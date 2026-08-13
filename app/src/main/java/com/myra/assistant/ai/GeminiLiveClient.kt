@@ -25,13 +25,23 @@ class GeminiLiveClient(
     private val client = OkHttpClient.Builder().pingInterval(8, TimeUnit.SECONDS).build()
     private var socket: WebSocket? = null
     private var renewThread: Thread? = null
+    private val ready = AtomicBoolean(false)
 
     fun connect() {
         if (apiKey.isBlank()) { onError?.invoke("Add your Gemini API key in Settings"); return }
         manualClose.set(false)
         onState?.invoke("Connecting…")
-        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=$apiKey"
-        socket = client.newWebSocket(Request.Builder().url(url).build(), this)
+        ready.set(false)
+        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
+        val opened = client.newWebSocket(Request.Builder().url(url).build(), this)
+        socket = opened
+        Thread {
+            Thread.sleep(15_000)
+            if (socket === opened && !ready.get() && !manualClose.get()) {
+                onError?.invoke("Connection timed out. Check API key, internet, and Gemini Live access.")
+                opened.cancel()
+            }
+        }.start()
     }
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -66,7 +76,7 @@ class GeminiLiveClient(
     override fun onMessage(webSocket: WebSocket, text: String) {
         try {
             val root = JSONObject(text)
-            if (root.has("setupComplete")) { onState?.invoke("Ready"); onReady?.invoke(); return }
+            if (root.has("setupComplete")) { ready.set(true); onState?.invoke("Ready"); onReady?.invoke(); return }
             val content = root.optJSONObject("serverContent") ?: return
             val parts = content.optJSONObject("modelTurn")?.optJSONArray("parts")
             if (parts != null) for (i in 0 until parts.length()) {
@@ -83,6 +93,9 @@ class GeminiLiveClient(
         onError?.invoke(t.message ?: "Gemini connection failed")
         if (!manualClose.get()) Thread { Thread.sleep(3_000); connect() }.start()
     }
-    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { onState?.invoke("Disconnected") }
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        if (!manualClose.get() && reason.isNotBlank()) onError?.invoke("Gemini closed connection ($code): $reason")
+    }
+    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { ready.set(false); onState?.invoke("Disconnected") }
     fun disconnect() { manualClose.set(true); renewThread?.interrupt(); socket?.close(1000, "App closed"); client.dispatcher.executorService.shutdown() }
 }
