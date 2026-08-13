@@ -52,7 +52,9 @@ object CommandParser {
         val place = "(?:mein|me|par|pe|में|पर)"
         val patterns = listOf(
             Regex("^$youtube\\s+$place\\s+(.+?)\\s+$action$"),
+            Regex("^$youtube\\s+$place\\s+$action\\s+(.+?)$"),
             Regex("^$youtube\\s+(.+?)\\s+$action$"),
+            Regex("^$youtube\\s+$action\\s+(.+?)$"),
             Regex("^(.+?)\\s+$youtube\\s+$place\\s+$action$"),
             Regex("^$action\\s+(.+?)\\s+(?:on|in|$place)\\s+$youtube$"),
             Regex("^$action\\s+(.+?)\\s+$youtube$")
@@ -66,6 +68,10 @@ object CommandParser {
     private fun looksLikeShortAppCommand(text: String): Boolean {
         val words = text.split(' ').filter { it.isNotBlank() }
         if (words.size > 7) return false
+        // These endings indicate an incomplete streamed instruction, for example
+        // "YouTube mein ..." before "search karo Lols Gaming" arrives. Waiting for
+        // the next transcription chunk prevents an accidental plain app launch.
+        if (Regex("(?:\\b(?:mein|me|par|pe|on|in|search|find|dhundo|dhoondo|khojo)\\b|में|पर|सर्च|ढूंढो|खोजो)$").containsMatchIn(text)) return false
         val conversational = Regex("\\b(?:cannot|cant|nahi|nahin|problem|message|video|about|like|pasand|mein\\s+message)\\b")
         return !conversational.containsMatchIn(text)
     }

@@ -68,7 +68,10 @@ class MyraVoiceService : Service() {
             client.onInputTranscript = { part ->
                 input.append(part); commandProbe.append(part)
                 val command = CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString())
-                if (command != null) executeCommand(command)
+                // A streamed transcript may first contain only "YouTube" and later add
+                // "mein search karo Lols Gaming". Never execute a plain open-app command
+                // from an incomplete chunk; confirm it from the complete turn below.
+                if (command != null && command !is AppCommand.OpenApp) executeCommand(command)
             }
             client.onOutputTranscript = { if (!suppressModelForTurn) output.append(it) }
             client.onTurnComplete = {
