@@ -52,7 +52,7 @@ class MainActivity : AppCompatActivity() {
         b.sendButton.setOnClickListener {
             b.textInput.text.toString().trim().takeIf { it.isNotEmpty() }?.let {
                 addBubble(it, true)
-                if (!executeAppCommand(it, showSuccess = true)) {
+                if (!executeAppCommand(it)) {
                     if (live == null) showStatus("Connect to MYRA first — tap the mic") else live?.sendText(it)
                 }
                 b.textInput.text.clear()
@@ -81,23 +81,24 @@ class MainActivity : AppCompatActivity() {
         live = GeminiLiveClient(key, p.getString("model", "gemini-3.1-flash-live-preview")!!, p.getString("voice", "Aoede")!!, prompt)
         live?.onState = { runOnUiThread { showStatus(it); b.orb.state = if (it == "Connecting…") OrbAnimationView.State.CONNECTING else OrbAnimationView.State.LISTENING } }
         live?.onReady = { runOnUiThread { b.connectButton.setColorFilter(Color.WHITE); audio?.start(); live?.sendText("Greet $name briefly and naturally.") } }
-        live?.onAudio = { audio?.queueAudio(it) }
+        live?.onAudio = { if (!commandExecutedForTurn) audio?.queueAudio(it) }
         live?.onInputTranscript = {
             input.append(it)
             val transcript = input.toString().trim()
             if (!commandExecutedForTurn && CommandParser.parse(transcript) != null) {
                 commandExecutedForTurn = true
-                runOnUiThread { executeAppCommand(transcript, showSuccess = false) }
+                audio?.interrupt()
+                runOnUiThread { executeAppCommand(transcript) }
             }
         }
-        live?.onOutputTranscript = { output.append(it) }
+        live?.onOutputTranscript = { if (!commandExecutedForTurn) output.append(it) }
         live?.onTurnComplete = { runOnUiThread {
             val userText = input.toString().trim()
             val myraText = output.toString().trim()
             if (userText.isNotBlank()) addBubble(userText, true)
-            if (myraText.isNotBlank()) addBubble(myraText, false)
+            if (myraText.isNotBlank() && !commandExecutedForTurn) addBubble(myraText, false)
             input.clear(); output.clear()
-            if (userText.isNotBlank() && !commandExecutedForTurn) executeAppCommand(userText, showSuccess = myraText.isBlank())
+            if (userText.isNotBlank() && !commandExecutedForTurn) executeAppCommand(userText)
             commandExecutedForTurn = false
         } }
         live?.onError = { runOnUiThread { showStatus(it) } }
@@ -188,12 +189,12 @@ class MainActivity : AppCompatActivity() {
         b.chatContainer.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         b.chatScroll.post { b.chatScroll.fullScroll(android.view.View.FOCUS_DOWN) }
     }
-    private fun executeAppCommand(text: String, showSuccess: Boolean): Boolean {
+    private fun executeAppCommand(text: String): Boolean {
         val command = CommandParser.parse(text) ?: return false
         val result = appActions.execute(command)
         showStatus(result.message)
         Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
-        if (!result.success || showSuccess) addBubble(result.message, false, !result.success)
+        addBubble(result.message, false, !result.success)
         return true
     }
     private fun showStatus(text: String) { b.statusText.text = text }
