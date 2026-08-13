@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#050505">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="24dp">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="MYRA SETTINGS" android:textColor="#FF1744" android:textSize="24sp" android:textStyle="bold" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Gemini API key" android:textColor="#AAAAAA" android:layout_marginTop="24dp" />
+        <EditText android:id="@+id/apiKeyInput" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/bg_field" android:inputType="textPassword" android:textColor="#EEEEEE" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Your name" android:textColor="#AAAAAA" android:layout_marginTop="18dp" />
+        <EditText android:id="@+id/nameInput" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/bg_field" android:textColor="#EEEEEE" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Model" android:textColor="#AAAAAA" android:layout_marginTop="18dp" />
+        <Spinner android:id="@+id/modelSpinner" android:layout_width="match_parent" android:layout_height="52dp" android:background="@drawable/bg_field" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Voice" android:textColor="#AAAAAA" android:layout_marginTop="18dp" />
+        <Spinner android:id="@+id/voiceSpinner" android:layout_width="match_parent" android:layout_height="52dp" android:background="@drawable/bg_field" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Personality" android:textColor="#AAAAAA" android:layout_marginTop="18dp" />
+        <Spinner android:id="@+id/personalitySpinner" android:layout_width="match_parent" android:layout_height="52dp" android:background="@drawable/bg_field" />
+        <Button android:id="@+id/saveButton" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="28dp" android:background="@drawable/bg_button" android:text="SAVE" android:textColor="#FFFFFF" />
+    </LinearLayout>
+</ScrollView>
