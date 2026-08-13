@@ -32,6 +32,7 @@ class AppActionExecutor(private val context: Context) {
         is AppCommand.OpenApp -> openApp(command.appName)
         is AppCommand.CloseCurrentApp -> closeCurrentApp()
         is AppCommand.SearchYouTube -> searchYouTube(command.query)
+        AppCommand.RepeatYouTubeSearch -> repeatYouTubeSearch()
     }
 
     private fun searchYouTube(rawQuery: String): Result {
@@ -48,10 +49,18 @@ class AppActionExecutor(private val context: Context) {
         }
         return try {
             context.startActivity(intent)
+            context.getSharedPreferences("myra", Context.MODE_PRIVATE).edit().putString("last_youtube_query", query).apply()
             Result("Searching YouTube for $query.", true)
         } catch (_: Exception) {
             Result("Android couldn't start that YouTube search.", false)
         }
+    }
+
+    private fun repeatYouTubeSearch(): Result {
+        val last = context.getSharedPreferences("myra", Context.MODE_PRIVATE)
+            .getString("last_youtube_query", "").orEmpty()
+        return if (last.isBlank()) Result("Tell me which channel or video to search first.", false)
+        else searchYouTube(last)
     }
 
     private fun openApp(rawName: String): Result {

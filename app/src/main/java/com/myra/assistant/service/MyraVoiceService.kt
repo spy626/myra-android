@@ -31,6 +31,7 @@ class MyraVoiceService : Service() {
     private val commandProbe = StringBuilder()
     private var suppressModelForTurn = false
     private var waitingForFreshInputAfterCommand = false
+    private var commandUserTextEmitted = false
     private var lastCommandKey = ""
     private var lastCommandAt = 0L
     private val appActions by lazy { AppActionExecutor(this) }
@@ -80,12 +81,19 @@ class MyraVoiceService : Service() {
                 // A streamed transcript may first contain only "YouTube" and later add
                 // "mein search karo Lols Gaming". Never execute a plain open-app command
                 // from an incomplete chunk; confirm it from the complete turn below.
-                if (command != null && command !is AppCommand.OpenApp) executeCommand(command)
+                if (command != null && command !is AppCommand.OpenApp) {
+                    val spoken = commandProbe.toString().trim()
+                    if (spoken.isNotBlank() && !commandUserTextEmitted) {
+                        listener?.onUserText(spoken)
+                        commandUserTextEmitted = true
+                    }
+                    executeCommand(command)
+                }
             }
             client.onOutputTranscript = { if (!suppressModelForTurn) output.append(it) }
             client.onTurnComplete = {
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
-                if (userText.isNotBlank()) listener?.onUserText(userText)
+                if (userText.isNotBlank() && !commandUserTextEmitted) listener?.onUserText(userText)
                 // Run one final parse over the complete transcript. Partial Live transcript
                 // chunks can omit or mistranscribe the action word even when the final text
                 // contains enough context to identify the device command.
@@ -94,6 +102,7 @@ class MyraVoiceService : Service() {
                 }
                 if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(myraText)
                 input.clear(); output.clear(); commandProbe.clear()
+                commandUserTextEmitted = false
                 if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
             }
             client.onError = { emitState(it) }
@@ -110,6 +119,7 @@ class MyraVoiceService : Service() {
             is AppCommand.OpenApp -> "open:${command.appName.lowercase(Locale.ROOT)}"
             is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
+            AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
         }
         if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
         lastCommandKey = key; lastCommandAt = now; return true

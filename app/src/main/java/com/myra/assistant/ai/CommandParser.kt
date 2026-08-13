@@ -31,6 +31,7 @@ object CommandParser {
     fun parse(raw: String): AppCommand? {
         val text = normalize(raw)
         if (text.isBlank()) return null
+        if (isRepeatYouTubeSearch(text)) return AppCommand.RepeatYouTubeSearch
         extractYouTubeSearch(text)?.let { return AppCommand.SearchYouTube(it) }
         if (closeAction.containsMatchIn(text)) return AppCommand.CloseCurrentApp(findKnownApp(text))
         val knownApp = findKnownApp(text)
@@ -50,19 +51,28 @@ object CommandParser {
         val action = "(?:search(?:\\s+karo|\\s+kar\\s+do)?|find|dhundo|dhoondo|khojo|सर्च(?:\\s+करो|\\s+कर\\s+दो)?|ढूंढो|खोजो)"
         val youtube = "(?:youtube|यूट्यूब)"
         val place = "(?:mein|me|par|pe|में|पर)"
+        val prefix = "(?:(?:please|ek\\s+(?:aur\\s+)?baar|ek\\s+bar|phir\\s+se|fir\\s+se|dobara|again|एक\\s+(?:और\\s+)?बार|फिर\\s+से|दोबारा)\\s+)?"
+        val repeatWord = "(?:(?:phir\\s+se|fir\\s+se|dobara|again|फिर\\s+से|दोबारा)\\s+)?"
         val patterns = listOf(
-            Regex("^$youtube\\s+$place\\s+(.+?)\\s+$action$"),
-            Regex("^$youtube\\s+$place\\s+$action\\s+(.+?)$"),
-            Regex("^$youtube\\s+(.+?)\\s+$action$"),
-            Regex("^$youtube\\s+$action\\s+(.+?)$"),
+            Regex("^$prefix$youtube\\s+$place\\s+$repeatWord(.+?)\\s+$action$"),
+            Regex("^$prefix$youtube\\s+$place\\s+$repeatWord$action\\s+(.+?)$"),
+            Regex("^$prefix$youtube\\s+(.+?)\\s+$action$"),
+            Regex("^$prefix$youtube\\s+$action\\s+(.+?)$"),
             Regex("^(.+?)\\s+$youtube\\s+$place\\s+$action$"),
             Regex("^$action\\s+(.+?)\\s+(?:on|in|$place)\\s+$youtube$"),
-            Regex("^$action\\s+(.+?)\\s+$youtube$")
+            Regex("^$action\\s+(.+?)\\s+$youtube$"),
+            Regex("^(?:phir\\s+se|fir\\s+se|dobara|again)\\s+(.+?)\\s+$action$")
         )
         return patterns.firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1) }
             ?.replace(Regex("^(?:for|the|video|channel)\\s+"), "")
             ?.replace(Regex("\\s+(?:video|channel)$"), "")
             ?.trim()?.takeIf { it.length in 2..80 }
+    }
+
+    private fun isRepeatYouTubeSearch(text: String): Boolean {
+        val repeat = Regex("(?:same\\s+(?:channel|search)|wahi\\s+(?:channel|search)|usi\\s+channel|phir\\s+se\\s+wahi|fir\\s+se\\s+wahi|वही\\s+(?:चैनल|सर्च)|उसी\\s+चैनल)")
+        val action = Regex("(?:search|find|dhundo|dhoondo|khojo|सर्च|ढूंढो|खोजो)")
+        return repeat.containsMatchIn(text) && action.containsMatchIn(text)
     }
 
     private fun looksLikeShortAppCommand(text: String): Boolean {

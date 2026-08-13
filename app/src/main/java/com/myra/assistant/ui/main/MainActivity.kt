@@ -187,6 +187,7 @@ class MainActivity : AppCompatActivity() {
             is AppCommand.OpenApp -> "open:${command.appName.lowercase(Locale.ROOT)}"
             is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
+            AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
         }
         if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
         lastCommandKey = key
