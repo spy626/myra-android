@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.app.ActivityManager
 import android.content.Context
 import android.content.IntentFilter
+import android.provider.Settings
 import android.os.BatteryManager
 import android.graphics.Color
 import android.view.Gravity
@@ -19,7 +20,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.myra.assistant.ai.AudioEngine
+import com.myra.assistant.ai.CommandParser
 import com.myra.assistant.ai.GeminiLiveClient
+import com.myra.assistant.phone.AppActionExecutor
+import com.myra.assistant.service.AccessibilityHelperService
 import com.myra.assistant.databinding.ActivityMainBinding
 import com.myra.assistant.databinding.SheetSettingsBinding
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -32,19 +36,27 @@ class MainActivity : AppCompatActivity() {
     private lateinit var b: ActivityMainBinding
     private var audio: AudioEngine? = null
     private var live: GeminiLiveClient? = null
+    private lateinit var appActions: AppActionExecutor
     private var muted = false
+    private var commandExecutedForTurn = false
     private val input = StringBuilder(); private val output = StringBuilder()
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { if (!it) showStatus("Microphone permission required") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); b = ActivityMainBinding.inflate(layoutInflater); setContentView(b.root)
+        appActions = AppActionExecutor(this)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) permission.launch(Manifest.permission.RECORD_AUDIO)
         b.settingsButton.setOnClickListener { showSettings() }
         updateDeviceStatus()
         b.connectButton.setOnClickListener { if (live == null) connect() else disconnect() }
         b.sendButton.setOnClickListener {
-            if (live == null) { showStatus("Connect to MYRA first — tap the mic") }
-            else b.textInput.text.toString().trim().takeIf { it.isNotEmpty() }?.let { live?.sendText(it); addBubble(it, true); b.textInput.text.clear() }
+            b.textInput.text.toString().trim().takeIf { it.isNotEmpty() }?.let {
+                addBubble(it, true)
+                if (!executeAppCommand(it, showSuccess = true)) {
+                    if (live == null) showStatus("Connect to MYRA first — tap the mic") else live?.sendText(it)
+                }
+                b.textInput.text.clear()
+            }
         }
         b.stopButton.setOnClickListener { audio?.interrupt(); live?.interrupt(); showStatus("Stopped") }
         b.muteButton.setOnClickListener { muted = !muted; audio?.setMuted(muted); b.muteButton.alpha = if (muted) 1f else .6f; showStatus(if (muted) "Microphone muted" else "Sun rahi hoon…") }
@@ -70,9 +82,24 @@ class MainActivity : AppCompatActivity() {
         live?.onState = { runOnUiThread { showStatus(it); b.orb.state = if (it == "Connecting…") OrbAnimationView.State.CONNECTING else OrbAnimationView.State.LISTENING } }
         live?.onReady = { runOnUiThread { b.connectButton.setColorFilter(Color.WHITE); audio?.start(); live?.sendText("Greet $name briefly and naturally.") } }
         live?.onAudio = { audio?.queueAudio(it) }
-        live?.onInputTranscript = { input.append(it) }
+        live?.onInputTranscript = {
+            input.append(it)
+            val transcript = input.toString().trim()
+            if (!commandExecutedForTurn && CommandParser.parse(transcript) != null) {
+                commandExecutedForTurn = true
+                runOnUiThread { executeAppCommand(transcript, showSuccess = false) }
+            }
+        }
         live?.onOutputTranscript = { output.append(it) }
-        live?.onTurnComplete = { runOnUiThread { if (input.isNotBlank()) addBubble(input.toString().trim(), true); if (output.isNotBlank()) addBubble(output.toString().trim(), false); input.clear(); output.clear() } }
+        live?.onTurnComplete = { runOnUiThread {
+            val userText = input.toString().trim()
+            val myraText = output.toString().trim()
+            if (userText.isNotBlank()) addBubble(userText, true)
+            if (myraText.isNotBlank()) addBubble(myraText, false)
+            input.clear(); output.clear()
+            if (userText.isNotBlank() && !commandExecutedForTurn) executeAppCommand(userText, showSuccess = myraText.isBlank())
+            commandExecutedForTurn = false
+        } }
         live?.onError = { runOnUiThread { showStatus(it) } }
         audio?.onMicChunk = { live?.sendAudio(it) }; audio?.onAmplitude = { runOnUiThread { b.orb.amplitude = it } }
         audio?.onSpeakingChanged = { runOnUiThread { b.orb.state = if (it) OrbAnimationView.State.SPEAKING else OrbAnimationView.State.LISTENING; showStatus(if (it) "Bol rahi hoon…" else "Sun rahi hoon…") } }
@@ -88,7 +115,7 @@ class MainActivity : AppCompatActivity() {
     private fun systemPrompt(name: String, mode: String): String {
         val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Warm caring Hinglish girlfriend-style companion. Use natural words like haan, acha, bilkul. At most three sentences." }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style Keep every response natural, conversational and safe."
+        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style Keep every response natural, conversational and safe. When the user asks to open or close an Android app, reply only with a brief acknowledgement such as Okay; never claim the action succeeded because the Android command layer reports the real result."
     }
     private fun showSettings() {
         val dialog = BottomSheetDialog(this, com.google.android.material.R.style.Theme_Design_BottomSheetDialog)
@@ -107,6 +134,9 @@ class MainActivity : AppCompatActivity() {
         s.modelChoice.text = modelLabels[modelIndex]; s.voiceChoice.text = voiceLabels[voiceIndex]
         when (p.getString("personality", "GF")) { "Professional" -> s.proMode.isChecked = true; "Assistant" -> s.assistantMode.isChecked = true; else -> s.gfMode.isChecked = true }
         s.micStatus.text = if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) "Granted ✓" else "Not yet granted — tap the mic to allow"
+        s.accessibilityStatus.text = if (AccessibilityHelperService.isEnabled(this)) "Enabled ✓ — MYRA can close the current app" else "Disabled — tap here to enable close-app control"
+        s.accessibilityStatus.setTextColor(if (AccessibilityHelperService.isEnabled(this)) Color.rgb(0, 230, 118) else Color.rgb(255, 80, 110))
+        s.accessibilityStatus.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         fun pick(title: String, labels: Array<String>, selected: Int, chosen: (Int) -> Unit) {
             AlertDialog.Builder(this).setTitle(title).setSingleChoiceItems(labels, selected) { d, which -> chosen(which); d.dismiss() }.show()
         }
@@ -157,6 +187,14 @@ class MainActivity : AppCompatActivity() {
         }
         b.chatContainer.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         b.chatScroll.post { b.chatScroll.fullScroll(android.view.View.FOCUS_DOWN) }
+    }
+    private fun executeAppCommand(text: String, showSuccess: Boolean): Boolean {
+        val command = CommandParser.parse(text) ?: return false
+        val result = appActions.execute(command)
+        showStatus(result.message)
+        Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
+        if (!result.success || showSuccess) addBubble(result.message, false, !result.success)
+        return true
     }
     private fun showStatus(text: String) { b.statusText.text = text }
     private fun disconnect() { live?.disconnect(); audio?.release(); live = null; audio = null; b.connectButton.clearColorFilter(); b.orb.state = OrbAnimationView.State.IDLE; showStatus("Tap the mic to wake MYRA") }

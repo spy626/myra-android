@@ -29,6 +29,7 @@
     <TextView style="@style/MyraLabel" android:text="MICROPHONE PERMISSION" />
     <TextView android:id="@+id/micStatus" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#777077" android:textSize="13sp" />
     <TextView style="@style/MyraLabel" android:text="DEVICE ACTIONS" />
-    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Voice connection is native. Phone calls, SMS and accessibility controls will be added after Live voice passes testing." android:textColor="#6F6870" android:textSize="12sp" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Opening installed apps is ready. Android requires Accessibility permission to move the foreground app to Home." android:textColor="#6F6870" android:textSize="12sp" />
+    <TextView android:id="@+id/accessibilityStatus" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="8dp" android:background="@drawable/bg_field" android:gravity="center_vertical" android:paddingHorizontal="16dp" android:textColor="#FF506E" android:textSize="13sp" />
     <Button android:id="@+id/sheetSave" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="28dp" android:layout_marginBottom="20dp" android:background="@drawable/bg_button" android:text="SAVE" android:textColor="#FFF" android:textStyle="bold" />
 </LinearLayout></ScrollView>
