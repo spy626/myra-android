@@ -57,9 +57,10 @@ class MyraVoiceService : Service() {
         val name = p.getString("user_name", "Friend") ?: "Friend"
         if (key.isBlank()) { emitState("Add your Gemini API key in Settings"); stopSelf(); return }
         audio = AudioEngine(this)
+        val selectedVoice = p.getString("voice", "Aoede") ?: "Aoede"
         live = GeminiLiveClient(
             key, p.getString("model", "gemini-3.1-flash-live-preview")!!,
-            p.getString("voice", "Aoede")!!, systemPrompt(name, p.getString("personality", "GF") ?: "GF")
+            selectedVoice, systemPrompt(name, p.getString("personality", "GF") ?: "GF", selectedVoice)
         ).also { client ->
             client.onState = { emitState(it) }
             client.onReady = { audio?.start(); listener?.onReady(); client.sendText("Greet $name briefly and naturally.") }
@@ -112,10 +113,16 @@ class MyraVoiceService : Service() {
         emitState(result.message)
     }
 
-    private fun systemPrompt(name: String, mode: String): String {
+    private fun systemPrompt(name: String, mode: String, voice: String): String {
         val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Warm caring Hinglish companion, at most three sentences." }
+        val femaleVoice = voice.lowercase(Locale.ROOT) in setOf("aoede", "kore", "leda", "zephyr")
+        val genderStyle = if (femaleVoice) {
+            "You have a female identity and the selected female voice is $voice. In Hindi and Hinglish always use feminine self-reference such as karungi, sakti hoon, sun rahi hoon, and gayi. Never say karunga, sakta hoon, sun raha hoon, or gaya about yourself."
+        } else {
+            "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
+        }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style Android executes phone actions locally. When the user asks to open, launch, close, or stop an app, do not discuss limitations and do not tell them to do it manually; remain silent because Android reports the result. Never claim a phone action succeeded yourself."
+        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. When the user asks to open, launch, close, or stop an app, do not discuss limitations and do not tell them to do it manually; remain silent because Android reports the result. Never claim a phone action succeeded yourself."
     }
 
     private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }
