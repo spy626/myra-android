@@ -58,8 +58,8 @@ class AppActionExecutor(private val context: Context) {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return Result("Enable MYRA Accessibility, then try the close command again.", false)
         }
-        return if (service.closeCurrentApp()) Result("Moved the current app to the background.", true)
-        else Result("Android could not close the current app.", false)
+        return if (service.returnToMyra()) Result("Returning to MYRA.", true)
+        else Result("Android could not return to MYRA.", false)
     }
 
     private fun normalize(value: String) = value.lowercase(Locale.ROOT)
