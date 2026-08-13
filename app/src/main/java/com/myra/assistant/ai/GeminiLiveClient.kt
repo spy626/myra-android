@@ -35,8 +35,31 @@ class GeminiLiveClient(
         manualClose.set(false)
         reconnecting.set(false)
         val attempt = generation.incrementAndGet()
-        onState?.invoke("Connecting…")
+        onState?.invoke("Checking Gemini access…")
         ready.set(false)
+        val modelId = model.removePrefix("models/")
+        val check = Request.Builder().url("https://generativelanguage.googleapis.com/v1beta/models/$modelId").header("x-goog-api-key", apiKey).build()
+        client.newCall(check).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: java.io.IOException) {
+                if (generation.get() == attempt && !manualClose.get()) onError?.invoke("Network check failed: ${e.message}")
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (generation.get() != attempt || manualClose.get()) return
+                    if (!it.isSuccessful) {
+                        val raw = it.body?.string().orEmpty()
+                        val message = try { JSONObject(raw).optJSONObject("error")?.optString("message") } catch (_: Exception) { null }
+                        onError?.invoke("Gemini access error (${it.code}): ${message ?: it.message}")
+                        return
+                    }
+                    openLiveSocket(attempt)
+                }
+            }
+        })
+    }
+
+    private fun openLiveSocket(attempt: Int) {
+        onState?.invoke("Connecting…")
         val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
         val opened = client.newWebSocket(Request.Builder().url(url).header("x-goog-api-key", apiKey).build(), this)
         socket = opened
@@ -58,15 +81,7 @@ class GeminiLiveClient(
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice))))
                 .put("temperature", 0.9))
             .put("inputAudioTranscription", JSONObject())
-            .put("outputAudioTranscription", JSONObject())
-            .put("realtimeInputConfig", JSONObject()
-                .put("automaticActivityDetection", JSONObject()
-                    .put("startOfSpeechSensitivity", "START_SENSITIVITY_HIGH")
-                    .put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
-                    .put("prefixPaddingMs", 80)
-                    .put("silenceDurationMs", 420))
-                .put("activityHandling", "START_OF_ACTIVITY_INTERRUPTS"))
-            .put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()).put("triggerTokens", 25000)))
+            .put("outputAudioTranscription", JSONObject()))
         webSocket.send(setup.toString())
         renewThread = Thread {
             try { Thread.sleep(540_000); if (!manualClose.get()) { socket?.close(1000, "Session renewal"); Thread.sleep(3_000); connect() } }
@@ -89,6 +104,13 @@ class GeminiLiveClient(
     override fun onMessage(webSocket: WebSocket, text: String) {
         try {
             val root = JSONObject(text)
+            root.optJSONObject("error")?.let {
+                val message = it.optString("message", "Gemini rejected the Live setup")
+                onError?.invoke("Gemini Live error: $message")
+                manualClose.set(true)
+                webSocket.close(1002, "Setup rejected")
+                return
+            }
             if (root.has("setupComplete")) { ready.set(true); onState?.invoke("Ready"); onReady?.invoke(); return }
             val content = root.optJSONObject("serverContent") ?: return
             val parts = content.optJSONObject("modelTurn")?.optJSONArray("parts")
