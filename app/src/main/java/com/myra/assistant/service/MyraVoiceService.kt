@@ -67,17 +67,18 @@ class MyraVoiceService : Service() {
             client.onInputTranscript = { part ->
                 input.append(part); commandProbe.append(part)
                 val command = CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString())
-                if (command != null && shouldExecute(command)) {
-                    suppressModelForTurn = true; commandProbe.clear(); audio?.interrupt()
-                    val result = appActions.execute(command)
-                    listener?.onMyraText(result.message, !result.success)
-                    emitState(result.message)
-                }
+                if (command != null) executeCommand(command)
             }
             client.onOutputTranscript = { if (!suppressModelForTurn) output.append(it) }
             client.onTurnComplete = {
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
                 if (userText.isNotBlank()) listener?.onUserText(userText)
+                // Run one final parse over the complete transcript. Partial Live transcript
+                // chunks can omit or mistranscribe the action word even when the final text
+                // contains enough context to identify the device command.
+                if (!suppressModelForTurn && userText.isNotBlank()) {
+                    CommandParser.parse(userText)?.let { executeCommand(it) }
+                }
                 if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(myraText)
                 input.clear(); output.clear(); commandProbe.clear(); suppressModelForTurn = false
             }
@@ -99,10 +100,22 @@ class MyraVoiceService : Service() {
         lastCommandKey = key; lastCommandAt = now; return true
     }
 
+    private fun executeCommand(command: AppCommand) {
+        if (!shouldExecute(command)) return
+        suppressModelForTurn = true
+        commandProbe.clear()
+        output.clear()
+        audio?.interrupt()
+        live?.interrupt()
+        val result = appActions.execute(command)
+        listener?.onMyraText(result.message, !result.success)
+        emitState(result.message)
+    }
+
     private fun systemPrompt(name: String, mode: String): String {
         val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Warm caring Hinglish companion, at most three sentences." }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style Never claim a phone action succeeded; Android reports action results."
+        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style Android executes phone actions locally. When the user asks to open, launch, close, or stop an app, do not discuss limitations and do not tell them to do it manually; remain silent because Android reports the result. Never claim a phone action succeeded yourself."
     }
 
     private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }

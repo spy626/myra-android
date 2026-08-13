@@ -22,7 +22,7 @@ object CommandParser {
     )
 
     private val openAction = Regex(
-        "(?:\\b(?:open|launch|start|kholo|kholna|khol\\s+do|khol\\s+dena|open\\s+karo|open\\s+karna|open\\s+kar\\s+do|open\\s+kar\\s+sakti\\s+ho|chalao|check\\s+karna|check\\s+karna\\s+hai)\\b|खोलो|खोलना|खोल\\s+दो|खोल\\s+देना|ओपन\\s+करो|ओपन\\s+करना|ओपन\\s+कर\\s+दो|चलाओ|देखना)"
+        "(?:\\b(?:open|opening|launch|start|get|kholo|kholo|khol|khul|kholna|khol\\s+do|khol\\s+dena|open\\s+karo|open\\s+karna|open\\s+kar\\s+do|open\\s+kar\\s+sakti\\s+ho|chalao|chalu\\s+karo|dikhao|check\\s+karna|check\\s+karna\\s+hai)\\b|खोलो|खोलना|खोल\\s+दो|खोल\\s+देना|ओपन\\s+करो|ओपन\\s+करना|ओपन\\s+कर\\s+दो|चलाओ|चालू\\s+करो|दिखाओ|देखना)"
     )
     private val closeAction = Regex(
         "(?:\\b(?:close|close\\s+karo|close\\s+karna|band\\s+karo|band\\s+kar\\s+do|band\\s+karna)\\b|बंद\\s+करो|बंद\\s+कर\\s+दो|बंद\\s+करना|क्लोज\\s+करो)"
@@ -32,10 +32,24 @@ object CommandParser {
         val text = normalize(raw)
         if (text.isBlank()) return null
         if (closeAction.containsMatchIn(text)) return AppCommand.CloseCurrentApp(findKnownApp(text))
-        if (!openAction.containsMatchIn(text)) return null
-        findKnownApp(text)?.let { return AppCommand.OpenApp(it) }
-        extractSimpleAppName(text)?.let { return AppCommand.OpenApp(it) }
+        val knownApp = findKnownApp(text)
+        if (openAction.containsMatchIn(text)) {
+            knownApp?.let { return AppCommand.OpenApp(it) }
+            extractSimpleAppName(text)?.let { return AppCommand.OpenApp(it) }
+        }
+
+        // Gemini input transcription often turns Hindi "kholo" into short words such as
+        // "get", "hello" or drops it completely. A short utterance naming one known app is
+        // still a command; longer conversational mentions are deliberately not executed.
+        if (knownApp != null && looksLikeShortAppCommand(text)) return AppCommand.OpenApp(knownApp)
         return null
+    }
+
+    private fun looksLikeShortAppCommand(text: String): Boolean {
+        val words = text.split(' ').filter { it.isNotBlank() }
+        if (words.size > 7) return false
+        val conversational = Regex("\\b(?:cannot|cant|nahi|nahin|problem|message|video|about|like|pasand|mein\\s+message)\\b")
+        return !conversational.containsMatchIn(text)
     }
 
     private fun findKnownApp(text: String): String? = appAliases.entries.firstOrNull { (alias, _) ->
