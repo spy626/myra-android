@@ -1,0 +1,8 @@
+<resources>
+    <color name="black">#050505</color>
+    <color name="card">#111111</color>
+    <color name="red">#FF1744</color>
+    <color name="purple">#D500F9</color>
+    <color name="text">#EEEEEE</color>
+    <color name="hint">#777777</color>
+</resources>
