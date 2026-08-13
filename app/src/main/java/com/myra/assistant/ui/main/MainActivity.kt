@@ -24,6 +24,7 @@ import com.myra.assistant.ai.CommandParser
 import com.myra.assistant.ai.GeminiLiveClient
 import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.service.AccessibilityHelperService
+import com.myra.assistant.model.AppCommand
 import com.myra.assistant.databinding.ActivityMainBinding
 import com.myra.assistant.databinding.SheetSettingsBinding
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -38,7 +39,10 @@ class MainActivity : AppCompatActivity() {
     private var live: GeminiLiveClient? = null
     private lateinit var appActions: AppActionExecutor
     private var muted = false
-    private var commandExecutedForTurn = false
+    private var suppressModelForTurn = false
+    private var lastCommandKey = ""
+    private var lastCommandAt = 0L
+    private val commandProbe = StringBuilder()
     private val input = StringBuilder(); private val output = StringBuilder()
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { if (!it) showStatus("Microphone permission required") }
 
@@ -81,25 +85,27 @@ class MainActivity : AppCompatActivity() {
         live = GeminiLiveClient(key, p.getString("model", "gemini-3.1-flash-live-preview")!!, p.getString("voice", "Aoede")!!, prompt)
         live?.onState = { runOnUiThread { showStatus(it); b.orb.state = if (it == "Connecting…") OrbAnimationView.State.CONNECTING else OrbAnimationView.State.LISTENING } }
         live?.onReady = { runOnUiThread { b.connectButton.setColorFilter(Color.WHITE); audio?.start(); live?.sendText("Greet $name briefly and naturally.") } }
-        live?.onAudio = { if (!commandExecutedForTurn) audio?.queueAudio(it) }
+        live?.onAudio = { if (!suppressModelForTurn) audio?.queueAudio(it) }
         live?.onInputTranscript = {
             input.append(it)
-            val transcript = input.toString().trim()
-            if (!commandExecutedForTurn && CommandParser.parse(transcript) != null) {
-                commandExecutedForTurn = true
+            commandProbe.append(it)
+            val command = CommandParser.parse(it) ?: CommandParser.parse(commandProbe.toString())
+            if (command != null && shouldExecute(command)) {
+                suppressModelForTurn = true
+                commandProbe.clear()
                 audio?.interrupt()
-                runOnUiThread { executeAppCommand(transcript) }
+                runOnUiThread { executeAppCommand(command) }
             }
         }
-        live?.onOutputTranscript = { if (!commandExecutedForTurn) output.append(it) }
+        live?.onOutputTranscript = { if (!suppressModelForTurn) output.append(it) }
         live?.onTurnComplete = { runOnUiThread {
             val userText = input.toString().trim()
             val myraText = output.toString().trim()
             if (userText.isNotBlank()) addBubble(userText, true)
-            if (myraText.isNotBlank() && !commandExecutedForTurn) addBubble(myraText, false)
-            input.clear(); output.clear()
-            if (userText.isNotBlank() && !commandExecutedForTurn) executeAppCommand(userText)
-            commandExecutedForTurn = false
+            if (myraText.isNotBlank() && !suppressModelForTurn) addBubble(myraText, false)
+            if (userText.isNotBlank() && !suppressModelForTurn) executeAppCommand(userText)
+            input.clear(); output.clear(); commandProbe.clear()
+            suppressModelForTurn = false
         } }
         live?.onError = { runOnUiThread { showStatus(it) } }
         audio?.onMicChunk = { live?.sendAudio(it) }; audio?.onAmplitude = { runOnUiThread { b.orb.amplitude = it } }
@@ -191,13 +197,29 @@ class MainActivity : AppCompatActivity() {
     }
     private fun executeAppCommand(text: String): Boolean {
         val command = CommandParser.parse(text) ?: return false
+        executeAppCommand(command)
+        return true
+    }
+    private fun executeAppCommand(command: AppCommand) {
         val result = appActions.execute(command)
         showStatus(result.message)
         Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
         addBubble(result.message, false, !result.success)
+    }
+    private fun shouldExecute(command: AppCommand): Boolean {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val key = when (command) {
+            is AppCommand.OpenApp -> "open:${command.appName.lowercase(Locale.ROOT)}"
+            is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
+        }
+        if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
+        lastCommandKey = key
+        lastCommandAt = now
         return true
     }
     private fun showStatus(text: String) { b.statusText.text = text }
     private fun disconnect() { live?.disconnect(); audio?.release(); live = null; audio = null; b.connectButton.clearColorFilter(); b.orb.state = OrbAnimationView.State.IDLE; showStatus("Tap the mic to wake MYRA") }
+    override fun onPause() { audio?.setMuted(true); super.onPause() }
+    override fun onResume() { super.onResume(); audio?.setMuted(muted) }
     override fun onDestroy() { disconnect(); super.onDestroy() }
 }
