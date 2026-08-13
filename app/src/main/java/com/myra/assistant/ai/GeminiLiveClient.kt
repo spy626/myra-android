@@ -61,10 +61,14 @@ class GeminiLiveClient(
 
     private fun openLiveSocket(attempt: Int) {
         onState?.invoke("Connecting…")
-        val url = HttpUrl.Builder().scheme("https").host("generativelanguage.googleapis.com")
-            .addPathSegments("ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
-            .addQueryParameter("key", apiKey).build().newBuilder().scheme("wss").build()
-        val opened = client.newWebSocket(Request.Builder().url(url).build(), this)
+        val encodedKey = java.net.URLEncoder.encode(apiKey, Charsets.UTF_8.name())
+        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$encodedKey"
+        val opened = try {
+            client.newWebSocket(Request.Builder().url(url).build(), this)
+        } catch (e: Exception) {
+            onError?.invoke("Could not start Gemini Live: ${e.message}")
+            return
+        }
         socket = opened
         Thread {
             Thread.sleep(15_000)
