@@ -30,6 +30,7 @@ class MyraVoiceService : Service() {
     private val output = StringBuilder()
     private val commandProbe = StringBuilder()
     private var suppressModelForTurn = false
+    private var waitingForFreshInputAfterCommand = false
     private var lastCommandKey = ""
     private var lastCommandAt = 0L
     private val appActions by lazy { AppActionExecutor(this) }
@@ -66,6 +67,14 @@ class MyraVoiceService : Service() {
             client.onReady = { audio?.start(); listener?.onReady(); client.sendText("Greet $name briefly and naturally.") }
             client.onAudio = { if (!suppressModelForTurn) audio?.queueAudio(it) }
             client.onInputTranscript = { part ->
+                // After a local phone command, delayed Gemini packets are discarded until
+                // the server has completed that command turn and the user actually starts
+                // speaking again. The first transcript of that new turn safely re-enables
+                // normal model output.
+                if (waitingForFreshInputAfterCommand) {
+                    waitingForFreshInputAfterCommand = false
+                    suppressModelForTurn = false
+                }
                 input.append(part); commandProbe.append(part)
                 val command = CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString())
                 // A streamed transcript may first contain only "YouTube" and later add
@@ -84,7 +93,8 @@ class MyraVoiceService : Service() {
                     CommandParser.parse(userText)?.let { executeCommand(it) }
                 }
                 if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(myraText)
-                input.clear(); output.clear(); commandProbe.clear(); suppressModelForTurn = false
+                input.clear(); output.clear(); commandProbe.clear()
+                if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
             }
             client.onError = { emitState(it) }
             audio?.onMicChunk = { client.sendAudio(it) }
@@ -108,6 +118,7 @@ class MyraVoiceService : Service() {
     private fun executeCommand(command: AppCommand) {
         if (!shouldExecute(command)) return
         suppressModelForTurn = true
+        waitingForFreshInputAfterCommand = false
         commandProbe.clear()
         output.clear()
         audio?.interrupt()
