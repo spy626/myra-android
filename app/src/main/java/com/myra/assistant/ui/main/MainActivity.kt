@@ -4,6 +4,10 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.app.ActivityManager
+import android.content.Context
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.graphics.Color
 import android.view.Gravity
 import android.view.ViewGroup
@@ -36,6 +40,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState); b = ActivityMainBinding.inflate(layoutInflater); setContentView(b.root)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) permission.launch(Manifest.permission.RECORD_AUDIO)
         b.settingsButton.setOnClickListener { showSettings() }
+        updateDeviceStatus()
         b.connectButton.setOnClickListener { if (live == null) connect() else disconnect() }
         b.sendButton.setOnClickListener {
             if (live == null) { showStatus("Connect to MYRA first — tap the mic") }
@@ -43,6 +48,16 @@ class MainActivity : AppCompatActivity() {
         }
         b.stopButton.setOnClickListener { audio?.interrupt(); live?.interrupt(); showStatus("Stopped") }
         b.muteButton.setOnClickListener { muted = !muted; audio?.setMuted(muted); b.muteButton.alpha = if (muted) 1f else .6f; showStatus(if (muted) "Microphone muted" else "Sun rahi hoon…") }
+    }
+    private fun updateDeviceStatus() {
+        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val percent = if (level >= 0) level * 100 / scale else 0
+        val memory = ActivityManager.MemoryInfo().also { (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it) }
+        val totalGb = kotlin.math.ceil(memory.totalMem / 1073741824.0).toInt()
+        b.deviceText.text = "$percent%\n${totalGb}GB"
+        b.timeText.text = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
     }
 
     private fun connect() {
