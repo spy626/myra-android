@@ -3,10 +3,12 @@ package com.myra.assistant.phone
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.Settings
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.service.AccessibilityHelperService
 import java.util.Locale
+import java.net.URLEncoder
 
 class AppActionExecutor(private val context: Context) {
     data class Result(val message: String, val success: Boolean)
@@ -29,6 +31,27 @@ class AppActionExecutor(private val context: Context) {
     fun execute(command: AppCommand): Result = when (command) {
         is AppCommand.OpenApp -> openApp(command.appName)
         is AppCommand.CloseCurrentApp -> closeCurrentApp()
+        is AppCommand.SearchYouTube -> searchYouTube(command.query)
+    }
+
+    private fun searchYouTube(rawQuery: String): Result {
+        val query = rawQuery.trim()
+        if (query.isBlank()) return Result("Tell me what you want to search on YouTube.", false)
+        val packageName = knownPackages.getValue("youtube")
+        if (context.packageManager.getLaunchIntentForPackage(packageName) == null) {
+            return Result("I couldn't find YouTube on this phone.", false)
+        }
+        val encoded = URLEncoder.encode(query, Charsets.UTF_8.name())
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$encoded")).apply {
+            setPackage(packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return try {
+            context.startActivity(intent)
+            Result("Searching YouTube for $query.", true)
+        } catch (_: Exception) {
+            Result("Android couldn't start that YouTube search.", false)
+        }
     }
 
     private fun openApp(rawName: String): Result {

@@ -96,6 +96,7 @@ class MyraVoiceService : Service() {
         val key = when (command) {
             is AppCommand.OpenApp -> "open:${command.appName.lowercase(Locale.ROOT)}"
             is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
+            is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
         }
         if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
         lastCommandKey = key; lastCommandAt = now; return true
@@ -122,7 +123,7 @@ class MyraVoiceService : Service() {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. When the user asks to open, launch, close, or stop an app, do not discuss limitations and do not tell them to do it manually; remain silent because Android reports the result. Never claim a phone action succeeded yourself."
+        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. When the user asks to open, launch, close, stop, or search inside YouTube, do not discuss limitations, do not invent search results, and do not tell them to do it manually; remain silent because Android reports the result. Never claim a phone action succeeded yourself."
     }
 
     private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }

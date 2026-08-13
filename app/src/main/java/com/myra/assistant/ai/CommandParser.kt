@@ -31,6 +31,7 @@ object CommandParser {
     fun parse(raw: String): AppCommand? {
         val text = normalize(raw)
         if (text.isBlank()) return null
+        extractYouTubeSearch(text)?.let { return AppCommand.SearchYouTube(it) }
         if (closeAction.containsMatchIn(text)) return AppCommand.CloseCurrentApp(findKnownApp(text))
         val knownApp = findKnownApp(text)
         if (openAction.containsMatchIn(text)) {
@@ -43,6 +44,23 @@ object CommandParser {
         // still a command; longer conversational mentions are deliberately not executed.
         if (knownApp != null && looksLikeShortAppCommand(text)) return AppCommand.OpenApp(knownApp)
         return null
+    }
+
+    private fun extractYouTubeSearch(text: String): String? {
+        val action = "(?:search(?:\\s+karo|\\s+kar\\s+do)?|find|dhundo|dhoondo|khojo|सर्च(?:\\s+करो|\\s+कर\\s+दो)?|ढूंढो|खोजो)"
+        val youtube = "(?:youtube|यूट्यूब)"
+        val place = "(?:mein|me|par|pe|में|पर)"
+        val patterns = listOf(
+            Regex("^$youtube\\s+$place\\s+(.+?)\\s+$action$"),
+            Regex("^$youtube\\s+(.+?)\\s+$action$"),
+            Regex("^(.+?)\\s+$youtube\\s+$place\\s+$action$"),
+            Regex("^$action\\s+(.+?)\\s+(?:on|in|$place)\\s+$youtube$"),
+            Regex("^$action\\s+(.+?)\\s+$youtube$")
+        )
+        return patterns.firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1) }
+            ?.replace(Regex("^(?:for|the|video|channel)\\s+"), "")
+            ?.replace(Regex("\\s+(?:video|channel)$"), "")
+            ?.trim()?.takeIf { it.length in 2..80 }
     }
 
     private fun looksLikeShortAppCommand(text: String): Boolean {
