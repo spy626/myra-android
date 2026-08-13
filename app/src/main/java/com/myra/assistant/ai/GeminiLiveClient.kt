@@ -2,6 +2,7 @@ package com.myra.assistant.ai
 
 import android.util.Base64
 import okhttp3.*
+import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -60,8 +61,10 @@ class GeminiLiveClient(
 
     private fun openLiveSocket(attempt: Int) {
         onState?.invoke("Connecting…")
-        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-        val opened = client.newWebSocket(Request.Builder().url(url).header("x-goog-api-key", apiKey).build(), this)
+        val url = HttpUrl.Builder().scheme("https").host("generativelanguage.googleapis.com")
+            .addPathSegments("ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
+            .addQueryParameter("key", apiKey).build().newBuilder().scheme("wss").build()
+        val opened = client.newWebSocket(Request.Builder().url(url).build(), this)
         socket = opened
         Thread {
             Thread.sleep(15_000)
@@ -122,6 +125,10 @@ class GeminiLiveClient(
             content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let { onOutputTranscript?.invoke(it) }
             if (content.optBoolean("turnComplete")) onTurnComplete?.invoke()
         } catch (e: Exception) { onError?.invoke("Invalid Live response: ${e.message}") }
+    }
+
+    override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+        onMessage(webSocket, bytes.utf8())
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
