@@ -76,7 +76,13 @@ class MainActivity : AppCompatActivity() {
         live?.onError = { runOnUiThread { showStatus(it) } }
         audio?.onMicChunk = { live?.sendAudio(it) }; audio?.onAmplitude = { runOnUiThread { b.orb.amplitude = it } }
         audio?.onSpeakingChanged = { runOnUiThread { b.orb.state = if (it) OrbAnimationView.State.SPEAKING else OrbAnimationView.State.LISTENING; showStatus(if (it) "Bol rahi hoon…" else "Sun rahi hoon…") } }
-        live?.connect()
+        try {
+            live?.connect()
+        } catch (e: Exception) {
+            showStatus("Connection could not start: ${e.message}")
+            audio?.release(); audio = null; live = null
+            b.orb.state = OrbAnimationView.State.IDLE
+        }
     }
 
     private fun systemPrompt(name: String, mode: String): String {
