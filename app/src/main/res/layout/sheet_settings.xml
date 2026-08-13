@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@drawable/bg_sheet" android:fillViewport="true">
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="24dp">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="S E T T I N G S" android:textColor="#EEEEEE" android:textSize="17sp" android:textStyle="bold" />
+        <TextView android:id="@+id/closeSettings" android:layout_width="44dp" android:layout_height="44dp" android:gravity="center" android:text="×" android:textColor="#FF1744" android:textSize="34sp" />
+    </LinearLayout>
+    <TextView style="@style/MyraLabel" android:text="GEMINI API KEY" />
+    <EditText android:id="@+id/sheetApiKey" style="@style/MyraField" android:inputType="textPassword" />
+    <TextView style="@style/MyraLabel" android:text="YOUR NAME" />
+    <EditText android:id="@+id/sheetName" style="@style/MyraField" />
+    <TextView style="@style/MyraLabel" android:text="AI MODEL" />
+    <TextView android:id="@+id/modelChoice" style="@style/MyraChoice" android:text="Flash Live (Latest · Fast)" />
+    <TextView style="@style/MyraLabel" android:text="VOICE" />
+    <TextView android:id="@+id/voiceChoice" style="@style/MyraChoice" android:text="Aoede (Female)" />
+    <TextView style="@style/MyraLabel" android:text="PERSONALITY" />
+    <RadioGroup android:id="@+id/personalityGroup" android:layout_width="match_parent" android:layout_height="48dp" android:orientation="horizontal">
+        <RadioButton android:id="@+id/gfMode" style="@style/MyraPill" android:text="GF 💖" android:checked="true" />
+        <RadioButton android:id="@+id/proMode" style="@style/MyraPill" android:text="PROFESSIONAL 💼" />
+        <RadioButton android:id="@+id/assistantMode" style="@style/MyraPill" android:text="ASSISTANT 🤖" />
+    </RadioGroup>
+    <TextView style="@style/MyraLabel" android:text="PRIME CONTACTS" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="58dp" android:orientation="horizontal">
+        <EditText android:id="@+id/contactName" style="@style/MyraField" android:layout_width="0dp" android:layout_weight="1" android:hint="Name" />
+        <EditText android:id="@+id/contactNumber" style="@style/MyraField" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="8dp" android:hint="Number" android:inputType="phone" />
+        <Button android:id="@+id/addContact" android:layout_width="74dp" android:layout_height="58dp" android:layout_marginStart="8dp" android:background="@drawable/bg_button" android:text="Add" android:textColor="#FFF" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/contactList" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
+    <TextView style="@style/MyraLabel" android:text="MICROPHONE PERMISSION" />
+    <TextView android:id="@+id/micStatus" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#777077" android:textSize="13sp" />
+    <TextView style="@style/MyraLabel" android:text="DEVICE ACTIONS" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Voice connection is native. Phone calls, SMS and accessibility controls will be added after Live voice passes testing." android:textColor="#6F6870" android:textSize="12sp" />
+    <Button android:id="@+id/sheetSave" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="28dp" android:layout_marginBottom="20dp" android:background="@drawable/bg_button" android:text="SAVE" android:textColor="#FFF" android:textStyle="bold" />
+</LinearLayout></ScrollView>
