@@ -7,6 +7,7 @@ import android.net.Uri
 import android.provider.Settings
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.service.AccessibilityHelperService
+import com.myra.assistant.service.WhatsAppReplyStore
 import java.util.Locale
 import java.net.URLEncoder
 
@@ -34,6 +35,8 @@ class AppActionExecutor(private val context: Context) {
         is AppCommand.SearchYouTube -> searchYouTube(command.query)
         AppCommand.RepeatYouTubeSearch -> repeatYouTubeSearch()
         is AppCommand.DeepResearch -> Result("Deep Research needs MYRA to be connected.", false)
+        is AppCommand.ReplyWhatsApp -> WhatsAppReplyStore.reply(context, command.sender, command.message)
+            .let { Result(it.message, it.success) }
     }
 
     private fun searchYouTube(rawQuery: String): Result {

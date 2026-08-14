@@ -85,6 +85,8 @@ class MyraVoiceService : Service() {
                         commandProbe.append(part)
                         val directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
                             ?: CommandParser.parseDirectMediaControl(part)
+                            ?: CommandParser.parse(commandProbe.toString()).takeIf { it is AppCommand.ReplyWhatsApp }
+                            ?: CommandParser.parse(part).takeIf { it is AppCommand.ReplyWhatsApp }
                         if (directCommand != null) {
                             val spoken = commandProbe.toString().trim()
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
@@ -172,6 +174,7 @@ class MyraVoiceService : Service() {
             is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
             is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
+            is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
         }
         // One utterance can arrive as several slightly different Live transcript chunks.
         // A longer semantic dedupe window prevents the same local action/error appearing
@@ -239,6 +242,20 @@ class MyraVoiceService : Service() {
     }
 
     private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }
+
+    private fun speakWhatsAppAnnouncement(sender: String, message: String?) {
+        if (live == null) return
+        audio?.interrupt()
+        mediaGuard.beginAssistantTurn()
+        val name = getSharedPreferences("myra", MODE_PRIVATE).getString("user_name", "Zopy") ?: "Zopy"
+        val announcement = if (message == null) {
+            "$name, WhatsApp mein $sender ka private message aaya hai. Content sensitive hai, main aloud nahi padhungi. Kya reply doon?"
+        } else {
+            "$name, WhatsApp mein $sender ka message aaya hai: $message. Kya reply doon?"
+        }
+        live?.sendText("Speak this notification announcement naturally in Hinglish. Do not add anything: $announcement")
+        emitState("WhatsApp message from $sender")
+    }
     private fun createChannel() { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel(CHANNEL_ID, "MYRA background voice", NotificationManager.IMPORTANCE_LOW)) }
     private fun notification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -264,6 +281,7 @@ class MyraVoiceService : Service() {
         @Volatile private var instance: MyraVoiceService? = null
         fun sendText(text: String) { instance?.live?.sendText(text) }
         fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
+        fun announceWhatsApp(sender: String, message: String?) { instance?.speakWhatsAppAnnouncement(sender, message) }
         fun interrupt() { instance?.audio?.interrupt(); instance?.live?.interrupt() }
     }
 }

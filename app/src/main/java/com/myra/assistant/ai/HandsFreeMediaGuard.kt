@@ -31,6 +31,7 @@ class HandsFreeMediaGuard(context: Context) {
     }
 
     fun allowModelResponse(): Boolean = !isExternalMediaPlaying() || isAwake()
+    fun beginAssistantTurn() = beginInteraction()
     fun isAwake(): Boolean = SystemClock.elapsedRealtime() < awakeUntil
     fun isExternalMediaPlaying(): Boolean = audioManager.isMusicActive
 

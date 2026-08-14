@@ -31,6 +31,7 @@ object CommandParser {
     fun parse(raw: String): AppCommand? {
         val text = normalize(raw)
         if (text.isBlank()) return null
+        extractWhatsAppReply(text)?.let { return it }
         extractDeepResearch(text)?.let { return it }
         if (isRepeatYouTubeSearch(text)) return AppCommand.RepeatYouTubeSearch
         extractYouTubeSearch(text)?.let { return AppCommand.SearchYouTube(it) }
@@ -47,6 +48,26 @@ object CommandParser {
         if (knownApp != null && looksLikeShortAppCommand(text)) return AppCommand.OpenApp(knownApp)
         return null
     }
+
+    private fun extractWhatsAppReply(text: String): AppCommand.ReplyWhatsApp? {
+        val namedPatterns = listOf(
+            Regex("^(.+?)\\s+ko\\s+(?:whatsapp\\s+)?(?:message|msg)\\s+(?:send|sent)\\s+karo\\s+(.+?)(?:\\s+bolke)?$"),
+            Regex("^(.+?)\\s+ko\\s+(.+?)\\s+(?:message|msg)\\s+bhejo$"),
+            Regex("^(.+?)\\s+ko\\s+(?:message|msg)\\s+bhejo\\s+(.+?)(?:\\s+bolke)?$")
+        )
+        namedPatterns.firstNotNullOfOrNull { pattern ->
+            pattern.matchEntire(text)?.let { match ->
+                AppCommand.ReplyWhatsApp(match.groupValues[1].trim(), cleanReplyText(match.groupValues[2]))
+            }
+        }?.let { return it.takeIf { command -> command.message.isNotBlank() } }
+
+        val contextual = Regex("^(?:reply|jawab)\\s+(?:karo|bhejo|send\\s+karo)?\\s*(.+)$")
+            .matchEntire(text)?.groupValues?.get(1)?.let(::cleanReplyText)
+        return contextual?.takeIf { it.isNotBlank() }?.let { AppCommand.ReplyWhatsApp(null, it) }
+    }
+
+    private fun cleanReplyText(value: String): String = value
+        .replace(Regex("\\s+bolke$"), "").trim().trim('"', '\'', '.', ',')
 
     /**
      * Commands allowed while external media is playing without requiring a wake word.

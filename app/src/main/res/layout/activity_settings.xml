@@ -34,5 +34,9 @@
             <TextView style="@style/MyraSettingsIcon" android:text="✓" />
             <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Permissions &amp; Device Actions" /><TextView style="@style/MyraSettingsSubtitle" android:text="Microphone and Accessibility controls" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
         </LinearLayout>
+        <LinearLayout android:id="@+id/notificationAccessCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="▣" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Notification Intelligence" /><TextView style="@style/MyraSettingsSubtitle" android:text="Announce and reply to WhatsApp messages" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

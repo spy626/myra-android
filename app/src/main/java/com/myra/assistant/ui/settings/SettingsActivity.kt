@@ -17,6 +17,7 @@ class SettingsActivity : AppCompatActivity() {
         b.apiCloudCard.setOnClickListener { startActivity(Intent(this, ApiCloudSettingsActivity::class.java)) }
         b.voiceAiCard.setOnClickListener { startActivity(Intent(this, VoiceAiSettingsActivity::class.java)) }
         b.permissionsCard.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        b.notificationAccessCard.setOnClickListener { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
         b.orbCard.setOnClickListener { Toast.makeText(this, "Orb customization is the next design module", Toast.LENGTH_SHORT).show() }
         b.contactsCard.setOnClickListener { Toast.makeText(this, "Prime contacts editor is being moved here next", Toast.LENGTH_SHORT).show() }
     }

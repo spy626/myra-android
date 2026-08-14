@@ -210,6 +210,7 @@ class MainActivity : AppCompatActivity() {
             is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
             is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
+            is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
         }
         if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
         lastCommandKey = key
