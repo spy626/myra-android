@@ -121,7 +121,10 @@ class MyraVoiceService : Service() {
             is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
         }
-        if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
+        // One utterance can arrive as several slightly different Live transcript chunks.
+        // A longer semantic dedupe window prevents the same local action/error appearing
+        // repeatedly while still allowing an intentional command a few seconds later.
+        if (key == lastCommandKey && now - lastCommandAt < 4_000L) return false
         lastCommandKey = key; lastCommandAt = now; return true
     }
 

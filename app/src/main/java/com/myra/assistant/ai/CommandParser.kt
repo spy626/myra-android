@@ -70,9 +70,14 @@ object CommandParser {
     }
 
     private fun isRepeatYouTubeSearch(text: String): Boolean {
-        val repeat = Regex("(?:same\\s+(?:channel|search)|wahi\\s+(?:channel|search)|usi\\s+channel|phir\\s+se\\s+wahi|fir\\s+se\\s+wahi|वही\\s+(?:चैनल|सर्च)|उसी\\s+चैनल)")
-        val action = Regex("(?:search|find|dhundo|dhoondo|khojo|सर्च|ढूंढो|खोजो)")
-        return repeat.containsMatchIn(text) && action.containsMatchIn(text)
+        val explicitReference = Regex("(?:same\\s+(?:channel|search)|wahi\\s+(?:channel|search)|usi\\s+channel|phir\\s+se\\s+wahi|fir\\s+se\\s+wahi|वही\\s+(?:चैनल|सर्च)|उसी\\s+चैनल)")
+        val action = Regex("(?:open|kholo|khol\\s+do|search|find|dhundo|dhoondo|khojo|ओपन|खोलो|खोल\\s+दो|सर्च|ढूंढो|खोजो)")
+        if (explicitReference.containsMatchIn(text) && action.containsMatchIn(text)) return true
+
+        // Live transcription sometimes turns "phir se" into "police se". These short
+        // commands are contextual repeats; AppActionExecutor safely refuses them when no
+        // previous YouTube query has been stored.
+        return Regex("^(?:(?:phir|fir|police)\\s+se|dobara|again|फिर\\s+से|दोबारा)\\s+(?:open|kholo|khol\\s+do|search|ओपन|खोलो|सर्च)(?:\\s+karo)?$").matches(text)
     }
 
     private fun looksLikeShortAppCommand(text: String): Boolean {
@@ -91,6 +96,8 @@ object CommandParser {
     }?.value
 
     private fun extractSimpleAppName(text: String): String? {
+        val contextualWords = Regex("(?:same\\s+channel|wahi\\s+channel|usi\\s+channel|phir\\s+se|fir\\s+se|police\\s+se|वही\\s+चैनल|उसी\\s+चैनल)")
+        if (contextualWords.containsMatchIn(text)) return null
         val patterns = listOf(
             Regex("^(?:please\\s+)?(?:open|launch|start)\\s+([\\p{L}\\p{N} ]{1,35})$"),
             Regex("^([\\p{L}\\p{N} ]{1,35})\\s+(?:kholo|khol\\s+do|open\\s+karo|open\\s+kar\\s+do|chalao)$")
