@@ -8,6 +8,7 @@ import androidx.core.app.NotificationCompat
 import com.myra.assistant.ai.AudioEngine
 import com.myra.assistant.ai.CommandParser
 import com.myra.assistant.ai.GeminiLiveClient
+import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.ui.main.MainActivity
@@ -55,7 +56,7 @@ class MyraVoiceService : Service() {
 
     private fun connect() {
         val p = getSharedPreferences("myra", MODE_PRIVATE)
-        val key = p.getString("api_key", "").orEmpty()
+        val key = ApiKeyStore(this).get(ApiKeyStore.GEMINI)
         val name = p.getString("user_name", "Friend") ?: "Friend"
         if (key.isBlank()) { emitState("Add your Gemini API key in Settings"); stopSelf(); return }
         audio = AudioEngine(this)

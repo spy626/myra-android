@@ -7,6 +7,23 @@
     </LinearLayout>
     <TextView style="@style/MyraLabel" android:text="GEMINI API KEY" />
     <EditText android:id="@+id/sheetApiKey" style="@style/MyraField" android:inputType="textPassword" />
+    <TextView style="@style/MyraLabel" android:text="CONVERSATION BRAIN" />
+    <TextView android:id="@+id/providerChoice" style="@style/MyraChoice" android:text="Gemini Live (Voice + Conversation)" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp" android:text="Gemini Live always handles live voice. Groq or DeepSeek can become the text/reasoning brain in the routing upgrade." android:textColor="#6F6870" android:textSize="12sp" />
+    <TextView style="@style/MyraLabel" android:text="GROQ API KEY" />
+    <EditText android:id="@+id/groqApiKey" style="@style/MyraField" android:hint="gsk_…" android:inputType="textPassword" />
+    <Button android:id="@+id/testGroq" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="8dp" android:background="@drawable/bg_field" android:text="TEST GROQ CONNECTION" android:textColor="#FF506E" />
+    <TextView style="@style/MyraLabel" android:text="DEEPSEEK API KEY" />
+    <EditText android:id="@+id/deepseekApiKey" style="@style/MyraField" android:hint="sk-…" android:inputType="textPassword" />
+    <Button android:id="@+id/testDeepseek" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="8dp" android:background="@drawable/bg_field" android:text="TEST DEEPSEEK CONNECTION" android:textColor="#FF506E" />
+    <TextView style="@style/MyraLabel" android:text="DEEP RESEARCH · TAVILY API KEY" />
+    <EditText android:id="@+id/tavilyApiKey" style="@style/MyraField" android:hint="tvly-…" android:inputType="textPassword" />
+    <TextView style="@style/MyraLabel" android:text="TAVILY API URL" />
+    <EditText android:id="@+id/tavilyApiUrl" style="@style/MyraField" android:inputType="textUri" android:text="https://api.tavily.com/search" />
+    <TextView style="@style/MyraLabel" android:text="RESEARCH DEPTH" />
+    <TextView android:id="@+id/researchDepthChoice" style="@style/MyraChoice" android:text="Basic (1 credit · faster)" />
+    <Button android:id="@+id/testTavily" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="8dp" android:background="@drawable/bg_field" android:text="TEST TAVILY CONNECTION" android:textColor="#FF506E" />
+    <TextView android:id="@+id/cloudStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Keys stay encrypted on this phone and are never committed to GitHub." android:textColor="#777077" android:textSize="12sp" />
     <TextView style="@style/MyraLabel" android:text="YOUR NAME" />
     <EditText android:id="@+id/sheetName" style="@style/MyraField" />
     <TextView style="@style/MyraLabel" android:text="AI MODEL" />
