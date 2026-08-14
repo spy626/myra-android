@@ -9,6 +9,6 @@
         <TextView style="@style/MyraLabel" android:text="RESEARCH DEPTH"/><TextView android:id="@+id/depthChoice" style="@style/MyraChoice"/>
         <TextView android:id="@+id/statusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="Status: Not tested" android:textColor="#777077" android:textSize="13sp"/>
     </LinearLayout>
-    <Button android:id="@+id/testButton" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="18dp" android:background="@drawable/bg_field" android:text="TEST CONNECTION" android:textColor="#EEEEEE"/>
-    <Button android:id="@+id/saveButton" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="12dp" android:background="@drawable/bg_button" android:text="SAVE SETTINGS" android:textColor="#FFFFFF" android:textStyle="bold"/>
+    <Button android:id="@+id/testButton" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="18dp" android:backgroundTint="#171517" android:text="TEST CONNECTION" android:textColor="#EEEEEE"/>
+    <Button android:id="@+id/saveButton" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="12dp" android:backgroundTint="#FF1744" android:text="SAVE SETTINGS" android:textColor="#FFFFFF" android:textStyle="bold"/>
 </LinearLayout></ScrollView>
