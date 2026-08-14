@@ -26,4 +26,16 @@
         <item name="android:layout_marginEnd">8dp</item><item name="android:button">@null</item><item name="android:background">@drawable/bg_pill</item>
         <item name="android:gravity">center</item><item name="android:textColor">#AAAAAA</item><item name="android:textSize">11sp</item>
     </style>
+    <style name="MyraSettingsCard">
+        <item name="android:layout_width">match_parent</item><item name="android:layout_height">82dp</item><item name="android:layout_marginBottom">10dp</item>
+        <item name="android:background">@drawable/bg_field</item><item name="android:gravity">center_vertical</item><item name="android:orientation">horizontal</item>
+        <item name="android:paddingHorizontal">16dp</item><item name="android:clickable">true</item><item name="android:focusable">true</item>
+    </style>
+    <style name="MyraSettingsIcon"><item name="android:layout_width">42dp</item><item name="android:layout_height">42dp</item><item name="android:gravity">center</item><item name="android:textColor">#FF1744</item><item name="android:textSize">23sp</item></style>
+    <style name="MyraSettingsTextGroup"><item name="android:layout_width">0dp</item><item name="android:layout_height">wrap_content</item><item name="android:layout_weight">1</item><item name="android:orientation">vertical</item><item name="android:layout_marginStart">12dp</item></style>
+    <style name="MyraSettingsTitle"><item name="android:layout_width">wrap_content</item><item name="android:layout_height">wrap_content</item><item name="android:textColor">#EEEEEE</item><item name="android:textSize">16sp</item><item name="android:textStyle">bold</item></style>
+    <style name="MyraSettingsSubtitle"><item name="android:layout_width">wrap_content</item><item name="android:layout_height">wrap_content</item><item name="android:layout_marginTop">4dp</item><item name="android:textColor">#777077</item><item name="android:textSize">12sp</item></style>
+    <style name="MyraSettingsChevron"><item name="android:layout_width">28dp</item><item name="android:layout_height">40dp</item><item name="android:gravity">center</item><item name="android:text">›</item><item name="android:textColor">#777077</item><item name="android:textSize">28sp</item></style>
+    <style name="MyraProviderRadio" parent="Widget.AppCompat.CompoundButton.RadioButton"><item name="android:layout_width">match_parent</item><item name="android:layout_height">48dp</item><item name="android:textColor">#EEEEEE</item><item name="android:textSize">14sp</item><item name="buttonTint">#FF1744</item></style>
+    <style name="MyraTestButton"><item name="android:layout_width">match_parent</item><item name="android:layout_height">44dp</item><item name="android:layout_marginTop">7dp</item><item name="android:background">@drawable/bg_field</item><item name="android:textColor">#FF506E</item><item name="android:textSize">12sp</item></style>
 </resources>

@@ -19,10 +19,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
 import com.myra.assistant.ai.AudioEngine
-import com.myra.assistant.ai.ApiConnectionTester
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.ai.CommandParser
 import com.myra.assistant.ai.GeminiLiveClient
@@ -32,6 +29,7 @@ import com.myra.assistant.service.MyraVoiceService
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.databinding.ActivityMainBinding
 import com.myra.assistant.databinding.SheetSettingsBinding
+import com.myra.assistant.ui.settings.SettingsActivity
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -104,32 +102,24 @@ class MainActivity : AppCompatActivity() {
         return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style Keep every response natural, conversational and safe. When the user asks to open or close an Android app, reply only with a brief acknowledgement such as Okay; never claim the action succeeded because the Android command layer reports the real result."
     }
     private fun showSettings() {
+        startActivity(Intent(this, SettingsActivity::class.java))
+    }
+
+    @Suppress("unused")
+    private fun showLegacySettings() {
         val dialog = BottomSheetDialog(this, com.google.android.material.R.style.Theme_Design_BottomSheetDialog)
         val s = SheetSettingsBinding.inflate(layoutInflater)
         dialog.setContentView(s.root)
         dialog.behavior.peekHeight = (resources.displayMetrics.heightPixels * .86f).toInt()
         dialog.behavior.isFitToContents = true
         val p = getSharedPreferences("myra", MODE_PRIVATE)
-        val keyStore = ApiKeyStore(this)
         val modelLabels = arrayOf("Flash Live (Latest · Fast)", "Native Audio (Human Voice)")
         val modelIds = arrayOf("gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-preview-12-2025")
         val voiceLabels = arrayOf("Aoede (Female)", "Charon (Male)", "Kore (Female)", "Fenrir (Male)", "Puck (Male)", "Leda (Female)", "Orus (Male)", "Zephyr (Female)")
         val voiceIds = arrayOf("Aoede", "Charon", "Kore", "Fenrir", "Puck", "Leda", "Orus", "Zephyr")
         var modelIndex = modelIds.indexOf(p.getString("model", modelIds[0])).coerceAtLeast(0)
         var voiceIndex = voiceIds.indexOf(p.getString("voice", voiceIds[0])).coerceAtLeast(0)
-        s.sheetApiKey.setText(keyStore.get(ApiKeyStore.GEMINI)); s.sheetName.setText(p.getString("user_name", "Zopy"))
-        s.groqApiKey.setText(keyStore.get(ApiKeyStore.GROQ))
-        s.deepseekApiKey.setText(keyStore.get(ApiKeyStore.DEEPSEEK))
-        s.tavilyApiKey.setText(keyStore.get(ApiKeyStore.TAVILY))
-        s.tavilyApiUrl.setText(p.getString("tavily_api_url", "https://api.tavily.com/search"))
-        val providerLabels = arrayOf("Gemini Live (Voice + Conversation)", "Groq (Fast text brain)", "DeepSeek (Reasoning brain)")
-        val providerIds = arrayOf("gemini", "groq", "deepseek")
-        var providerIndex = providerIds.indexOf(p.getString("conversation_provider", "gemini")).coerceAtLeast(0)
-        s.providerChoice.text = providerLabels[providerIndex]
-        val depthLabels = arrayOf("Basic (1 credit · faster)", "Advanced (2 credits · deeper)")
-        val depthIds = arrayOf("basic", "advanced")
-        var depthIndex = depthIds.indexOf(p.getString("research_depth", "basic")).coerceAtLeast(0)
-        s.researchDepthChoice.text = depthLabels[depthIndex]
+        s.sheetApiKey.setText(p.getString("api_key", "")); s.sheetName.setText(p.getString("user_name", "Zopy"))
         s.modelChoice.text = modelLabels[modelIndex]; s.voiceChoice.text = voiceLabels[voiceIndex]
         when (p.getString("personality", "GF")) { "Professional" -> s.proMode.isChecked = true; "Assistant" -> s.assistantMode.isChecked = true; else -> s.gfMode.isChecked = true }
         s.micStatus.text = if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) "Granted ✓" else "Not yet granted — tap the mic to allow"
@@ -141,21 +131,6 @@ class MainActivity : AppCompatActivity() {
         }
         s.modelChoice.setOnClickListener { pick("AI Model", modelLabels, modelIndex) { modelIndex = it; s.modelChoice.text = modelLabels[it] } }
         s.voiceChoice.setOnClickListener { pick("Voice", voiceLabels, voiceIndex) { voiceIndex = it; s.voiceChoice.text = voiceLabels[it] } }
-        s.providerChoice.setOnClickListener { pick("Conversation Brain", providerLabels, providerIndex) { providerIndex = it; s.providerChoice.text = providerLabels[it] } }
-        s.researchDepthChoice.setOnClickListener { pick("Research Depth", depthLabels, depthIndex) { depthIndex = it; s.researchDepthChoice.text = depthLabels[it] } }
-        val tester = ApiConnectionTester()
-        fun runTest(provider: ApiConnectionTester.Provider, key: String) {
-            s.cloudStatus.text = "Testing ${provider.label}…"
-            s.cloudStatus.setTextColor(Color.LTGRAY)
-            lifecycleScope.launch {
-                val result = tester.test(provider, key, s.tavilyApiUrl.text.toString())
-                s.cloudStatus.text = result.message
-                s.cloudStatus.setTextColor(if (result.success) Color.rgb(0, 230, 118) else Color.rgb(255, 80, 110))
-            }
-        }
-        s.testGroq.setOnClickListener { runTest(ApiConnectionTester.Provider.GROQ, s.groqApiKey.text.toString().trim()) }
-        s.testDeepseek.setOnClickListener { runTest(ApiConnectionTester.Provider.DEEPSEEK, s.deepseekApiKey.text.toString().trim()) }
-        s.testTavily.setOnClickListener { runTest(ApiConnectionTester.Provider.TAVILY, s.tavilyApiKey.text.toString().trim()) }
         val contacts = JSONArray(p.getString("prime_contacts_json", "[]"))
         fun renderContacts() {
             s.contactList.removeAllViews()
@@ -177,14 +152,8 @@ class MainActivity : AppCompatActivity() {
         s.closeSettings.setOnClickListener { dialog.dismiss() }
         s.sheetSave.setOnClickListener {
             val personality = when (s.personalityGroup.checkedRadioButtonId) { s.proMode.id -> "Professional"; s.assistantMode.id -> "Assistant"; else -> "GF" }
-            keyStore.put(ApiKeyStore.GEMINI, s.sheetApiKey.text.toString())
-            keyStore.put(ApiKeyStore.GROQ, s.groqApiKey.text.toString())
-            keyStore.put(ApiKeyStore.DEEPSEEK, s.deepseekApiKey.text.toString())
-            keyStore.put(ApiKeyStore.TAVILY, s.tavilyApiKey.text.toString())
-            p.edit().putString("user_name",s.sheetName.text.toString().trim())
+            p.edit().putString("api_key",s.sheetApiKey.text.toString().trim()).putString("user_name",s.sheetName.text.toString().trim())
                 .putString("model",modelIds[modelIndex]).putString("voice",voiceIds[voiceIndex]).putString("personality",personality)
-                .putString("conversation_provider",providerIds[providerIndex]).putString("research_depth",depthIds[depthIndex])
-                .putString("tavily_api_url",s.tavilyApiUrl.text.toString().trim())
                 .putString("prime_contacts_json",contacts.toString()).apply()
             Toast.makeText(this,"Settings saved",Toast.LENGTH_SHORT).show(); dialog.dismiss()
             if (MyraVoiceService.isRunning) { disconnect(); showStatus("Tap the mic to apply new settings") }
