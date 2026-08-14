@@ -74,11 +74,16 @@ object CommandParser {
             Regex("^(.+?)\\s+$youtube\\s+$place\\s+$action$"),
             Regex("^$action\\s+(.+?)\\s+(?:on|in|$place)\\s+$youtube$"),
             Regex("^$action\\s+(.+?)\\s+$youtube$"),
-            Regex("^(?:phir\\s+se|fir\\s+se|dobara|again)\\s+(.+?)\\s+$action$")
+            Regex("^(?:phir\\s+se|fir\\s+se|dobara|again)\\s+(.+?)\\s+$action$"),
+            // When YouTube is already open, people naturally omit its name:
+            // "Lols Gaming search karo". Treat a query followed by an explicit
+            // search verb as a YouTube search instead of degrading to OpenApp.
+            Regex("^(.+?)\\s+$action$")
         )
         return patterns.firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1) }
             ?.replace(Regex("^(?:for|the|video|channel)\\s+"), "")
             ?.replace(Regex("\\s+(?:video|channel)$"), "")
+            ?.replace(Regex("^(?:please|youtube\\s+(?:mein|me|par|pe)|यूट्यूब\\s+(?:में|पर))\\s+"), "")
             ?.trim()?.takeIf { it.length in 2..80 }
     }
 
