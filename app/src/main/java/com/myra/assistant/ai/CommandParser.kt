@@ -31,6 +31,7 @@ object CommandParser {
     fun parse(raw: String): AppCommand? {
         val text = normalize(raw)
         if (text.isBlank()) return null
+        extractDeepResearch(text)?.let { return it }
         if (isRepeatYouTubeSearch(text)) return AppCommand.RepeatYouTubeSearch
         extractYouTubeSearch(text)?.let { return AppCommand.SearchYouTube(it) }
         if (closeAction.containsMatchIn(text)) return AppCommand.CloseCurrentApp(findKnownApp(text))
@@ -45,6 +46,18 @@ object CommandParser {
         // still a command; longer conversational mentions are deliberately not executed.
         if (knownApp != null && looksLikeShortAppCommand(text)) return AppCommand.OpenApp(knownApp)
         return null
+    }
+
+    private fun extractDeepResearch(text: String): AppCommand.DeepResearch? {
+        val trigger = Regex("(?:deep\\s+(?:research|search)|in-depth\\s+(?:research|search)|गहरी\\s+(?:रिसर्च|सर्च)|डीप\\s+(?:रिसर्च|सर्च))")
+        if (!trigger.containsMatchIn(text)) return null
+        val intent = Regex("(?:karo|karna|kar\\s+do|karke|batao|dhundo|dhoondo|find|do|can\\s+you|sakti\\s+ho|sakta\\s+hai|करो|करना|कर\\s+दो|करके|बताओ|ढूंढो)")
+        if (!text.startsWith("deep ") && !text.startsWith("in depth ") && !intent.containsMatchIn(text)) return null
+        val filler = Regex("(?:please|kya|mere\\s+liye|kar\\s+sakti\\s+ho|kar\\s+sakta\\s+hai|sakti\\s+ho|sakta\\s+hai|can\\s+you|karo|karna|kar\\s+do|karke|batao|dhundo|dhoondo|find|about|on|please|क्या|कर\\s+सकती\\s+हो|कर\\s+सकता\\s+है|करो|करना|कर\\s+दो|करके|बताओ|ढूंढो)")
+        val query = trigger.replace(text, " ").let { filler.replace(it, " ") }
+            .replace(Regex("\\s+"), " ").trim().trim('?', '.', ',')
+            .takeIf { it.length >= 3 }
+        return AppCommand.DeepResearch(query)
     }
 
     private fun extractYouTubeSearch(text: String): String? {

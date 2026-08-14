@@ -33,6 +33,7 @@ class AppActionExecutor(private val context: Context) {
         is AppCommand.CloseCurrentApp -> closeCurrentApp()
         is AppCommand.SearchYouTube -> searchYouTube(command.query)
         AppCommand.RepeatYouTubeSearch -> repeatYouTubeSearch()
+        is AppCommand.DeepResearch -> Result("Deep Research needs MYRA to be connected.", false)
     }
 
     private fun searchYouTube(rawQuery: String): Result {

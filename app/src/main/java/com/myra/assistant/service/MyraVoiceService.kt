@@ -9,11 +9,17 @@ import com.myra.assistant.ai.AudioEngine
 import com.myra.assistant.ai.CommandParser
 import com.myra.assistant.ai.GeminiLiveClient
 import com.myra.assistant.ai.ApiKeyStore
+import com.myra.assistant.ai.DeepResearchClient
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.ui.main.MainActivity
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class MyraVoiceService : Service() {
     interface Listener {
@@ -35,6 +41,8 @@ class MyraVoiceService : Service() {
     private var commandUserTextEmitted = false
     private var lastCommandKey = ""
     private var lastCommandAt = 0L
+    private var hideNextModelTranscript = false
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val appActions by lazy { AppActionExecutor(this) }
 
     override fun onCreate() {
@@ -82,7 +90,7 @@ class MyraVoiceService : Service() {
                 // A streamed transcript may first contain only "YouTube" and later add
                 // "mein search karo Lols Gaming". Never execute a plain open-app command
                 // from an incomplete chunk; confirm it from the complete turn below.
-                if (command != null && command !is AppCommand.OpenApp) {
+                if (command != null && command !is AppCommand.OpenApp && command !is AppCommand.DeepResearch) {
                     val spoken = commandProbe.toString().trim()
                     if (spoken.isNotBlank() && !commandUserTextEmitted) {
                         listener?.onUserText(spoken)
@@ -91,8 +99,13 @@ class MyraVoiceService : Service() {
                     executeCommand(command)
                 }
             }
-            client.onOutputTranscript = { if (!suppressModelForTurn) output.append(it) }
-            client.onTurnComplete = {
+            client.onOutputTranscript = { if (!suppressModelForTurn && !hideNextModelTranscript) output.append(it) }
+            client.onTurnComplete = turnComplete@ {
+                if (hideNextModelTranscript) {
+                    hideNextModelTranscript = false
+                    input.clear(); output.clear(); commandProbe.clear(); commandUserTextEmitted = false
+                    return@turnComplete
+                }
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
                 if (userText.isNotBlank() && !commandUserTextEmitted) listener?.onUserText(userText)
                 // Run one final parse over the complete transcript. Partial Live transcript
@@ -121,6 +134,7 @@ class MyraVoiceService : Service() {
             is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
+            is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
         }
         // One utterance can arrive as several slightly different Live transcript chunks.
         // A longer semantic dedupe window prevents the same local action/error appearing
@@ -131,6 +145,7 @@ class MyraVoiceService : Service() {
 
     private fun executeCommand(command: AppCommand) {
         if (!shouldExecute(command)) return
+        if (command is AppCommand.DeepResearch) { executeDeepResearch(command); return }
         suppressModelForTurn = true
         waitingForFreshInputAfterCommand = false
         commandProbe.clear()
@@ -140,6 +155,37 @@ class MyraVoiceService : Service() {
         val result = appActions.execute(command)
         listener?.onMyraText(result.message, !result.success)
         emitState(result.message)
+    }
+
+    private fun executeDeepResearch(command: AppCommand.DeepResearch) {
+        val query = command.query?.trim().orEmpty()
+        suppressModelForTurn = true; waitingForFreshInputAfterCommand = false; output.clear(); commandProbe.clear()
+        audio?.interrupt(); live?.interrupt()
+        if (query.isBlank()) {
+            val prompt = "Haan, deep research kar sakti hoon. Kis topic par research chahiye?"
+            listener?.onMyraText(prompt); emitState("Waiting for a research topic")
+            speakResearchSummary(prompt)
+            return
+        }
+        listener?.onMyraText("Researching “$query”…")
+        emitState("Deep Research in progress…")
+        val prefs = getSharedPreferences("myra", MODE_PRIVATE)
+        val apiKey = ApiKeyStore(this).get(ApiKeyStore.TAVILY)
+        val endpoint = prefs.getString("tavily_api_url", "https://api.tavily.com/search").orEmpty()
+        val depth = prefs.getString("research_depth", "basic").orEmpty()
+        serviceScope.launch {
+            val result = DeepResearchClient().search(query, apiKey, endpoint, depth)
+            listener?.onMyraText(result.report, !result.success)
+            emitState(if (result.success) "Deep Research complete" else "Deep Research failed")
+            if (result.success) speakResearchSummary(result.spokenSummary)
+            else { suppressModelForTurn = false; waitingForFreshInputAfterCommand = true }
+        }
+    }
+
+    private fun speakResearchSummary(summary: String) {
+        hideNextModelTranscript = true
+        suppressModelForTurn = false
+        live?.sendText("Speak this research result aloud naturally and briefly. Do not add facts or mention URLs: $summary")
     }
 
     private fun systemPrompt(name: String, mode: String, voice: String): String {
@@ -164,7 +210,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { live?.disconnect(); audio?.release(); live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { serviceScope.cancel(); live?.disconnect(); audio?.release(); live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -179,6 +225,7 @@ class MyraVoiceService : Service() {
         @Volatile var listener: Listener? = null
         @Volatile private var instance: MyraVoiceService? = null
         fun sendText(text: String) { instance?.live?.sendText(text) }
+        fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
         fun interrupt() { instance?.audio?.interrupt(); instance?.live?.interrupt() }
     }
 }

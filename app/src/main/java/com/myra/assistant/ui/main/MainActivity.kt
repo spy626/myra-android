@@ -12,6 +12,8 @@ import android.os.BatteryManager
 import android.graphics.Color
 import android.view.Gravity
 import android.view.ViewGroup
+import android.text.util.Linkify
+import android.text.method.LinkMovementMethod
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -166,6 +168,9 @@ class MainActivity : AppCompatActivity() {
             setTextColor(if (isError) Color.rgb(255, 110, 130) else Color.rgb(238, 238, 238))
             textSize = 13f
             maxWidth = (resources.displayMetrics.widthPixels * .82f).toInt()
+            autoLinkMask = Linkify.WEB_URLS
+            movementMethod = LinkMovementMethod.getInstance()
+            linksClickable = true
             setBackgroundResource(if (isUser) com.myra.assistant.R.drawable.bg_chat_user else com.myra.assistant.R.drawable.bg_chat_myra)
         }
         val row = LinearLayout(this).apply {
@@ -183,6 +188,15 @@ class MainActivity : AppCompatActivity() {
         return true
     }
     private fun executeAppCommand(command: AppCommand) {
+        if (command is AppCommand.DeepResearch) {
+            if (!MyraVoiceService.isRunning) {
+                val message = "Connect MYRA first, then start Deep Research."
+                showStatus(message); addBubble(message, false, true)
+            } else {
+                MyraVoiceService.startDeepResearch(command.query)
+            }
+            return
+        }
         val result = appActions.execute(command)
         showStatus(result.message)
         Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
@@ -195,6 +209,7 @@ class MainActivity : AppCompatActivity() {
             is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
+            is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
         }
         if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
         lastCommandKey = key
