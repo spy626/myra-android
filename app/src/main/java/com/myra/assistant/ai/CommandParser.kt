@@ -48,6 +48,18 @@ object CommandParser {
         return null
     }
 
+    /**
+     * Commands allowed while external media is playing without requiring a wake word.
+     * Keep this deliberately strict so ordinary dialogue from a video is ignored.
+     */
+    fun parseDirectMediaControl(raw: String): AppCommand? {
+        val text = normalize(raw)
+        val close = Regex(
+            "^(?:(?:and|aur|और)\\s+)?(?:(?:youtube|यूट्यूब)\\s+)?(?:close|close\\s+karo|close\\s+kar\\s+do|band\\s+karo|band\\s+kar\\s+do|बंद\\s+करो|बंद\\s+कर\\s+दो|क्लोज\\s+करो)(?:\\s+(?:youtube|यूट्यूब))?$"
+        )
+        return if (close.matches(text)) AppCommand.CloseCurrentApp(findKnownApp(text)) else null
+    }
+
     private fun extractDeepResearch(text: String): AppCommand.DeepResearch? {
         val trigger = Regex("(?:deep\\s+(?:research|search)|in-depth\\s+(?:research|search)|गहरी\\s+(?:रिसर्च|सर्च)|डीप\\s+(?:रिसर्च|सर्च))")
         if (!trigger.containsMatchIn(text)) return null

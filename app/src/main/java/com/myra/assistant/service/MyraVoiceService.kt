@@ -82,7 +82,20 @@ class MyraVoiceService : Service() {
             client.onInputTranscript = inputTranscript@ { part ->
                 when (mediaGuard.inspect(part)) {
                     HandsFreeMediaGuard.Gate.BLOCK -> {
-                        if (!mediaBlockedTurn) emitState("Media Guard active — say Hey MYRA")
+                        commandProbe.append(part)
+                        val directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
+                            ?: CommandParser.parseDirectMediaControl(part)
+                        if (directCommand != null) {
+                            val spoken = commandProbe.toString().trim()
+                            if (spoken.isNotBlank() && !commandUserTextEmitted) {
+                                listener?.onUserText(spoken)
+                                commandUserTextEmitted = true
+                            }
+                            mediaBlockedTurn = false
+                            executeCommand(directCommand)
+                            return@inputTranscript
+                        }
+                        if (!mediaBlockedTurn) emitState("Media Guard active — say close karo")
                         mediaBlockedTurn = true
                         output.clear()
                         return@inputTranscript
