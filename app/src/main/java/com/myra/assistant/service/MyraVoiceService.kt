@@ -10,6 +10,7 @@ import com.myra.assistant.ai.CommandParser
 import com.myra.assistant.ai.GeminiLiveClient
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.ai.DeepResearchClient
+import com.myra.assistant.ai.HandsFreeMediaGuard
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.ui.main.MainActivity
@@ -42,7 +43,9 @@ class MyraVoiceService : Service() {
     private var lastCommandKey = ""
     private var lastCommandAt = 0L
     private var hideNextModelTranscript = false
+    private var mediaBlockedTurn = false
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mediaGuard by lazy { HandsFreeMediaGuard(this) }
     private val appActions by lazy { AppActionExecutor(this) }
 
     override fun onCreate() {
@@ -75,8 +78,23 @@ class MyraVoiceService : Service() {
         ).also { client ->
             client.onState = { emitState(it) }
             client.onReady = { audio?.start(); listener?.onReady(); client.sendText("Greet $name briefly and naturally.") }
-            client.onAudio = { if (!suppressModelForTurn) audio?.queueAudio(it) }
-            client.onInputTranscript = { part ->
+            client.onAudio = { if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it) }
+            client.onInputTranscript = inputTranscript@ { part ->
+                when (mediaGuard.inspect(part)) {
+                    HandsFreeMediaGuard.Gate.BLOCK -> {
+                        if (!mediaBlockedTurn) emitState("Media Guard active — say Hey MYRA")
+                        mediaBlockedTurn = true
+                        output.clear()
+                        return@inputTranscript
+                    }
+                    HandsFreeMediaGuard.Gate.WAKE_DETECTED -> {
+                        mediaBlockedTurn = false
+                        suppressModelForTurn = false
+                        waitingForFreshInputAfterCommand = false
+                        emitState("Listening — media lowered for 10 seconds")
+                    }
+                    HandsFreeMediaGuard.Gate.OPEN -> mediaBlockedTurn = false
+                }
                 // After a local phone command, delayed Gemini packets are discarded until
                 // the server has completed that command turn and the user actually starts
                 // speaking again. The first transcript of that new turn safely re-enables
@@ -99,8 +117,13 @@ class MyraVoiceService : Service() {
                     executeCommand(command)
                 }
             }
-            client.onOutputTranscript = { if (!suppressModelForTurn && !hideNextModelTranscript) output.append(it) }
+            client.onOutputTranscript = { if (!suppressModelForTurn && !hideNextModelTranscript && mediaGuard.allowModelResponse()) output.append(it) }
             client.onTurnComplete = turnComplete@ {
+                if (mediaBlockedTurn && !mediaGuard.isAwake()) {
+                    mediaBlockedTurn = false
+                    input.clear(); output.clear(); commandProbe.clear(); commandUserTextEmitted = false
+                    return@turnComplete
+                }
                 if (hideNextModelTranscript) {
                     hideNextModelTranscript = false
                     input.clear(); output.clear(); commandProbe.clear(); commandUserTextEmitted = false
@@ -118,6 +141,7 @@ class MyraVoiceService : Service() {
                 input.clear(); output.clear(); commandProbe.clear()
                 commandUserTextEmitted = false
                 if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
+                if (mediaGuard.isAwake()) mediaGuard.finishInteraction()
             }
             client.onError = { emitState(it) }
             audio?.onMicChunk = { client.sendAudio(it) }
@@ -152,6 +176,7 @@ class MyraVoiceService : Service() {
         output.clear()
         audio?.interrupt()
         live?.interrupt()
+        mediaGuard.finishInteraction()
         val result = appActions.execute(command)
         listener?.onMyraText(result.message, !result.success)
         emitState(result.message)
@@ -210,7 +235,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { serviceScope.cancel(); live?.disconnect(); audio?.release(); live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 

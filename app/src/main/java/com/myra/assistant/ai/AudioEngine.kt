@@ -4,6 +4,9 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.*
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import androidx.core.content.ContextCompat
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -21,6 +24,9 @@ class AudioEngine(private val context: Context) {
     private val queue = LinkedBlockingQueue<ByteArray>()
     private var recorder: AudioRecord? = null
     private var track: AudioTrack? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+    private var gainControl: AutomaticGainControl? = null
 
     fun start() {
         if (running.getAndSet(true)) return
@@ -31,8 +37,13 @@ class AudioEngine(private val context: Context) {
     private fun startRecording() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
         val min = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        recorder = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000,
+        recorder = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 16000,
             AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, 4096))
+        recorder?.audioSessionId?.let { session ->
+            if (AcousticEchoCanceler.isAvailable()) echoCanceler = AcousticEchoCanceler.create(session)?.apply { enabled = true }
+            if (NoiseSuppressor.isAvailable()) noiseSuppressor = NoiseSuppressor.create(session)?.apply { enabled = true }
+            if (AutomaticGainControl.isAvailable()) gainControl = AutomaticGainControl.create(session)?.apply { enabled = true }
+        }
         recorder?.startRecording()
         thread(name = "myra-mic") {
             val data = ByteArray(3200) // 100 ms, recommended by Live API
@@ -67,7 +78,7 @@ class AudioEngine(private val context: Context) {
     fun queueAudio(bytes: ByteArray) = queue.offer(bytes)
     fun setMuted(value: Boolean) { muted.set(value) }
     fun interrupt() { queue.clear(); track?.pause(); track?.flush(); track?.play(); speaking.set(false); onSpeakingChanged?.invoke(false) }
-    fun release() { running.set(false); recorder?.stop(); recorder?.release(); track?.stop(); track?.release(); queue.offer(ByteArray(0)) }
+    fun release() { running.set(false); echoCanceler?.release(); noiseSuppressor?.release(); gainControl?.release(); recorder?.stop(); recorder?.release(); track?.stop(); track?.release(); queue.offer(ByteArray(0)) }
 
     private fun rms(bytes: ByteArray): Float {
         if (bytes.size < 2) return 0f
