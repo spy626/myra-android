@@ -85,8 +85,8 @@ class MyraVoiceService : Service() {
                         commandProbe.append(part)
                         val directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
                             ?: CommandParser.parseDirectMediaControl(part)
-                            ?: CommandParser.parse(commandProbe.toString()).takeIf { it is AppCommand.ReplyWhatsApp }
-                            ?: CommandParser.parse(part).takeIf { it is AppCommand.ReplyWhatsApp }
+                            ?: CommandParser.parse(commandProbe.toString()).takeIf { it is AppCommand.ReplyWhatsApp || it is AppCommand.QueryWhatsAppMessages }
+                            ?: CommandParser.parse(part).takeIf { it is AppCommand.ReplyWhatsApp || it is AppCommand.QueryWhatsAppMessages }
                         if (directCommand != null) {
                             val spoken = commandProbe.toString().trim()
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
@@ -175,6 +175,7 @@ class MyraVoiceService : Service() {
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
             is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
+            AppCommand.QueryWhatsAppMessages -> "whatsapp-message-query"
         }
         // One utterance can arrive as several slightly different Live transcript chunks.
         // A longer semantic dedupe window prevents the same local action/error appearing
@@ -196,6 +197,13 @@ class MyraVoiceService : Service() {
         val result = appActions.execute(command)
         listener?.onMyraText(result.message, !result.success)
         emitState(result.message)
+        speakLocalResult(result.message)
+    }
+
+    private fun speakLocalResult(message: String) {
+        hideNextModelTranscript = true
+        suppressModelForTurn = false
+        live?.sendText("Speak exactly this local Android result naturally. Do not add or change facts: $message")
     }
 
     private fun executeDeepResearch(command: AppCommand.DeepResearch) {
@@ -238,7 +246,7 @@ class MyraVoiceService : Service() {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. When the user asks to open, launch, close, stop, or search inside YouTube, do not discuss limitations, do not invent search results, and do not tell them to do it manually; remain silent because Android reports the result. Never claim a phone action succeeded yourself."
+        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. When the user asks to open, launch, close, stop, search inside YouTube, check WhatsApp messages, or send/reply to a message, do not answer, invent a sender, or claim success; remain silent because Android reports the verified local result. Never invent notification, contact, or message information. Never claim a phone action succeeded yourself."
     }
 
     private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }

@@ -31,6 +31,7 @@ object CommandParser {
     fun parse(raw: String): AppCommand? {
         val text = normalize(raw)
         if (text.isBlank()) return null
+        if (isWhatsAppMessageQuery(text)) return AppCommand.QueryWhatsAppMessages
         extractWhatsAppReply(text)?.let { return it }
         extractDeepResearch(text)?.let { return it }
         if (isRepeatYouTubeSearch(text)) return AppCommand.RepeatYouTubeSearch
@@ -52,6 +53,7 @@ object CommandParser {
     private fun extractWhatsAppReply(text: String): AppCommand.ReplyWhatsApp? {
         val namedPatterns = listOf(
             Regex("^(.+?)\\s+ko\\s+(?:whatsapp\\s+)?(?:message|msg)\\s+(?:send|sent)\\s+karo\\s+(.+?)(?:\\s+bolke)?$"),
+            Regex("^(.+?)\\s+ko\\s+(?:reply|jawab)\\s+(?:do|karo|bhejo|send\\s+karo)\\s+(.+?)(?:\\s+bolke)?$"),
             Regex("^(.+?)\\s+ko\\s+(.+?)\\s+(?:message|msg)\\s+bhejo$"),
             Regex("^(.+?)\\s+ko\\s+(?:message|msg)\\s+bhejo\\s+(.+?)(?:\\s+bolke)?$")
         )
@@ -61,9 +63,22 @@ object CommandParser {
             }
         }?.let { return it.takeIf { command -> command.message.isNotBlank() } }
 
-        val contextual = Regex("^(?:reply|jawab)\\s+(?:karo|bhejo|send\\s+karo)?\\s*(.+)$")
-            .matchEntire(text)?.groupValues?.get(1)?.let(::cleanReplyText)
+        val contextualPatterns = listOf(
+            Regex("^(?:reply|jawab)\\s+(?:do|karo|bhejo|send\\s+karo)?\\s*(.+?)(?:\\s+bolke)?$"),
+            Regex("^(.+?)\\s+bolke\\s+(?:reply\\s+(?:do|karo)|bhejo|send\\s+karo)$"),
+            Regex("^(.+?)\\s+(?:reply\\s+(?:do|karo)|bhejo|send\\s+karo)$")
+        )
+        val contextual = contextualPatterns.firstNotNullOfOrNull {
+            it.matchEntire(text)?.groupValues?.get(1)?.let(::cleanReplyText)
+        }
         return contextual?.takeIf { it.isNotBlank() }?.let { AppCommand.ReplyWhatsApp(null, it) }
+    }
+
+    private fun isWhatsAppMessageQuery(text: String): Boolean {
+        val whatsapp = Regex("(?:whatsapp|व्हाट्सएप|वॉट्सऐप)")
+        val message = Regex("(?:message|msg|मैसेज|संदेश)")
+        val question = Regex("(?:aaya|aya|aayi|hai|kaun|kisne|who|what|check|batao|आया|आई|कौन|किसने|बताओ)")
+        return whatsapp.containsMatchIn(text) && message.containsMatchIn(text) && question.containsMatchIn(text)
     }
 
     private fun cleanReplyText(value: String): String = value

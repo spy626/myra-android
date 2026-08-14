@@ -37,6 +37,7 @@ class AppActionExecutor(private val context: Context) {
         is AppCommand.DeepResearch -> Result("Deep Research needs MYRA to be connected.", false)
         is AppCommand.ReplyWhatsApp -> WhatsAppReplyStore.reply(context, command.sender, command.message)
             .let { Result(it.message, it.success) }
+        AppCommand.QueryWhatsAppMessages -> WhatsAppReplyStore.latestMessage().let { Result(it.message, it.success) }
     }
 
     private fun searchYouTube(rawQuery: String): Result {

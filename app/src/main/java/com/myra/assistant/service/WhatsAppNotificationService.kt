@@ -31,9 +31,10 @@ class WhatsAppNotificationService : NotificationListenerService() {
         if (seen.put(fingerprint, now) != null) return
 
         notification.actions?.firstOrNull { !it.remoteInputs.isNullOrEmpty() }?.let { action ->
-            WhatsAppReplyStore.remember(sender, action.actionIntent, action.remoteInputs)
+            WhatsAppReplyStore.remember(sender, message, action.actionIntent, action.remoteInputs)
         }
         val safeMessage = if (containsSensitiveContent(message)) null else message
+        WhatsAppReplyStore.rememberAnnouncement(sender, safeMessage)
         MyraVoiceService.announceWhatsApp(sender, safeMessage)
     }
 
@@ -55,15 +56,26 @@ object WhatsAppReplyStore {
     data class Result(val message: String, val success: Boolean)
     private data class Target(
         val sender: String,
+        val incomingMessage: String,
         val pendingIntent: PendingIntent,
         val remoteInputs: Array<RemoteInput>,
         val receivedAt: Long
     )
 
     private val targets = ConcurrentHashMap<String, Target>()
+    @Volatile private var latest: Pair<String, String?>? = null
 
-    fun remember(sender: String, pendingIntent: PendingIntent, inputs: Array<RemoteInput>) {
-        targets[normalize(sender)] = Target(sender, pendingIntent, inputs, System.currentTimeMillis())
+    fun remember(sender: String, message: String, pendingIntent: PendingIntent, inputs: Array<RemoteInput>) {
+        targets[normalize(sender)] = Target(sender, message, pendingIntent, inputs, System.currentTimeMillis())
+    }
+
+    fun rememberAnnouncement(sender: String, safeMessage: String?) { latest = sender to safeMessage }
+
+    fun latestMessage(): Result {
+        val item = latest ?: return Result("Mere notification record mein abhi koi WhatsApp message nahi hai.", false)
+        val (sender, message) = item
+        return if (message == null) Result("$sender ka private WhatsApp message aaya hai. Main sensitive content aloud nahi padhungi.", true)
+        else Result("$sender ka WhatsApp message aaya hai: $message", true)
     }
 
     fun reply(context: Context, requestedSender: String?, replyText: String): Result {
@@ -85,7 +97,7 @@ object WhatsAppReplyStore {
             target.remoteInputs.forEach { bundle.putCharSequence(it.resultKey, text) }
             RemoteInput.addResultsToIntent(target.remoteInputs, fillIn, bundle)
             target.pendingIntent.send(context, 0, fillIn)
-            Result("${target.sender} ko “$text” send kar diya.", true)
+            Result("${target.sender} ko “$text” WhatsApp reply action se bhej diya.", true)
         } catch (_: PendingIntent.CanceledException) {
             Result("WhatsApp reply expire ho gaya. Naya message aane ke baad try karo.", false)
         }

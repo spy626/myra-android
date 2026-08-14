@@ -7,4 +7,5 @@ sealed interface AppCommand {
     data object RepeatYouTubeSearch : AppCommand
     data class DeepResearch(val query: String?) : AppCommand
     data class ReplyWhatsApp(val sender: String?, val message: String) : AppCommand
+    data object QueryWhatsAppMessages : AppCommand
 }
