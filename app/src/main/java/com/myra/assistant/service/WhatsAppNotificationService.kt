@@ -20,31 +20,42 @@ class WhatsAppNotificationService : NotificationListenerService() {
         val notification = sbn.notification
         if (notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         val extras = notification.extras
+        if (!extras.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY).isNullOrEmpty()) return
         val sender = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
         val message = (extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
             ?: extras.getCharSequence(Notification.EXTRA_TEXT))?.toString()?.trim().orEmpty()
-        if (sender.isBlank() || message.isBlank() || isSummary(message)) return
+        if (!isGenuineIncoming(sender, message) || WhatsAppReplyStore.wasJustSentByMyra(message)) return
+        val replyAction = notification.actions?.firstOrNull { !it.remoteInputs.isNullOrEmpty() } ?: return
+        val remoteInputs = replyAction.remoteInputs ?: return
 
-        val fingerprint = "${sbn.key}|$sender|$message"
+        val fingerprint = "${normalize(sender)}|${normalize(message)}"
         val now = System.currentTimeMillis()
         seen.entries.removeIf { now - it.value > 60_000L }
-        if (seen.put(fingerprint, now) != null) return
+        if (seen.putIfAbsent(fingerprint, now) != null) return
 
-        notification.actions?.firstOrNull { !it.remoteInputs.isNullOrEmpty() }?.let { action ->
-            WhatsAppReplyStore.remember(sender, message, action.actionIntent, action.remoteInputs)
-        }
+        WhatsAppReplyStore.remember(sender, message, replyAction.actionIntent, remoteInputs)
         val safeMessage = if (containsSensitiveContent(message)) null else message
         WhatsAppReplyStore.rememberAnnouncement(sender, safeMessage)
         MyraVoiceService.announceWhatsApp(sender, safeMessage)
     }
 
-    private fun isSummary(text: String): Boolean = Regex("^\\d+\\s+(?:new\\s+)?messages?", RegexOption.IGNORE_CASE).containsMatchIn(text)
+    private fun isGenuineIncoming(sender: String, message: String): Boolean {
+        if (sender.isBlank() || message.isBlank()) return false
+        val title = normalize(sender)
+        val body = normalize(message)
+        if (title == "you" || title == "whatsapp") return false
+        if (body == "checking for new messages" || body == "new messages") return false
+        return !Regex("^\\d+\\s+(?:new\\s+)?messages?$").matches(body)
+    }
 
     private fun containsSensitiveContent(text: String): Boolean {
         val lowered = text.lowercase(Locale.ROOT)
         val privateWord = Regex("\\b(?:otp|password|passcode|verification\\s+code|security\\s+code|pin)\\b").containsMatchIn(lowered)
         return privateWord || Regex("(?<!\\d)\\d{4,8}(?!\\d)").containsMatchIn(text)
     }
+
+    private fun normalize(value: String) = value.lowercase(Locale.ROOT)
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
 
     companion object {
         private val WHATSAPP_PACKAGES = setOf("com.whatsapp", "com.whatsapp.w4b")
@@ -63,6 +74,7 @@ object WhatsAppReplyStore {
     )
 
     private val targets = ConcurrentHashMap<String, Target>()
+    private val recentOutgoing = ConcurrentHashMap<String, Long>()
     @Volatile private var latest: Pair<String, String?>? = null
 
     fun remember(sender: String, message: String, pendingIntent: PendingIntent, inputs: Array<RemoteInput>) {
@@ -70,6 +82,12 @@ object WhatsAppReplyStore {
     }
 
     fun rememberAnnouncement(sender: String, safeMessage: String?) { latest = sender to safeMessage }
+
+    fun wasJustSentByMyra(message: String): Boolean {
+        val now = System.currentTimeMillis()
+        recentOutgoing.entries.removeIf { now - it.value > OUTGOING_SUPPRESSION_MS }
+        return recentOutgoing.containsKey(normalize(message))
+    }
 
     fun latestMessage(): Result {
         val item = latest ?: return Result("Mere notification record mein abhi koi WhatsApp message nahi hai.", false)
@@ -80,7 +98,7 @@ object WhatsAppReplyStore {
 
     fun reply(context: Context, requestedSender: String?, replyText: String): Result {
         val text = replyText.trim()
-        if (text.isBlank()) return Result("Message khaali hai, isliye send nahi kiya.", false)
+        if (text.isBlank()) return Result("Reply command samajh aaya, lekin message clear nahi tha. Dobara bolo: reply karo hi.", false)
         val now = System.currentTimeMillis()
         targets.entries.removeIf { now - it.value.receivedAt > TARGET_TTL_MS }
         val requested = normalize(requestedSender.orEmpty())
@@ -91,14 +109,17 @@ object WhatsAppReplyStore {
                 .maxByOrNull { it.receivedAt }
         } ?: return Result("${requestedSender ?: "Us message"} ka active WhatsApp reply option nahi mila.", false)
 
+        val outgoingKey = normalize(text)
+        recentOutgoing[outgoingKey] = now
         return try {
             val fillIn = Intent()
             val bundle = Bundle()
             target.remoteInputs.forEach { bundle.putCharSequence(it.resultKey, text) }
             RemoteInput.addResultsToIntent(target.remoteInputs, fillIn, bundle)
             target.pendingIntent.send(context, 0, fillIn)
-            Result("${target.sender} ko “$text” WhatsApp reply action se bhej diya.", true)
+            Result("Android ne ${target.sender} ko “$text” bhejne ka WhatsApp reply action accept kiya.", true)
         } catch (_: PendingIntent.CanceledException) {
+            recentOutgoing.remove(outgoingKey)
             Result("WhatsApp reply expire ho gaya. Naya message aane ke baad try karo.", false)
         }
     }
@@ -107,4 +128,5 @@ object WhatsAppReplyStore {
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
 
     private const val TARGET_TTL_MS = 30 * 60 * 1000L
+    private const val OUTGOING_SUPPRESSION_MS = 20_000L
 }
