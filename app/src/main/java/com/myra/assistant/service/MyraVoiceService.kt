@@ -40,6 +40,7 @@ class MyraVoiceService : Service() {
     private var suppressModelForTurn = false
     private var waitingForFreshInputAfterCommand = false
     private var commandUserTextEmitted = false
+    private var localCommandExecutedThisTurn = false
     private var lastCommandKey = ""
     private var lastCommandAt = 0L
     private var hideNextModelTranscript = false
@@ -87,8 +88,8 @@ class MyraVoiceService : Service() {
                         commandProbe.append(part)
                         val directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
                             ?: CommandParser.parseDirectMediaControl(part)
-                            ?: CommandParser.parse(commandProbe.toString()).takeIf { it is AppCommand.ReplyWhatsApp || it is AppCommand.QueryWhatsAppMessages }
-                            ?: CommandParser.parse(part).takeIf { it is AppCommand.ReplyWhatsApp || it is AppCommand.QueryWhatsAppMessages }
+                            ?: CommandParser.parse(commandProbe.toString()).takeIf(::isSafeDirectMediaCommand)
+                            ?: CommandParser.parse(part).takeIf(::isSafeDirectMediaCommand)
                         if (directCommand != null) {
                             val spoken = commandProbe.toString().trim()
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
@@ -99,7 +100,7 @@ class MyraVoiceService : Service() {
                             executeCommand(directCommand)
                             return@inputTranscript
                         }
-                        if (!mediaBlockedTurn) emitState("Media Guard active — say close karo")
+                        if (!mediaBlockedTurn) emitState("Media Guard active — direct search, close and WhatsApp commands are ready")
                         mediaBlockedTurn = true
                         output.clear()
                         return@inputTranscript
@@ -119,6 +120,7 @@ class MyraVoiceService : Service() {
                 if (waitingForFreshInputAfterCommand) {
                     waitingForFreshInputAfterCommand = false
                     suppressModelForTurn = false
+                    localCommandExecutedThisTurn = false
                 }
                 input.append(part); commandProbe.append(part)
                 val command = CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString())
@@ -139,11 +141,13 @@ class MyraVoiceService : Service() {
                 if (mediaBlockedTurn && !mediaGuard.isAwake()) {
                     mediaBlockedTurn = false
                     input.clear(); output.clear(); commandProbe.clear(); commandUserTextEmitted = false
+                    localCommandExecutedThisTurn = false
                     return@turnComplete
                 }
                 if (hideNextModelTranscript) {
                     hideNextModelTranscript = false
                     input.clear(); output.clear(); commandProbe.clear(); commandUserTextEmitted = false
+                    waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
@@ -168,6 +172,12 @@ class MyraVoiceService : Service() {
         }
     }
 
+    private fun isSafeDirectMediaCommand(command: AppCommand): Boolean = when (command) {
+        is AppCommand.SearchYouTube, AppCommand.RepeatYouTubeSearch,
+        is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages -> true
+        else -> false
+    }
+
     private fun shouldExecute(command: AppCommand): Boolean {
         val now = android.os.SystemClock.elapsedRealtime()
         val key = when (command) {
@@ -187,10 +197,11 @@ class MyraVoiceService : Service() {
     }
 
     private fun executeCommand(command: AppCommand) {
-        if (!shouldExecute(command)) return
+        if (localCommandExecutedThisTurn || !shouldExecute(command)) return
+        localCommandExecutedThisTurn = true
         if (command is AppCommand.DeepResearch) { executeDeepResearch(command); return }
         suppressModelForTurn = true
-        waitingForFreshInputAfterCommand = false
+        waitingForFreshInputAfterCommand = true
         commandProbe.clear()
         output.clear()
         audio?.interrupt()
