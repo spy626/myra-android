@@ -9,11 +9,7 @@ object VoiceResponseFormatter {
         if (!result.success) return result.spokenMessage
         return when (command.type) {
             CommandType.OPEN_APP -> if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
-            CommandType.CLOSE_APP -> if (result.verified) {
-                "Done $name, ${command.target ?: "app"} se bahar aa gayi hoon. Aur kuch karun?"
-            } else {
-                "Theek hai $name, ${command.target ?: "app"} se bahar aa rahi hoon."
-            }
+            CommandType.CLOSE_APP -> "${command.target ?: "YouTube"} close kar rahi hoon. Aur kuch karun?"
             CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> {
                 val query = humanize(command.content ?: command.target.orEmpty())
                 "Done $name, YouTube par $query search kar diya. Aur kuch karun?"

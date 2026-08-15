@@ -61,6 +61,7 @@ class MyraVoiceService : Service() {
     private val localSpeechAudio = mutableListOf<ByteArray>()
     private val localSpeechTranscript = StringBuilder()
     private var localPlaybackActive = false
+    private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
     private var lastLocalSpeechKey = ""
     private var lastLocalSpeechAt = 0L
     private var lastAnnouncementKey = ""
@@ -276,8 +277,10 @@ class MyraVoiceService : Service() {
                 updateNotification(if (speaking) "LYRA is speaking" else "LYRA is listening")
                 if (!speaking && localPlaybackActive) {
                     localPlaybackActive = false
-                    audio?.setMuted(false)
-                    emitState("Sun rahi hoon…")
+                    if (!runPendingActionAfterSpeech()) {
+                        audio?.setMuted(false)
+                        emitState("Sun rahi hoon…")
+                    }
                 }
             }
             client.connect()
@@ -326,6 +329,13 @@ class MyraVoiceService : Service() {
         output.clear()
         audio?.interrupt()
         live?.interrupt()
+        if (command is AppCommand.CloseCurrentApp &&
+            AccessibilityHelperService.instance != null &&
+            AccessibilityHelperService.isEnabled(this)
+        ) {
+            prepareCloseAfterSpeech(command)
+            return
+        }
         mediaGuard.finishInteraction()
         val result = assistantController.processCommand(
             StructuredCommandParser.fromLegacy(command, command.toString()),
@@ -346,6 +356,37 @@ class MyraVoiceService : Service() {
             result.spokenMessage,
             allowUntranscribedAudio = result.success && isSafeUntranscribedConfirmation(command)
         )
+    }
+
+    private fun prepareCloseAfterSpeech(command: AppCommand.CloseCurrentApp) {
+        val target = command.requestedName?.trim().takeUnless { it.isNullOrBlank() } ?: "YouTube"
+        val message = "$target close kar rahi hoon. Aur kuch karun?"
+        pendingActionAfterLocalSpeech = {
+            val result = assistantController.processCommand(
+                StructuredCommandParser.fromLegacy(command, command.toString()),
+                speak = false,
+                notifyListeners = false
+            )
+            if (result.success) {
+                audio?.setMuted(false)
+                emitState("Sun rahi hoon…")
+            } else {
+                listener?.onMyraText(result.spokenMessage, true)
+                emitState(result.spokenMessage)
+                queueLocalSpeech(result.spokenMessage)
+            }
+        }
+        listener?.onMyraText(message)
+        emitState(message)
+        mediaGuard.beginAssistantTurn()
+        queueLocalSpeech(message, allowUntranscribedAudio = true)
+    }
+
+    private fun runPendingActionAfterSpeech(): Boolean {
+        val action = pendingActionAfterLocalSpeech ?: return false
+        pendingActionAfterLocalSpeech = null
+        mainHandler.post { action() }
+        return true
     }
 
     private fun isSafeUntranscribedConfirmation(command: AppCommand): Boolean = when (command) {
@@ -429,8 +470,10 @@ class MyraVoiceService : Service() {
 
     private fun fallbackLocalSpeech(message: String) {
         assistantController.speakMessage(message) {
-            audio?.setMuted(false)
-            emitState("Sun rahi hoon…")
+            if (!runPendingActionAfterSpeech()) {
+                audio?.setMuted(false)
+                emitState("Sun rahi hoon…")
+            }
         }
     }
 
