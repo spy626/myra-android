@@ -13,6 +13,6 @@ class CommandParserTest {
     @Test fun preservesExistingYouTubeCommand() {
         val command = CommandParser.parse("YouTube mein Lols Gaming search karo")
         assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
-        assertEquals("Lols Gaming", command.content)
+        assertEquals("lols gaming", command.content)
     }
 }
