@@ -42,7 +42,11 @@ class GeminiLiveClient(
         val check = Request.Builder().url("https://generativelanguage.googleapis.com/v1beta/models/$modelId").header("x-goog-api-key", apiKey).build()
         client.newCall(check).enqueue(object : Callback {
             override fun onFailure(call: Call, e: java.io.IOException) {
-                if (generation.get() == attempt && !manualClose.get()) onError?.invoke("Network check failed: ${e.message}")
+                if (generation.get() == attempt && !manualClose.get()) {
+                    onState?.invoke("Network unavailable — reconnecting…")
+                    reconnecting.set(false)
+                    scheduleReconnect()
+                }
             }
             override fun onResponse(call: Call, response: Response) {
                 response.use {
@@ -198,7 +202,10 @@ class GeminiLiveClient(
         Thread {
             try {
                 Thread.sleep(delayMs)
-                if (!manualClose.get()) connect()
+                if (!manualClose.get()) {
+                    reconnecting.set(false)
+                    connect()
+                }
             } catch (_: InterruptedException) {
                 reconnecting.set(false)
             }
