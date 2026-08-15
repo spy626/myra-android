@@ -51,27 +51,26 @@ object CommandParser {
     }
 
     private fun extractWhatsAppReply(text: String): AppCommand.ReplyWhatsApp? {
-        val namedPatterns = listOf(
-            Regex("^(.+?)\\s+ko\\s+(?:whatsapp\\s+)?(?:message|msg)\\s+(?:send|sent)\\s+karo\\s+(.+?)(?:\\s+bolke)?$"),
-            Regex("^(.+?)\\s+ko\\s+(?:reply|jawab)\\s+(?:do|karo|bhejo|send\\s+karo)\\s+(.+?)(?:\\s+bolke)?$"),
-            Regex("^(.+?)\\s+ko\\s+(.+?)\\s+(?:message|msg)\\s+bhejo$"),
-            Regex("^(.+?)\\s+ko\\s+(?:message|msg)\\s+bhejo\\s+(.+?)(?:\\s+bolke)?$")
+        val reply = "(?:reply|replay|re\\s+ply|jawab|रिप्लाई|रिप्लाय|जवाब)"
+        val action = "(?:do|karo|bhejo|send\\s+karo|भेजो|करो|दो)"
+        val filler = "(?:bolke|bol\\s+kar|likh\\s+ke|likh\\s+kar|बोलके|बोल\\s+कर|लिख\\s+के|लिख\\s+कर)"
+        val named = listOf(
+            Regex("^(.+?)\\s+ko\\s+(?:whatsapp\\s+)?$reply\\s+(?:$action)?\\s*(.+)$"),
+            Regex("^(.+?)\\s+ko\\s+(.+?)\\s+$filler\\s+(?:(?:message|msg|मैसेज)\\s+)?(?:$reply\\s+(?:$action)?|bhejo|send\\s+karo|भेजो)$"),
+            Regex("^(.+?)\\s+ko\\s+(.+?)\\s+(?:message|msg|मैसेज)\\s+(?:bhejo|send\\s+karo|भेजो)$")
         )
-        namedPatterns.firstNotNullOfOrNull { pattern ->
-            pattern.matchEntire(text)?.let { match ->
-                AppCommand.ReplyWhatsApp(match.groupValues[1].trim(), cleanReplyText(match.groupValues[2]))
-            }
-        }?.let { return it.takeIf { command -> command.message.isNotBlank() } }
-
-        val contextualPatterns = listOf(
-            Regex("^(?:reply|jawab)\\s+(?:do|karo|bhejo|send\\s+karo)?\\s*(.+?)(?:\\s+bolke)?$"),
-            Regex("^(.+?)\\s+bolke\\s+(?:reply\\s+(?:do|karo)|bhejo|send\\s+karo)$"),
-            Regex("^(.+?)\\s+(?:reply\\s+(?:do|karo)|bhejo|send\\s+karo)$")
-        )
-        val contextual = contextualPatterns.firstNotNullOfOrNull {
-            it.matchEntire(text)?.groupValues?.get(1)?.let(::cleanReplyText)
-        }
-        return contextual?.takeIf { it.isNotBlank() }?.let { AppCommand.ReplyWhatsApp(null, it) }
+        named.firstNotNullOfOrNull { pattern ->
+            pattern.matchEntire(text)?.let { AppCommand.ReplyWhatsApp(it.groupValues[1].trim(), cleanReplyText(it.groupValues[2])) }
+        }?.takeIf { it.message.isNotBlank() }?.let { return it }
+        val contextual = listOf(
+            Regex("^$reply\\s+(?:$action)?\\s*(.+)$"),
+            Regex("^(.+?)\\s+$filler\\s+(?:(?:message|msg|मैसेज)\\s+)?(?:$reply\\s+(?:$action)?|bhejo|send\\s+karo|भेजो)$"),
+            Regex("^(.+?)\\s+(?:message|msg|मैसेज)\\s+(?:bhejo|send\\s+karo|भेजो)$"),
+            Regex("^(.+?)\\s+(?:bhejo|send\\s+karo|भेजो)$")
+        ).firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1)?.let(::cleanReplyText) }
+        contextual?.takeIf { it.isNotBlank() }?.let { return AppCommand.ReplyWhatsApp(null, it) }
+        val messaging = Regex("(?:\\b(?:reply|replay|jawab|bhejo|send\\s+karo)\\b|रिप्लाई|जवाब|मैसेज|भेजो)")
+        return if (messaging.containsMatchIn(text)) AppCommand.ReplyWhatsApp(null, "") else null
     }
 
     private fun isWhatsAppMessageQuery(text: String): Boolean {
@@ -81,8 +80,12 @@ object CommandParser {
         return whatsapp.containsMatchIn(text) && message.containsMatchIn(text) && question.containsMatchIn(text)
     }
 
-    private fun cleanReplyText(value: String): String = value
-        .replace(Regex("\\s+bolke$"), "").trim().trim('"', '\'', '.', ',')
+    private fun cleanReplyText(value: String): String {
+        var cleaned = value.trim().trim('"', '\'', '.', ',')
+        val suffix = Regex("\\s+(?:bolke|bol\\s+kar|likh\\s+ke|likh\\s+kar|message|msg|send\\s+karo|bhejo|reply\\s+(?:do|karo)|jawab\\s+(?:do|karo)|बोलके|लिख\\s+के|मैसेज|भेजो)$")
+        while (suffix.containsMatchIn(cleaned)) cleaned = suffix.replace(cleaned, "").trim()
+        return cleaned.trim('"', '\'', '.', ',')
+    }
 
     /**
      * Commands allowed while external media is playing without requiring a wake word.
