@@ -26,6 +26,7 @@ class GeminiLiveClient(
     private val manualClose = AtomicBoolean(false)
     private val reconnecting = AtomicBoolean(false)
     private val generation = AtomicInteger(0)
+    private val reconnectAttempt = AtomicInteger(0)
     private val client = OkHttpClient.Builder().pingInterval(8, TimeUnit.SECONDS).build()
     private var socket: WebSocket? = null
     private var renewThread: Thread? = null
@@ -34,7 +35,6 @@ class GeminiLiveClient(
     fun connect() {
         if (apiKey.isBlank()) { onError?.invoke("Add your Gemini API key in Settings"); return }
         manualClose.set(false)
-        reconnecting.set(false)
         val attempt = generation.incrementAndGet()
         onState?.invoke("Checking Gemini access…")
         ready.set(false)
@@ -80,6 +80,10 @@ class GeminiLiveClient(
     }
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
+        if (socket !== webSocket || manualClose.get()) {
+            webSocket.close(1000, "Stale connection")
+            return
+        }
         val setup = JSONObject().put("setup", JSONObject()
             .put("model", "models/${model.removePrefix("models/")}")
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
@@ -91,22 +95,46 @@ class GeminiLiveClient(
             .put("outputAudioTranscription", JSONObject()))
         webSocket.send(setup.toString())
         renewThread = Thread {
-            try { Thread.sleep(540_000); if (!manualClose.get()) { socket?.close(1000, "Session renewal"); Thread.sleep(3_000); connect() } }
-            catch (_: InterruptedException) { }
+            try {
+                Thread.sleep(540_000)
+                if (!manualClose.get() && socket === webSocket) webSocket.close(1000, "Session renewal")
+            } catch (_: InterruptedException) { }
         }.also { it.start() }
     }
 
     fun sendAudio(bytes: ByteArray) {
+        if (!ready.get() || bytes.isEmpty()) return
         val audio = JSONObject().put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("mimeType", "audio/pcm;rate=16000")
-        socket?.send(JSONObject().put("realtimeInput", JSONObject().put("audio", audio)).toString())
+        sendWhenReady(JSONObject().put("realtimeInput", JSONObject().put("audio", audio)).toString())
     }
 
     fun sendText(text: String) {
+        if (text.isBlank()) return
         val turn = JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text)))
-        socket?.send(JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString())
+        sendWhenReady(JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString())
     }
 
-    fun interrupt() = socket?.send(JSONObject().put("clientContent", JSONObject().put("turns", JSONArray()).put("turnComplete", true)).toString())
+    private fun sendWhenReady(payload: String): Boolean {
+        val active = socket
+        if (!ready.get() || active == null) {
+            onState?.invoke("Reconnecting…")
+            scheduleReconnect()
+            return false
+        }
+        val accepted = active.send(payload)
+        if (!accepted) {
+            ready.set(false)
+            onState?.invoke("Reconnecting…")
+            scheduleReconnect()
+        }
+        return accepted
+    }
+
+    /**
+     * Local playback is interrupted by AudioEngine. Never send an empty clientContent
+     * turn: Gemini rejects that packet with close code 1007 (invalid argument).
+     */
+    fun interrupt() = Unit
 
     override fun onMessage(webSocket: WebSocket, text: String) {
         try {
@@ -118,7 +146,14 @@ class GeminiLiveClient(
                 webSocket.close(1002, "Setup rejected")
                 return
             }
-            if (root.has("setupComplete")) { ready.set(true); onState?.invoke("Ready"); onReady?.invoke(); return }
+            if (root.has("setupComplete")) {
+                ready.set(true)
+                reconnectAttempt.set(0)
+                reconnecting.set(false)
+                onState?.invoke("Ready")
+                onReady?.invoke()
+                return
+            }
             val content = root.optJSONObject("serverContent") ?: return
             val parts = content.optJSONObject("modelTurn")?.optJSONArray("parts")
             if (parts != null) for (i in 0 until parts.length()) {
@@ -143,18 +178,30 @@ class GeminiLiveClient(
         scheduleReconnect()
     }
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-        if (!manualClose.get() && reason.isNotBlank()) onError?.invoke("Gemini closed connection ($code): $reason")
+        ready.set(false)
+        if (!manualClose.get() && code != 1000 && reason.isNotBlank()) {
+            onError?.invoke("Gemini connection interrupted. Reconnecting…")
+        }
     }
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
         if (socket !== webSocket) return
-        ready.set(false); onState?.invoke("Disconnected")
-        if (!manualClose.get()) scheduleReconnect()
+        ready.set(false)
+        if (!manualClose.get()) {
+            onState?.invoke("Reconnecting…")
+            scheduleReconnect()
+        }
     }
     private fun scheduleReconnect() {
         if (!reconnecting.compareAndSet(false, true) || manualClose.get()) return
+        val attempt = reconnectAttempt.incrementAndGet().coerceAtMost(5)
+        val delayMs = (3_000L * attempt).coerceAtMost(15_000L)
         Thread {
-            try { Thread.sleep(3_000); if (!manualClose.get()) connect() }
-            finally { reconnecting.set(false) }
+            try {
+                Thread.sleep(delayMs)
+                if (!manualClose.get()) connect()
+            } catch (_: InterruptedException) {
+                reconnecting.set(false)
+            }
         }.start()
     }
     fun disconnect() { manualClose.set(true); generation.incrementAndGet(); renewThread?.interrupt(); socket?.close(1000, "App closed"); socket = null }
