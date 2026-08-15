@@ -112,7 +112,7 @@ object CommandParser {
     }
 
     private fun extractYouTubeSearch(text: String): String? {
-        val action = "(?:search(?:\\s+karo|\\s+kar\\s+do)?|find|dhundo|dhoondo|khojo|सर्च(?:\\s+करो|\\s+कर\\s+दो)?|ढूंढो|खोजो)"
+        val action = "(?:search(?:ing)?(?:\\s+karo|\\s+kar\\s+do|\\s+karna)?|find|dhundo|dhoondo|khojo|सर्च(?:\\s+करो|\\s+कर\\s+दो|\\s+करना)?|ढूंढो|खोजो)"
         val youtube = "(?:youtube|यूट्यूब)"
         val place = "(?:mein|me|par|pe|में|पर)"
         val prefix = "(?:(?:please|ek\\s+(?:aur\\s+)?baar|ek\\s+bar|phir\\s+se|fir\\s+se|dobara|again|एक\\s+(?:और\\s+)?बार|फिर\\s+से|दोबारा)\\s+)?"
