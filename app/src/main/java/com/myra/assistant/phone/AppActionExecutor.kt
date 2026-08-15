@@ -94,14 +94,16 @@ class AppActionExecutor(private val context: Context) {
         return Result("Battery ${level * 100 / scale} percent hai.", true)
     }
 
-    private fun setFlashlight(enabled: Boolean): Result = try {
-        val camera = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val id = camera.cameraIdList.firstOrNull { camera.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
-            ?: return Result("Is phone mein flashlight available nahi hai.", false)
-        camera.setTorchMode(id, enabled)
-        Result(if (enabled) "Flashlight on kar di." else "Flashlight off kar di.", true)
-    } catch (error: Exception) {
-        Result("Flashlight change nahi ho paayi.", false)
+    private fun setFlashlight(enabled: Boolean): Result {
+        return try {
+            val camera = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val id = camera.cameraIdList.firstOrNull { camera.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
+                ?: return Result("Is phone mein flashlight available nahi hai.", false)
+            camera.setTorchMode(id, enabled)
+            Result(if (enabled) "Flashlight on kar di." else "Flashlight off kar di.", true)
+        } catch (error: Exception) {
+            Result("Flashlight change nahi ho paayi.", false)
+        }
     }
 
     private fun searchYouTube(rawQuery: String): Result {
