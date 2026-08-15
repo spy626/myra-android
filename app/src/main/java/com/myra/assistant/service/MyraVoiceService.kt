@@ -88,8 +88,8 @@ class MyraVoiceService : Service() {
                         commandProbe.append(part)
                         val directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
                             ?: CommandParser.parseDirectMediaControl(part)
-                            ?: CommandParser.parse(commandProbe.toString()).takeIf(::isSafeDirectMediaCommand)
-                            ?: CommandParser.parse(part).takeIf(::isSafeDirectMediaCommand)
+                            ?: CommandParser.parse(commandProbe.toString())?.takeIf(::isSafeDirectMediaCommand)
+                            ?: CommandParser.parse(part)?.takeIf(::isSafeDirectMediaCommand)
                         if (directCommand != null) {
                             val spoken = commandProbe.toString().trim()
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
