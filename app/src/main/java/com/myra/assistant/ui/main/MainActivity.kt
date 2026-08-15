@@ -98,7 +98,9 @@ class MainActivity : AppCompatActivity() {
                 addBubble(it, true)
                 val structured = StructuredCommandParser.parse(it)
                 if (structured.type != CommandType.UNKNOWN) {
-                    assistantController.processCommand(structured, speak = !MyraVoiceService.isRunning)
+                    if (!MyraVoiceService.isRunning || !MyraVoiceService.executeLocalText(it)) {
+                        assistantController.processCommand(structured, speak = true)
+                    }
                 } else {
                     if (!MyraVoiceService.isRunning) showStatus("Connect to MYRA first — tap the mic") else MyraVoiceService.sendText(it)
                 }

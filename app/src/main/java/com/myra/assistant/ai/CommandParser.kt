@@ -34,9 +34,9 @@ object CommandParser {
         if (Regex("^(?:go )?home(?: screen)?$|^home (?:jao|chalo|karo)$|^होम").containsMatchIn(text)) return AppCommand.GoHome
         if (Regex("^(?:go )?back$|^back (?:jao|karo)$|^peeche (?:jao|chalo)$|^पीछे").containsMatchIn(text)) return AppCommand.GoBack
         if (Regex("(?:what(?:'s| is) the time|time (?:kya|kitna|kitni|batao)|(?:kya|kitna|kitni) time|samay|kitne baje|टाइम|समय)").containsMatchIn(text)) return AppCommand.CurrentTime
-        if (Regex("(?:battery|बैटरी).*(?:level|percent|kitni|batao|कितनी)|^(?:battery|बैटरी)$").containsMatchIn(text)) return AppCommand.BatteryLevel
-        if (Regex("(?:flashlight|torch|टॉर्च).*(?:on|chalu|jala|चालू|जलाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(true)
-        if (Regex("(?:flashlight|torch|टॉर्च).*(?:off|band|bujha|बंद|बुझाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(false)
+        if (Regex("(?:battery|बैटरी).*(?:level|percent|percentage|kitna|kitni|batao|status|charge|कितना|कितनी|बताओ)|^(?:battery|बैटरी)$").containsMatchIn(text)) return AppCommand.BatteryLevel
+        if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:on|open|chalu|jala|चालू|जलाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(true)
+        if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:off|close|band|bujha|बंद|बुझाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(false)
         if (isWhatsAppMessageQuery(text)) return AppCommand.QueryWhatsAppMessages
         extractWhatsAppReply(text)?.let { return it }
         extractDeepResearch(text)?.let { return it }
@@ -59,7 +59,7 @@ object CommandParser {
     fun isProbableDeviceAction(raw: String): Boolean {
         val text = normalize(raw)
         if (text.isBlank()) return false
-        val target = Regex("(?:youtube|whatsapp|instagram|facebook|chrome|gmail|maps|spotify|telegram|snapchat|settings|app|application|torch|flashlight|battery|time|home|back|यूट्यूब|व्हाट्सएप|टॉर्च|बैटरी|होम)")
+        val target = Regex("(?:youtube|whatsapp|instagram|facebook|chrome|gmail|maps|spotify|telegram|snapchat|settings|app|application|torch|flashlight|flash|battery|time|home|back|यूट्यूब|व्हाट्सएप|टॉर्च|बैटरी|होम)")
         val action = Regex("(?:open|close|launch|start|search|play|pause|khol|kholo|band|chalu|on|off|bhejo|send|reply|jawab|batao|kitna|kitni|jao|karo|खोलो|बंद|चालू|भेजो|जवाब|बताओ)")
         return target.containsMatchIn(text) && action.containsMatchIn(text)
     }
@@ -67,6 +67,13 @@ object CommandParser {
     fun isExplicitOpenCommand(raw: String): Boolean {
         val text = normalize(raw)
         return findKnownApp(text) != null && openAction.containsMatchIn(text)
+    }
+
+    fun isAmbiguousFlashlightCommand(raw: String): Boolean {
+        val text = normalize(raw)
+        val target = Regex("(?:flashlight|flash|torch|टॉर्च)").containsMatchIn(text)
+        val direction = Regex("(?:on|off|open|close|chalu|band|jala|bujha|चालू|बंद|जलाओ|बुझाओ)").containsMatchIn(text)
+        return target && !direction
     }
 
     private fun extractWhatsAppReply(text: String): AppCommand.ReplyWhatsApp? {

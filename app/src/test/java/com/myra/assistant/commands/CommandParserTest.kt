@@ -13,6 +13,12 @@ class CommandParserTest {
         assertEquals(CommandType.FLASHLIGHT_ON, CommandParser.parse("No, meri phone ka torch open on karo").type)
         assertEquals(CommandType.OPEN_APP, CommandParser.parse("Mmm, YouTube open karo").type)
         assertEquals(CommandType.OPEN_APP, CommandParser.parse("WhatsApp open karo, sun rahe ho kya?").type)
+        assertEquals(CommandType.FLASHLIGHT_OFF, CommandParser.parse("Flash band karo").type)
+        assertEquals(CommandType.BATTERY_LEVEL, CommandParser.parse("Mere phone ki battery percentage batao").type)
+        assertEquals(CommandType.UNKNOWN, CommandParser.parse("Torch karo").type)
+        assertEquals(true, com.myra.assistant.ai.CommandParser.isAmbiguousFlashlightCommand("Torch karo"))
+        assertEquals(false, com.myra.assistant.ai.CommandParser.isExplicitOpenCommand("YouTube"))
+        assertEquals(true, com.myra.assistant.ai.CommandParser.isExplicitOpenCommand("YouTube open karo"))
     }
     @Test fun preservesExistingYouTubeCommand() {
         val command = CommandParser.parse("YouTube mein Lols Gaming search karo")

@@ -49,6 +49,13 @@ class MyraVoiceService : Service() {
     private var hideNextModelTranscript = false
     private var mediaBlockedTurn = false
     private var probableActionTurn = false
+    private var pendingLocalSpeech: String? = null
+    private var validatingLocalSpeech: String? = null
+    private val localSpeechAudio = mutableListOf<ByteArray>()
+    private val localSpeechTranscript = StringBuilder()
+    private var localPlaybackActive = false
+    private var lastLocalSpeechKey = ""
+    private var lastLocalSpeechAt = 0L
     private var lastAnnouncementKey = ""
     private var lastAnnouncementAt = 0L
     private var hasGreeted = false
@@ -100,15 +107,24 @@ class MyraVoiceService : Service() {
                     emitState("MYRA reconnected — listening")
                 }
             }
-            client.onAudio = { if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it) }
+            client.onAudio = {
+                if (validatingLocalSpeech != null) localSpeechAudio += it.copyOf()
+                else if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it)
+            }
             client.onInputTranscript = inputTranscript@ { part ->
                 when (mediaGuard.inspect(part)) {
                     HandsFreeMediaGuard.Gate.BLOCK -> {
                         appendTranscript(commandProbe, part)
-                        val directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
+                        var directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
                             ?: CommandParser.parseDirectMediaControl(part)
                             ?: CommandParser.parse(commandProbe.toString())?.takeIf(::isSafeDirectMediaCommand)
                             ?: CommandParser.parse(part)?.takeIf(::isSafeDirectMediaCommand)
+                        if (directCommand is AppCommand.OpenApp &&
+                            !CommandParser.isExplicitOpenCommand(commandProbe.toString()) &&
+                            !CommandParser.isExplicitOpenCommand(part)
+                        ) {
+                            directCommand = null
+                        }
                         if (directCommand != null) {
                             val spoken = commandProbe.toString().trim()
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
@@ -166,8 +182,23 @@ class MyraVoiceService : Service() {
                     executeCommand(command)
                 }
             }
-            client.onOutputTranscript = { if (!suppressModelForTurn && !hideNextModelTranscript && mediaGuard.allowModelResponse()) output.append(it) }
+            client.onOutputTranscript = {
+                if (validatingLocalSpeech != null) appendTranscript(localSpeechTranscript, it)
+                else if (!suppressModelForTurn && !hideNextModelTranscript && mediaGuard.allowModelResponse()) appendTranscript(output, it)
+            }
             client.onTurnComplete = turnComplete@ {
+                if (validatingLocalSpeech != null) {
+                    finishValidatedLocalSpeech()
+                    resetTurnBuffers()
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
+                }
+                pendingLocalSpeech?.let { message ->
+                    pendingLocalSpeech = null
+                    resetTurnBuffers()
+                    beginValidatedLocalSpeech(message)
+                    return@turnComplete
+                }
                 if (mediaBlockedTurn && !mediaGuard.isAwake()) {
                     mediaBlockedTurn = false
                     input.clear(); output.clear(); commandProbe.clear(); commandUserTextEmitted = false
@@ -192,11 +223,14 @@ class MyraVoiceService : Service() {
                         executeCommand(parsed)
                     } else if (probableActionTurn || CommandParser.isProbableDeviceAction(userText)) {
                         suppressModelForTurn = true
-                        val error = "Zopy, command samajh aayi, lekin action clear nahi hua. Ek baar seedha bolkar try karo."
+                        val error = if (CommandParser.isAmbiguousFlashlightCommand(userText)) {
+                            "Zopy, torch on karun ya off?"
+                        } else {
+                            "Zopy, command samajh aayi, lekin action clear nahi hua. Ek baar seedha bolkar try karo."
+                        }
                         listener?.onMyraText(error, true)
                         emitState(error)
-                        audio?.setMuted(true)
-                        assistantController.speakMessage(error) { audio?.setMuted(false); emitState("Sun rahi hoon…") }
+                        queueLocalSpeech(error)
                     }
                 }
                 if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(myraText)
@@ -205,11 +239,23 @@ class MyraVoiceService : Service() {
                 probableActionTurn = false
                 if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
                 if (mediaGuard.isAwake()) mediaGuard.finishInteraction()
+                pendingLocalSpeech?.let { message ->
+                    pendingLocalSpeech = null
+                    beginValidatedLocalSpeech(message)
+                }
             }
             client.onError = { emitState(it) }
             audio?.onMicChunk = { client.sendAudio(it) }
             audio?.onAmplitude = { listener?.onAmplitude(it) }
-            audio?.onSpeakingChanged = { listener?.onSpeaking(it); updateNotification(if (it) "MYRA is speaking" else "MYRA is listening") }
+            audio?.onSpeakingChanged = { speaking ->
+                listener?.onSpeaking(speaking)
+                updateNotification(if (speaking) "MYRA is speaking" else "MYRA is listening")
+                if (!speaking && localPlaybackActive) {
+                    localPlaybackActive = false
+                    audio?.setMuted(false)
+                    emitState("Sun rahi hoon…")
+                }
+            }
             client.connect()
         }
     }
@@ -257,15 +303,14 @@ class MyraVoiceService : Service() {
         audio?.interrupt()
         live?.interrupt()
         mediaGuard.finishInteraction()
-        audio?.setMuted(true)
         val result = assistantController.processCommand(
             StructuredCommandParser.fromLegacy(command, command.toString()),
-            speak = true,
-            notifyListeners = false,
-            onSpeechFinished = { audio?.setMuted(false); emitState("Sun rahi hoon…") }
+            speak = false,
+            notifyListeners = false
         )
         listener?.onMyraText(result.spokenMessage, !result.success)
         emitState(result.spokenMessage)
+        queueLocalSpeech(result.spokenMessage)
     }
 
     private fun appendTranscript(builder: StringBuilder, part: String) {
@@ -274,6 +319,67 @@ class MyraVoiceService : Service() {
         if (builder.isNotEmpty() && !builder.last().isWhitespace()) builder.append(' ')
         builder.append(clean)
     }
+
+    private fun queueLocalSpeech(message: String) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val key = normalizeSpeech(message)
+        if (key == lastLocalSpeechKey && now - lastLocalSpeechAt < 4_000L) return
+        lastLocalSpeechKey = key
+        lastLocalSpeechAt = now
+        pendingLocalSpeech = message
+        suppressModelForTurn = true
+        audio?.setMuted(true)
+    }
+
+    private fun beginValidatedLocalSpeech(message: String) {
+        val client = live
+        if (client == null) {
+            fallbackLocalSpeech(message)
+            return
+        }
+        validatingLocalSpeech = message
+        localSpeechAudio.clear()
+        localSpeechTranscript.clear()
+        suppressModelForTurn = true
+        client.sendText("Say exactly these words once, with the selected natural voice. Do not add, remove, translate, explain, or introduce them: ${org.json.JSONObject.quote(message)}")
+    }
+
+    private fun finishValidatedLocalSpeech() {
+        val expected = validatingLocalSpeech ?: return
+        val actual = localSpeechTranscript.toString()
+        validatingLocalSpeech = null
+        val valid = normalizeSpeech(actual) == normalizeSpeech(expected)
+        if (valid && localSpeechAudio.isNotEmpty()) {
+            localPlaybackActive = true
+            localSpeechAudio.forEach { audio?.queueAudio(it) }
+            localSpeechAudio.clear()
+            localSpeechTranscript.clear()
+        } else {
+            localSpeechAudio.clear()
+            localSpeechTranscript.clear()
+            fallbackLocalSpeech(expected)
+        }
+    }
+
+    private fun fallbackLocalSpeech(message: String) {
+        assistantController.speakMessage(message) {
+            audio?.setMuted(false)
+            emitState("Sun rahi hoon…")
+        }
+    }
+
+    private fun resetTurnBuffers() {
+        input.clear()
+        output.clear()
+        commandProbe.clear()
+        commandUserTextEmitted = false
+        probableActionTurn = false
+        mediaBlockedTurn = false
+    }
+
+    private fun normalizeSpeech(value: String): String = value.lowercase(Locale.ROOT)
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .trim()
 
     private fun executeDeepResearch(command: AppCommand.DeepResearch) {
         val query = command.query?.trim().orEmpty()
@@ -321,6 +427,18 @@ class MyraVoiceService : Service() {
     private fun configuredUserName(saved: String?): String =
         saved?.trim()?.takeIf { it.isNotBlank() && !it.equals("Friend", ignoreCase = true) } ?: "Zopy"
 
+    private fun executeTypedLocalCommand(text: String): Boolean {
+        val command = CommandParser.parse(text) ?: return false
+        localCommandExecutedThisTurn = false
+        waitingForFreshInputAfterCommand = false
+        executeCommand(command)
+        pendingLocalSpeech?.let { message ->
+            pendingLocalSpeech = null
+            beginValidatedLocalSpeech(message)
+        }
+        return true
+    }
+
     private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }
 
     private fun speakWhatsAppAnnouncement(sender: String, message: String?) {
@@ -365,6 +483,7 @@ class MyraVoiceService : Service() {
         @Volatile var listener: Listener? = null
         @Volatile private var instance: MyraVoiceService? = null
         fun sendText(text: String) { instance?.live?.sendText(text) }
+        fun executeLocalText(text: String): Boolean = instance?.executeTypedLocalCommand(text) == true
         fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
         fun announceWhatsApp(sender: String, message: String?) { instance?.speakWhatsAppAnnouncement(sender, message) }
         fun interrupt() { instance?.audio?.interrupt(); instance?.live?.interrupt() }
