@@ -19,6 +19,7 @@ import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.MyApplication
 import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
+import com.myra.assistant.voice.VoiceResponseFormatter
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.CoroutineScope
@@ -359,8 +360,10 @@ class MyraVoiceService : Service() {
     }
 
     private fun prepareCloseAfterSpeech(command: AppCommand.CloseCurrentApp) {
-        val target = command.requestedName?.trim().takeUnless { it.isNullOrBlank() } ?: "YouTube"
-        val message = "$target close kar rahi hoon. Aur kuch karun?"
+        val preferences = getSharedPreferences("myra", MODE_PRIVATE)
+        val name = configuredUserName(preferences.getString("user_name", null))
+        val personality = preferences.getString("personality", "GF") ?: "GF"
+        val message = VoiceResponseFormatter.closeStarting(command.requestedName, personality, name)
         pendingActionAfterLocalSpeech = {
             val result = assistantController.processCommand(
                 StructuredCommandParser.fromLegacy(command, command.toString()),

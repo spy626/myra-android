@@ -55,8 +55,12 @@ class AssistantController(context: Context) {
             transition(AssistantState.EXECUTING_ACTION)
             executor.execute(command)
         }
-        val name = appContext.getSharedPreferences("myra", Context.MODE_PRIVATE).getString("user_name", "Zopy").orEmpty().ifBlank { "Zopy" }
-        val result = rawResult.copy(spokenMessage = VoiceResponseFormatter.format(command, rawResult, name))
+        val preferences = appContext.getSharedPreferences("myra", Context.MODE_PRIVATE)
+        val name = preferences.getString("user_name", "Zopy").orEmpty().ifBlank { "Zopy" }
+        val personality = preferences.getString("personality", "GF").orEmpty().ifBlank { "GF" }
+        val result = rawResult.copy(
+            spokenMessage = VoiceResponseFormatter.format(command, rawResult, name, personality)
+        )
         audit.record(result.actionType, result.target, result.success, result.verified)
         if (notifyListeners) main.post { listeners.forEach { it.onResult(command, result) } }
         if (speak) {

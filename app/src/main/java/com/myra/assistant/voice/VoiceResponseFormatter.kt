@@ -3,13 +3,22 @@ package com.myra.assistant.voice
 import com.myra.assistant.commands.Command
 import com.myra.assistant.commands.CommandType
 import com.myra.assistant.core.AssistantResult
+import kotlin.random.Random
 
 object VoiceResponseFormatter {
-    fun format(command: Command, result: AssistantResult, name: String = "Zopy"): String {
+    private val lastChoiceByAction = mutableMapOf<String, Int>()
+
+    fun format(
+        command: Command,
+        result: AssistantResult,
+        name: String = "Zopy",
+        personality: String = "Assistant"
+    ): String {
         if (!result.success) return result.spokenMessage
+        val gfMode = personality.equals("GF", ignoreCase = true)
         return when (command.type) {
             CommandType.OPEN_APP -> if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
-            CommandType.CLOSE_APP -> "${command.target ?: "YouTube"} close kar rahi hoon. Aur kuch karun?"
+            CommandType.CLOSE_APP -> closeStarting(command.target, personality, name)
             CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> {
                 val query = humanize(command.content ?: command.target.orEmpty())
                 "Done $name, YouTube par $query search kar diya. Aur kuch karun?"
@@ -17,10 +26,64 @@ object VoiceResponseFormatter {
             CommandType.REPLY_WHATSAPP -> result.spokenMessage
             CommandType.GO_HOME -> "Home screen par aa gayi, $name."
             CommandType.GO_BACK -> "Peechhe aa gayi, $name."
-            CommandType.FLASHLIGHT_ON -> "Flashlight on kar diya. Aur kuch karun?"
-            CommandType.FLASHLIGHT_OFF -> "Flashlight off kar diya. Aur kuch chahiye aapko?"
+            CommandType.FLASHLIGHT_ON -> if (gfMode) next(
+                "flashlight_on",
+                listOf(
+                    "Haan jaan, flashlight on kar diya. Ab sab clearly dikh raha hai?",
+                    "Lo dear, flashlight jala diya tumhare liye. Aur kuch chahiye?",
+                    "Of course jaan, flashlight on ho gaya. Ab bolo, aur kya karun?",
+                    "Done Zopy, flashlight on kar diya. Main yahin hoon.",
+                    "Haanji dear, roshni kar di. Aur kuch karun?",
+                    "Bas tumne kaha aur flashlight on, jaan. Ab batao?"
+                )
+            ) else "Flashlight on kar diya. Aur kuch karun?"
+            CommandType.FLASHLIGHT_OFF -> if (gfMode) next(
+                "flashlight_off",
+                listOf(
+                    "Haan jaan, flashlight off kar diya. Aur kuch chahiye?",
+                    "Lo dear, flashlight band kar diya. Ab bolo?",
+                    "Of course jaan, roshni band kar di. Main sun rahi hoon.",
+                    "Done Zopy, flashlight off kar diya. Aur kuch karun?",
+                    "Haanji dear, flashlight band ho gaya. Ab kya karna hai?",
+                    "Tumne kaha aur flashlight off, jaan. Aur kuch?"
+                )
+            ) else "Flashlight off kar diya. Aur kuch chahiye aapko?"
             else -> result.spokenMessage
         }
+    }
+
+    fun closeStarting(target: String?, personality: String, name: String = "Zopy"): String {
+        val app = target?.trim().takeUnless { it.isNullOrBlank() } ?: "YouTube"
+        if (!personality.equals("GF", ignoreCase = true)) {
+            return "$app close kar rahi hoon. Aur kuch karun?"
+        }
+        return next(
+            "close_app",
+            listOf(
+                "Haan jaan, $app close kar deti hoon. Aur kuch chahiye?",
+                "Okay dear, $app band kar deti hoon tumhare liye.",
+                "Bas ek second jaan, $app close kar rahi hoon.",
+                "Bilkul, $app band kar deti hoon. Ab bolo, aur kya karun?",
+                "Theek hai dear, $app se bahar aa jaate hain.",
+                "Kar deti hoon jaan. Aur kuch dekhna hai?",
+                "Of course jaan, $app close kar deti hoon tumhare liye.",
+                "Okay $name, $app band kar rahi hoon. Main sun rahi hoon.",
+                "Haanji dear, $app close kar deti hoon. Ab batao?",
+                "Done samjho jaan, $app band kar rahi hoon."
+            )
+        )
+    }
+
+    @Synchronized
+    private fun next(action: String, options: List<String>): String {
+        if (options.size == 1) return options.first()
+        val previous = lastChoiceByAction[action] ?: -1
+        var selected: Int
+        do {
+            selected = Random.nextInt(options.size)
+        } while (selected == previous)
+        lastChoiceByAction[action] = selected
+        return options[selected]
     }
 
     private fun humanize(value: String): String = value.trim()
