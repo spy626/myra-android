@@ -54,6 +54,11 @@ class WhatsAppNotificationService : NotificationListenerService() {
         return privateWord || Regex("(?<!\\d)\\d{4,8}(?!\\d)").containsMatchIn(text)
     }
 
+    private fun userName(context: Context): String {
+        val saved = context.getSharedPreferences("myra", Context.MODE_PRIVATE).getString("user_name", null)?.trim()
+        return saved?.takeIf { it.isNotBlank() && !it.equals("Friend", ignoreCase = true) } ?: "Zopy"
+    }
+
     private fun normalize(value: String) = value.lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
 
@@ -75,6 +80,7 @@ object WhatsAppReplyStore {
 
     private val targets = ConcurrentHashMap<String, Target>()
     private val recentOutgoing = ConcurrentHashMap<String, Long>()
+    private val recentReplyActions = ConcurrentHashMap<String, Long>()
     @Volatile private var latest: Pair<String, String?>? = null
 
     fun remember(sender: String, message: String, pendingIntent: PendingIntent, inputs: Array<RemoteInput>) {
@@ -110,6 +116,12 @@ object WhatsAppReplyStore {
         } ?: return Result("${requestedSender ?: "Us message"} ka active WhatsApp reply option nahi mila.", false)
 
         val outgoingKey = normalize(text)
+        val actionKey = "${normalize(target.sender)}|$outgoingKey"
+        recentReplyActions.entries.removeIf { now - it.value > REPLY_DEDUPE_MS }
+        if (recentReplyActions.putIfAbsent(actionKey, now) != null) {
+            val name = userName(context)
+            return Result("$name, yeh message abhi bheja tha. Maine dobara nahi bheja.", false)
+        }
         recentOutgoing[outgoingKey] = now
         return try {
             val fillIn = Intent()
@@ -117,10 +129,13 @@ object WhatsAppReplyStore {
             target.remoteInputs.forEach { bundle.putCharSequence(it.resultKey, text) }
             RemoteInput.addResultsToIntent(target.remoteInputs, fillIn, bundle)
             target.pendingIntent.send(context, 0, fillIn)
-            Result("Android ne ${target.sender} ko “$text” bhejne ka WhatsApp reply action accept kiya.", true)
+            val name = userName(context)
+            Result("Done $name, maine ${target.sender} ko “$text” bhej diya hai. Delivery confirm nahi hui hai. Aur kuch karun?", true)
         } catch (_: PendingIntent.CanceledException) {
             recentOutgoing.remove(outgoingKey)
-            Result("WhatsApp reply expire ho gaya. Naya message aane ke baad try karo.", false)
+            recentReplyActions.remove(actionKey)
+            val name = userName(context)
+            Result("Sorry $name, message nahi bhej paayi. WhatsApp reply expire ho gaya. Naya message aane ke baad phir try karna.", false)
         }
     }
 
@@ -129,4 +144,5 @@ object WhatsAppReplyStore {
 
     private const val TARGET_TTL_MS = 30 * 60 * 1000L
     private const val OUTGOING_SUPPRESSION_MS = 20_000L
+    private const val REPLY_DEDUPE_MS = 12_000L
 }
