@@ -59,7 +59,7 @@ class MainActivity : AppCompatActivity() {
                 AssistantState.SPEAKING -> { b.orb.state = OrbAnimationView.State.SPEAKING; showStatus("Bol rahi hoon…") }
                 AssistantState.WAKE_WORD_LISTENING, AssistantState.COMMAND_LISTENING -> { b.orb.state = OrbAnimationView.State.LISTENING; showStatus("Sun rahi hoon…") }
                 AssistantState.ERROR -> showStatus("Kuch gadbad hui—dobara try karo")
-                AssistantState.STOPPED -> showStatus("MYRA ruk gayi")
+                AssistantState.STOPPED -> showStatus("LYRA ruk gayi")
                 else -> Unit
             }
         }
@@ -102,7 +102,7 @@ class MainActivity : AppCompatActivity() {
                         assistantController.processCommand(structured, speak = true)
                     }
                 } else {
-                    if (!MyraVoiceService.isRunning) showStatus("Connect to MYRA first — tap the mic") else MyraVoiceService.sendText(it)
+                    if (!MyraVoiceService.isRunning) showStatus("Connect to LYRA first — tap the mic") else MyraVoiceService.sendText(it)
                 }
                 b.textInput.text.clear()
             }
@@ -133,7 +133,7 @@ class MainActivity : AppCompatActivity() {
     private fun systemPrompt(name: String, mode: String): String {
         val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Warm caring Hinglish girlfriend-style companion. Use natural words like haan, acha, bilkul. At most three sentences." }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style Keep every response natural, conversational and safe. When the user asks to open or close an Android app, reply only with a brief acknowledgement such as Okay; never claim the action succeeded because the Android command layer reports the real result."
+        return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style Keep every response natural, conversational and safe. When the user asks to open or close an Android app, reply only with a brief acknowledgement such as Okay; never claim the action succeeded because the Android command layer reports the real result."
     }
     private fun showSettings() {
         startActivity(Intent(this, SettingsActivity::class.java))
@@ -157,7 +157,7 @@ class MainActivity : AppCompatActivity() {
         s.modelChoice.text = modelLabels[modelIndex]; s.voiceChoice.text = voiceLabels[voiceIndex]
         when (p.getString("personality", "GF")) { "Professional" -> s.proMode.isChecked = true; "Assistant" -> s.assistantMode.isChecked = true; else -> s.gfMode.isChecked = true }
         s.micStatus.text = if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) "Granted ✓" else "Not yet granted — tap the mic to allow"
-        s.accessibilityStatus.text = if (AccessibilityHelperService.isEnabled(this)) "Enabled ✓ — MYRA can close the current app" else "Disabled — tap here to enable close-app control"
+        s.accessibilityStatus.text = if (AccessibilityHelperService.isEnabled(this)) "Enabled ✓ — LYRA can close the current app" else "Disabled — tap here to enable close-app control"
         s.accessibilityStatus.setTextColor(if (AccessibilityHelperService.isEnabled(this)) Color.rgb(0, 230, 118) else Color.rgb(255, 80, 110))
         s.accessibilityStatus.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         fun pick(title: String, labels: Array<String>, selected: Int, chosen: (Int) -> Unit) {
@@ -223,7 +223,7 @@ class MainActivity : AppCompatActivity() {
     private fun executeAppCommand(command: AppCommand) {
         if (command is AppCommand.DeepResearch) {
             if (!MyraVoiceService.isRunning) {
-                val message = "Connect MYRA first, then start Deep Research."
+                val message = "Connect LYRA first, then start Deep Research."
                 showStatus(message); addBubble(message, false, true)
             } else {
                 MyraVoiceService.startDeepResearch(command.query)
@@ -257,7 +257,7 @@ class MainActivity : AppCompatActivity() {
         return true
     }
     private fun showStatus(text: String) { b.statusText.text = text }
-    private fun disconnect() { startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_STOP)); b.connectButton.clearColorFilter(); b.orb.state = OrbAnimationView.State.IDLE; showStatus("Tap the mic to wake MYRA") }
+    private fun disconnect() { startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_STOP)); b.connectButton.clearColorFilter(); b.orb.state = OrbAnimationView.State.IDLE; showStatus("Tap the mic to wake LYRA") }
     override fun onResume() { super.onResume(); MyraVoiceService.listener = voiceListener; if (MyraVoiceService.isRunning) b.connectButton.setColorFilter(Color.WHITE) }
     override fun onDestroy() { assistantController.removeListener(controllerListener); if (MyraVoiceService.listener === voiceListener) MyraVoiceService.listener = null; super.onDestroy() }
 }

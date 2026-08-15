@@ -21,8 +21,8 @@ object VoiceResponseFormatter {
             CommandType.REPLY_WHATSAPP -> result.spokenMessage
             CommandType.GO_HOME -> "Home screen par aa gayi, $name."
             CommandType.GO_BACK -> "Peechhe aa gayi, $name."
-            CommandType.FLASHLIGHT_ON -> "Flashlight on kar di, $name."
-            CommandType.FLASHLIGHT_OFF -> "Flashlight off kar di, $name."
+            CommandType.FLASHLIGHT_ON -> "Flashlight on kar diya. Aur kuch karun?"
+            CommandType.FLASHLIGHT_OFF -> "Flashlight off kar diya. Aur kuch chahiye aapko?"
             else -> result.spokenMessage
         }
     }

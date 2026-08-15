@@ -41,7 +41,7 @@ class AppActionExecutor(private val context: Context) {
         is AppCommand.CloseCurrentApp -> closeCurrentApp()
         is AppCommand.SearchYouTube -> searchYouTube(command.query)
         AppCommand.RepeatYouTubeSearch -> repeatYouTubeSearch()
-        is AppCommand.DeepResearch -> Result("Deep Research needs MYRA to be connected.", false)
+        is AppCommand.DeepResearch -> Result("Deep Research needs LYRA to be connected.", false)
         is AppCommand.ReplyWhatsApp -> WhatsAppReplyStore.reply(context, command.sender, command.message)
             .let { Result(it.message, it.success) }
         AppCommand.QueryWhatsAppMessages -> WhatsAppReplyStore.latestMessage().let { Result(it.message, it.success) }
@@ -81,7 +81,7 @@ class AppActionExecutor(private val context: Context) {
 
     private fun navigateBack(): Result {
         val service = AccessibilityHelperService.instance
-        if (service == null || !AccessibilityHelperService.isEnabled(context)) return Result("Back control ke liye MYRA Accessibility enable karo.", false)
+        if (service == null || !AccessibilityHelperService.isEnabled(context)) return Result("Back control ke liye LYRA Accessibility enable karo.", false)
         return if (service.goBack()) Result("Peechhe aa gayi.", true) else Result("Android back action complete nahi kar paaya.", false)
     }
 
@@ -160,7 +160,7 @@ class AppActionExecutor(private val context: Context) {
         val service = AccessibilityHelperService.instance
         if (service == null || !AccessibilityHelperService.isEnabled(context)) {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return Result("Enable MYRA Accessibility, then try the close command again.", false)
+            return Result("Enable LYRA Accessibility, then try the close command again.", false)
         }
         return if (service.returnToMyra()) Result("YouTube se bahar aa rahi hoon.", true)
         else Result("Zopy, Android YouTube se bahar nahi aa paaya.", false)

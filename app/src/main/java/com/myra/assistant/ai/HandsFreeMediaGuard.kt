@@ -9,7 +9,7 @@ import android.os.Looper
 import android.os.SystemClock
 import java.util.Locale
 
-/** Prevents external media speech from becoming a MYRA turn while remaining hands-free. */
+/** Prevents external media speech from becoming a LYRA turn while remaining hands-free. */
 class HandsFreeMediaGuard(context: Context) {
     enum class Gate { OPEN, WAKE_DETECTED, BLOCK }
 
@@ -60,6 +60,6 @@ class HandsFreeMediaGuard(context: Context) {
 
     companion object {
         private const val LISTEN_WINDOW_MS = 10_000L
-        private val WAKE_PHRASE = Regex("(?:hey|hi|हाय|हे)\\s+(?:myra|mayra|mira|मायरा)")
+        private val WAKE_PHRASE = Regex("(?:hey|hi|हाय|हे)\\s+(?:lyra|lira|leera|लीरा|लायरा|myra|mayra|mira|मायरा)")
     }
 }

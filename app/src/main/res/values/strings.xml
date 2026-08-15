@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">MYRA</string>
-    <string name="accessibility_description">Allows MYRA to return the current app to the Home screen after your voice command.</string>
+    <string name="app_name">LYRA</string>
+    <string name="accessibility_description">Allows LYRA to return the current app to the Home screen after your voice command.</string>
 </resources>

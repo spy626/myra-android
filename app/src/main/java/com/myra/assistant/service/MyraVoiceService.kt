@@ -76,9 +76,9 @@ class MyraVoiceService : Service() {
         super.onCreate()
         instance = this
         createChannel()
-        startForeground(NOTIFICATION_ID, notification("Starting MYRA…"))
+        startForeground(NOTIFICATION_ID, notification("Starting LYRA…"))
         wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MYRA:BackgroundVoice")
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LYRA:BackgroundVoice")
             .apply { setReferenceCounted(false); acquire() }
         isRunning = true
     }
@@ -111,7 +111,7 @@ class MyraVoiceService : Service() {
                     hasGreeted = true
                     client.sendText("Greet $name briefly and naturally.")
                 } else {
-                    emitState("MYRA reconnected — listening")
+                    emitState("LYRA reconnected — listening")
                 }
             }
             client.onAudio = {
@@ -273,7 +273,7 @@ class MyraVoiceService : Service() {
             audio?.onAmplitude = { listener?.onAmplitude(it) }
             audio?.onSpeakingChanged = { speaking ->
                 listener?.onSpeaking(speaking)
-                updateNotification(if (speaking) "MYRA is speaking" else "MYRA is listening")
+                updateNotification(if (speaking) "LYRA is speaking" else "LYRA is listening")
                 if (!speaking && localPlaybackActive) {
                     localPlaybackActive = false
                     audio?.setMuted(false)
@@ -332,6 +332,14 @@ class MyraVoiceService : Service() {
             speak = false,
             notifyListeners = false
         )
+        // Opening an app is immediately visible to the user. A delayed spoken
+        // acknowledgement adds noise and can arrive after the external app is already
+        // on screen, so keep listening silently instead.
+        if (command is AppCommand.OpenApp && result.success) {
+            audio?.setMuted(false)
+            emitState("Sun rahi hoon…")
+            return
+        }
         listener?.onMyraText(result.spokenMessage, !result.success)
         emitState(result.spokenMessage)
         queueLocalSpeech(
@@ -479,7 +487,7 @@ class MyraVoiceService : Service() {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. For every request to open, launch, close, stop, search, play, pause, go home/back, report device time or battery, control the flashlight, check WhatsApp, or send/reply to a message: produce no audio and no confirmation. Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
+        return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. For every request to open, launch, close, stop, search, play, pause, go home/back, report device time or battery, control the flashlight, check WhatsApp, or send/reply to a message: produce no audio and no confirmation. Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }
 
     private fun configuredUserName(saved: String?): String =
@@ -517,12 +525,12 @@ class MyraVoiceService : Service() {
         live?.sendText("Speak this notification announcement naturally in Hinglish. Do not add anything: $announcement")
         emitState("WhatsApp message from $sender")
     }
-    private fun createChannel() { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel(CHANNEL_ID, "MYRA background voice", NotificationManager.IMPORTANCE_LOW)) }
+    private fun createChannel() { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel(CHANNEL_ID, "LYRA background voice", NotificationManager.IMPORTANCE_LOW)) }
     private fun notification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 2, Intent(this, MyraVoiceService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setColor(Color.rgb(255, 23, 68)).setContentTitle("MYRA background voice").setContentText(text)
+            .setColor(Color.rgb(255, 23, 68)).setContentTitle("LYRA background voice").setContentText(text)
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }

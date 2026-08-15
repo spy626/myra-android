@@ -18,7 +18,7 @@
     <application
         android:name=".MyApplication"
         android:allowBackup="true"
-        android:label="MYRA"
+        android:label="LYRA"
         android:theme="@style/Theme.Myra"
         android:usesCleartextTraffic="false">
         <activity android:name=".ui.settings.SettingsActivity" android:exported="false" />
@@ -37,7 +37,7 @@
         <service
             android:name=".service.AccessibilityHelperService"
             android:exported="true"
-            android:label="MYRA device actions"
+            android:label="LYRA device actions"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -53,7 +53,7 @@
         <service
             android:name=".service.WhatsAppNotificationService"
             android:exported="true"
-            android:label="MYRA notification intelligence"
+            android:label="LYRA notification intelligence"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
