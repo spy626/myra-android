@@ -48,6 +48,7 @@ class MyraVoiceService : Service() {
     private var lastCommandAt = 0L
     private var hideNextModelTranscript = false
     private var mediaBlockedTurn = false
+    private var probableActionTurn = false
     private var lastAnnouncementKey = ""
     private var lastAnnouncementAt = 0L
     private var hasGreeted = false
@@ -103,7 +104,7 @@ class MyraVoiceService : Service() {
             client.onInputTranscript = inputTranscript@ { part ->
                 when (mediaGuard.inspect(part)) {
                     HandsFreeMediaGuard.Gate.BLOCK -> {
-                        commandProbe.append(part)
+                        appendTranscript(commandProbe, part)
                         val directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
                             ?: CommandParser.parseDirectMediaControl(part)
                             ?: CommandParser.parse(commandProbe.toString())?.takeIf(::isSafeDirectMediaCommand)
@@ -117,6 +118,11 @@ class MyraVoiceService : Service() {
                             mediaBlockedTurn = false
                             executeCommand(directCommand)
                             return@inputTranscript
+                        }
+                        if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
+                            probableActionTurn = true
+                            suppressModelForTurn = true
+                            output.clear()
                         }
                         if (!mediaBlockedTurn) emitState("Media Guard active — direct search, close and WhatsApp commands are ready")
                         mediaBlockedTurn = true
@@ -140,12 +146,18 @@ class MyraVoiceService : Service() {
                     suppressModelForTurn = false
                     localCommandExecutedThisTurn = false
                 }
-                input.append(part); commandProbe.append(part)
+                appendTranscript(input, part); appendTranscript(commandProbe, part)
                 val command = CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString())
+                if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
+                    probableActionTurn = true
+                    suppressModelForTurn = true
+                    output.clear()
+                }
                 // A streamed transcript may first contain only "YouTube" and later add
                 // "mein search karo Lols Gaming". Never execute a plain open-app command
                 // from an incomplete chunk; confirm it from the complete turn below.
-                if (command != null && command !is AppCommand.OpenApp && command !is AppCommand.DeepResearch) {
+                val explicitOpen = command is AppCommand.OpenApp && CommandParser.isExplicitOpenCommand(part)
+                if (command != null && (command !is AppCommand.OpenApp || explicitOpen) && command !is AppCommand.DeepResearch) {
                     val spoken = commandProbe.toString().trim()
                     if (spoken.isNotBlank() && !commandUserTextEmitted) {
                         listener?.onUserText(spoken)
@@ -160,6 +172,7 @@ class MyraVoiceService : Service() {
                     mediaBlockedTurn = false
                     input.clear(); output.clear(); commandProbe.clear(); commandUserTextEmitted = false
                     localCommandExecutedThisTurn = false
+                    probableActionTurn = false
                     return@turnComplete
                 }
                 if (hideNextModelTranscript) {
@@ -173,12 +186,23 @@ class MyraVoiceService : Service() {
                 // Run one final parse over the complete transcript. Partial Live transcript
                 // chunks can omit or mistranscribe the action word even when the final text
                 // contains enough context to identify the device command.
-                if (!suppressModelForTurn && userText.isNotBlank()) {
-                    CommandParser.parse(userText)?.let { executeCommand(it) }
+                if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
+                    val parsed = CommandParser.parse(userText)
+                    if (parsed != null) {
+                        executeCommand(parsed)
+                    } else if (probableActionTurn || CommandParser.isProbableDeviceAction(userText)) {
+                        suppressModelForTurn = true
+                        val error = "Zopy, command samajh aayi, lekin action clear nahi hua. Ek baar seedha bolkar try karo."
+                        listener?.onMyraText(error, true)
+                        emitState(error)
+                        audio?.setMuted(true)
+                        assistantController.speakMessage(error) { audio?.setMuted(false); emitState("Sun rahi hoon…") }
+                    }
                 }
                 if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(myraText)
                 input.clear(); output.clear(); commandProbe.clear()
                 commandUserTextEmitted = false
+                probableActionTurn = false
                 if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
                 if (mediaGuard.isAwake()) mediaGuard.finishInteraction()
             }
@@ -192,7 +216,10 @@ class MyraVoiceService : Service() {
 
     private fun isSafeDirectMediaCommand(command: AppCommand): Boolean = when (command) {
         is AppCommand.SearchYouTube, AppCommand.RepeatYouTubeSearch,
-        is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages -> true
+        is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
+        is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
+        AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
+        AppCommand.BatteryLevel, is AppCommand.SetFlashlight -> true
         else -> false
     }
 
@@ -230,16 +257,22 @@ class MyraVoiceService : Service() {
         audio?.interrupt()
         live?.interrupt()
         mediaGuard.finishInteraction()
-        val result = assistantController.processCommand(StructuredCommandParser.fromLegacy(command, command.toString()), speak = false, notifyListeners = false)
+        audio?.setMuted(true)
+        val result = assistantController.processCommand(
+            StructuredCommandParser.fromLegacy(command, command.toString()),
+            speak = true,
+            notifyListeners = false,
+            onSpeechFinished = { audio?.setMuted(false); emitState("Sun rahi hoon…") }
+        )
         listener?.onMyraText(result.spokenMessage, !result.success)
         emitState(result.spokenMessage)
-        speakLocalResult(result.spokenMessage)
     }
 
-    private fun speakLocalResult(message: String) {
-        hideNextModelTranscript = true
-        suppressModelForTurn = false
-        live?.sendText("Speak exactly this local Android result naturally. Do not add or change facts: $message")
+    private fun appendTranscript(builder: StringBuilder, part: String) {
+        val clean = part.trim()
+        if (clean.isBlank()) return
+        if (builder.isNotEmpty() && !builder.last().isWhitespace()) builder.append(' ')
+        builder.append(clean)
     }
 
     private fun executeDeepResearch(command: AppCommand.DeepResearch) {
@@ -282,7 +315,7 @@ class MyraVoiceService : Service() {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. When the user asks to open, launch, close, stop, search inside YouTube, check WhatsApp messages, or send/reply to a message, do not answer, invent a sender, or claim success; remain silent because Android reports the verified local result. Never invent notification, contact, or message information. Never claim a phone action succeeded yourself."
+        return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. For every request to open, launch, close, stop, search, play, pause, go home/back, report device time or battery, control the flashlight, check WhatsApp, or send/reply to a message: produce no audio and no confirmation. Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }
 
     private fun configuredUserName(saved: String?): String =

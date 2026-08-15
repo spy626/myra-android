@@ -49,7 +49,7 @@ class AssistantController(context: Context) {
         return processCommand(command, speak, alreadyProcessing = true)
     }
 
-    fun processCommand(command: Command, speak: Boolean = true, alreadyProcessing: Boolean = false, notifyListeners: Boolean = true): AssistantResult {
+    fun processCommand(command: Command, speak: Boolean = true, alreadyProcessing: Boolean = false, notifyListeners: Boolean = true, onSpeechFinished: (() -> Unit)? = null): AssistantResult {
         if (!alreadyProcessing) transition(AssistantState.PROCESSING)
         val rawResult = validator.validate(command) ?: run {
             transition(AssistantState.EXECUTING_ACTION)
@@ -61,9 +61,20 @@ class AssistantController(context: Context) {
         if (notifyListeners) main.post { listeners.forEach { it.onResult(command, result) } }
         if (speak) {
             transition(AssistantState.SPEAKING)
-            tts.speak(result.spokenMessage) { resumeAfterSpeech(result.shouldResumeListening) }
-        } else resumeAfterSpeech(result.shouldResumeListening)
+            tts.speak(result.spokenMessage) {
+                resumeAfterSpeech(result.shouldResumeListening)
+                onSpeechFinished?.invoke()
+            }
+        } else {
+            resumeAfterSpeech(result.shouldResumeListening)
+            onSpeechFinished?.invoke()
+        }
         return result
+    }
+
+    fun speakMessage(message: String, onFinished: (() -> Unit)? = null) {
+        transition(AssistantState.SPEAKING)
+        tts.speak(message) { resumeAfterSpeech(true); onFinished?.invoke() }
     }
 
     private fun resumeAfterSpeech(shouldResume: Boolean) {

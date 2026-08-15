@@ -116,7 +116,7 @@ class AppActionExecutor(private val context: Context) {
         val encoded = URLEncoder.encode(query, Charsets.UTF_8.name())
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$encoded")).apply {
             setPackage(packageName)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         }
         return try {
             context.startActivity(intent)
@@ -139,7 +139,7 @@ class AppActionExecutor(private val context: Context) {
         val pm = context.packageManager
         val launch = knownPackages[name]?.let(pm::getLaunchIntentForPackage) ?: findInstalledApp(name, pm)
         if (launch == null) return Result("I couldn't find $rawName on this phone.", false)
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         return try {
             context.startActivity(launch); Result("Opening $rawName.", true)
         } catch (_: Exception) { Result("$rawName is installed, but Android would not let me open it.", false) }

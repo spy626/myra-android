@@ -10,7 +10,7 @@ class VoiceResponseFormatterTest {
     @Test fun formatsHumanAppConfirmation() {
         val command = Command(CommandType.OPEN_APP, "YouTube", sourceText = "YouTube open karo")
         val result = AssistantResult(true, false, "OPEN_APP", "YouTube", "Opening YouTube")
-        assertEquals("YouTube khol diya, Zopy.", VoiceResponseFormatter.format(command, result))
+        assertEquals("Zopy, YouTube khol rahi hoon.", VoiceResponseFormatter.format(command, result))
     }
     @Test fun neverRewritesFailureAsSuccess() {
         val command = Command(CommandType.OPEN_APP, "YouTube", sourceText = "open")

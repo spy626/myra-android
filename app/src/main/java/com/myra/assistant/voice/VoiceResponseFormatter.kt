@@ -8,8 +8,12 @@ object VoiceResponseFormatter {
     fun format(command: Command, result: AssistantResult, name: String = "Zopy"): String {
         if (!result.success) return result.spokenMessage
         return when (command.type) {
-            CommandType.OPEN_APP -> "${command.target} khol diya, $name."
-            CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> "YouTube par ${command.content ?: command.target.orEmpty()} search khol diya, $name."
+            CommandType.OPEN_APP -> if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
+            CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> if (result.verified) {
+                "YouTube par ${command.content ?: command.target.orEmpty()} search khol diya, $name."
+            } else {
+                "$name, YouTube par ${command.content ?: command.target.orEmpty()} search khol rahi hoon."
+            }
             CommandType.REPLY_WHATSAPP -> result.spokenMessage
             CommandType.GO_HOME -> "Home screen par aa gayi, $name."
             CommandType.GO_BACK -> "Peechhe aa gayi, $name."
