@@ -54,11 +54,6 @@ class WhatsAppNotificationService : NotificationListenerService() {
         return privateWord || Regex("(?<!\\d)\\d{4,8}(?!\\d)").containsMatchIn(text)
     }
 
-    private fun userName(context: Context): String {
-        val saved = context.getSharedPreferences("myra", Context.MODE_PRIVATE).getString("user_name", null)?.trim()
-        return saved?.takeIf { it.isNotBlank() && !it.equals("Friend", ignoreCase = true) } ?: "Zopy"
-    }
-
     private fun normalize(value: String) = value.lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
 
@@ -137,6 +132,11 @@ object WhatsAppReplyStore {
             val name = userName(context)
             Result("Sorry $name, message nahi bhej paayi. WhatsApp reply expire ho gaya. Naya message aane ke baad phir try karna.", false)
         }
+    }
+
+    private fun userName(context: Context): String {
+        val saved = context.getSharedPreferences("myra", Context.MODE_PRIVATE).getString("user_name", null)?.trim()
+        return saved?.takeIf { it.isNotBlank() && !it.equals("Friend", ignoreCase = true) } ?: "Zopy"
     }
 
     private fun normalize(value: String) = value.lowercase(Locale.ROOT)
