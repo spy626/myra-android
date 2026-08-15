@@ -56,6 +56,7 @@ class MyraVoiceService : Service() {
     private var localSpeechValidationToken = 0L
     private var localSpeechValidationAttempt = 0
     private var localSpeechHasContent = false
+    private var allowUntranscribedLocalSpeech = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private val localSpeechAudio = mutableListOf<ByteArray>()
     private val localSpeechTranscript = StringBuilder()
@@ -333,7 +334,19 @@ class MyraVoiceService : Service() {
         )
         listener?.onMyraText(result.spokenMessage, !result.success)
         emitState(result.spokenMessage)
-        queueLocalSpeech(result.spokenMessage)
+        queueLocalSpeech(
+            result.spokenMessage,
+            allowUntranscribedAudio = result.success && isSafeUntranscribedConfirmation(command)
+        )
+    }
+
+    private fun isSafeUntranscribedConfirmation(command: AppCommand): Boolean = when (command) {
+        is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
+        is AppCommand.SearchYouTube, AppCommand.RepeatYouTubeSearch,
+        AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
+        AppCommand.BatteryLevel, is AppCommand.SetFlashlight -> true
+        is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
+        is AppCommand.DeepResearch -> false
     }
 
     private fun appendTranscript(builder: StringBuilder, part: String) {
@@ -343,7 +356,7 @@ class MyraVoiceService : Service() {
         builder.append(clean)
     }
 
-    private fun queueLocalSpeech(message: String) {
+    private fun queueLocalSpeech(message: String, allowUntranscribedAudio: Boolean = false) {
         val now = android.os.SystemClock.elapsedRealtime()
         val key = normalizeSpeech(message)
         if (key == lastLocalSpeechKey && now - lastLocalSpeechAt < 4_000L) return
@@ -351,6 +364,7 @@ class MyraVoiceService : Service() {
         lastLocalSpeechAt = now
         suppressModelForTurn = true
         audio?.setMuted(true)
+        allowUntranscribedLocalSpeech = allowUntranscribedAudio
         if (validatingLocalSpeech == null) beginValidatedLocalSpeech(message)
         else pendingLocalSpeech = message
     }
@@ -382,8 +396,14 @@ class MyraVoiceService : Service() {
         val expected = validatingLocalSpeech ?: return
         val actual = localSpeechTranscript.toString()
         validatingLocalSpeech = null
-        val valid = normalizeSpeech(actual) == normalizeSpeech(expected)
-        if (valid && localSpeechAudio.isNotEmpty()) {
+        val transcriptMatches = normalizeSpeech(actual) == normalizeSpeech(expected)
+        // Gemini Live documents that output transcription is independent from audio
+        // and may be delayed or absent. For already-successful, non-sensitive local
+        // actions we may play the requested natural-voice audio when no transcript was
+        // returned. Messaging and failed-action confirmations remain strict.
+        val safeAudioWithoutTranscript = allowUntranscribedLocalSpeech &&
+            actual.isBlank() && localSpeechAudio.isNotEmpty()
+        if ((transcriptMatches || safeAudioWithoutTranscript) && localSpeechAudio.isNotEmpty()) {
             localPlaybackActive = true
             localSpeechAudio.forEach { audio?.queueAudio(it) }
             localSpeechAudio.clear()

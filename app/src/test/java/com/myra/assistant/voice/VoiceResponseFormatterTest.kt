@@ -17,6 +17,14 @@ class VoiceResponseFormatterTest {
         val result = AssistantResult(false, false, "OPEN_APP", "YouTube", "YouTube nahi mila.")
         assertEquals("YouTube nahi mila.", VoiceResponseFormatter.format(command, result))
     }
+    @Test fun formatsCompletedYouTubeSearchNaturally() {
+        val command = Command(CommandType.SEARCH_YOUTUBE, "YouTube", "jonathan gaming", "search", null)
+        val result = AssistantResult(true, false, "SEARCH_YOUTUBE", "YouTube", "accepted")
+        assertEquals(
+            "Done Zopy, YouTube par Jonathan Gaming search kar diya. Aur kuch karun?",
+            VoiceResponseFormatter.format(command, result)
+        )
+    }
     @Test fun closeResponseDoesNotClaimForceStopOrVerification() {
         val command = Command(CommandType.CLOSE_APP, "YouTube", sourceText = "YouTube close karo")
         val result = AssistantResult(true, false, "CLOSE_APP", "YouTube", "accepted")

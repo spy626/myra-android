@@ -14,10 +14,9 @@ object VoiceResponseFormatter {
             } else {
                 "Theek hai $name, ${command.target ?: "app"} se bahar aa rahi hoon."
             }
-            CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> if (result.verified) {
-                "YouTube par ${command.content ?: command.target.orEmpty()} search khol diya, $name."
-            } else {
-                "$name, YouTube par ${command.content ?: command.target.orEmpty()} search khol rahi hoon."
+            CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> {
+                val query = humanize(command.content ?: command.target.orEmpty())
+                "Done $name, YouTube par $query search kar diya. Aur kuch karun?"
             }
             CommandType.REPLY_WHATSAPP -> result.spokenMessage
             CommandType.GO_HOME -> "Home screen par aa gayi, $name."
@@ -27,4 +26,8 @@ object VoiceResponseFormatter {
             else -> result.spokenMessage
         }
     }
+
+    private fun humanize(value: String): String = value.trim()
+        .split(Regex("\\s+"))
+        .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
 }
