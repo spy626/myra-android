@@ -14,6 +14,8 @@ import com.myra.assistant.ai.DeepResearchClient
 import com.myra.assistant.ai.HandsFreeMediaGuard
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.phone.AppActionExecutor
+import com.myra.assistant.MyApplication
+import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
 import java.text.SimpleDateFormat
 import java.util.*
@@ -53,6 +55,7 @@ class MyraVoiceService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mediaGuard by lazy { HandsFreeMediaGuard(this) }
     private val appActions by lazy { AppActionExecutor(this) }
+    private val assistantController by lazy { (application as MyApplication).assistantController }
 
     override fun onCreate() {
         super.onCreate()
@@ -203,6 +206,11 @@ class MyraVoiceService : Service() {
             is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
             AppCommand.QueryWhatsAppMessages -> "whatsapp-message-query"
+            AppCommand.GoHome -> "go-home"
+            AppCommand.GoBack -> "go-back"
+            AppCommand.CurrentTime -> "current-time"
+            AppCommand.BatteryLevel -> "battery-level"
+            is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
         }
         // One utterance can arrive as several slightly different Live transcript chunks.
         // A longer semantic dedupe window prevents the same local action/error appearing
@@ -222,10 +230,10 @@ class MyraVoiceService : Service() {
         audio?.interrupt()
         live?.interrupt()
         mediaGuard.finishInteraction()
-        val result = appActions.execute(command)
-        listener?.onMyraText(result.message, !result.success)
-        emitState(result.message)
-        speakLocalResult(result.message)
+        val result = assistantController.processCommand(StructuredCommandParser.fromLegacy(command, command.toString()), speak = false, notifyListeners = false)
+        listener?.onMyraText(result.spokenMessage, !result.success)
+        emitState(result.spokenMessage)
+        speakLocalResult(result.spokenMessage)
     }
 
     private fun speakLocalResult(message: String) {

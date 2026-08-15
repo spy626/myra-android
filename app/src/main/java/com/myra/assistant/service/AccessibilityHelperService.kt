@@ -29,6 +29,9 @@ class AccessibilityHelperService : AccessibilityService() {
         return movedToHome
     }
 
+    fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
+    fun goBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
+
     companion object {
         @Volatile var instance: AccessibilityHelperService? = null
             private set

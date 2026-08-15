@@ -29,6 +29,13 @@ import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.service.AccessibilityHelperService
 import com.myra.assistant.service.MyraVoiceService
 import com.myra.assistant.model.AppCommand
+import com.myra.assistant.MyApplication
+import com.myra.assistant.commands.CommandType
+import com.myra.assistant.commands.CommandParser as StructuredCommandParser
+import com.myra.assistant.core.AssistantController
+import com.myra.assistant.core.AssistantResult
+import com.myra.assistant.core.AssistantState
+import com.myra.assistant.commands.Command
 import com.myra.assistant.databinding.ActivityMainBinding
 import com.myra.assistant.databinding.SheetSettingsBinding
 import com.myra.assistant.ui.settings.SettingsActivity
@@ -43,6 +50,24 @@ class MainActivity : AppCompatActivity() {
     private var audio: AudioEngine? = null
     private var live: GeminiLiveClient? = null
     private lateinit var appActions: AppActionExecutor
+    private val assistantController by lazy { (application as MyApplication).assistantController }
+    private val controllerListener = object : AssistantController.Listener {
+        override fun onStateChanged(state: AssistantState) = runOnUiThread {
+            when (state) {
+                AssistantState.PROCESSING -> showStatus("Soch rahi hoon…")
+                AssistantState.EXECUTING_ACTION -> showStatus("Kar rahi hoon…")
+                AssistantState.SPEAKING -> { b.orb.state = OrbAnimationView.State.SPEAKING; showStatus("Bol rahi hoon…") }
+                AssistantState.WAKE_WORD_LISTENING, AssistantState.COMMAND_LISTENING -> { b.orb.state = OrbAnimationView.State.LISTENING; showStatus("Sun rahi hoon…") }
+                AssistantState.ERROR -> showStatus("Kuch gadbad hui—dobara try karo")
+                AssistantState.STOPPED -> showStatus("MYRA ruk gayi")
+                else -> Unit
+            }
+        }
+        override fun onResult(command: Command, result: AssistantResult) = runOnUiThread {
+            addBubble(result.spokenMessage, false, !result.success)
+            showStatus(result.spokenMessage)
+        }
+    }
     private var muted = false
     private var suppressModelForTurn = false
     private var lastCommandKey = ""
@@ -62,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); b = ActivityMainBinding.inflate(layoutInflater); setContentView(b.root)
         MyraVoiceService.listener = voiceListener
+        assistantController.addListener(controllerListener)
         appActions = AppActionExecutor(this)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) permission.launch(Manifest.permission.RECORD_AUDIO)
         b.settingsButton.setOnClickListener { showSettings() }
@@ -70,13 +96,16 @@ class MainActivity : AppCompatActivity() {
         b.sendButton.setOnClickListener {
             b.textInput.text.toString().trim().takeIf { it.isNotEmpty() }?.let {
                 addBubble(it, true)
-                if (!executeAppCommand(it)) {
+                val structured = StructuredCommandParser.parse(it)
+                if (structured.type != CommandType.UNKNOWN) {
+                    assistantController.processCommand(structured, speak = !MyraVoiceService.isRunning)
+                } else {
                     if (!MyraVoiceService.isRunning) showStatus("Connect to MYRA first — tap the mic") else MyraVoiceService.sendText(it)
                 }
                 b.textInput.text.clear()
             }
         }
-        b.stopButton.setOnClickListener { MyraVoiceService.interrupt(); showStatus("Stopped") }
+        b.stopButton.setOnClickListener { MyraVoiceService.interrupt(); assistantController.stop(); showStatus("Stopped") }
         b.muteButton.setOnClickListener { muted = !muted; startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_MUTE).putExtra(MyraVoiceService.EXTRA_MUTED, muted)); b.muteButton.alpha = if (muted) 1f else .6f; showStatus(if (muted) "Microphone muted" else "Sun rahi hoon…") }
     }
     private fun updateDeviceStatus() {
@@ -91,6 +120,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connect() {
+        assistantController.resume()
         val key = ApiKeyStore(this).get(ApiKeyStore.GEMINI)
         if (key.isBlank()) { showSettings(); showStatus("Add your API key first"); return }
         MyraVoiceService.listener = voiceListener
@@ -121,7 +151,7 @@ class MainActivity : AppCompatActivity() {
         val voiceIds = arrayOf("Aoede", "Charon", "Kore", "Fenrir", "Puck", "Leda", "Orus", "Zephyr")
         var modelIndex = modelIds.indexOf(p.getString("model", modelIds[0])).coerceAtLeast(0)
         var voiceIndex = voiceIds.indexOf(p.getString("voice", voiceIds[0])).coerceAtLeast(0)
-        s.sheetApiKey.setText(p.getString("api_key", "")); s.sheetName.setText(p.getString("user_name", "Zopy"))
+        s.sheetApiKey.setText(ApiKeyStore(this).get(ApiKeyStore.GEMINI)); s.sheetName.setText(p.getString("user_name", "Zopy"))
         s.modelChoice.text = modelLabels[modelIndex]; s.voiceChoice.text = voiceLabels[voiceIndex]
         when (p.getString("personality", "GF")) { "Professional" -> s.proMode.isChecked = true; "Assistant" -> s.assistantMode.isChecked = true; else -> s.gfMode.isChecked = true }
         s.micStatus.text = if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) "Granted ✓" else "Not yet granted — tap the mic to allow"
@@ -154,7 +184,8 @@ class MainActivity : AppCompatActivity() {
         s.closeSettings.setOnClickListener { dialog.dismiss() }
         s.sheetSave.setOnClickListener {
             val personality = when (s.personalityGroup.checkedRadioButtonId) { s.proMode.id -> "Professional"; s.assistantMode.id -> "Assistant"; else -> "GF" }
-            p.edit().putString("api_key",s.sheetApiKey.text.toString().trim()).putString("user_name",s.sheetName.text.toString().trim())
+            ApiKeyStore(this).put(ApiKeyStore.GEMINI, s.sheetApiKey.text.toString())
+            p.edit().putString("user_name",s.sheetName.text.toString().trim().ifBlank { "Zopy" })
                 .putString("model",modelIds[modelIndex]).putString("voice",voiceIds[voiceIndex]).putString("personality",personality)
                 .putString("prime_contacts_json",contacts.toString()).apply()
             Toast.makeText(this,"Settings saved",Toast.LENGTH_SHORT).show(); dialog.dismiss()
@@ -212,6 +243,11 @@ class MainActivity : AppCompatActivity() {
             is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
             AppCommand.QueryWhatsAppMessages -> "whatsapp-message-query"
+            AppCommand.GoHome -> "go-home"
+            AppCommand.GoBack -> "go-back"
+            AppCommand.CurrentTime -> "current-time"
+            AppCommand.BatteryLevel -> "battery-level"
+            is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
         }
         if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
         lastCommandKey = key
@@ -221,5 +257,5 @@ class MainActivity : AppCompatActivity() {
     private fun showStatus(text: String) { b.statusText.text = text }
     private fun disconnect() { startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_STOP)); b.connectButton.clearColorFilter(); b.orb.state = OrbAnimationView.State.IDLE; showStatus("Tap the mic to wake MYRA") }
     override fun onResume() { super.onResume(); MyraVoiceService.listener = voiceListener; if (MyraVoiceService.isRunning) b.connectButton.setColorFilter(Color.WHITE) }
-    override fun onDestroy() { if (MyraVoiceService.listener === voiceListener) MyraVoiceService.listener = null; super.onDestroy() }
+    override fun onDestroy() { assistantController.removeListener(controllerListener); if (MyraVoiceService.listener === voiceListener) MyraVoiceService.listener = null; super.onDestroy() }
 }

@@ -31,6 +31,12 @@ object CommandParser {
     fun parse(raw: String): AppCommand? {
         val text = normalize(raw)
         if (text.isBlank()) return null
+        if (Regex("^(?:go )?home(?: screen)?$|^home (?:jao|chalo|karo)$|^होम").containsMatchIn(text)) return AppCommand.GoHome
+        if (Regex("^(?:go )?back$|^back (?:jao|karo)$|^peeche (?:jao|chalo)$|^पीछे").containsMatchIn(text)) return AppCommand.GoBack
+        if (Regex("(?:what(?:'s| is) the time|time (?:kya|batao)|samay|kitne baje|टाइम|समय)").containsMatchIn(text)) return AppCommand.CurrentTime
+        if (Regex("(?:battery|बैटरी).*(?:level|percent|kitni|batao|कितनी)|^(?:battery|बैटरी)$").containsMatchIn(text)) return AppCommand.BatteryLevel
+        if (Regex("(?:flashlight|torch|टॉर्च).*(?:on|chalu|jala|चालू|जलाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(true)
+        if (Regex("(?:flashlight|torch|टॉर्च).*(?:off|band|bujha|बंद|बुझाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(false)
         if (isWhatsAppMessageQuery(text)) return AppCommand.QueryWhatsAppMessages
         extractWhatsAppReply(text)?.let { return it }
         extractDeepResearch(text)?.let { return it }

@@ -10,6 +10,13 @@ import com.myra.assistant.service.AccessibilityHelperService
 import com.myra.assistant.service.WhatsAppReplyStore
 import java.util.Locale
 import java.net.URLEncoder
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.hardware.camera2.CameraManager
+import com.myra.assistant.commands.Command
+import com.myra.assistant.core.AssistantResult
+import java.text.SimpleDateFormat
+import java.util.Date
 
 class AppActionExecutor(private val context: Context) {
     data class Result(val message: String, val success: Boolean)
@@ -38,6 +45,63 @@ class AppActionExecutor(private val context: Context) {
         is AppCommand.ReplyWhatsApp -> WhatsAppReplyStore.reply(context, command.sender, command.message)
             .let { Result(it.message, it.success) }
         AppCommand.QueryWhatsAppMessages -> WhatsAppReplyStore.latestMessage().let { Result(it.message, it.success) }
+        AppCommand.GoHome -> navigateHome()
+        AppCommand.GoBack -> navigateBack()
+        AppCommand.CurrentTime -> currentTime()
+        AppCommand.BatteryLevel -> batteryLevel()
+        is AppCommand.SetFlashlight -> setFlashlight(command.enabled)
+    }
+
+    fun executeStructured(command: Command): AssistantResult {
+        val local = command.localCommand ?: return AssistantResult(false, false, command.type.name, command.target, "Zopy, ye command abhi supported nahi hai.")
+        val result = execute(local)
+        val acceptedOnly = local is AppCommand.OpenApp || local is AppCommand.SearchYouTube || local is AppCommand.ReplyWhatsApp
+        return AssistantResult(
+            success = result.success,
+            verified = result.success && !acceptedOnly,
+            actionType = command.type.name,
+            target = command.target,
+            spokenMessage = result.message,
+            technicalError = if (result.success) null else result.message,
+            shouldResumeListening = true
+        )
+    }
+
+    private fun navigateHome(): Result {
+        val service = AccessibilityHelperService.instance
+        return when {
+            service != null && service.goHome() -> Result("Home screen khol di.", true)
+            else -> try {
+                context.startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                Result("Home screen khol di.", true)
+            } catch (error: Exception) { Result("Home screen nahi khul paayi.", false) }
+        }
+    }
+
+    private fun navigateBack(): Result {
+        val service = AccessibilityHelperService.instance
+        if (service == null || !AccessibilityHelperService.isEnabled(context)) return Result("Back control ke liye MYRA Accessibility enable karo.", false)
+        return if (service.goBack()) Result("Peechhe aa gayi.", true) else Result("Android back action complete nahi kar paaya.", false)
+    }
+
+    private fun currentTime(): Result = Result("Abhi ${SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date())} ho rahe hain.", true)
+
+    private fun batteryLevel(): Result {
+        val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        if (level < 0) return Result("Battery level read nahi ho paaya.", false)
+        return Result("Battery ${level * 100 / scale} percent hai.", true)
+    }
+
+    private fun setFlashlight(enabled: Boolean): Result = try {
+        val camera = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val id = camera.cameraIdList.firstOrNull { camera.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
+            ?: return Result("Is phone mein flashlight available nahi hai.", false)
+        camera.setTorchMode(id, enabled)
+        Result(if (enabled) "Flashlight on kar di." else "Flashlight off kar di.", true)
+    } catch (error: Exception) {
+        Result("Flashlight change nahi ho paayi.", false)
     }
 
     private fun searchYouTube(rawQuery: String): Result {

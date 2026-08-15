@@ -16,6 +16,7 @@
     </queries>
 
     <application
+        android:name=".MyApplication"
         android:allowBackup="true"
         android:label="MYRA"
         android:theme="@style/Theme.Myra"
