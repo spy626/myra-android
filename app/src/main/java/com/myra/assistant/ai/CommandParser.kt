@@ -120,9 +120,20 @@ object CommandParser {
     fun parseDirectMediaControl(raw: String): AppCommand? {
         val text = normalize(raw)
         val close = Regex(
-            "^(?:(?:and|aur|और)\\s+)?(?:(?:youtube|यूट्यूब)\\s+)?(?:close|close\\s+karo|close\\s+kar\\s+do|band\\s+karo|band\\s+kar\\s+do|बंद\\s+करो|बंद\\s+कर\\s+दो|क्लोज\\s+करो)(?:\\s+(?:youtube|यूट्यूब))?$"
+            "^(?:(?:and|aur|और)\\s+)?(?:(?:youtube|यूट्यूब)\\s+(?:ko\\s+)?)?(?:(?:go\\s+to\\s+)?(?:close|clothes|closed)(?:\\s+(?:karo|kar\\s+do))?|band\\s+karo|band\\s+kar\\s+do|बंद\\s+करो|बंद\\s+कर\\s+दो|क्लोज\\s+करो)(?:\\s+(?:youtube|यूट्यूब))?$"
         )
-        return if (close.matches(text)) AppCommand.CloseCurrentApp(findKnownApp(text)) else null
+        // Live transcription may split "YouTube" and "close karo" into separate
+        // packets, or leave a few media words at the front of commandProbe. Check a
+        // short trailing window as well as the complete utterance. The accepted suffix
+        // remains deliberately strict; arbitrary media dialogue must not become a
+        // phone action.
+        val words = text.split(' ').filter(String::isNotBlank)
+        val hasDirectSuffix = (2..minOf(7, words.size)).any { count ->
+            close.matches(words.takeLast(count).joinToString(" "))
+        }
+        return if (close.matches(text) || hasDirectSuffix) {
+            AppCommand.CloseCurrentApp(findKnownApp(text) ?: "YouTube")
+        } else null
     }
 
     private fun extractDeepResearch(text: String): AppCommand.DeepResearch? {

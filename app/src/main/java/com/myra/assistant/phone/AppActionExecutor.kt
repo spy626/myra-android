@@ -55,7 +55,8 @@ class AppActionExecutor(private val context: Context) {
     fun executeStructured(command: Command): AssistantResult {
         val local = command.localCommand ?: return AssistantResult(false, false, command.type.name, command.target, "Zopy, ye command abhi supported nahi hai.")
         val result = execute(local)
-        val acceptedOnly = local is AppCommand.OpenApp || local is AppCommand.SearchYouTube || local is AppCommand.ReplyWhatsApp
+        val acceptedOnly = local is AppCommand.OpenApp || local is AppCommand.CloseCurrentApp ||
+            local is AppCommand.SearchYouTube || local is AppCommand.ReplyWhatsApp
         return AssistantResult(
             success = result.success,
             verified = result.success && !acceptedOnly,
@@ -161,8 +162,8 @@ class AppActionExecutor(private val context: Context) {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return Result("Enable MYRA Accessibility, then try the close command again.", false)
         }
-        return if (service.returnToMyra()) Result("Returning to MYRA.", true)
-        else Result("Android could not return to MYRA.", false)
+        return if (service.returnToMyra()) Result("YouTube se bahar aa rahi hoon.", true)
+        else Result("Zopy, Android YouTube se bahar nahi aa paaya.", false)
     }
 
     private fun normalize(value: String) = value.lowercase(Locale.ROOT)

@@ -25,4 +25,11 @@ class CommandParserTest {
         assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
         assertEquals("lols gaming", command.content)
     }
+    @Test fun acceptsLiveYouTubeCloseVariants() {
+        val parser = com.myra.assistant.ai.CommandParser
+        assertEquals(true, parser.parseDirectMediaControl("YouTube close karo") is com.myra.assistant.model.AppCommand.CloseCurrentApp)
+        assertEquals(true, parser.parseDirectMediaControl("YouTube ko close kar do") is com.myra.assistant.model.AppCommand.CloseCurrentApp)
+        assertEquals(true, parser.parseDirectMediaControl("go to close karo") is com.myra.assistant.model.AppCommand.CloseCurrentApp)
+        assertEquals(true, parser.parseDirectMediaControl("some streamed words YouTube close karo") is com.myra.assistant.model.AppCommand.CloseCurrentApp)
+    }
 }

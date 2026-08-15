@@ -9,6 +9,11 @@ object VoiceResponseFormatter {
         if (!result.success) return result.spokenMessage
         return when (command.type) {
             CommandType.OPEN_APP -> if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
+            CommandType.CLOSE_APP -> if (result.verified) {
+                "Done $name, ${command.target ?: "app"} se bahar aa gayi hoon. Aur kuch karun?"
+            } else {
+                "Theek hai $name, ${command.target ?: "app"} se bahar aa rahi hoon."
+            }
             CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> if (result.verified) {
                 "YouTube par ${command.content ?: command.target.orEmpty()} search khol diya, $name."
             } else {

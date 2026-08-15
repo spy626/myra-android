@@ -4,6 +4,8 @@ import android.app.*
 import android.content.Intent
 import android.graphics.Color
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.myra.assistant.ai.AudioEngine
@@ -51,6 +53,10 @@ class MyraVoiceService : Service() {
     private var probableActionTurn = false
     private var pendingLocalSpeech: String? = null
     private var validatingLocalSpeech: String? = null
+    private var localSpeechValidationToken = 0L
+    private var localSpeechValidationAttempt = 0
+    private var localSpeechHasContent = false
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val localSpeechAudio = mutableListOf<ByteArray>()
     private val localSpeechTranscript = StringBuilder()
     private var localPlaybackActive = false
@@ -108,7 +114,10 @@ class MyraVoiceService : Service() {
                 }
             }
             client.onAudio = {
-                if (validatingLocalSpeech != null) localSpeechAudio += it.copyOf()
+                if (validatingLocalSpeech != null) {
+                    localSpeechHasContent = true
+                    localSpeechAudio += it.copyOf()
+                }
                 else if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it)
             }
             client.onInputTranscript = inputTranscript@ { part ->
@@ -183,14 +192,28 @@ class MyraVoiceService : Service() {
                 }
             }
             client.onOutputTranscript = {
-                if (validatingLocalSpeech != null) appendTranscript(localSpeechTranscript, it)
+                if (validatingLocalSpeech != null) {
+                    localSpeechHasContent = true
+                    appendTranscript(localSpeechTranscript, it)
+                }
                 else if (!suppressModelForTurn && !hideNextModelTranscript && mediaGuard.allowModelResponse()) appendTranscript(output, it)
             }
             client.onTurnComplete = turnComplete@ {
                 if (validatingLocalSpeech != null) {
-                    finishValidatedLocalSpeech()
-                    resetTurnBuffers()
-                    waitingForFreshInputAfterCommand = true
+                    // Sending clientContent interrupts the previous Gemini generation.
+                    // Its interrupted turnComplete can arrive before the new confirmation.
+                    // Ignore that empty boundary, and briefly allow the independently
+                    // streamed output transcript to arrive after the audio turn completes.
+                    if (localSpeechHasContent) {
+                        val token = localSpeechValidationToken
+                        mainHandler.postDelayed({
+                            if (token == localSpeechValidationToken && validatingLocalSpeech != null) {
+                                finishValidatedLocalSpeech()
+                                resetTurnBuffers()
+                                waitingForFreshInputAfterCommand = true
+                            }
+                        }, 350L)
+                    }
                     return@turnComplete
                 }
                 pendingLocalSpeech?.let { message ->
@@ -326,22 +349,33 @@ class MyraVoiceService : Service() {
         if (key == lastLocalSpeechKey && now - lastLocalSpeechAt < 4_000L) return
         lastLocalSpeechKey = key
         lastLocalSpeechAt = now
-        pendingLocalSpeech = message
         suppressModelForTurn = true
         audio?.setMuted(true)
+        if (validatingLocalSpeech == null) beginValidatedLocalSpeech(message)
+        else pendingLocalSpeech = message
     }
 
-    private fun beginValidatedLocalSpeech(message: String) {
+    private fun beginValidatedLocalSpeech(message: String, retry: Boolean = false) {
         val client = live
         if (client == null) {
             fallbackLocalSpeech(message)
             return
         }
+        if (!retry) localSpeechValidationAttempt = 0
+        localSpeechValidationAttempt++
+        localSpeechValidationToken++
+        val token = localSpeechValidationToken
         validatingLocalSpeech = message
+        localSpeechHasContent = false
         localSpeechAudio.clear()
         localSpeechTranscript.clear()
         suppressModelForTurn = true
         client.sendText("Say exactly these words once, with the selected natural voice. Do not add, remove, translate, explain, or introduce them: ${org.json.JSONObject.quote(message)}")
+        mainHandler.postDelayed({
+            if (token == localSpeechValidationToken && validatingLocalSpeech != null) {
+                finishValidatedLocalSpeech()
+            }
+        }, 8_000L)
     }
 
     private fun finishValidatedLocalSpeech() {
@@ -357,7 +391,11 @@ class MyraVoiceService : Service() {
         } else {
             localSpeechAudio.clear()
             localSpeechTranscript.clear()
-            fallbackLocalSpeech(expected)
+            if (localSpeechValidationAttempt < 2 && live != null) {
+                beginValidatedLocalSpeech(expected, retry = true)
+            } else {
+                fallbackLocalSpeech(expected)
+            }
         }
     }
 
