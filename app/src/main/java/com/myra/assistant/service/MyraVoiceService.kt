@@ -138,6 +138,15 @@ class MyraVoiceService : Service() {
                             directCommand = null
                         }
                         if (directCommand != null) {
+                            // Media Guard runs before the normal fresh-input reset below.
+                            // A genuine direct command heard during playback starts a new
+                            // user turn, so release the completed previous command here.
+                            // shouldExecute() still blocks duplicate transcript chunks.
+                            if (waitingForFreshInputAfterCommand) {
+                                waitingForFreshInputAfterCommand = false
+                                localCommandExecutedThisTurn = false
+                                commandUserTextEmitted = false
+                            }
                             val spoken = commandProbe.toString().trim()
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
                                 listener?.onUserText(spoken)
