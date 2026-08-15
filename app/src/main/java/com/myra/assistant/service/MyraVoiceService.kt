@@ -44,6 +44,8 @@ class MyraVoiceService : Service() {
     private var lastCommandAt = 0L
     private var hideNextModelTranscript = false
     private var mediaBlockedTurn = false
+    private var lastAnnouncementKey = ""
+    private var lastAnnouncementAt = 0L
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mediaGuard by lazy { HandsFreeMediaGuard(this) }
     private val appActions by lazy { AppActionExecutor(this) }
@@ -68,7 +70,7 @@ class MyraVoiceService : Service() {
     private fun connect() {
         val p = getSharedPreferences("myra", MODE_PRIVATE)
         val key = ApiKeyStore(this).get(ApiKeyStore.GEMINI)
-        val name = p.getString("user_name", "Friend") ?: "Friend"
+        val name = configuredUserName(p.getString("user_name", null))
         if (key.isBlank()) { emitState("Add your Gemini API key in Settings"); stopSelf(); return }
         audio = AudioEngine(this)
         val selectedVoice = p.getString("voice", "Aoede") ?: "Aoede"
@@ -249,13 +251,21 @@ class MyraVoiceService : Service() {
         return "You are MYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. When the user asks to open, launch, close, stop, search inside YouTube, check WhatsApp messages, or send/reply to a message, do not answer, invent a sender, or claim success; remain silent because Android reports the verified local result. Never invent notification, contact, or message information. Never claim a phone action succeeded yourself."
     }
 
+    private fun configuredUserName(saved: String?): String =
+        saved?.trim()?.takeIf { it.isNotBlank() && !it.equals("Friend", ignoreCase = true) } ?: "Zopy"
+
     private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }
 
     private fun speakWhatsAppAnnouncement(sender: String, message: String?) {
         if (live == null) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val key = "${sender.lowercase(Locale.ROOT)}|${message.orEmpty().lowercase(Locale.ROOT)}"
+        if (key == lastAnnouncementKey && now - lastAnnouncementAt < 30_000L) return
+        lastAnnouncementKey = key
+        lastAnnouncementAt = now
         audio?.interrupt()
         mediaGuard.beginAssistantTurn()
-        val name = getSharedPreferences("myra", MODE_PRIVATE).getString("user_name", "Zopy") ?: "Zopy"
+        val name = configuredUserName(getSharedPreferences("myra", MODE_PRIVATE).getString("user_name", null))
         val announcement = if (message == null) {
             "$name, WhatsApp mein $sender ka private message aaya hai. Content sensitive hai, main aloud nahi padhungi. Kya reply doon?"
         } else {
