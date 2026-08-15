@@ -4,6 +4,7 @@ import android.app.*
 import android.content.Intent
 import android.graphics.Color
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.myra.assistant.ai.AudioEngine
 import com.myra.assistant.ai.CommandParser
@@ -47,6 +48,8 @@ class MyraVoiceService : Service() {
     private var mediaBlockedTurn = false
     private var lastAnnouncementKey = ""
     private var lastAnnouncementAt = 0L
+    private var hasGreeted = false
+    private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mediaGuard by lazy { HandsFreeMediaGuard(this) }
     private val appActions by lazy { AppActionExecutor(this) }
@@ -56,6 +59,9 @@ class MyraVoiceService : Service() {
         instance = this
         createChannel()
         startForeground(NOTIFICATION_ID, notification("Starting MYRA…"))
+        wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MYRA:BackgroundVoice")
+            .apply { setReferenceCounted(false); acquire() }
         isRunning = true
     }
 
@@ -65,7 +71,7 @@ class MyraVoiceService : Service() {
             ACTION_MUTE -> audio?.setMuted(intent.getBooleanExtra(EXTRA_MUTED, false))
             else -> if (live == null) connect()
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun connect() {
@@ -80,7 +86,16 @@ class MyraVoiceService : Service() {
             selectedVoice, systemPrompt(name, p.getString("personality", "GF") ?: "GF", selectedVoice)
         ).also { client ->
             client.onState = { emitState(it) }
-            client.onReady = { audio?.start(); listener?.onReady(); client.sendText("Greet $name briefly and naturally.") }
+            client.onReady = {
+                audio?.start()
+                listener?.onReady()
+                if (!hasGreeted) {
+                    hasGreeted = true
+                    client.sendText("Greet $name briefly and naturally.")
+                } else {
+                    emitState("MYRA reconnected — listening")
+                }
+            }
             client.onAudio = { if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it) }
             client.onInputTranscript = inputTranscript@ { part ->
                 when (mediaGuard.inspect(part)) {
@@ -294,7 +309,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
