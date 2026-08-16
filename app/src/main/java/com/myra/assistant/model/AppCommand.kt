@@ -15,5 +15,5 @@ sealed interface AppCommand {
     data class SetFlashlight(val enabled: Boolean) : AppCommand
     data class ControlMedia(val action: MediaAction) : AppCommand
 
-    enum class MediaAction { PAUSE, PLAY, NEXT, PREVIOUS }
+    enum class MediaAction { PAUSE, PLAY, NEXT, PREVIOUS, FIRST }
 }
