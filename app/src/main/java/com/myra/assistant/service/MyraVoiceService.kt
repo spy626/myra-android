@@ -121,17 +121,12 @@ class MyraVoiceService : Service() {
             }
             client.onAudio = {
                 if (validatingLocalSpeech != null) {
+                    // Never play a local-action confirmation before its transcript has
+                    // been validated. Gemini can occasionally answer only "OK"; streaming
+                    // that audio directly caused the short robotic confirmation reported
+                    // for YouTube and flashlight actions.
                     localSpeechHasContent = true
-                    if (allowUntranscribedLocalSpeech) {
-                        // These words were selected locally for an already-successful,
-                        // non-sensitive action. Stream the selected Gemini voice as soon
-                        // as it arrives instead of buffering the entire sentence.
-                        localSpeechStreamedDirectly = true
-                        localPlaybackActive = true
-                        audio?.queueAudio(it)
-                    } else {
-                        localSpeechAudio += it.copyOf()
-                    }
+                    localSpeechAudio += it.copyOf()
                 }
                 else if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it)
             }
@@ -453,21 +448,12 @@ class MyraVoiceService : Service() {
         val expected = validatingLocalSpeech ?: return
         val actual = localSpeechTranscript.toString()
         validatingLocalSpeech = null
-        if (localSpeechStreamedDirectly) {
-            localSpeechGenerationComplete = true
-            localSpeechAudio.clear()
-            localSpeechTranscript.clear()
-            if (!localAudioSpeaking && localPlaybackActive) finishLocalPlayback()
-            return
-        }
         val transcriptMatches = normalizeSpeech(actual) == normalizeSpeech(expected)
-        // Gemini Live documents that output transcription is independent from audio
-        // and may be delayed or absent. For already-successful, non-sensitive local
-        // actions we may play the requested natural-voice audio when no transcript was
-        // returned. Messaging and failed-action confirmations remain strict.
-        val safeAudioWithoutTranscript = allowUntranscribedLocalSpeech &&
-            actual.isBlank() && localSpeechAudio.isNotEmpty()
-        if ((transcriptMatches || safeAudioWithoutTranscript) && localSpeechAudio.isNotEmpty()) {
+        // Audio without a matching transcript is never played. This intentionally trades
+        // a little latency for correctness: a stray "OK" must not replace the complete
+        // deterministic action confirmation. After one retry, Android TTS receives the
+        // full expected sentence rather than any model-generated fallback.
+        if (transcriptMatches && localSpeechAudio.isNotEmpty()) {
             localSpeechGenerationComplete = true
             localPlaybackActive = true
             localSpeechAudio.forEach { audio?.queueAudio(it) }
