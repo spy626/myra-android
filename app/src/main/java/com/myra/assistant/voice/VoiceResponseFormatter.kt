@@ -52,6 +52,7 @@ object VoiceResponseFormatter {
             CommandType.MEDIA_PLAY -> mediaResponse("play", gfMode)
             CommandType.MEDIA_NEXT -> mediaResponse("next", gfMode)
             CommandType.MEDIA_PREVIOUS -> mediaResponse("previous", gfMode)
+            CommandType.MEDIA_FIRST -> mediaResponse("first", gfMode)
             else -> result.spokenMessage
         }
     }
@@ -61,8 +62,9 @@ object VoiceResponseFormatter {
             return when (action) {
                 "pause" -> "Video pause command bhej diya."
                 "play" -> "Video play command bhej diya."
-                "next" -> "Next video command bhej diya."
-                else -> "Previous video command bhej diya."
+                "next" -> "Next video par tap kar diya."
+                "previous" -> "Previous video command bhej diya."
+                else -> "First video par tap kar diya."
             }
         }
         val options = when (action) {
@@ -84,11 +86,17 @@ object VoiceResponseFormatter {
                 "Next kar diya meri jaan. Batao, ye pasand hai?",
                 "Agla video aa gaya, dear. Aur kuch karun?"
             )
+            "previous" -> listOf(
+                "Pichhla video command bhej diya tumhare liye, jaan.",
+                "Lo dear, previous video command bhej diya.",
+                "Pehle wale video ka command bhej diya, meri jaan.",
+                "Previous karne ko bol diya. Ab check karo, jaan."
+            )
             else -> listOf(
-                "Pichhla video laga diya tumhare liye, jaan.",
-                "Lo dear, pehle wala video chala diya.",
-                "Previous video par aa gaye, meri jaan.",
-                "Pichhla video wapas laga diya. Ab theek hai?"
+                "First video par tap kar diya, jaan.",
+                "Lo dear, sabse pehla video select kar diya.",
+                "Pehla video open karne ke liye tap kar diya, meri jaan.",
+                "First video choose kar diya. Ab dekhte hain, jaan."
             )
         }
         return next("media_$action", options)
