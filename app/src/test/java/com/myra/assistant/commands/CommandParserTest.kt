@@ -25,6 +25,28 @@ class CommandParserTest {
         assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
         assertEquals("lols gaming", command.content)
     }
+    @Test fun parsesStrictMediaControlPhrasesWithoutWakeWord() {
+        val parser = com.myra.assistant.ai.CommandParser
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.PAUSE,
+            (parser.parseDirectMediaControl("video pause karo") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.PLAY,
+            (parser.parseDirectMediaControl("video play karo") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.NEXT,
+            (parser.parseDirectMediaControl("next video chalao") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.PREVIOUS,
+            (parser.parseDirectMediaControl("pichhla video lagao") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        assertEquals(null, parser.parseDirectMediaControl("ruko"))
+        assertEquals(null, parser.parseDirectMediaControl("video bahut achha hai"))
+    }
+
     @Test fun acceptsLiveYouTubeCloseVariants() {
         val parser = com.myra.assistant.ai.CommandParser
         assertEquals(true, parser.parseDirectMediaControl("YouTube close karo") is com.myra.assistant.model.AppCommand.CloseCurrentApp)
