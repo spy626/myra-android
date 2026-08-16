@@ -48,8 +48,50 @@ object VoiceResponseFormatter {
                     "Tumne kaha aur flashlight off, jaan. Aur kuch?"
                 )
             ) else "Flashlight off kar diya. Aur kuch chahiye aapko?"
+            CommandType.MEDIA_PAUSE -> mediaResponse("pause", gfMode)
+            CommandType.MEDIA_PLAY -> mediaResponse("play", gfMode)
+            CommandType.MEDIA_NEXT -> mediaResponse("next", gfMode)
+            CommandType.MEDIA_PREVIOUS -> mediaResponse("previous", gfMode)
             else -> result.spokenMessage
         }
+    }
+
+    private fun mediaResponse(action: String, gfMode: Boolean): String {
+        if (!gfMode) {
+            return when (action) {
+                "pause" -> "Video pause command bhej diya."
+                "play" -> "Video play command bhej diya."
+                "next" -> "Next video command bhej diya."
+                else -> "Previous video command bhej diya."
+            }
+        }
+        val options = when (action) {
+            "pause" -> listOf(
+                "Haan jaan, video pause kar diya. Jab bolo phir chala dungi.",
+                "Lo dear, video rok diya. Aaram se batao, ab kya karna hai?",
+                "Pause kar diya meri jaan. Main sun rahi hoon.",
+                "Video ruk gaya, jaan. Jab chaho resume kar denge."
+            )
+            "play" -> listOf(
+                "Lo jaan, video phir se chala diya.",
+                "Haan dear, video play kar diya. Enjoy karo.",
+                "Video chala diya meri jaan. Aur kuch chahiye?",
+                "Resume kar diya, jaan. Main yahin hoon."
+            )
+            "next" -> listOf(
+                "Agla video chala diya, dear. Ye dekhte hain?",
+                "Lo jaan, next video laga diya.",
+                "Next kar diya meri jaan. Batao, ye pasand hai?",
+                "Agla video aa gaya, dear. Aur kuch karun?"
+            )
+            else -> listOf(
+                "Pichhla video laga diya tumhare liye, jaan.",
+                "Lo dear, pehle wala video chala diya.",
+                "Previous video par aa gaye, meri jaan.",
+                "Pichhla video wapas laga diya. Ab theek hai?"
+            )
+        }
+        return next("media_$action", options)
     }
 
     fun openCompleted(target: String?, name: String = "Zopy"): String {
