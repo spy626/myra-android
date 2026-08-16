@@ -37,6 +37,7 @@ object CommandParser {
         if (Regex("(?:battery|बैटरी).*(?:level|percent|percentage|kitna|kitni|batao|status|charge|कितना|कितनी|बताओ)|^(?:battery|बैटरी)$").containsMatchIn(text)) return AppCommand.BatteryLevel
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:on|open|chalu|jala|चालू|जलाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(true)
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:off|close|band|bujha|बंद|बुझाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(false)
+        parseExactMediaControl(text)?.let { return it }
         if (isWhatsAppMessageQuery(text)) return AppCommand.QueryWhatsAppMessages
         extractWhatsAppReply(text)?.let { return it }
         extractDeepResearch(text)?.let { return it }
@@ -60,7 +61,7 @@ object CommandParser {
         val text = normalize(raw)
         if (text.isBlank()) return false
         val target = Regex("(?:youtube|whatsapp|instagram|facebook|chrome|gmail|maps|spotify|telegram|snapchat|settings|app|application|torch|flashlight|flash|battery|time|home|back|यूट्यूब|व्हाट्सएप|टॉर्च|बैटरी|होम)")
-        val action = Regex("(?:open|close|launch|start|search|play|pause|khol|kholo|band|chalu|on|off|bhejo|send|reply|jawab|batao|kitna|kitni|jao|karo|खोलो|बंद|चालू|भेजो|जवाब|बताओ)")
+        val action = Regex("(?:open|close|launch|start|search|play|pause|resume|next|previous|agla|pichla|pichhla|chalao|lagao|khol|kholo|band|chalu|on|off|bhejo|send|reply|jawab|batao|kitna|kitni|jao|karo|खोलो|बंद|चालू|भेजो|जवाब|बताओ)")
         return target.containsMatchIn(text) && action.containsMatchIn(text)
     }
 
@@ -131,9 +132,29 @@ object CommandParser {
         val hasDirectSuffix = (2..minOf(7, words.size)).any { count ->
             close.matches(words.takeLast(count).joinToString(" "))
         }
-        return if (close.matches(text) || hasDirectSuffix) {
-            AppCommand.CloseCurrentApp(findKnownApp(text) ?: "YouTube")
-        } else null
+        if (close.matches(text) || hasDirectSuffix) {
+            return AppCommand.CloseCurrentApp(findKnownApp(text) ?: "YouTube")
+        }
+        parseExactMediaControl(text)?.let { return it }
+        return (2..minOf(7, words.size)).firstNotNullOfOrNull { count ->
+            parseExactMediaControl(words.takeLast(count).joinToString(" "))
+        }
+    }
+
+    private fun parseExactMediaControl(text: String): AppCommand.ControlMedia? {
+        val polite = "(?:please\\s+)?"
+        val video = "(?:(?:is|ye|this)\\s+)?(?:video\\s+)?"
+        return when {
+            Regex("^$polite$video(?:pause\\s+karo|pause\\s+kar\\s+do|rok\\s+do)$").matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.PAUSE)
+            Regex("^$polite$video(?:play\\s+karo|play\\s+kar\\s+do|chalao|resume\\s+karo|wapas\\s+chala\\s+do)$").matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.PLAY)
+            Regex("^$polite(?:next|agla)\\s+(?:video\\s+)?(?:chalao|lagao|karo)$|^$polite next\\s+karo$".replace(" ", "")).matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.NEXT)
+            Regex("^$polite(?:pichla|pichhla|previous|pehle\\s+wala)\\s+(?:video\\s+)?(?:chalao|lagao|karo)$").matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.PREVIOUS)
+            else -> null
+        }
     }
 
     private fun extractDeepResearch(text: String): AppCommand.DeepResearch? {
