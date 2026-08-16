@@ -87,6 +87,25 @@ class VoiceResponseFormatterTest {
         )
     }
 
+    @Test fun successfulLocalActionsNeverUseGenericOk() {
+        val cases = listOf(
+            Command(CommandType.OPEN_APP, "YouTube", sourceText = "YouTube open karo") to
+                AssistantResult(true, true, "OPEN_APP", "YouTube", "ok"),
+            Command(CommandType.CLOSE_APP, "YouTube", sourceText = "YouTube close karo") to
+                AssistantResult(true, true, "CLOSE_APP", "YouTube", "ok"),
+            Command(CommandType.FLASHLIGHT_ON, sourceText = "flashlight on karo") to
+                AssistantResult(true, true, "FLASHLIGHT_ON", spokenMessage = "ok"),
+            Command(CommandType.FLASHLIGHT_OFF, sourceText = "flashlight off karo") to
+                AssistantResult(true, true, "FLASHLIGHT_OFF", spokenMessage = "ok")
+        )
+
+        cases.forEach { (command, result) ->
+            val response = VoiceResponseFormatter.format(command, result, personality = "GF")
+            assertTrue(response.length > 2)
+            assertNotEquals("ok", response.trim().lowercase())
+        }
+    }
+
     @Test fun assistantCompletedCloseResponseStaysNeutral() {
         assertEquals(
             "YouTube close kar diya. Aur kuch karun?",
