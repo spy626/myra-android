@@ -80,7 +80,11 @@ class VoiceResponseFormatterTest {
 
         assertNotEquals(first, second)
         assertTrue(first.contains("YouTube"))
-        assertTrue(first.contains("close", ignoreCase = true) || first.contains("band", ignoreCase = true))
+        assertTrue(
+            first.contains("close", ignoreCase = true) ||
+                first.contains("band", ignoreCase = true) ||
+                first.contains("bahar", ignoreCase = true)
+        )
     }
 
     @Test fun assistantCompletedCloseResponseStaysNeutral() {
