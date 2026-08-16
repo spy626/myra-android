@@ -112,11 +112,33 @@ class AppActionExecutor(private val context: Context) {
     }
 
     private fun controlMedia(action: AppCommand.MediaAction): Result {
+        if (action == AppCommand.MediaAction.NEXT || action == AppCommand.MediaAction.FIRST) {
+            val service = AccessibilityHelperService.instance
+            if (service == null || !AccessibilityHelperService.isEnabled(context)) {
+                return Result("YouTube video select karne ke liye LYRA Accessibility enable karo.", false)
+            }
+            val clicked = if (action == AppCommand.MediaAction.NEXT) {
+                service.clickNextYouTubeVideo()
+            } else {
+                service.clickFirstYouTubeVideo()
+            }
+            if (!clicked) {
+                val target = if (action == AppCommand.MediaAction.NEXT) "Next recommendation" else "First video"
+                return Result("$target screen par nahi mila. YouTube video list visible rakho aur phir try karo.", false)
+            }
+            return Result(
+                if (action == AppCommand.MediaAction.NEXT) "Next video par tap kar diya."
+                else "First video par tap kar diya.",
+                true
+            )
+        }
+
         val keyCode = when (action) {
             AppCommand.MediaAction.PAUSE -> KeyEvent.KEYCODE_MEDIA_PAUSE
             AppCommand.MediaAction.PLAY -> KeyEvent.KEYCODE_MEDIA_PLAY
-            AppCommand.MediaAction.NEXT -> KeyEvent.KEYCODE_MEDIA_NEXT
             AppCommand.MediaAction.PREVIOUS -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            AppCommand.MediaAction.NEXT, AppCommand.MediaAction.FIRST ->
+                return Result("Media command complete nahi ho paaya.", false)
         }
         return try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -126,8 +148,8 @@ class AppActionExecutor(private val context: Context) {
             val message = when (action) {
                 AppCommand.MediaAction.PAUSE -> "Pause command bhej diya."
                 AppCommand.MediaAction.PLAY -> "Play command bhej diya."
-                AppCommand.MediaAction.NEXT -> "Next command bhej diya."
                 AppCommand.MediaAction.PREVIOUS -> "Previous command bhej diya."
+                AppCommand.MediaAction.NEXT, AppCommand.MediaAction.FIRST -> "Media command bhej diya."
             }
             Result(message, true)
         } catch (_: Exception) {
