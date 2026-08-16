@@ -106,6 +106,18 @@ class VoiceResponseFormatterTest {
         }
     }
 
+    @Test fun gfMediaResponsesChangeWithoutRepeating() {
+        val command = Command(CommandType.MEDIA_PAUSE, "media", sourceText = "video pause karo")
+        val result = AssistantResult(true, false, "MEDIA_PAUSE", "media", "accepted")
+
+        val first = VoiceResponseFormatter.format(command, result, personality = "GF")
+        val second = VoiceResponseFormatter.format(command, result, personality = "GF")
+
+        assertNotEquals(first, second)
+        assertTrue(first.contains("pause", ignoreCase = true) || first.contains("rok", ignoreCase = true) || first.contains("ruk", ignoreCase = true))
+        assertNotEquals("ok", first.trim().lowercase())
+    }
+
     @Test fun assistantCompletedCloseResponseStaysNeutral() {
         assertEquals(
             "YouTube close kar diya. Aur kuch karun?",
