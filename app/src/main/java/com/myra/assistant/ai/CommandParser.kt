@@ -153,6 +153,8 @@ object CommandParser {
                 AppCommand.ControlMedia(AppCommand.MediaAction.NEXT)
             Regex("^$polite(?:pichla|pichhla|previous|pehle\\s+wala)\\s+(?:video\\s+)?(?:chalao|lagao|karo)$").matches(text) ->
                 AppCommand.ControlMedia(AppCommand.MediaAction.PREVIOUS)
+            Regex("^$polite(?:first|pehla|pehli)\\s+(?:video\\s+)?(?:chalao|lagao|play\\s+karo|open\\s+karo)$").matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.FIRST)
             else -> null
         }
     }
