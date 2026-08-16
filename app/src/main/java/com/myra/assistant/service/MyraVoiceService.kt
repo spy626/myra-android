@@ -62,6 +62,9 @@ class MyraVoiceService : Service() {
     private val localSpeechAudio = mutableListOf<ByteArray>()
     private val localSpeechTranscript = StringBuilder()
     private var localPlaybackActive = false
+    private var localSpeechStreamedDirectly = false
+    private var localSpeechGenerationComplete = false
+    private var localAudioSpeaking = false
     private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
     private var lastLocalSpeechKey = ""
     private var lastLocalSpeechAt = 0L
@@ -119,7 +122,16 @@ class MyraVoiceService : Service() {
             client.onAudio = {
                 if (validatingLocalSpeech != null) {
                     localSpeechHasContent = true
-                    localSpeechAudio += it.copyOf()
+                    if (allowUntranscribedLocalSpeech) {
+                        // These words were selected locally for an already-successful,
+                        // non-sensitive action. Stream the selected Gemini voice as soon
+                        // as it arrives instead of buffering the entire sentence.
+                        localSpeechStreamedDirectly = true
+                        localPlaybackActive = true
+                        audio?.queueAudio(it)
+                    } else {
+                        localSpeechAudio += it.copyOf()
+                    }
                 }
                 else if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it)
             }
@@ -283,14 +295,11 @@ class MyraVoiceService : Service() {
             audio?.onMicChunk = { client.sendAudio(it) }
             audio?.onAmplitude = { listener?.onAmplitude(it) }
             audio?.onSpeakingChanged = { speaking ->
+                localAudioSpeaking = speaking
                 listener?.onSpeaking(speaking)
                 updateNotification(if (speaking) "LYRA is speaking" else "LYRA is listening")
-                if (!speaking && localPlaybackActive) {
-                    localPlaybackActive = false
-                    if (!runPendingActionAfterSpeech()) {
-                        audio?.setMuted(false)
-                        emitState("Sun rahi hoon…")
-                    }
+                if (!speaking && localPlaybackActive && localSpeechGenerationComplete) {
+                    finishLocalPlayback()
                 }
             }
             client.connect()
@@ -352,14 +361,6 @@ class MyraVoiceService : Service() {
             speak = false,
             notifyListeners = false
         )
-        // Opening an app is immediately visible to the user. A delayed spoken
-        // acknowledgement adds noise and can arrive after the external app is already
-        // on screen, so keep listening silently instead.
-        if (command is AppCommand.OpenApp && result.success) {
-            audio?.setMuted(false)
-            emitState("Sun rahi hoon…")
-            return
-        }
         listener?.onMyraText(result.spokenMessage, !result.success)
         emitState(result.spokenMessage)
         queueLocalSpeech(
@@ -442,6 +443,8 @@ class MyraVoiceService : Service() {
         val token = localSpeechValidationToken
         validatingLocalSpeech = message
         localSpeechHasContent = false
+        localSpeechStreamedDirectly = false
+        localSpeechGenerationComplete = false
         localSpeechAudio.clear()
         localSpeechTranscript.clear()
         suppressModelForTurn = true
@@ -457,6 +460,13 @@ class MyraVoiceService : Service() {
         val expected = validatingLocalSpeech ?: return
         val actual = localSpeechTranscript.toString()
         validatingLocalSpeech = null
+        if (localSpeechStreamedDirectly) {
+            localSpeechGenerationComplete = true
+            localSpeechAudio.clear()
+            localSpeechTranscript.clear()
+            if (!localAudioSpeaking && localPlaybackActive) finishLocalPlayback()
+            return
+        }
         val transcriptMatches = normalizeSpeech(actual) == normalizeSpeech(expected)
         // Gemini Live documents that output transcription is independent from audio
         // and may be delayed or absent. For already-successful, non-sensitive local
@@ -465,6 +475,7 @@ class MyraVoiceService : Service() {
         val safeAudioWithoutTranscript = allowUntranscribedLocalSpeech &&
             actual.isBlank() && localSpeechAudio.isNotEmpty()
         if ((transcriptMatches || safeAudioWithoutTranscript) && localSpeechAudio.isNotEmpty()) {
+            localSpeechGenerationComplete = true
             localPlaybackActive = true
             localSpeechAudio.forEach { audio?.queueAudio(it) }
             localSpeechAudio.clear()
@@ -477,6 +488,16 @@ class MyraVoiceService : Service() {
             } else {
                 fallbackLocalSpeech(expected)
             }
+        }
+    }
+
+    private fun finishLocalPlayback() {
+        localPlaybackActive = false
+        localSpeechStreamedDirectly = false
+        localSpeechGenerationComplete = false
+        if (!runPendingActionAfterSpeech()) {
+            audio?.setMuted(false)
+            emitState("Sun rahi hoon…")
         }
     }
 

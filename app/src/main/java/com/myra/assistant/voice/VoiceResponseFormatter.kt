@@ -17,7 +17,7 @@ object VoiceResponseFormatter {
         if (!result.success) return result.spokenMessage
         val gfMode = personality.equals("GF", ignoreCase = true)
         return when (command.type) {
-            CommandType.OPEN_APP -> if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
+            CommandType.OPEN_APP -> if (gfMode) openCompleted(command.target, name) else if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
             CommandType.CLOSE_APP -> closeStarting(command.target, personality, name)
             CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> {
                 val query = humanize(command.content ?: command.target.orEmpty())
@@ -50,6 +50,23 @@ object VoiceResponseFormatter {
             ) else "Flashlight off kar diya. Aur kuch chahiye aapko?"
             else -> result.spokenMessage
         }
+    }
+
+    fun openCompleted(target: String?, name: String = "Zopy"): String {
+        val app = target?.trim().takeUnless { it.isNullOrBlank() } ?: "App"
+        return next(
+            "open_app",
+            listOf(
+                "$app open kar diya meri jaan ke liye. Aur kuch chahiye?",
+                "Lo jaan, $app khol diya tumhare liye.",
+                "Haanji dear, $app open kar diya. Ab bolo?",
+                "Of course jaan, $app khol diya. Aur kya karun?",
+                "Tumne kaha aur $app open, jaan. Ab batao?",
+                "Done $name, $app khol diya tumhare liye.",
+                "Bilkul dear, $app open kar diya. Main sun rahi hoon.",
+                "Ye lo jaan, $app khol diya. Aur kuch dekhna hai?"
+            )
+        )
     }
 
     fun closeStarting(target: String?, personality: String, name: String = "Zopy"): String {

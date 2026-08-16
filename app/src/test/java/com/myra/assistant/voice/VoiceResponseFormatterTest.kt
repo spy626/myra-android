@@ -30,6 +30,18 @@ class VoiceResponseFormatterTest {
         )
     }
 
+    @Test fun gfOpenResponsesChangeWithoutRepeating() {
+        val command = Command(CommandType.OPEN_APP, "YouTube", sourceText = "YouTube open karo")
+        val result = AssistantResult(true, false, "OPEN_APP", "YouTube", "accepted")
+
+        val first = VoiceResponseFormatter.format(command, result, personality = "GF")
+        val second = VoiceResponseFormatter.format(command, result, personality = "GF")
+
+        assertNotEquals(first, second)
+        assertTrue(first.contains("YouTube"))
+        assertTrue(first.contains("open", ignoreCase = true) || first.contains("khol", ignoreCase = true))
+    }
+
     @Test fun gfFlashlightResponsesChangeWithoutRepeating() {
         val on = Command(CommandType.FLASHLIGHT_ON, sourceText = "torch on")
         val off = Command(CommandType.FLASHLIGHT_OFF, sourceText = "torch off")
