@@ -19,6 +19,7 @@ import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.MyApplication
 import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
+import com.myra.assistant.voice.LocalSpeechGate
 import com.myra.assistant.voice.VoiceResponseFormatter
 import java.text.SimpleDateFormat
 import java.util.*
@@ -121,12 +122,15 @@ class MyraVoiceService : Service() {
             }
             client.onAudio = {
                 if (validatingLocalSpeech != null) {
-                    // Never play a local-action confirmation before its transcript has
-                    // been validated. Gemini can occasionally answer only "OK"; streaming
-                    // that audio directly caused the short robotic confirmation reported
-                    // for YouTube and flashlight actions.
                     localSpeechHasContent = true
-                    localSpeechAudio += it.copyOf()
+                    if (localSpeechStreamedDirectly) {
+                        // The transcript prefix already matched the prepared response.
+                        // Continue streaming the remaining natural voice without waiting
+                        // for the complete sentence.
+                        audio?.queueAudio(it)
+                    } else {
+                        localSpeechAudio += it.copyOf()
+                    }
                 }
                 else if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it)
             }
@@ -214,6 +218,7 @@ class MyraVoiceService : Service() {
                 if (validatingLocalSpeech != null) {
                     localSpeechHasContent = true
                     appendTranscript(localSpeechTranscript, it)
+                    startLocalSpeechWhenPrefixMatches()
                 }
                 else if (!suppressModelForTurn && !hideNextModelTranscript && mediaGuard.allowModelResponse()) appendTranscript(output, it)
             }
@@ -444,10 +449,31 @@ class MyraVoiceService : Service() {
         }, 8_000L)
     }
 
+    private fun startLocalSpeechWhenPrefixMatches() {
+        val expected = validatingLocalSpeech ?: return
+        if (localSpeechStreamedDirectly || localSpeechAudio.isEmpty()) return
+        if (!LocalSpeechGate.matchesExpectedPrefix(localSpeechTranscript.toString(), expected)) return
+
+        localSpeechStreamedDirectly = true
+        localPlaybackActive = true
+        localSpeechAudio.forEach { audio?.queueAudio(it) }
+        localSpeechAudio.clear()
+    }
+
     private fun finishValidatedLocalSpeech() {
         val expected = validatingLocalSpeech ?: return
         val actual = localSpeechTranscript.toString()
         validatingLocalSpeech = null
+        if (localSpeechStreamedDirectly) {
+            // The first verified words matched the deterministic response, so playback
+            // was safely released early. Wait for queued audio to finish before resuming
+            // listening or running any deferred action.
+            localSpeechGenerationComplete = true
+            localSpeechAudio.clear()
+            localSpeechTranscript.clear()
+            if (!localAudioSpeaking && localPlaybackActive) finishLocalPlayback()
+            return
+        }
         val transcriptMatches = normalizeSpeech(actual) == normalizeSpeech(expected)
         // Audio without a matching transcript is never played. This intentionally trades
         // a little latency for correctness: a stray "OK" must not replace the complete
