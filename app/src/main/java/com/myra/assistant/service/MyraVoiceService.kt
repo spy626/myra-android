@@ -311,7 +311,8 @@ class MyraVoiceService : Service() {
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, is AppCommand.SetFlashlight -> true
+        AppCommand.BatteryLevel, is AppCommand.SetFlashlight,
+        is AppCommand.ControlMedia -> true
         else -> false
     }
 
@@ -330,6 +331,7 @@ class MyraVoiceService : Service() {
             AppCommand.CurrentTime -> "current-time"
             AppCommand.BatteryLevel -> "battery-level"
             is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
+            is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
         }
         // One utterance can arrive as several slightly different Live transcript chunks.
         // A longer semantic dedupe window prevents the same local action/error appearing
@@ -399,7 +401,8 @@ class MyraVoiceService : Service() {
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.SearchYouTube, AppCommand.RepeatYouTubeSearch,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, is AppCommand.SetFlashlight -> true
+        AppCommand.BatteryLevel, is AppCommand.SetFlashlight,
+        is AppCommand.ControlMedia -> true
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         is AppCommand.DeepResearch -> false
     }
@@ -560,7 +563,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun systemPrompt(name: String, mode: String, voice: String): String {
-        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Warm caring Hinglish companion, at most three sentences." }
+        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Speak like a warm, caring girlfriend-style companion in natural Hinglish. Notice the user's mood, respond with genuine interest, gentle affection, reassurance, and occasional playful warmth. Use terms such as jaan or dear only when they fit naturally, not in every reply. Never sound possessive, controlling, dependent, manipulative, or overly dramatic. Stay honest and useful, at most three sentences." }
         val femaleVoice = voice.lowercase(Locale.ROOT) in setOf("aoede", "kore", "leda", "zephyr")
         val genderStyle = if (femaleVoice) {
             "You have a female identity and the selected female voice is $voice. In Hindi and Hinglish always use feminine self-reference such as karungi, sakti hoon, sun rahi hoon, and gayi. Never say karunga, sakta hoon, sun raha hoon, or gaya about yourself."
