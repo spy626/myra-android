@@ -42,26 +42,34 @@ class VoiceResponseFormatterTest {
         assertTrue(first.contains("open", ignoreCase = true) || first.contains("khol", ignoreCase = true))
     }
 
-    @Test fun flashlightResponsesStaySimple() {
+    @Test fun gfFlashlightResponsesChangeWithoutRepeating() {
         val on = Command(CommandType.FLASHLIGHT_ON, sourceText = "torch on")
         val off = Command(CommandType.FLASHLIGHT_OFF, sourceText = "torch off")
         val onResult = AssistantResult(true, true, "FLASHLIGHT_ON", spokenMessage = "on")
         val offResult = AssistantResult(true, true, "FLASHLIGHT_OFF", spokenMessage = "off")
 
+        val firstOn = VoiceResponseFormatter.format(on, onResult, personality = "GF")
+        val secondOn = VoiceResponseFormatter.format(on, onResult, personality = "GF")
+        val firstOff = VoiceResponseFormatter.format(off, offResult, personality = "GF")
+        val secondOff = VoiceResponseFormatter.format(off, offResult, personality = "GF")
+
+        assertNotEquals(firstOn, secondOn)
+        assertNotEquals(firstOff, secondOff)
+        assertTrue(firstOn.contains("flashlight", ignoreCase = true) || firstOn.contains("roshni", ignoreCase = true))
+        assertTrue(firstOff.contains("flashlight", ignoreCase = true) || firstOff.contains("roshni", ignoreCase = true))
+    }
+
+    @Test fun assistantFlashlightResponsesStayNeutral() {
+        val on = Command(CommandType.FLASHLIGHT_ON, sourceText = "torch on")
+        val off = Command(CommandType.FLASHLIGHT_OFF, sourceText = "torch off")
+        val onResult = AssistantResult(true, true, "FLASHLIGHT_ON", spokenMessage = "on")
+        val offResult = AssistantResult(true, true, "FLASHLIGHT_OFF", spokenMessage = "off")
         assertEquals(
-            "Flashlight on.",
-            VoiceResponseFormatter.format(on, onResult, personality = "GF")
-        )
-        assertEquals(
-            "Flashlight off.",
-            VoiceResponseFormatter.format(off, offResult, personality = "GF")
-        )
-        assertEquals(
-            "Flashlight on.",
+            "Flashlight on kar diya. Aur kuch karun?",
             VoiceResponseFormatter.format(on, onResult, personality = "Assistant")
         )
         assertEquals(
-            "Flashlight off.",
+            "Flashlight off kar diya. Aur kuch chahiye aapko?",
             VoiceResponseFormatter.format(off, offResult, personality = "Assistant")
         )
     }

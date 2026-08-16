@@ -26,8 +26,28 @@ object VoiceResponseFormatter {
             CommandType.REPLY_WHATSAPP -> result.spokenMessage
             CommandType.GO_HOME -> "Home screen par aa gayi, $name."
             CommandType.GO_BACK -> "Peechhe aa gayi, $name."
-            CommandType.FLASHLIGHT_ON -> "Flashlight on."
-            CommandType.FLASHLIGHT_OFF -> "Flashlight off."
+            CommandType.FLASHLIGHT_ON -> if (gfMode) next(
+                "flashlight_on",
+                listOf(
+                    "Haan jaan, flashlight on kar diya. Ab sab clearly dikh raha hai?",
+                    "Lo dear, flashlight jala diya tumhare liye. Aur kuch chahiye?",
+                    "Of course jaan, flashlight on ho gaya. Ab bolo, aur kya karun?",
+                    "Done Zopy, flashlight on kar diya. Main yahin hoon.",
+                    "Haanji dear, roshni kar di. Aur kuch karun?",
+                    "Bas tumne kaha aur flashlight on, jaan. Ab batao?"
+                )
+            ) else "Flashlight on kar diya. Aur kuch karun?"
+            CommandType.FLASHLIGHT_OFF -> if (gfMode) next(
+                "flashlight_off",
+                listOf(
+                    "Haan jaan, flashlight off kar diya. Aur kuch chahiye?",
+                    "Lo dear, flashlight band kar diya. Ab bolo?",
+                    "Of course jaan, roshni band kar di. Main sun rahi hoon.",
+                    "Done Zopy, flashlight off kar diya. Aur kuch karun?",
+                    "Haanji dear, flashlight band ho gaya. Ab kya karna hai?",
+                    "Tumne kaha aur flashlight off, jaan. Aur kuch?"
+                )
+            ) else "Flashlight off kar diya. Aur kuch chahiye aapko?"
             else -> result.spokenMessage
         }
     }
