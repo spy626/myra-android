@@ -250,6 +250,7 @@ class MainActivity : AppCompatActivity() {
             AppCommand.CurrentTime -> "current-time"
             AppCommand.BatteryLevel -> "battery-level"
             is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
+            is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
         }
         if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
         lastCommandKey = key
