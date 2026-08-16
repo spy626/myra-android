@@ -32,5 +32,16 @@ object CommandParser {
         AppCommand.CurrentTime -> Command(CommandType.CURRENT_TIME, sourceText = source, localCommand = command)
         AppCommand.BatteryLevel -> Command(CommandType.BATTERY_LEVEL, sourceText = source, localCommand = command)
         is AppCommand.SetFlashlight -> Command(if (command.enabled) CommandType.FLASHLIGHT_ON else CommandType.FLASHLIGHT_OFF, sourceText = source, localCommand = command)
+        is AppCommand.ControlMedia -> Command(
+            when (command.action) {
+                AppCommand.MediaAction.PAUSE -> CommandType.MEDIA_PAUSE
+                AppCommand.MediaAction.PLAY -> CommandType.MEDIA_PLAY
+                AppCommand.MediaAction.NEXT -> CommandType.MEDIA_NEXT
+                AppCommand.MediaAction.PREVIOUS -> CommandType.MEDIA_PREVIOUS
+            },
+            target = "media",
+            sourceText = source,
+            localCommand = command
+        )
     }
 }
