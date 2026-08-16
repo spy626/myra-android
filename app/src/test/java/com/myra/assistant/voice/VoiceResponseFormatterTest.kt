@@ -118,6 +118,22 @@ class VoiceResponseFormatterTest {
         assertNotEquals("ok", first.trim().lowercase())
     }
 
+    @Test fun failedNextVideoIsNeverRewrittenAsSuccess() {
+        val command = Command(CommandType.MEDIA_NEXT, "media", sourceText = "next video chalao")
+        val result = AssistantResult(
+            false,
+            false,
+            "MEDIA_NEXT",
+            "media",
+            "Next recommendation screen par nahi mila."
+        )
+
+        assertEquals(
+            "Next recommendation screen par nahi mila.",
+            VoiceResponseFormatter.format(command, result, personality = "GF")
+        )
+    }
+
     @Test fun assistantCompletedCloseResponseStaysNeutral() {
         assertEquals(
             "YouTube close kar diya. Aur kuch karun?",
