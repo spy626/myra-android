@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import android.media.AudioManager
+import android.view.KeyEvent
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.service.AccessibilityHelperService
 import com.myra.assistant.service.WhatsAppReplyStore
@@ -50,13 +52,15 @@ class AppActionExecutor(private val context: Context) {
         AppCommand.CurrentTime -> currentTime()
         AppCommand.BatteryLevel -> batteryLevel()
         is AppCommand.SetFlashlight -> setFlashlight(command.enabled)
+        is AppCommand.ControlMedia -> controlMedia(command.action)
     }
 
     fun executeStructured(command: Command): AssistantResult {
         val local = command.localCommand ?: return AssistantResult(false, false, command.type.name, command.target, "Zopy, ye command abhi supported nahi hai.")
         val result = execute(local)
         val acceptedOnly = local is AppCommand.OpenApp || local is AppCommand.CloseCurrentApp ||
-            local is AppCommand.SearchYouTube || local is AppCommand.ReplyWhatsApp
+            local is AppCommand.SearchYouTube || local is AppCommand.ReplyWhatsApp ||
+            local is AppCommand.ControlMedia
         return AssistantResult(
             success = result.success,
             verified = result.success && !acceptedOnly,
@@ -104,6 +108,30 @@ class AppActionExecutor(private val context: Context) {
             Result(if (enabled) "Flashlight on kar di." else "Flashlight off kar di.", true)
         } catch (error: Exception) {
             Result("Flashlight change nahi ho paayi.", false)
+        }
+    }
+
+    private fun controlMedia(action: AppCommand.MediaAction): Result {
+        val keyCode = when (action) {
+            AppCommand.MediaAction.PAUSE -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            AppCommand.MediaAction.PLAY -> KeyEvent.KEYCODE_MEDIA_PLAY
+            AppCommand.MediaAction.NEXT -> KeyEvent.KEYCODE_MEDIA_NEXT
+            AppCommand.MediaAction.PREVIOUS -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+        }
+        return try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val downTime = android.os.SystemClock.uptimeMillis()
+            audioManager.dispatchMediaKeyEvent(KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0))
+            audioManager.dispatchMediaKeyEvent(KeyEvent(downTime, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0))
+            val message = when (action) {
+                AppCommand.MediaAction.PAUSE -> "Pause command bhej diya."
+                AppCommand.MediaAction.PLAY -> "Play command bhej diya."
+                AppCommand.MediaAction.NEXT -> "Next command bhej diya."
+                AppCommand.MediaAction.PREVIOUS -> "Previous command bhej diya."
+            }
+            Result(message, true)
+        } catch (_: Exception) {
+            Result("Media control complete nahi ho paaya.", false)
         }
     }
 
