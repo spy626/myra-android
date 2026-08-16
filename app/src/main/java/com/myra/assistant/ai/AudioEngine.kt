@@ -9,6 +9,7 @@ import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import androidx.core.content.ContextCompat
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlin.math.sqrt
@@ -67,10 +68,16 @@ class AudioEngine(private val context: Context) {
         track?.play()
         thread(name = "myra-speaker") {
             while (running.get()) {
-                val bytes = queue.take()
+                val bytes = queue.poll(SPEECH_END_GRACE_MS, TimeUnit.MILLISECONDS)
+                if (bytes == null) {
+                    // Gemini audio is delivered in network chunks. A temporarily empty
+                    // queue is not the end of the sentence; wait through a short gap so
+                    // listening and deferred actions resume only after the full reply.
+                    if (speaking.compareAndSet(true, false)) onSpeakingChanged?.invoke(false)
+                    continue
+                }
                 if (speaking.compareAndSet(false, true)) onSpeakingChanged?.invoke(true)
                 track?.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING)
-                if (queue.isEmpty() && speaking.compareAndSet(true, false)) onSpeakingChanged?.invoke(false)
             }
         }
     }
@@ -79,6 +86,10 @@ class AudioEngine(private val context: Context) {
     fun setMuted(value: Boolean) { muted.set(value) }
     fun interrupt() { queue.clear(); track?.pause(); track?.flush(); track?.play(); speaking.set(false); onSpeakingChanged?.invoke(false) }
     fun release() { running.set(false); echoCanceler?.release(); noiseSuppressor?.release(); gainControl?.release(); recorder?.stop(); recorder?.release(); track?.stop(); track?.release(); queue.offer(ByteArray(0)) }
+
+    private companion object {
+        const val SPEECH_END_GRACE_MS = 350L
+    }
 
     private fun rms(bytes: ByteArray): Float {
         if (bytes.size < 2) return 0f
