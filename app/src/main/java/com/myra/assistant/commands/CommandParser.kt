@@ -38,6 +38,7 @@ object CommandParser {
                 AppCommand.MediaAction.PLAY -> CommandType.MEDIA_PLAY
                 AppCommand.MediaAction.NEXT -> CommandType.MEDIA_NEXT
                 AppCommand.MediaAction.PREVIOUS -> CommandType.MEDIA_PREVIOUS
+                AppCommand.MediaAction.FIRST -> CommandType.MEDIA_FIRST
             },
             target = "media",
             sourceText = source,
