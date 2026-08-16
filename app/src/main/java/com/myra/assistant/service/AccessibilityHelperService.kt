@@ -49,7 +49,7 @@ class AccessibilityHelperService : AccessibilityService() {
         if (!root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)) return false
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        val minimumTop = if (afterPlayer) (screenHeight * 0.38f).toInt() else (screenHeight * 0.10f).toInt()
+        val minimumTop = if (afterPlayer) (screenHeight * 0.30f).toInt() else (screenHeight * 0.10f).toInt()
         val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
         collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, candidates)
         return candidates.sortedBy { it.first }.firstOrNull()?.second
@@ -66,7 +66,8 @@ class AccessibilityHelperService : AccessibilityService() {
         if (node.isVisibleToUser) {
             val label = listOfNotNull(node.text, node.contentDescription, node.viewIdResourceName)
                 .joinToString(" ")
-            if (looksLikeVideoCard(label)) {
+            val contextLabel = nodeContextLabel(node)
+            if (looksLikeVideoCard(label) && !AD_SIGNAL.containsMatchIn(contextLabel)) {
                 var clickable: AccessibilityNodeInfo? = node
                 repeat(4) {
                     if (clickable?.isClickable == true) return@repeat
@@ -76,8 +77,8 @@ class AccessibilityHelperService : AccessibilityService() {
                     val bounds = Rect()
                     target.getBoundsInScreen(bounds)
                     if (bounds.top >= minimumTop && bounds.bottom <= screenHeight &&
-                        bounds.width() >= (screenWidth * 0.45f).toInt() &&
-                        bounds.height() >= (screenHeight * 0.04f).toInt()
+                        bounds.width() >= (screenWidth * 0.30f).toInt() &&
+                        bounds.height() >= (screenHeight * 0.015f).toInt()
                     ) {
                         output += bounds.top to target
                     }
@@ -91,6 +92,19 @@ class AccessibilityHelperService : AccessibilityService() {
         }
     }
 
+    private fun nodeContextLabel(start: AccessibilityNodeInfo): String {
+        val parts = mutableListOf<String>()
+        var current: AccessibilityNodeInfo? = start
+        repeat(4) {
+            current?.let { node ->
+                listOfNotNull(node.text, node.contentDescription, node.viewIdResourceName)
+                    .forEach { parts += it.toString() }
+            }
+            current = current?.parent
+        }
+        return parts.joinToString(" ").lowercase()
+    }
+
     private fun looksLikeVideoCard(label: String): Boolean {
         val clean = label.lowercase()
         if (clean.isBlank() || NON_VIDEO_CONTROLS.containsMatchIn(clean)) return false
@@ -102,7 +116,8 @@ class AccessibilityHelperService : AccessibilityService() {
 
     companion object {
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
-        private val VIDEO_CARD_SIGNAL = Regex("(?:\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
+        private val VIDEO_CARD_SIGNAL = Regex("(?:video[_\\s]*(?:title|thumbnail)|thumbnail|\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
+        private val AD_SIGNAL = Regex("(?:\\bsponsored\\b|\\badvertisement\\b|\\bad\\b|\\binstall\\b|learn more|visit advertiser|google play)", RegexOption.IGNORE_CASE)
         private val NON_VIDEO_CONTROLS = Regex("^(?:home|shorts|subscriptions|you|library|comments?|share|like|dislike|download|save|settings)$", RegexOption.IGNORE_CASE)
 
         @Volatile var instance: AccessibilityHelperService? = null
