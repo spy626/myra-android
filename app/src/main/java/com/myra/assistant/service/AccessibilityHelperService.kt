@@ -5,11 +5,13 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import com.myra.assistant.ui.main.MainActivity
 
 class AccessibilityHelperService : AccessibilityService() {
@@ -38,10 +40,71 @@ class AccessibilityHelperService : AccessibilityService() {
         return movedToHome
     }
 
+    fun clickFirstYouTubeVideo(): Boolean = clickVisibleYouTubeVideo(afterPlayer = false)
+
+    fun clickNextYouTubeVideo(): Boolean = clickVisibleYouTubeVideo(afterPlayer = true)
+
+    private fun clickVisibleYouTubeVideo(afterPlayer: Boolean): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if (!root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)) return false
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val minimumTop = if (afterPlayer) (screenHeight * 0.38f).toInt() else (screenHeight * 0.10f).toInt()
+        val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
+        collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, candidates)
+        return candidates.sortedBy { it.first }.firstOrNull()?.second
+            ?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+    }
+
+    private fun collectVideoCandidates(
+        node: AccessibilityNodeInfo,
+        screenWidth: Int,
+        screenHeight: Int,
+        minimumTop: Int,
+        output: MutableList<Pair<Int, AccessibilityNodeInfo>>
+    ) {
+        if (node.isVisibleToUser) {
+            val label = listOfNotNull(node.text, node.contentDescription, node.viewIdResourceName)
+                .joinToString(" ")
+            if (looksLikeVideoCard(label)) {
+                var clickable: AccessibilityNodeInfo? = node
+                repeat(4) {
+                    if (clickable?.isClickable == true) return@repeat
+                    clickable = clickable?.parent
+                }
+                clickable?.takeIf { it.isClickable && it.isVisibleToUser }?.let { target ->
+                    val bounds = Rect()
+                    target.getBoundsInScreen(bounds)
+                    if (bounds.top >= minimumTop && bounds.bottom <= screenHeight &&
+                        bounds.width() >= (screenWidth * 0.45f).toInt() &&
+                        bounds.height() >= (screenHeight * 0.04f).toInt()
+                    ) {
+                        output += bounds.top to target
+                    }
+                }
+            }
+        }
+        for (index in 0 until node.childCount) {
+            node.getChild(index)?.let {
+                collectVideoCandidates(it, screenWidth, screenHeight, minimumTop, output)
+            }
+        }
+    }
+
+    private fun looksLikeVideoCard(label: String): Boolean {
+        val clean = label.lowercase()
+        if (clean.isBlank() || NON_VIDEO_CONTROLS.containsMatchIn(clean)) return false
+        return VIDEO_CARD_SIGNAL.containsMatchIn(clean)
+    }
+
     fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
     fun goBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
 
     companion object {
+        private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+        private val VIDEO_CARD_SIGNAL = Regex("(?:\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
+        private val NON_VIDEO_CONTROLS = Regex("^(?:home|shorts|subscriptions|you|library|comments?|share|like|dislike|download|save|settings)$", RegexOption.IGNORE_CASE)
+
         @Volatile var instance: AccessibilityHelperService? = null
             private set
         fun isEnabled(context: Context): Boolean {
