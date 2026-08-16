@@ -18,7 +18,7 @@ object VoiceResponseFormatter {
         val gfMode = personality.equals("GF", ignoreCase = true)
         return when (command.type) {
             CommandType.OPEN_APP -> if (gfMode) openCompleted(command.target, name) else if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
-            CommandType.CLOSE_APP -> closeStarting(command.target, personality, name)
+            CommandType.CLOSE_APP -> closeCompleted(command.target, personality, name)
             CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> {
                 val query = humanize(command.content ?: command.target.orEmpty())
                 "Done $name, YouTube par $query search kar diya. Aur kuch karun?"
@@ -26,28 +26,8 @@ object VoiceResponseFormatter {
             CommandType.REPLY_WHATSAPP -> result.spokenMessage
             CommandType.GO_HOME -> "Home screen par aa gayi, $name."
             CommandType.GO_BACK -> "Peechhe aa gayi, $name."
-            CommandType.FLASHLIGHT_ON -> if (gfMode) next(
-                "flashlight_on",
-                listOf(
-                    "Haan jaan, flashlight on kar diya. Ab sab clearly dikh raha hai?",
-                    "Lo dear, flashlight jala diya tumhare liye. Aur kuch chahiye?",
-                    "Of course jaan, flashlight on ho gaya. Ab bolo, aur kya karun?",
-                    "Done Zopy, flashlight on kar diya. Main yahin hoon.",
-                    "Haanji dear, roshni kar di. Aur kuch karun?",
-                    "Bas tumne kaha aur flashlight on, jaan. Ab batao?"
-                )
-            ) else "Flashlight on kar diya. Aur kuch karun?"
-            CommandType.FLASHLIGHT_OFF -> if (gfMode) next(
-                "flashlight_off",
-                listOf(
-                    "Haan jaan, flashlight off kar diya. Aur kuch chahiye?",
-                    "Lo dear, flashlight band kar diya. Ab bolo?",
-                    "Of course jaan, roshni band kar di. Main sun rahi hoon.",
-                    "Done Zopy, flashlight off kar diya. Aur kuch karun?",
-                    "Haanji dear, flashlight band ho gaya. Ab kya karna hai?",
-                    "Tumne kaha aur flashlight off, jaan. Aur kuch?"
-                )
-            ) else "Flashlight off kar diya. Aur kuch chahiye aapko?"
+            CommandType.FLASHLIGHT_ON -> "Flashlight on."
+            CommandType.FLASHLIGHT_OFF -> "Flashlight off."
             else -> result.spokenMessage
         }
     }
@@ -65,6 +45,26 @@ object VoiceResponseFormatter {
                 "Done $name, $app khol diya tumhare liye.",
                 "Bilkul dear, $app open kar diya. Main sun rahi hoon.",
                 "Ye lo jaan, $app khol diya. Aur kuch dekhna hai?"
+            )
+        )
+    }
+
+    fun closeCompleted(target: String?, personality: String, name: String = "Zopy"): String {
+        val app = target?.trim().takeUnless { it.isNullOrBlank() } ?: "YouTube"
+        if (!personality.equals("GF", ignoreCase = true)) {
+            return "$app close kar diya. Aur kuch karun?"
+        }
+        return next(
+            "close_completed",
+            listOf(
+                "Aapke liye $app close kar diya, jaan. Ab theek hai? Aur kuch karun?",
+                "$app close kar diya tumhare liye, dear. Ab bolo?",
+                "Lo jaan, $app band kar diya. Aur kuch chahiye?",
+                "Done meri jaan, $app se bahar aa gaye. Ab theek hai?",
+                "Bilkul dear, $app close kar diya. Main sun rahi hoon.",
+                "Ho gaya jaan, $app band kar diya tumhare liye. Aur kuch?",
+                "Tumne kaha aur $app close, jaan. Ab batao?",
+                "Okay $name, $app se bahar aa gaye. Aur kya karun?"
             )
         )
     }

@@ -348,13 +348,6 @@ class MyraVoiceService : Service() {
         output.clear()
         audio?.interrupt()
         live?.interrupt()
-        if (command is AppCommand.CloseCurrentApp &&
-            AccessibilityHelperService.instance != null &&
-            AccessibilityHelperService.isEnabled(this)
-        ) {
-            prepareCloseAfterSpeech(command)
-            return
-        }
         mediaGuard.finishInteraction()
         val result = assistantController.processCommand(
             StructuredCommandParser.fromLegacy(command, command.toString()),
