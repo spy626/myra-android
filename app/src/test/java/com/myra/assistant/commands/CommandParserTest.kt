@@ -35,10 +35,22 @@ class CommandParserTest {
             com.myra.assistant.model.AppCommand.MediaAction.PLAY,
             (parser.parseDirectMediaControl("video play karo") as com.myra.assistant.model.AppCommand.ControlMedia).action
         )
-        assertEquals(
-            com.myra.assistant.model.AppCommand.MediaAction.NEXT,
-            (parser.parseDirectMediaControl("next video chalao") as com.myra.assistant.model.AppCommand.ControlMedia).action
-        )
+        listOf(
+            "next video chalao",
+            "next video chala",
+            "next video chalo",
+            "next video play karo",
+            "agla video play kar do"
+        ).forEach { phrase ->
+            assertEquals(
+                com.myra.assistant.model.AppCommand.MediaAction.NEXT,
+                (parser.parseDirectMediaControl(phrase) as com.myra.assistant.model.AppCommand.ControlMedia).action
+            )
+            assertEquals(
+                com.myra.assistant.model.AppCommand.MediaAction.NEXT,
+                (parser.parse(phrase) as com.myra.assistant.model.AppCommand.ControlMedia).action
+            )
+        }
         assertEquals(
             com.myra.assistant.model.AppCommand.MediaAction.PREVIOUS,
             (parser.parseDirectMediaControl("pichhla video lagao") as com.myra.assistant.model.AppCommand.ControlMedia).action
