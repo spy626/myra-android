@@ -149,7 +149,7 @@ object CommandParser {
                 AppCommand.ControlMedia(AppCommand.MediaAction.PAUSE)
             Regex("^$polite$video(?:play\\s+karo|play\\s+kar\\s+do|chalao|resume\\s+karo|wapas\\s+chala\\s+do)$").matches(text) ->
                 AppCommand.ControlMedia(AppCommand.MediaAction.PLAY)
-            Regex("^$polite(?:next|agla)\\s+(?:video\\s+)?(?:chalao|lagao|karo)$").matches(text) ->
+            Regex("^$polite(?:next|agla)\\s+(?:video\\s+)?(?:chalao|chala|chalo|play\\s+karo|play\\s+kar\\s+do|lagao|karo)$").matches(text) ->
                 AppCommand.ControlMedia(AppCommand.MediaAction.NEXT)
             Regex("^$polite(?:pichla|pichhla|previous|pehle\\s+wala)\\s+(?:video\\s+)?(?:chalao|lagao|karo)$").matches(text) ->
                 AppCommand.ControlMedia(AppCommand.MediaAction.PREVIOUS)
