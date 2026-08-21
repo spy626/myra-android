@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.net.Uri
 import android.graphics.Rect
 import android.graphics.Path
 import android.os.Handler
@@ -17,6 +18,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.myra.assistant.ui.main.MainActivity
 
 class AccessibilityHelperService : AccessibilityService() {
+    private var currentVideoQuery: String? = null
+    private var previousVideoQuery: String? = null
+    private var pendingHistoryRestoreQuery: String? = null
     override fun onServiceConnected() { instance = this; super.onServiceConnected() }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
@@ -89,9 +93,20 @@ class AccessibilityHelperService : AccessibilityService() {
         val minimumTop = if (afterPlayer) (screenHeight * 0.50f).toInt() else (screenHeight * 0.10f).toInt()
         val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
         collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, afterPlayer, candidates)
-        val clicked = candidates.sortedBy { it.first }.firstOrNull()?.second
-            ?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
-        if (clicked) watchForSkippableYouTubeAd()
+        val target = candidates.sortedBy { it.first }.firstOrNull()?.second
+        val clicked = target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+        if (clicked) {
+            val restored = pendingHistoryRestoreQuery
+            val selectedQuery = restored ?: target?.let(::extractVideoSearchQuery)
+            if (afterPlayer) {
+                previousVideoQuery = currentVideoQuery
+                currentVideoQuery = selectedQuery
+            } else {
+                currentVideoQuery = selectedQuery
+            }
+            if (restored != null) pendingHistoryRestoreQuery = null
+            watchForSkippableYouTubeAd()
+        }
         return clicked
     }
 
@@ -192,6 +207,57 @@ class AccessibilityHelperService : AccessibilityService() {
         // recommendations from the current title, while the ad-context filter removes
         // sponsored cards.
         return VIDEO_LIST_SIGNAL.containsMatchIn(clean)
+    }
+
+    fun openPreviousYouTubeVideo(): Boolean {
+        val query = previousVideoQuery?.takeIf { it.isNotBlank() } ?: return false
+        val returnQuery = currentVideoQuery
+        pendingHistoryRestoreQuery = query
+        previousVideoQuery = returnQuery
+
+        val intent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")
+        ).apply {
+            setPackage(YOUTUBE_PACKAGE)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        return runCatching {
+            startActivity(intent)
+            clickFirstVideoWhenReady(attempt = 0)
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun clickFirstVideoWhenReady(attempt: Int) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (clickVisibleYouTubeVideo(afterPlayer = false)) return@postDelayed
+            if (attempt < 5) clickFirstVideoWhenReady(attempt + 1)
+            else pendingHistoryRestoreQuery = null
+        }, if (attempt == 0) 1_100L else 550L)
+    }
+
+    private fun extractVideoSearchQuery(node: AccessibilityNodeInfo): String? {
+        val values = mutableListOf<String>()
+        fun collect(current: AccessibilityNodeInfo, depth: Int) {
+            listOfNotNull(current.text, current.contentDescription)
+                .mapTo(values) { it.toString().trim() }
+            if (depth >= 4) return
+            for (index in 0 until current.childCount) {
+                current.getChild(index)?.let { collect(it, depth + 1) }
+            }
+        }
+        collect(node, 0)
+        return values.asSequence()
+            .filter { it.length in 6..180 }
+            .filterNot { AD_SIGNAL.containsMatchIn(it) || NON_VIDEO_CONTROLS.matches(it) }
+            .map { value ->
+                value.split(
+                    Regex("(?:\\s+[•·]\\s+|\\s+\\d[\\d,.]*\\s+views?\\b|\\s+\\d+\\s+(?:hours?|days?|weeks?|months?|years?)\\s+ago\\b)",
+                        RegexOption.IGNORE_CASE)
+                ).first().trim()
+            }
+            .firstOrNull { it.length >= 6 && !Regex("^\\d{1,2}:\\d{2}$").matches(it) }
     }
 
     fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
