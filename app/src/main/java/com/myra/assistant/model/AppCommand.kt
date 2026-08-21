@@ -8,6 +8,7 @@ sealed interface AppCommand {
     data object OpenYouTubeShorts : AppCommand
     data object RequestInstagramReels : AppCommand
     data object OpenInstagramReels : AppCommand
+    data object TakeScreenshot : AppCommand
     data object RepeatYouTubeSearch : AppCommand
     data class DeepResearch(val query: String?) : AppCommand
     data class ReplyWhatsApp(val sender: String?, val message: String) : AppCommand
