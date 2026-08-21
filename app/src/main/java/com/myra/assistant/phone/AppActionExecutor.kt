@@ -123,14 +123,14 @@ class AppActionExecutor(private val context: Context) {
             val completed = when (action) {
                 AppCommand.MediaAction.NEXT -> service.clickNextYouTubeVideo()
                 AppCommand.MediaAction.FIRST -> service.clickFirstYouTubeVideo()
-                AppCommand.MediaAction.PREVIOUS -> service.goBack()
+                AppCommand.MediaAction.PREVIOUS -> service.openPreviousYouTubeVideo()
                 else -> false
             }
             if (!completed) {
                 val target = when (action) {
                     AppCommand.MediaAction.NEXT -> "Next recommendation"
                     AppCommand.MediaAction.FIRST -> "First video"
-                    AppCommand.MediaAction.PREVIOUS -> "Previous video"
+                    AppCommand.MediaAction.PREVIOUS -> "Previous LYRA-opened video"
                     else -> "Video"
                 }
                 return Result("$target screen par nahi mila. YouTube video list visible rakho aur phir try karo.", false)
