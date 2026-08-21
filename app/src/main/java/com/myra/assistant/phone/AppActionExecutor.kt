@@ -14,6 +14,8 @@ import java.util.Locale
 import java.net.URLEncoder
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.os.Handler
+import android.os.Looper
 import android.hardware.camera2.CameraManager
 import com.myra.assistant.commands.Command
 import com.myra.assistant.core.AssistantResult
@@ -42,6 +44,7 @@ class AppActionExecutor(private val context: Context) {
         is AppCommand.OpenApp -> openApp(command.appName)
         is AppCommand.CloseCurrentApp -> closeCurrentApp()
         is AppCommand.SearchYouTube -> searchYouTube(command.query)
+        is AppCommand.PlayYouTube -> playYouTube(command.query)
         AppCommand.RepeatYouTubeSearch -> repeatYouTubeSearch()
         is AppCommand.DeepResearch -> Result("Deep Research needs LYRA to be connected.", false)
         is AppCommand.ReplyWhatsApp -> WhatsAppReplyStore.reply(context, command.sender, command.message)
@@ -61,7 +64,7 @@ class AppActionExecutor(private val context: Context) {
         val local = command.localCommand ?: return AssistantResult(false, false, command.type.name, command.target, "Zopy, ye command abhi supported nahi hai.")
         val result = execute(local)
         val acceptedOnly = local is AppCommand.OpenApp || local is AppCommand.CloseCurrentApp ||
-            local is AppCommand.SearchYouTube || local is AppCommand.ReplyWhatsApp ||
+            local is AppCommand.SearchYouTube || local is AppCommand.PlayYouTube || local is AppCommand.ReplyWhatsApp ||
             local is AppCommand.ControlMedia || local is AppCommand.ScrollYouTube
         return AssistantResult(
             success = result.success,
@@ -198,6 +201,19 @@ class AppActionExecutor(private val context: Context) {
         } catch (_: Exception) {
             Result("Media control complete nahi ho paaya.", false)
         }
+    }
+
+    private fun playYouTube(query: String?): Result {
+        val started = if (query.isNullOrBlank()) openApp("YouTube") else searchYouTube(query)
+        if (!started.success) return started
+        Handler(Looper.getMainLooper()).postDelayed({
+            AccessibilityHelperService.instance?.clickFirstYouTubeVideo()
+        }, 1_500L)
+        return Result(
+            if (query.isNullOrBlank()) "Tumhare liye ek video chala rahi hoon."
+            else "YouTube par $query dhoondhkar chala rahi hoon.",
+            true
+        )
     }
 
     private fun searchYouTube(rawQuery: String): Result {
