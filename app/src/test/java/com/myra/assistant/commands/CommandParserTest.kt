@@ -20,6 +20,17 @@ class CommandParserTest {
         assertEquals(false, com.myra.assistant.ai.CommandParser.isExplicitOpenCommand("YouTube"))
         assertEquals(true, com.myra.assistant.ai.CommandParser.isExplicitOpenCommand("YouTube open karo"))
     }
+    @Test fun listsOnlyImplementedFeatures() {
+        listOf(
+            "kon kon se features hai",
+            "tum kya kya kar sakti ho",
+            "apne saare features batao",
+            "what can you do"
+        ).forEach { phrase ->
+            assertEquals(CommandType.LIST_FEATURES, CommandParser.parse(phrase).type)
+        }
+    }
+
     @Test fun preservesExistingYouTubeCommand() {
         val command = CommandParser.parse("YouTube mein Lols Gaming search karo")
         assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
