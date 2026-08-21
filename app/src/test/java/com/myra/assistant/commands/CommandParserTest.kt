@@ -95,6 +95,17 @@ class CommandParserTest {
         }
     }
 
+    @Test fun parsesScreenshotRequests() {
+        listOf(
+            "screenshot lo",
+            "take screenshot",
+            "is screen ka screenshot le lo",
+            "jo dikh raha hai use save kar lo"
+        ).forEach { phrase ->
+            assertEquals(CommandType.TAKE_SCREENSHOT, CommandParser.parse(phrase).type)
+        }
+    }
+
     @Test fun preservesExistingYouTubeCommand() {
         val command = CommandParser.parse("YouTube mein Lols Gaming search karo")
         assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
