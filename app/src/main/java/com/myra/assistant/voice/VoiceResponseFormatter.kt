@@ -19,6 +19,11 @@ object VoiceResponseFormatter {
         return when (command.type) {
             CommandType.OPEN_APP -> if (gfMode) openCompleted(command.target, name) else if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
             CommandType.CLOSE_APP -> closeCompleted(command.target, personality, name)
+            CommandType.PLAY_YOUTUBE -> {
+                val query = command.content?.let(::humanize)
+                if (query.isNullOrBlank()) "Haan jaan, bore mat ho. Tumhare liye ek video chala rahi hoon."
+                else "Haan jaan, YouTube par $query dhoondhkar chala rahi hoon."
+            }
             CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> {
                 val query = humanize(command.content ?: command.target.orEmpty())
                 "Done $name, YouTube par $query search kar diya. Aur kuch karun?"
