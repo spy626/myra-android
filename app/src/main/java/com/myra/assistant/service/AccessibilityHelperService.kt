@@ -1,11 +1,13 @@
 package com.myra.assistant.service
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.graphics.Rect
+import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -42,7 +44,35 @@ class AccessibilityHelperService : AccessibilityService() {
 
     fun clickFirstYouTubeVideo(): Boolean = clickVisibleYouTubeVideo(afterPlayer = false)
 
-    fun clickNextYouTubeVideo(): Boolean = clickVisibleYouTubeVideo(afterPlayer = true)
+    fun clickNextYouTubeVideo(): Boolean {
+        if (clickVisibleYouTubeVideo(afterPlayer = true)) return true
+        return scrollThenClickNextVideo(remainingScrolls = 2)
+    }
+
+    private fun scrollThenClickNextVideo(remainingScrolls: Int): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if (!root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)) return false
+
+        val width = resources.displayMetrics.widthPixels.toFloat()
+        val height = resources.displayMetrics.heightPixels.toFloat()
+        val swipe = Path().apply {
+            moveTo(width * 0.50f, height * 0.84f)
+            lineTo(width * 0.50f, height * 0.38f)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(swipe, 0L, 320L))
+            .build()
+
+        return dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (!clickVisibleYouTubeVideo(afterPlayer = true) && remainingScrolls > 1) {
+                        scrollThenClickNextVideo(remainingScrolls - 1)
+                    }
+                }, 450L)
+            }
+        }, null)
+    }
 
     private fun clickVisibleYouTubeVideo(afterPlayer: Boolean): Boolean {
         val root = rootInActiveWindow ?: return false
