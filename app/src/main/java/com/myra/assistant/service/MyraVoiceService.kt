@@ -319,7 +319,7 @@ class MyraVoiceService : Service() {
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
         AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
-        is AppCommand.ControlMedia -> true
+        is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
         else -> false
     }
 
@@ -340,6 +340,7 @@ class MyraVoiceService : Service() {
             AppCommand.ListFeatures -> "list-features"
             is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
             is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
+            is AppCommand.ScrollYouTube -> "youtube-scroll:${command.direction?.name?.lowercase(Locale.ROOT) ?: "repeat"}"
         }
         // One utterance can arrive as several slightly different Live transcript chunks.
         // A longer semantic dedupe window prevents the same local action/error appearing
@@ -410,7 +411,7 @@ class MyraVoiceService : Service() {
         is AppCommand.SearchYouTube, AppCommand.RepeatYouTubeSearch,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
         AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
-        is AppCommand.ControlMedia -> true
+        is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         is AppCommand.DeepResearch -> false
     }
