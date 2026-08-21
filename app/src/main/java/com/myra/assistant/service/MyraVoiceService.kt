@@ -779,6 +779,7 @@ class MyraVoiceService : Service() {
         @Volatile var listener: Listener? = null
         @Volatile private var instance: MyraVoiceService? = null
         fun sendText(text: String) { instance?.live?.sendText(text) }
+        fun sendImage(image: ByteArray, mimeType: String, prompt: String) { instance?.live?.sendImage(image, mimeType, prompt) }
         fun executeLocalText(text: String): Boolean = instance?.executeTypedLocalCommand(text) == true
         fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
         fun announceWhatsApp(sender: String, message: String?) { instance?.speakWhatsAppAnnouncement(sender, message) }
