@@ -52,6 +52,7 @@ object CommandParser {
         if (Regex("(?:battery|बैटरी).*(?:level|percent|percentage|kitna|kitni|batao|status|charge|कितना|कितनी|बताओ)|^(?:battery|बैटरी)$").containsMatchIn(text)) return AppCommand.BatteryLevel
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:on|open|chalu|jala|चालू|जलाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(true)
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:off|close|band|bujha|बंद|बुझाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(false)
+        parseNaturalEntertainmentIntent(text)?.let { return it }
         parseNaturalYouTubePlay(text)?.let { return it }
         parseExactMediaControl(text)?.let { return it }
         parseYouTubeScroll(text)?.let { return it }
@@ -158,6 +159,20 @@ object CommandParser {
             val suffix = words.takeLast(count).joinToString(" ")
             parseExactMediaControl(suffix) ?: parseYouTubeScroll(suffix)
         }
+    }
+
+    private fun parseNaturalEntertainmentIntent(text: String): AppCommand? {
+        val shorts = listOf(
+            Regex("^(?:(?:youtube|यूट्यूब)(?:\\s+(?:home|home\\s+page))?\\s+)?shorts?\\s+(?:open\\s+karo|kholo|dikhao|chalao)$"),
+            Regex("^(?:mujhe\\s+)?(?:youtube\\s+)?shorts?\\s+(?:dekhna|dekhni)\\s+(?:hai|hain|he)$")
+        ).any { it.matches(text) }
+        if (shorts) return AppCommand.OpenYouTubeShorts
+
+        val reels = listOf(
+            Regex("^(?:mujhe|main|mai)\\s+(?:instagram\\s+)?reels?\\s+(?:dekhna|dekhni)\\s+(?:hai|hain|he)$"),
+            Regex("^(?:i\\s+)?(?:want|need)\\s+to\\s+watch\\s+(?:instagram\\s+)?reels?$")
+        ).any { it.matches(text) }
+        return if (reels) AppCommand.RequestInstagramReels else null
     }
 
     private fun parseNaturalYouTubePlay(text: String): AppCommand.PlayYouTube? {
