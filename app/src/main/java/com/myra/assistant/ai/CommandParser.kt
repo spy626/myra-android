@@ -53,6 +53,7 @@ object CommandParser {
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:on|open|chalu|jala|चालू|जलाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(true)
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:off|close|band|bujha|बंद|बुझाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(false)
         parseExactMediaControl(text)?.let { return it }
+        parseYouTubeScroll(text)?.let { return it }
         if (isWhatsAppMessageQuery(text)) return AppCommand.QueryWhatsAppMessages
         extractWhatsAppReply(text)?.let { return it }
         extractDeepResearch(text)?.let { return it }
@@ -151,9 +152,20 @@ object CommandParser {
             return AppCommand.CloseCurrentApp(findKnownApp(text) ?: "YouTube")
         }
         parseExactMediaControl(text)?.let { return it }
+        parseYouTubeScroll(text)?.let { return it }
         return (2..minOf(7, words.size)).firstNotNullOfOrNull { count ->
-            parseExactMediaControl(words.takeLast(count).joinToString(" "))
+            val suffix = words.takeLast(count).joinToString(" ")
+            parseExactMediaControl(suffix) ?: parseYouTubeScroll(suffix)
         }
+    }
+
+    private fun parseYouTubeScroll(text: String): AppCommand.ScrollYouTube? = when {
+        Regex("^(?:niche|neeche|down)\\s+(?:scroll|swipe)(?:\\s+karo)?$").matches(text) ->
+            AppCommand.ScrollYouTube(AppCommand.ScrollDirection.DOWN)
+        Regex("^(?:upar|upper|up)\\s+(?:scroll|swipe)(?:\\s+karo)?$").matches(text) ->
+            AppCommand.ScrollYouTube(AppCommand.ScrollDirection.UP)
+        Regex("^(?:scroll|swipe)(?:\\s+karo)?$").matches(text) -> AppCommand.ScrollYouTube(null)
+        else -> null
     }
 
     private fun parseExactMediaControl(text: String): AppCommand.ControlMedia? {
@@ -197,6 +209,7 @@ object CommandParser {
             Regex("^$prefix$youtube\\s+$place\\s+$repeatWord$action\\s+(.+?)$"),
             Regex("^$prefix$youtube\\s+(.+?)\\s+$action$"),
             Regex("^$prefix$youtube\\s+$action\\s+(.+?)$"),
+            Regex("^$prefix$action\\s+(.+?)$"),
             Regex("^(.+?)\\s+$youtube\\s+$place\\s+$action$"),
             Regex("^$action\\s+(.+?)\\s+(?:on|in|$place)\\s+$youtube$"),
             Regex("^$action\\s+(.+?)\\s+$youtube$"),
