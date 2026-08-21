@@ -116,7 +116,7 @@ class AccessibilityHelperService : AccessibilityService() {
 
     companion object {
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
-        private val VIDEO_CARD_SIGNAL = Regex("(?:video[_\\s]*(?:title|thumbnail)|thumbnail|\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
+        private val VIDEO_CARD_SIGNAL = Regex("(?:video[_\\s]*thumbnail|thumbnail|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
         private val AD_SIGNAL = Regex("(?:\\bsponsored\\b|\\badvertisement\\b|\\bad\\b|\\binstall\\b|learn more|visit advertiser|google play)", RegexOption.IGNORE_CASE)
         private val NON_VIDEO_CONTROLS = Regex("^(?:home|shorts|subscriptions|you|library|comments?|share|like|dislike|download|save|settings)$", RegexOption.IGNORE_CASE)
 
