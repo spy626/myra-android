@@ -91,6 +91,9 @@ class AccessibilityHelperService : AccessibilityService() {
         // inserted first. This boundary lets us use reliable title/view metadata
         // without ever selecting the current title.
         val minimumTop = if (afterPlayer) (screenHeight * 0.50f).toInt() else (screenHeight * 0.10f).toInt()
+        val outgoingQuery = if (afterPlayer) {
+            currentVideoQuery ?: findCurrentVideoQuery(root, screenHeight)
+        } else null
         val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
         collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, afterPlayer, candidates)
         val target = candidates.sortedBy { it.first }.firstOrNull()?.second
@@ -99,7 +102,7 @@ class AccessibilityHelperService : AccessibilityService() {
             val restored = pendingHistoryRestoreQuery
             val selectedQuery = restored ?: target?.let(::extractVideoSearchQuery)
             if (afterPlayer) {
-                previousVideoQuery = currentVideoQuery
+                previousVideoQuery = outgoingQuery
                 currentVideoQuery = selectedQuery
             } else {
                 currentVideoQuery = selectedQuery
@@ -108,6 +111,29 @@ class AccessibilityHelperService : AccessibilityService() {
             watchForSkippableYouTubeAd()
         }
         return clicked
+    }
+
+    private fun findCurrentVideoQuery(root: AccessibilityNodeInfo, screenHeight: Int): String? {
+        val candidates = mutableListOf<Pair<Int, String>>()
+        fun inspect(node: AccessibilityNodeInfo) {
+            if (node.isVisibleToUser) {
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                if (bounds.top >= (screenHeight * 0.12f).toInt() &&
+                    bounds.top < (screenHeight * 0.50f).toInt()
+                ) {
+                    val query = extractVideoSearchQuery(node)
+                    if (query != null &&
+                        !CURRENT_VIDEO_UI_SIGNAL.containsMatchIn(query)
+                    ) candidates += bounds.top to query
+                }
+            }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(::inspect)
+            }
+        }
+        inspect(root)
+        return candidates.sortedByDescending { it.first }.firstOrNull()?.second
     }
 
     private fun watchForSkippableYouTubeAd(attempt: Int = 0) {
@@ -271,6 +297,7 @@ class AccessibilityHelperService : AccessibilityService() {
             "^(?:skip\\s+ads?|skip\\s+advertisement|विज्ञापन\\s+छोड़ें|विज्ञापन\\s+स्किप\\s+करें)$",
             RegexOption.IGNORE_CASE
         )
+        private val CURRENT_VIDEO_UI_SIGNAL = Regex("^(?:youtube|video player|comments?|subscribe|share|like|dislike|more actions)$", RegexOption.IGNORE_CASE)
         private val VIDEO_LIST_SIGNAL = Regex("(?:video[_\\s]*(?:title|thumbnail)|thumbnail|\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
         private val AD_SIGNAL = Regex("(?:\\bsponsored\\b|\\badvertisement\\b|\\bad\\b|\\binstall\\b|learn more|visit advertiser|google play)", RegexOption.IGNORE_CASE)
         private val NON_VIDEO_CONTROLS = Regex("^(?:home|shorts|subscriptions|you|library|comments?|share|like|dislike|download|save|settings)$", RegexOption.IGNORE_CASE)
