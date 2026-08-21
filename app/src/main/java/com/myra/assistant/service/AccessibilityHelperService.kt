@@ -51,7 +51,7 @@ class AccessibilityHelperService : AccessibilityService() {
         val screenHeight = resources.displayMetrics.heightPixels
         val minimumTop = if (afterPlayer) (screenHeight * 0.30f).toInt() else (screenHeight * 0.10f).toInt()
         val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
-        collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, candidates)
+        collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, afterPlayer, candidates)
         return candidates.sortedBy { it.first }.firstOrNull()?.second
             ?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
     }
@@ -61,13 +61,14 @@ class AccessibilityHelperService : AccessibilityService() {
         screenWidth: Int,
         screenHeight: Int,
         minimumTop: Int,
+        afterPlayer: Boolean,
         output: MutableList<Pair<Int, AccessibilityNodeInfo>>
     ) {
         if (node.isVisibleToUser) {
             val label = listOfNotNull(node.text, node.contentDescription, node.viewIdResourceName)
                 .joinToString(" ")
             val contextLabel = nodeContextLabel(node)
-            if (looksLikeVideoCard(label) && !AD_SIGNAL.containsMatchIn(contextLabel)) {
+            if (looksLikeVideoCard(label, afterPlayer) && !AD_SIGNAL.containsMatchIn(contextLabel)) {
                 var clickable: AccessibilityNodeInfo? = node
                 repeat(4) {
                     if (clickable?.isClickable == true) return@repeat
@@ -87,7 +88,7 @@ class AccessibilityHelperService : AccessibilityService() {
         }
         for (index in 0 until node.childCount) {
             node.getChild(index)?.let {
-                collectVideoCandidates(it, screenWidth, screenHeight, minimumTop, output)
+                collectVideoCandidates(it, screenWidth, screenHeight, minimumTop, afterPlayer, output)
             }
         }
     }
@@ -105,10 +106,14 @@ class AccessibilityHelperService : AccessibilityService() {
         return parts.joinToString(" ").lowercase()
     }
 
-    private fun looksLikeVideoCard(label: String): Boolean {
+    private fun looksLikeVideoCard(label: String, afterPlayer: Boolean): Boolean {
         val clean = label.lowercase()
         if (clean.isBlank() || NON_VIDEO_CONTROLS.containsMatchIn(clean)) return false
-        return VIDEO_CARD_SIGNAL.containsMatchIn(clean)
+        // Search/home lists expose the first organic result through title and view
+        // metadata on some YouTube versions. The watch page uses a stricter signal,
+        // because its current title opens Description instead of the next video.
+        return if (afterPlayer) NEXT_VIDEO_SIGNAL.containsMatchIn(clean)
+        else FIRST_VIDEO_SIGNAL.containsMatchIn(clean)
     }
 
     fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
@@ -116,7 +121,8 @@ class AccessibilityHelperService : AccessibilityService() {
 
     companion object {
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
-        private val VIDEO_CARD_SIGNAL = Regex("(?:video[_\\s]*thumbnail|thumbnail|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
+        private val FIRST_VIDEO_SIGNAL = Regex("(?:video[_\\s]*(?:title|thumbnail)|thumbnail|\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
+        private val NEXT_VIDEO_SIGNAL = Regex("(?:video[_\\s]*thumbnail|thumbnail|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
         private val AD_SIGNAL = Regex("(?:\\bsponsored\\b|\\badvertisement\\b|\\bad\\b|\\binstall\\b|learn more|visit advertiser|google play)", RegexOption.IGNORE_CASE)
         private val NON_VIDEO_CONTROLS = Regex("^(?:home|shorts|subscriptions|you|library|comments?|share|like|dislike|download|save|settings)$", RegexOption.IGNORE_CASE)
 
