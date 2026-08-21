@@ -20,6 +20,7 @@ class GeminiLiveClient(
     var onInputTranscript: ((String) -> Unit)? = null
     var onOutputTranscript: ((String) -> Unit)? = null
     var onTurnComplete: (() -> Unit)? = null
+    var onToolCall: ((String, String, JSONObject) -> Unit)? = null
     var onState: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
 
@@ -95,6 +96,28 @@ class GeminiLiveClient(
                 .put("responseModalities", JSONArray().put("AUDIO"))
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice))))
                 .put("temperature", 0.9))
+            .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", JSONArray().put(
+                JSONObject()
+                    .put("name", "perform_phone_action")
+                    .put("description", "Perform one allowed Android phone action when the user's natural-language intent is clear. Ask a conversational follow-up instead of calling this tool when the action, app, direction, recipient, or query is uncertain. Instagram Reels must use REQUEST_INSTAGRAM_REELS so Android asks for confirmation.")
+                    .put("parameters", JSONObject()
+                        .put("type", "OBJECT")
+                        .put("properties", JSONObject()
+                            .put("action", JSONObject()
+                                .put("type", "STRING")
+                                .put("enum", JSONArray(listOf(
+                                    "OPEN_APP", "CLOSE_APP", "YOUTUBE_SEARCH", "PLAY_YOUTUBE",
+                                    "OPEN_YOUTUBE_SHORTS", "REQUEST_INSTAGRAM_REELS",
+                                    "SCROLL_DOWN", "SCROLL_UP", "SCROLL_REPEAT",
+                                    "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS", "MEDIA_FIRST",
+                                    "FLASHLIGHT_ON", "FLASHLIGHT_OFF", "HOME", "BACK",
+                                    "TIME", "BATTERY", "LIST_FEATURES", "QUERY_WHATSAPP"
+                                )))
+                                .put("description", "The single allowed action to perform."))
+                            .put("target", JSONObject().put("type", "STRING").put("description", "App name for OPEN_APP or CLOSE_APP."))
+                            .put("query", JSONObject().put("type", "STRING").put("description", "Search or media query for YOUTUBE_SEARCH or PLAY_YOUTUBE.")))
+                        .put("required", JSONArray().put("action")))
+            )))
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject()))
         webSocket.send(setup.toString())
@@ -116,6 +139,22 @@ class GeminiLiveClient(
         if (text.isBlank()) return
         val turn = JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text)))
         sendWhenReady(JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString())
+    }
+
+    fun sendToolResponse(id: String, name: String, success: Boolean, message: String) {
+        val response = JSONObject()
+            .put("result", if (success) "success" else "failed")
+            .put("message", message)
+        val functionResponse = JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("response", response)
+        sendWhenReady(
+            JSONObject().put(
+                "toolResponse",
+                JSONObject().put("functionResponses", JSONArray().put(functionResponse))
+            ).toString()
+        )
     }
 
     private fun sendWhenReady(payload: String): Boolean {
@@ -156,6 +195,17 @@ class GeminiLiveClient(
                 reconnecting.set(false)
                 onState?.invoke("Ready")
                 onReady?.invoke()
+                return
+            }
+            root.optJSONObject("toolCall")?.optJSONArray("functionCalls")?.let { calls ->
+                for (i in 0 until calls.length()) {
+                    val call = calls.optJSONObject(i) ?: continue
+                    val id = call.optString("id")
+                    val name = call.optString("name")
+                    if (id.isNotBlank() && name.isNotBlank()) {
+                        onToolCall?.invoke(id, name, call.optJSONObject("args") ?: JSONObject())
+                    }
+                }
                 return
             }
             val content = root.optJSONObject("serverContent") ?: return
