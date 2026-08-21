@@ -33,6 +33,16 @@ object CommandParser {
         AppCommand.BatteryLevel -> Command(CommandType.BATTERY_LEVEL, sourceText = source, localCommand = command)
         AppCommand.ListFeatures -> Command(CommandType.LIST_FEATURES, sourceText = source, localCommand = command)
         is AppCommand.SetFlashlight -> Command(if (command.enabled) CommandType.FLASHLIGHT_ON else CommandType.FLASHLIGHT_OFF, sourceText = source, localCommand = command)
+        is AppCommand.ScrollYouTube -> Command(
+            when (command.direction) {
+                AppCommand.ScrollDirection.DOWN -> CommandType.YOUTUBE_SCROLL_DOWN
+                AppCommand.ScrollDirection.UP -> CommandType.YOUTUBE_SCROLL_UP
+                null -> CommandType.YOUTUBE_SCROLL_REPEAT
+            },
+            target = "YouTube",
+            sourceText = source,
+            localCommand = command
+        )
         is AppCommand.ControlMedia -> Command(
             when (command.action) {
                 AppCommand.MediaAction.PAUSE -> CommandType.MEDIA_PAUSE
