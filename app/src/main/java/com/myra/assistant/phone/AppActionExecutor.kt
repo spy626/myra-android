@@ -112,23 +112,36 @@ class AppActionExecutor(private val context: Context) {
     }
 
     private fun controlMedia(action: AppCommand.MediaAction): Result {
-        if (action == AppCommand.MediaAction.NEXT || action == AppCommand.MediaAction.FIRST) {
+        if (action == AppCommand.MediaAction.NEXT ||
+            action == AppCommand.MediaAction.FIRST ||
+            action == AppCommand.MediaAction.PREVIOUS
+        ) {
             val service = AccessibilityHelperService.instance
             if (service == null || !AccessibilityHelperService.isEnabled(context)) {
                 return Result("YouTube video select karne ke liye LYRA Accessibility enable karo.", false)
             }
-            val clicked = if (action == AppCommand.MediaAction.NEXT) {
-                service.clickNextYouTubeVideo()
-            } else {
-                service.clickFirstYouTubeVideo()
+            val completed = when (action) {
+                AppCommand.MediaAction.NEXT -> service.clickNextYouTubeVideo()
+                AppCommand.MediaAction.FIRST -> service.clickFirstYouTubeVideo()
+                AppCommand.MediaAction.PREVIOUS -> service.goBack()
+                else -> false
             }
-            if (!clicked) {
-                val target = if (action == AppCommand.MediaAction.NEXT) "Next recommendation" else "First video"
+            if (!completed) {
+                val target = when (action) {
+                    AppCommand.MediaAction.NEXT -> "Next recommendation"
+                    AppCommand.MediaAction.FIRST -> "First video"
+                    AppCommand.MediaAction.PREVIOUS -> "Previous video"
+                    else -> "Video"
+                }
                 return Result("$target screen par nahi mila. YouTube video list visible rakho aur phir try karo.", false)
             }
             return Result(
-                if (action == AppCommand.MediaAction.NEXT) "Next video par tap kar diya."
-                else "First video par tap kar diya.",
+                when (action) {
+                    AppCommand.MediaAction.NEXT -> "Next video par tap kar diya."
+                    AppCommand.MediaAction.FIRST -> "First video par tap kar diya."
+                    AppCommand.MediaAction.PREVIOUS -> "Pichhla video khol diya."
+                    else -> "Video command complete ho gaya."
+                },
                 true
             )
         }
