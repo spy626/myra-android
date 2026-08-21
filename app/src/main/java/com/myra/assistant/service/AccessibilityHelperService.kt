@@ -48,6 +48,8 @@ class AccessibilityHelperService : AccessibilityService() {
         return movedToHome
     }
 
+    fun takeScreenshot(): Boolean = performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
+
     fun openYouTubeShorts(): Boolean = clickNavigationTarget(
         YOUTUBE_PACKAGE,
         setOf("shorts", "youtube shorts")
