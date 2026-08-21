@@ -62,8 +62,9 @@ class AssistantController(context: Context) {
             spokenMessage = VoiceResponseFormatter.format(command, rawResult, name, personality)
         )
         audit.record(result.actionType, result.target, result.success, result.verified)
-        if (notifyListeners) main.post { listeners.forEach { it.onResult(command, result) } }
-        if (speak) {
+        val silentRepeatedScroll = command.type == com.myra.assistant.commands.CommandType.YOUTUBE_SCROLL_REPEAT && result.success
+        if (notifyListeners && !silentRepeatedScroll) main.post { listeners.forEach { it.onResult(command, result) } }
+        if (speak && !silentRepeatedScroll) {
             transition(AssistantState.SPEAKING)
             tts.speak(result.spokenMessage) {
                 resumeAfterSpeech(result.shouldResumeListening)
