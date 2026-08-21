@@ -38,6 +38,7 @@ object CommandParser {
             Regex("^(?:what\\s+can\\s+you\\s+do|list\\s+(?:all\\s+)?features?|show\\s+(?:all\\s+)?features?)$"),
             Regex("^(?:तुम\\s+)?क्या\\s+क्या\\s+कर\\s+सक(?:ती|ते)\\s+हो$"),
             Regex("^(?:अपने\\s+)?(?:सारे\\s+)?फीचर्स?\\s+(?:बताओ|बता\\s+दो)$"),
+            Regex("^(?:अभी\\s+)?(?:(?:कौन|कोन)(?:\\s+(?:सा|सी|से))?\\s+){1,2}(?:फीचर्स?|फिचर्स?)(?:\\s+(?:है|हैं))?(?:\\s+अभी)?$"),
             Regex("^(?:(?:kaun|kon|kauna)(?:\\s+(?:sa|si|se))?\\s+){1,2}(?:features?|phicara|phichara|fichara?|phichar)(?:\\s+(?:hai|hain|haim|he))?(?:\\s+abhi)?$"),
             Regex("^(?:features?|phicara|phichara|fichara?|phichar)\\s+(?:(?:kaun|kon|kauna|konsi|kaunsi)(?:\\s+(?:sa|si|se))?\\s*){1,2}(?:hai|hain|haim|he)?(?:\\s+abhi)?$")
         ).any { it.matches(text) }
