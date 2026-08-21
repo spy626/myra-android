@@ -111,7 +111,7 @@ class GeminiLiveClient(
                                     "SCROLL_DOWN", "SCROLL_UP", "SCROLL_REPEAT",
                                     "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS", "MEDIA_FIRST",
                                     "FLASHLIGHT_ON", "FLASHLIGHT_OFF", "HOME", "BACK",
-                                    "TIME", "BATTERY", "LIST_FEATURES", "QUERY_WHATSAPP"
+                                    "TIME", "BATTERY", "TAKE_SCREENSHOT", "LIST_FEATURES", "QUERY_WHATSAPP"
                                 )))
                                 .put("description", "The single allowed action to perform."))
                             .put("target", JSONObject().put("type", "STRING").put("description", "App name for OPEN_APP or CLOSE_APP."))
