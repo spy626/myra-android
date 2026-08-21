@@ -245,6 +245,7 @@ class MainActivity : AppCompatActivity() {
             AppCommand.OpenYouTubeShorts -> "youtube-shorts"
             AppCommand.RequestInstagramReels -> "request-instagram-reels"
             AppCommand.OpenInstagramReels -> "open-instagram-reels"
+            AppCommand.TakeScreenshot -> "take-screenshot"
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
             is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
