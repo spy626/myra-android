@@ -51,6 +51,7 @@ class AppActionExecutor(private val context: Context) {
         AppCommand.GoBack -> navigateBack()
         AppCommand.CurrentTime -> currentTime()
         AppCommand.BatteryLevel -> batteryLevel()
+        AppCommand.ListFeatures -> listFeatures()
         is AppCommand.SetFlashlight -> setFlashlight(command.enabled)
         is AppCommand.ControlMedia -> controlMedia(command.action)
     }
@@ -71,6 +72,11 @@ class AppActionExecutor(private val context: Context) {
             shouldResumeListening = true
         )
     }
+
+    private fun listFeatures(): Result = Result(
+        "Abhi main apps open aur close, home aur back, time aur battery, aur flashlight control kar sakti hoon. YouTube mein search, first, next, previous, play, pause, banner ke baad auto-scroll aur skippable ads skip; WhatsApp message check aur reply; Deep Research; aur tumse normal caring conversation bhi kar sakti hoon.",
+        true
+    )
 
     private fun navigateHome(): Result {
         val service = AccessibilityHelperService.instance
