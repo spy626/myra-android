@@ -101,9 +101,17 @@ class AccessibilityHelperService : AccessibilityService() {
         collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, afterPlayer, candidates)
         val uniqueCandidates = candidates.sortedBy { it.first }
             .distinctBy { (_, node) ->
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                "${bounds.left}:${bounds.top}:${bounds.right}:${bounds.bottom}"
+                // YouTube exposes one history card through thumbnail, title and
+                // metadata nodes with different bounds. Prefer the extracted title
+                // as the stable identity so a single video is counted only once.
+                extractVideoSearchQuery(node)
+                    ?.lowercase()
+                    ?.replace(Regex("\\s+"), " ")
+                    ?: run {
+                        val bounds = Rect()
+                        node.getBoundsInScreen(bounds)
+                        "row:${bounds.centerY() / (screenHeight * 0.12f).toInt().coerceAtLeast(1)}"
+                    }
             }
         val target = uniqueCandidates.getOrNull(selectionIndex)?.second
         val clicked = target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
@@ -276,7 +284,7 @@ class AccessibilityHelperService : AccessibilityService() {
             } else {
                 fallbackQuery?.let(::openPreviousBySavedTitle)
             }
-        }, if (attempt == 0) 1_200L else 550L)
+        }, if (attempt == 0) 2_000L else 650L)
     }
 
     private fun openPreviousBySavedTitle(query: String) {
