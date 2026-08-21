@@ -51,6 +51,7 @@ class MyraVoiceService : Service() {
     private var commandUserTextEmitted = false
     private var localCommandExecutedThisTurn = false
     private var lastCommandKey = ""
+    private var hasAcknowledgedScrollDirection = false
     private var lastCommandAt = 0L
     private var hideNextModelTranscript = false
     private var mediaBlockedTurn = false
@@ -472,6 +473,20 @@ class MyraVoiceService : Service() {
             speak = false,
             notifyListeners = false
         )
+        val silentRepeatedScroll =
+            command is AppCommand.ScrollYouTube &&
+                command.direction == null &&
+                result.success &&
+                hasAcknowledgedScrollDirection
+        if (command is AppCommand.ScrollYouTube && result.success) {
+            hasAcknowledgedScrollDirection = true
+        }
+        if (silentRepeatedScroll) {
+            audio?.setMuted(false)
+            suppressModelForTurn = false
+            emitState("Sun rahi hoon…")
+            return
+        }
         listener?.onMyraText(result.spokenMessage, !result.success)
         emitState(result.spokenMessage)
         queueLocalSpeech(
