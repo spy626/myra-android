@@ -86,8 +86,46 @@ class AccessibilityHelperService : AccessibilityService() {
         val minimumTop = if (afterPlayer) (screenHeight * 0.50f).toInt() else (screenHeight * 0.10f).toInt()
         val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
         collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, afterPlayer, candidates)
-        return candidates.sortedBy { it.first }.firstOrNull()?.second
+        val clicked = candidates.sortedBy { it.first }.firstOrNull()?.second
             ?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+        if (clicked) watchForSkippableYouTubeAd()
+        return clicked
+    }
+
+    private fun watchForSkippableYouTubeAd(attempt: Int = 0) {
+        if (attempt >= SKIP_AD_WATCH_ATTEMPTS) return
+        Handler(Looper.getMainLooper()).postDelayed({
+            val root = rootInActiveWindow
+            if (root == null ||
+                !root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)
+            ) return@postDelayed
+
+            if (!clickYouTubeSkipAd(root)) {
+                watchForSkippableYouTubeAd(attempt + 1)
+            }
+        }, SKIP_AD_POLL_INTERVAL_MS)
+    }
+
+    private fun clickYouTubeSkipAd(node: AccessibilityNodeInfo): Boolean {
+        if (node.isVisibleToUser) {
+            val label = listOfNotNull(node.text, node.contentDescription)
+                .joinToString(" ")
+                .trim()
+            if (SKIP_AD_SIGNAL.matches(label)) {
+                var clickable: AccessibilityNodeInfo? = node
+                repeat(5) {
+                    if (clickable?.isClickable == true) return@repeat
+                    clickable = clickable?.parent
+                }
+                if (clickable?.isClickable == true &&
+                    clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+                ) return true
+            }
+        }
+        for (index in 0 until node.childCount) {
+            node.getChild(index)?.let { if (clickYouTubeSkipAd(it)) return true }
+        }
+        return false
     }
 
     private fun collectVideoCandidates(
@@ -158,6 +196,12 @@ class AccessibilityHelperService : AccessibilityService() {
 
     companion object {
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+        private const val SKIP_AD_POLL_INTERVAL_MS = 500L
+        private const val SKIP_AD_WATCH_ATTEMPTS = 60
+        private val SKIP_AD_SIGNAL = Regex(
+            "^(?:skip\\s+ads?|skip\\s+advertisement|विज्ञापन\\s+छोड़ें|विज्ञापन\\s+स्किप\\s+करें)$",
+            RegexOption.IGNORE_CASE
+        )
         private val VIDEO_LIST_SIGNAL = Regex("(?:video[_\\s]*(?:title|thumbnail)|thumbnail|\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
         private val AD_SIGNAL = Regex("(?:\\bsponsored\\b|\\badvertisement\\b|\\bad\\b|\\binstall\\b|learn more|visit advertiser|google play)", RegexOption.IGNORE_CASE)
         private val NON_VIDEO_CONTROLS = Regex("^(?:home|shorts|subscriptions|you|library|comments?|share|like|dislike|download|save|settings)$", RegexOption.IGNORE_CASE)
