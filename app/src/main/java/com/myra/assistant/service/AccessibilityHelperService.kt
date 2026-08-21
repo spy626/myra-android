@@ -21,6 +21,7 @@ class AccessibilityHelperService : AccessibilityService() {
     private var currentVideoQuery: String? = null
     private var previousVideoQuery: String? = null
     private var pendingHistoryRestoreQuery: String? = null
+    private var lastScrollDown = true
     override fun onServiceConnected() { instance = this; super.onServiceConnected() }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
@@ -54,6 +55,28 @@ class AccessibilityHelperService : AccessibilityService() {
     fun clickNextYouTubeVideo(): Boolean {
         if (clickVisibleYouTubeVideo(afterPlayer = true)) return true
         return scrollThenClickVideo(afterPlayer = true, remainingScrolls = 2)
+    }
+
+    fun scrollYouTube(down: Boolean?): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if (!root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)) return false
+        val resolvedDown = down ?: lastScrollDown
+        lastScrollDown = resolvedDown
+        val width = resources.displayMetrics.widthPixels.toFloat()
+        val height = resources.displayMetrics.heightPixels.toFloat()
+        val swipe = Path().apply {
+            if (resolvedDown) {
+                moveTo(width * 0.50f, height * 0.78f)
+                lineTo(width * 0.50f, height * 0.32f)
+            } else {
+                moveTo(width * 0.50f, height * 0.32f)
+                lineTo(width * 0.50f, height * 0.78f)
+            }
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(swipe, 0L, 300L))
+            .build()
+        return dispatchGesture(gesture, null, null)
     }
 
     private fun scrollThenClickVideo(afterPlayer: Boolean, remainingScrolls: Int): Boolean {
