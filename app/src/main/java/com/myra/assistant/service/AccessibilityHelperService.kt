@@ -42,14 +42,17 @@ class AccessibilityHelperService : AccessibilityService() {
         return movedToHome
     }
 
-    fun clickFirstYouTubeVideo(): Boolean = clickVisibleYouTubeVideo(afterPlayer = false)
+    fun clickFirstYouTubeVideo(): Boolean {
+        if (clickVisibleYouTubeVideo(afterPlayer = false)) return true
+        return scrollThenClickVideo(afterPlayer = false, remainingScrolls = 2)
+    }
 
     fun clickNextYouTubeVideo(): Boolean {
         if (clickVisibleYouTubeVideo(afterPlayer = true)) return true
-        return scrollThenClickNextVideo(remainingScrolls = 2)
+        return scrollThenClickVideo(afterPlayer = true, remainingScrolls = 2)
     }
 
-    private fun scrollThenClickNextVideo(remainingScrolls: Int): Boolean {
+    private fun scrollThenClickVideo(afterPlayer: Boolean, remainingScrolls: Int): Boolean {
         val root = rootInActiveWindow ?: return false
         if (!root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)) return false
 
@@ -66,8 +69,8 @@ class AccessibilityHelperService : AccessibilityService() {
         return dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 Handler(Looper.getMainLooper()).postDelayed({
-                    if (!clickVisibleYouTubeVideo(afterPlayer = true) && remainingScrolls > 1) {
-                        scrollThenClickNextVideo(remainingScrolls - 1)
+                    if (!clickVisibleYouTubeVideo(afterPlayer) && remainingScrolls > 1) {
+                        scrollThenClickVideo(afterPlayer, remainingScrolls - 1)
                     }
                 }, 450L)
             }
