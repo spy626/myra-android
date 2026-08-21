@@ -324,6 +324,12 @@ class MyraVoiceService : Service() {
             live?.sendToolResponse(id, functionName, false, "Unsupported tool")
             return
         }
+        if (localCommandExecutedThisTurn) {
+            // The deterministic parser already handled this same streamed utterance.
+            // A later Gemini tool call is an acknowledgement, not a second action.
+            live?.sendToolResponse(id, functionName, true, "Action was already handled locally")
+            return
+        }
         val action = args.optString("action").uppercase(Locale.ROOT)
         val target = args.optString("target").trim()
         val query = args.optString("query").trim()
@@ -348,6 +354,7 @@ class MyraVoiceService : Service() {
             "BACK" -> AppCommand.GoBack
             "TIME" -> AppCommand.CurrentTime
             "BATTERY" -> AppCommand.BatteryLevel
+            "TAKE_SCREENSHOT" -> AppCommand.TakeScreenshot
             "LIST_FEATURES" -> AppCommand.ListFeatures
             "QUERY_WHATSAPP" -> AppCommand.QueryWhatsAppMessages
             else -> null
@@ -396,7 +403,7 @@ class MyraVoiceService : Service() {
 
     private fun isSafeDirectMediaCommand(command: AppCommand): Boolean = when (command) {
         is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
-        AppCommand.OpenInstagramReels, AppCommand.RepeatYouTubeSearch,
+        AppCommand.OpenInstagramReels, AppCommand.TakeScreenshot, AppCommand.RepeatYouTubeSearch,
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
@@ -415,6 +422,7 @@ class MyraVoiceService : Service() {
             AppCommand.OpenYouTubeShorts -> "youtube-shorts"
             AppCommand.RequestInstagramReels -> "request-instagram-reels"
             AppCommand.OpenInstagramReels -> "open-instagram-reels"
+            AppCommand.TakeScreenshot -> "take-screenshot"
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
             is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
@@ -508,7 +516,8 @@ class MyraVoiceService : Service() {
     private fun isSafeUntranscribedConfirmation(command: AppCommand): Boolean = when (command) {
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
-        AppCommand.RequestInstagramReels, AppCommand.OpenInstagramReels, AppCommand.RepeatYouTubeSearch,
+        AppCommand.RequestInstagramReels, AppCommand.OpenInstagramReels, AppCommand.TakeScreenshot,
+        AppCommand.RepeatYouTubeSearch,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
         AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
         is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
