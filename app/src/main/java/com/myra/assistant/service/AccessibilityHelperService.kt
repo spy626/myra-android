@@ -16,6 +16,7 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.myra.assistant.ui.main.MainActivity
+import java.util.Locale
 
 class AccessibilityHelperService : AccessibilityService() {
     private var currentVideoQuery: String? = null
@@ -45,6 +46,38 @@ class AccessibilityHelperService : AccessibilityService() {
             runCatching { startActivity(openMyra) }
         }, 100L)
         return movedToHome
+    }
+
+    fun openYouTubeShorts(): Boolean = clickNavigationTarget(
+        YOUTUBE_PACKAGE,
+        setOf("shorts", "youtube shorts")
+    )
+
+    fun openInstagramReels(): Boolean = clickNavigationTarget(
+        INSTAGRAM_PACKAGE,
+        setOf("reels", "reel")
+    )
+
+    private fun clickNavigationTarget(packageName: String, labels: Set<String>): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if (!root.packageName?.toString().orEmpty().equals(packageName, ignoreCase = true)) return false
+        fun inspect(node: AccessibilityNodeInfo): Boolean {
+            val values = listOfNotNull(node.text, node.contentDescription)
+                .map { it.toString().trim().lowercase(Locale.ROOT) }
+            if (node.isVisibleToUser && values.any { value -> labels.any { value == it || value.startsWith("$it,") } }) {
+                var target: AccessibilityNodeInfo? = node
+                repeat(4) {
+                    val current = target ?: return@repeat
+                    if (current.isClickable && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                    target = current.parent
+                }
+            }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let { if (inspect(it)) return true }
+            }
+            return false
+        }
+        return inspect(root)
     }
 
     fun clickFirstYouTubeVideo(): Boolean {
@@ -374,6 +407,7 @@ class AccessibilityHelperService : AccessibilityService() {
 
     companion object {
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+        private const val INSTAGRAM_PACKAGE = "com.instagram.android"
         private const val YOUTUBE_HISTORY_URL = "https://www.youtube.com/feed/history"
         private const val SKIP_AD_POLL_INTERVAL_MS = 500L
         private const val SKIP_AD_WATCH_ATTEMPTS = 60
