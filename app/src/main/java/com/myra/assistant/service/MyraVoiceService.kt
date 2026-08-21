@@ -311,7 +311,7 @@ class MyraVoiceService : Service() {
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, is AppCommand.SetFlashlight,
+        AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
         is AppCommand.ControlMedia -> true
         else -> false
     }
@@ -330,6 +330,7 @@ class MyraVoiceService : Service() {
             AppCommand.GoBack -> "go-back"
             AppCommand.CurrentTime -> "current-time"
             AppCommand.BatteryLevel -> "battery-level"
+            AppCommand.ListFeatures -> "list-features"
             is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
             is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
         }
