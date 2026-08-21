@@ -10,6 +10,7 @@ import android.content.IntentFilter
 import android.provider.Settings
 import android.os.BatteryManager
 import android.graphics.Color
+import android.graphics.BitmapFactory
 import android.view.Gravity
 import android.view.ViewGroup
 import android.text.util.Linkify
@@ -43,6 +44,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
+import java.io.ByteArrayOutputStream
 import java.util.*
 
 class MainActivity : AppCompatActivity() {
@@ -75,6 +77,20 @@ class MainActivity : AppCompatActivity() {
     private val commandProbe = StringBuilder()
     private val input = StringBuilder(); private val output = StringBuilder()
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { if (!it) showStatus("Microphone permission required") }
+    private var pendingImage: ByteArray? = null
+    private var pendingImageMimeType = "image/jpeg"
+    private val screenshotPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        val image = prepareScreenshot(uri)
+        if (image == null) {
+            showStatus("Screenshot read nahi hui — doosri image try karo")
+        } else {
+            pendingImage = image
+            pendingImageMimeType = "image/jpeg"
+            b.attachImageButton.setColorFilter(Color.WHITE)
+            showStatus("Screenshot attached — sawaal likho ya Send dabao")
+        }
+    }
     private val voiceListener = object : MyraVoiceService.Listener {
         override fun onState(text: String) = runOnUiThread { showStatus(text) }
         override fun onReady() = runOnUiThread { b.connectButton.setColorFilter(Color.WHITE); showStatus("Sun rahi hoon…") }
@@ -93,23 +109,61 @@ class MainActivity : AppCompatActivity() {
         b.settingsButton.setOnClickListener { showSettings() }
         updateDeviceStatus()
         b.connectButton.setOnClickListener { if (!MyraVoiceService.isRunning) connect() else disconnect() }
+        b.attachImageButton.setOnClickListener {
+            if (!MyraVoiceService.isRunning) showStatus("Connect to LYRA first — tap the mic")
+            else screenshotPicker.launch("image/*")
+        }
         b.sendButton.setOnClickListener {
-            b.textInput.text.toString().trim().takeIf { it.isNotEmpty() }?.let {
-                addBubble(it, true)
-                val structured = StructuredCommandParser.parse(it)
-                if (structured.type != CommandType.UNKNOWN) {
-                    if (!MyraVoiceService.isRunning || !MyraVoiceService.executeLocalText(it)) {
-                        assistantController.processCommand(structured, speak = true)
-                    }
+            val text = b.textInput.text.toString().trim()
+            val image = pendingImage
+            if (image != null) {
+                if (!MyraVoiceService.isRunning) {
+                    showStatus("Connect to LYRA first — tap the mic")
                 } else {
-                    if (!MyraVoiceService.isRunning) showStatus("Connect to LYRA first — tap the mic") else MyraVoiceService.sendText(it)
+                    val prompt = text.ifBlank { "Analyze this screenshot and tell me naturally what you can see and what the issue may be." }
+                    addBubble(if (text.isBlank()) "📷 Screenshot" else "📷 $text", true)
+                    MyraVoiceService.sendImage(image, pendingImageMimeType, prompt)
+                    pendingImage = null
+                    b.attachImageButton.clearColorFilter()
+                    b.attachImageButton.setColorFilter(Color.rgb(169, 155, 165))
+                    b.textInput.text.clear()
+                    showStatus("Screenshot dekh rahi hoon…")
                 }
-                b.textInput.text.clear()
+            } else {
+                text.takeIf { it.isNotEmpty() }?.let {
+                    addBubble(it, true)
+                    val structured = StructuredCommandParser.parse(it)
+                    if (structured.type != CommandType.UNKNOWN) {
+                        if (!MyraVoiceService.isRunning || !MyraVoiceService.executeLocalText(it)) {
+                            assistantController.processCommand(structured, speak = true)
+                        }
+                    } else {
+                        if (!MyraVoiceService.isRunning) showStatus("Connect to LYRA first — tap the mic") else MyraVoiceService.sendText(it)
+                    }
+                    b.textInput.text.clear()
+                }
             }
         }
         b.stopButton.setOnClickListener { MyraVoiceService.interrupt(); assistantController.stop(); showStatus("Stopped") }
         b.muteButton.setOnClickListener { muted = !muted; startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_MUTE).putExtra(MyraVoiceService.EXTRA_MUTED, muted)); b.muteButton.alpha = if (muted) 1f else .6f; showStatus(if (muted) "Microphone muted" else "Sun rahi hoon…") }
     }
+    private fun prepareScreenshot(uri: android.net.Uri): ByteArray? = try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
+        val bitmap = contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: return null
+        ByteArrayOutputStream().use { output ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, output)
+            bitmap.recycle()
+            output.toByteArray()
+        }
+    } catch (_: Exception) {
+        null
+    }
+
     private fun updateDeviceStatus() {
         val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
