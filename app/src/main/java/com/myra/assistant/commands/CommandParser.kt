@@ -27,6 +27,7 @@ object CommandParser {
         AppCommand.OpenYouTubeShorts -> Command(CommandType.OPEN_YOUTUBE_SHORTS, "YouTube Shorts", sourceText = source, localCommand = command)
         AppCommand.RequestInstagramReels -> Command(CommandType.REQUEST_INSTAGRAM_REELS, "Instagram Reels", sourceText = source, localCommand = command)
         AppCommand.OpenInstagramReels -> Command(CommandType.OPEN_INSTAGRAM_REELS, "Instagram Reels", sourceText = source, localCommand = command)
+        AppCommand.TakeScreenshot -> Command(CommandType.TAKE_SCREENSHOT, "screen", sourceText = source, localCommand = command)
         AppCommand.RepeatYouTubeSearch -> Command(CommandType.REPEAT_YOUTUBE_SEARCH, "YouTube", sourceText = source, localCommand = command)
         is AppCommand.DeepResearch -> Command(CommandType.DEEP_RESEARCH, content = command.query, sourceText = source, localCommand = command)
         is AppCommand.ReplyWhatsApp -> Command(CommandType.REPLY_WHATSAPP, command.sender, command.message, source, command)
