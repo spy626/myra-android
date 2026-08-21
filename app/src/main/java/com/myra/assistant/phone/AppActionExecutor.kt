@@ -74,7 +74,7 @@ class AppActionExecutor(private val context: Context) {
     }
 
     private fun listFeatures(): Result = Result(
-        "Abhi main apps open aur close, home aur back, time aur battery, aur flashlight control kar sakti hoon. YouTube mein search, first, next, previous, play, pause, banner ke baad auto-scroll aur skippable ads skip; WhatsApp message check aur reply; Deep Research; aur tumse normal caring conversation bhi kar sakti hoon.",
+        "My current features hain: 1. App Control - installed apps open aur current app close. 2. YouTube Control - search, first, next, previous, play aur pause. 3. Smart YouTube - banner ke baad auto-scroll aur available Skip Ad button press. 4. Phone Control - flashlight, Home, Back, time aur battery. 5. WhatsApp - latest message check aur reply. 6. Deep Research - kisi topic par detailed research. 7. Normal Chat - English aur caring Roman Hinglish conversation.",
         true
     )
 
