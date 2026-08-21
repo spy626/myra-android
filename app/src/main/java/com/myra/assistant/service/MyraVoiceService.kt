@@ -430,7 +430,7 @@ class MyraVoiceService : Service() {
     private fun beginValidatedLocalSpeech(message: String, retry: Boolean = false) {
         val client = live
         if (client == null) {
-            fallbackLocalSpeech(message)
+            finishUnavailableNaturalLocalSpeech(message)
             return
         }
         if (!retry) localSpeechValidationAttempt = 0
@@ -494,12 +494,32 @@ class MyraVoiceService : Service() {
             if (localSpeechValidationAttempt < 2 && live != null) {
                 beginValidatedLocalSpeech(expected, retry = true)
             } else {
-                fallbackLocalSpeech(expected)
+                finishUnavailableNaturalLocalSpeech(expected)
             }
         }
     }
 
+    private fun finishUnavailableNaturalLocalSpeech(message: String) {
+        if (!allowUntranscribedLocalSpeech) {
+            fallbackLocalSpeech(message)
+            return
+        }
+
+        // Successful, low-risk device actions should never switch to the robotic
+        // Android TTS voice. If the natural voice is unavailable, complete any
+        // deferred action and resume listening without a spoken confirmation.
+        allowUntranscribedLocalSpeech = false
+        localPlaybackActive = false
+        localSpeechStreamedDirectly = false
+        localSpeechGenerationComplete = false
+        if (!runPendingActionAfterSpeech()) {
+            audio?.setMuted(false)
+            emitState("Sun rahi hoon…")
+        }
+    }
+
     private fun finishLocalPlayback() {
+        allowUntranscribedLocalSpeech = false
         localPlaybackActive = false
         localSpeechStreamedDirectly = false
         localSpeechGenerationComplete = false
