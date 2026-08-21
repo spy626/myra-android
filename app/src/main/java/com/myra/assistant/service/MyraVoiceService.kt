@@ -129,6 +129,9 @@ class MyraVoiceService : Service() {
                     emitState("LYRA reconnected — listening")
                 }
             }
+            client.onToolCall = { id, functionName, args ->
+                mainHandler.post { handleSemanticToolCall(id, functionName, args) }
+            }
             client.onAudio = {
                 if (validatingLocalSpeech != null) {
                     localSpeechHasContent = true
@@ -314,6 +317,52 @@ class MyraVoiceService : Service() {
             }
             client.connect()
         }
+    }
+
+    private fun handleSemanticToolCall(id: String, functionName: String, args: org.json.JSONObject) {
+        if (functionName != "perform_phone_action") {
+            live?.sendToolResponse(id, functionName, false, "Unsupported tool")
+            return
+        }
+        val action = args.optString("action").uppercase(Locale.ROOT)
+        val target = args.optString("target").trim()
+        val query = args.optString("query").trim()
+        val command: AppCommand? = when (action) {
+            "OPEN_APP" -> target.takeIf { it.length in 2..40 }?.let(AppCommand::OpenApp)
+            "CLOSE_APP" -> AppCommand.CloseCurrentApp(target.ifBlank { null })
+            "YOUTUBE_SEARCH" -> query.takeIf { it.length in 2..80 }?.let(AppCommand::SearchYouTube)
+            "PLAY_YOUTUBE" -> AppCommand.PlayYouTube(query.ifBlank { null })
+            "OPEN_YOUTUBE_SHORTS" -> AppCommand.OpenYouTubeShorts
+            "REQUEST_INSTAGRAM_REELS" -> AppCommand.RequestInstagramReels
+            "SCROLL_DOWN" -> AppCommand.ScrollYouTube(AppCommand.ScrollDirection.DOWN)
+            "SCROLL_UP" -> AppCommand.ScrollYouTube(AppCommand.ScrollDirection.UP)
+            "SCROLL_REPEAT" -> AppCommand.ScrollYouTube(null)
+            "MEDIA_PAUSE" -> AppCommand.ControlMedia(AppCommand.MediaAction.PAUSE)
+            "MEDIA_PLAY" -> AppCommand.ControlMedia(AppCommand.MediaAction.PLAY)
+            "MEDIA_NEXT" -> AppCommand.ControlMedia(AppCommand.MediaAction.NEXT)
+            "MEDIA_PREVIOUS" -> AppCommand.ControlMedia(AppCommand.MediaAction.PREVIOUS)
+            "MEDIA_FIRST" -> AppCommand.ControlMedia(AppCommand.MediaAction.FIRST)
+            "FLASHLIGHT_ON" -> AppCommand.SetFlashlight(true)
+            "FLASHLIGHT_OFF" -> AppCommand.SetFlashlight(false)
+            "HOME" -> AppCommand.GoHome
+            "BACK" -> AppCommand.GoBack
+            "TIME" -> AppCommand.CurrentTime
+            "BATTERY" -> AppCommand.BatteryLevel
+            "LIST_FEATURES" -> AppCommand.ListFeatures
+            "QUERY_WHATSAPP" -> AppCommand.QueryWhatsAppMessages
+            else -> null
+        }
+        if (command == null) {
+            live?.sendToolResponse(id, functionName, false, "Missing or unsupported action details")
+            return
+        }
+        // A semantic tool call is a new action turn. Android remains the authority:
+        // Gemini chooses only from the allowlist, while the existing executor verifies
+        // accessibility, installed apps, and actual device capabilities.
+        localCommandExecutedThisTurn = false
+        waitingForFreshInputAfterCommand = false
+        executeCommand(command)
+        live?.sendToolResponse(id, functionName, true, "Android accepted the validated action")
     }
 
     private fun handlePendingConfirmation(raw: String): Boolean {
@@ -659,7 +708,7 @@ class MyraVoiceService : Service() {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. For every request to open, launch, close, stop, search, play, pause, go home/back, report device time or battery, control the flashlight, check WhatsApp, or send/reply to a message: produce no audio and no confirmation. Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
+        return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }
 
     private fun configuredUserName(saved: String?): String =
