@@ -117,7 +117,7 @@ class GeminiLiveClient(
                             .put("target", JSONObject().put("type", "STRING").put("description", "App name for OPEN_APP or CLOSE_APP."))
                             .put("query", JSONObject().put("type", "STRING").put("description", "Search or media query for YOUTUBE_SEARCH or PLAY_YOUTUBE.")))
                         .put("required", JSONArray().put("action")))
-            )))
+            ))))
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject()))
         webSocket.send(setup.toString())
