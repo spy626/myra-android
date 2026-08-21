@@ -149,11 +149,11 @@ object CommandParser {
                 AppCommand.ControlMedia(AppCommand.MediaAction.PAUSE)
             Regex("^$polite$video(?:play\\s+karo|play\\s+kar\\s+do|chalao|resume\\s+karo|wapas\\s+chala\\s+do)$").matches(text) ->
                 AppCommand.ControlMedia(AppCommand.MediaAction.PLAY)
-            Regex("^$polite(?:next|agla)\\s+(?:video\\s+)?(?:chalao|chala|chalo|play\\s+karo|play\\s+kar\\s+do|lagao|karo)$").matches(text) ->
+            Regex("^$polite(?:next|agla)\\s+(?:video\\s+)?(?:chalao|chala|chalo|play\\s+karo|play\\s+kar\\s+do|open\\s+karo|open\\s+kar\\s+do|kholo|khol\\s+do|lagao|karo)$").matches(text) ->
                 AppCommand.ControlMedia(AppCommand.MediaAction.NEXT)
             Regex("^$polite(?:pichla|pichhla|previous|pehle\\s+wala)\\s+(?:video\\s+)?(?:chalao|lagao|karo)$").matches(text) ->
                 AppCommand.ControlMedia(AppCommand.MediaAction.PREVIOUS)
-            Regex("^$polite(?:first|pehla|pehli)\\s+(?:video\\s+)?(?:chalao|lagao|play\\s+karo|open\\s+karo)$").matches(text) ->
+            Regex("^$polite(?:first|pehla|pehli)\\s+(?:video\\s+)?(?:chalao|chala|chalo|lagao|play\\s+karo|play\\s+kar\\s+do|open\\s+karo|open\\s+kar\\s+do|kholo|khol\\s+do|karo)$").matches(text) ->
                 AppCommand.ControlMedia(AppCommand.MediaAction.FIRST)
             else -> null
         }
@@ -227,6 +227,9 @@ object CommandParser {
     private fun extractSimpleAppName(text: String): String? {
         val contextualWords = Regex("(?:same\\s+channel|wahi\\s+channel|usi\\s+channel|phir\\s+se|fir\\s+se|police\\s+se|वही\\s+चैनल|उसी\\s+चैनल)")
         if (contextualWords.containsMatchIn(text)) return null
+        // Media navigation phrases are not app names. Without this guard a failed
+        // media parse can fall through to OpenApp("next video").
+        if (Regex("^(?:next|agla|first|pehla|pehli|previous|pichla|pichhla)\\s+(?:video\\s+)?").containsMatchIn(text)) return null
         val patterns = listOf(
             Regex("^(?:please\\s+)?(?:open|launch|start)\\s+([\\p{L}\\p{N} ]{1,35})$"),
             Regex("^([\\p{L}\\p{N} ]{1,35})\\s+(?:kholo|khol\\s+do|open\\s+karo|open\\s+kar\\s+do|chalao)$")
