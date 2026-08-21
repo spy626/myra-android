@@ -200,7 +200,14 @@ class AppActionExecutor(private val context: Context) {
         val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val matches = pm.queryIntentActivities(query, PackageManager.MATCH_ALL)
         val match = matches.firstOrNull { normalize(it.loadLabel(pm).toString()) == name }
-            ?: matches.firstOrNull { normalize(it.loadLabel(pm).toString()).let { label -> label.contains(name) || name.contains(label) } }
+            ?: matches.firstOrNull {
+                normalize(it.loadLabel(pm).toString()).let { label ->
+                    // Never fuzzy-match a one- or two-character launcher label. The
+                    // Twitter label "X" previously matched the x inside "next video".
+                    label.length >= 3 && name.length >= 3 &&
+                        (label.contains(name) || name.contains(label))
+                }
+            }
         return match?.activityInfo?.let {
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setClassName(it.packageName, it.name)
         }
