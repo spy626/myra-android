@@ -45,6 +45,9 @@ class AppActionExecutor(private val context: Context) {
         is AppCommand.CloseCurrentApp -> closeCurrentApp()
         is AppCommand.SearchYouTube -> searchYouTube(command.query)
         is AppCommand.PlayYouTube -> playYouTube(command.query)
+        AppCommand.OpenYouTubeShorts -> openYouTubeShorts()
+        AppCommand.RequestInstagramReels -> Result("Instagram open kar dun tumhare liye?", true)
+        AppCommand.OpenInstagramReels -> openInstagramReels()
         AppCommand.RepeatYouTubeSearch -> repeatYouTubeSearch()
         is AppCommand.DeepResearch -> Result("Deep Research needs LYRA to be connected.", false)
         is AppCommand.ReplyWhatsApp -> WhatsAppReplyStore.reply(context, command.sender, command.message)
@@ -64,7 +67,9 @@ class AppActionExecutor(private val context: Context) {
         val local = command.localCommand ?: return AssistantResult(false, false, command.type.name, command.target, "Zopy, ye command abhi supported nahi hai.")
         val result = execute(local)
         val acceptedOnly = local is AppCommand.OpenApp || local is AppCommand.CloseCurrentApp ||
-            local is AppCommand.SearchYouTube || local is AppCommand.PlayYouTube || local is AppCommand.ReplyWhatsApp ||
+            local is AppCommand.SearchYouTube || local is AppCommand.PlayYouTube ||
+            local is AppCommand.OpenYouTubeShorts || local is AppCommand.OpenInstagramReels ||
+            local is AppCommand.ReplyWhatsApp ||
             local is AppCommand.ControlMedia || local is AppCommand.ScrollYouTube
         return AssistantResult(
             success = result.success,
@@ -201,6 +206,26 @@ class AppActionExecutor(private val context: Context) {
         } catch (_: Exception) {
             Result("Media control complete nahi ho paaya.", false)
         }
+    }
+
+    private fun openYouTubeShorts(): Result {
+        val service = AccessibilityHelperService.instance
+        if (service?.openYouTubeShorts() == true) return Result("YouTube Shorts open kar diya.", true)
+        val opened = openApp("YouTube")
+        if (!opened.success) return opened
+        Handler(Looper.getMainLooper()).postDelayed({
+            AccessibilityHelperService.instance?.openYouTubeShorts()
+        }, 1_400L)
+        return Result("YouTube Shorts open kar rahi hoon.", true)
+    }
+
+    private fun openInstagramReels(): Result {
+        val opened = openApp("Instagram")
+        if (!opened.success) return opened
+        Handler(Looper.getMainLooper()).postDelayed({
+            AccessibilityHelperService.instance?.openInstagramReels()
+        }, 1_500L)
+        return Result("Instagram Reels open kar rahi hoon.", true)
     }
 
     private fun playYouTube(query: String?): Result {
