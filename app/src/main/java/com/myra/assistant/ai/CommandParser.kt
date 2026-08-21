@@ -31,6 +31,7 @@ object CommandParser {
     fun parse(raw: String): AppCommand? {
         val text = normalize(raw)
         if (text.isBlank()) return null
+        if (Regex("^(?:(?:lyra|laira)\\s+)?(?:(?:tumhare|aapke|abhi)\\s+)?(?:kaun|kon|kya)\\s+(?:kaun|kon|kya)\\s+(?:se\\s+)?features?\\s+(?:hain|hai|he)|^(?:(?:lyra|laira)\\s+)?(?:tum\\s+)?kya\\s+kya\\s+kar\\s+sakti\\s+ho|^(?:(?:lyra|laira)\\s+)?(?:apne|saare|all)\\s+features?\\s+(?:batao|bata\\s+do|dikhao)|^(?:what\\s+can\\s+you\\s+do|list\\s+(?:all\\s+)?features?|show\\s+(?:all\\s+)?features?)$").containsMatchIn(text)) return AppCommand.ListFeatures
         if (Regex("^(?:go )?home(?: screen)?$|^home (?:jao|chalo|karo)$|^होम").containsMatchIn(text)) return AppCommand.GoHome
         if (Regex("^(?:go )?back$|^back (?:jao|karo)$|^peeche (?:jao|chalo)$|^पीछे").containsMatchIn(text)) return AppCommand.GoBack
         if (Regex("(?:what(?:'s| is) the time|time (?:kya|kitna|kitni|batao)|(?:kya|kitna|kitni) time|samay|kitne baje|टाइम|समय)").containsMatchIn(text)) return AppCommand.CurrentTime
