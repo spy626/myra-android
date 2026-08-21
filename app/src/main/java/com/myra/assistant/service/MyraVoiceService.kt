@@ -314,7 +314,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun isSafeDirectMediaCommand(command: AppCommand): Boolean = when (command) {
-        is AppCommand.SearchYouTube, AppCommand.RepeatYouTubeSearch,
+        is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.RepeatYouTubeSearch,
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
@@ -329,6 +329,7 @@ class MyraVoiceService : Service() {
             is AppCommand.OpenApp -> "open:${command.appName.lowercase(Locale.ROOT)}"
             is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
+            is AppCommand.PlayYouTube -> "youtube-play:${command.query.orEmpty().lowercase(Locale.ROOT)}"
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
             is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
@@ -408,7 +409,7 @@ class MyraVoiceService : Service() {
 
     private fun isSafeUntranscribedConfirmation(command: AppCommand): Boolean = when (command) {
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
-        is AppCommand.SearchYouTube, AppCommand.RepeatYouTubeSearch,
+        is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.RepeatYouTubeSearch,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
         AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
         is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
