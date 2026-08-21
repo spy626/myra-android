@@ -402,7 +402,7 @@ class MyraVoiceService : Service() {
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.SearchYouTube, AppCommand.RepeatYouTubeSearch,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, is AppCommand.SetFlashlight,
+        AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
         is AppCommand.ControlMedia -> true
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         is AppCommand.DeepResearch -> false
