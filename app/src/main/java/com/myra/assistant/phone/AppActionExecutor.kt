@@ -54,6 +54,7 @@ class AppActionExecutor(private val context: Context) {
         AppCommand.ListFeatures -> listFeatures()
         is AppCommand.SetFlashlight -> setFlashlight(command.enabled)
         is AppCommand.ControlMedia -> controlMedia(command.action)
+        is AppCommand.ScrollYouTube -> scrollYouTube(command.direction)
     }
 
     fun executeStructured(command: Command): AssistantResult {
@@ -61,7 +62,7 @@ class AppActionExecutor(private val context: Context) {
         val result = execute(local)
         val acceptedOnly = local is AppCommand.OpenApp || local is AppCommand.CloseCurrentApp ||
             local is AppCommand.SearchYouTube || local is AppCommand.ReplyWhatsApp ||
-            local is AppCommand.ControlMedia
+            local is AppCommand.ControlMedia || local is AppCommand.ScrollYouTube
         return AssistantResult(
             success = result.success,
             verified = result.success && !acceptedOnly,
@@ -115,6 +116,29 @@ class AppActionExecutor(private val context: Context) {
         } catch (error: Exception) {
             Result("Flashlight change nahi ho paayi.", false)
         }
+    }
+
+    private fun scrollYouTube(direction: AppCommand.ScrollDirection?): Result {
+        val service = AccessibilityHelperService.instance
+        if (service == null || !AccessibilityHelperService.isEnabled(context)) {
+            return Result("YouTube scroll ke liye LYRA Accessibility enable karo.", false)
+        }
+        val completed = service.scrollYouTube(
+            when (direction) {
+                AppCommand.ScrollDirection.DOWN -> true
+                AppCommand.ScrollDirection.UP -> false
+                null -> null
+            }
+        )
+        if (!completed) return Result("YouTube screen visible nahi hai. YouTube kholo aur phir try karo.", false)
+        return Result(
+            when (direction) {
+                AppCommand.ScrollDirection.DOWN -> "Neeche ek baar scroll kar diya."
+                AppCommand.ScrollDirection.UP -> "Upar ek baar scroll kar diya."
+                null -> "Pichhli direction mein ek baar scroll kar diya."
+            },
+            true
+        )
     }
 
     private fun controlMedia(action: AppCommand.MediaAction): Result {
