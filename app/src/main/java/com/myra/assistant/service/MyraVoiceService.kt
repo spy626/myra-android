@@ -69,6 +69,8 @@ class MyraVoiceService : Service() {
     private var localSpeechGenerationComplete = false
     private var localAudioSpeaking = false
     private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
+    private var pendingConfirmedCommand: AppCommand? = null
+    private var pendingConfirmationExpiresAt = 0L
     private var lastLocalSpeechKey = ""
     private var lastLocalSpeechAt = 0L
     private var lastAnnouncementKey = ""
@@ -142,6 +144,7 @@ class MyraVoiceService : Service() {
                 else if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it)
             }
             client.onInputTranscript = inputTranscript@ { part ->
+                if (handlePendingConfirmation(part)) return@inputTranscript
                 when (mediaGuard.inspect(part)) {
                     HandsFreeMediaGuard.Gate.BLOCK -> {
                         appendTranscript(commandProbe, part)
@@ -313,8 +316,38 @@ class MyraVoiceService : Service() {
         }
     }
 
+    private fun handlePendingConfirmation(raw: String): Boolean {
+        val pending = pendingConfirmedCommand ?: return false
+        if (android.os.SystemClock.elapsedRealtime() > pendingConfirmationExpiresAt) {
+            pendingConfirmedCommand = null
+            return false
+        }
+        val text = raw.lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+        val yes = Regex("^(?:haan|ha|han|yes|yeah|yep|kar\\s+do|karo|open\\s+kar\\s+do|bilkul|theek\\s+hai)$").matches(text)
+        val no = Regex("^(?:nahi|nahin|no|nope|cancel|rehne\\s+do|mat\\s+karo)$").matches(text)
+        if (!yes && !no) return false
+        pendingConfirmedCommand = null
+        pendingConfirmationExpiresAt = 0L
+        waitingForFreshInputAfterCommand = false
+        localCommandExecutedThisTurn = false
+        commandUserTextEmitted = true
+        listener?.onUserText(romanDisplayText(raw.trim()))
+        if (yes) {
+            executeCommand(pending)
+        } else {
+            suppressModelForTurn = true
+            val message = "Theek hai jaan, nahi kholungi."
+            listener?.onMyraText(message)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = true)
+        }
+        return true
+    }
+
     private fun isSafeDirectMediaCommand(command: AppCommand): Boolean = when (command) {
-        is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.RepeatYouTubeSearch,
+        is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
+        AppCommand.OpenInstagramReels, AppCommand.RepeatYouTubeSearch,
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
@@ -330,6 +363,9 @@ class MyraVoiceService : Service() {
             is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
             is AppCommand.PlayYouTube -> "youtube-play:${command.query.orEmpty().lowercase(Locale.ROOT)}"
+            AppCommand.OpenYouTubeShorts -> "youtube-shorts"
+            AppCommand.RequestInstagramReels -> "request-instagram-reels"
+            AppCommand.OpenInstagramReels -> "open-instagram-reels"
             AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
             is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
             is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
@@ -353,6 +389,19 @@ class MyraVoiceService : Service() {
     private fun executeCommand(command: AppCommand) {
         if (localCommandExecutedThisTurn || !shouldExecute(command)) return
         localCommandExecutedThisTurn = true
+        if (command == AppCommand.RequestInstagramReels) {
+            pendingConfirmedCommand = AppCommand.OpenInstagramReels
+            pendingConfirmationExpiresAt = android.os.SystemClock.elapsedRealtime() + 30_000L
+            suppressModelForTurn = true
+            waitingForFreshInputAfterCommand = true
+            commandProbe.clear()
+            output.clear()
+            val message = "Instagram open kar dun tumhare liye?"
+            listener?.onMyraText(message)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = true)
+            return
+        }
         if (command is AppCommand.DeepResearch) { executeDeepResearch(command); return }
         suppressModelForTurn = true
         waitingForFreshInputAfterCommand = true
@@ -409,7 +458,8 @@ class MyraVoiceService : Service() {
 
     private fun isSafeUntranscribedConfirmation(command: AppCommand): Boolean = when (command) {
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
-        is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.RepeatYouTubeSearch,
+        is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
+        AppCommand.RequestInstagramReels, AppCommand.OpenInstagramReels, AppCommand.RepeatYouTubeSearch,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
         AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
         is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
