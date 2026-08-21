@@ -81,7 +81,10 @@ class AccessibilityHelperService : AccessibilityService() {
         }, null)
     }
 
-    private fun clickVisibleYouTubeVideo(afterPlayer: Boolean): Boolean {
+    private fun clickVisibleYouTubeVideo(
+        afterPlayer: Boolean,
+        selectionIndex: Int = 0
+    ): Boolean {
         val root = rootInActiveWindow ?: return false
         if (!root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)) return false
         val screenWidth = resources.displayMetrics.widthPixels
@@ -96,7 +99,13 @@ class AccessibilityHelperService : AccessibilityService() {
         } else null
         val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
         collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, afterPlayer, candidates)
-        val target = candidates.sortedBy { it.first }.firstOrNull()?.second
+        val uniqueCandidates = candidates.sortedBy { it.first }
+            .distinctBy { (_, node) ->
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                "${bounds.left}:${bounds.top}:${bounds.right}:${bounds.bottom}"
+            }
+        val target = uniqueCandidates.getOrNull(selectionIndex)?.second
         val clicked = target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
         if (clicked) {
             val restored = pendingHistoryRestoreQuery
@@ -236,23 +245,53 @@ class AccessibilityHelperService : AccessibilityService() {
     }
 
     fun openPreviousYouTubeVideo(): Boolean {
-        val query = previousVideoQuery?.takeIf { it.isNotBlank() } ?: return false
+        val fallbackQuery = previousVideoQuery?.takeIf { it.isNotBlank() }
         val returnQuery = currentVideoQuery
-        pendingHistoryRestoreQuery = query
         previousVideoQuery = returnQuery
 
-        val intent = Intent(
+        val historyIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse(YOUTUBE_HISTORY_URL)
+        ).apply {
+            setPackage(YOUTUBE_PACKAGE)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        return runCatching {
+            startActivity(historyIntent)
+            clickPreviousFromHistoryWhenReady(attempt = 0, fallbackQuery = fallbackQuery)
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun clickPreviousFromHistoryWhenReady(attempt: Int, fallbackQuery: String?) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            // Watch History is newest-first: index 0 is the video that just played,
+            // and index 1 is the actual previous video. Candidate de-duplication keeps
+            // title, thumbnail and metadata nodes from counting as separate videos.
+            if (clickVisibleYouTubeVideo(afterPlayer = false, selectionIndex = 1)) {
+                return@postDelayed
+            }
+            if (attempt < 6) {
+                clickPreviousFromHistoryWhenReady(attempt + 1, fallbackQuery)
+            } else {
+                fallbackQuery?.let(::openPreviousBySavedTitle)
+            }
+        }, if (attempt == 0) 1_200L else 550L)
+    }
+
+    private fun openPreviousBySavedTitle(query: String) {
+        pendingHistoryRestoreQuery = query
+        val searchIntent = Intent(
             Intent.ACTION_VIEW,
             Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")
         ).apply {
             setPackage(YOUTUBE_PACKAGE)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
-        return runCatching {
-            startActivity(intent)
+        runCatching {
+            startActivity(searchIntent)
             clickFirstVideoWhenReady(attempt = 0)
-            true
-        }.getOrDefault(false)
+        }.onFailure { pendingHistoryRestoreQuery = null }
     }
 
     private fun clickFirstVideoWhenReady(attempt: Int) {
@@ -291,6 +330,7 @@ class AccessibilityHelperService : AccessibilityService() {
 
     companion object {
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+        private const val YOUTUBE_HISTORY_URL = "https://www.youtube.com/feed/history"
         private const val SKIP_AD_POLL_INTERVAL_MS = 500L
         private const val SKIP_AD_WATCH_ATTEMPTS = 60
         private val SKIP_AD_SIGNAL = Regex(
