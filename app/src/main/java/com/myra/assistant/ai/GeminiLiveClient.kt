@@ -141,6 +141,21 @@ class GeminiLiveClient(
         sendWhenReady(JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString())
     }
 
+    fun sendImage(image: ByteArray, mimeType: String, prompt: String) {
+        if (image.isEmpty()) return
+        val parts = JSONArray()
+            .put(JSONObject().put("text", prompt.ifBlank {
+                "Analyze this screenshot. Explain naturally what is visible and help me understand any problem."
+            }))
+            .put(JSONObject().put("inlineData", JSONObject()
+                .put("mimeType", mimeType.ifBlank { "image/jpeg" })
+                .put("data", Base64.encodeToString(image, Base64.NO_WRAP))))
+        val turn = JSONObject().put("role", "user").put("parts", parts)
+        sendWhenReady(JSONObject().put("clientContent", JSONObject()
+            .put("turns", JSONArray().put(turn))
+            .put("turnComplete", true)).toString())
+    }
+
     fun sendToolResponse(id: String, name: String, success: Boolean, message: String) {
         val response = JSONObject()
             .put("result", if (success) "success" else "failed")
