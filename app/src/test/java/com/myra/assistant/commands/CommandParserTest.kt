@@ -24,6 +24,9 @@ class CommandParserTest {
         listOf(
             "kon kon se features hai",
             "kaun sa kaun sa feature hai",
+            "kauna kauna si phicara hai abhi",
+            "phicara kauna kauna se haim",
+            "features konsi hai",
             "tum kya kya kar sakti ho",
             "tum kya kya kar sakte ho",
             "तुम क्या-क्या कर सकते हो",
