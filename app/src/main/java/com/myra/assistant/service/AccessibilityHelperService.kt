@@ -62,6 +62,19 @@ class AccessibilityHelperService : AccessibilityService() {
         if (!root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)) return false
         val resolvedDown = down ?: lastScrollDown
         lastScrollDown = resolvedDown
+        val accessibilityAction = if (resolvedDown) {
+            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        } else {
+            AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        }
+        fun scrollNode(node: AccessibilityNodeInfo): Boolean {
+            if (node.isVisibleToUser && node.isScrollable && node.performAction(accessibilityAction)) return true
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let { if (scrollNode(it)) return true }
+            }
+            return false
+        }
+        if (scrollNode(root)) return true
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
         val swipe = Path().apply {
