@@ -31,6 +31,7 @@ object CommandParser {
         AppCommand.GoBack -> Command(CommandType.GO_BACK, sourceText = source, localCommand = command)
         AppCommand.CurrentTime -> Command(CommandType.CURRENT_TIME, sourceText = source, localCommand = command)
         AppCommand.BatteryLevel -> Command(CommandType.BATTERY_LEVEL, sourceText = source, localCommand = command)
+        AppCommand.ListFeatures -> Command(CommandType.LIST_FEATURES, sourceText = source, localCommand = command)
         is AppCommand.SetFlashlight -> Command(if (command.enabled) CommandType.FLASHLIGHT_ON else CommandType.FLASHLIGHT_OFF, sourceText = source, localCommand = command)
         is AppCommand.ControlMedia -> Command(
             when (command.action) {
