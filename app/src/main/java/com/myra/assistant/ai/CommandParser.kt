@@ -52,6 +52,7 @@ object CommandParser {
         if (Regex("(?:battery|बैटरी).*(?:level|percent|percentage|kitna|kitni|batao|status|charge|कितना|कितनी|बताओ)|^(?:battery|बैटरी)$").containsMatchIn(text)) return AppCommand.BatteryLevel
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:on|open|chalu|jala|चालू|जलाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(true)
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:off|close|band|bujha|बंद|बुझाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(false)
+        if (Regex("^(?:(?:is|this|current)\\s+screen\\s+(?:ka\\s+)?)?(?:screenshot|screen\\s+shot)(?:\\s+(?:lo|le\\s+lo|lena|take\\s+karo|capture\\s+karo))?$|^(?:take|capture)\\s+(?:a\\s+)?screenshot$|^(?:jo\\s+dikh\\s+raha\\s+hai|is\\s+screen)\\s+(?:use\\s+)?save\\s+kar\\s+lo$").matches(text)) return AppCommand.TakeScreenshot
         parseNaturalEntertainmentIntent(text)?.let { return it }
         parseNaturalYouTubePlay(text)?.let { return it }
         parseExactMediaControl(text)?.let { return it }
@@ -78,8 +79,8 @@ object CommandParser {
     fun isProbableDeviceAction(raw: String): Boolean {
         val text = normalize(raw)
         if (text.isBlank()) return false
-        val target = Regex("(?:youtube|whatsapp|instagram|facebook|chrome|gmail|maps|spotify|telegram|snapchat|settings|app|application|torch|flashlight|flash|battery|time|home|back|यूट्यूब|व्हाट्सएप|टॉर्च|बैटरी|होम)")
-        val action = Regex("(?:open|close|launch|start|search|play|pause|resume|next|previous|agla|pichla|pichhla|chalao|lagao|khol|kholo|band|chalu|on|off|bhejo|send|reply|jawab|batao|kitna|kitni|jao|karo|खोलो|बंद|चालू|भेजो|जवाब|बताओ)")
+        val target = Regex("(?:youtube|whatsapp|instagram|facebook|chrome|gmail|maps|spotify|telegram|snapchat|settings|app|application|torch|flashlight|flash|screenshot|screen\\s+shot|battery|time|home|back|यूट्यूब|व्हाट्सएप|टॉर्च|बैटरी|होम)")
+        val action = Regex("(?:open|close|launch|start|search|play|pause|resume|next|previous|agla|pichla|pichhla|chalao|lagao|khol|kholo|band|chalu|on|off|bhejo|send|reply|jawab|batao|kitna|kitni|jao|karo|take|capture|save|खोलो|बंद|चालू|भेजो|जवाब|बताओ)")
         return target.containsMatchIn(text) && action.containsMatchIn(text)
     }
 
