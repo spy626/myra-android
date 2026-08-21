@@ -78,6 +78,23 @@ class CommandParserTest {
         }
     }
 
+    @Test fun parsesContextualShortsAndReelsIntentions() {
+        listOf(
+            "YouTube home page shorts open karo",
+            "shorts dekhna hai",
+            "mujhe youtube shorts dekhni hai"
+        ).forEach { phrase ->
+            assertEquals(CommandType.OPEN_YOUTUBE_SHORTS, CommandParser.parse(phrase).type)
+        }
+        listOf(
+            "mujhe reel dekhna hai",
+            "mujhe Instagram reels dekhni hain",
+            "I want to watch reels"
+        ).forEach { phrase ->
+            assertEquals(CommandType.REQUEST_INSTAGRAM_REELS, CommandParser.parse(phrase).type)
+        }
+    }
+
     @Test fun preservesExistingYouTubeCommand() {
         val command = CommandParser.parse("YouTube mein Lols Gaming search karo")
         assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
