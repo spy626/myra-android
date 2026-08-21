@@ -23,7 +23,10 @@ class CommandParserTest {
     @Test fun listsOnlyImplementedFeatures() {
         listOf(
             "kon kon se features hai",
+            "kaun sa kaun sa feature hai",
             "tum kya kya kar sakti ho",
+            "tum kya kya kar sakte ho",
+            "तुम क्या-क्या कर सकते हो",
             "apne saare features batao",
             "what can you do"
         ).forEach { phrase ->
