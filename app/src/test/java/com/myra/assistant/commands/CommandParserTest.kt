@@ -40,6 +40,8 @@ class CommandParserTest {
             "next video chala",
             "next video chalo",
             "next video play karo",
+            "next video open karo",
+            "next video khol do",
             "agla video play kar do"
         ).forEach { phrase ->
             assertEquals(
@@ -62,6 +64,10 @@ class CommandParserTest {
         assertEquals(
             com.myra.assistant.model.AppCommand.MediaAction.FIRST,
             (parser.parse("pehla video lagao") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.FIRST,
+            (parser.parse("first video kholo") as com.myra.assistant.model.AppCommand.ControlMedia).action
         )
         assertEquals(null, parser.parseDirectMediaControl("ruko"))
         assertEquals(null, parser.parseDirectMediaControl("video bahut achha hai"))
