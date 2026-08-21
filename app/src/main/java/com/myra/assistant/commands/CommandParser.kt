@@ -23,6 +23,7 @@ object CommandParser {
         is AppCommand.OpenApp -> Command(CommandType.OPEN_APP, command.appName, sourceText = source, localCommand = command)
         is AppCommand.CloseCurrentApp -> Command(CommandType.CLOSE_APP, command.requestedName, sourceText = source, localCommand = command)
         is AppCommand.SearchYouTube -> Command(CommandType.SEARCH_YOUTUBE, "YouTube", command.query, source, command)
+        is AppCommand.PlayYouTube -> Command(CommandType.PLAY_YOUTUBE, "YouTube", command.query, source, command)
         AppCommand.RepeatYouTubeSearch -> Command(CommandType.REPEAT_YOUTUBE_SEARCH, "YouTube", sourceText = source, localCommand = command)
         is AppCommand.DeepResearch -> Command(CommandType.DEEP_RESEARCH, content = command.query, sourceText = source, localCommand = command)
         is AppCommand.ReplyWhatsApp -> Command(CommandType.REPLY_WHATSAPP, command.sender, command.message, source, command)
