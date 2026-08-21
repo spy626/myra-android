@@ -252,6 +252,7 @@ class MainActivity : AppCompatActivity() {
             AppCommand.ListFeatures -> "list-features"
             is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
             is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
+            is AppCommand.ScrollYouTube -> "youtube-scroll:${command.direction?.name?.lowercase(Locale.ROOT) ?: "repeat"}"
         }
         if (key == lastCommandKey && now - lastCommandAt < 2_000L) return false
         lastCommandKey = key
