@@ -65,6 +65,19 @@ class CommandParserTest {
         )
     }
 
+    @Test fun parsesNaturalYouTubePlayRequests() {
+        listOf(
+            "mai bore ho raha hun koi video open karo" to null,
+            "main bore ho raha hoon ek video chalao" to null,
+            "mujhe new song sunna hai" to "new song",
+            "I need to hear new song" to "new song"
+        ).forEach { (phrase, expectedQuery) ->
+            val command = CommandParser.parse(phrase)
+            assertEquals(CommandType.PLAY_YOUTUBE, command.type)
+            assertEquals(expectedQuery, command.content)
+        }
+    }
+
     @Test fun preservesExistingYouTubeCommand() {
         val command = CommandParser.parse("YouTube mein Lols Gaming search karo")
         assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
