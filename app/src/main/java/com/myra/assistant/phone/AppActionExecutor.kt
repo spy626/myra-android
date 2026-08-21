@@ -48,6 +48,7 @@ class AppActionExecutor(private val context: Context) {
         AppCommand.OpenYouTubeShorts -> openYouTubeShorts()
         AppCommand.RequestInstagramReels -> Result("Instagram open kar dun tumhare liye?", true)
         AppCommand.OpenInstagramReels -> openInstagramReels()
+        AppCommand.TakeScreenshot -> takeScreenshot()
         AppCommand.RepeatYouTubeSearch -> repeatYouTubeSearch()
         is AppCommand.DeepResearch -> Result("Deep Research needs LYRA to be connected.", false)
         is AppCommand.ReplyWhatsApp -> WhatsAppReplyStore.reply(context, command.sender, command.message)
@@ -83,7 +84,7 @@ class AppActionExecutor(private val context: Context) {
     }
 
     private fun listFeatures(): Result = Result(
-        "Haan jaan, main YouTube open aur band kar sakti hoon, YouTube par videos search kar sakti hoon, first, next aur pichhla video chala sakti hoon, aur play-pause bhi control kar sakti hoon. Main available YouTube ads skip kar sakti hoon, flashlight on-off kar sakti hoon, Home aur Back control kar sakti hoon, time aur battery bata sakti hoon, WhatsApp messages check karke reply de sakti hoon, Deep Research kar sakti hoon, aur tumse English ya Hinglish mein normally baat bhi kar sakti hoon.",
+        "Haan jaan, main YouTube open aur band kar sakti hoon, YouTube par videos search kar sakti hoon, first, next aur pichhla video chala sakti hoon, aur play-pause bhi control kar sakti hoon. Main available YouTube ads skip kar sakti hoon, flashlight on-off aur screenshot le sakti hoon, Home aur Back control kar sakti hoon, time aur battery bata sakti hoon, WhatsApp messages check karke reply de sakti hoon, Deep Research kar sakti hoon, aur tumse English ya Hinglish mein normally baat bhi kar sakti hoon.",
         true
     )
 
@@ -211,12 +212,32 @@ class AppActionExecutor(private val context: Context) {
     private fun openYouTubeShorts(): Result {
         val service = AccessibilityHelperService.instance
         if (service?.openYouTubeShorts() == true) return Result("YouTube Shorts open kar diya.", true)
-        val opened = openApp("YouTube")
-        if (!opened.success) return opened
-        Handler(Looper.getMainLooper()).postDelayed({
-            AccessibilityHelperService.instance?.openYouTubeShorts()
-        }, 1_400L)
-        return Result("YouTube Shorts open kar rahi hoon.", true)
+        val packageName = knownPackages.getValue("youtube")
+        if (context.packageManager.getLaunchIntentForPackage(packageName) == null) {
+            return Result("YouTube is phone mein nahi mila.", false)
+        }
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/shorts")).apply {
+                setPackage(packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            context.startActivity(intent)
+            Handler(Looper.getMainLooper()).postDelayed({
+                AccessibilityHelperService.instance?.openYouTubeShorts()
+            }, 1_500L)
+            Result("YouTube Shorts khol rahi hoon.", true)
+        } catch (_: Exception) {
+            Result("YouTube Shorts open nahi ho paaya.", false)
+        }
+    }
+
+    private fun takeScreenshot(): Result {
+        val service = AccessibilityHelperService.instance
+        if (service == null || !AccessibilityHelperService.isEnabled(context)) {
+            return Result("Screenshot ke liye LYRA Accessibility enable karo.", false)
+        }
+        return if (service.takeScreenshot()) Result("Screenshot le liya.", true)
+        else Result("Screenshot nahi le paayi.", false)
     }
 
     private fun openInstagramReels(): Result {
