@@ -49,7 +49,11 @@ class AccessibilityHelperService : AccessibilityService() {
         if (!root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)) return false
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        val minimumTop = if (afterPlayer) (screenHeight * 0.30f).toInt() else (screenHeight * 0.10f).toInt()
+        // On the watch page the current video's title/Description target is in the
+        // upper half. Recommendations begin below it, even when an ad banner is
+        // inserted first. This boundary lets us use reliable title/view metadata
+        // without ever selecting the current title.
+        val minimumTop = if (afterPlayer) (screenHeight * 0.50f).toInt() else (screenHeight * 0.10f).toInt()
         val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
         collectVideoCandidates(root, screenWidth, screenHeight, minimumTop, afterPlayer, candidates)
         return candidates.sortedBy { it.first }.firstOrNull()?.second
@@ -70,14 +74,17 @@ class AccessibilityHelperService : AccessibilityService() {
             val contextLabel = nodeContextLabel(node)
             if (looksLikeVideoCard(label, afterPlayer) && !AD_SIGNAL.containsMatchIn(contextLabel)) {
                 var clickable: AccessibilityNodeInfo? = node
-                repeat(4) {
+                repeat(8) {
                     if (clickable?.isClickable == true) return@repeat
                     clickable = clickable?.parent
                 }
                 clickable?.takeIf { it.isClickable && it.isVisibleToUser }?.let { target ->
                     val bounds = Rect()
                     target.getBoundsInScreen(bounds)
-                    if (bounds.top >= minimumTop && bounds.bottom <= screenHeight &&
+                    // YouTube commonly leaves the next organic card partly below the
+                    // viewport when a sponsored banner is present. A visible top edge
+                    // is sufficient for Accessibility ACTION_CLICK.
+                    if (bounds.top >= minimumTop && bounds.top < (screenHeight * 0.94f).toInt() &&
                         bounds.width() >= (screenWidth * 0.30f).toInt() &&
                         bounds.height() >= (screenHeight * 0.015f).toInt()
                     ) {
@@ -109,11 +116,11 @@ class AccessibilityHelperService : AccessibilityService() {
     private fun looksLikeVideoCard(label: String, afterPlayer: Boolean): Boolean {
         val clean = label.lowercase()
         if (clean.isBlank() || NON_VIDEO_CONTROLS.containsMatchIn(clean)) return false
-        // Search/home lists expose the first organic result through title and view
-        // metadata on some YouTube versions. The watch page uses a stricter signal,
-        // because its current title opens Description instead of the next video.
-        return if (afterPlayer) NEXT_VIDEO_SIGNAL.containsMatchIn(clean)
-        else FIRST_VIDEO_SIGNAL.containsMatchIn(clean)
+        // Modern YouTube layouts often expose cards only through title/view metadata,
+        // not a thumbnail resource id. Screen position separates watch-page
+        // recommendations from the current title, while the ad-context filter removes
+        // sponsored cards.
+        return VIDEO_LIST_SIGNAL.containsMatchIn(clean)
     }
 
     fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
@@ -121,8 +128,7 @@ class AccessibilityHelperService : AccessibilityService() {
 
     companion object {
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
-        private val FIRST_VIDEO_SIGNAL = Regex("(?:video[_\\s]*(?:title|thumbnail)|thumbnail|\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
-        private val NEXT_VIDEO_SIGNAL = Regex("(?:video[_\\s]*thumbnail|thumbnail|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
+        private val VIDEO_LIST_SIGNAL = Regex("(?:video[_\\s]*(?:title|thumbnail)|thumbnail|\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})", RegexOption.IGNORE_CASE)
         private val AD_SIGNAL = Regex("(?:\\bsponsored\\b|\\badvertisement\\b|\\bad\\b|\\binstall\\b|learn more|visit advertiser|google play)", RegexOption.IGNORE_CASE)
         private val NON_VIDEO_CONTROLS = Regex("^(?:home|shorts|subscriptions|you|library|comments?|share|like|dislike|download|save|settings)$", RegexOption.IGNORE_CASE)
 
