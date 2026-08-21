@@ -40,6 +40,31 @@ class CommandParserTest {
         }
     }
 
+    @Test fun parsesContextualYouTubeSearchAndScrolling() {
+        listOf(
+            "search karo new song" to "new song",
+            "Jonathan Gaming search karo" to "jonathan gaming"
+        ).forEach { (phrase, expectedQuery) ->
+            val command = CommandParser.parse(phrase)
+            assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
+            assertEquals(expectedQuery, command.content)
+        }
+
+        val parser = com.myra.assistant.ai.CommandParser
+        assertEquals(
+            com.myra.assistant.model.AppCommand.ScrollDirection.DOWN,
+            (parser.parseDirectMediaControl("niche scroll karo") as com.myra.assistant.model.AppCommand.ScrollYouTube).direction
+        )
+        assertEquals(
+            com.myra.assistant.model.AppCommand.ScrollDirection.UP,
+            (parser.parseDirectMediaControl("upper scroll karo") as com.myra.assistant.model.AppCommand.ScrollYouTube).direction
+        )
+        assertEquals(
+            null,
+            (parser.parseDirectMediaControl("scroll karo") as com.myra.assistant.model.AppCommand.ScrollYouTube).direction
+        )
+    }
+
     @Test fun preservesExistingYouTubeCommand() {
         val command = CommandParser.parse("YouTube mein Lols Gaming search karo")
         assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
