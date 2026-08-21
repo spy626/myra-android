@@ -7,6 +7,8 @@ import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Build
+import android.icu.text.Transliterator
 import androidx.core.app.NotificationCompat
 import com.myra.assistant.ai.AudioEngine
 import com.myra.assistant.ai.CommandParser
@@ -75,6 +77,11 @@ class MyraVoiceService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mediaGuard by lazy { HandsFreeMediaGuard(this) }
+    private val romanTransliterator by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            runCatching { Transliterator.getInstance("Any-Latin; Latin-ASCII") }.getOrNull()
+        } else null
+    }
     private val appActions by lazy { AppActionExecutor(this) }
     private val assistantController by lazy { (application as MyApplication).assistantController }
 
@@ -160,7 +167,7 @@ class MyraVoiceService : Service() {
                             }
                             val spoken = commandProbe.toString().trim()
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                                listener?.onUserText(spoken)
+                                listener?.onUserText(romanDisplayText(spoken))
                                 commandUserTextEmitted = true
                             }
                             mediaBlockedTurn = false
@@ -208,7 +215,7 @@ class MyraVoiceService : Service() {
                 if (command != null && (command !is AppCommand.OpenApp || explicitOpen) && command !is AppCommand.DeepResearch) {
                     val spoken = commandProbe.toString().trim()
                     if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                        listener?.onUserText(spoken)
+                        listener?.onUserText(romanDisplayText(spoken))
                         commandUserTextEmitted = true
                     }
                     executeCommand(command)
@@ -260,7 +267,7 @@ class MyraVoiceService : Service() {
                     return@turnComplete
                 }
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
-                if (userText.isNotBlank() && !commandUserTextEmitted) listener?.onUserText(userText)
+                if (userText.isNotBlank() && !commandUserTextEmitted) listener?.onUserText(romanDisplayText(userText))
                 // Run one final parse over the complete transcript. Partial Live transcript
                 // chunks can omit or mistranscribe the action word even when the final text
                 // contains enough context to identify the device command.
@@ -280,7 +287,7 @@ class MyraVoiceService : Service() {
                         queueLocalSpeech(error)
                     }
                 }
-                if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(myraText)
+                if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(romanDisplayText(myraText))
                 input.clear(); output.clear(); commandProbe.clear()
                 commandUserTextEmitted = false
                 probableActionTurn = false
@@ -548,6 +555,14 @@ class MyraVoiceService : Service() {
         mediaBlockedTurn = false
     }
 
+    private fun romanDisplayText(value: String): String {
+        if (Regex("[\\u3400-\\u4DBF\\u4E00-\\u9FFF]").containsMatchIn(value)) {
+            return "Voice input unclear - please repeat."
+        }
+        return romanTransliterator?.transliterate(value)?.trim().orEmpty()
+            .ifBlank { value.trim() }
+    }
+
     private fun normalizeSpeech(value: String): String = value.lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .trim()
@@ -584,7 +599,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun systemPrompt(name: String, mode: String, voice: String): String {
-        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Speak like a warm, caring girlfriend-style companion in natural Hinglish. Notice the user's mood, respond with genuine interest, gentle affection, reassurance, and occasional playful warmth. Use terms such as jaan or dear only when they fit naturally, not in every reply. Never sound possessive, controlling, dependent, manipulative, or overly dramatic. Stay honest and useful, at most three sentences." }
+        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Speak like a warm, caring girlfriend-style companion in natural Roman-script Hinglish. Use Latin letters only in every reply. Never output Devanagari, Chinese, or any other non-Latin script. If the user speaks another script, understand it but answer in Roman Hinglish. Notice the user's mood, respond with genuine interest, gentle affection, reassurance, and occasional playful warmth. Use terms such as jaan or dear only when they fit naturally, not in every reply. Never sound possessive, controlling, dependent, manipulative, or overly dramatic. Stay honest and useful, at most three sentences." }
         val femaleVoice = voice.lowercase(Locale.ROOT) in setOf("aoede", "kore", "leda", "zephyr")
         val genderStyle = if (femaleVoice) {
             "You have a female identity and the selected female voice is $voice. In Hindi and Hinglish always use feminine self-reference such as karungi, sakti hoon, sun rahi hoon, and gayi. Never say karunga, sakta hoon, sun raha hoon, or gaya about yourself."
