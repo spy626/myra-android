@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.View
-import com.myra.assistant.R
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -25,7 +24,6 @@ class OrbAnimationView @JvmOverloads constructor(
         set(value) { field = value.coerceIn(0f, 1f); invalidate() }
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val character by lazy { BitmapFactory.decodeResource(resources, R.drawable.lyra_character) }
     private var phase = 0f
     private val ticker = object : Runnable {
         override fun run() {
@@ -56,7 +54,6 @@ class OrbAnimationView @JvmOverloads constructor(
         }
 
         drawAura(canvas, cx, cy, accent, energy)
-        drawCharacter(canvas)
         drawStateParticles(canvas, cx, cy, accent, energy)
     }
 
@@ -85,21 +82,6 @@ class OrbAnimationView @JvmOverloads constructor(
             canvas.drawArc(cx - ring, cy - ring, cx + ring, cy + ring, phase * 24f + 191f + index * 63f, 42f, false, paint)
         }
         paint.style = Paint.Style.FILL
-    }
-
-    private fun drawCharacter(canvas: Canvas) {
-        if (character.width <= 0 || character.height <= 0) return
-        val breathe = 1f + sin(phase * .55f) * .004f + if (state == State.SPEAKING) amplitude * .008f else 0f
-        val availableHeight = height * .98f
-        val availableWidth = width * .96f
-        val scale = minOf(availableWidth / character.width, availableHeight / character.height) * breathe
-        val drawWidth = character.width * scale
-        val drawHeight = character.height * scale
-        val left = (width - drawWidth) / 2f
-        val top = height - drawHeight
-        paint.alpha = if (state == State.IDLE) 238 else 255
-        canvas.drawBitmap(character, null, RectF(left, top, left + drawWidth, top + drawHeight), paint)
-        paint.alpha = 255
     }
 
     private fun drawStateParticles(canvas: Canvas, cx: Float, cy: Float, color: Int, energy: Float) {
