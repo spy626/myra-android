@@ -161,11 +161,14 @@ class MainActivity : AppCompatActivity() {
         val last = preferences.getInt("last_character_reaction", -1)
         val next = reactions.indices.filter { it != last }.random()
         preferences.edit().putInt("last_character_reaction", next).apply()
+        if (!MyraVoiceService.isNaturalVoiceReady) {
+            showStatus("Connect LYRA first — tap the mic")
+            return
+        }
         val message = reactions[next]
         addBubble(message, false)
         showStatus(message)
-        if (MyraVoiceService.isRunning) MyraVoiceService.speakLocal(message)
-        else assistantController.speakMessage(message)
+        MyraVoiceService.speakLocal(message)
     }
 
     private fun prepareScreenshot(uri: android.net.Uri): ByteArray? {
