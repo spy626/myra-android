@@ -437,10 +437,11 @@ class MyraVoiceService : Service() {
             is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
             is AppCommand.ScrollYouTube -> "youtube-scroll:${command.direction?.name?.lowercase(Locale.ROOT) ?: "repeat"}"
         }
-        // One utterance can arrive as several slightly different Live transcript chunks.
-        // A longer semantic dedupe window prevents the same local action/error appearing
-        // repeatedly while still allowing an intentional command a few seconds later.
-        if (key == lastCommandKey && now - lastCommandAt < 4_000L) return false
+        // Scroll is intentionally repeatable hands-free, so only suppress near-identical
+        // transcript fragments from the same utterance. Other actions keep the longer
+        // safety window that prevents accidental duplicate execution.
+        val dedupeWindowMs = if (command is AppCommand.ScrollYouTube) 700L else 4_000L
+        if (key == lastCommandKey && now - lastCommandAt < dedupeWindowMs) return false
         lastCommandKey = key; lastCommandAt = now; return true
     }
 
@@ -461,11 +462,11 @@ class MyraVoiceService : Service() {
             return
         }
         if (command is AppCommand.DeepResearch) { executeDeepResearch(command); return }
+        cancelSpeechForNewAction()
         suppressModelForTurn = true
         waitingForFreshInputAfterCommand = true
         commandProbe.clear()
         output.clear()
-        audio?.interrupt()
         live?.interrupt()
         mediaGuard.finishInteraction()
         val result = assistantController.processCommand(
@@ -547,6 +548,24 @@ class MyraVoiceService : Service() {
         builder.append(clean)
     }
 
+    private fun cancelSpeechForNewAction() {
+        // Clear validation/playback state before AudioEngine emits its interruption
+        // callback. Otherwise finishLocalPlayback() can revive an expired model turn.
+        localSpeechValidationToken++
+        validatingLocalSpeech = null
+        pendingLocalSpeech = null
+        localSpeechAudio.clear()
+        localSpeechTranscript.clear()
+        localSpeechHasContent = false
+        localSpeechStreamedDirectly = false
+        localSpeechGenerationComplete = false
+        localPlaybackActive = false
+        allowUntranscribedLocalSpeech = false
+        pendingActionAfterLocalSpeech = null
+        audio?.interrupt()
+        audio?.setMuted(false)
+    }
+
     private fun queueLocalSpeech(message: String, allowUntranscribedAudio: Boolean = false) {
         val now = android.os.SystemClock.elapsedRealtime()
         val key = normalizeSpeech(message)
@@ -554,7 +573,9 @@ class MyraVoiceService : Service() {
         lastLocalSpeechKey = key
         lastLocalSpeechAt = now
         suppressModelForTurn = true
-        audio?.setMuted(true)
+        // Keep the echo-cancelled microphone open so the user can interrupt or issue
+        // the next short command without waiting for LYRA's acknowledgement to finish.
+        audio?.setMuted(false)
         allowUntranscribedLocalSpeech = allowUntranscribedAudio
         if (validatingLocalSpeech == null) beginValidatedLocalSpeech(message)
         else pendingLocalSpeech = message
