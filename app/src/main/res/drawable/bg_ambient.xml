@@ -1,5 +1,15 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item><shape><solid android:color="#070307" /></shape></item>
-    <item android:gravity="top|start" android:width="420dp" android:height="520dp"><shape android:shape="oval"><gradient android:type="radial" android:gradientRadius="260dp" android:startColor="#552C0018" android:endColor="#00100010" /></shape></item>
-    <item android:gravity="bottom|end" android:width="400dp" android:height="560dp"><shape android:shape="oval"><gradient android:type="radial" android:gradientRadius="260dp" android:startColor="#442A0033" android:endColor="#00000000" /></shape></item>
+    <item>
+        <shape><solid android:color="#020202" /></shape>
+    </item>
+    <item android:gravity="top|center_horizontal" android:width="440dp" android:height="570dp">
+        <shape android:shape="oval">
+            <gradient android:type="radial" android:gradientRadius="285dp" android:startColor="#511A0008" android:centerColor="#240B0205" android:endColor="#00000000" />
+        </shape>
+    </item>
+    <item android:gravity="bottom|center_horizontal" android:width="460dp" android:height="390dp">
+        <shape android:shape="oval">
+            <gradient android:type="radial" android:gradientRadius="250dp" android:startColor="#2B390008" android:endColor="#00000000" />
+        </shape>
+    </item>
 </layer-list>

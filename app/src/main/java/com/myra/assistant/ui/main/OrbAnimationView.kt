@@ -4,29 +4,117 @@ import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.View
+import com.myra.assistant.R
 import kotlin.math.cos
 import kotlin.math.sin
 
-class OrbAnimationView @JvmOverloads constructor(context: Context, attrs: AttributeSet? = null) : View(context, attrs) {
+/**
+ * LYRA's visual presence. The public state/amplitude API is intentionally unchanged so
+ * the existing voice service and command flow keep working while the orb becomes a
+ * character-backed interface.
+ */
+class OrbAnimationView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : View(context, attrs) {
     enum class State { IDLE, CONNECTING, LISTENING, SPEAKING }
-    var state = State.IDLE; set(value) { field = value; invalidate() }
-    var amplitude = 0f; set(value) { field = value; invalidate() }
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    var state = State.IDLE
+        set(value) { field = value; invalidate() }
+    var amplitude = 0f
+        set(value) { field = value.coerceIn(0f, 1f); invalidate() }
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val character by lazy { BitmapFactory.decodeResource(resources, R.drawable.lyra_character) }
     private var phase = 0f
-    private val ticker = object : Runnable { override fun run() { phase += if (state == State.SPEAKING) .08f else .035f; invalidate(); postDelayed(this, 16) } }
+    private val ticker = object : Runnable {
+        override fun run() {
+            phase += if (state == State.SPEAKING) .075f else .028f
+            invalidate()
+            postDelayed(this, 16L)
+        }
+    }
+
     override fun onAttachedToWindow() { super.onAttachedToWindow(); post(ticker) }
     override fun onDetachedFromWindow() { removeCallbacks(ticker); super.onDetachedFromWindow() }
-    override fun onDraw(c: Canvas) {
-        val cx = width / 2f; val cy = height / 2f; val base = width.coerceAtMost(height) * .25f
-        val color = when (state) { State.CONNECTING -> Color.CYAN; State.SPEAKING -> Color.rgb(224,64,251); else -> Color.rgb(255,23,68) }
-        val pulse = 1f + .08f * sin(phase) + amplitude * .25f
-        paint.shader = RadialGradient(cx, cy, base * 1.7f, intArrayOf(color, Color.argb(70, Color.red(color), Color.green(color), Color.blue(color)), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-        c.drawCircle(cx, cy, base * 1.7f * pulse, paint)
-        paint.shader = RadialGradient(cx - base*.3f, cy - base*.3f, base*1.4f, Color.WHITE, color, Shader.TileMode.CLAMP)
-        c.drawCircle(cx, cy, base * pulse, paint); paint.shader = null
-        paint.style = Paint.Style.STROKE; paint.strokeWidth = 3f
-        repeat(3) { i -> paint.color = Color.argb(120-i*25, Color.red(color), Color.green(color), Color.blue(color)); val r=base*(1.25f+i*.2f); c.drawArc(cx-r,cy-r,cx+r,cy+r,phase*40+i*70,210f,false,paint) }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val cx = width / 2f
+        val cy = height * .43f
+        val accent = when (state) {
+            State.IDLE -> Color.rgb(126, 10, 29)
+            State.CONNECTING -> Color.rgb(205, 17, 46)
+            State.LISTENING -> Color.rgb(255, 31, 67)
+            State.SPEAKING -> Color.rgb(229, 13, 48)
+        }
+        val energy = when (state) {
+            State.IDLE -> .24f
+            State.CONNECTING -> .48f
+            State.LISTENING -> .60f + amplitude * .18f
+            State.SPEAKING -> .72f + amplitude * .28f
+        }
+
+        drawAura(canvas, cx, cy, accent, energy)
+        drawCharacter(canvas)
+        drawStateParticles(canvas, cx, cy, accent, energy)
+    }
+
+    private fun drawAura(canvas: Canvas, cx: Float, cy: Float, color: Int, energy: Float) {
+        val radius = width.coerceAtMost(height) * (.39f + .018f * sin(phase))
         paint.style = Paint.Style.FILL
-        if (state == State.SPEAKING || state == State.LISTENING) repeat(12) { i -> val a=phase+i*Math.PI.toFloat()/6; val r=base*1.55f; c.drawCircle(cx+cos(a)*r,cy+sin(a)*r,3f+amplitude*7f,paint) }
+        paint.shader = RadialGradient(
+            cx, cy, radius,
+            intArrayOf(
+                Color.argb((86 * energy).toInt(), Color.red(color), 0, 14),
+                Color.argb((38 * energy).toInt(), Color.red(color), 0, 10),
+                Color.TRANSPARENT
+            ),
+            floatArrayOf(0f, .52f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawCircle(cx, cy, radius, paint)
+        paint.shader = null
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = resources.displayMetrics.density
+        repeat(3) { index ->
+            val ring = radius * (.58f + index * .14f)
+            paint.color = Color.argb((95 * energy).toInt(), Color.red(color), 10, 31)
+            canvas.drawArc(cx - ring, cy - ring, cx + ring, cy + ring, phase * 24f + index * 78f, 118f, false, paint)
+            canvas.drawArc(cx - ring, cy - ring, cx + ring, cy + ring, phase * 24f + 191f + index * 63f, 42f, false, paint)
+        }
+        paint.style = Paint.Style.FILL
+    }
+
+    private fun drawCharacter(canvas: Canvas) {
+        if (character.width <= 0 || character.height <= 0) return
+        val breathe = 1f + sin(phase * .55f) * .004f + if (state == State.SPEAKING) amplitude * .008f else 0f
+        val availableHeight = height * .98f
+        val availableWidth = width * .96f
+        val scale = minOf(availableWidth / character.width, availableHeight / character.height) * breathe
+        val drawWidth = character.width * scale
+        val drawHeight = character.height * scale
+        val left = (width - drawWidth) / 2f
+        val top = height - drawHeight
+        paint.alpha = if (state == State.IDLE) 238 else 255
+        canvas.drawBitmap(character, null, RectF(left, top, left + drawWidth, top + drawHeight), paint)
+        paint.alpha = 255
+    }
+
+    private fun drawStateParticles(canvas: Canvas, cx: Float, cy: Float, color: Int, energy: Float) {
+        if (state == State.IDLE) return
+        paint.style = Paint.Style.FILL
+        repeat(10) { index ->
+            val angle = phase * .42f + index * (Math.PI.toFloat() / 5f)
+            val radius = width * (.36f + (index % 3) * .035f)
+            paint.color = Color.argb((135 * energy).toInt(), Color.red(color), 16, 43)
+            canvas.drawCircle(
+                cx + cos(angle) * radius,
+                cy + sin(angle) * radius * .72f,
+                1.5f + energy * 2.2f,
+                paint
+            )
+        }
     }
 }
