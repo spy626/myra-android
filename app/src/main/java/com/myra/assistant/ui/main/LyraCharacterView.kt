@@ -148,7 +148,7 @@ class LyraCharacterView @JvmOverloads constructor(
             modelViewer.transformToUnitCube()
             val asset = modelViewer.asset ?: error("LYRA model asset missing")
             val tm = modelViewer.engine.transformManager
-            baseRootTransform = tm.getTransform(tm.getInstance(asset.root), null)
+            baseRootTransform = tm.getTransform(tm.getInstance(asset.root), FloatArray(16))
             applyRelaxedPose()
             applyRootTransform()
         }.onFailure {
@@ -171,7 +171,7 @@ class LyraCharacterView @JvmOverloads constructor(
         if (entity == 0) return
         val tm = modelViewer.engine.transformManager
         val instance = tm.getInstance(entity)
-        val original = tm.getTransform(instance, null)
+        val original = tm.getTransform(instance, FloatArray(16))
         tm.setTransform(instance, multiply(original, rotationZ(degrees * PI.toFloat() / 180f)))
     }
 
