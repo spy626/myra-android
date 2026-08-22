@@ -94,7 +94,7 @@ class AccessibilityHelperService : AccessibilityService() {
 
     fun scrollYouTube(down: Boolean?): Boolean {
         val root = rootInActiveWindow ?: return false
-        if (!root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)) return false
+        if (!isYouTubeRoot(root)) return false
         val resolvedDown = down ?: lastScrollDown
         lastScrollDown = resolvedDown
         val accessibilityAction = if (resolvedDown) {
@@ -102,30 +102,127 @@ class AccessibilityHelperService : AccessibilityService() {
         } else {
             AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
         }
-        fun scrollNode(node: AccessibilityNodeInfo): Boolean {
-            if (node.isVisibleToUser && node.isScrollable && node.performAction(accessibilityAction)) return true
-            for (index in 0 until node.childCount) {
-                node.getChild(index)?.let { if (scrollNode(it)) return true }
+
+        // YouTube exposes horizontal chips, ad carousels and the vertical feed as
+        // scrollable. Pick the largest tall node so "scroll" moves the Home feed.
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
+        fun collect(node: AccessibilityNodeInfo) {
+            if (node.isVisibleToUser && node.isScrollable) {
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                if (bounds.width() >= (screenWidth * 0.55f).toInt() &&
+                    bounds.height() >= (screenHeight * 0.30f).toInt()
+                ) candidates += bounds.width() * bounds.height() to node
             }
-            return false
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
         }
-        if (scrollNode(root)) return true
+        collect(root)
+        candidates.sortedByDescending { it.first }.forEach { (_, node) ->
+            if (node.performAction(accessibilityAction)) return true
+        }
+        return dispatchYouTubeSwipe(resolvedDown)
+    }
+
+    fun scrollYouTubeVerified(down: Boolean?, onResult: (Boolean) -> Unit): Boolean {
+        val resolvedDown = down ?: lastScrollDown
+        lastScrollDown = resolvedDown
+        val root = rootInActiveWindow
+        if (root == null || !isYouTubeRoot(root)) {
+            val launch = packageManager.getLaunchIntentForPackage(YOUTUBE_PACKAGE)
+                ?: return false
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            return runCatching {
+                startActivity(launch)
+                waitForYouTubeAndScroll(resolvedDown, 0, onResult)
+                true
+            }.getOrDefault(false)
+        }
+        performVerifiedScroll(resolvedDown, retry = true, onResult)
+        return true
+    }
+
+    private fun waitForYouTubeAndScroll(
+        down: Boolean,
+        attempt: Int,
+        onResult: (Boolean) -> Unit
+    ) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            val root = rootInActiveWindow
+            if (root != null && isYouTubeRoot(root)) {
+                performVerifiedScroll(down, retry = true, onResult)
+            } else if (attempt < 7) {
+                waitForYouTubeAndScroll(down, attempt + 1, onResult)
+            } else {
+                onResult(false)
+            }
+        }, if (attempt == 0) 900L else 350L)
+    }
+
+    private fun performVerifiedScroll(
+        down: Boolean,
+        retry: Boolean,
+        onResult: (Boolean) -> Unit
+    ) {
+        val before = youtubeScreenSignature()
+        if (!scrollYouTube(down)) {
+            onResult(false)
+            return
+        }
+        Handler(Looper.getMainLooper()).postDelayed({
+            val changed = before.isNotBlank() && youtubeScreenSignature() != before
+            if (changed) {
+                onResult(true)
+            } else if (retry && dispatchYouTubeSwipe(down)) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    onResult(before.isNotBlank() && youtubeScreenSignature() != before)
+                }, 650L)
+            } else {
+                onResult(false)
+            }
+        }, 650L)
+    }
+
+    private fun dispatchYouTubeSwipe(down: Boolean): Boolean {
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
         val swipe = Path().apply {
-            if (resolvedDown) {
-                moveTo(width * 0.50f, height * 0.78f)
-                lineTo(width * 0.50f, height * 0.32f)
+            if (down) {
+                moveTo(width * 0.50f, height * 0.80f)
+                lineTo(width * 0.50f, height * 0.28f)
             } else {
-                moveTo(width * 0.50f, height * 0.32f)
-                lineTo(width * 0.50f, height * 0.78f)
+                moveTo(width * 0.50f, height * 0.28f)
+                lineTo(width * 0.50f, height * 0.80f)
             }
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(swipe, 0L, 300L))
+            .addStroke(GestureDescription.StrokeDescription(swipe, 0L, 340L))
             .build()
         return dispatchGesture(gesture, null, null)
     }
+
+    private fun youtubeScreenSignature(): String {
+        val root = rootInActiveWindow ?: return ""
+        if (!isYouTubeRoot(root)) return ""
+        val items = mutableListOf<String>()
+        fun collect(node: AccessibilityNodeInfo) {
+            if (node.isVisibleToUser) {
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                listOfNotNull(node.text, node.contentDescription).forEach {
+                    val value = it.toString().trim()
+                    if (value.isNotBlank()) items += "${bounds.top}:${bounds.bottom}:$value"
+                }
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
+        }
+        collect(root)
+        return items.distinct().sorted().joinToString("|").take(12_000)
+    }
+
+    private fun isYouTubeRoot(root: AccessibilityNodeInfo): Boolean =
+        root.packageName?.toString().orEmpty().equals(YOUTUBE_PACKAGE, ignoreCase = true)
 
     private fun scrollThenClickVideo(afterPlayer: Boolean, remainingScrolls: Int): Boolean {
         val root = rootInActiveWindow ?: return false
