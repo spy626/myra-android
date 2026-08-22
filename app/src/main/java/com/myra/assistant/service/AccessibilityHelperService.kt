@@ -166,7 +166,9 @@ class AccessibilityHelperService : AccessibilityService() {
         onResult: (Boolean) -> Unit
     ) {
         val before = youtubeScreenSignature()
-        if (!scrollYouTube(down)) {
+        // Swipe first so the feed starts moving immediately. Accessibility ACTION_SCROLL
+        // can be accepted by a sponsored carousel without moving the vertical Home feed.
+        if (!dispatchYouTubeSwipe(down, useRightEdge = true)) {
             onResult(false)
             return
         }
@@ -174,30 +176,33 @@ class AccessibilityHelperService : AccessibilityService() {
             val changed = before.isNotBlank() && youtubeScreenSignature() != before
             if (changed) {
                 onResult(true)
-            } else if (retry && dispatchYouTubeSwipe(down)) {
+            } else if (retry && dispatchYouTubeSwipe(down, useRightEdge = false)) {
                 Handler(Looper.getMainLooper()).postDelayed({
                     onResult(before.isNotBlank() && youtubeScreenSignature() != before)
-                }, 650L)
+                }, 420L)
             } else {
                 onResult(false)
             }
-        }, 650L)
+        }, 380L)
     }
 
-    private fun dispatchYouTubeSwipe(down: Boolean): Boolean {
+    private fun dispatchYouTubeSwipe(down: Boolean, useRightEdge: Boolean = false): Boolean {
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
+        // The first path stays away from sponsored-card buttons in the center. The
+        // alternate path handles layouts whose right-side overlay consumes gestures.
+        val x = width * if (useRightEdge) 0.86f else 0.18f
         val swipe = Path().apply {
             if (down) {
-                moveTo(width * 0.50f, height * 0.80f)
-                lineTo(width * 0.50f, height * 0.28f)
+                moveTo(x, height * 0.82f)
+                lineTo(x, height * 0.25f)
             } else {
-                moveTo(width * 0.50f, height * 0.28f)
-                lineTo(width * 0.50f, height * 0.80f)
+                moveTo(x, height * 0.25f)
+                lineTo(x, height * 0.82f)
             }
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(swipe, 0L, 340L))
+            .addStroke(GestureDescription.StrokeDescription(swipe, 0L, 220L))
             .build()
         return dispatchGesture(gesture, null, null)
     }
