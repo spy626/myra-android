@@ -24,7 +24,29 @@ android {
     }
     kotlinOptions { jvmTarget = '17' }
     buildFeatures { viewBinding true }
+    sourceSets.main.assets.srcDir "$buildDir/generated/lyraAssets"
 }
+
+tasks.register('prepareLyraCharacter') {
+    def chunksDir = file('src/main/lyra-model')
+    def outputFile = file("$buildDir/generated/lyraAssets/models/lyra_elf_1k.glb")
+    inputs.dir(chunksDir)
+    outputs.file(outputFile)
+    doLast {
+        def chunks = chunksDir.listFiles()?.findAll { it.name.endsWith('.b64') }?.sort { it.name }
+        if (!chunks) throw new GradleException('LYRA character model chunks are missing')
+        outputFile.parentFile.mkdirs()
+        def encoded = new StringBuilder()
+        chunks.each { encoded.append(it.getText('UTF-8').trim()) }
+        outputFile.bytes = java.util.Base64.decoder.decode(encoded.toString())
+        def digest = java.security.MessageDigest.getInstance('SHA-256').digest(outputFile.bytes).encodeHex().toString()
+        if (digest != '877c3d01fe9744cffb20e89df4a74515bcbcf1baa71bc510a5c1eaea9ef4b54e') {
+            throw new GradleException('LYRA character model integrity check failed')
+        }
+    }
+}
+
+preBuild.dependsOn prepareLyraCharacter
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'
@@ -38,5 +60,8 @@ dependencies {
     implementation 'com.google.android.material:material:1.12.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.google.android.filament:filament-android:1.75.0'
+    implementation 'com.google.android.filament:gltfio-android:1.75.0'
+    implementation 'com.google.android.filament:filament-utils-android:1.75.0'
     testImplementation 'junit:junit:4.13.2'
 }
