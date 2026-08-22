@@ -53,7 +53,9 @@ class AudioEngine(private val context: Context) {
                 if (count > 0) {
                     val chunk = data.copyOf(count)
                     onAmplitude?.invoke(rms(chunk))
-                    if (!muted.get() && !speaking.get()) onMicChunk?.invoke(chunk)
+                    // VOICE_COMMUNICATION plus platform AEC keeps assistant playback
+                    // out of the uplink while allowing real barge-in commands.
+                    if (!muted.get()) onMicChunk?.invoke(chunk)
                 }
             }
         }
