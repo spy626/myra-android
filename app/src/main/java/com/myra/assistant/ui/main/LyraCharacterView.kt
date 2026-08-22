@@ -1,7 +1,6 @@
 package com.myra.assistant.ui.main
 
 import android.content.Context
-import android.graphics.PixelFormat
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.MotionEvent
@@ -43,8 +42,6 @@ class LyraCharacterView @JvmOverloads constructor(
 
     init {
         isClickable = true
-        setZOrderOnTop(true)
-        holder.setFormat(PixelFormat.TRANSLUCENT)
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
         modelViewer.view.blendMode = View.BlendMode.TRANSLUCENT
         modelViewer.scene.skybox = null
