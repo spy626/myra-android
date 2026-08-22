@@ -197,8 +197,12 @@ class AccessibilityHelperService : AccessibilityService() {
                 moveTo(x, height * 0.82f)
                 lineTo(x, height * 0.25f)
             } else {
-                moveTo(x, height * 0.25f)
-                lineTo(x, height * 0.82f)
+                // Never begin an upward-page scroll inside YouTube's player. A downward
+                // finger swipe over the player is YouTube's "minimize video" gesture.
+                // Starting below the player scrolls the watch-page recommendations/title
+                // back toward the top while the video remains in its normal player.
+                moveTo(x, height * 0.58f)
+                lineTo(x, height * 0.90f)
             }
         }
         val gesture = GestureDescription.Builder()
