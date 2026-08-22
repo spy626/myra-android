@@ -22,6 +22,7 @@ class AudioEngine(private val context: Context) {
     private val running = AtomicBoolean(false)
     private val muted = AtomicBoolean(false)
     private val speaking = AtomicBoolean(false)
+    @Volatile private var ignoreMicUntilMs = 0L
     private val queue = LinkedBlockingQueue<ByteArray>()
     private var recorder: AudioRecord? = null
     private var track: AudioTrack? = null
@@ -53,9 +54,11 @@ class AudioEngine(private val context: Context) {
                 if (count > 0) {
                     val chunk = data.copyOf(count)
                     onAmplitude?.invoke(rms(chunk))
-                    // VOICE_COMMUNICATION plus platform AEC keeps assistant playback
-                    // out of the uplink while allowing real barge-in commands.
-                    if (!muted.get()) onMicChunk?.invoke(chunk)
+                    // Never feed LYRA's own speaker output back into Gemini. Platform
+                    // echo cancellation is helpful but not reliable on every phone.
+                    if (!muted.get() && !speaking.get() &&
+                        android.os.SystemClock.elapsedRealtime() >= ignoreMicUntilMs
+                    ) onMicChunk?.invoke(chunk)
                 }
             }
         }
@@ -75,7 +78,10 @@ class AudioEngine(private val context: Context) {
                     // Gemini audio is delivered in network chunks. A temporarily empty
                     // queue is not the end of the sentence; wait through a short gap so
                     // listening and deferred actions resume only after the full reply.
-                    if (speaking.compareAndSet(true, false)) onSpeakingChanged?.invoke(false)
+                    if (speaking.compareAndSet(true, false)) {
+                        ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime() + MIC_ECHO_COOLDOWN_MS
+                        onSpeakingChanged?.invoke(false)
+                    }
                     continue
                 }
                 if (speaking.compareAndSet(false, true)) onSpeakingChanged?.invoke(true)
@@ -91,6 +97,7 @@ class AudioEngine(private val context: Context) {
 
     private companion object {
         const val SPEECH_END_GRACE_MS = 350L
+        const val MIC_ECHO_COOLDOWN_MS = 600L
     }
 
     private fun rms(bytes: ByteArray): Float {
