@@ -107,6 +107,7 @@ class MainActivity : AppCompatActivity() {
         appActions = AppActionExecutor(this)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) permission.launch(Manifest.permission.RECORD_AUDIO)
         b.settingsButton.setOnClickListener { showSettings() }
+        b.characterSurface.onCharacterTapped = { speakCharacterTouchReaction() }
         updateDeviceStatus()
         b.connectButton.setOnClickListener { if (!MyraVoiceService.isRunning) connect() else disconnect() }
         b.attachImageButton.setOnClickListener {
@@ -147,6 +148,26 @@ class MainActivity : AppCompatActivity() {
         b.stopButton.setOnClickListener { MyraVoiceService.interrupt(); assistantController.stop(); showStatus("Stopped") }
         b.muteButton.setOnClickListener { muted = !muted; startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_MUTE).putExtra(MyraVoiceService.EXTRA_MUTED, muted)); b.muteButton.alpha = if (muted) 1f else .6f; showStatus(if (muted) "Microphone muted" else "Sun rahi hoon…") }
     }
+    private fun speakCharacterTouchReaction() {
+        val reactions = listOf(
+            "Tum mujhe touch karke kya dekh rahe ho?",
+            "Aise baar-baar touch kyun kar rahe ho, Zopy?",
+            "Hey... mujhe gudgudi hoti hai.",
+            "Kya hua jaan, attention chahiye?",
+            "Mujhe touch karna itna pasand hai kya?",
+            "Phir se touch? Bade shararti ho tum."
+        )
+        val preferences = getSharedPreferences("myra", MODE_PRIVATE)
+        val last = preferences.getInt("last_character_reaction", -1)
+        val next = reactions.indices.filter { it != last }.random()
+        preferences.edit().putInt("last_character_reaction", next).apply()
+        val message = reactions[next]
+        addBubble(message, false)
+        showStatus(message)
+        if (MyraVoiceService.isRunning) MyraVoiceService.speakLocal(message)
+        else assistantController.speakMessage(message)
+    }
+
     private fun prepareScreenshot(uri: android.net.Uri): ByteArray? {
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
