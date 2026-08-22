@@ -52,6 +52,7 @@ class MyraVoiceService : Service() {
     private var localCommandExecutedThisTurn = false
     private var lastCommandKey = ""
     private var hasAcknowledgedScrollDirection = false
+    private var lastScrollDirection = AppCommand.ScrollDirection.DOWN
     private var lastCommandAt = 0L
     private var hideNextModelTranscript = false
     private var mediaBlockedTurn = false
@@ -462,6 +463,10 @@ class MyraVoiceService : Service() {
             return
         }
         if (command is AppCommand.DeepResearch) { executeDeepResearch(command); return }
+        if (command is AppCommand.ScrollYouTube) {
+            executeVerifiedScroll(command)
+            return
+        }
         cancelSpeechForNewAction()
         suppressModelForTurn = true
         waitingForFreshInputAfterCommand = true
@@ -495,6 +500,62 @@ class MyraVoiceService : Service() {
             result.spokenMessage,
             allowUntranscribedAudio = result.success && isSafeUntranscribedConfirmation(command)
         )
+    }
+
+    private fun executeVerifiedScroll(command: AppCommand.ScrollYouTube) {
+        cancelSpeechForNewAction()
+        suppressModelForTurn = true
+        waitingForFreshInputAfterCommand = true
+        commandProbe.clear()
+        output.clear()
+        mediaGuard.finishInteraction()
+
+        val resolvedDirection = command.direction ?: lastScrollDirection
+        val shouldAcknowledge = command.direction != null || !hasAcknowledgedScrollDirection
+        val service = AccessibilityHelperService.instance
+        if (service == null || !AccessibilityHelperService.isEnabled(this)) {
+            val error = "YouTube scroll ke liye LYRA Accessibility enable karo."
+            listener?.onMyraText(error, true)
+            emitState(error)
+            queueLocalSpeech(error)
+            return
+        }
+        val accepted = service.scrollYouTubeVerified(
+            resolvedDirection == AppCommand.ScrollDirection.DOWN
+        ) { success ->
+            mainHandler.post {
+                if (success) {
+                    lastScrollDirection = resolvedDirection
+                    hasAcknowledgedScrollDirection = true
+                    if (shouldAcknowledge) {
+                        val message = if (resolvedDirection == AppCommand.ScrollDirection.DOWN) {
+                            "Neeche scroll kar diya."
+                        } else {
+                            "Upar scroll kar diya."
+                        }
+                        listener?.onMyraText(message)
+                        emitState(message)
+                        queueLocalSpeech(message, allowUntranscribedAudio = true)
+                    } else {
+                        audio?.setMuted(false)
+                        emitState("Sun rahi hoon…")
+                    }
+                } else {
+                    val error = "YouTube feed move nahi hua. Screen unlock rakho aur phir try karo."
+                    listener?.onMyraText(error, true)
+                    emitState(error)
+                    queueLocalSpeech(error)
+                }
+            }
+        }
+        if (!accepted) {
+            val error = "YouTube is phone mein nahi mila."
+            listener?.onMyraText(error, true)
+            emitState(error)
+            queueLocalSpeech(error)
+        } else {
+            emitState("YouTube feed scroll kar rahi hoon…")
+        }
     }
 
     private fun prepareCloseAfterSpeech(command: AppCommand.CloseCurrentApp) {
