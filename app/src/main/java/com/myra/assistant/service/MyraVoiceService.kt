@@ -900,6 +900,12 @@ class MyraVoiceService : Service() {
         fun executeLocalText(text: String): Boolean = instance?.executeTypedLocalCommand(text) == true
         fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
         fun announceWhatsApp(sender: String, message: String?) { instance?.speakWhatsAppAnnouncement(sender, message) }
+        fun speakLocal(message: String) {
+            instance?.let { service ->
+                service.mediaGuard.beginAssistantTurn()
+                service.queueLocalSpeech(message, allowUntranscribedAudio = true)
+            }
+        }
         fun interrupt() { instance?.audio?.interrupt(); instance?.live?.interrupt() }
     }
 }
