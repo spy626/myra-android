@@ -150,6 +150,13 @@ class MyraVoiceService : Service() {
             }
             client.onInputTranscript = inputTranscript@ { part ->
                 if (handlePendingConfirmation(part)) return@inputTranscript
+                if (isPhantomTranscript(part)) {
+                    // Short echo/noise fragments must never become chat bubbles or
+                    // receive a conversational answer.
+                    suppressModelForTurn = true
+                    output.clear()
+                    return@inputTranscript
+                }
                 when (mediaGuard.inspect(part)) {
                     HandsFreeMediaGuard.Gate.BLOCK -> {
                         appendTranscript(commandProbe, part)
@@ -771,6 +778,14 @@ class MyraVoiceService : Service() {
             .ifBlank { value.trim() }
     }
 
+    private fun isPhantomTranscript(value: String): Boolean {
+        val clean = value.lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .trim()
+        if (clean.isBlank()) return true
+        return PHANTOM_TRANSCRIPT.matches(clean)
+    }
+
     private fun normalizeSpeech(value: String): String = value.lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .trim()
@@ -873,6 +888,10 @@ class MyraVoiceService : Service() {
         const val EXTRA_MUTED = "muted"
         private const val CHANNEL_ID = "myra_voice"
         private const val NOTIFICATION_ID = 1001
+        private val PHANTOM_TRANSCRIPT = Regex(
+            "^(?:in|si|sí|hm+|hmm+|um+|uh+|ah+|oh+|mm+)(?:\\s+(?:in|si|sí|hm+|hmm+|um+|uh+|ah+|oh+|mm+))*$",
+            RegexOption.IGNORE_CASE
+        )
         @Volatile var isRunning = false
         @Volatile var listener: Listener? = null
         @Volatile private var instance: MyraVoiceService? = null
