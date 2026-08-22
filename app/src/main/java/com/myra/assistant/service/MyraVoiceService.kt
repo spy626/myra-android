@@ -484,7 +484,8 @@ class MyraVoiceService : Service() {
         }
         if (silentRepeatedScroll) {
             audio?.setMuted(false)
-            suppressModelForTurn = false
+            // Keep this turn suppressed until the next real user transcript. Gemini may
+            // still deliver late packets for the intercepted utterance; none may speak.
             emitState("Sun rahi hoon…")
             return
         }
