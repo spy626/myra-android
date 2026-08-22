@@ -64,7 +64,7 @@ object VoiceResponseFormatter {
             CommandType.MEDIA_FIRST -> mediaResponse("first", gfMode)
             CommandType.YOUTUBE_SCROLL_DOWN -> if (gfMode) "Neeche scroll kar diya, jaan." else "Neeche scroll kar diya."
             CommandType.YOUTUBE_SCROLL_UP -> if (gfMode) "Upar scroll kar diya, jaan." else "Upar scroll kar diya."
-            CommandType.YOUTUBE_SCROLL_REPEAT -> if (gfMode) "Haan jaan, usi direction mein ek baar aur scroll kar diya." else "Ussi direction mein scroll kar diya."
+            CommandType.YOUTUBE_SCROLL_REPEAT -> result.spokenMessage
             else -> result.spokenMessage
         }
     }
