@@ -5,7 +5,6 @@ import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.SurfaceView
-import android.widget.Toast
 import com.google.android.filament.View
 import com.google.android.filament.utils.ModelViewer
 import com.google.android.filament.utils.Utils
@@ -29,6 +28,7 @@ class LyraCharacterView @JvmOverloads constructor(
         init { Utils.init() }
         private const val MODEL_ASSET = "models/lyra_elf_1k.glb"
         private const val TAP_SLOP_PX = 18f
+        private const val TAP_COOLDOWN_MS = 2_500L
     }
 
     private val choreographer = Choreographer.getInstance()
@@ -37,6 +37,8 @@ class LyraCharacterView @JvmOverloads constructor(
     private var downX = 0f
     private var downY = 0f
     private var moved = false
+    private var lastTapAt = 0L
+    var onCharacterTapped: (() -> Unit)? = null
 
     init {
         isClickable = true
@@ -60,11 +62,26 @@ class LyraCharacterView @JvmOverloads constructor(
                 MotionEvent.ACTION_UP -> {
                     if (!moved) {
                         performClick()
-                        Toast.makeText(context, "Mujhe touch mat karo", Toast.LENGTH_SHORT).show()
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (now - lastTapAt >= TAP_COOLDOWN_MS) {
+                            lastTapAt = now
+                            onCharacterTapped?.invoke()
+                        }
                     }
                 }
             }
-            modelViewer.onTouchEvent(event)
+
+            // Keep one-finger character inspection horizontal so LYRA cannot flip
+            // sideways or upside-down. Multi-touch remains available for zoom.
+            if (event.pointerCount == 1) {
+                MotionEvent.obtain(event).also { constrained ->
+                    constrained.setLocation(event.x, downY)
+                    modelViewer.onTouchEvent(constrained)
+                    constrained.recycle()
+                }
+            } else {
+                modelViewer.onTouchEvent(event)
+            }
             true
         }
     }
