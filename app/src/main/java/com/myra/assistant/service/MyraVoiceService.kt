@@ -122,6 +122,7 @@ class MyraVoiceService : Service() {
         ).also { client ->
             client.onState = { emitState(it) }
             client.onReady = {
+                isNaturalVoiceReady = true
                 audio?.start()
                 listener?.onReady()
                 if (!hasGreeted) {
@@ -877,7 +878,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -893,6 +894,7 @@ class MyraVoiceService : Service() {
             RegexOption.IGNORE_CASE
         )
         @Volatile var isRunning = false
+        @Volatile var isNaturalVoiceReady = false
         @Volatile var listener: Listener? = null
         @Volatile private var instance: MyraVoiceService? = null
         fun sendText(text: String) { instance?.live?.sendText(text) }
@@ -901,6 +903,7 @@ class MyraVoiceService : Service() {
         fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
         fun announceWhatsApp(sender: String, message: String?) { instance?.speakWhatsAppAnnouncement(sender, message) }
         fun speakLocal(message: String) {
+            if (!isNaturalVoiceReady) return
             instance?.let { service ->
                 service.mediaGuard.beginAssistantTurn()
                 service.queueLocalSpeech(message, allowUntranscribedAudio = true)
