@@ -153,7 +153,7 @@ class MainActivity : AppCompatActivity() {
             "Tum mujhe touch karke kya dekh rahe ho?",
             "Aise baar-baar touch kyun kar rahe ho, Zopy?",
             "Hey... mujhe gudgudi hoti hai.",
-            "Kya hua jaan, attention chahiye?",
+            "Kya hua yaar, attention chahiye?",
             "Mujhe touch karna itna pasand hai kya?",
             "Phir se touch? Bade shararti ho tum."
         )
@@ -211,7 +211,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun systemPrompt(name: String, mode: String): String {
-        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Warm caring Hinglish girlfriend-style companion. Use natural words like haan, acha, bilkul. At most three sentences." }
+        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Warm close-friend Hinglish companion. Never use romantic pet names such as jaan or dear. Use natural friendship words like yaar, dost, haan, acha, or bilkul only when they fit. At most three sentences." }
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
         return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style Keep every response natural, conversational and safe. When the user asks to open or close an Android app, reply only with a brief acknowledgement such as Okay; never claim the action succeeded because the Android command layer reports the real result."
     }
