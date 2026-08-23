@@ -139,14 +139,9 @@ object VoiceResponseFormatter {
         return next(
             "close_completed",
             listOf(
-                "Aapke liye $app close kar diya.",
-                "$app close kar diya tumhare liye.",
-                "Lo, $app band kar diya.",
-                "Done yaar, $app se bahar aa gaye.",
-                "Bilkul, $app close kar diya. Main sun rahi hoon.",
-                "Ho gaya, $app band kar diya tumhare liye.",
-                "Tumne kaha aur $app close.",
-                "Okay $name, $app se bahar aa gaye."
+                "$app band kar diya.",
+                "$app close ho gaya.",
+                "$app close kar diya."
             )
         )
     }
