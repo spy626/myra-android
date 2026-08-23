@@ -293,6 +293,7 @@ class MainActivity : AppCompatActivity() {
             addView(bubble, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         b.chatContainer.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        while (b.chatContainer.childCount > 3) b.chatContainer.removeViewAt(0)
         b.chatScroll.post { b.chatScroll.fullScroll(android.view.View.FOCUS_DOWN) }
     }
     private fun executeAppCommand(text: String): Boolean {

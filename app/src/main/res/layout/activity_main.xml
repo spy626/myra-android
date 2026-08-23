@@ -116,7 +116,7 @@
     <ScrollView
         android:id="@+id/chatScroll"
         android:layout_width="0dp"
-        android:layout_height="150dp"
+        android:layout_height="96dp"
         android:layout_marginHorizontal="22dp"
         android:layout_marginBottom="10dp"
         android:fillViewport="true"
