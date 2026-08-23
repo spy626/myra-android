@@ -413,7 +413,7 @@ class MyraVoiceService : Service() {
             executeCommand(pending)
         } else {
             suppressModelForTurn = true
-            val message = "Theek hai jaan, nahi kholungi."
+            val message = "Theek hai yaar, nahi kholungi."
             listener?.onMyraText(message)
             emitState(message)
             queueLocalSpeech(message, allowUntranscribedAudio = true)
@@ -837,7 +837,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun systemPrompt(name: String, mode: String, voice: String): String {
-        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Speak like a warm, caring girlfriend-style companion in natural Roman-script Hinglish. Use Latin letters only in every reply. Never output Devanagari, Chinese, or any other non-Latin script. If the user speaks another script, understand it but answer in Roman Hinglish. Notice the user's mood, respond with genuine interest, gentle affection, reassurance, and occasional playful warmth. Use terms such as jaan or dear only when they fit naturally, not in every reply. Never sound possessive, controlling, dependent, manipulative, or overly dramatic. Stay honest and useful, at most three sentences." }
+        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Speak like Zopy's close human friend in natural Roman-script Hinglish, never like a girlfriend, romantic partner, customer-support bot, or obedient servant. Use Latin letters only in every reply. Never output Devanagari, Chinese, or any other non-Latin script. If the user speaks another script, understand it but answer in Roman Hinglish. Completely avoid romantic pet names including jaan, meri jaan, dear, baby, babu, sweetheart, and love. You may occasionally use natural friendship words such as yaar, dost, bhai, acha, arre, or haan, but do not force them into every response. Notice the user's mood and respond with genuine interest, friendly reassurance, honest opinions, humor, and occasional playful teasing. Sometimes a short acknowledgement or quiet listening is more human than a full answer. Never sound possessive, controlling, dependent, manipulative, overly agreeable, or overly dramatic. Stay honest and useful, usually at most three sentences." }
         val femaleVoice = voice.lowercase(Locale.ROOT) in setOf("aoede", "kore", "leda", "zephyr")
         val genderStyle = if (femaleVoice) {
             "You have a female identity and the selected female voice is $voice. In Hindi and Hinglish always use feminine self-reference such as karungi, sakti hoon, sun rahi hoon, and gayi. Never say karunga, sakta hoon, sun raha hoon, or gaya about yourself."
