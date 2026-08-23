@@ -33,4 +33,25 @@ class CommandParserTest {
     fun explicitMessageSendStillStartsWhatsAppFlow() {
         assertTrue(CommandParser.parse("message bhejo") is AppCommand.ReplyWhatsApp)
     }
+    @Test fun explicitRememberStatementIsMemoryIntentNotPhoneCommand() {
+        val text = "Remember that I like horror movies"
+        assertTrue(CommandParser.isMemoryIntent(text))
+        assertNull(CommandParser.parse(text))
+    }
+
+    @Test fun memoryQuestionIsNotPhoneCommand() {
+        val text = "What do you remember about me"
+        assertTrue(CommandParser.isMemoryIntent(text))
+        assertNull(CommandParser.parse(text))
+    }
+
+    @Test fun forgetStatementIsNotPhoneCommand() {
+        val text = "Forget that I like horror movies"
+        assertTrue(CommandParser.isMemoryIntent(text))
+        assertNull(CommandParser.parse(text))
+    }
+
+    @Test fun hinglishRememberStatementIsProtected() {
+        assertTrue(CommandParser.isMemoryIntent("Yaad rakhna ki mujhe horror movies pasand hain"))
+    }
 }

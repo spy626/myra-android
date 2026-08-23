@@ -76,6 +76,18 @@ object CommandParser {
         return null
     }
 
+    fun isMemoryIntent(raw: String): Boolean {
+        val text = normalize(raw)
+        return listOf(
+            Regex("^(?:please\\s+)?remember\\s+(?:that\\s+)?\\S.+$"),
+            Regex("^(?:please\\s+)?forget\\s+(?:that\\s+)?\\S.+$"),
+            Regex("^(?:what|kya)\\s+do\\s+you\\s+remember(?:\\s+about\\s+me)?$"),
+            Regex("^(?:tumhe|tumko)\\s+mere\\s+baare\\s+mein\\s+kya\\s+yaad\\s+hai$"),
+            Regex("^(?:yaad\\s+rakhna|yaad\\s+rakho)\\s+(?:ki\\s+)?\\S.+$"),
+            Regex("^(?:ye|yeh|is\\s+baat\\s+ko)\\s+(?:bhool\\s+jao|bhoolna)$")
+        ).any { it.matches(text) }
+    }
+
     fun isProbableDeviceAction(raw: String): Boolean {
         val text = normalize(raw)
         if (text.isBlank()) return false
