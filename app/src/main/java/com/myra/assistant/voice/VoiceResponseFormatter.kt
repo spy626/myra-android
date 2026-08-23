@@ -40,7 +40,7 @@ object VoiceResponseFormatter {
                 listOf(
                     "Haan, flashlight on kar diya. Ab sab clearly dikh raha hai?",
                     "Lo, flashlight jala diya tumhare liye.",
-                    "Of course, flashlight on ho gaya. Ab bolo, aur kya karun?",
+                    "Of course, flashlight on ho gaya.",
                     "Done Zopy, flashlight on kar diya. Main yahin hoon.",
                     "Haanji, roshni kar di.",
                     "Bas tumne kaha aur flashlight on."
@@ -139,10 +139,10 @@ object VoiceResponseFormatter {
         return next(
             "close_completed",
             listOf(
-                "Aapke liye $app close kar diya. ",
+                "Aapke liye $app close kar diya.",
                 "$app close kar diya tumhare liye.",
                 "Lo, $app band kar diya.",
-                "Done yaar, $app se bahar aa gaye. ",
+                "Done yaar, $app se bahar aa gaye.",
                 "Bilkul, $app close kar diya. Main sun rahi hoon.",
                 "Ho gaya, $app band kar diya tumhare liye.",
                 "Tumne kaha aur $app close.",
@@ -162,7 +162,7 @@ object VoiceResponseFormatter {
                 "Haan, $app close kar deti hoon.",
                 "Okay, $app band kar deti hoon tumhare liye.",
                 "Bas ek second, $app close kar rahi hoon.",
-                "Bilkul, $app band kar deti hoon. Ab bolo, aur kya karun?",
+                "Bilkul, $app band kar deti hoon.",
                 "Theek hai, $app se bahar aa jaate hain.",
                 "Kar deti hoon.",
                 "Of course, $app close kar deti hoon tumhare liye.",
