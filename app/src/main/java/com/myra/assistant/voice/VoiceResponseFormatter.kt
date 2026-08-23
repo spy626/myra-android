@@ -19,14 +19,14 @@ object VoiceResponseFormatter {
         return when (command.type) {
             CommandType.OPEN_APP -> if (gfMode) openCompleted(command.target, name) else if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
             CommandType.CLOSE_APP -> closeCompleted(command.target, personality, name)
-            CommandType.OPEN_YOUTUBE_SHORTS -> "YouTube Shorts open kar diya, jaan."
+            CommandType.OPEN_YOUTUBE_SHORTS -> "YouTube Shorts open kar diya,."
             CommandType.REQUEST_INSTAGRAM_REELS -> "Instagram open kar dun tumhare liye?"
-            CommandType.OPEN_INSTAGRAM_REELS -> "Instagram Reels open kar diya tumhare liye, jaan."
-            CommandType.TAKE_SCREENSHOT -> "Screenshot le liya, jaan."
+            CommandType.OPEN_INSTAGRAM_REELS -> "Instagram Reels open kar diya tumhare liye,."
+            CommandType.TAKE_SCREENSHOT -> "Screenshot le liya,."
             CommandType.PLAY_YOUTUBE -> {
                 val query = command.content?.let(::humanize)
-                if (query.isNullOrBlank()) "Haan jaan, bore mat ho. Tumhare liye ek video chala rahi hoon."
-                else "Haan jaan, YouTube par $query dhoondhkar chala rahi hoon."
+                if (query.isNullOrBlank()) "Haan, bore mat ho. Tumhare liye ek video chala rahi hoon."
+                else "Haan, YouTube par $query dhoondhkar chala rahi hoon."
             }
             CommandType.SEARCH_YOUTUBE, CommandType.REPEAT_YOUTUBE_SEARCH -> {
                 val query = humanize(command.content ?: command.target.orEmpty())
@@ -38,23 +38,23 @@ object VoiceResponseFormatter {
             CommandType.FLASHLIGHT_ON -> if (gfMode) next(
                 "flashlight_on",
                 listOf(
-                    "Haan jaan, flashlight on kar diya. Ab sab clearly dikh raha hai?",
-                    "Lo dear, flashlight jala diya tumhare liye. Aur kuch chahiye?",
-                    "Of course jaan, flashlight on ho gaya. Ab bolo, aur kya karun?",
+                    "Haan, flashlight on kar diya. Ab sab clearly dikh raha hai?",
+                    "Lo, flashlight jala diya tumhare liye. Aur kuch chahiye?",
+                    "Of course, flashlight on ho gaya. Ab bolo, aur kya karun?",
                     "Done Zopy, flashlight on kar diya. Main yahin hoon.",
-                    "Haanji dear, roshni kar di. Aur kuch karun?",
-                    "Bas tumne kaha aur flashlight on, jaan. Ab batao?"
+                    "Haanji, roshni kar di. Aur kuch karun?",
+                    "Bas tumne kaha aur flashlight on,. Ab batao?"
                 )
             ) else "Flashlight on kar diya. Aur kuch karun?"
             CommandType.FLASHLIGHT_OFF -> if (gfMode) next(
                 "flashlight_off",
                 listOf(
-                    "Haan jaan, flashlight off kar diya. Aur kuch chahiye?",
-                    "Lo dear, flashlight band kar diya. Ab bolo?",
-                    "Of course jaan, roshni band kar di. Main sun rahi hoon.",
+                    "Haan, flashlight off kar diya. Aur kuch chahiye?",
+                    "Lo, flashlight band kar diya. Ab bolo?",
+                    "Of course, roshni band kar di. Main sun rahi hoon.",
                     "Done Zopy, flashlight off kar diya. Aur kuch karun?",
-                    "Haanji dear, flashlight band ho gaya. Ab kya karna hai?",
-                    "Tumne kaha aur flashlight off, jaan. Aur kuch?"
+                    "Haanji, flashlight band ho gaya. Ab kya karna hai?",
+                    "Tumne kaha aur flashlight off,. Aur kuch?"
                 )
             ) else "Flashlight off kar diya. Aur kuch chahiye aapko?"
             CommandType.MEDIA_PAUSE -> mediaResponse("pause", gfMode)
@@ -62,8 +62,8 @@ object VoiceResponseFormatter {
             CommandType.MEDIA_NEXT -> mediaResponse("next", gfMode)
             CommandType.MEDIA_PREVIOUS -> mediaResponse("previous", gfMode)
             CommandType.MEDIA_FIRST -> mediaResponse("first", gfMode)
-            CommandType.YOUTUBE_SCROLL_DOWN -> if (gfMode) "Neeche scroll kar diya, jaan." else "Neeche scroll kar diya."
-            CommandType.YOUTUBE_SCROLL_UP -> if (gfMode) "Upar scroll kar diya, jaan." else "Upar scroll kar diya."
+            CommandType.YOUTUBE_SCROLL_DOWN -> if (gfMode) "Neeche scroll kar diya,." else "Neeche scroll kar diya."
+            CommandType.YOUTUBE_SCROLL_UP -> if (gfMode) "Upar scroll kar diya,." else "Upar scroll kar diya."
             CommandType.YOUTUBE_SCROLL_REPEAT -> result.spokenMessage
             else -> result.spokenMessage
         }
@@ -81,34 +81,34 @@ object VoiceResponseFormatter {
         }
         val options = when (action) {
             "pause" -> listOf(
-                "Haan jaan, video pause kar diya. Jab bolo phir chala dungi.",
-                "Lo dear, video rok diya. Aaram se batao, ab kya karna hai?",
-                "Pause kar diya meri jaan. Main sun rahi hoon.",
-                "Video ruk gaya, jaan. Jab chaho resume kar denge."
+                "Haan, video pause kar diya. Jab bolo phir chala dungi.",
+                "Lo, video rok diya. Aaram se batao, ab kya karna hai?",
+                "Pause kar diya yaar. Main sun rahi hoon.",
+                "Video ruk gaya,. Jab chaho resume kar denge."
             )
             "play" -> listOf(
-                "Lo jaan, video phir se chala diya.",
-                "Haan dear, video play kar diya. Enjoy karo.",
-                "Video chala diya meri jaan. Aur kuch chahiye?",
-                "Resume kar diya, jaan. Main yahin hoon."
+                "Lo, video phir se chala diya.",
+                "Haan, video play kar diya. Enjoy karo.",
+                "Video chala diya yaar. Aur kuch chahiye?",
+                "Resume kar diya,. Main yahin hoon."
             )
             "next" -> listOf(
-                "Agla video chala diya, dear. Ye dekhte hain?",
-                "Lo jaan, next video laga diya.",
-                "Next kar diya meri jaan. Batao, ye pasand hai?",
-                "Agla video aa gaya, dear. Aur kuch karun?"
+                "Agla video chala diya,. Ye dekhte hain?",
+                "Lo, next video laga diya.",
+                "Next kar diya yaar. Batao, ye pasand hai?",
+                "Agla video aa gaya,. Aur kuch karun?"
             )
             "previous" -> listOf(
-                "Pichhla video command bhej diya tumhare liye, jaan.",
-                "Lo dear, previous video command bhej diya.",
-                "Pehle wale video ka command bhej diya, meri jaan.",
-                "Previous karne ko bol diya. Ab check karo, jaan."
+                "Pichhla video command bhej diya tumhare liye,.",
+                "Lo, previous video command bhej diya.",
+                "Pehle wale video ka command bhej diya, yaar.",
+                "Previous karne ko bol diya. Ab check karo,."
             )
             else -> listOf(
-                "First video par tap kar diya, jaan.",
-                "Lo dear, sabse pehla video select kar diya.",
-                "Pehla video open karne ke liye tap kar diya, meri jaan.",
-                "First video choose kar diya. Ab dekhte hain, jaan."
+                "First video par tap kar diya,.",
+                "Lo, sabse pehla video select kar diya.",
+                "Pehla video open karne ke liye tap kar diya, yaar.",
+                "First video choose kar diya. Ab dekhte hain,."
             )
         }
         return next("media_$action", options)
@@ -119,14 +119,14 @@ object VoiceResponseFormatter {
         return next(
             "open_app",
             listOf(
-                "$app open kar diya meri jaan ke liye. Aur kuch chahiye?",
-                "Lo jaan, $app khol diya tumhare liye.",
-                "Haanji dear, $app open kar diya. Ab bolo?",
-                "Of course jaan, $app khol diya. Aur kya karun?",
-                "Tumne kaha aur $app open, jaan. Ab batao?",
+                "$app open kar diya tumhare liye, yaar. Aur kuch chahiye?",
+                "Lo, $app khol diya tumhare liye.",
+                "Haanji, $app open kar diya. Ab bolo?",
+                "Of course, $app khol diya. Aur kya karun?",
+                "Tumne kaha aur $app open,. Ab batao?",
                 "Done $name, $app khol diya tumhare liye.",
-                "Bilkul dear, $app open kar diya. Main sun rahi hoon.",
-                "Ye lo jaan, $app khol diya. Aur kuch dekhna hai?"
+                "Bilkul, $app open kar diya. Main sun rahi hoon.",
+                "Ye lo, $app khol diya. Aur kuch dekhna hai?"
             )
         )
     }
@@ -139,13 +139,13 @@ object VoiceResponseFormatter {
         return next(
             "close_completed",
             listOf(
-                "Aapke liye $app close kar diya, jaan. Ab theek hai? Aur kuch karun?",
-                "$app close kar diya tumhare liye, dear. Ab bolo?",
-                "Lo jaan, $app band kar diya. Aur kuch chahiye?",
-                "Done meri jaan, $app se bahar aa gaye. Ab theek hai?",
-                "Bilkul dear, $app close kar diya. Main sun rahi hoon.",
-                "Ho gaya jaan, $app band kar diya tumhare liye. Aur kuch?",
-                "Tumne kaha aur $app close, jaan. Ab batao?",
+                "Aapke liye $app close kar diya,. Ab theek hai? Aur kuch karun?",
+                "$app close kar diya tumhare liye,. Ab bolo?",
+                "Lo, $app band kar diya. Aur kuch chahiye?",
+                "Done yaar, $app se bahar aa gaye. Ab theek hai?",
+                "Bilkul, $app close kar diya. Main sun rahi hoon.",
+                "Ho gaya, $app band kar diya tumhare liye. Aur kuch?",
+                "Tumne kaha aur $app close,. Ab batao?",
                 "Okay $name, $app se bahar aa gaye. Aur kya karun?"
             )
         )
@@ -159,16 +159,16 @@ object VoiceResponseFormatter {
         return next(
             "close_app",
             listOf(
-                "Haan jaan, $app close kar deti hoon. Aur kuch chahiye?",
-                "Okay dear, $app band kar deti hoon tumhare liye.",
-                "Bas ek second jaan, $app close kar rahi hoon.",
+                "Haan, $app close kar deti hoon. Aur kuch chahiye?",
+                "Okay, $app band kar deti hoon tumhare liye.",
+                "Bas ek second, $app close kar rahi hoon.",
                 "Bilkul, $app band kar deti hoon. Ab bolo, aur kya karun?",
-                "Theek hai dear, $app se bahar aa jaate hain.",
-                "Kar deti hoon jaan. Aur kuch dekhna hai?",
-                "Of course jaan, $app close kar deti hoon tumhare liye.",
+                "Theek hai, $app se bahar aa jaate hain.",
+                "Kar deti hoon. Aur kuch dekhna hai?",
+                "Of course, $app close kar deti hoon tumhare liye.",
                 "Okay $name, $app band kar rahi hoon. Main sun rahi hoon.",
-                "Haanji dear, $app close kar deti hoon. Ab batao?",
-                "Done samjho jaan, $app band kar rahi hoon."
+                "Haanji, $app close kar deti hoon. Ab batao?",
+                "Done samjho, $app band kar rahi hoon."
             )
         )
     }
