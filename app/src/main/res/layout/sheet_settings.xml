@@ -32,7 +32,7 @@
     <TextView android:id="@+id/voiceChoice" style="@style/MyraChoice" android:text="Aoede (Female)" />
     <TextView style="@style/MyraLabel" android:text="PERSONALITY" />
     <RadioGroup android:id="@+id/personalityGroup" android:layout_width="match_parent" android:layout_height="48dp" android:orientation="horizontal">
-        <RadioButton android:id="@+id/gfMode" style="@style/MyraPill" android:text="GF 💖" android:checked="true" />
+        <RadioButton android:id="@+id/gfMode" style="@style/MyraPill" android:text="Friend Mode" android:checked="true" />
         <RadioButton android:id="@+id/proMode" style="@style/MyraPill" android:text="PROFESSIONAL 💼" />
         <RadioButton android:id="@+id/assistantMode" style="@style/MyraPill" android:text="ASSISTANT 🤖" />
     </RadioGroup>
