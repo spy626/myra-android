@@ -140,4 +140,19 @@ class VoiceResponseFormatterTest {
             VoiceResponseFormatter.closeCompleted("YouTube", "Assistant")
         )
     }
+
+    @Test fun friendCompletedCloseResponsesStayShortAndInformal() {
+        val allowed = setOf(
+            "YouTube band kar diya.",
+            "YouTube close ho gaya.",
+            "YouTube close kar diya."
+        )
+
+        repeat(12) {
+            val response = VoiceResponseFormatter.closeCompleted("YouTube", "Friend")
+            assertTrue(response in allowed)
+            assertTrue(!response.contains("aapke liye", ignoreCase = true))
+            assertTrue(!response.contains("tumhare liye", ignoreCase = true))
+        }
+    }
 }
