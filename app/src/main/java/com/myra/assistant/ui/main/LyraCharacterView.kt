@@ -1,51 +1,45 @@
 package com.myra.assistant.ui.main
 
 import android.content.Context
+import android.graphics.Matrix
+import android.graphics.SurfaceTexture
+import android.media.MediaPlayer
 import android.util.AttributeSet
-import android.view.Choreographer
 import android.view.MotionEvent
-import android.view.SurfaceView
-import com.google.android.filament.View
-import com.google.android.filament.utils.ModelViewer
-import com.google.android.filament.utils.Utils
-import java.nio.ByteBuffer
+import android.view.Surface
+import android.view.TextureView
 import kotlin.math.abs
 
 /**
- * Stable front-facing renderer for LYRA.
+ * Displays LYRA's silent idle animation as a hardware-accelerated looping video.
  *
- * Character rotation is intentionally disabled in this recovery version. The
- * previous camera orbit and experimental bone/root transforms could turn the
- * model sideways. Tap reactions remain available without deforming the GLB.
+ * The class name and tap callback are intentionally preserved so MainActivity
+ * and the existing layout do not need risky changes.
  */
 class LyraCharacterView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
-) : SurfaceView(context, attrs, defStyleAttr), Choreographer.FrameCallback {
+) : TextureView(context, attrs, defStyleAttr), TextureView.SurfaceTextureListener {
 
     companion object {
-        init { Utils.init() }
-        private const val MODEL_ASSET = "models/lyra_elf_1k.glb"
         private const val TAP_SLOP_PX = 18f
         private const val TAP_COOLDOWN_MS = 5_000L
     }
 
-    private val choreographer = Choreographer.getInstance()
-    private val modelViewer = ModelViewer(this)
-    private var rendering = false
+    private var player: MediaPlayer? = null
+    private var playbackSurface: Surface? = null
     private var downX = 0f
     private var downY = 0f
     private var moved = false
     private var lastTapAt = 0L
+
     var onCharacterTapped: (() -> Unit)? = null
 
     init {
         isClickable = true
-        setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        modelViewer.view.blendMode = View.BlendMode.TRANSLUCENT
-        modelViewer.scene.skybox = null
-        loadBundledModel()
+        isOpaque = true
+        surfaceTextureListener = this
 
         setOnTouchListener { _, event ->
             when (event.actionMasked) {
@@ -54,12 +48,16 @@ class LyraCharacterView @JvmOverloads constructor(
                     downY = event.y
                     moved = false
                 }
-                MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> moved = true
+                MotionEvent.ACTION_POINTER_DOWN,
+                MotionEvent.ACTION_POINTER_UP -> moved = true
                 MotionEvent.ACTION_MOVE -> {
-                    if (event.pointerCount > 1 ||
+                    if (
+                        event.pointerCount > 1 ||
                         abs(event.x - downX) > TAP_SLOP_PX ||
                         abs(event.y - downY) > TAP_SLOP_PX
-                    ) moved = true
+                    ) {
+                        moved = true
+                    }
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!moved) {
@@ -71,18 +69,9 @@ class LyraCharacterView @JvmOverloads constructor(
                         }
                     }
                 }
+                MotionEvent.ACTION_CANCEL -> moved = true
             }
             true
-        }
-    }
-
-    private fun loadBundledModel() {
-        runCatching {
-            val data = context.assets.open(MODEL_ASSET).use { ByteBuffer.wrap(it.readBytes()) }
-            modelViewer.loadModelGlb(data)
-            modelViewer.transformToUnitCube()
-        }.onFailure {
-            visibility = GONE
         }
     }
 
@@ -91,21 +80,93 @@ class LyraCharacterView @JvmOverloads constructor(
         return true
     }
 
+    override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        startVideo(surfaceTexture)
+    }
+
+    override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        updateVideoTransform()
+    }
+
+    override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
+        releasePlayer()
+        return true
+    }
+
+    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        rendering = true
-        choreographer.postFrameCallback(this)
+        if (isAvailable && player == null) {
+            surfaceTexture?.let(::startVideo)
+        }
     }
 
     override fun onDetachedFromWindow() {
-        rendering = false
-        choreographer.removeFrameCallback(this)
+        releasePlayer()
         super.onDetachedFromWindow()
     }
 
-    override fun doFrame(frameTimeNanos: Long) {
-        if (!rendering) return
-        choreographer.postFrameCallback(this)
-        modelViewer.render(frameTimeNanos)
+    private fun startVideo(surfaceTexture: SurfaceTexture) {
+        releasePlayer()
+        val surface = Surface(surfaceTexture)
+        playbackSurface = surface
+
+        runCatching {
+            val descriptor = resources.openRawResourceFd(com.myra.assistant.R.raw.lyra_idle)
+            MediaPlayer().also { mediaPlayer ->
+                player = mediaPlayer
+                mediaPlayer.setDataSource(
+                    descriptor.fileDescriptor,
+                    descriptor.startOffset,
+                    descriptor.length
+                )
+                descriptor.close()
+                mediaPlayer.setSurface(surface)
+                mediaPlayer.isLooping = true
+                mediaPlayer.setVolume(0f, 0f)
+                mediaPlayer.setOnVideoSizeChangedListener { _, _, _ -> updateVideoTransform() }
+                mediaPlayer.setOnPreparedListener {
+                    updateVideoTransform()
+                    it.start()
+                }
+                mediaPlayer.prepareAsync()
+            }
+        }.onFailure {
+            releasePlayer()
+            visibility = GONE
+        }
+    }
+
+    private fun updateVideoTransform() {
+        val mediaPlayer = player ?: return
+        val videoWidth = mediaPlayer.videoWidth
+        val videoHeight = mediaPlayer.videoHeight
+        if (width == 0 || height == 0 || videoWidth == 0 || videoHeight == 0) return
+
+        val viewRatio = width.toFloat() / height.toFloat()
+        val videoRatio = videoWidth.toFloat() / videoHeight.toFloat()
+        val scaleX: Float
+        val scaleY: Float
+
+        if (videoRatio > viewRatio) {
+            scaleX = videoRatio / viewRatio
+            scaleY = 1f
+        } else {
+            scaleX = 1f
+            scaleY = viewRatio / videoRatio
+        }
+
+        setTransform(Matrix().apply {
+            setScale(scaleX, scaleY, width / 2f, height / 2f)
+        })
+    }
+
+    private fun releasePlayer() {
+        player?.runCatching { stop() }
+        player?.release()
+        player = null
+        playbackSurface?.release()
+        playbackSurface = null
     }
 }
