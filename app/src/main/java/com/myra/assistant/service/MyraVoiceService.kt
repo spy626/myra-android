@@ -808,6 +808,7 @@ class MyraVoiceService : Service() {
         mainHandler.removeCallbacks(idleNudgeRunnable)
         audio?.interrupt(); live?.interrupt()
         if (query.isBlank()) {
+            deepResearchActive = false
             val prompt = "Haan, deep research kar sakti hoon. Kis topic par research chahiye?"
             listener?.onMyraText(prompt); emitState("Waiting for a research topic")
             speakResearchSummary(prompt)
