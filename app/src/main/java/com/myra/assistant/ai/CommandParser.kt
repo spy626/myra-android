@@ -115,8 +115,14 @@ object CommandParser {
             Regex("^(.+?)\\s+(?:bhejo|send\\s+karo|भेजो)$")
         ).firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1)?.let(::cleanReplyText) }
         contextual?.takeIf { it.isNotBlank() }?.let { return AppCommand.ReplyWhatsApp(null, it) }
-        val messaging = Regex("(?:\\b(?:reply|replay|jawab|bhejo|send\\s+karo)\\b|रिप्लाई|जवाब|मैसेज|भेजो)")
-        return if (messaging.containsMatchIn(text)) AppCommand.ReplyWhatsApp(null, "") else null
+        // Only an explicit standalone messaging instruction may open the
+        // WhatsApp reply flow. Ordinary conversation can mention a friend,
+        // messages, or delayed replies without becoming a phone command.
+        val explicitPrompt = Regex(
+            "^(?:(?:whatsapp|व्हाट्सएप|वॉट्सऐप)\\s+)?(?:reply|replay|jawab|रिप्लाई|रिप्लाय|जवाब)(?:\\s+(?:do|karo|करो|दो))?$" +
+                "|^(?:message|msg|मैसेज)\\s+(?:bhejo|send\\s+karo|भेजो)$"
+        )
+        return if (explicitPrompt.matches(text)) AppCommand.ReplyWhatsApp(null, "") else null
     }
 
     private fun isWhatsAppMessageQuery(text: String): Boolean {
