@@ -25,7 +25,7 @@ class VoiceResponseFormatterTest {
         val command = Command(CommandType.SEARCH_YOUTUBE, "YouTube", "jonathan gaming", "search", null)
         val result = AssistantResult(true, false, "SEARCH_YOUTUBE", "YouTube", "accepted")
         assertEquals(
-            "Done Zopy, YouTube par Jonathan Gaming search kar diya. Aur kuch karun?",
+            "Done Zopy, YouTube par Jonathan Gaming search kar diya.",
             VoiceResponseFormatter.format(command, result)
         )
     }
@@ -65,11 +65,11 @@ class VoiceResponseFormatterTest {
         val onResult = AssistantResult(true, true, "FLASHLIGHT_ON", spokenMessage = "on")
         val offResult = AssistantResult(true, true, "FLASHLIGHT_OFF", spokenMessage = "off")
         assertEquals(
-            "Flashlight on kar diya. Aur kuch karun?",
+            "Flashlight on kar diya.",
             VoiceResponseFormatter.format(on, onResult, personality = "Assistant")
         )
         assertEquals(
-            "Flashlight off kar diya. Aur kuch chahiye aapko?",
+            "Flashlight off kar diya.",
             VoiceResponseFormatter.format(off, offResult, personality = "Assistant")
         )
     }
@@ -136,7 +136,7 @@ class VoiceResponseFormatterTest {
 
     @Test fun assistantCompletedCloseResponseStaysNeutral() {
         assertEquals(
-            "YouTube close kar diya. Aur kuch karun?",
+            "YouTube close kar diya.",
             VoiceResponseFormatter.closeCompleted("YouTube", "Assistant")
         )
     }
