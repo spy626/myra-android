@@ -15,7 +15,7 @@ object VoiceResponseFormatter {
         personality: String = "Assistant"
     ): String {
         if (!result.success) return result.spokenMessage
-        val gfMode = personality.equals("GF", ignoreCase = true)
+        val gfMode = personality.equals("GF", ignoreCase = true) || personality.equals("Friend", ignoreCase = true)
         return when (command.type) {
             CommandType.OPEN_APP -> if (gfMode) openCompleted(command.target, name) else if (result.verified) "${command.target} khol diya, $name." else "$name, ${command.target} khol rahi hoon."
             CommandType.CLOSE_APP -> closeCompleted(command.target, personality, name)
@@ -133,7 +133,7 @@ object VoiceResponseFormatter {
 
     fun closeCompleted(target: String?, personality: String, name: String = "Zopy"): String {
         val app = target?.trim().takeUnless { it.isNullOrBlank() } ?: "YouTube"
-        if (!personality.equals("GF", ignoreCase = true)) {
+        if (!(personality.equals("GF", ignoreCase = true) || personality.equals("Friend", ignoreCase = true))) {
             return "$app close kar diya. Aur kuch karun?"
         }
         return next(
@@ -153,7 +153,7 @@ object VoiceResponseFormatter {
 
     fun closeStarting(target: String?, personality: String, name: String = "Zopy"): String {
         val app = target?.trim().takeUnless { it.isNullOrBlank() } ?: "YouTube"
-        if (!personality.equals("GF", ignoreCase = true)) {
+        if (!(personality.equals("GF", ignoreCase = true) || personality.equals("Friend", ignoreCase = true))) {
             return "$app close kar rahi hoon. Aur kuch karun?"
         }
         return next(
