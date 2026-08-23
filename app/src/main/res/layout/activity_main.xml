@@ -133,9 +133,23 @@
             android:paddingVertical="4dp" />
     </ScrollView>
 
+    <ImageButton
+        android:id="@+id/chatToggleButton"
+        android:layout_width="54dp"
+        android:layout_height="54dp"
+        android:layout_marginStart="22dp"
+        android:background="@drawable/bg_circle_outline"
+        android:contentDescription="Open text chat"
+        android:padding="13dp"
+        android:src="@drawable/ic_lyra_sparkle"
+        android:tint="#A8FFB2"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/controlRow" />
+
     <LinearLayout
         android:id="@+id/composer"
         android:layout_width="0dp"
+        android:visibility="invisible"
         android:layout_height="54dp"
         android:layout_marginHorizontal="22dp"
         android:orientation="horizontal"
