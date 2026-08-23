@@ -25,6 +25,11 @@ class MemoryRepository(private val dao: MemoryDao) {
     suspend fun forget(id: String): Boolean =
         dao.deactivate(id, System.currentTimeMillis()) > 0
 
+    suspend fun forgetMatching(query: String): Boolean {
+        val match = relevant(query, 10).firstOrNull() ?: return false
+        return forget(match.id)
+    }
+
     suspend fun clearAll() = dao.deleteAll()
 
     private suspend fun persist(candidate: MemoryCandidate): MemoryWriteResult {

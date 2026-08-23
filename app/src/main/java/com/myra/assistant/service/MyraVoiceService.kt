@@ -16,6 +16,11 @@ import com.myra.assistant.ai.GeminiLiveClient
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.ai.DeepResearchClient
 import com.myra.assistant.ai.HandsFreeMediaGuard
+import com.myra.assistant.data.memory.LyraMemoryDatabase
+import com.myra.assistant.data.memory.MemoryCommand
+import com.myra.assistant.data.memory.MemoryCommandParser
+import com.myra.assistant.data.memory.MemoryRepository
+import com.myra.assistant.data.memory.MemoryWriteResult
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.MyApplication
@@ -92,6 +97,7 @@ class MyraVoiceService : Service() {
         } else null
     }
     private val appActions by lazy { AppActionExecutor(this) }
+    private val memoryRepository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
     private val assistantController by lazy { (application as MyApplication).assistantController }
 
     override fun onCreate() {
@@ -230,6 +236,11 @@ class MyraVoiceService : Service() {
                 }
                 appendTranscript(input, part); appendTranscript(commandProbe, part)
                 lastUserIntentText = input.toString().trim()
+                if (MemoryCommandParser.looksLikeIntent(commandProbe.toString())) {
+                    suppressModelForTurn = true
+                    output.clear()
+                    audio?.interrupt()
+                }
                 val command = CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString())
                 if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
                     probableActionTurn = true
@@ -300,6 +311,13 @@ class MyraVoiceService : Service() {
                 // chunks can omit or mistranscribe the action word even when the final text
                 // contains enough context to identify the device command.
                 if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
+                    val memoryCommand = MemoryCommandParser.parse(userText)
+                    if (memoryCommand != null) {
+                        handleMemoryCommand(memoryCommand)
+                        resetTurnBuffers()
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
                     val parsed = CommandParser.parse(userText)
                     if (parsed != null) {
                         executeCommand(parsed)
@@ -338,6 +356,41 @@ class MyraVoiceService : Service() {
                 }
             }
             client.connect()
+        }
+    }
+
+    private fun handleExplicitMemoryText(text: String): Boolean {
+        val command = MemoryCommandParser.parse(text) ?: return false
+        handleMemoryCommand(command)
+        return true
+    }
+
+    private fun handleMemoryCommand(command: MemoryCommand) {
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        output.clear()
+        serviceScope.launch {
+            val response = when (command) {
+                is MemoryCommand.Remember -> when (memoryRepository.save(command.candidate)) {
+                    is MemoryWriteResult.Saved -> "Got it, I'll remember that ${command.displayFact}."
+                    MemoryWriteResult.NeedsPermission -> "Should I save that as a personal memory?"
+                    is MemoryWriteResult.Rejected -> "I can't save passwords, security codes, or unsafe private information."
+                }
+                is MemoryCommand.Read -> {
+                    val memories = memoryRepository.relevant(command.query, 5)
+                    if (memories.isEmpty()) "I don't have any saved memories about you yet."
+                    else "I remember that " + memories.joinToString("; ") { it.fact } + "."
+                }
+                is MemoryCommand.Forget -> {
+                    if (memoryRepository.forgetMatching(command.query)) "Okay, I forgot that."
+                    else "I couldn't find that in my saved memories."
+                }
+            }
+            mainHandler.post {
+                listener?.onMyraText(response)
+                emitState(response)
+                queueLocalSpeech(response, allowUntranscribedAudio = true)
+            }
         }
     }
 
@@ -967,7 +1020,13 @@ class MyraVoiceService : Service() {
         @Volatile var listener: Listener? = null
         @Volatile private var uiVisible = false
         @Volatile private var instance: MyraVoiceService? = null
-        fun sendText(text: String) { instance?.let { it.markUserInteraction(); it.lastUserIntentText = text.trim(); it.live?.sendText(text) } }
+        fun sendText(text: String) {
+            instance?.let {
+                it.markUserInteraction()
+                it.lastUserIntentText = text.trim()
+                if (!it.handleExplicitMemoryText(text)) it.live?.sendText(text)
+            }
+        }
         fun sendImage(image: ByteArray, mimeType: String, prompt: String) { instance?.live?.sendImage(image, mimeType, prompt) }
         fun executeLocalText(text: String): Boolean = instance?.executeTypedLocalCommand(text) == true
         fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
