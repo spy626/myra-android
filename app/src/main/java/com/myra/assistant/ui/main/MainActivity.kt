@@ -347,6 +347,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun showStatus(text: String) { b.statusText.text = text }
     private fun disconnect() { startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_STOP)); b.connectButton.clearColorFilter(); b.orb.state = OrbAnimationView.State.IDLE; showStatus("Tap the mic to wake LYRA") }
-    override fun onResume() { super.onResume(); MyraVoiceService.listener = voiceListener; if (MyraVoiceService.isRunning) b.connectButton.setColorFilter(Color.WHITE) }
+    override fun onResume() { super.onResume(); MyraVoiceService.listener = voiceListener; MyraVoiceService.setUiVisible(true); if (MyraVoiceService.isRunning) b.connectButton.setColorFilter(Color.WHITE) }
+    override fun onPause() { MyraVoiceService.setUiVisible(false); super.onPause() }
     override fun onDestroy() { assistantController.removeListener(controllerListener); if (MyraVoiceService.listener === voiceListener) MyraVoiceService.listener = null; super.onDestroy() }
 }
