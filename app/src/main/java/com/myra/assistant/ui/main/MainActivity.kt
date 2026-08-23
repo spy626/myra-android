@@ -12,9 +12,12 @@ import android.os.BatteryManager
 import android.graphics.Color
 import android.graphics.BitmapFactory
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.text.util.Linkify
 import android.text.method.LinkMovementMethod
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -107,6 +110,7 @@ class MainActivity : AppCompatActivity() {
         appActions = AppActionExecutor(this)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) permission.launch(Manifest.permission.RECORD_AUDIO)
         b.settingsButton.setOnClickListener { showSettings() }
+        b.chatToggleButton.setOnClickListener { expandComposer() }
         b.characterSurface.onCharacterTapped = { speakCharacterTouchReaction() }
         updateDeviceStatus()
         b.connectButton.setOnClickListener { if (!MyraVoiceService.isRunning) connect() else disconnect() }
@@ -128,6 +132,7 @@ class MainActivity : AppCompatActivity() {
                     b.attachImageButton.clearColorFilter()
                     b.attachImageButton.setColorFilter(Color.rgb(169, 155, 165))
                     b.textInput.text.clear()
+                    collapseComposer()
                     showStatus("Screenshot dekh rahi hoon…")
                 }
             } else {
@@ -142,6 +147,9 @@ class MainActivity : AppCompatActivity() {
                         if (!MyraVoiceService.isRunning) showStatus("Connect to LYRA first — tap the mic") else MyraVoiceService.sendText(it)
                     }
                     b.textInput.text.clear()
+                    if (structured.type != CommandType.UNKNOWN || MyraVoiceService.isRunning) {
+                        collapseComposer()
+                    }
                 }
             }
         }
@@ -290,12 +298,43 @@ class MainActivity : AppCompatActivity() {
             gravity = if (isUser) Gravity.END else Gravity.START
             val gap = (6 * resources.displayMetrics.density).toInt()
             setPadding(0, gap / 2, 0, gap / 2)
+            if (!isUser) {
+                val iconSize = (34 * resources.displayMetrics.density).toInt()
+                val iconGap = (7 * resources.displayMetrics.density).toInt()
+                val iconPadding = (7 * resources.displayMetrics.density).toInt()
+                val icon = ImageView(this@MainActivity).apply {
+                    setImageResource(com.myra.assistant.R.drawable.ic_lyra_sparkle)
+                    setBackgroundResource(com.myra.assistant.R.drawable.bg_circle_outline)
+                    setPadding(iconPadding, iconPadding, iconPadding, iconPadding)
+                    contentDescription = "LYRA"
+                }
+                addView(icon, LinearLayout.LayoutParams(iconSize, iconSize).apply {
+                    gravity = Gravity.TOP
+                    marginEnd = iconGap
+                })
+            }
             addView(bubble, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         b.chatContainer.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         while (b.chatContainer.childCount > 20) b.chatContainer.removeViewAt(0)
         b.chatScroll.post { b.chatScroll.fullScroll(android.view.View.FOCUS_DOWN) }
     }
+    private fun expandComposer() {
+        b.chatToggleButton.visibility = View.INVISIBLE
+        b.composer.visibility = View.VISIBLE
+        b.textInput.requestFocus()
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+            .showSoftInput(b.textInput, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun collapseComposer() {
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(b.textInput.windowToken, 0)
+        b.textInput.clearFocus()
+        b.composer.visibility = View.INVISIBLE
+        b.chatToggleButton.visibility = View.VISIBLE
+    }
+
     private fun executeAppCommand(text: String): Boolean {
         val command = CommandParser.parse(text) ?: return false
         executeAppCommand(command)
