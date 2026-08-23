@@ -64,6 +64,10 @@ class MyraVoiceService : Service() {
     private var localSpeechHasContent = false
     private var allowUntranscribedLocalSpeech = false
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var microphoneMuted = false
+    private var deepResearchActive = false
+    private var idleNudgeCount = 0
+    private val idleNudgeRunnable = Runnable { handleIdleNudge() }
     private val localSpeechAudio = mutableListOf<ByteArray>()
     private val localSpeechTranscript = StringBuilder()
     private var localPlaybackActive = false
@@ -103,7 +107,11 @@ class MyraVoiceService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopSession()
-            ACTION_MUTE -> audio?.setMuted(intent.getBooleanExtra(EXTRA_MUTED, false))
+            ACTION_MUTE -> {
+                microphoneMuted = intent.getBooleanExtra(EXTRA_MUTED, false)
+                audio?.setMuted(microphoneMuted)
+                if (microphoneMuted) mainHandler.removeCallbacks(idleNudgeRunnable) else markUserInteraction()
+            }
             else -> if (live == null) connect()
         }
         return START_STICKY
@@ -131,6 +139,7 @@ class MyraVoiceService : Service() {
                 } else {
                     emitState("LYRA reconnected — listening")
                 }
+                markUserInteraction()
             }
             client.onToolCall = { id, functionName, args ->
                 mainHandler.post { handleSemanticToolCall(id, functionName, args) }
@@ -158,6 +167,7 @@ class MyraVoiceService : Service() {
                     output.clear()
                     return@inputTranscript
                 }
+                markUserInteraction()
                 when (mediaGuard.inspect(part)) {
                     HandsFreeMediaGuard.Gate.BLOCK -> {
                         appendTranscript(commandProbe, part)
@@ -794,6 +804,8 @@ class MyraVoiceService : Service() {
     private fun executeDeepResearch(command: AppCommand.DeepResearch) {
         val query = command.query?.trim().orEmpty()
         suppressModelForTurn = true; waitingForFreshInputAfterCommand = false; output.clear(); commandProbe.clear()
+        deepResearchActive = true
+        mainHandler.removeCallbacks(idleNudgeRunnable)
         audio?.interrupt(); live?.interrupt()
         if (query.isBlank()) {
             val prompt = "Haan, deep research kar sakti hoon. Kis topic par research chahiye?"
@@ -809,6 +821,7 @@ class MyraVoiceService : Service() {
         val depth = prefs.getString("research_depth", "basic").orEmpty()
         serviceScope.launch {
             val result = DeepResearchClient().search(query, apiKey, endpoint, depth)
+            deepResearchActive = false
             listener?.onMyraText(result.report, !result.success)
             emitState(if (result.success) "Deep Research complete" else "Deep Research failed")
             if (result.success) speakResearchSummary(result.spokenSummary)
@@ -834,10 +847,53 @@ class MyraVoiceService : Service() {
         return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Adapt warmth and energy to sadness, concern, excitement, frustration, or happiness. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }
 
+    private fun markUserInteraction() {
+        idleNudgeCount = 0
+        mainHandler.removeCallbacks(idleNudgeRunnable)
+        if (isRunning && isNaturalVoiceReady && uiVisible && !microphoneMuted) {
+            mainHandler.postDelayed(idleNudgeRunnable, FIRST_IDLE_NUDGE_MS)
+        }
+    }
+
+    private fun handleIdleNudge() {
+        mainHandler.removeCallbacks(idleNudgeRunnable)
+        val screenOn = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
+        val busy = microphoneMuted || deepResearchActive || localPlaybackActive || localAudioSpeaking ||
+            validatingLocalSpeech != null || pendingLocalSpeech != null
+        if (!isRunning || !isNaturalVoiceReady || !uiVisible || !screenOn || busy) {
+            if (isRunning && idleNudgeCount < MAX_IDLE_NUDGES) {
+                mainHandler.postDelayed(idleNudgeRunnable, IDLE_RECHECK_MS)
+            }
+            return
+        }
+        val message = if (idleNudgeCount == 0) {
+            listOf(
+                "Kya hua, aaj mujhse baat nahi karoge?",
+                "Itne chup kyun ho, sab theek hai?",
+                "Hmm... kis soch mein kho gaye?"
+            ).random()
+        } else {
+            listOf(
+                "Main yahin hoon, jab mann ho baat kar lena.",
+                "Aaj bade shaant lag rahe ho... kya hua?",
+                "Theek hai, main yahin hoon. Jab chaho baat kar lena."
+            ).random()
+        }
+        idleNudgeCount++
+        listener?.onMyraText(message)
+        emitState(message)
+        mediaGuard.beginAssistantTurn()
+        queueLocalSpeech(message, allowUntranscribedAudio = true)
+        if (idleNudgeCount < MAX_IDLE_NUDGES) {
+            mainHandler.postDelayed(idleNudgeRunnable, SECOND_IDLE_NUDGE_MS)
+        }
+    }
+
     private fun configuredUserName(saved: String?): String =
         saved?.trim()?.takeIf { it.isNotBlank() && !it.equals("Friend", ignoreCase = true) } ?: "Zopy"
 
     private fun executeTypedLocalCommand(text: String): Boolean {
+        markUserInteraction()
         val command = CommandParser.parse(text) ?: return false
         localCommandExecutedThisTurn = false
         waitingForFreshInputAfterCommand = false
@@ -878,7 +934,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; mainHandler.removeCallbacks(idleNudgeRunnable); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -889,6 +945,10 @@ class MyraVoiceService : Service() {
         const val EXTRA_MUTED = "muted"
         private const val CHANNEL_ID = "myra_voice"
         private const val NOTIFICATION_ID = 1001
+        private const val FIRST_IDLE_NUDGE_MS = 2 * 60 * 1000L
+        private const val SECOND_IDLE_NUDGE_MS = 5 * 60 * 1000L
+        private const val IDLE_RECHECK_MS = 30 * 1000L
+        private const val MAX_IDLE_NUDGES = 2
         private val PHANTOM_TRANSCRIPT = Regex(
             "^(?:in|si|sí|hm+|hmm+|um+|uh+|ah+|oh+|mm+)(?:\\s+(?:in|si|sí|hm+|hmm+|um+|uh+|ah+|oh+|mm+))*$",
             RegexOption.IGNORE_CASE
@@ -896,8 +956,9 @@ class MyraVoiceService : Service() {
         @Volatile var isRunning = false
         @Volatile var isNaturalVoiceReady = false
         @Volatile var listener: Listener? = null
+        @Volatile private var uiVisible = false
         @Volatile private var instance: MyraVoiceService? = null
-        fun sendText(text: String) { instance?.live?.sendText(text) }
+        fun sendText(text: String) { instance?.let { it.markUserInteraction(); it.live?.sendText(text) } }
         fun sendImage(image: ByteArray, mimeType: String, prompt: String) { instance?.live?.sendImage(image, mimeType, prompt) }
         fun executeLocalText(text: String): Boolean = instance?.executeTypedLocalCommand(text) == true
         fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
@@ -905,8 +966,16 @@ class MyraVoiceService : Service() {
         fun speakLocal(message: String) {
             if (!isNaturalVoiceReady) return
             instance?.let { service ->
+                service.markUserInteraction()
                 service.mediaGuard.beginAssistantTurn()
                 service.queueLocalSpeech(message, allowUntranscribedAudio = true)
+            }
+        }
+        fun setUiVisible(visible: Boolean) {
+            uiVisible = visible
+            instance?.let { service ->
+                service.mainHandler.removeCallbacks(service.idleNudgeRunnable)
+                if (visible) service.markUserInteraction()
             }
         }
         fun interrupt() { instance?.audio?.interrupt(); instance?.live?.interrupt() }
