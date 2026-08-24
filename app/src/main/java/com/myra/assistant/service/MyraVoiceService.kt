@@ -70,6 +70,19 @@ class MyraVoiceService : Service() {
     private var localSpeechHasContent = false
     private var allowUntranscribedLocalSpeech = false
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var pendingMemoryCommand: MemoryCommand? = null
+    private val memoryCommandRunnable = Runnable {
+        val command = pendingMemoryCommand
+        pendingMemoryCommand = null
+        if (command != null && !localCommandExecutedThisTurn) {
+            val spoken = commandProbe.toString().trim()
+            if (spoken.isNotBlank() && !commandUserTextEmitted) {
+                listener?.onUserText(romanDisplayText(spoken))
+                commandUserTextEmitted = true
+            }
+            handleMemoryCommand(command)
+        }
+    }
     private var microphoneMuted = false
     private var deepResearchActive = false
     private var idleNudgeCount = 0
@@ -240,6 +253,11 @@ class MyraVoiceService : Service() {
                     suppressModelForTurn = true
                     output.clear()
                     audio?.interrupt()
+                    MemoryCommandParser.parse(commandProbe.toString())?.let { memoryCommand ->
+                        pendingMemoryCommand = memoryCommand
+                        mainHandler.removeCallbacks(memoryCommandRunnable)
+                        mainHandler.postDelayed(memoryCommandRunnable, MEMORY_COMMAND_PAUSE_MS)
+                    }
                 }
                 val command = CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString())
                 if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
@@ -305,6 +323,8 @@ class MyraVoiceService : Service() {
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
+                mainHandler.removeCallbacks(memoryCommandRunnable)
+                pendingMemoryCommand = null
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
                 if (userText.isNotBlank() && !commandUserTextEmitted) listener?.onUserText(romanDisplayText(userText))
                 // Run one final parse over the complete transcript. Partial Live transcript
@@ -996,7 +1016,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; mainHandler.removeCallbacks(idleNudgeRunnable); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); pendingMemoryCommand = null; serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -1007,6 +1027,7 @@ class MyraVoiceService : Service() {
         const val EXTRA_MUTED = "muted"
         private const val CHANNEL_ID = "myra_voice"
         private const val NOTIFICATION_ID = 1001
+        private const val MEMORY_COMMAND_PAUSE_MS = 450L
         private const val FIRST_IDLE_NUDGE_MS = 2 * 60 * 1000L
         private const val SECOND_IDLE_NUDGE_MS = 5 * 60 * 1000L
         private const val IDLE_RECHECK_MS = 30 * 1000L
