@@ -33,6 +33,16 @@ object PersonalMemoryExtractor {
             RegexOption.IGNORE_CASE
         )
     )
+    private val bestFriendCorrectionPatterns = listOf(
+        Regex(
+            "^[\\p{L}][\\p{L} .'-]{1,39} (?:nahi|nahin|nai),? ([\\p{L}][\\p{L} .'-]{1,39}) meri (?:best|besta) (?:friend|frend|phrend|phrenda) (?:hai|he)$",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "^meri (?:best|besta) (?:friend|frend|phrend|phrenda) [\\p{L}][\\p{L} .'-]{1,39} (?:nahi|nahin|nai),? ([\\p{L}][\\p{L} .'-]{1,39}) (?:hai|he)$",
+            RegexOption.IGNORE_CASE
+        )
+    )
     private val goalPatterns = listOf(
         Regex("^my (?:main )?goal is (.{3,100})$", RegexOption.IGNORE_CASE),
         Regex("^mera (?:main )?goal (.{3,100}) (?:hai|he)$", RegexOption.IGNORE_CASE)
@@ -59,7 +69,10 @@ object PersonalMemoryExtractor {
             return candidate(MemoryCategory.IDENTITY, "Zopy is ${age} years old", "identity:age", 0.98)
         }
 
-        bestFriendPatterns.firstNotNullOfOrNull { it.matchEntire(text) }?.let { match ->
+        val bestFriendMatch =
+            bestFriendCorrectionPatterns.firstNotNullOfOrNull { it.matchEntire(text) }
+                ?: bestFriendPatterns.firstNotNullOfOrNull { it.matchEntire(text) }
+        bestFriendMatch?.let { match ->
             val name = cleanValue(match.groupValues[1]) ?: return null
             if (name.lowercase(Locale.ROOT) in ambiguousValues) return null
             return candidate(
