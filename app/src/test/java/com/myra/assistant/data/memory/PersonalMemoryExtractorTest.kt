@@ -37,13 +37,17 @@ class PersonalMemoryExtractorTest {
 
     @Test
     fun handlesObservedVoiceTranscriptionMistakes() {
-        val age = PersonalMemoryExtractor.extract("maim 26 sala ka hum")
+        val age = PersonalMemoryExtractor.extract("maim 26 sala ka hum.")
         assertEquals("Zopy is 26 years old", age?.fact)
 
-        val friend = PersonalMemoryExtractor.extract("ayusa meri besta phrenda hai")
+        val friend = PersonalMemoryExtractor.extract("ayusa meri besta phrenda hai.")
         assertEquals(MemoryCategory.PERSON, friend?.category)
         assertEquals("person:best_friend", friend?.stableKey)
         assertEquals("Zopy's best friend is ayusa", friend?.fact)
+        assertEquals(
+            "Zopy is 26 years old",
+            PersonalMemoryExtractor.extract("maim 26 sala ka hum?!")?.fact
+        )
     }
 
     @Test
