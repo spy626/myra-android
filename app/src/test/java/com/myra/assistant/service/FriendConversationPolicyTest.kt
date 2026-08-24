@@ -10,6 +10,9 @@ class FriendConversationPolicyTest {
         assertTrue(policy.contains("one or two short natural sentences"))
         assertTrue(policy.contains("Answer and stop by default"))
         assertTrue(policy.contains("only question in the entire reply"))
+        assertTrue(policy.contains("help kar sakti hoon"))
+        assertTrue(policy.contains("isse zyada main kya boloon"))
+        assertTrue(policy.contains("never sound dismissive"))
         assertFalse(policy.contains("two questions"))
     }
 
