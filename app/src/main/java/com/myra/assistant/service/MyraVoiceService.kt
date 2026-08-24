@@ -1145,12 +1145,15 @@ class MyraVoiceService : Service() {
     }
 
     private fun finishLocalPlayback() {
+        val resumeMicImmediately =
+            localSpeechValidationPolicy.resumeMicImmediatelyAfterPlayback
         allowUntranscribedLocalSpeech = false
         localPlaybackActive = false
         localSpeechStreamedDirectly = false
         localSpeechGenerationComplete = false
         if (!runPendingActionAfterSpeech()) {
-            audio?.setMuted(false)
+            if (resumeMicImmediately) audio?.resumeListeningNow()
+            else audio?.setMuted(false)
             emitState("Sun rahi hoon…")
         }
     }
