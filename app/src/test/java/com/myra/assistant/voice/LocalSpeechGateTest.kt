@@ -48,4 +48,21 @@ class LocalSpeechGateTest {
         assertFalse(LocalSpeechGate.matchesExpectedExactly("Ayasa tumhari", "Ayasa tumhari best friend hai"))
         assertTrue(LocalSpeechGate.matchesExpectedExactly("Ayasa tumhari best friend hai.", "Ayasa tumhari best friend hai"))
     }
+
+    @Test fun bufferedMemoryReplyWaitsForCompleteGeminiTurn() {
+        assertFalse(
+            LocalSpeechGate.shouldReleaseBeforeTurnComplete(
+                bufferUntilTurnComplete = true,
+                actual = "Theek hai save nahi karungi",
+                expected = "Theek hai, save nahi karungi."
+            )
+        )
+        assertTrue(
+            LocalSpeechGate.shouldReleaseBeforeTurnComplete(
+                bufferUntilTurnComplete = false,
+                actual = "YouTube close",
+                expected = "YouTube close kar diya."
+            )
+        )
+    }
 }

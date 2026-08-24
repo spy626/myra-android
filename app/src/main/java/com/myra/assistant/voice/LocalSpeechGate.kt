@@ -3,6 +3,12 @@ package com.myra.assistant.voice
 import java.util.Locale
 
 object LocalSpeechGate {
+    fun shouldReleaseBeforeTurnComplete(
+        bufferUntilTurnComplete: Boolean,
+        actual: String,
+        expected: String
+    ): Boolean = !bufferUntilTurnComplete && matchesExpectedPrefix(actual, expected)
+
     fun matchesExpectedPrefix(actual: String, expected: String): Boolean {
         val heard = normalize(actual)
         val prepared = normalize(expected)

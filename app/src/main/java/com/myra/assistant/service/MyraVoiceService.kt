@@ -1090,11 +1090,11 @@ class MyraVoiceService : Service() {
     private fun startLocalSpeechWhenPrefixMatches() {
         val expected = validatingLocalSpeech ?: return
         if (localSpeechStreamedDirectly || localSpeechAudio.isEmpty()) return
-        if (localSpeechValidationPolicy.bufferUntilValidated) {
-            val bufferedBytes = localSpeechAudio.sumOf { it.size }
-            if (!LocalSpeechGate.matchesExpectedExactly(localSpeechTranscript.toString(), expected)) return
-            if (!LocalSpeechGate.hasEnoughBufferedNaturalAudio(bufferedBytes, expected)) return
-        } else if (!LocalSpeechGate.matchesExpectedPrefix(localSpeechTranscript.toString(), expected)) {
+        if (!LocalSpeechGate.shouldReleaseBeforeTurnComplete(
+                localSpeechValidationPolicy.bufferUntilValidated,
+                localSpeechTranscript.toString(),
+                expected
+            )) {
             return
         }
 

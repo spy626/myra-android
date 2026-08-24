@@ -94,7 +94,9 @@ class GeminiLiveClient(
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
             .put("generationConfig", JSONObject()
                 .put("responseModalities", JSONArray().put("AUDIO"))
-                .put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice))))
+                .put("speechConfig", JSONObject()
+                    .put("languageCode", LiveLanguagePolicy.SPEECH_LANGUAGE_CODE)
+                    .put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice))))
                 .put("temperature", 0.9))
             .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", JSONArray().put(
                 JSONObject()
