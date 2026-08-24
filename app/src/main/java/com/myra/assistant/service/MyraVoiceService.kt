@@ -16,7 +16,8 @@ import com.myra.assistant.ai.GeminiLiveClient
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.ai.DeepResearchClient
 import com.myra.assistant.ai.HandsFreeMediaGuard
-import com.myra.assistant.data.memory.AutomaticMemoryExtractor
+import com.myra.assistant.data.memory.AutomaticMemoryChange
+import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
@@ -468,11 +469,14 @@ class MyraVoiceService : Service() {
 
     private fun learnSafePreferenceFromCompletedTurn(userText: String) {
         val romanUserText = romanDisplayText(userText)
-        val candidate = AutomaticMemoryExtractor.extract(romanUserText) ?: return
+        val change = AutomaticMemoryChangeParser.parse(romanUserText) ?: return
         serviceScope.launch {
             // Automatic learning stays silent. Only explicit remember/forget
             // commands produce a confirmation in the conversation.
-            memoryRepository.save(candidate)
+            when (change) {
+                is AutomaticMemoryChange.Save -> memoryRepository.save(change.candidate)
+                is AutomaticMemoryChange.Forget -> memoryRepository.forgetStableKey(change.stableKey)
+            }
         }
     }
 
