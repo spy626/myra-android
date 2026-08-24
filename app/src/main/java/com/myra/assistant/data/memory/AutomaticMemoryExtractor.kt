@@ -68,7 +68,7 @@ object AutomaticMemoryExtractor {
         ).matchEntire(text)?.let { it.groupValues[1] to it.groupValues[2] }
 
     private fun preference(rawSubject: String): MemoryCandidate? {
-        val subject = cleanSubject(rawSubject) ?: return null
+        val subject = cleanSubject(rawSubject)?.let(::canonicalSubject) ?: return null
         return MemoryCandidate(
             category = MemoryCategory.PREFERENCE,
             fact = "Zopy likes $subject",
@@ -87,6 +87,17 @@ object AutomaticMemoryExtractor {
             ambiguousSubject.matches(clean) || prohibitedOrPersonal.containsMatchIn(clean)
         ) return null
         return clean
+    }
+
+    private fun canonicalSubject(value: String): String {
+        val normalized = normalize(value)
+        return when {
+            Regex("(?:science|sainsa|sains)\\s+(?:science\\s+)?(?:fiction|phiksana|phiksan).*?(?:movie|muvi|muvija)").containsMatchIn(normalized) ->
+                "science-fiction movies"
+            Regex("(?:horror|horara).*?(?:movie|muvi|muvija)").containsMatchIn(normalized) ->
+                "horror movies"
+            else -> value
+        }
     }
 
     private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
