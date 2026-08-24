@@ -91,6 +91,9 @@ object CommandParser {
     fun isProbableDeviceAction(raw: String): Boolean {
         val text = normalize(raw)
         if (text.isBlank()) return false
+        val hasTimeWord = Regex("(?:^|\\s)(?:time|samay|समय|टाइम)(?:$|\\s)").containsMatchIn(text)
+        val otherDeviceTarget = Regex("(?:youtube|whatsapp|instagram|facebook|chrome|gmail|maps|spotify|telegram|snapchat|settings|app|application|torch|flashlight|flash|screenshot|screen\\s+shot|battery|home|back|यूट्यूब|व्हाट्सएप|टॉर्च|बैटरी|होम)").containsMatchIn(text)
+        if (hasTimeWord && !otherDeviceTarget && !isCurrentTimeQuery(text)) return false
         val target = Regex("(?:youtube|whatsapp|instagram|facebook|chrome|gmail|maps|spotify|telegram|snapchat|settings|app|application|torch|flashlight|flash|screenshot|screen\\s+shot|battery|time|home|back|यूट्यूब|व्हाट्सएप|टॉर्च|बैटरी|होम)")
         val action = Regex("(?:open|close|launch|start|search|play|pause|resume|next|previous|agla|pichla|pichhla|chalao|lagao|khol|kholo|band|chalu|on|off|bhejo|send|reply|jawab|batao|kitna|kitni|jao|karo|take|capture|save|खोलो|बंद|चालू|भेजो|जवाब|बताओ)")
         return target.containsMatchIn(text) && action.containsMatchIn(text)
@@ -140,13 +143,16 @@ object CommandParser {
     fun isExplicitWhatsAppMessageQuery(raw: String): Boolean =
         isWhatsAppMessageQuery(normalize(raw))
 
+    fun isAmbiguousMessageReference(raw: String): Boolean =
+        Regex("^(?:message|msg|मैसेज)$").matches(normalize(raw))
+
     private fun isCurrentTimeQuery(text: String): Boolean = listOf(
         Regex("^(?:what(?:'s| is) the (?:current )?time|current time)$"),
         Regex("^(?:abhi )?time (?:kya|kitna|kitni|batao)(?: (?:hai|he|hua|ho raha hai))?$"),
         Regex("^(?:abhi )?(?:kya|kitna|kitni) time (?:hai|he|hua|ho raha hai)$"),
         Regex("^(?:abhi )?kitne baje(?: hain| hai| he)?$"),
         Regex("^(?:abhi )?(?:samay|समय|टाइम)(?: kya hai| batao)?$"),
-        Regex("^normal time$")
+        Regex("^(?:normal )?time$")
     ).any { it.matches(text) }
 
     private fun isWhatsAppMessageQuery(text: String): Boolean {
