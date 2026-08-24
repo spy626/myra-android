@@ -38,6 +38,7 @@ import com.myra.assistant.MyApplication
 import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.voice.LocalSpeechGate
+import com.myra.assistant.voice.RomanHinglishFormatter
 import com.myra.assistant.voice.VoiceResponseFormatter
 import java.text.SimpleDateFormat
 import java.util.*
@@ -156,7 +157,9 @@ class MyraVoiceService : Service() {
     private val mediaGuard by lazy { HandsFreeMediaGuard(this) }
     private val romanTransliterator by lazy {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            runCatching { Transliterator.getInstance("Any-Latin; Latin-ASCII") }.getOrNull()
+            // Keep pronunciation marks long enough for RomanHinglishFormatter to
+            // distinguish names such as करीम instead of flattening them to "karima".
+            runCatching { Transliterator.getInstance("Any-Latin") }.getOrNull()
         } else null
     }
     private val appActions by lazy { AppActionExecutor(this) }
@@ -1199,8 +1202,9 @@ class MyraVoiceService : Service() {
         if (Regex("[\\u3400-\\u4DBF\\u4E00-\\u9FFF]").containsMatchIn(value)) {
             return "Voice input unclear - please repeat."
         }
-        return romanTransliterator?.transliterate(value)?.trim().orEmpty()
+        val transliterated = romanTransliterator?.transliterate(value)?.trim().orEmpty()
             .ifBlank { value.trim() }
+        return RomanHinglishFormatter.format(transliterated)
     }
 
     private fun contextualRelationshipCandidate(currentTurn: String): MemoryCandidate? {
