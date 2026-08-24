@@ -21,15 +21,20 @@ object MemoryCommandParser {
         "^(?:(?:what)(?:\\s+(?:all))?(?:\\s+do)?(?:\\s+you)?\\s+remember(?:\\s+about\\s+me)?|(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+kya\\s+(?:yaad|yada)\\s+(?:hai|he)|(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:(?:pata|yaad|yada)\\s+(?:hai|he)|(?:jante|jaante|janate|janti|jaanti|janati)\\s+ho))[?]?$",
         RegexOption.IGNORE_CASE
     )
+    private val bestFriendRead = Regex(
+        "^(?:(?:who|kon|koun|kaun|kauna)\\s+(?:is\\s+)?(?:my|meri|mere|morei)|(?:my|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)\\s+(?:kon|koun|kaun|kauna))\\s+(?:best|besti|besta)?\\s*(?:friend|friends|frend|frends|phrend|phrenda)?\\s*(?:hai|he|is)?[?]?$",
+        RegexOption.IGNORE_CASE
+    )
 
     fun looksLikeIntent(raw: String): Boolean = Regex(
-        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate|janti|jaanti|janati)",
+        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate|janti|jaanti|janati)|^(?:who|kon|koun|kaun|kauna)\\s+(?:is\\s+)?(?:my|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)|^(?:my|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)\\s+(?:kon|koun|kaun|kauna)",
         RegexOption.IGNORE_CASE
     ).containsMatchIn(raw.trim())
 
     fun parse(raw: String): MemoryCommand? {
         val text = raw.trim().trimEnd('.', '?', '!')
         read.matchEntire(text)?.let { return MemoryCommand.Read() }
+        bestFriendRead.matchEntire(text)?.let { return MemoryCommand.Read("best friend") }
         remember.matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.length >= 2 }?.let { rawFact ->
             val fact = rawFact.replace(Regex("^(?:this|ye|yeh)\\s+", RegexOption.IGNORE_CASE), "").trim()
             if (fact.length < 2) return null
