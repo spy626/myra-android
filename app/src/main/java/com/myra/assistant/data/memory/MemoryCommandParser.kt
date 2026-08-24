@@ -18,12 +18,12 @@ object MemoryCommandParser {
         RegexOption.IGNORE_CASE
     )
     private val read = Regex(
-        "^(?:(?:what)(?:\\s+(?:all))?(?:\\s+do)?(?:\\s+you)?\\s+remember(?:\\s+about\\s+me)?|(?:tumhe|tumko)\\s+mere\\s+baare\\s+mein\\s+kya\\s+yaad\\s+hai)[?]?$",
+        "^(?:(?:what)(?:\\s+(?:all))?(?:\\s+do)?(?:\\s+you)?\\s+remember(?:\\s+about\\s+me)?|(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+kya\\s+(?:yaad|yada)\\s+(?:hai|he)|(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+kya\\s+(?:pata|yaad|yada)\\s+(?:hai|he))[?]?$",
         RegexOption.IGNORE_CASE
     )
 
     fun looksLikeIntent(raw: String): Boolean = Regex(
-        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumko)\\s+mere\\s+baare",
+        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+kya\\s+(?:pata|yaad|yada)",
         RegexOption.IGNORE_CASE
     ).containsMatchIn(raw.trim())
 
