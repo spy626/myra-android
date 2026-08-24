@@ -23,6 +23,7 @@ import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
 import com.myra.assistant.data.memory.MemoryCandidate
 import com.myra.assistant.data.memory.PersonalMemoryExtractor
+import com.myra.assistant.data.memory.PersonalMemoryPermissionPrompt
 import com.myra.assistant.data.memory.MemoryRepository
 import com.myra.assistant.data.memory.SavedMemoryContextFormatter
 import com.myra.assistant.data.memory.MemoryWriteResult
@@ -543,7 +544,7 @@ class MyraVoiceService : Service() {
         output.clear()
         audio?.interrupt()
         live?.interrupt()
-        val message = "Ye personal memory hai. Kya main ise yaad rakhun?"
+        val message = PersonalMemoryPermissionPrompt.format(candidate)
         listener?.onMyraText(message)
         emitState(message)
         queueLocalSpeech(message, allowUntranscribedAudio = true)
