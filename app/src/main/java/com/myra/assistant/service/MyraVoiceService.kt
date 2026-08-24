@@ -1052,11 +1052,13 @@ class MyraVoiceService : Service() {
             return
         }
         val transcriptMatches = normalizeSpeech(actual) == normalizeSpeech(expected)
-        // Audio without a matching transcript is never played. This intentionally trades
-        // a little latency for correctness: a stray "OK" must not replace the complete
-        // deterministic action confirmation. After one retry, Android TTS receives the
-        // full expected sentence rather than any model-generated fallback.
-        if (transcriptMatches && localSpeechAudio.isNotEmpty()) {
+        // Memory prompts are low-risk and already have their exact text on screen. Live
+        // sometimes streams the selected natural voice before its output transcript. In
+        // that narrow case, keep the buffered Gemini audio instead of discarding it and
+        // switching to robotic Android TTS. Phone actions retain strict transcript gating.
+        val trustedNaturalAudio =
+            localSpeechValidationPolicy.trustBufferedNaturalAudio && localSpeechHasContent
+        if ((transcriptMatches || trustedNaturalAudio) && localSpeechAudio.isNotEmpty()) {
             localSpeechGenerationComplete = true
             localPlaybackActive = true
             localSpeechAudio.forEach { audio?.queueAudio(it) }
