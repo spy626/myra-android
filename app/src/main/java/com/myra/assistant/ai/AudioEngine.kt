@@ -92,6 +92,10 @@ class AudioEngine(private val context: Context) {
 
     fun queueAudio(bytes: ByteArray) = queue.offer(bytes)
     fun setMuted(value: Boolean) { muted.set(value) }
+    fun resumeListeningNow() {
+        ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime()
+        muted.set(false)
+    }
     fun interrupt() { queue.clear(); track?.pause(); track?.flush(); track?.play(); speaking.set(false); onSpeakingChanged?.invoke(false) }
     fun release() { running.set(false); echoCanceler?.release(); noiseSuppressor?.release(); gainControl?.release(); recorder?.stop(); recorder?.release(); track?.stop(); track?.release(); queue.offer(ByteArray(0)) }
 
