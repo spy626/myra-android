@@ -13,6 +13,7 @@ class FriendConversationPolicyTest {
         assertTrue(policy.contains("help kar sakti hoon"))
         assertTrue(policy.contains("isse zyada main kya boloon"))
         assertTrue(policy.contains("never sound dismissive"))
+        assertTrue(policy.contains("pressure the user"))
         assertFalse(policy.contains("two questions"))
     }
 
