@@ -21,6 +21,8 @@ import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
+import com.myra.assistant.data.memory.MemoryCandidate
+import com.myra.assistant.data.memory.PersonalMemoryExtractor
 import com.myra.assistant.data.memory.MemoryRepository
 import com.myra.assistant.data.memory.SavedMemoryContextFormatter
 import com.myra.assistant.data.memory.MemoryWriteResult
@@ -114,6 +116,8 @@ class MyraVoiceService : Service() {
     private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
     private var pendingConfirmedCommand: AppCommand? = null
     private var pendingConfirmationExpiresAt = 0L
+    private var pendingPersonalMemory: MemoryCandidate? = null
+    private var pendingPersonalMemoryExpiresAt = 0L
     private var lastLocalSpeechKey = ""
     private var lastLocalSpeechAt = 0L
     private var lastAnnouncementKey = ""
@@ -211,6 +215,7 @@ class MyraVoiceService : Service() {
                 else if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it)
             }
             client.onInputTranscript = inputTranscript@ { part ->
+                if (handlePendingPersonalMemoryPermission(part)) return@inputTranscript
                 if (handlePendingConfirmation(part)) return@inputTranscript
                 if (isPhantomTranscript(part)) {
                     // Short echo/noise fragments must never become chat bubbles or
@@ -282,6 +287,13 @@ class MyraVoiceService : Service() {
                 appendTranscript(input, part); appendTranscript(commandProbe, part)
                 lastUserIntentText = input.toString().trim()
                 val currentTranscript = commandProbe.toString().trim()
+                if (PersonalMemoryExtractor.extract(romanDisplayText(currentTranscript)) != null) {
+                    // Stop Gemini from answering a personal-memory statement before
+                    // Android has asked the user whether it may be stored.
+                    suppressModelForTurn = true
+                    output.clear()
+                    audio?.interrupt()
+                }
                 if (CommandParser.isLikelyIncompleteActionFragment(currentTranscript)) {
                     incompleteActionFragmentTurn = true
                     suppressModelForTurn = true
@@ -434,6 +446,13 @@ class MyraVoiceService : Service() {
                     }
                 }
                 if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
+                    val personalCandidate = PersonalMemoryExtractor.extract(romanDisplayText(userText))
+                    if (personalCandidate != null) {
+                        requestPersonalMemoryPermission(personalCandidate)
+                        resetTurnBuffers()
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
                     learnSafePreferenceFromCompletedTurn(userText)
                 }
                 if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(romanDisplayText(myraText))
@@ -513,6 +532,77 @@ class MyraVoiceService : Service() {
                 queueLocalSpeech(response, allowUntranscribedAudio = true)
             }
         }
+    }
+
+    private fun requestPersonalMemoryPermission(candidate: MemoryCandidate) {
+        pendingPersonalMemory = candidate
+        pendingPersonalMemoryExpiresAt =
+            android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        output.clear()
+        audio?.interrupt()
+        live?.interrupt()
+        val message = "Ye personal memory hai. Kya main ise yaad rakhun?"
+        listener?.onMyraText(message)
+        emitState(message)
+        queueLocalSpeech(message, allowUntranscribedAudio = true)
+    }
+
+    private fun handlePendingPersonalMemoryPermission(raw: String): Boolean {
+        val candidate = pendingPersonalMemory ?: return false
+        if (android.os.SystemClock.elapsedRealtime() > pendingPersonalMemoryExpiresAt) {
+            pendingPersonalMemory = null
+            pendingPersonalMemoryExpiresAt = 0L
+            return false
+        }
+        val text = raw.lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .trim()
+        val yes = Regex(
+            "^(?:haan|ha|han|yes|yeah|yep|bilkul|theek\\s+hai|yaad\\s+rakho|save\\s+kar\\s+do)$"
+        ).matches(text)
+        val no = Regex(
+            "^(?:nahi|nahin|no|nope|cancel|rehne\\s+do|mat\\s+(?:save\\s+)?karo)$"
+        ).matches(text)
+        if (!yes && !no) return false
+
+        pendingPersonalMemory = null
+        pendingPersonalMemoryExpiresAt = 0L
+        markUserInteraction()
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        waitingForFreshInputAfterCommand = true
+        commandUserTextEmitted = true
+        output.clear()
+        audio?.interrupt()
+        live?.interrupt()
+        listener?.onUserText(romanDisplayText(raw.trim()))
+
+        if (!yes) {
+            val message = "Theek hai, save nahi karungi."
+            listener?.onMyraText(message)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = true)
+            resetTurnBuffers()
+            return true
+        }
+
+        serviceScope.launch {
+            val result = memoryRepository.save(candidate, permissionGranted = true)
+            val message = when (result) {
+                is MemoryWriteResult.Saved -> "Theek hai, yaad rakhungi."
+                is MemoryWriteResult.NeedsPermission -> "Save karne ki permission clear nahi hui."
+                is MemoryWriteResult.Rejected -> "Ye memory safely save nahi kar sakti."
+            }
+            mainHandler.post {
+                listener?.onMyraText(message)
+                emitState(message)
+                queueLocalSpeech(message, allowUntranscribedAudio = true)
+                resetTurnBuffers()
+            }
+        }
+        return true
     }
 
     private fun handleSemanticToolCall(id: String, functionName: String, args: org.json.JSONObject) {
@@ -1129,7 +1219,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); pendingMemoryCommand = null; serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); pendingMemoryCommand = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -1141,6 +1231,7 @@ class MyraVoiceService : Service() {
         private const val CHANNEL_ID = "myra_voice"
         private const val NOTIFICATION_ID = 1001
         private const val MEMORY_COMMAND_PAUSE_MS = 450L
+        private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
         private const val FIRST_IDLE_NUDGE_MS = 2 * 60 * 1000L
         private const val SECOND_IDLE_NUDGE_MS = 5 * 60 * 1000L
         private const val IDLE_RECHECK_MS = 30 * 1000L
