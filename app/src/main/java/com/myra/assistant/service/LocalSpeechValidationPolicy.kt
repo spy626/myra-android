@@ -4,7 +4,8 @@ data class LocalSpeechValidationPolicy(
     val maxAttempts: Int,
     val timeoutMs: Long,
     val speakFallback: Boolean,
-    val trustBufferedNaturalAudio: Boolean = false
+    val trustBufferedNaturalAudio: Boolean = false,
+    val isolateFromMicDuringGeneration: Boolean = false
 ) {
     companion object {
         val DEFAULT = LocalSpeechValidationPolicy(2, 8_000L, false)
@@ -12,7 +13,8 @@ data class LocalSpeechValidationPolicy(
             maxAttempts = 2,
             timeoutMs = 3_500L,
             speakFallback = false,
-            trustBufferedNaturalAudio = true
+            trustBufferedNaturalAudio = true,
+            isolateFromMicDuringGeneration = true
         )
     }
 }
