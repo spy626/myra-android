@@ -12,6 +12,9 @@ object LocalSpeechGate {
         return prepared == heard || prepared.startsWith("$heard ")
     }
 
+    fun matchesExpectedExactly(actual: String, expected: String): Boolean =
+        normalize(actual).isNotBlank() && normalize(actual) == normalize(expected)
+
     fun hasEnoughBufferedNaturalAudio(audioBytes: Int, expected: String): Boolean {
         if (audioBytes <= 0) return false
         val wordCount = normalize(expected).split(' ').count { it.isNotBlank() }
