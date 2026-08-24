@@ -72,4 +72,14 @@ class PersonalMemoryExtractorTest {
         assertNull(PersonalMemoryExtractor.extract("24 hours me kitna time hota hai"))
         assertNull(PersonalMemoryExtractor.extract("mujhe horror movies pasand hain"))
     }
+
+    @Test
+    fun correctionUsesTheSameBestFriendSlotWithTheNewName() {
+        val direct = PersonalMemoryExtractor.extract("Karima meri best friend hai")!!
+        val corrected = PersonalMemoryExtractor.extract("Karima nahi Aysha meri best friend hai")!!
+
+        assertEquals("person:best_friend", direct.stableKey)
+        assertEquals(direct.stableKey, corrected.stableKey)
+        assertEquals("Zopy's best friend is Aysha", corrected.fact)
+    }
 }
