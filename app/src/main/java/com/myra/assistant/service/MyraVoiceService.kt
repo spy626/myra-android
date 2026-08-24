@@ -18,6 +18,7 @@ import com.myra.assistant.ai.DeepResearchClient
 import com.myra.assistant.ai.HandsFreeMediaGuard
 import com.myra.assistant.data.memory.AutomaticMemoryChange
 import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
+import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
@@ -77,6 +78,7 @@ class MyraVoiceService : Service() {
     private val output = StringBuilder()
     private val commandProbe = StringBuilder()
     private var lastUserIntentText = ""
+    private val recentRelationshipTurns = mutableListOf<Pair<Long, String>>()
     private var suppressModelForTurn = false
     private var waitingForFreshInputAfterCommand = false
     private var commandUserTextEmitted = false
@@ -491,13 +493,17 @@ class MyraVoiceService : Service() {
                     }
                 }
                 if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
-                    val personalCandidate = PersonalMemoryExtractor.extract(romanDisplayText(userText))
+                    val displayUserText = romanDisplayText(userText)
+                    val personalCandidate = PersonalMemoryExtractor.extract(displayUserText)
+                        ?: contextualRelationshipCandidate(displayUserText)
                     if (personalCandidate != null) {
+                        recentRelationshipTurns.clear()
                         requestPersonalMemoryPermission(personalCandidate)
                         resetTurnBuffers()
                         waitingForFreshInputAfterCommand = true
                         return@turnComplete
                     }
+                    rememberRecentRelationshipTurn(displayUserText)
                     learnSafePreferenceFromCompletedTurn(userText)
                 }
                 if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(romanDisplayText(myraText))
@@ -1197,6 +1203,22 @@ class MyraVoiceService : Service() {
             .ifBlank { value.trim() }
     }
 
+    private fun contextualRelationshipCandidate(currentTurn: String): MemoryCandidate? {
+        val now = android.os.SystemClock.elapsedRealtime()
+        recentRelationshipTurns.removeAll { now - it.first > RELATIONSHIP_CONTEXT_MS }
+        return ContextualRelationshipMemoryExtractor.extract(
+            recentRelationshipTurns.map { it.second } + currentTurn
+        )
+    }
+
+    private fun rememberRecentRelationshipTurn(turn: String) {
+        if (turn.isBlank()) return
+        recentRelationshipTurns += android.os.SystemClock.elapsedRealtime() to turn
+        while (recentRelationshipTurns.size > MAX_RELATIONSHIP_CONTEXT_TURNS) {
+            recentRelationshipTurns.removeAt(0)
+        }
+    }
+
     private fun isPhantomTranscript(value: String): Boolean {
         val clean = value.lowercase(Locale.ROOT)
             .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
@@ -1345,7 +1367,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -1359,6 +1381,8 @@ class MyraVoiceService : Service() {
         private const val MEMORY_COMMAND_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
+        private const val RELATIONSHIP_CONTEXT_MS = 45_000L
+        private const val MAX_RELATIONSHIP_CONTEXT_TURNS = 3
         private const val FIRST_IDLE_NUDGE_MS = 2 * 60 * 1000L
         private const val SECOND_IDLE_NUDGE_MS = 5 * 60 * 1000L
         private const val IDLE_RECHECK_MS = 30 * 1000L
