@@ -56,6 +56,7 @@ class MyraVoiceService : Service() {
     private var waitingForFreshInputAfterCommand = false
     private var commandUserTextEmitted = false
     private var localCommandExecutedThisTurn = false
+    private var ambiguousMessageTurn = false
     private var lastCommandKey = ""
     private var hasAcknowledgedScrollDirection = false
     private var lastScrollDirection = AppCommand.ScrollDirection.DOWN
@@ -259,6 +260,18 @@ class MyraVoiceService : Service() {
                         mainHandler.postDelayed(memoryCommandRunnable, MEMORY_COMMAND_PAUSE_MS)
                     }
                 }
+                val ambiguousMessage = CommandParser.isAmbiguousMessageReference(commandProbe.toString())
+                if (ambiguousMessage) {
+                    ambiguousMessageTurn = true
+                    suppressModelForTurn = true
+                    output.clear()
+                    audio?.interrupt()
+                } else if (ambiguousMessageTurn && !MemoryCommandParser.looksLikeIntent(commandProbe.toString())) {
+                    // A later transcript chunk completed the thought. Gemini already
+                    // received the audio, so allow its contextual response again.
+                    ambiguousMessageTurn = false
+                    suppressModelForTurn = false
+                }
                 val command = CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString())
                 if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
                     probableActionTurn = true
@@ -331,6 +344,17 @@ class MyraVoiceService : Service() {
                 // chunks can omit or mistranscribe the action word even when the final text
                 // contains enough context to identify the device command.
                 if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
+                    if (CommandParser.isAmbiguousMessageReference(userText)) {
+                        val clarification = "Message ke baare mein baat kar rahe ho, ya kisi ko bhejna hai?"
+                        localCommandExecutedThisTurn = true
+                        listener?.onMyraText(clarification)
+                        emitState(clarification)
+                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
+                        resetTurnBuffers()
+                        ambiguousMessageTurn = false
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
                     val memoryCommand = MemoryCommandParser.parse(userText)
                     if (memoryCommand != null) {
                         handleMemoryCommand(memoryCommand)
@@ -870,6 +894,7 @@ class MyraVoiceService : Service() {
         commandUserTextEmitted = false
         probableActionTurn = false
         mediaBlockedTurn = false
+        ambiguousMessageTurn = false
     }
 
     private fun romanDisplayText(value: String): String {
