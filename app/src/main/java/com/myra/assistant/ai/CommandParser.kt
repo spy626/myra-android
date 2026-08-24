@@ -48,7 +48,7 @@ object CommandParser {
         if (asksForFeatures) return AppCommand.ListFeatures
         if (Regex("^(?:go )?home(?: screen)?$|^home (?:jao|chalo|karo)$|^होम").containsMatchIn(text)) return AppCommand.GoHome
         if (Regex("^(?:go )?back$|^back (?:jao|karo)$|^peeche (?:jao|chalo)$|^पीछे").containsMatchIn(text)) return AppCommand.GoBack
-        if (Regex("(?:what(?:'s| is) the time|time (?:kya|kitna|kitni|batao)|(?:kya|kitna|kitni) time|samay|kitne baje|टाइम|समय)").containsMatchIn(text)) return AppCommand.CurrentTime
+        if (isCurrentTimeQuery(text)) return AppCommand.CurrentTime
         if (Regex("(?:battery|बैटरी).*(?:level|percent|percentage|kitna|kitni|batao|status|charge|कितना|कितनी|बताओ)|^(?:battery|बैटरी)$").containsMatchIn(text)) return AppCommand.BatteryLevel
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:on|open|chalu|jala|चालू|जलाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(true)
         if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:off|close|band|bujha|बंद|बुझाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(false)
@@ -136,6 +136,18 @@ object CommandParser {
         )
         return if (explicitPrompt.matches(text)) AppCommand.ReplyWhatsApp(null, "") else null
     }
+
+    fun isExplicitWhatsAppMessageQuery(raw: String): Boolean =
+        isWhatsAppMessageQuery(normalize(raw))
+
+    private fun isCurrentTimeQuery(text: String): Boolean = listOf(
+        Regex("^(?:what(?:'s| is) the (?:current )?time|current time)$"),
+        Regex("^(?:abhi )?time (?:kya|kitna|kitni|batao)(?: (?:hai|he|hua|ho raha hai))?$"),
+        Regex("^(?:abhi )?(?:kya|kitna|kitni) time (?:hai|he|hua|ho raha hai)$"),
+        Regex("^(?:abhi )?kitne baje(?: hain| hai| he)?$"),
+        Regex("^(?:abhi )?(?:samay|समय|टाइम)(?: kya hai| batao)?$"),
+        Regex("^normal time$")
+    ).any { it.matches(text) }
 
     private fun isWhatsAppMessageQuery(text: String): Boolean {
         val whatsapp = Regex("(?:whatsapp|व्हाट्सएप|वॉट्सऐप)")
