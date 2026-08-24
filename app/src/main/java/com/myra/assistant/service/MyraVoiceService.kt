@@ -69,6 +69,7 @@ class MyraVoiceService : Service() {
     private var commandUserTextEmitted = false
     private var localCommandExecutedThisTurn = false
     private var ambiguousMessageTurn = false
+    private var incompleteActionFragmentTurn = false
     private var lastCommandKey = ""
     private var hasAcknowledgedScrollDirection = false
     private var lastScrollDirection = AppCommand.ScrollDirection.DOWN
@@ -262,6 +263,20 @@ class MyraVoiceService : Service() {
                 }
                 appendTranscript(input, part); appendTranscript(commandProbe, part)
                 lastUserIntentText = input.toString().trim()
+                val currentTranscript = commandProbe.toString().trim()
+                if (CommandParser.isLikelyIncompleteActionFragment(currentTranscript)) {
+                    incompleteActionFragmentTurn = true
+                    suppressModelForTurn = true
+                    output.clear()
+                    audio?.interrupt()
+                    return@inputTranscript
+                } else if (incompleteActionFragmentTurn) {
+                    // A later chunk completed the same thought, so resume the normal
+                    // parser. If Gemini finalized the fragment as its own turn, the
+                    // turn-complete guard below discards it without a chat bubble.
+                    incompleteActionFragmentTurn = false
+                    suppressModelForTurn = false
+                }
                 if (MemoryCommandParser.looksLikeIntent(commandProbe.toString())) {
                     suppressModelForTurn = true
                     output.clear()
@@ -351,6 +366,17 @@ class MyraVoiceService : Service() {
                 mainHandler.removeCallbacks(memoryCommandRunnable)
                 pendingMemoryCommand = null
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
+                if (incompleteActionFragmentTurn &&
+                    CommandParser.isLikelyIncompleteActionFragment(userText)
+                ) {
+                    // Do not expose or answer partial ASR words such as "Tem",
+                    // "tain", or "meses". The next completed utterance starts fresh.
+                    audio?.interrupt()
+                    resetTurnBuffers()
+                    suppressModelForTurn = true
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
+                }
                 if (userText.isNotBlank() && !commandUserTextEmitted) listener?.onUserText(romanDisplayText(userText))
                 // Run one final parse over the complete transcript. Partial Live transcript
                 // chunks can omit or mistranscribe the action word even when the final text
@@ -907,6 +933,7 @@ class MyraVoiceService : Service() {
         probableActionTurn = false
         mediaBlockedTurn = false
         ambiguousMessageTurn = false
+        incompleteActionFragmentTurn = false
     }
 
     private fun romanDisplayText(value: String): String {
