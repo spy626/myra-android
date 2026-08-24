@@ -236,6 +236,7 @@ class MyraVoiceService : Service() {
                         audio?.queueAudio(it)
                     } else {
                         localSpeechAudio += it.copyOf()
+                        startLocalSpeechWhenPrefixMatches()
                     }
                 }
                 else if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it)
@@ -1068,9 +1069,14 @@ class MyraVoiceService : Service() {
 
     private fun startLocalSpeechWhenPrefixMatches() {
         val expected = validatingLocalSpeech ?: return
-        if (localSpeechValidationPolicy.bufferUntilValidated) return
         if (localSpeechStreamedDirectly || localSpeechAudio.isEmpty()) return
-        if (!LocalSpeechGate.matchesExpectedPrefix(localSpeechTranscript.toString(), expected)) return
+        if (localSpeechValidationPolicy.bufferUntilValidated) {
+            val bufferedBytes = localSpeechAudio.sumOf { it.size }
+            if (!LocalSpeechGate.matchesExpectedExactly(localSpeechTranscript.toString(), expected)) return
+            if (!LocalSpeechGate.hasEnoughBufferedNaturalAudio(bufferedBytes, expected)) return
+        } else if (!LocalSpeechGate.matchesExpectedPrefix(localSpeechTranscript.toString(), expected)) {
+            return
+        }
 
         localSpeechStreamedDirectly = true
         localPlaybackActive = true
