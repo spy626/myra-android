@@ -47,7 +47,10 @@ object PersonalMemoryExtractor {
     )
 
     fun extract(raw: String): MemoryCandidate? {
-        val text = raw.trim().replace(Regex("\\s+"), " ")
+        val text = raw.trim()
+            .trimEnd('.', ',', '?', '!', '।')
+            .trim()
+            .replace(Regex("\\s+"), " ")
         if (text.length !in 4..MAX_INPUT_LENGTH || blocked.containsMatchIn(text)) return null
 
         agePatterns.firstNotNullOfOrNull { it.matchEntire(text) }?.let { match ->
