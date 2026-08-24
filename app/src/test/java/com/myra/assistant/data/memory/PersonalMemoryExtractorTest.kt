@@ -103,4 +103,10 @@ class PersonalMemoryExtractorTest {
 
         assertEquals("Zopy's best friend is Karima", candidate?.fact)
     }
+
+    @Test
+    fun doesNotTreatRecallQuestionWordAsFriendName() {
+        assertNull(PersonalMemoryExtractor.extract("Kauna meri best friend hai"))
+        assertNull(PersonalMemoryExtractor.extract("Kon meri best frend hai"))
+    }
 }
