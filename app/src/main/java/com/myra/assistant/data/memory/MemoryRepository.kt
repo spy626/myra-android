@@ -22,6 +22,9 @@ class MemoryRepository(private val dao: MemoryDao) {
         return dao.search(normalized, limit.coerceIn(1, 10))
     }
 
+    suspend fun isAlreadySaved(candidate: MemoryCandidate): Boolean =
+        MemoryFactMatcher.isSameActiveFact(dao.findByStableKey(candidate.stableKey), candidate)
+
     suspend fun forget(id: String): Boolean =
         dao.deactivate(id, System.currentTimeMillis()) > 0
 
