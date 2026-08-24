@@ -26,6 +26,7 @@ import com.myra.assistant.data.memory.MemoryConfirmationParser
 import com.myra.assistant.data.memory.MemoryCandidate
 import com.myra.assistant.data.memory.PersonalMemoryExtractor
 import com.myra.assistant.data.memory.PersonalMemoryPermissionPrompt
+import com.myra.assistant.data.memory.PersonalMemoryRecallFormatter
 import com.myra.assistant.data.memory.MemoryRepository
 import com.myra.assistant.data.memory.SavedMemoryContextFormatter
 import com.myra.assistant.data.memory.MemoryWriteResult
@@ -138,6 +139,7 @@ class MyraVoiceService : Service() {
     private var pendingConfirmationExpiresAt = 0L
     private var pendingPersonalMemory: MemoryCandidate? = null
     private var pendingPersonalMemoryExpiresAt = 0L
+    private val pendingPersonalMemoryConfirmationInput = StringBuilder()
     private var lastLocalSpeechKey = ""
     private var lastLocalSpeechAt = 0L
     private var lastAnnouncementKey = ""
@@ -554,8 +556,7 @@ class MyraVoiceService : Service() {
                 }
                 is MemoryCommand.Read -> {
                     val memories = memoryRepository.relevant(command.query, 5)
-                    if (memories.isEmpty()) "I don't have any saved memories about you yet."
-                    else "I remember that " + memories.joinToString("; ") { it.fact } + "."
+                    PersonalMemoryRecallFormatter.format(memories.map { it.fact })
                 }
                 is MemoryCommand.Forget -> {
                     if (memoryRepository.forgetMatching(command.query)) "Okay, I forgot that."
@@ -572,6 +573,7 @@ class MyraVoiceService : Service() {
 
     private fun requestPersonalMemoryPermission(candidate: MemoryCandidate) {
         pendingPersonalMemory = candidate
+        pendingPersonalMemoryConfirmationInput.clear()
         pendingPersonalMemoryExpiresAt =
             android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
         suppressModelForTurn = true
@@ -590,14 +592,21 @@ class MyraVoiceService : Service() {
         if (android.os.SystemClock.elapsedRealtime() > pendingPersonalMemoryExpiresAt) {
             pendingPersonalMemory = null
             pendingPersonalMemoryExpiresAt = 0L
+            pendingPersonalMemoryConfirmationInput.clear()
             return false
         }
-        val decision =
-            MemoryConfirmationParser.parse(romanDisplayText(raw)) ?: MemoryConfirmationParser.parse(raw)
+        val romanRaw = romanDisplayText(raw)
+        appendTranscript(pendingPersonalMemoryConfirmationInput, romanRaw)
+        val combined = pendingPersonalMemoryConfirmationInput.toString()
+        val decision = MemoryConfirmationParser.parse(romanRaw)
+            ?: MemoryConfirmationParser.parse(raw)
+            ?: MemoryConfirmationParser.parse(combined)
+            ?: MemoryConfirmationParser.parse(combined.replace(" ", ""))
         if (decision == null) return false
 
         pendingPersonalMemory = null
         pendingPersonalMemoryExpiresAt = 0L
+        pendingPersonalMemoryConfirmationInput.clear()
         markUserInteraction()
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
@@ -1248,7 +1257,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
