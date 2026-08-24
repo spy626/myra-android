@@ -18,7 +18,7 @@ object MemoryCommandParser {
         RegexOption.IGNORE_CASE
     )
     private val read = Regex(
-        "^(?:(?:what)(?:\\s+(?:all))?(?:\\s+do)?(?:\\s+you)?\\s+remember(?:\\s+about\\s+me)?|(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+kya\\s+(?:yaad|yada)\\s+(?:hai|he)|(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:(?:pata|yaad|yada)\\s+(?:hai|he)|(?:jante|jaante|janate)\\s+ho))[?]?$",
+        "^(?:(?:what)(?:\\s+(?:all))?(?:\\s+do)?(?:\\s+you)?\\s+remember(?:\\s+about\\s+me)?|(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+kya\\s+(?:yaad|yada)\\s+(?:hai|he)|(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:(?:pata|yaad|yada)\\s+(?:hai|he)|(?:jante|jaante|janate|janti|jaanti|janati)\\s+ho))[?]?$",
         RegexOption.IGNORE_CASE
     )
 
