@@ -25,4 +25,22 @@ class LocalSpeechGateTest {
         assertFalse(LocalSpeechGate.matchesExpectedPrefix("Aapke", expected))
         assertFalse(LocalSpeechGate.matchesExpectedPrefix("Lo jaan", expected))
     }
+
+    @Test fun rejectsShortPartialNaturalAudio() {
+        assertFalse(
+            LocalSpeechGate.hasEnoughBufferedNaturalAudio(
+                audioBytes = 12_000,
+                expected = "Ayasa tumhari best friend hai, main yeh yaad rakhun?"
+            )
+        )
+    }
+
+    @Test fun acceptsCompleteEnoughNaturalAudio() {
+        assertTrue(
+            LocalSpeechGate.hasEnoughBufferedNaturalAudio(
+                audioBytes = 80_000,
+                expected = "Ayasa tumhari best friend hai, main yeh yaad rakhun?"
+            )
+        )
+    }
 }
