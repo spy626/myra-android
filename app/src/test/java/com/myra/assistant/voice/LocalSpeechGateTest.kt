@@ -43,4 +43,9 @@ class LocalSpeechGateTest {
             )
         )
     }
+
+    @Test fun exactMatchRequiresTheWholePreparedReply() {
+        assertFalse(LocalSpeechGate.matchesExpectedExactly("Ayasa tumhari", "Ayasa tumhari best friend hai"))
+        assertTrue(LocalSpeechGate.matchesExpectedExactly("Ayasa tumhari best friend hai.", "Ayasa tumhari best friend hai"))
+    }
 }
