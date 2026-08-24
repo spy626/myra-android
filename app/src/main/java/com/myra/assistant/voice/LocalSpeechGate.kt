@@ -12,10 +12,23 @@ object LocalSpeechGate {
         return prepared == heard || prepared.startsWith("$heard ")
     }
 
+    fun hasEnoughBufferedNaturalAudio(audioBytes: Int, expected: String): Boolean {
+        if (audioBytes <= 0) return false
+        val wordCount = normalize(expected).split(' ').count { it.isNotBlank() }
+        if (wordCount == 0) return false
+        val minimumDurationMs = (wordCount * ESTIMATED_MS_PER_WORD)
+            .coerceIn(MINIMUM_AUDIO_MS, MAXIMUM_REQUIRED_AUDIO_MS)
+        return audioBytes >= minimumDurationMs * PCM_24K_MONO_BYTES_PER_MS
+    }
+
     private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .trim()
         .replace(Regex("\\s+"), " ")
 
     private const val MINIMUM_PREFIX_WORDS = 2
+    private const val PCM_24K_MONO_BYTES_PER_MS = 48
+    private const val ESTIMATED_MS_PER_WORD = 180
+    private const val MINIMUM_AUDIO_MS = 600
+    private const val MAXIMUM_REQUIRED_AUDIO_MS = 1_800
 }
