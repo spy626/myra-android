@@ -75,4 +75,24 @@ class CommandParserTest {
         assertTrue(!CommandParser.isExplicitWhatsAppMessageQuery("mere baare mein kya jaante ho tum"))
         assertTrue(CommandParser.isExplicitWhatsAppMessageQuery("WhatsApp message aaya hai kya"))
     }
+
+    @Test fun standaloneTimeUsesLocalClockCommand() {
+        assertTrue(CommandParser.parse("time") is AppCommand.CurrentTime)
+    }
+
+    @Test fun durationQuestionIsNotEvenAProbablePhoneAction() {
+        val text = "24 hours mein kitna time hota hai"
+        assertNull(CommandParser.parse(text))
+        assertTrue(!CommandParser.isProbableDeviceAction(text))
+    }
+
+    @Test fun conversationalTimeReferenceIsNotAProbablePhoneAction() {
+        assertTrue(!CommandParser.isProbableDeviceAction("meri dost time par nahi aaye toh kya karna chahiye"))
+    }
+
+    @Test fun onlyStandaloneMessageIsAmbiguous() {
+        assertTrue(CommandParser.isAmbiguousMessageReference("message"))
+        assertTrue(!CommandParser.isAmbiguousMessageReference("message ka reply late aata hai"))
+        assertTrue(CommandParser.parse("message bhejo") is AppCommand.ReplyWhatsApp)
+    }
 }
