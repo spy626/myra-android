@@ -21,6 +21,8 @@ import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
+import com.myra.assistant.data.memory.MemoryConfirmationDecision
+import com.myra.assistant.data.memory.MemoryConfirmationParser
 import com.myra.assistant.data.memory.MemoryCandidate
 import com.myra.assistant.data.memory.PersonalMemoryExtractor
 import com.myra.assistant.data.memory.PersonalMemoryPermissionPrompt
@@ -310,11 +312,12 @@ class MyraVoiceService : Service() {
                     incompleteActionFragmentTurn = false
                     suppressModelForTurn = false
                 }
-                if (MemoryCommandParser.looksLikeIntent(commandProbe.toString())) {
+                val romanMemoryTranscript = romanDisplayText(commandProbe.toString())
+                if (MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {
                     suppressModelForTurn = true
                     output.clear()
                     audio?.interrupt()
-                    MemoryCommandParser.parse(commandProbe.toString())?.let { memoryCommand ->
+                    MemoryCommandParser.parse(romanMemoryTranscript)?.let { memoryCommand ->
                         pendingMemoryCommand = memoryCommand
                         mainHandler.removeCallbacks(memoryCommandRunnable)
                         mainHandler.postDelayed(memoryCommandRunnable, MEMORY_COMMAND_PAUSE_MS)
@@ -326,7 +329,7 @@ class MyraVoiceService : Service() {
                     suppressModelForTurn = true
                     output.clear()
                     audio?.interrupt()
-                } else if (ambiguousMessageTurn && !MemoryCommandParser.looksLikeIntent(commandProbe.toString())) {
+                } else if (ambiguousMessageTurn && !MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {
                     // A later transcript chunk completed the thought. Gemini already
                     // received the audio, so allow its contextual response again.
                     ambiguousMessageTurn = false
@@ -426,7 +429,7 @@ class MyraVoiceService : Service() {
                         waitingForFreshInputAfterCommand = true
                         return@turnComplete
                     }
-                    val memoryCommand = MemoryCommandParser.parse(userText)
+                    val memoryCommand = MemoryCommandParser.parse(romanDisplayText(userText))
                     if (memoryCommand != null) {
                         handleMemoryCommand(memoryCommand)
                         resetTurnBuffers()
@@ -559,16 +562,9 @@ class MyraVoiceService : Service() {
             pendingPersonalMemoryExpiresAt = 0L
             return false
         }
-        val text = raw.lowercase(Locale.ROOT)
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
-            .trim()
-        val yes = Regex(
-            "^(?:haan|ha|han|yes|yeah|yep|bilkul|theek\\s+hai|yaad\\s+rakho|save\\s+kar\\s+do)$"
-        ).matches(text)
-        val no = Regex(
-            "^(?:nahi|nahin|no|nope|cancel|rehne\\s+do|mat\\s+(?:save\\s+)?karo)$"
-        ).matches(text)
-        if (!yes && !no) return false
+        val decision =
+            MemoryConfirmationParser.parse(romanDisplayText(raw)) ?: MemoryConfirmationParser.parse(raw)
+        if (decision == null) return false
 
         pendingPersonalMemory = null
         pendingPersonalMemoryExpiresAt = 0L
@@ -582,7 +578,7 @@ class MyraVoiceService : Service() {
         live?.interrupt()
         listener?.onUserText(romanDisplayText(raw.trim()))
 
-        if (!yes) {
+        if (decision == MemoryConfirmationDecision.NO) {
             val message = "Theek hai, save nahi karungi."
             listener?.onMyraText(message)
             emitState(message)
