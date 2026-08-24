@@ -95,4 +95,22 @@ class CommandParserTest {
         assertTrue(!CommandParser.isAmbiguousMessageReference("message ka reply late aata hai"))
         assertTrue(CommandParser.parse("message bhejo") is AppCommand.ReplyWhatsApp)
     }
+
+    @Test fun observedPartialActionWordsAreHeldSilently() {
+        listOf("Tem", "tain", "meses", "messag").forEach {
+            assertTrue(it, CommandParser.isLikelyIncompleteActionFragment(it))
+            assertNull(CommandParser.parse(it))
+        }
+    }
+
+    @Test fun completeActionsAndConversationAreNotPartialFragments() {
+        listOf(
+            "time",
+            "message",
+            "WhatsApp par message aaya hai kya",
+            "meri dost message ka reply late deti hai"
+        ).forEach {
+            assertTrue(it, !CommandParser.isLikelyIncompleteActionFragment(it))
+        }
+    }
 }
