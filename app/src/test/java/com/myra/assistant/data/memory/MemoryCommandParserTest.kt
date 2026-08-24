@@ -66,7 +66,9 @@ class MemoryCommandParserTest {
             "tumhem mere bare mem kya yada hai",
             "tumhen mere bare me kya yaad hai",
             "abhi mere bare mem kya pata hai",
-            "mere baare mein kya yaad hai"
+            "mere baare mein kya yaad hai",
+            "mere bare mem kya janate ho",
+            "mere baare mein tum kya jaante ho"
         ).forEach { phrase ->
             assertTrue(phrase, MemoryCommandParser.looksLikeIntent(phrase))
             assertTrue(phrase, MemoryCommandParser.parse(phrase) is MemoryCommand.Read)
