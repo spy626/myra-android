@@ -46,4 +46,19 @@ class AutomaticMemoryExtractorTest {
         assertNull(AutomaticMemoryExtractor.extract("WhatsApp message aaya hai kya"))
         assertNull(AutomaticMemoryExtractor.extract("meri dost reply late karti hai"))
     }
+
+    @Test fun normalizesObservedRomanizedMovieTranscripts() {
+        assertEquals(
+            "Zopy likes science-fiction movies",
+            AutomaticMemoryExtractor.extract(
+                "mujhe sainsa sainsa phiksana muvi bahuta pasanda hai"
+            )?.fact
+        )
+        assertEquals(
+            "Zopy likes horror movies",
+            AutomaticMemoryExtractor.extract(
+                "mujhe horara muvi bahuta pasanda hai"
+            )?.fact
+        )
+    }
 }
