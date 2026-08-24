@@ -1068,6 +1068,7 @@ class MyraVoiceService : Service() {
 
     private fun startLocalSpeechWhenPrefixMatches() {
         val expected = validatingLocalSpeech ?: return
+        if (localSpeechValidationPolicy.bufferUntilValidated) return
         if (localSpeechStreamedDirectly || localSpeechAudio.isEmpty()) return
         if (!LocalSpeechGate.matchesExpectedPrefix(localSpeechTranscript.toString(), expected)) return
 
@@ -1096,8 +1097,11 @@ class MyraVoiceService : Service() {
         // sometimes streams the selected natural voice before its output transcript. In
         // that narrow case, keep the buffered Gemini audio instead of discarding it and
         // switching to robotic Android TTS. Phone actions retain strict transcript gating.
+        val bufferedAudioBytes = localSpeechAudio.sumOf { it.size }
         val trustedNaturalAudio =
-            localSpeechValidationPolicy.trustBufferedNaturalAudio && localSpeechHasContent
+            localSpeechValidationPolicy.trustBufferedNaturalAudio &&
+                localSpeechHasContent &&
+                LocalSpeechGate.hasEnoughBufferedNaturalAudio(bufferedAudioBytes, expected)
         if ((transcriptMatches || trustedNaturalAudio) && localSpeechAudio.isNotEmpty()) {
             localSpeechGenerationComplete = true
             localPlaybackActive = true
