@@ -1,5 +1,6 @@
 package com.myra.assistant.data.memory
 
+import com.myra.assistant.voice.RomanHinglishFormatter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -34,5 +35,13 @@ class ContextualRelationshipMemoryExtractorTest {
 
     @Test fun incompleteRelationshipWithoutNameDoesNotSave() {
         assertNull(ContextualRelationshipMemoryExtractor.extract(listOf("Mera ek male best friend hai")))
+    }
+
+    @Test fun learnsAfterObservedHindiTranscriptIsCleaned() {
+        val cleaned = RomanHinglishFormatter.format(
+            "mērā ēka mēla bēsṭa phrēṇḍa hai. usakā nāma karīma hai."
+        )
+        val candidate = ContextualRelationshipMemoryExtractor.extract(listOf(cleaned))
+        assertEquals("Zopy's best friend is Kareem", candidate?.fact)
     }
 }
