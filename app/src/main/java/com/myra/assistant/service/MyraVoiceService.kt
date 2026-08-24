@@ -1052,6 +1052,12 @@ class MyraVoiceService : Service() {
         localSpeechAudio.clear()
         localSpeechTranscript.clear()
         suppressModelForTurn = true
+        // Continuous mic packets can race with clientContent and cancel this short
+        // deterministic memory utterance before Gemini returns audio. Listening is
+        // restored by every playback-complete and unavailable-audio path below.
+        if (localSpeechValidationPolicy.isolateFromMicDuringGeneration) {
+            audio?.setMuted(true)
+        }
         client.sendText("Say exactly these words once, with the selected natural voice. Do not add, remove, translate, explain, or introduce them: ${org.json.JSONObject.quote(message)}")
         mainHandler.postDelayed({
             if (token == localSpeechValidationToken && validatingLocalSpeech != null) {
