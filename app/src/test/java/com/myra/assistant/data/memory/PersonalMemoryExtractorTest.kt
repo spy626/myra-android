@@ -82,4 +82,18 @@ class PersonalMemoryExtractorTest {
         assertEquals(direct.stableKey, corrected.stableKey)
         assertEquals("Zopy's best friend is Aysha", corrected.fact)
     }
+
+    @Test
+    fun handlesObservedLiveCorrectionTranscriptionMistakes() {
+        val observed = PersonalMemoryExtractor.extract(
+            "Arima mane Ayasa mere besta phrenda hai"
+        )
+        val directCorrection = PersonalMemoryExtractor.extract(
+            "Nahi meri best friend Aisha hai"
+        )
+
+        assertEquals("person:best_friend", observed?.stableKey)
+        assertEquals("Zopy's best friend is Ayasa", observed?.fact)
+        assertEquals("Zopy's best friend is Aisha", directCorrection?.fact)
+    }
 }
