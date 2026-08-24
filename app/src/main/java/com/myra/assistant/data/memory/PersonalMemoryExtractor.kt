@@ -77,7 +77,7 @@ object PersonalMemoryExtractor {
             bestFriendCorrectionPatterns.firstNotNullOfOrNull { it.matchEntire(text) }
                 ?: bestFriendPatterns.firstNotNullOfOrNull { it.matchEntire(text) }
         bestFriendMatch?.let { match ->
-            val name = cleanValue(match.groupValues[1]) ?: return null
+            val name = cleanValue(match.groupValues[1])?.let(::collapseRepeatedName) ?: return null
             if (name.lowercase(Locale.ROOT) in ambiguousValues) return null
             return candidate(
                 MemoryCategory.PERSON,
@@ -127,6 +127,30 @@ object PersonalMemoryExtractor {
         val clean = value.trim().trim('.', ',', '?', '!')
         if (clean.length !in 2..100 || blocked.containsMatchIn(clean)) return null
         return clean
+    }
+
+    private fun collapseRepeatedName(value: String): String {
+        val words = value.split(' ').filter(String::isNotBlank)
+        if (words.size != 2 || words.any { it.length < 4 }) return value
+        val distance = editDistance(words[0].lowercase(Locale.ROOT), words[1].lowercase(Locale.ROOT))
+        return if (distance <= 1) words.maxBy(String::length) else value
+    }
+
+    private fun editDistance(first: String, second: String): Int {
+        var previous = IntArray(second.length + 1) { it }
+        first.forEachIndexed { firstIndex, firstChar ->
+            val current = IntArray(second.length + 1)
+            current[0] = firstIndex + 1
+            second.forEachIndexed { secondIndex, secondChar ->
+                current[secondIndex + 1] = minOf(
+                    current[secondIndex] + 1,
+                    previous[secondIndex + 1] + 1,
+                    previous[secondIndex] + if (firstChar == secondChar) 0 else 1
+                )
+            }
+            previous = current
+        }
+        return previous[second.length]
     }
 
     private fun stableToken(value: String): String = value.lowercase(Locale.ROOT)
