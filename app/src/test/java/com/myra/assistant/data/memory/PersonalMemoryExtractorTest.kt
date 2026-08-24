@@ -96,4 +96,11 @@ class PersonalMemoryExtractorTest {
         assertEquals("Zopy's best friend is Ayasa", observed?.fact)
         assertEquals("Zopy's best friend is Aisha", directCorrection?.fact)
     }
+
+    @Test
+    fun collapsesAdjacentNearDuplicateNamesFromLiveAsr() {
+        val candidate = PersonalMemoryExtractor.extract("Karima Amira meri best friend hai")
+
+        assertEquals("Zopy's best friend is Karima", candidate?.fact)
+    }
 }
