@@ -585,10 +585,9 @@ class MyraVoiceService : Service() {
     }
 
     private fun requestPersonalMemoryPermission(candidate: MemoryCandidate) {
-        pendingPersonalMemory = candidate
+        pendingPersonalMemory = null
         pendingPersonalMemoryConfirmationInput.clear()
-        pendingPersonalMemoryExpiresAt =
-            android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
+        pendingPersonalMemoryExpiresAt = 0L
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
         output.clear()
@@ -597,14 +596,26 @@ class MyraVoiceService : Service() {
         // an interrupted Gemini turn that may never emit another turnComplete.
         cancelSpeechForNewAction()
         live?.interrupt()
-        val message = PersonalMemoryPermissionPrompt.format(candidate)
-        listener?.onMyraText(message)
-        emitState(message)
-        queueLocalSpeech(
-            message,
-            allowUntranscribedAudio = true,
-            validationPolicy = LocalSpeechValidationPolicy.MEMORY
-        )
+        serviceScope.launch {
+            val alreadySaved = memoryRepository.isAlreadySaved(candidate)
+            mainHandler.post {
+                val message = if (alreadySaved) {
+                    "Haan, mujhe yaad hai."
+                } else {
+                    pendingPersonalMemory = candidate
+                    pendingPersonalMemoryExpiresAt =
+                        android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
+                    PersonalMemoryPermissionPrompt.format(candidate)
+                }
+                listener?.onMyraText(message)
+                emitState(message)
+                queueLocalSpeech(
+                    message,
+                    allowUntranscribedAudio = true,
+                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
+                )
+            }
+        }
     }
 
     private fun handlePendingPersonalMemoryPermission(raw: String): Boolean {
