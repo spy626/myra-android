@@ -9,9 +9,9 @@ data class LocalSpeechValidationPolicy(
     companion object {
         val DEFAULT = LocalSpeechValidationPolicy(2, 8_000L, false)
         val MEMORY = LocalSpeechValidationPolicy(
-            maxAttempts = 1,
+            maxAttempts = 2,
             timeoutMs = 3_500L,
-            speakFallback = true,
+            speakFallback = false,
             trustBufferedNaturalAudio = true
         )
     }
