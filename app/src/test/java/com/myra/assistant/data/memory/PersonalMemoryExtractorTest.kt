@@ -36,6 +36,24 @@ class PersonalMemoryExtractorTest {
     }
 
     @Test
+    fun handlesObservedVoiceTranscriptionMistakes() {
+        val age = PersonalMemoryExtractor.extract("maim 26 sala ka hum")
+        assertEquals("Zopy is 26 years old", age?.fact)
+
+        val friend = PersonalMemoryExtractor.extract("ayusa meri besta phrenda hai")
+        assertEquals(MemoryCategory.PERSON, friend?.category)
+        assertEquals("person:best_friend", friend?.stableKey)
+        assertEquals("Zopy's best friend is ayusa", friend?.fact)
+    }
+
+    @Test
+    fun rejectsNearMatchesOutsideClearPersonalStatements() {
+        assertNull(PersonalMemoryExtractor.extract("mere dost ka time nahi aaya"))
+        assertNull(PersonalMemoryExtractor.extract("best friend movie dikhao"))
+        assertNull(PersonalMemoryExtractor.extract("26 hours me kitna time hota hai"))
+    }
+
+    @Test
     fun rejectsSecretsSensitiveAndAmbiguousStatements() {
         assertNull(PersonalMemoryExtractor.extract("my bank account number is 12345"))
         assertNull(PersonalMemoryExtractor.extract("my diagnosis is diabetes"))
