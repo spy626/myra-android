@@ -135,6 +135,7 @@ object PersonalMemoryExtractor {
         .take(48)
 
     private val ambiguousValues = setOf(
-        "it", "this", "that", "he", "she", "they", "vo", "woh", "ye", "usko", "isko"
+        "it", "this", "that", "he", "she", "they", "vo", "woh", "ye", "usko", "isko",
+        "who", "what", "kon", "koun", "kaun", "kauna"
     )
 }
