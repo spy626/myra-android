@@ -35,11 +35,15 @@ object PersonalMemoryExtractor {
     )
     private val bestFriendCorrectionPatterns = listOf(
         Regex(
-            "^[\\p{L}][\\p{L} .'-]{1,39} (?:nahi|nahin|nai),? ([\\p{L}][\\p{L} .'-]{1,39}) meri (?:best|besta) (?:friend|frend|phrend|phrenda) (?:hai|he)$",
+            "^[\\p{L}][\\p{L} .'-]{1,39} (?:nahi|nahin|nai|nhi|nehi|mane),? ([\\p{L}][\\p{L} .'-]{1,39}) (?:meri|mere) (?:best|besta) (?:friend|frend|phrend|phrenda) (?:hai|he)$",
             RegexOption.IGNORE_CASE
         ),
         Regex(
-            "^meri (?:best|besta) (?:friend|frend|phrend|phrenda) [\\p{L}][\\p{L} .'-]{1,39} (?:nahi|nahin|nai),? ([\\p{L}][\\p{L} .'-]{1,39}) (?:hai|he)$",
+            "^(?:meri|mere) (?:best|besta) (?:friend|frend|phrend|phrenda) [\\p{L}][\\p{L} .'-]{1,39} (?:nahi|nahin|nai|nhi|nehi|mane),? ([\\p{L}][\\p{L} .'-]{1,39}) (?:hai|he)$",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "^(?:nahi|nahin|nai|nhi|nehi),? (?:meri|mere) (?:best|besta) (?:friend|frend|phrend|phrenda) ([\\p{L}][\\p{L} .'-]{1,39}) (?:hai|he)$",
             RegexOption.IGNORE_CASE
         )
     )
