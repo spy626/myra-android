@@ -45,6 +45,15 @@ class MemoryCommandParserTest {
         variants.forEach { assertTrue(it, MemoryCommandParser.parse(it) is MemoryCommand.Read) }
     }
 
+
+    @Test fun parsesLyraHinglishRememberVariant() {
+        val command = MemoryCommandParser.parse(
+            "Lyra yaad rako mujhe horror movie bohot pasand hai"
+        ) as MemoryCommand.Remember
+        assertEquals(MemoryCategory.PREFERENCE, command.candidate.category)
+        assertEquals("mujhe horror movie bohot pasand hai", command.displayFact)
+    }
+
     @Test fun stripsLeadingThisFromRememberedFact() {
         val command = MemoryCommandParser.parse("Remember this I love horror movies") as MemoryCommand.Remember
         assertEquals("I love horror movies", command.candidate.fact)
