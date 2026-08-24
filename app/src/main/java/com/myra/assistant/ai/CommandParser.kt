@@ -146,6 +146,16 @@ object CommandParser {
     fun isAmbiguousMessageReference(raw: String): Boolean =
         Regex("^(?:message|msg|मैसेज)$").matches(normalize(raw))
 
+    /**
+     * Gemini Live occasionally finalizes a turn while a command word is only partly
+     * transcribed. These observed fragments are not meaningful user messages and
+     * must be held silently instead of reaching Gemini conversation output.
+     */
+    fun isLikelyIncompleteActionFragment(raw: String): Boolean {
+        val text = normalize(raw)
+        return Regex("^(?:ti|tim|tem|tai|tain|taim|mes|mese|meses|mess|messa|messag)$").matches(text)
+    }
+
     private fun isCurrentTimeQuery(text: String): Boolean = listOf(
         Regex("^(?:what(?:'s| is) the (?:current )?time|current time)$"),
         Regex("^(?:abhi )?time (?:kya|kitna|kitni|batao)(?: (?:hai|he|hua|ho raha hai))?$"),
