@@ -25,6 +25,7 @@ import com.myra.assistant.data.memory.MemoryConfirmationDecision
 import com.myra.assistant.data.memory.MemoryConfirmationParser
 import com.myra.assistant.data.memory.MemoryCandidate
 import com.myra.assistant.data.memory.PersonalMemoryExtractor
+import com.myra.assistant.data.memory.PersonalMemoryContextCorrection
 import com.myra.assistant.data.memory.PersonalMemoryPermissionPrompt
 import com.myra.assistant.data.memory.PersonalMemoryRecallFormatter
 import com.myra.assistant.data.memory.MemoryRepository
@@ -573,7 +574,11 @@ class MyraVoiceService : Service() {
             mainHandler.post {
                 listener?.onMyraText(response)
                 emitState(response)
-                queueLocalSpeech(response, validationPolicy = LocalSpeechValidationPolicy.MEMORY)
+                queueLocalSpeech(
+                    response,
+                    allowUntranscribedAudio = true,
+                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
+                )
             }
         }
     }
@@ -591,7 +596,11 @@ class MyraVoiceService : Service() {
         val message = PersonalMemoryPermissionPrompt.format(candidate)
         listener?.onMyraText(message)
         emitState(message)
-        queueLocalSpeech(message, validationPolicy = LocalSpeechValidationPolicy.MEMORY)
+        queueLocalSpeech(
+            message,
+            allowUntranscribedAudio = true,
+            validationPolicy = LocalSpeechValidationPolicy.MEMORY
+        )
     }
 
     private fun handlePendingPersonalMemoryPermission(raw: String): Boolean {
@@ -603,6 +612,18 @@ class MyraVoiceService : Service() {
             return false
         }
         val romanRaw = romanDisplayText(raw)
+        PersonalMemoryContextCorrection.resolve(romanRaw, candidate)?.let { replacement ->
+            markUserInteraction()
+            suppressModelForTurn = true
+            localCommandExecutedThisTurn = true
+            waitingForFreshInputAfterCommand = true
+            commandUserTextEmitted = true
+            output.clear()
+            listener?.onUserText(romanRaw)
+            requestPersonalMemoryPermission(replacement)
+            resetTurnBuffers()
+            return true
+        }
         appendTranscript(pendingPersonalMemoryConfirmationInput, romanRaw)
         val combined = pendingPersonalMemoryConfirmationInput.toString()
         val decision = MemoryConfirmationParser.parse(romanRaw)
@@ -628,7 +649,11 @@ class MyraVoiceService : Service() {
             val message = "Theek hai, save nahi karungi."
             listener?.onMyraText(message)
             emitState(message)
-            queueLocalSpeech(message, validationPolicy = LocalSpeechValidationPolicy.MEMORY)
+            queueLocalSpeech(
+                message,
+                allowUntranscribedAudio = true,
+                validationPolicy = LocalSpeechValidationPolicy.MEMORY
+            )
             resetTurnBuffers()
             return true
         }
@@ -643,7 +668,11 @@ class MyraVoiceService : Service() {
             mainHandler.post {
                 listener?.onMyraText(message)
                 emitState(message)
-                queueLocalSpeech(message, validationPolicy = LocalSpeechValidationPolicy.MEMORY)
+                queueLocalSpeech(
+                    message,
+                    allowUntranscribedAudio = true,
+                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
+                )
                 resetTurnBuffers()
             }
         }
