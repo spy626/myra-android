@@ -20,12 +20,18 @@ object PersonalMemoryExtractor {
         Regex("^i am (\\d{1,3}) years? old$", RegexOption.IGNORE_CASE),
         Regex("^my age is (\\d{1,3})$", RegexOption.IGNORE_CASE),
         Regex("^meri age (?:is|hai) (\\d{1,3})$", RegexOption.IGNORE_CASE),
-        Regex("^main (\\d{1,3}) saal (?:ka|ki) (?:hun|hoon|hu)$", RegexOption.IGNORE_CASE)
+        Regex("^(?:main|maim|mein) (\\d{1,3}) (?:saal|sala) (?:ka|ki) (?:hun|hoon|hum|hu)$", RegexOption.IGNORE_CASE)
     )
     private val bestFriendPatterns = listOf(
         Regex("^my best friend is ([\\p{L}][\\p{L} .'-]{1,39})$", RegexOption.IGNORE_CASE),
-        Regex("^([\\p{L}][\\p{L} .'-]{1,39}) meri best friend (?:hai|he)$", RegexOption.IGNORE_CASE),
-        Regex("^meri best friend ([\\p{L}][\\p{L} .'-]{1,39}) (?:hai|he)$", RegexOption.IGNORE_CASE)
+        Regex(
+            "^([\\p{L}][\\p{L} .'-]{1,39}) meri (?:best|besta) (?:friend|frend|phrend|phrenda) (?:hai|he)$",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "^meri (?:best|besta) (?:friend|frend|phrend|phrenda) ([\\p{L}][\\p{L} .'-]{1,39}) (?:hai|he)$",
+            RegexOption.IGNORE_CASE
+        )
     )
     private val goalPatterns = listOf(
         Regex("^my (?:main )?goal is (.{3,100})$", RegexOption.IGNORE_CASE),
