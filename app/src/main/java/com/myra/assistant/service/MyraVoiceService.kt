@@ -432,6 +432,16 @@ class MyraVoiceService : Service() {
             live?.sendToolResponse(id, functionName, false, "This is a memory request, not a phone action")
             return
         }
+        if (action == "TIME" && CommandParser.parse(guardedText) !is AppCommand.CurrentTime) {
+            suppressModelForTurn = false
+            live?.sendToolResponse(id, functionName, false, "The user mentioned time conversationally; no clock query was made")
+            return
+        }
+        if (action == "QUERY_WHATSAPP" && !CommandParser.isExplicitWhatsAppMessageQuery(guardedText)) {
+            suppressModelForTurn = false
+            live?.sendToolResponse(id, functionName, false, "No explicit WhatsApp notification query was made")
+            return
+        }
         val target = args.optString("target").trim()
         val query = args.optString("query").trim()
         val command: AppCommand? = when (action) {
