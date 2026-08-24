@@ -23,7 +23,7 @@ object MemoryCommandParser {
     )
 
     fun looksLikeIntent(raw: String): Boolean = Regex(
-        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate)",
+        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate|janti|jaanti|janati)",
         RegexOption.IGNORE_CASE
     ).containsMatchIn(raw.trim())
 
