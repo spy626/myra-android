@@ -6,10 +6,10 @@ import org.junit.Test
 
 class LocalSpeechValidationPolicyTest {
     @Test
-    fun memorySpeechFailsAudiblyAndQuickly() {
-        assertEquals(1, LocalSpeechValidationPolicy.MEMORY.maxAttempts)
+    fun memorySpeechUsesNaturalVoiceOnly() {
+        assertEquals(2, LocalSpeechValidationPolicy.MEMORY.maxAttempts)
         assertTrue(LocalSpeechValidationPolicy.MEMORY.timeoutMs <= 4_000L)
-        assertTrue(LocalSpeechValidationPolicy.MEMORY.speakFallback)
+        assertTrue(!LocalSpeechValidationPolicy.MEMORY.speakFallback)
         assertTrue(LocalSpeechValidationPolicy.MEMORY.trustBufferedNaturalAudio)
     }
 }
