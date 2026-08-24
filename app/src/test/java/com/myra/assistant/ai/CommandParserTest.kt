@@ -54,4 +54,25 @@ class CommandParserTest {
     @Test fun hinglishRememberStatementIsProtected() {
         assertTrue(CommandParser.isMemoryIntent("Yaad rakhna ki mujhe horror movies pasand hain"))
     }
+
+    @Test fun friendArrivingOnTimeIsConversationNotClockCommand() {
+        assertNull(CommandParser.parse("meri dost time par nahi aaye toh kya karna chahiye"))
+        assertNull(CommandParser.parse("meri dost ya koi bhi time par nahi aayega toh kya karna chahiye"))
+    }
+
+    @Test fun durationQuestionIsConversationNotClockCommand() {
+        assertNull(CommandParser.parse("24 hours mein kitna time hota hai"))
+    }
+
+    @Test fun directClockQuestionsStillWork() {
+        assertTrue(CommandParser.parse("time kya hai") is AppCommand.CurrentTime)
+        assertTrue(CommandParser.parse("abhi kitne baje hain") is AppCommand.CurrentTime)
+        assertTrue(CommandParser.parse("normal time") is AppCommand.CurrentTime)
+    }
+
+    @Test fun ordinaryMessageConversationIsNotNotificationQuery() {
+        assertNull(CommandParser.parse("normal conversation mein message ka reply kaise doon"))
+        assertTrue(!CommandParser.isExplicitWhatsAppMessageQuery("mere baare mein kya jaante ho tum"))
+        assertTrue(CommandParser.isExplicitWhatsAppMessageQuery("WhatsApp message aaya hai kya"))
+    }
 }
