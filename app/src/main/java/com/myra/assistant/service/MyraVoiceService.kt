@@ -591,7 +591,10 @@ class MyraVoiceService : Service() {
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
         output.clear()
-        audio?.interrupt()
+        // A correction can arrive while the previous memory prompt is still being
+        // validated. Replace that prompt instead of leaving the new one queued behind
+        // an interrupted Gemini turn that may never emit another turnComplete.
+        cancelSpeechForNewAction()
         live?.interrupt()
         val message = PersonalMemoryPermissionPrompt.format(candidate)
         listener?.onMyraText(message)
@@ -641,7 +644,9 @@ class MyraVoiceService : Service() {
         waitingForFreshInputAfterCommand = true
         commandUserTextEmitted = true
         output.clear()
-        audio?.interrupt()
+        // "Haan"/"nahi" commonly interrupts the permission prompt. Clear its local
+        // validation state so the result confirmation starts immediately.
+        cancelSpeechForNewAction()
         live?.interrupt()
         listener?.onUserText(romanDisplayText(raw.trim()))
 
