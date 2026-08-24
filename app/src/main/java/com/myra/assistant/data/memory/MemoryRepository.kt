@@ -32,7 +32,8 @@ class MemoryRepository(private val dao: MemoryDao) {
         dao.deactivateByStableKey(stableKey.trim(), System.currentTimeMillis()) > 0
 
     suspend fun forgetMatching(query: String): Boolean {
-        val match = relevant(query, 10).firstOrNull() ?: return false
+        val activeMemories = dao.recent(10)
+        val match = MemoryForgetMatcher.find(query, activeMemories) ?: return false
         return forget(match.id)
     }
 

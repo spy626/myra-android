@@ -18,7 +18,7 @@ object MemoryCommandParser {
         RegexOption.IGNORE_CASE
     )
     private val relationshipForget = listOf(
-        Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+ko\\s+(?:meri\\s+)?memory\\s+se\\s+(?:hata\\s+do|delete\\s+kar\\s+do|remove\\s+kar\\s+do)$", RegexOption.IGNORE_CASE),
+        Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+ko\\s+(?:meri\\s+)?memory\\s+se\\s+(?:hata\\s+do|hatao|delete\\s+(?:kar\\s+do|karo|kero)|remove\\s+(?:kar\\s+do|karo|kero))$", RegexOption.IGNORE_CASE),
         Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+mera\\s+(?:best\\s+)?(?:friend|frend|dost)\\s+nahi\\s+hai(?:,?\\s*(?:ye|yeh)\\s+bhool\\s+jao)?$", RegexOption.IGNORE_CASE)
     )
     private val read = Regex(

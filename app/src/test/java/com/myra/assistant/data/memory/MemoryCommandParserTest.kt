@@ -94,11 +94,17 @@ class MemoryCommandParserTest {
         listOf(
             "Kareem ko meri memory se hata do",
             "Kareem ko memory se delete kar do",
+            "Kareem ko memory se delete karo",
             "Kareem mera friend nahi hai ye bhool jao"
         ).forEach { phrase ->
             assertTrue(phrase, MemoryCommandParser.looksLikeIntent(phrase))
             val command = MemoryCommandParser.parse(phrase) as MemoryCommand.Forget
             assertEquals("kareem", command.query)
         }
+    }
+
+    @Test fun acceptsCommonAsrDeleteWording() {
+        val command = MemoryCommandParser.parse("Kareen ko memory se delete kero") as MemoryCommand.Forget
+        assertEquals("kareen", command.query)
     }
 }
