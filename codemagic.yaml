@@ -1,0 +1,25 @@
+workflows:
+  lyra-android-debug:
+    name: LYRA Android tests and APK
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      java: 17
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: agent/myra-phase-1
+          include: true
+          source: true
+    scripts:
+      - name: Configure Android SDK
+        script: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/local.properties"
+      - name: Run unit tests and build debug APK
+        script: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug --stacktrace
+    artifacts:
+      - app/build/outputs/apk/debug/app-debug.apk
+      - app/build/reports/tests/testDebugUnitTest/**/*
