@@ -76,4 +76,17 @@ class MemoryCommandParserTest {
             assertTrue(phrase, MemoryCommandParser.parse(phrase) is MemoryCommand.Read)
         }
     }
+
+    @Test fun parsesBestFriendRecallQuestions() {
+        listOf(
+            "Kon meri best frend hai",
+            "Kauna meri best friend hai",
+            "Meri best friend kaun hai",
+            "Who is my best friend"
+        ).forEach { phrase ->
+            assertTrue(phrase, MemoryCommandParser.looksLikeIntent(phrase))
+            val command = MemoryCommandParser.parse(phrase) as MemoryCommand.Read
+            assertEquals("best friend", command.query)
+        }
+    }
 }
