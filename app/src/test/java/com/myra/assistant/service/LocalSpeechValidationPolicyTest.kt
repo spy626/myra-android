@@ -11,5 +11,6 @@ class LocalSpeechValidationPolicyTest {
         assertTrue(LocalSpeechValidationPolicy.MEMORY.timeoutMs <= 4_000L)
         assertTrue(!LocalSpeechValidationPolicy.MEMORY.speakFallback)
         assertTrue(LocalSpeechValidationPolicy.MEMORY.trustBufferedNaturalAudio)
+        assertTrue(LocalSpeechValidationPolicy.MEMORY.isolateFromMicDuringGeneration)
     }
 }
