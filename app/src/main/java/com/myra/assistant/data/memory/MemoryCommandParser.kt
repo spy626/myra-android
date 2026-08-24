@@ -10,7 +10,7 @@ sealed class MemoryCommand {
 
 object MemoryCommandParser {
     private val remember = Regex(
-        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|yaad\\s+rakhna|yaad\\s+ra(?:kh)?o|yaad\\s+rakh\\s+lo)(?:\\s+(?:that|ki))?\\s+(.+)$",
+        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo)(?:\\s+(?:that|ki))?\\s+(.+)$",
         RegexOption.IGNORE_CASE
     )
     private val forget = Regex(
@@ -23,7 +23,7 @@ object MemoryCommandParser {
     )
 
     fun looksLikeIntent(raw: String): Boolean = Regex(
-        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumko)\\s+mere\\s+baare",
+        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumko)\\s+mere\\s+baare",
         RegexOption.IGNORE_CASE
     ).containsMatchIn(raw.trim())
 
