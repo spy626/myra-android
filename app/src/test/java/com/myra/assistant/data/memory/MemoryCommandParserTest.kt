@@ -89,4 +89,16 @@ class MemoryCommandParserTest {
             assertEquals("best friend", command.query)
         }
     }
+
+    @Test fun parsesNaturalRelationshipRemoval() {
+        listOf(
+            "Kareem ko meri memory se hata do",
+            "Kareem ko memory se delete kar do",
+            "Kareem mera friend nahi hai ye bhool jao"
+        ).forEach { phrase ->
+            assertTrue(phrase, MemoryCommandParser.looksLikeIntent(phrase))
+            val command = MemoryCommandParser.parse(phrase) as MemoryCommand.Forget
+            assertEquals("kareem", command.query)
+        }
+    }
 }
