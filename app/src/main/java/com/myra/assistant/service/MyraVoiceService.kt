@@ -47,7 +47,9 @@ internal object FriendConversationPolicy {
         "Keep ordinary casual replies to one or two short natural sentences. " +
             "Use more only when Zopy explicitly asks for detail or the topic requires a safety explanation. " +
             "Answer and stop by default. Ask no follow-up unless one question would materially improve the answer; " +
-            "if you ask one, it must be the only question in the entire reply."
+            "if you ask one, it must be the only question in the entire reply. " +
+            "Never use customer-support wording such as 'help kar sakti hoon', and never sound dismissive with " +
+            "phrases such as 'isse zyada main kya boloon' or pressure the user to give a specific topic."
 
     const val MALE_USER_GRAMMAR =
         "Zopy is male, so when addressing him use masculine forms such as sakte ho, karoge, and gaye; " +
