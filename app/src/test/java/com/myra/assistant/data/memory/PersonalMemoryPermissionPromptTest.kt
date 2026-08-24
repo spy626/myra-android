@@ -8,7 +8,7 @@ class PersonalMemoryPermissionPromptTest {
     fun repeatsInterpretedAgeForVerification() {
         val candidate = PersonalMemoryExtractor.extract("maim 26 sala ka hum")!!
         assertEquals(
-            "Maine samjha tum 26 saal ke ho. Kya main ise yaad rakhun?",
+            "Tum 26 saal ke ho. Kya main yeh yaad rakhun?",
             PersonalMemoryPermissionPrompt.format(candidate)
         )
     }
@@ -17,7 +17,7 @@ class PersonalMemoryPermissionPromptTest {
     fun repeatsInterpretedFriendNameForVerification() {
         val candidate = PersonalMemoryExtractor.extract("ayusa meri besta phrenda hai")!!
         assertEquals(
-            "Maine samjha ayusa tumhari best friend hai. Kya main ise yaad rakhun?",
+            "Ayusa tumhari best friend hai. Kya main yeh yaad rakhun?",
             PersonalMemoryPermissionPrompt.format(candidate)
         )
     }

@@ -108,6 +108,21 @@ class MyraVoiceService : Service() {
             handleMemoryCommand(command)
         }
     }
+    private var pendingDetectedPersonalMemory: MemoryCandidate? = null
+    private val personalMemoryPauseRunnable = Runnable {
+        val candidate = pendingDetectedPersonalMemory
+        pendingDetectedPersonalMemory = null
+        if (candidate != null && pendingPersonalMemory == null && !localCommandExecutedThisTurn) {
+            val spoken = commandProbe.toString().trim()
+            if (spoken.isNotBlank() && !commandUserTextEmitted) {
+                listener?.onUserText(romanDisplayText(spoken))
+                commandUserTextEmitted = true
+            }
+            requestPersonalMemoryPermission(candidate)
+            resetTurnBuffers()
+            waitingForFreshInputAfterCommand = true
+        }
+    }
     private var microphoneMuted = false
     private var deepResearchActive = false
     private var idleNudgeCount = 0
@@ -292,12 +307,25 @@ class MyraVoiceService : Service() {
                 appendTranscript(input, part); appendTranscript(commandProbe, part)
                 lastUserIntentText = input.toString().trim()
                 val currentTranscript = commandProbe.toString().trim()
-                if (PersonalMemoryExtractor.extract(romanDisplayText(currentTranscript)) != null) {
-                    // Stop Gemini from answering a personal-memory statement before
-                    // Android has asked the user whether it may be stored.
+                val detectedPersonalMemory =
+                    PersonalMemoryExtractor.extract(romanDisplayText(currentTranscript))
+                if (detectedPersonalMemory != null) {
+                    // A short pause lets streamed ASR finish the fact, then Android can
+                    // ask permission without waiting for Gemini's full turn boundary.
                     suppressModelForTurn = true
                     output.clear()
                     audio?.interrupt()
+                    pendingDetectedPersonalMemory = detectedPersonalMemory
+                    mainHandler.removeCallbacks(personalMemoryPauseRunnable)
+                    mainHandler.postDelayed(
+                        personalMemoryPauseRunnable,
+                        PERSONAL_MEMORY_PAUSE_MS
+                    )
+                } else if (pendingDetectedPersonalMemory != null) {
+                    // A later chunk changed the sentence into something that is no
+                    // longer a complete durable fact. Do not prompt from stale text.
+                    pendingDetectedPersonalMemory = null
+                    mainHandler.removeCallbacks(personalMemoryPauseRunnable)
                 }
                 if (CommandParser.isLikelyIncompleteActionFragment(currentTranscript)) {
                     incompleteActionFragmentTurn = true
@@ -401,6 +429,8 @@ class MyraVoiceService : Service() {
                 }
                 mainHandler.removeCallbacks(memoryCommandRunnable)
                 pendingMemoryCommand = null
+                mainHandler.removeCallbacks(personalMemoryPauseRunnable)
+                pendingDetectedPersonalMemory = null
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
                 if (incompleteActionFragmentTurn &&
                     CommandParser.isLikelyIncompleteActionFragment(userText)
@@ -1218,7 +1248,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); pendingMemoryCommand = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -1230,6 +1260,7 @@ class MyraVoiceService : Service() {
         private const val CHANNEL_ID = "myra_voice"
         private const val NOTIFICATION_ID = 1001
         private const val MEMORY_COMMAND_PAUSE_MS = 450L
+        private const val PERSONAL_MEMORY_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
         private const val FIRST_IDLE_NUDGE_MS = 2 * 60 * 1000L
         private const val SECOND_IDLE_NUDGE_MS = 5 * 60 * 1000L

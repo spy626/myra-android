@@ -23,10 +23,13 @@ object PersonalMemoryPermissionPrompt {
                     ?.let { "tum ${it}" }
             else -> null
         }
-        return if (understood == null) {
-            "Ye personal memory hai. Kya main ise yaad rakhun?"
+        val naturalFact = understood?.replaceFirstChar { first ->
+            if (first.isLowerCase()) first.titlecase() else first.toString()
+        }
+        return if (naturalFact == null) {
+            "Ye personal memory hai. Kya main yeh yaad rakhun?"
         } else {
-            "Maine samjha ${understood}. Kya main ise yaad rakhun?"
+            "${naturalFact}. Kya main yeh yaad rakhun?"
         }
     }
 }
