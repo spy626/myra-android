@@ -60,4 +60,16 @@ class MemoryCommandParserTest {
         assertEquals("I love horror movies", command.displayFact)
     }
 
+
+    @Test fun parsesObservedImperfectRecallTranscripts() {
+        listOf(
+            "tumhem mere bare mem kya yada hai",
+            "tumhen mere bare me kya yaad hai",
+            "abhi mere bare mem kya pata hai",
+            "mere baare mein kya yaad hai"
+        ).forEach { phrase ->
+            assertTrue(phrase, MemoryCommandParser.looksLikeIntent(phrase))
+            assertTrue(phrase, MemoryCommandParser.parse(phrase) is MemoryCommand.Read)
+        }
+    }
 }
