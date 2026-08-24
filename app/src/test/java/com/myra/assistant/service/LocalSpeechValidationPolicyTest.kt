@@ -13,5 +13,6 @@ class LocalSpeechValidationPolicyTest {
         assertTrue(LocalSpeechValidationPolicy.MEMORY.trustBufferedNaturalAudio)
         assertTrue(LocalSpeechValidationPolicy.MEMORY.isolateFromMicDuringGeneration)
         assertTrue(LocalSpeechValidationPolicy.MEMORY.bufferUntilValidated)
+        assertTrue(LocalSpeechValidationPolicy.MEMORY.resumeMicImmediatelyAfterPlayback)
     }
 }
