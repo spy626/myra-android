@@ -90,9 +90,12 @@ class MyraVoiceService : Service() {
     private var mediaBlockedTurn = false
     private var probableActionTurn = false
     private var pendingLocalSpeech: String? = null
+    private var pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
+    private var pendingLocalSpeechAllowsSilence = false
     private var validatingLocalSpeech: String? = null
     private var localSpeechValidationToken = 0L
     private var localSpeechValidationAttempt = 0
+    private var localSpeechValidationPolicy = LocalSpeechValidationPolicy.DEFAULT
     private var localSpeechHasContent = false
     private var allowUntranscribedLocalSpeech = false
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -413,6 +416,8 @@ class MyraVoiceService : Service() {
                 pendingLocalSpeech?.let { message ->
                     pendingLocalSpeech = null
                     resetTurnBuffers()
+                    localSpeechValidationPolicy = pendingLocalSpeechPolicy
+                    allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
                     beginValidatedLocalSpeech(message)
                     return@turnComplete
                 }
@@ -501,6 +506,8 @@ class MyraVoiceService : Service() {
                 if (mediaGuard.isAwake()) mediaGuard.finishInteraction()
                 pendingLocalSpeech?.let { message ->
                     pendingLocalSpeech = null
+                    localSpeechValidationPolicy = pendingLocalSpeechPolicy
+                    allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
                     beginValidatedLocalSpeech(message)
                 }
             }
@@ -566,7 +573,7 @@ class MyraVoiceService : Service() {
             mainHandler.post {
                 listener?.onMyraText(response)
                 emitState(response)
-                queueLocalSpeech(response, allowUntranscribedAudio = true)
+                queueLocalSpeech(response, validationPolicy = LocalSpeechValidationPolicy.MEMORY)
             }
         }
     }
@@ -584,7 +591,7 @@ class MyraVoiceService : Service() {
         val message = PersonalMemoryPermissionPrompt.format(candidate)
         listener?.onMyraText(message)
         emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
+        queueLocalSpeech(message, validationPolicy = LocalSpeechValidationPolicy.MEMORY)
     }
 
     private fun handlePendingPersonalMemoryPermission(raw: String): Boolean {
@@ -621,7 +628,7 @@ class MyraVoiceService : Service() {
             val message = "Theek hai, save nahi karungi."
             listener?.onMyraText(message)
             emitState(message)
-            queueLocalSpeech(message, allowUntranscribedAudio = true)
+            queueLocalSpeech(message, validationPolicy = LocalSpeechValidationPolicy.MEMORY)
             resetTurnBuffers()
             return true
         }
@@ -636,7 +643,7 @@ class MyraVoiceService : Service() {
             mainHandler.post {
                 listener?.onMyraText(message)
                 emitState(message)
-                queueLocalSpeech(message, allowUntranscribedAudio = true)
+                queueLocalSpeech(message, validationPolicy = LocalSpeechValidationPolicy.MEMORY)
                 resetTurnBuffers()
             }
         }
@@ -954,6 +961,8 @@ class MyraVoiceService : Service() {
         localSpeechValidationToken++
         validatingLocalSpeech = null
         pendingLocalSpeech = null
+        pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
+        pendingLocalSpeechAllowsSilence = false
         localSpeechAudio.clear()
         localSpeechTranscript.clear()
         localSpeechHasContent = false
@@ -966,7 +975,11 @@ class MyraVoiceService : Service() {
         audio?.setMuted(false)
     }
 
-    private fun queueLocalSpeech(message: String, allowUntranscribedAudio: Boolean = false) {
+    private fun queueLocalSpeech(
+        message: String,
+        allowUntranscribedAudio: Boolean = false,
+        validationPolicy: LocalSpeechValidationPolicy = LocalSpeechValidationPolicy.DEFAULT
+    ) {
         val now = android.os.SystemClock.elapsedRealtime()
         val key = normalizeSpeech(message)
         if (key == lastLocalSpeechKey && now - lastLocalSpeechAt < 4_000L) return
@@ -976,9 +989,16 @@ class MyraVoiceService : Service() {
         // Keep the echo-cancelled microphone open so the user can interrupt or issue
         // the next short command without waiting for LYRA's acknowledgement to finish.
         audio?.setMuted(false)
-        allowUntranscribedLocalSpeech = allowUntranscribedAudio
-        if (validatingLocalSpeech == null) beginValidatedLocalSpeech(message)
-        else pendingLocalSpeech = message
+        if (validatingLocalSpeech == null) {
+            allowUntranscribedLocalSpeech = allowUntranscribedAudio
+            localSpeechValidationPolicy = validationPolicy
+            beginValidatedLocalSpeech(message)
+        }
+        else {
+            pendingLocalSpeech = message
+            pendingLocalSpeechPolicy = validationPolicy
+            pendingLocalSpeechAllowsSilence = allowUntranscribedAudio
+        }
     }
 
     private fun beginValidatedLocalSpeech(message: String, retry: Boolean = false) {
@@ -1003,7 +1023,7 @@ class MyraVoiceService : Service() {
             if (token == localSpeechValidationToken && validatingLocalSpeech != null) {
                 finishValidatedLocalSpeech()
             }
-        }, 8_000L)
+        }, localSpeechValidationPolicy.timeoutMs)
     }
 
     private fun startLocalSpeechWhenPrefixMatches() {
@@ -1045,7 +1065,7 @@ class MyraVoiceService : Service() {
         } else {
             localSpeechAudio.clear()
             localSpeechTranscript.clear()
-            if (localSpeechValidationAttempt < 2 && live != null) {
+            if (localSpeechValidationAttempt < localSpeechValidationPolicy.maxAttempts && live != null) {
                 beginValidatedLocalSpeech(expected, retry = true)
             } else {
                 finishUnavailableNaturalLocalSpeech(expected)
@@ -1054,7 +1074,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun finishUnavailableNaturalLocalSpeech(message: String) {
-        if (!allowUntranscribedLocalSpeech) {
+        if (localSpeechValidationPolicy.speakFallback || !allowUntranscribedLocalSpeech) {
             fallbackLocalSpeech(message)
             return
         }
@@ -1223,6 +1243,8 @@ class MyraVoiceService : Service() {
         executeCommand(command)
         pendingLocalSpeech?.let { message ->
             pendingLocalSpeech = null
+            localSpeechValidationPolicy = pendingLocalSpeechPolicy
+            allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
             beginValidatedLocalSpeech(message)
         }
         return true
