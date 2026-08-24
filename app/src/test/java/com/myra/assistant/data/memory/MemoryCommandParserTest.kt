@@ -35,4 +35,20 @@ class MemoryCommandParserTest {
         assertEquals(MemoryCategory.IDENTITY, command.candidate.category)
         assertEquals("identity:age", command.candidate.stableKey)
     }
+    @Test fun parsesNaturalRecallVariants() {
+        val variants = listOf(
+            "What remember about me",
+            "What you remember about me",
+            "What all do you remember about me",
+            "Tumhe mere baare mein kya yaad hai"
+        )
+        variants.forEach { assertTrue(it, MemoryCommandParser.parse(it) is MemoryCommand.Read) }
+    }
+
+    @Test fun stripsLeadingThisFromRememberedFact() {
+        val command = MemoryCommandParser.parse("Remember this I love horror movies") as MemoryCommand.Remember
+        assertEquals("I love horror movies", command.candidate.fact)
+        assertEquals("I love horror movies", command.displayFact)
+    }
+
 }

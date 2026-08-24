@@ -18,19 +18,21 @@ object MemoryCommandParser {
         RegexOption.IGNORE_CASE
     )
     private val read = Regex(
-        "^(?:what\\s+do\\s+you\\s+remember(?:\\s+about\\s+me)?|(?:tumhe|tumko)\\s+mere\\s+baare\\s+mein\\s+kya\\s+yaad\\s+hai)[?]?$",
+        "^(?:(?:what)(?:\\s+(?:all))?(?:\\s+do)?(?:\\s+you)?\\s+remember(?:\\s+about\\s+me)?|(?:tumhe|tumko)\\s+mere\\s+baare\\s+mein\\s+kya\\s+yaad\\s+hai)[?]?$",
         RegexOption.IGNORE_CASE
     )
 
     fun looksLikeIntent(raw: String): Boolean = Regex(
-        "^(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+rakho|bhool\\s+jao|bhoolna)\\b|^what\\s+do\\s+you\\s+remember\\b|^(?:tumhe|tumko)\\s+mere\\s+baare",
+        "^(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+rakho|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumko)\\s+mere\\s+baare",
         RegexOption.IGNORE_CASE
     ).containsMatchIn(raw.trim())
 
     fun parse(raw: String): MemoryCommand? {
         val text = raw.trim().trimEnd('.', '?', '!')
         read.matchEntire(text)?.let { return MemoryCommand.Read() }
-        remember.matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.length >= 2 }?.let { fact ->
+        remember.matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.length >= 2 }?.let { rawFact ->
+            val fact = rawFact.replace(Regex("^(?:this|ye|yeh)\\s+", RegexOption.IGNORE_CASE), "").trim()
+            if (fact.length < 2) return null
             val category = classify(fact)
             val normalized = normalize(fact)
             return MemoryCommand.Remember(
