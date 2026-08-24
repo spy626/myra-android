@@ -16,6 +16,7 @@ import com.myra.assistant.ai.GeminiLiveClient
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.ai.DeepResearchClient
 import com.myra.assistant.ai.HandsFreeMediaGuard
+import com.myra.assistant.data.memory.AutomaticMemoryExtractor
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
@@ -415,6 +416,9 @@ class MyraVoiceService : Service() {
                         queueLocalSpeech(error)
                     }
                 }
+                if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
+                    learnSafePreferenceFromCompletedTurn(userText)
+                }
                 if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(romanDisplayText(myraText))
                 input.clear(); output.clear(); commandProbe.clear()
                 commandUserTextEmitted = false
@@ -438,6 +442,15 @@ class MyraVoiceService : Service() {
                 }
             }
             client.connect()
+        }
+    }
+
+    private fun learnSafePreferenceFromCompletedTurn(userText: String) {
+        val candidate = AutomaticMemoryExtractor.extract(userText) ?: return
+        serviceScope.launch {
+            // Automatic learning stays silent. Only explicit remember/forget
+            // commands produce a confirmation in the conversation.
+            memoryRepository.save(candidate)
         }
     }
 
