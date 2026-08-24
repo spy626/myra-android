@@ -52,7 +52,7 @@ object AutomaticMemoryExtractor {
     private fun hinglishPreference(text: String): String? =
         listOf(
             Regex(
-                """^mujhe\s+(.+?)\s+(?:(?:bahut|bohot|bohat|kaafi)\s+)?pasand\s+(?:hai|hain|he)$""",
+                """^mujhe\s+(.+?)\s+(?:(?:bahut|bahuta|bohot|bohat|kaafi)\s+)?pasand[ae]?\s+(?:hai|hain|he)$""",
                 RegexOption.IGNORE_CASE
             ),
             Regex(
@@ -92,7 +92,7 @@ object AutomaticMemoryExtractor {
     private fun canonicalSubject(value: String): String {
         val normalized = normalize(value)
         return when {
-            Regex("(?:science|sainsa|sains)\\s+(?:science\\s+)?(?:fiction|phiksana|phiksan).*?(?:movie|muvi|muvija)").containsMatchIn(normalized) ->
+            Regex("(?:science|sainsa|sains)(?:\\s+(?:science|sainsa|sains))?\\s+(?:fiction|phiksana|phiksan).*?(?:movie|muvi|muvija)").containsMatchIn(normalized) ->
                 "science-fiction movies"
             Regex("(?:horror|horara).*?(?:movie|muvi|muvija)").containsMatchIn(normalized) ->
                 "horror movies"
