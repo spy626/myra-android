@@ -17,6 +17,10 @@ object MemoryCommandParser {
         "^(?:(?:please|just)\\s+)*(?:forget|bhool\\s+jao|bhoolna)(?:\\s+(?:that|ki))?\\s+(.+)$",
         RegexOption.IGNORE_CASE
     )
+    private val relationshipForget = listOf(
+        Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+ko\\s+(?:meri\\s+)?memory\\s+se\\s+(?:hata\\s+do|delete\\s+kar\\s+do|remove\\s+kar\\s+do)$", RegexOption.IGNORE_CASE),
+        Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+mera\\s+(?:best\\s+)?(?:friend|frend|dost)\\s+nahi\\s+hai(?:,?\\s*(?:ye|yeh)\\s+bhool\\s+jao)?$", RegexOption.IGNORE_CASE)
+    )
     private val read = Regex(
         "^(?:(?:what)(?:\\s+(?:all))?(?:\\s+do)?(?:\\s+you)?\\s+remember(?:\\s+about\\s+me)?|(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+kya\\s+(?:yaad|yada)\\s+(?:hai|he)|(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:(?:pata|yaad|yada)\\s+(?:hai|he)|(?:jante|jaante|janate|janti|jaanti|janati)\\s+ho))[?]?$",
         RegexOption.IGNORE_CASE
@@ -27,7 +31,7 @@ object MemoryCommandParser {
     )
 
     fun looksLikeIntent(raw: String): Boolean = Regex(
-        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate|janti|jaanti|janati)|^(?:who|kon|koun|kaun|kauna)\\s+(?:is\\s+)?(?:my|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)|^(?:my|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)\\s+(?:kon|koun|kaun|kauna)",
+        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^[\\p{L}][\\p{L}'-]{1,30}\\s+(?:ko\\s+(?:meri\\s+)?memory\\s+se|mera\\s+(?:best\\s+)?(?:friend|frend|dost)\\s+nahi)|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate|janti|jaanti|janati)|^(?:who|kon|koun|kaun|kauna)\\s+(?:is\\s+)?(?:my|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)|^(?:my|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)\\s+(?:kon|koun|kaun|kauna)",
         RegexOption.IGNORE_CASE
     ).containsMatchIn(raw.trim())
 
@@ -35,6 +39,9 @@ object MemoryCommandParser {
         val text = raw.trim().trimEnd('.', '?', '!')
         read.matchEntire(text)?.let { return MemoryCommand.Read() }
         bestFriendRead.matchEntire(text)?.let { return MemoryCommand.Read("best friend") }
+        relationshipForget.firstNotNullOfOrNull { it.matchEntire(text) }?.let {
+            return MemoryCommand.Forget(normalize(it.groupValues[1]))
+        }
         remember.matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.length >= 2 }?.let { rawFact ->
             val fact = rawFact.replace(Regex("^(?:this|ye|yeh)\\s+", RegexOption.IGNORE_CASE), "").trim()
             if (fact.length < 2) return null
