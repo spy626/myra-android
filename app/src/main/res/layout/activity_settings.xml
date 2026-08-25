@@ -38,5 +38,10 @@
             <TextView style="@style/MyraSettingsIcon" android:text="▣" />
             <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Notification Intelligence" /><TextView style="@style/MyraSettingsSubtitle" android:text="Announce and reply to WhatsApp messages" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
         </LinearLayout>
+        <TextView style="@style/MyraLabel" android:text="DIAGNOSTICS" />
+        <LinearLayout android:id="@+id/exportVoiceLogsCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="⇧" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Export Voice Logs" /><TextView style="@style/MyraSettingsSubtitle" android:text="Share playback diagnostics for silent replies" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

@@ -2,6 +2,7 @@ package com.myra.assistant.ai
 
 import android.util.Base64
 import android.util.Log
+import com.myra.assistant.diagnostics.VoicePipelineLogger
 import okhttp3.*
 import okio.ByteString
 import org.json.JSONArray
@@ -257,10 +258,8 @@ class GeminiLiveClient(
                 if (!data.isNullOrBlank()) {
                     val pcm = Base64.decode(data, Base64.DEFAULT)
                     if (VOICE_AUDIO_DEBUG_LOGGING) {
-                        Log.d(
-                            VOICE_AUDIO_LOG_TAG,
-                            "ws_audio_received tMs=${android.os.SystemClock.elapsedRealtime()} " +
-                                "seq=${receivedAudioChunk.incrementAndGet()} bytes=${pcm.size}"
+                        VoicePipelineLogger.debug(
+                            "ws_audio_received seq=${receivedAudioChunk.incrementAndGet()} bytes=${pcm.size}"
                         )
                     }
                     onAudio?.invoke(pcm)

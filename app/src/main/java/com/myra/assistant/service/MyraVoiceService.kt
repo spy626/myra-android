@@ -9,7 +9,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.Build
 import android.icu.text.Transliterator
-import android.util.Log
+import com.myra.assistant.diagnostics.VoicePipelineLogger
 import androidx.core.app.NotificationCompat
 import com.myra.assistant.ai.AudioEngine
 import com.myra.assistant.ai.CommandParser
@@ -1354,7 +1354,7 @@ class MyraVoiceService : Service() {
 
     private fun voiceLog(message: String) {
         if (VOICE_AUDIO_DEBUG_LOGGING) {
-            Log.d(VOICE_AUDIO_LOG_TAG, "$message tMs=${android.os.SystemClock.elapsedRealtime()}")
+            VoicePipelineLogger.debug(message)
         }
     }
 

@@ -22,6 +22,15 @@
         android:label="LYRA"
         android:theme="@style/Theme.Myra"
         android:usesCleartextTraffic="false">
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
         <activity android:name=".ui.settings.SettingsActivity" android:exported="false" />
         <activity android:name=".ui.settings.ApiCloudSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.DeepResearchSettingsActivity" android:exported="false" android:screenOrientation="portrait" />

@@ -8,8 +8,8 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
-import android.util.Log
 import androidx.core.content.ContextCompat
+import com.myra.assistant.diagnostics.VoicePipelineLogger
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -140,7 +140,7 @@ class AudioEngine(private val context: Context) {
                                 "queued=${queue.size} playState=${track?.playState}"
                         )
                     }.onFailure { error ->
-                        Log.e(VOICE_AUDIO_LOG_TAG, "audio_track_failure tMs=${nowMs()}", error)
+                        VoicePipelineLogger.error("audio_track_failure", error)
                     }
                 }
             }
@@ -194,7 +194,7 @@ class AudioEngine(private val context: Context) {
     }
 
     private fun voiceLog(message: String) {
-        if (VOICE_AUDIO_DEBUG_LOGGING) Log.d(VOICE_AUDIO_LOG_TAG, "$message tMs=${nowMs()}")
+        if (VOICE_AUDIO_DEBUG_LOGGING) VoicePipelineLogger.debug(message)
     }
 
     private fun nowMs(): Long = android.os.SystemClock.elapsedRealtime()
