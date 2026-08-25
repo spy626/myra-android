@@ -13,6 +13,11 @@ object MemoryRelationshipPolicy {
         "^(.+?) is Zopy's (?:male |female )?best friend$",
         RegexOption.IGNORE_CASE
     )
+    private val naturalFact = Regex(
+        "^([\\p{L}][\\p{L} .'-]{1,39}) (?:meri|mere|my) (?:best|besta|besti) " +
+            "(?:friend|friends|frend|frends|phrend|phrenda|dost) (?:hai|he|is)$",
+        RegexOption.IGNORE_CASE
+    )
 
     fun isBestFriend(candidate: MemoryCandidate): Boolean =
         candidate.stableKey.contains("best_friend", ignoreCase = true) ||
@@ -22,12 +27,19 @@ object MemoryRelationshipPolicy {
         memory.stableKey.contains("best_friend", ignoreCase = true) ||
             bestFriendWords.containsMatchIn(memory.fact)
 
-    fun canonicalize(candidate: MemoryCandidate): MemoryCandidate =
-        if (isBestFriend(candidate)) candidate.copy(stableKey = BEST_FRIEND_KEY) else candidate
+    fun canonicalize(candidate: MemoryCandidate): MemoryCandidate {
+        if (!isBestFriend(candidate)) return candidate
+        val name = personName(candidate.fact)
+        return candidate.copy(
+            stableKey = BEST_FRIEND_KEY,
+            fact = name?.let { "Zopy's best friend is $it" } ?: candidate.fact
+        )
+    }
 
     fun personName(fact: String): String? {
         val clean = fact.trim().trimEnd('.')
         return canonicalFact.matchEntire(clean)?.groupValues?.get(1)?.trim()
             ?: reverseFact.matchEntire(clean)?.groupValues?.get(1)?.trim()
+            ?: naturalFact.matchEntire(clean)?.groupValues?.get(1)?.trim()
     }
 }

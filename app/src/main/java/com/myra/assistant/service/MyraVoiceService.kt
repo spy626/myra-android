@@ -597,11 +597,21 @@ class MyraVoiceService : Service() {
         localCommandExecutedThisTurn = true
         output.clear()
         serviceScope.launch {
+            val rememberResult = if (command is MemoryCommand.Remember) {
+                memoryRepository.save(command.candidate)
+            } else null
+            if (command is MemoryCommand.Remember && rememberResult == MemoryWriteResult.NeedsPermission) {
+                // An explicit remember command can still conflict with a unique
+                // relationship. Enter the real confirmation flow so "haan" replaces
+                // the old person instead of returning a dead-end generic question.
+                mainHandler.post { requestPersonalMemoryPermission(command.candidate) }
+                return@launch
+            }
             val response = when (command) {
-                is MemoryCommand.Remember -> when (memoryRepository.save(command.candidate)) {
+                is MemoryCommand.Remember -> when (rememberResult) {
                     is MemoryWriteResult.Saved -> "Got it, I'll remember that ${command.displayFact}."
-                    MemoryWriteResult.NeedsPermission -> "Should I save that as a personal memory?"
                     is MemoryWriteResult.Rejected -> "I can't save passwords, security codes, or unsafe private information."
+                    MemoryWriteResult.NeedsPermission, null -> "Save karne ki permission clear nahi hui."
                 }
                 is MemoryCommand.Read -> {
                     val memories = memoryRepository.relevant(command.query, 5)
@@ -648,7 +658,7 @@ class MyraVoiceService : Service() {
                     pendingPersonalMemory = candidate
                     pendingPersonalMemoryExpiresAt =
                         android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
-                    "Abhi ${oldName} tumhari best friend saved hai. ${newName} se replace karun?"
+                    "Abhi ${oldName} tumhari best friend saved hai. ${newName} ko uski jagah save karun?"
                 } else {
                     pendingPersonalMemory = candidate
                     pendingPersonalMemoryExpiresAt =

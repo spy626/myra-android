@@ -13,6 +13,18 @@ class MemoryForgetMatcherTest {
         assertEquals("1", MemoryForgetMatcher.find("kareen", listOf(memory("1", "Kareem tumhara best friend hai")))?.id)
     }
 
+    @Test fun findsUniqueKareemKarimAsrVariant() {
+        assertEquals("1", MemoryForgetMatcher.find("karim", listOf(memory("1", "Zopy's best friend is Kareem")))?.id)
+    }
+
+    @Test fun refusesAmbiguousPhoneticNameVariant() {
+        val memories = listOf(
+            memory("1", "Zopy's best friend is Kareem"),
+            memory("2", "Zopy knows Karam")
+        )
+        assertNull(MemoryForgetMatcher.find("karim", memories))
+    }
+
     @Test fun refusesAmbiguousFuzzyNameError() {
         val memories = listOf(memory("1", "Kareem tumhara dost hai"), memory("2", "Kareen creator pasand hai"))
         assertEquals("2", MemoryForgetMatcher.find("kareen", memories)?.id)

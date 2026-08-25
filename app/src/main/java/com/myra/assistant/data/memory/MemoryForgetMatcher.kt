@@ -15,11 +15,29 @@ object MemoryForgetMatcher {
         val fuzzyMatches = memories.filter { memory ->
             val factTokens = normalize(memory.normalizedFact).split(' ')
             significantTargetTokens.all { wanted ->
-                factTokens.any { token -> token.length >= 4 && editDistanceAtMostOne(token, wanted) }
+                factTokens.any { token ->
+                    token.length >= 4 &&
+                        (editDistanceAtMostOne(token, wanted) || sameConservativeNameSound(token, wanted))
+                }
             }
         }
         return fuzzyMatches.singleOrNull()
     }
+
+    /**
+     * Handles conservative ASR spelling variants such as Kareem/Karim. It is only
+     * accepted when exactly one active memory matches, so a similar second name can
+     * never be deleted silently.
+     */
+    private fun sameConservativeNameSound(left: String, right: String): Boolean {
+        if (left.length !in 4..20 || right.length !in 4..20) return false
+        if (left.first() != right.first() || left.last() != right.last()) return false
+        return consonantKey(left) == consonantKey(right)
+    }
+
+    private fun consonantKey(value: String): String = value
+        .replace(Regex("([a-z])\\1+"), "\$1")
+        .filterNot { it in "aeiou" }
 
     private fun containsToken(fact: String, target: String): Boolean =
         normalize(fact).split(' ').any { it == target } || normalize(fact).contains(target)

@@ -19,4 +19,18 @@ class MemoryRelationshipPolicyTest {
         assertEquals("Karima", MemoryRelationshipPolicy.personName("Zopy's best friend is Karima"))
         assertEquals("Kareem", MemoryRelationshipPolicy.personName("Kareem is Zopy's male best friend"))
     }
+
+    @Test fun canonicalizesNaturalHinglishReplacementFact() {
+        val raw = MemoryCandidate(
+            category = MemoryCategory.PERSON,
+            fact = "Ayesha meri best friend hai",
+            stableKey = "person:ayesha_best_friend",
+            sensitivity = MemorySensitivity.PERSONAL,
+            confidence = 1.0,
+            explicitlyRequested = true
+        )
+        val canonical = MemoryRelationshipPolicy.canonicalize(raw)
+        assertEquals("person:best_friend", canonical.stableKey)
+        assertEquals("Zopy's best friend is Ayesha", canonical.fact)
+    }
 }
