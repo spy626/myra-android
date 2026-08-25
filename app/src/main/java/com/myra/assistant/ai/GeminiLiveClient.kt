@@ -98,28 +98,10 @@ class GeminiLiveClient(
                     .put("languageCode", LiveLanguagePolicy.SPEECH_LANGUAGE_CODE)
                     .put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice))))
                 .put("temperature", 0.9))
-            .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", JSONArray().put(
-                JSONObject()
-                    .put("name", "perform_phone_action")
-                    .put("description", "Perform one allowed Android phone action when the user's natural-language intent is clear. Ask a conversational follow-up instead of calling this tool when the action, app, direction, recipient, or query is uncertain. Instagram Reels must use REQUEST_INSTAGRAM_REELS so Android asks for confirmation.")
-                    .put("parameters", JSONObject()
-                        .put("type", "OBJECT")
-                        .put("properties", JSONObject()
-                            .put("action", JSONObject()
-                                .put("type", "STRING")
-                                .put("enum", JSONArray(listOf(
-                                    "OPEN_APP", "CLOSE_APP", "YOUTUBE_SEARCH", "PLAY_YOUTUBE",
-                                    "OPEN_YOUTUBE_SHORTS", "REQUEST_INSTAGRAM_REELS",
-                                    "SCROLL_DOWN", "SCROLL_UP", "SCROLL_REPEAT",
-                                    "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS", "MEDIA_FIRST",
-                                    "FLASHLIGHT_ON", "FLASHLIGHT_OFF", "HOME", "BACK",
-                                    "TIME", "BATTERY", "TAKE_SCREENSHOT", "LIST_FEATURES", "QUERY_WHATSAPP"
-                                )))
-                                .put("description", "The single allowed action to perform."))
-                            .put("target", JSONObject().put("type", "STRING").put("description", "App name for OPEN_APP or CLOSE_APP."))
-                            .put("query", JSONObject().put("type", "STRING").put("description", "Search or media query for YOUTUBE_SEARCH or PLAY_YOUTUBE.")))
-                        .put("required", JSONArray().put("action")))
-            ))))
+            .put("tools", JSONArray().put(JSONObject().put(
+                "functionDeclarations",
+                JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration())
+            )))
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject()))
         webSocket.send(setup.toString())
@@ -130,6 +112,38 @@ class GeminiLiveClient(
             } catch (_: InterruptedException) { }
         }.also { it.start() }
     }
+
+    private fun phoneActionDeclaration() = JSONObject()
+        .put("name", "perform_phone_action")
+        .put("description", "Perform one allowed Android phone action when the user's natural-language intent is clear. Ask a conversational follow-up when required details are uncertain. Instagram Reels must use REQUEST_INSTAGRAM_REELS.")
+        .put("parameters", JSONObject()
+            .put("type", "OBJECT")
+            .put("properties", JSONObject()
+                .put("action", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                    "OPEN_APP", "CLOSE_APP", "YOUTUBE_SEARCH", "PLAY_YOUTUBE",
+                    "OPEN_YOUTUBE_SHORTS", "REQUEST_INSTAGRAM_REELS", "SCROLL_DOWN", "SCROLL_UP",
+                    "SCROLL_REPEAT", "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS",
+                    "MEDIA_FIRST", "FLASHLIGHT_ON", "FLASHLIGHT_OFF", "HOME", "BACK", "TIME",
+                    "BATTERY", "TAKE_SCREENSHOT", "LIST_FEATURES", "QUERY_WHATSAPP"
+                ))))
+                .put("target", JSONObject().put("type", "STRING"))
+                .put("query", JSONObject().put("type", "STRING")))
+            .put("required", JSONArray().put("action")))
+
+    private fun memoryProposalDeclaration() = JSONObject()
+        .put("name", "propose_user_memory")
+        .put("description", "Propose one durable fact clearly stated by the user in natural conversation. Never use for guesses, temporary moods, secrets, explicit remember/forget commands, or facts already supplied in saved memory. Android validates and decides whether confirmation is required. Do not verbally mention saving after calling.")
+        .put("parameters", JSONObject()
+            .put("type", "OBJECT")
+            .put("properties", JSONObject()
+                .put("fact", JSONObject().put("type", "STRING").put("description", "Concise third-person fact about Zopy."))
+                .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                    "IDENTITY", "PREFERENCE", "PERSON", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT"
+                ))))
+                .put("memory_key", JSONObject().put("type", "STRING").put("description", "Stable lowercase subject key such as best_friend, age, movie_genre, or current_project."))
+                .put("evidence", JSONObject().put("type", "STRING").put("description", "The supporting words the user actually said."))
+                .put("confidence", JSONObject().put("type", "NUMBER")))
+            .put("required", JSONArray(listOf("fact", "category", "memory_key", "evidence", "confidence"))))
 
     fun sendAudio(bytes: ByteArray) {
         if (!ready.get() || bytes.isEmpty()) return

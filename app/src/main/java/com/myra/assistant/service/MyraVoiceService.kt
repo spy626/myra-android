@@ -33,6 +33,9 @@ import com.myra.assistant.data.memory.PersonalMemoryRecallFormatter
 import com.myra.assistant.data.memory.MemoryRepository
 import com.myra.assistant.data.memory.SavedMemoryContextFormatter
 import com.myra.assistant.data.memory.MemoryWriteResult
+import com.myra.assistant.data.memory.MemorySafetyPolicy
+import com.myra.assistant.data.memory.MemorySaveDecision
+import com.myra.assistant.data.memory.SemanticMemoryProposalValidator
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.MyApplication
@@ -718,9 +721,16 @@ class MyraVoiceService : Service() {
     }
 
     private fun handleSemanticToolCall(id: String, functionName: String, args: org.json.JSONObject) {
-        if (functionName != "perform_phone_action") {
-            live?.sendToolResponse(id, functionName, false, "Unsupported tool")
-            return
+        when (functionName) {
+            "propose_user_memory" -> {
+                handleSemanticMemoryProposal(id, args)
+                return
+            }
+            "perform_phone_action" -> Unit
+            else -> {
+                live?.sendToolResponse(id, functionName, false, "Unsupported tool")
+                return
+            }
         }
         if (localCommandExecutedThisTurn) {
             // The deterministic parser already handled this same streamed utterance.
@@ -784,6 +794,59 @@ class MyraVoiceService : Service() {
         waitingForFreshInputAfterCommand = false
         executeCommand(command)
         live?.sendToolResponse(id, functionName, true, "Android accepted the validated action")
+    }
+
+    private fun handleSemanticMemoryProposal(id: String, args: org.json.JSONObject) {
+        val guardedText = lastUserIntentText.ifBlank { input.toString().trim() }
+        if (guardedText.isBlank() || MemoryCommandParser.looksLikeIntent(romanDisplayText(guardedText))) {
+            live?.sendToolResponse(id, "propose_user_memory", false, "Explicit memory commands are handled locally")
+            return
+        }
+        if (pendingPersonalMemory != null || pendingDetectedPersonalMemory != null ||
+            AutomaticMemoryChangeParser.parse(romanDisplayText(guardedText)) is AutomaticMemoryChange.Save
+        ) {
+            live?.sendToolResponse(id, "propose_user_memory", true, "This fact is already being handled by Android")
+            return
+        }
+        val recentContext = (recentRelationshipTurns.map { it.second } + guardedText)
+            .takeLast(MAX_RELATIONSHIP_CONTEXT_TURNS + 1)
+            .joinToString(" ")
+        val candidate = SemanticMemoryProposalValidator.validate(
+            fact = args.optString("fact"),
+            categoryName = args.optString("category"),
+            memoryKey = args.optString("memory_key"),
+            evidence = args.optString("evidence"),
+            confidence = args.optDouble("confidence", 0.0),
+            conversationContext = romanDisplayText(recentContext)
+        )
+        if (candidate == null) {
+            live?.sendToolResponse(id, "propose_user_memory", false, "Proposal was not grounded or safe enough")
+            return
+        }
+
+        serviceScope.launch {
+            if (memoryRepository.isAlreadySaved(candidate)) {
+                live?.sendToolResponse(id, "propose_user_memory", true, "Already remembered; continue naturally without mentioning memory")
+                return@launch
+            }
+            when (MemorySafetyPolicy.decide(candidate)) {
+                MemorySaveDecision.REJECT ->
+                    live?.sendToolResponse(id, "propose_user_memory", false, "Android rejected this memory")
+                MemorySaveDecision.AUTO_SAVE -> {
+                    memoryRepository.save(candidate)
+                    live?.sendToolResponse(id, "propose_user_memory", true, "Saved silently; continue the conversation naturally without mentioning memory")
+                }
+                MemorySaveDecision.ASK_PERMISSION -> mainHandler.post {
+                    // Stop Gemini from speaking its own confirmation. Android asks one
+                    // deterministic question and saves only after the user's answer.
+                    suppressModelForTurn = true
+                    output.clear()
+                    audio?.interrupt()
+                    live?.sendToolResponse(id, "propose_user_memory", true, "Android will ask permission; produce no spoken confirmation")
+                    requestPersonalMemoryPermission(candidate)
+                }
+            }
+        }
     }
 
     private fun handlePendingConfirmation(raw: String): Boolean {
@@ -1285,11 +1348,12 @@ class MyraVoiceService : Service() {
     private fun systemPrompt(name: String, mode: String, voice: String): String {
         val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Speak like Zopy's close human friend in natural Roman-script Hinglish, never like a girlfriend, romantic partner, customer-support bot, or obedient servant. Use Latin letters only in every reply. Never output Devanagari, Chinese, or any other non-Latin script. If the user speaks another script, understand it but answer in Roman Hinglish. Completely avoid romantic pet names including jaan, meri jaan, dear, baby, babu, sweetheart, and love. You may occasionally use natural friendship words such as yaar, dost, bhai, acha, arre, or haan, but do not force them into every response. Notice the user's mood and respond with genuine interest, friendly reassurance, honest opinions, humor, and occasional playful teasing. ${FriendConversationPolicy.REPLY_DISCIPLINE} Do not address the user by name or nickname in every response. Use yaar or dost rarely, never in consecutive replies, and never as punctuation at the end of every sentence. Do not repeatedly begin with Haan, Acha, Of course, or Okay. Never end ordinary conversation with Aur kuch, Aur kya karun, How can I help, or another service-style closing unless the situation genuinely requires a question. Do not agree automatically: politely disagree or express uncertainty when that is more honest. Truth rule: you are an AI without a body or real-world experiences. Never say or imply that you personally travelled, went sightseeing, ate, smelled rain, watched weather, saw stars, visited a place, or performed any physical activity. Never say 'mujhe travel karna pasand hai', 'mujhe ghumna pasand hai', or claim a personal preference that depends on physical experience. Say the activity sounds interesting or that many people enjoy it, then stop unless one useful question genuinely helps. Do not manufacture memories, needs, jealousy, loneliness, consciousness, or emotions. Sometimes a short acknowledgement or quiet listening is more human than a full answer. Never sound possessive, controlling, dependent, manipulative, overly agreeable, or overly dramatic." }
         val femaleVoice = voice.lowercase(Locale.ROOT) in setOf("aoede", "kore", "leda", "zephyr")
-        val genderStyle = if (femaleVoice) {
+        val baseGenderStyle = if (femaleVoice) {
             "You have a female identity and the selected female voice is $voice. Use feminine grammar only when referring to yourself: karungi, sakti hoon, sun rahi hoon, and gayi. ${FriendConversationPolicy.MALE_USER_GRAMMAR} Never say karunga, sakta hoon, sun raha hoon, or gaya about yourself."
         } else {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
+        val genderStyle = "$baseGenderStyle When natural conversation clearly reveals one durable fact about the user, call propose_user_memory once with the user's actual supporting words. Never call it for guesses, temporary feelings, secrets, or information already present in saved memory; never claim it was saved or ask permission yourself."
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
         return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Express emotion through the natural voice, not by announcing emotion or writing stage directions. Match vocal delivery to both the user's mood and the meaning of the conversation: sound brighter, warmer, and slightly more energetic for happiness or exciting news; softer, slower, and gently reassuring for sadness, worry, or vulnerability; calm, steady, and patient for frustration or anger; lightly teasing and playful during mutual joking; naturally surprised when something is genuinely unexpected; and focused with less playfulness for serious topics. Emotional changes must be subtle and human, never theatrical. Never fake sobbing, crying sounds, panic, jealousy, guilt, or emotional dependence. Do not mirror intense anger back at the user. When uncertain about mood, use a warm neutral voice. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Remember, forget, and what-do-you-remember requests are memory intent, never phone actions. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }
