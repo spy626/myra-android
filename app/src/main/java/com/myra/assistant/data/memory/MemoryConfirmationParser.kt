@@ -14,8 +14,8 @@ object MemoryConfirmationParser {
             "mat\\s+(?:save\\s+)?karo|save\\s+mat\\s+karo)$"
     )
     private val add = Regex(
-        "^(?:dono|both|dono\s+(?:best\s+)?friends?|dono\s+(?:best\s+)?friend\s+hai|" +
-            "dono\s+ko\s+(?:save|yaad)\s+(?:karo|rakho)|add\s+kar\s+do)$"
+        """^(?:dono|both|dono\s+(?:best\s+)?friends?|dono\s+(?:best\s+)?friend\s+hai|""" +
+            """dono\s+ko\s+(?:save|yaad)\s+(?:karo|rakho)|add\s+kar\s+do)$"""
     )
     private val devanagariYes = setOf("हाँ", "हां", "हा", "जी हाँ", "जी हां", "ठीक है")
     private val devanagariNo = setOf("नहीं", "नही", "ना", "रहने दो", "सेव मत करो")
