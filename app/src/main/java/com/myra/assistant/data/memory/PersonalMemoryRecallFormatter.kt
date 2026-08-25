@@ -2,16 +2,7 @@ package com.myra.assistant.data.memory
 
 object PersonalMemoryRecallFormatter {
     fun format(facts: List<String>): String {
-        var bestFriendSeen = false
         val natural = facts.asSequence()
-            .filter { fact ->
-                val isBestFriend = Regex("\\bbest\\s+friend\\b", RegexOption.IGNORE_CASE)
-                    .containsMatchIn(fact)
-                if (!isBestFriend) true else if (bestFriendSeen) false else {
-                    bestFriendSeen = true
-                    true
-                }
-            }
             .mapNotNull(::naturalFact)
             .distinct()
             .toList()

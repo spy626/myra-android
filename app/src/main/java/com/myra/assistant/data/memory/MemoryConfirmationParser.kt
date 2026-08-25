@@ -2,7 +2,7 @@ package com.myra.assistant.data.memory
 
 import java.util.Locale
 
-enum class MemoryConfirmationDecision { YES, NO }
+enum class MemoryConfirmationDecision { YES, NO, ADD }
 
 object MemoryConfirmationParser {
     private val yes = Regex(
@@ -12,6 +12,10 @@ object MemoryConfirmationParser {
     private val no = Regex(
         "^(?:nahi|nahin|na|no|nope|cancel|rehne\\s+do|" +
             "mat\\s+(?:save\\s+)?karo|save\\s+mat\\s+karo)$"
+    )
+    private val add = Regex(
+        "^(?:dono|both|dono\s+(?:best\s+)?friends?|dono\s+(?:best\s+)?friend\s+hai|" +
+            "dono\s+ko\s+(?:save|yaad)\s+(?:karo|rakho)|add\s+kar\s+do)$"
     )
     private val devanagariYes = setOf("हाँ", "हां", "हा", "जी हाँ", "जी हां", "ठीक है")
     private val devanagariNo = setOf("नहीं", "नही", "ना", "रहने दो", "सेव मत करो")
@@ -28,6 +32,7 @@ object MemoryConfirmationParser {
             .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
             .trim()
         return when {
+            add.matches(latin) -> MemoryConfirmationDecision.ADD
             yes.matches(latin) -> MemoryConfirmationDecision.YES
             no.matches(latin) -> MemoryConfirmationDecision.NO
             else -> null

@@ -36,6 +36,16 @@ object MemoryRelationshipPolicy {
         )
     }
 
+    /** Uses a person-specific slot when the user explicitly keeps multiple best friends. */
+    fun canonicalizeAdditional(candidate: MemoryCandidate): MemoryCandidate {
+        val canonical = canonicalize(candidate)
+        val name = personName(canonical.fact) ?: return canonical
+        val suffix = name.lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}]+"), "_")
+            .trim('_')
+        return canonical.copy(stableKey = "$BEST_FRIEND_KEY:$suffix")
+    }
+
     fun personName(fact: String): String? {
         val clean = fact.trim().trimEnd('.')
         return canonicalFact.matchEntire(clean)?.groupValues?.get(1)?.trim()

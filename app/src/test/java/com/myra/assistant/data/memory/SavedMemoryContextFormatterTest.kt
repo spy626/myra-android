@@ -33,11 +33,11 @@ class SavedMemoryContextFormatterTest {
         assertFalse(context.contains("memory 12"))
     }
 
-    @Test fun keepsOnlyNewestUniqueBestFriendFact() {
+    @Test fun keepsMultipleBestFriendsWhenUserExplicitlySavedBoth() {
         val context = SavedMemoryContextFormatter.format(
             listOf("Zopy's best friend is Karima", "Kareem is Zopy's male best friend")
         )
         assertTrue(context.contains("Karima"))
-        assertFalse(context.contains("Kareem"))
+        assertTrue(context.contains("Kareem"))
     }
 }

@@ -33,4 +33,17 @@ class MemoryRelationshipPolicyTest {
         assertEquals("person:best_friend", canonical.stableKey)
         assertEquals("Zopy's best friend is Ayesha", canonical.fact)
     }
+
+    @Test fun additionalBestFriendUsesPersonSpecificStableKey() {
+        val raw = MemoryCandidate(
+            category = MemoryCategory.PERSON,
+            fact = "Ayesha meri best friend hai",
+            stableKey = "person:ayesha_best_friend",
+            sensitivity = MemorySensitivity.PERSONAL,
+            confidence = 1.0
+        )
+        val additional = MemoryRelationshipPolicy.canonicalizeAdditional(raw)
+        assertEquals("person:best_friend:ayesha", additional.stableKey)
+        assertEquals("Zopy's best friend is Ayesha", additional.fact)
+    }
 }

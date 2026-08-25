@@ -5,7 +5,11 @@ import java.util.UUID
 
 class MemoryRepository(private val dao: MemoryDao) {
     suspend fun save(candidate: MemoryCandidate, permissionGranted: Boolean = false): MemoryWriteResult {
-        val canonical = MemoryRelationshipPolicy.canonicalize(candidate)
+        val canonical = if (candidate.stableKey.startsWith("${MemoryRelationshipPolicy.BEST_FRIEND_KEY}:")) {
+            candidate
+        } else {
+            MemoryRelationshipPolicy.canonicalize(candidate)
+        }
         // Even an otherwise auto-saveable proposal cannot silently replace a unique
         // relationship held by another person.
         if (!permissionGranted && uniqueRelationshipConflict(canonical) != null) {
@@ -30,6 +34,13 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     suspend fun isAlreadySaved(candidate: MemoryCandidate): Boolean {
         val canonical = MemoryRelationshipPolicy.canonicalize(candidate)
+        if (MemoryRelationshipPolicy.isBestFriend(canonical)) {
+            val name = MemoryRelationshipPolicy.personName(canonical.fact)
+            return dao.recent(50).any {
+                MemoryRelationshipPolicy.isBestFriend(it) &&
+                    MemoryRelationshipPolicy.personName(it.fact)?.equals(name, ignoreCase = true) == true
+            }
+        }
         return MemoryFactMatcher.isSameActiveFact(dao.findByStableKey(canonical.stableKey), canonical)
     }
 
@@ -44,10 +55,23 @@ class MemoryRepository(private val dao: MemoryDao) {
         }
     }
 
-    /** Repairs legacy semantic/deterministic duplicates, keeping the newest fact. */
+    /** Repairs duplicate rows for the same person without deleting legitimate multiple best friends. */
     suspend fun reconcileUniqueRelationships() {
         val duplicates = dao.recent(50).filter(MemoryRelationshipPolicy::isBestFriend)
-        duplicates.drop(1).forEach { dao.deactivate(it.id, System.currentTimeMillis()) }
+        duplicates.groupBy {
+            MemoryRelationshipPolicy.personName(it.fact)?.lowercase() ?: it.normalizedFact
+        }.values.forEach { samePerson ->
+            samePerson.drop(1).forEach { dao.deactivate(it.id, System.currentTimeMillis()) }
+        }
+    }
+
+    suspend fun saveAdditionalBestFriend(candidate: MemoryCandidate): MemoryWriteResult {
+        val additional = MemoryRelationshipPolicy.canonicalizeAdditional(candidate)
+        if (!MemoryRelationshipPolicy.isBestFriend(additional)) return save(candidate, permissionGranted = true)
+        return when (MemorySafetyPolicy.decide(additional)) {
+            MemorySaveDecision.REJECT -> MemoryWriteResult.Rejected("This information is unsafe to remember.")
+            else -> persist(additional, replaceBestFriends = false)
+        }
     }
 
     suspend fun forget(id: String): Boolean =
@@ -64,10 +88,17 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     suspend fun clearAll() = dao.deleteAll()
 
-    private suspend fun persist(candidate: MemoryCandidate): MemoryWriteResult {
-        val canonical = MemoryRelationshipPolicy.canonicalize(candidate)
+    private suspend fun persist(
+        candidate: MemoryCandidate,
+        replaceBestFriends: Boolean = true
+    ): MemoryWriteResult {
+        val canonical = if (candidate.stableKey.startsWith("${MemoryRelationshipPolicy.BEST_FRIEND_KEY}:")) {
+            candidate
+        } else {
+            MemoryRelationshipPolicy.canonicalize(candidate)
+        }
         val now = System.currentTimeMillis()
-        if (MemoryRelationshipPolicy.isBestFriend(canonical)) {
+        if (replaceBestFriends && MemoryRelationshipPolicy.isBestFriend(canonical)) {
             // A confirmed replacement must deactivate old semantic keys as well as the
             // canonical key, otherwise both people leak into recall context.
             dao.recent(50)

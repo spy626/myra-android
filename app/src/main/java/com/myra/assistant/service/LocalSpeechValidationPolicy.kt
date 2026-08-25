@@ -17,7 +17,10 @@ data class LocalSpeechValidationPolicy(
             speakFallback = false,
             trustBufferedNaturalAudio = true,
             isolateFromMicDuringGeneration = true,
-            bufferUntilValidated = true,
+            // The exact deterministic text is already visible. Releasing after a
+            // matching spoken prefix prevents Gemini's late turnComplete ordering
+            // from turning a valid natural reply into silence.
+            bufferUntilValidated = false,
             resumeMicImmediatelyAfterPlayback = true
         )
     }

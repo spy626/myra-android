@@ -33,9 +33,9 @@ class PersonalMemoryRecallFormatterTest {
     }
 
     @Test
-    fun neverRecallsTwoPeopleAsTheUniqueBestFriend() {
+    fun recallsTwoBestFriendsWhenUserExplicitlyKeptBoth() {
         assertEquals(
-            "Karima tumhari best friend hai.",
+            "Karima tumhari best friend hai, aur Kareem tumhari best friend hai.",
             PersonalMemoryRecallFormatter.format(
                 listOf("Zopy's best friend is Karima", "Kareem is Zopy's male best friend")
             )

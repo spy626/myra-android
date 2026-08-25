@@ -22,6 +22,13 @@ class MemoryConfirmationParserTest {
     }
 
     @Test
+    fun acceptsKeepBothBestFriendsDecision() {
+        assertEquals(MemoryConfirmationDecision.ADD, MemoryConfirmationParser.parse("Dono best friend hai."))
+        assertEquals(MemoryConfirmationDecision.ADD, MemoryConfirmationParser.parse("both"))
+        assertEquals(MemoryConfirmationDecision.ADD, MemoryConfirmationParser.parse("dono ko save karo"))
+    }
+
+    @Test
     fun rejectsConversationThatIsNotAConfirmation() {
         assertNull(MemoryConfirmationParser.parse("haan mujhe horror movies pasand hain"))
         assertNull(MemoryConfirmationParser.parse("nahi pata kya karna chahiye"))

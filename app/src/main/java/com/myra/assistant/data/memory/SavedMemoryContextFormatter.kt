@@ -2,18 +2,9 @@ package com.myra.assistant.data.memory
 
 object SavedMemoryContextFormatter {
     fun format(rawFacts: List<String>, limit: Int = 8): String {
-        var bestFriendSeen = false
         val facts = rawFacts.asSequence()
             .map { it.replace(Regex("[\\r\\n]+"), " ").trim().take(120) }
             .filter(String::isNotBlank)
-            .filter { fact ->
-                val isBestFriend = Regex("\\bbest\\s+friend\\b", RegexOption.IGNORE_CASE)
-                    .containsMatchIn(fact)
-                if (!isBestFriend) true else if (bestFriendSeen) false else {
-                    bestFriendSeen = true
-                    true
-                }
-            }
             .distinct()
             .take(limit.coerceIn(1, 10))
             .toList()

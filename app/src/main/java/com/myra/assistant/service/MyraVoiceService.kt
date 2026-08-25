@@ -455,7 +455,7 @@ class MyraVoiceService : Service() {
                                 resetTurnBuffers()
                                 waitingForFreshInputAfterCommand = true
                             }
-                        }, 350L)
+                        }, LOCAL_SPEECH_AUDIO_DRAIN_MS)
                     }
                     return@turnComplete
                 }
@@ -676,7 +676,7 @@ class MyraVoiceService : Service() {
                     pendingPersonalMemory = candidate
                     pendingPersonalMemoryExpiresAt =
                         android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
-                    "Abhi ${oldName} tumhari best friend saved hai. ${newName} ko uski jagah save karun?"
+                    "Abhi ${oldName} tumhari best friend saved hai. ${newName} ko replace karun, ya dono ko save karun?"
                 } else {
                     pendingPersonalMemory = candidate
                     pendingPersonalMemoryExpiresAt =
@@ -752,9 +752,17 @@ class MyraVoiceService : Service() {
         }
 
         serviceScope.launch {
-            val result = memoryRepository.save(candidate, permissionGranted = true)
+            val result = if (decision == MemoryConfirmationDecision.ADD) {
+                memoryRepository.saveAdditionalBestFriend(candidate)
+            } else {
+                memoryRepository.save(candidate, permissionGranted = true)
+            }
             val message = when (result) {
-                is MemoryWriteResult.Saved -> "Theek hai, yaad rakhungi."
+                is MemoryWriteResult.Saved -> if (decision == MemoryConfirmationDecision.ADD) {
+                    "Theek hai, dono ko yaad rakhungi."
+                } else {
+                    "Theek hai, yaad rakhungi."
+                }
                 is MemoryWriteResult.NeedsPermission -> "Save karne ki permission clear nahi hui."
                 is MemoryWriteResult.Rejected -> "Ye memory safely save nahi kar sakti."
             }
@@ -1557,6 +1565,7 @@ class MyraVoiceService : Service() {
         private const val MEMORY_COMMAND_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
+        private const val LOCAL_SPEECH_AUDIO_DRAIN_MS = 800L
         private const val RELATIONSHIP_CONTEXT_MS = 45_000L
         private const val MAX_RELATIONSHIP_CONTEXT_TURNS = 3
         private const val FIRST_IDLE_NUDGE_MS = 2 * 60 * 1000L
