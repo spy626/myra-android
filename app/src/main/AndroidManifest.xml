@@ -17,6 +17,7 @@
 
     <application
         android:name=".MyApplication"
+        android:allowAudioPlaybackCapture="true"
         android:allowBackup="true"
         android:label="LYRA"
         android:theme="@style/Theme.Myra"

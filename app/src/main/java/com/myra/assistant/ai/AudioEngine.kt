@@ -66,8 +66,30 @@ class AudioEngine(private val context: Context) {
 
     private fun startPlayback() {
         val min = AudioTrack.getMinBufferSize(24000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val playbackAttributes = AudioAttributes.Builder()
+            // Android playback capture accepts MEDIA/GAME/UNKNOWN, not ASSISTANT.
+            // Keep CONTENT_TYPE_SPEECH so routing and processing still describe voice.
+            .setUsage(
+                if (LyraPlaybackCapturePolicy.useCapturableMediaUsage) AudioAttributes.USAGE_MEDIA
+                else AudioAttributes.USAGE_ASSISTANT
+            )
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    LyraPlaybackCapturePolicy.allowExternalPlaybackCapture
+                ) {
+                    setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL)
+                }
+            }
+            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            LyraPlaybackCapturePolicy.allowExternalPlaybackCapture
+        ) {
+            (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+                .setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL)
+        }
         track = AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setAudioAttributes(playbackAttributes)
             .setAudioFormat(AudioFormat.Builder().setSampleRate(24000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
             .setBufferSizeInBytes(maxOf(min, 8192)).setTransferMode(AudioTrack.MODE_STREAM).build()
         track?.play()
