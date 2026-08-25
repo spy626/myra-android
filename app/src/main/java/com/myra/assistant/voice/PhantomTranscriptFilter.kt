@@ -8,7 +8,7 @@ object PhantomTranscriptFilter {
         "as", "in", "si", "sí", "hm", "hmm", "um", "uh", "ah", "oh", "mm", "ja"
     )
     private val repeatedCharacter = Regex("^([a-z])\\1+$", RegexOption.IGNORE_CASE)
-    private val consonantNoise = Regex("^[bcdfghjklmnpqrstvwxyz]{2,8}$", RegexOption.IGNORE_CASE)
+    private val consonantNoise = Regex("^[bcdfghjklmnpqrstvwxyz]{1,8}$", RegexOption.IGNORE_CASE)
 
     fun shouldIgnore(raw: String): Boolean {
         val clean = raw.lowercase(Locale.ROOT)
