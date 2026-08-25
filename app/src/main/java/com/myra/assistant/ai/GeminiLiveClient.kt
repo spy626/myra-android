@@ -1,6 +1,8 @@
 package com.myra.assistant.ai
 
 import android.util.Base64
+import android.util.Log
+import com.myra.assistant.BuildConfig
 import okhttp3.*
 import okio.ByteString
 import org.json.JSONArray
@@ -38,6 +40,8 @@ class GeminiLiveClient(
     private val transcriptionScheduler = Executors.newSingleThreadScheduledExecutor()
     private var pendingTurnComplete = false
     private var pendingTurnFallback: ScheduledFuture<*>? = null
+    private var inputTranscriptTurn = 1L
+    private var inputTranscriptChunk = 0L
 
     fun connect() {
         if (apiKey.isBlank()) { onError?.invoke("Add your Gemini API key in Settings"); return }
@@ -254,6 +258,18 @@ class GeminiLiveClient(
             content.optJSONObject("inputTranscription")?.let { transcription ->
                 val text = transcription.optString("text")
                 if (text.isNotEmpty()) {
+                    inputTranscriptChunk += 1
+                    if (BuildConfig.DEBUG) {
+                        // Log the untouched API value before any assembler, formatter,
+                        // command parser, or UI code sees it. JSONObject.quote keeps
+                        // spaces and escaped characters visible in Logcat.
+                        Log.d(
+                            TRANSCRIPT_LOG_TAG,
+                            "raw_input tMs=${System.nanoTime() / 1_000_000} " +
+                                "turn=$inputTranscriptTurn chunk=$inputTranscriptChunk " +
+                                "text=${JSONObject.quote(text)}"
+                        )
+                    }
                     onInputTranscript?.invoke(text)
                     reschedulePendingTurnBoundary()
                 }
@@ -342,7 +358,20 @@ class GeminiLiveClient(
             pendingTurnFallback?.cancel(false)
             pendingTurnFallback = null
         }
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                TRANSCRIPT_LOG_TAG,
+                "input_turn_complete tMs=${System.nanoTime() / 1_000_000} " +
+                    "turn=$inputTranscriptTurn chunks=$inputTranscriptChunk"
+            )
+        }
         onTurnComplete?.invoke()
+        inputTranscriptTurn += 1
+        inputTranscriptChunk = 0
+    }
+
+    private companion object {
+        const val TRANSCRIPT_LOG_TAG = "LyraInputTranscript"
     }
 
     fun disconnect() {
