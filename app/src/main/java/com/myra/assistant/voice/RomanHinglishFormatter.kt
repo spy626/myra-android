@@ -30,6 +30,11 @@ object RomanHinglishFormatter {
         text = Normalizer.normalize(text, Normalizer.Form.NFD)
             .replace(Regex("\\p{M}+"), "")
         replacements.forEach { (pattern, replacement) -> text = pattern.replace(text, replacement) }
+        if (Regex("\\bbest\\s+friend\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)) {
+            // Live ASR sometimes splits the name Naufal into "no fall". Limit this
+            // correction to explicit best-friend context so ordinary words stay intact.
+            text = Regex("\\bno\\s+fall\\b", RegexOption.IGNORE_CASE).replace(text, "Naufal")
+        }
         text = Regex("^go and memory setting kar do[.!?]?$", RegexOption.IGNORE_CASE)
             .replace(text, "Ghumna memory se delete kar do.")
         text = Regex("^kya kara rahe(?: ho)?[.!?]?$", RegexOption.IGNORE_CASE)

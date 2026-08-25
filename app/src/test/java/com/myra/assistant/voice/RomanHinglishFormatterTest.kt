@@ -61,4 +61,14 @@ class RomanHinglishFormatterTest {
             RomanHinglishFormatter.format("Munara bahuta jagaha ja ke aya hum.")
         )
     }
+    @Test fun correctsNoFallOnlyInBestFriendContext() {
+        assertEquals(
+            "Naufal is my best friend.",
+            RomanHinglishFormatter.format("No fall is my best friend.")
+        )
+        assertEquals(
+            "There was no fall.",
+            RomanHinglishFormatter.format("There was no fall.")
+        )
+    }
 }
