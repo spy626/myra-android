@@ -26,7 +26,7 @@ object PersonalMemoryExtractor {
         Regex("^my best friend is ([\\p{L}][\\p{L} .'-]{1,39})$", RegexOption.IGNORE_CASE),
         Regex("^([\\p{L}][\\p{L} .'-]{1,39}) is my best friend$", RegexOption.IGNORE_CASE),
         Regex(
-            "^([\\p{L}][\\p{L} .'-]{1,39}) (?:meri|mere|amira) (?:best|besta) (?:friend|frend|phrend|phrenda) (?:hai|he)$",
+            "^([\\p{L}][\\p{L} .'-]{1,39}) (?:mera|meri|mere|amira) (?:best|besta) (?:friend|frend|phrend|phrenda) (?:hai|he)$",
             RegexOption.IGNORE_CASE
         ),
         Regex(

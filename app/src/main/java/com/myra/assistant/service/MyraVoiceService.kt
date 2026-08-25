@@ -446,6 +446,16 @@ class MyraVoiceService : Service() {
                 else if (!suppressModelForTurn && !hideNextModelTranscript && mediaGuard.allowModelResponse()) appendTranscript(output, it)
             }
             client.onTurnComplete = turnComplete@ {
+                quarantinedLocalSpeech?.let { message ->
+                    // The cancelled ordinary Gemini turn has now delivered its final
+                    // boundary. Only now request deterministic memory speech, so no
+                    // late audio from the old reply can enter the new voice buffer.
+                    val drainToken = localSpeechValidationToken
+                    mainHandler.postDelayed({
+                        releaseQuarantinedLocalSpeech(drainToken, message)
+                    }, CANCELLED_MODEL_TURN_DRAIN_MS)
+                    return@turnComplete
+                }
                 if (validatingLocalSpeech != null) {
                     // Sending clientContent interrupts the previous Gemini generation.
                     // Its interrupted turnComplete can arrive before the new confirmation.
@@ -1211,12 +1221,10 @@ class MyraVoiceService : Service() {
                 quarantinedLocalSpeech = message
                 val drainToken = ++localSpeechValidationToken
                 mainHandler.postDelayed({
-                    if (drainToken != localSpeechValidationToken || validatingLocalSpeech != null ||
-                        quarantinedLocalSpeech != message
-                    ) return@postDelayed
-                    quarantinedLocalSpeech = null
-                    beginValidatedLocalSpeech(message)
-                }, CANCELLED_MODEL_AUDIO_DRAIN_MS)
+                    // Fallback for a turn whose completion boundary arrived before the
+                    // local parser took control. The token prevents stale speech.
+                    releaseQuarantinedLocalSpeech(drainToken, message)
+                }, CANCELLED_MODEL_TURN_TIMEOUT_MS)
             } else {
                 beginValidatedLocalSpeech(message)
             }
@@ -1226,6 +1234,14 @@ class MyraVoiceService : Service() {
             pendingLocalSpeechPolicy = validationPolicy
             pendingLocalSpeechAllowsSilence = allowUntranscribedAudio
         }
+    }
+
+    private fun releaseQuarantinedLocalSpeech(token: Long, message: String) {
+        if (token != localSpeechValidationToken || validatingLocalSpeech != null ||
+            quarantinedLocalSpeech != message
+        ) return
+        quarantinedLocalSpeech = null
+        beginValidatedLocalSpeech(message)
     }
 
     private fun beginValidatedLocalSpeech(message: String, retry: Boolean = false) {
@@ -1591,7 +1607,8 @@ class MyraVoiceService : Service() {
         private const val MEMORY_COMMAND_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
-        private const val CANCELLED_MODEL_AUDIO_DRAIN_MS = 500L
+        private const val CANCELLED_MODEL_TURN_DRAIN_MS = 120L
+        private const val CANCELLED_MODEL_TURN_TIMEOUT_MS = 2_000L
         private const val LOCAL_SPEECH_AUDIO_DRAIN_MS = 800L
         private const val RELATIONSHIP_CONTEXT_MS = 45_000L
         private const val MAX_RELATIONSHIP_CONTEXT_TURNS = 3

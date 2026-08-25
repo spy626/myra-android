@@ -6,6 +6,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PersonalMemoryExtractorTest {
+    @Test fun learnsObservedMeraBestFriendWording() {
+        listOf("Kareem mera best friend hai", "Ayesha mera best friend hai", "Naufal mera best friend hai")
+            .forEach { phrase ->
+                val candidate = PersonalMemoryExtractor.extract(phrase)
+                assertTrue(phrase, MemoryRelationshipPolicy.isBestFriend(candidate!!))
+            }
+    }
+
     @Test
     fun extractsEnglishAndHinglishAge() {
         val english = PersonalMemoryExtractor.extract("I am 26 years old")
