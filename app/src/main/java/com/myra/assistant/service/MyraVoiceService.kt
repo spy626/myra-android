@@ -16,6 +16,7 @@ import com.myra.assistant.ai.GeminiLiveClient
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.ai.DeepResearchClient
 import com.myra.assistant.ai.HandsFreeMediaGuard
+import com.myra.assistant.ai.LyraPlaybackCapturePolicy
 import com.myra.assistant.data.memory.AutomaticMemoryChange
 import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
 import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
@@ -244,7 +245,18 @@ class MyraVoiceService : Service() {
                         startLocalSpeechWhenPrefixMatches()
                     }
                 }
-                else if (!suppressModelForTurn && mediaGuard.allowModelResponse()) audio?.queueAudio(it)
+                else if (LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
+                        suppressed = suppressModelForTurn,
+                        assistantAlreadySpeaking = localAudioSpeaking,
+                        mediaGuardAllowsResponse = mediaGuard.allowModelResponse()
+                    )
+                ) {
+                    // Capturable LYRA speech uses USAGE_MEDIA. Once the first valid
+                    // chunk is accepted, keep Media Guard awake so LYRA never mistakes
+                    // her own active AudioTrack for external YouTube playback.
+                    mediaGuard.beginAssistantTurn()
+                    audio?.queueAudio(it)
+                }
             }
             client.onInputTranscript = inputTranscript@ { part ->
                 if (handlePendingPersonalMemoryPermission(part)) return@inputTranscript

@@ -93,7 +93,6 @@ class AudioEngine(private val context: Context) {
             .setAudioAttributes(playbackAttributes)
             .setAudioFormat(AudioFormat.Builder().setSampleRate(24000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
             .setBufferSizeInBytes(maxOf(min, 8192)).setTransferMode(AudioTrack.MODE_STREAM).build()
-        track?.play()
         thread(name = "myra-speaker") {
             while (running.get()) {
                 val bytes = queue.poll(SPEECH_END_GRACE_MS, TimeUnit.MILLISECONDS)
@@ -102,11 +101,13 @@ class AudioEngine(private val context: Context) {
                     // queue is not the end of the sentence; wait through a short gap so
                     // listening and deferred actions resume only after the full reply.
                     if (speaking.compareAndSet(true, false)) {
+                        track?.pause()
                         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime() + MIC_ECHO_COOLDOWN_MS
                         onSpeakingChanged?.invoke(false)
                     }
                     continue
                 }
+                if (track?.playState != AudioTrack.PLAYSTATE_PLAYING) track?.play()
                 if (speaking.compareAndSet(false, true)) onSpeakingChanged?.invoke(true)
                 track?.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING)
             }
@@ -119,7 +120,7 @@ class AudioEngine(private val context: Context) {
         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime()
         muted.set(false)
     }
-    fun interrupt() { queue.clear(); track?.pause(); track?.flush(); track?.play(); speaking.set(false); onSpeakingChanged?.invoke(false) }
+    fun interrupt() { queue.clear(); track?.pause(); track?.flush(); speaking.set(false); onSpeakingChanged?.invoke(false) }
     fun release() { running.set(false); echoCanceler?.release(); noiseSuppressor?.release(); gainControl?.release(); recorder?.stop(); recorder?.release(); track?.stop(); track?.release(); queue.offer(ByteArray(0)) }
 
     private companion object {

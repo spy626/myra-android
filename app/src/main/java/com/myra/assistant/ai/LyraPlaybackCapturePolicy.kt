@@ -4,4 +4,10 @@ package com.myra.assistant.ai
 object LyraPlaybackCapturePolicy {
     const val useCapturableMediaUsage = true
     const val allowExternalPlaybackCapture = true
+
+    fun shouldAcceptModelAudio(
+        suppressed: Boolean,
+        assistantAlreadySpeaking: Boolean,
+        mediaGuardAllowsResponse: Boolean
+    ): Boolean = !suppressed && (assistantAlreadySpeaking || mediaGuardAllowsResponse)
 }
