@@ -5,27 +5,36 @@ import java.text.Normalizer
 /** Converts ICU's literal Indic transliteration into natural chat-style Roman Hinglish. */
 object RomanHinglishFormatter {
     private val replacements = listOf(
-        Regex("\\b(?:ēka|eka)\\b", RegexOption.IGNORE_CASE) to "ek",
-        Regex("\\b(?:usakā|usaka)\\b", RegexOption.IGNORE_CASE) to "uska",
-        Regex("\\b(?:nāma|nama)\\b", RegexOption.IGNORE_CASE) to "naam",
-        Regex("\\b(?:bēsṭa|besta)\\b", RegexOption.IGNORE_CASE) to "best",
-        Regex("\\b(?:phrēṇḍa|phrenda)\\b", RegexOption.IGNORE_CASE) to "friend",
-        Regex("\\b(?:mēla|mela)(?=\\s+best\\b)", RegexOption.IGNORE_CASE) to "male",
+        Regex("\\beka\\b", RegexOption.IGNORE_CASE) to "ek",
+        Regex("\\busaka\\b", RegexOption.IGNORE_CASE) to "uska",
+        Regex("\\bnama\\b", RegexOption.IGNORE_CASE) to "naam",
+        Regex("\\bbesta\\b", RegexOption.IGNORE_CASE) to "best",
+        Regex("\\bphrenda\\b", RegexOption.IGNORE_CASE) to "friend",
+        Regex("\\bmela(?=\\s+best\\b)", RegexOption.IGNORE_CASE) to "male",
         Regex("\\b(?:maim|mein)(?=\\s+\\d{1,3}\\s+(?:sala|saal)\\b)", RegexOption.IGNORE_CASE) to "main",
-        Regex("\\b(?:sala|sāla)(?=\\s+(?:ka|ki)\\b)", RegexOption.IGNORE_CASE) to "saal",
-        Regex("\\b(?:pasanda|pasandā)\\b", RegexOption.IGNORE_CASE) to "pasand",
-        Regex("\\b(?:ghumana|ghumāna)(?=\\s+(?:bahut\\s+|bohot\\s+)?pasand\\b)", RegexOption.IGNORE_CASE) to "ghumna"
+        Regex("\\bsala(?=\\s+(?:ka|ki)\\b)", RegexOption.IGNORE_CASE) to "saal",
+        Regex("\\bpasanda\\b", RegexOption.IGNORE_CASE) to "pasand",
+        Regex("\\b(?:ghumana|gomna|goomna|ghomna)(?=\\s+(?:bahut\\s+|bohot\\s+)?pasand\\b|\\s+memor(?:y|ies)\\b)", RegexOption.IGNORE_CASE) to "ghumna",
+        Regex("\\bnahim\\b", RegexOption.IGNORE_CASE) to "nahi"
     )
 
     fun format(raw: String): String {
         var text = raw.trim().replace(Regex("\\s+"), " ")
-        replacements.forEach { (pattern, replacement) -> text = pattern.replace(text, replacement) }
         // करीम transliterates as karīma, while the distinct final long vowel in करीमा
         // is karīmā. Use that signal only inside an explicit name phrase.
-        text = Regex("\\b(naam\\s+)karīma\\b", RegexOption.IGNORE_CASE)
+        text = Regex("\\b((?:nāma|nama|naam)\\s+)karīma\\b", RegexOption.IGNORE_CASE)
             .replace(text) { it.groupValues[1] + "Kareem" }
         text = Normalizer.normalize(text, Normalizer.Form.NFD)
             .replace(Regex("\\p{M}+"), "")
+        replacements.forEach { (pattern, replacement) -> text = pattern.replace(text, replacement) }
+        text = Regex("^go and memory setting kar do[.!?]?$", RegexOption.IGNORE_CASE)
+            .replace(text, "Ghumna memory se delete kar do.")
+        text = Regex("^kya kara rahe(?: ho)?[.!?]?$", RegexOption.IGNORE_CASE)
+            .replace(text, "Kya kar rahe ho?")
+        if (Regex("\\b(?:goom naam|goom nam|gom naam)\\b.*\\bre-?visit\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)) {
+            return "Voice input unclear - please repeat."
+        }
+        text = text
             .replace(Regex("\\s+([,.!?])"), "$1")
             .replace(Regex("([,.!?])(?=\\S)"), "$1 ")
             .replace(Regex("\\s+"), " ")

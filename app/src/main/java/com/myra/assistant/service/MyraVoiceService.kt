@@ -56,7 +56,8 @@ internal object FriendConversationPolicy {
     const val REPLY_DISCIPLINE =
         "Keep ordinary casual replies to one or two short natural sentences. " +
             "Use more only when Zopy explicitly asks for detail or the topic requires a safety explanation. " +
-            "Answer and stop by default. Ask no follow-up unless one question would materially improve the answer; " +
+            "Sometimes react briefly; sometimes answer directly and stop. Do not force every exchange to continue. " +
+            "Ask no follow-up unless one question would materially improve the answer; " +
             "if you ask one, it must be the only question in the entire reply. " +
             "Never use customer-support wording such as 'help kar sakti hoon', and never sound dismissive with " +
             "phrases such as 'isse zyada main kya boloon' or pressure the user to give a specific topic."

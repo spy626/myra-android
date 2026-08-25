@@ -8,7 +8,8 @@ class FriendConversationPolicyTest {
     @Test fun casualRepliesDefaultToShortAnswersWithoutQuestions() {
         val policy = FriendConversationPolicy.REPLY_DISCIPLINE
         assertTrue(policy.contains("one or two short natural sentences"))
-        assertTrue(policy.contains("Answer and stop by default"))
+        assertTrue(policy.contains("answer directly and stop"))
+        assertTrue(policy.contains("Do not force every exchange"))
         assertTrue(policy.contains("only question in the entire reply"))
         assertTrue(policy.contains("help kar sakti hoon"))
         assertTrue(policy.contains("isse zyada main kya boloon"))

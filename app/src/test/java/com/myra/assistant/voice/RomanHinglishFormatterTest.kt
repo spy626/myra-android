@@ -38,5 +38,20 @@ class RomanHinglishFormatterTest {
             "Mujhe ghumna pasand hai.",
             RomanHinglishFormatter.format("mujhe ghumana pasanda hai.")
         )
+        assertEquals(
+            "Mujhe ghumna pasand hai.",
+            RomanHinglishFormatter.format("mujhe ghūmanā pasandā hai.")
+        )
+    }
+
+    @Test fun cleansObservedConversationAndMemoryCommandCorruption() {
+        assertEquals("Kya kar rahe ho?", RomanHinglishFormatter.format("Kya kara rahe?"))
+        assertEquals("Nahi.", RomanHinglishFormatter.format("Nahim."))
+        assertEquals("Ghumna memory se delete kar do.", RomanHinglishFormatter.format("Gomna memory se delete kar do."))
+        assertEquals("Ghumna memory se delete kar do.", RomanHinglishFormatter.format("Go and memory setting kar do."))
+        assertEquals(
+            "Voice input unclear - please repeat.",
+            RomanHinglishFormatter.format("Goom naam hai main re-visit karta hun.")
+        )
     }
 }

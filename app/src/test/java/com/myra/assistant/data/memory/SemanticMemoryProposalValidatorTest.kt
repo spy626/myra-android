@@ -54,4 +54,15 @@ class SemanticMemoryProposalValidatorTest {
             conversationContext = "My password is secret123"
         ))
     }
+
+    @Test fun rejectsMalformedTravelProposalObservedFromCorruptedAsr() {
+        assertNull(SemanticMemoryProposalValidator.validate(
+            fact = "Zopy likes to re-visit travel destinations",
+            categoryName = "PREFERENCE",
+            memoryKey = "travel_preference",
+            evidence = "Goom naam hai main re-visit karta hun",
+            confidence = 0.93,
+            conversationContext = "Goom naam hai main re-visit karta hun"
+        ))
+    }
 }

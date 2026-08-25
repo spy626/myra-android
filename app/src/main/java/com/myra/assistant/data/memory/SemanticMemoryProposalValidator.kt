@@ -13,6 +13,10 @@ object SemanticMemoryProposalValidator {
         """\b(?:address|bank|account number|diagnosis|disease|medical|religion|sexual|trauma|fear|afraid)\b""",
         RegexOption.IGNORE_CASE
     )
+    private val malformedFact = Regex(
+        """\b(?:zopy|tum|user)\s+likes\s+to\b|\bre-?visit\s+travel\s+destinations?\b""",
+        RegexOption.IGNORE_CASE
+    )
     private val stopWords = setOf(
         "a", "an", "the", "is", "are", "am", "was", "were", "to", "of", "and", "or",
         "my", "meri", "mera", "mere", "hai", "hain", "he", "hoon", "hun", "ka", "ki", "ke",
@@ -35,7 +39,8 @@ object SemanticMemoryProposalValidator {
         val key = normalize(memoryKey).replace(' ', '_')
         if (cleanFact.length !in 5..180 || cleanEvidence.length !in 3..180 ||
             !safeKey.matches(key) || confidence < 0.78 ||
-            prohibited.containsMatchIn(cleanFact) || prohibited.containsMatchIn(cleanEvidence)
+            prohibited.containsMatchIn(cleanFact) || prohibited.containsMatchIn(cleanEvidence) ||
+            malformedFact.containsMatchIn(cleanFact)
         ) return null
 
         val contextTokens = meaningfulTokens(conversationContext)
