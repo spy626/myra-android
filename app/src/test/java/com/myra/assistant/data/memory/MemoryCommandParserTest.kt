@@ -81,6 +81,7 @@ class MemoryCommandParserTest {
         listOf(
             "Kon meri best frend hai",
             "Kauna meri best friend hai",
+            "Mera best friend kaun hai",
             "Meri best friend kaun hai",
             "Who is my best friend"
         ).forEach { phrase ->
