@@ -3,7 +3,9 @@ package com.myra.assistant.data.memory
 object PersonalMemoryPermissionPrompt {
     fun format(candidate: MemoryCandidate): String {
         if (MemoryRelationshipPolicy.isBestFriend(candidate)) {
-            val name = MemoryRelationshipPolicy.personName(candidate.fact)
+            val name = MemoryRelationshipPolicy.personName(candidate.fact)?.replaceFirstChar { first ->
+                if (first.isLowerCase()) first.titlecase() else first.toString()
+            }
             return if (name == null) {
                 "Ye strong relationship label hai—sahi? Haan bologe toh yaad rakhungi."
             } else {
