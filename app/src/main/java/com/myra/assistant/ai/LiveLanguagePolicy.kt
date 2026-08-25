@@ -1,6 +1,6 @@
 package com.myra.assistant.ai
 
-/** Indian English and Hindi speech bundle used by Gemini Live. */
+/** Output voice locale. Gemini Live inputAudioTranscription has no locale-hint field. */
 object LiveLanguagePolicy {
     const val SPEECH_LANGUAGE_CODE = "en-IN"
 }

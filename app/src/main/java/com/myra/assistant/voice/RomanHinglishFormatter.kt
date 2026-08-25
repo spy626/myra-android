@@ -14,6 +14,9 @@ object RomanHinglishFormatter {
         Regex("\\b(?:maim|mein)(?=\\s+\\d{1,3}\\s+(?:sala|saal)\\b)", RegexOption.IGNORE_CASE) to "main",
         Regex("\\bsala(?=\\s+(?:ka|ki)\\b)", RegexOption.IGNORE_CASE) to "saal",
         Regex("\\bpasanda\\b", RegexOption.IGNORE_CASE) to "pasand",
+        Regex("\\bbahuta\\b", RegexOption.IGNORE_CASE) to "bahut",
+        Regex("\\bjagaha\\b", RegexOption.IGNORE_CASE) to "jagah",
+        Regex("\\bmunara\\b", RegexOption.IGNORE_CASE) to "Munnar",
         Regex("\\b(?:ghumana|gomna|goomna|ghomna)(?=\\s+(?:bahut\\s+|bohot\\s+)?pasand\\b|\\s+memor(?:y|ies)\\b)", RegexOption.IGNORE_CASE) to "ghumna",
         Regex("\\bnahim\\b", RegexOption.IGNORE_CASE) to "nahi"
     )
@@ -41,6 +44,8 @@ object RomanHinglishFormatter {
             .trim()
         text = Regex("\\b(main\\s+\\d{1,3}\\s+saal\\s+(?:ka|ki)\\s+)hum(?=[.!?]?$)", RegexOption.IGNORE_CASE)
             .replace(text) { it.groupValues[1] + "hoon" }
+        text = Regex("\\b(aya)\\s+hum(?=[.!?]?$)", RegexOption.IGNORE_CASE)
+            .replace(text) { "aaya hoon" }
         return Regex("(^|[.!?]\\s+)([a-z])").replace(text) { match ->
             match.groupValues[1] + match.groupValues[2].uppercase()
         }

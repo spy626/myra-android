@@ -6,6 +6,8 @@ import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -32,6 +34,10 @@ class GeminiLiveClient(
     private var socket: WebSocket? = null
     private var renewThread: Thread? = null
     private val ready = AtomicBoolean(false)
+    private val transcriptionLock = Any()
+    private val transcriptionScheduler = Executors.newSingleThreadScheduledExecutor()
+    private var pendingTurnComplete = false
+    private var pendingTurnFallback: ScheduledFuture<*>? = null
 
     fun connect() {
         if (apiKey.isBlank()) { onError?.invoke("Add your Gemini API key in Settings"); return }
@@ -245,9 +251,15 @@ class GeminiLiveClient(
                 val data = parts.optJSONObject(i)?.optJSONObject("inlineData")?.optString("data")
                 if (!data.isNullOrBlank()) onAudio?.invoke(Base64.decode(data, Base64.DEFAULT))
             }
-            content.optJSONObject("inputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let { onInputTranscript?.invoke(it) }
+            content.optJSONObject("inputTranscription")?.let { transcription ->
+                val text = transcription.optString("text")
+                if (text.isNotEmpty()) {
+                    onInputTranscript?.invoke(text)
+                    reschedulePendingTurnBoundary()
+                }
+            }
             content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let { onOutputTranscript?.invoke(it) }
-            if (content.optBoolean("turnComplete")) onTurnComplete?.invoke()
+            if (content.optBoolean("turnComplete")) deferTurnCompleteUntilTranscriptIsQuiet()
         } catch (e: Exception) { onError?.invoke("Invalid Live response: ${e.message}") }
     }
 
@@ -292,5 +304,58 @@ class GeminiLiveClient(
             }
         }.start()
     }
-    fun disconnect() { manualClose.set(true); generation.incrementAndGet(); renewThread?.interrupt(); socket?.close(1000, "App closed"); socket = null }
+    private fun deferTurnCompleteUntilTranscriptIsQuiet() {
+        synchronized(transcriptionLock) {
+            pendingTurnComplete = true
+            scheduleTurnBoundaryAfterTranscriptQuietPeriod()
+        }
+    }
+
+    private fun reschedulePendingTurnBoundary() {
+        synchronized(transcriptionLock) {
+            if (pendingTurnComplete) scheduleTurnBoundaryAfterTranscriptQuietPeriod()
+        }
+    }
+
+    private fun scheduleTurnBoundaryAfterTranscriptQuietPeriod() {
+        pendingTurnFallback?.cancel(false)
+        // The Gemini Developer API transcription object contains only `text`; unlike
+        // some Vertex variants it has no final/finished flag. Since Google also says
+        // transcription ordering is independent of turnComplete, finalize after a
+        // short quiet window so late deltas are included without adding voice latency.
+        pendingTurnFallback = transcriptionScheduler.schedule({
+            val release = synchronized(transcriptionLock) {
+                if (!pendingTurnComplete) false
+                else {
+                    pendingTurnComplete = false
+                    pendingTurnFallback = null
+                    true
+                }
+            }
+            if (release) completeTurnBoundary()
+        }, 350, TimeUnit.MILLISECONDS)
+    }
+
+    private fun completeTurnBoundary() {
+        synchronized(transcriptionLock) {
+            pendingTurnComplete = false
+            pendingTurnFallback?.cancel(false)
+            pendingTurnFallback = null
+        }
+        onTurnComplete?.invoke()
+    }
+
+    fun disconnect() {
+        manualClose.set(true)
+        generation.incrementAndGet()
+        renewThread?.interrupt()
+        synchronized(transcriptionLock) {
+            pendingTurnFallback?.cancel(false)
+            pendingTurnFallback = null
+            pendingTurnComplete = false
+        }
+        transcriptionScheduler.shutdownNow()
+        socket?.close(1000, "App closed")
+        socket = null
+    }
 }

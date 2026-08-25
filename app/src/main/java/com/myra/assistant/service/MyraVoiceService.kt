@@ -17,6 +17,7 @@ import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.ai.DeepResearchClient
 import com.myra.assistant.ai.HandsFreeMediaGuard
 import com.myra.assistant.ai.LyraPlaybackCapturePolicy
+import com.myra.assistant.ai.LiveTranscriptAssembler
 import com.myra.assistant.data.memory.AutomaticMemoryChange
 import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
 import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
@@ -1092,10 +1093,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun appendTranscript(builder: StringBuilder, part: String) {
-        val clean = part.trim()
-        if (clean.isBlank()) return
-        if (builder.isNotEmpty() && !builder.last().isWhitespace()) builder.append(' ')
-        builder.append(clean)
+        LiveTranscriptAssembler.append(builder, part)
     }
 
     private fun cancelSpeechForNewAction() {

@@ -54,4 +54,11 @@ class RomanHinglishFormatterTest {
             RomanHinglishFormatter.format("Goom naam hai main re-visit karta hun.")
         )
     }
+
+    @Test fun cleansObservedMunnarSentenceWithoutRewritingItsMeaning() {
+        assertEquals(
+            "Munnar bahut jagah ja ke aaya hoon.",
+            RomanHinglishFormatter.format("Munara bahuta jagaha ja ke aya hum.")
+        )
+    }
 }
