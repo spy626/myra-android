@@ -4,6 +4,24 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class MemoryRelationshipPolicyTest {
+    @Test fun ordinarySavesUsePersonSpecificKeysAndConfirmedReplacementUsesSharedKey() {
+        val candidate = MemoryCandidate(
+            category = MemoryCategory.PERSON,
+            fact = "Zopy's best friend is Ayesha",
+            stableKey = "person:best_friend",
+            sensitivity = MemorySensitivity.PERSONAL,
+            confidence = 0.96
+        )
+        assertEquals(
+            "person:best_friend:ayesha",
+            MemoryRelationshipPolicy.canonicalizeForSave(candidate, replaceExisting = false).stableKey
+        )
+        assertEquals(
+            "person:best_friend",
+            MemoryRelationshipPolicy.canonicalizeForSave(candidate, replaceExisting = true).stableKey
+        )
+    }
+
     @Test fun recognizesAndCanonicalizesLegacyModelFact() {
         assertEquals("Naufal", MemoryRelationshipPolicy.personName("The user's best friend is Naufal"))
     }

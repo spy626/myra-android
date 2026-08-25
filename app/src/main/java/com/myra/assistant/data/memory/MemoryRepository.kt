@@ -5,16 +5,10 @@ import java.util.UUID
 
 class MemoryRepository(private val dao: MemoryDao) {
     suspend fun save(candidate: MemoryCandidate, permissionGranted: Boolean = false): MemoryWriteResult {
-        val canonical = if (candidate.stableKey.startsWith("${MemoryRelationshipPolicy.BEST_FRIEND_KEY}:")) {
-            candidate
-        } else {
-            MemoryRelationshipPolicy.canonicalize(candidate)
-        }
-        // Even an otherwise auto-saveable proposal cannot silently replace a unique
-        // relationship held by another person.
-        if (!permissionGranted && uniqueRelationshipConflict(canonical) != null) {
-            return MemoryWriteResult.NeedsPermission
-        }
+        val canonical = MemoryRelationshipPolicy.canonicalizeForSave(
+            candidate,
+            replaceExisting = permissionGranted
+        )
         return when (MemorySafetyPolicy.decide(canonical)) {
             MemorySaveDecision.REJECT -> MemoryWriteResult.Rejected("This information is unsafe, empty, or too uncertain to remember.")
             MemorySaveDecision.ASK_PERMISSION -> if (!permissionGranted) {
@@ -22,7 +16,10 @@ class MemoryRepository(private val dao: MemoryDao) {
             } else {
                 persist(canonical)
             }
-            MemorySaveDecision.AUTO_SAVE -> persist(canonical)
+            MemorySaveDecision.AUTO_SAVE -> persist(
+                canonical,
+                replaceBestFriends = permissionGranted && MemoryRelationshipPolicy.isBestFriend(canonical)
+            )
         }
     }
 

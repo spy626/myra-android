@@ -46,6 +46,11 @@ object MemoryRelationshipPolicy {
         return canonical.copy(stableKey = "$BEST_FRIEND_KEY:$suffix")
     }
 
+    /** Best friends add by default; only an explicit confirmed replacement uses the shared slot. */
+    fun canonicalizeForSave(candidate: MemoryCandidate, replaceExisting: Boolean): MemoryCandidate =
+        if (isBestFriend(candidate) && !replaceExisting) canonicalizeAdditional(candidate)
+        else canonicalize(candidate)
+
     fun personName(fact: String): String? {
         val clean = fact.trim().trimEnd('.')
         return canonicalFact.matchEntire(clean)?.groupValues?.get(1)?.trim()

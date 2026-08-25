@@ -25,6 +25,7 @@ import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
+import com.myra.assistant.data.memory.MemoryCommandReplyFormatter
 import com.myra.assistant.data.memory.MemoryConfirmationDecision
 import com.myra.assistant.data.memory.MemoryConfirmationParser
 import com.myra.assistant.data.memory.MemoryCandidate
@@ -648,8 +649,8 @@ class MyraVoiceService : Service() {
             }
             val response = when (command) {
                 is MemoryCommand.Remember -> when (rememberResult) {
-                    is MemoryWriteResult.Saved -> "Got it, I'll remember that ${command.displayFact}."
-                    is MemoryWriteResult.Rejected -> "I can't save passwords, security codes, or unsafe private information."
+                    is MemoryWriteResult.Saved -> MemoryCommandReplyFormatter.rememberSaved()
+                    is MemoryWriteResult.Rejected -> MemoryCommandReplyFormatter.rememberRejected()
                     MemoryWriteResult.NeedsPermission, null -> "Save karne ki permission clear nahi hui."
                 }
                 is MemoryCommand.Read -> {
@@ -657,8 +658,9 @@ class MyraVoiceService : Service() {
                     PersonalMemoryRecallFormatter.format(memories.map { it.fact })
                 }
                 is MemoryCommand.Forget -> {
-                    if (memoryRepository.forgetMatching(command.query)) "Okay, I forgot that."
-                    else "I couldn't find that in my saved memories."
+                    MemoryCommandReplyFormatter.forgotten(
+                        memoryRepository.forgetMatching(command.query)
+                    )
                 }
             }
             mainHandler.post {
