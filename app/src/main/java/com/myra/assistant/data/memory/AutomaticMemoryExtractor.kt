@@ -96,6 +96,7 @@ object AutomaticMemoryExtractor {
                 "science-fiction movies"
             Regex("(?:horror|horara).*?(?:movie|muvi|muvija)").containsMatchIn(normalized) ->
                 "horror movies"
+            Regex("^(?:ghumana|ghoomana|gumāna|ghumna)$").matches(normalized) -> "ghumna"
             else -> value
         }
     }

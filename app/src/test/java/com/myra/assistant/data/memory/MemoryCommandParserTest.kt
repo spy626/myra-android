@@ -114,4 +114,11 @@ class MemoryCommandParserTest {
         ) as MemoryCommand.Forget
         assertEquals("na ghumna", command.query)
     }
+
+    @Test fun parsesPluralMemoryRemovalFromObservedAsr() {
+        val command = MemoryCommandParser.parse(
+            "ghumana memories delete kar do"
+        ) as MemoryCommand.Forget
+        assertEquals("ghumana", command.query)
+    }
 }

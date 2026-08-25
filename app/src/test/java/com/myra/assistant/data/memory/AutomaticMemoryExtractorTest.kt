@@ -62,4 +62,11 @@ class AutomaticMemoryExtractorTest {
             )?.fact
         )
     }
+
+    @Test fun canonicalizesObservedGhumnaTranscriptBeforeSaving() {
+        assertEquals(
+            "Zopy likes ghumna",
+            AutomaticMemoryExtractor.extract("mujhe ghumana pasand hai")?.fact
+        )
+    }
 }

@@ -28,4 +28,15 @@ class RomanHinglishFormatterTest {
             RomanHinglishFormatter.format("usaka nama Karima hai.")
         )
     }
+
+    @Test fun cleansObservedAgeAndPreferenceTranscripts() {
+        assertEquals(
+            "Main 26 saal ka hoon.",
+            RomanHinglishFormatter.format("maim 26 sala ka hum.")
+        )
+        assertEquals(
+            "Mujhe ghumna pasand hai.",
+            RomanHinglishFormatter.format("mujhe ghumana pasanda hai.")
+        )
+    }
 }

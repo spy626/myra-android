@@ -30,6 +30,9 @@ class AudioEngine(private val context: Context) {
     private var echoCanceler: AcousticEchoCanceler? = null
     private var noiseSuppressor: NoiseSuppressor? = null
     private var gainControl: AutomaticGainControl? = null
+    private var micThread: Thread? = null
+    private var speakerThread: Thread? = null
+    private val playbackLock = Any()
 
     fun start() {
         if (running.getAndSet(true)) return
@@ -48,10 +51,10 @@ class AudioEngine(private val context: Context) {
             if (AutomaticGainControl.isAvailable()) gainControl = AutomaticGainControl.create(session)?.apply { enabled = true }
         }
         recorder?.startRecording()
-        thread(name = "myra-mic") {
+        micThread = thread(name = "myra-mic") {
             val data = ByteArray(3200) // 100 ms, recommended by Live API
             while (running.get()) {
-                val count = recorder?.read(data, 0, data.size) ?: 0
+                val count = runCatching { recorder?.read(data, 0, data.size) ?: 0 }.getOrDefault(0)
                 if (count > 0) {
                     val chunk = data.copyOf(count)
                     onAmplitude?.invoke(rms(chunk))
@@ -93,23 +96,29 @@ class AudioEngine(private val context: Context) {
             .setAudioAttributes(playbackAttributes)
             .setAudioFormat(AudioFormat.Builder().setSampleRate(24000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
             .setBufferSizeInBytes(maxOf(min, 8192)).setTransferMode(AudioTrack.MODE_STREAM).build()
-        thread(name = "myra-speaker") {
+        speakerThread = thread(name = "myra-speaker") {
             while (running.get()) {
                 val bytes = queue.poll(SPEECH_END_GRACE_MS, TimeUnit.MILLISECONDS)
+                if (!running.get()) break
                 if (bytes == null) {
                     // Gemini audio is delivered in network chunks. A temporarily empty
                     // queue is not the end of the sentence; wait through a short gap so
                     // listening and deferred actions resume only after the full reply.
                     if (speaking.compareAndSet(true, false)) {
-                        track?.pause()
+                        synchronized(playbackLock) { runCatching { track?.pause() } }
                         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime() + MIC_ECHO_COOLDOWN_MS
                         onSpeakingChanged?.invoke(false)
                     }
                     continue
                 }
-                if (track?.playState != AudioTrack.PLAYSTATE_PLAYING) track?.play()
-                if (speaking.compareAndSet(false, true)) onSpeakingChanged?.invoke(true)
-                track?.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING)
+                synchronized(playbackLock) {
+                    if (!running.get()) return@synchronized
+                    runCatching {
+                        if (track?.playState != AudioTrack.PLAYSTATE_PLAYING) track?.play()
+                        if (speaking.compareAndSet(false, true)) onSpeakingChanged?.invoke(true)
+                        track?.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING)
+                    }
+                }
             }
         }
     }
@@ -120,8 +129,31 @@ class AudioEngine(private val context: Context) {
         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime()
         muted.set(false)
     }
-    fun interrupt() { queue.clear(); track?.pause(); track?.flush(); speaking.set(false); onSpeakingChanged?.invoke(false) }
-    fun release() { running.set(false); echoCanceler?.release(); noiseSuppressor?.release(); gainControl?.release(); recorder?.stop(); recorder?.release(); track?.stop(); track?.release(); queue.offer(ByteArray(0)) }
+    fun interrupt() {
+        queue.clear()
+        synchronized(playbackLock) { runCatching { track?.pause(); track?.flush() } }
+        speaking.set(false)
+        onSpeakingChanged?.invoke(false)
+    }
+    fun release() {
+        if (!running.getAndSet(false)) return
+        queue.offer(ByteArray(0))
+        runCatching { recorder?.stop() }
+        runCatching { micThread?.join(750) }
+        runCatching { speakerThread?.join(750) }
+        runCatching { echoCanceler?.release() }
+        runCatching { noiseSuppressor?.release() }
+        runCatching { gainControl?.release() }
+        runCatching { recorder?.release() }
+        synchronized(playbackLock) {
+            runCatching { track?.stop() }
+            runCatching { track?.release() }
+        }
+        recorder = null
+        track = null
+        micThread = null
+        speakerThread = null
+    }
 
     private companion object {
         const val SPEECH_END_GRACE_MS = 350L
