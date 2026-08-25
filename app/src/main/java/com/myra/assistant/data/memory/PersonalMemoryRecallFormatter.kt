@@ -21,6 +21,8 @@ object PersonalMemoryRecallFormatter {
             .matchEntire(clean)?.let { return "tum ${it.groupValues[1]} saal ke ho" }
         Regex("^Zopy's best friend is (.+)$", RegexOption.IGNORE_CASE)
             .matchEntire(clean)?.let { return "${it.groupValues[1].trim()} tumhari best friend hai" }
+        Regex("^The user's best friend is (.+)$", RegexOption.IGNORE_CASE)
+            .matchEntire(clean)?.let { return "${it.groupValues[1].trim()} tumhari best friend hai" }
         Regex("^(.+?) is Zopy's (?:male |female )?best friend$", RegexOption.IGNORE_CASE)
             .matchEntire(clean)?.let { return "${it.groupValues[1].trim()} tumhari best friend hai" }
         Regex("^Zopy's goal is (.+)$", RegexOption.IGNORE_CASE)

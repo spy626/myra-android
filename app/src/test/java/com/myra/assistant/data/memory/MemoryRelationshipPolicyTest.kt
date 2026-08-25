@@ -4,6 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class MemoryRelationshipPolicyTest {
+    @Test fun recognizesAndCanonicalizesLegacyModelFact() {
+        assertEquals("Naufal", MemoryRelationshipPolicy.personName("The user's best friend is Naufal"))
+    }
+
     @Test fun semanticAndDeterministicBestFriendFactsShareOneKey() {
         val candidate = MemoryCandidate(
             category = MemoryCategory.PERSON,

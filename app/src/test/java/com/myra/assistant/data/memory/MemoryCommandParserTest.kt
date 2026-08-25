@@ -94,6 +94,7 @@ class MemoryCommandParserTest {
     @Test fun parsesNaturalRelationshipRemoval() {
         listOf(
             "Delete karo Naufal ko",
+            "Ayesha ko delete kar do",
             "Kareem ko meri memory se hata do",
             "Kareem ko memory se delete kar do",
             "Kareem ko memory se delete karo",

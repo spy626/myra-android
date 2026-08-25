@@ -4,6 +4,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PersonalMemoryRecallFormatterTest {
+    @Test fun formatsLegacyModelBestFriendFactNaturally() {
+        assertEquals(
+            "Naufal tumhari best friend hai.",
+            PersonalMemoryRecallFormatter.format(listOf("The user's best friend is Naufal"))
+        )
+    }
+
     @Test
     fun recallsAgeAndLatestFriendNaturallyWithoutRoboticPrefix() {
         assertEquals(

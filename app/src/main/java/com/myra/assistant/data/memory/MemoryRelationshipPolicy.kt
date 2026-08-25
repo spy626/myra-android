@@ -6,7 +6,7 @@ object MemoryRelationshipPolicy {
 
     private val bestFriendWords = Regex("\\bbest\\s+friend\\b", RegexOption.IGNORE_CASE)
     private val canonicalFact = Regex(
-        "^Zopy's best friend is (.+)$",
+        "^(?:Zopy's|The user's) best friend is (.+)$",
         RegexOption.IGNORE_CASE
     )
     private val reverseFact = Regex(

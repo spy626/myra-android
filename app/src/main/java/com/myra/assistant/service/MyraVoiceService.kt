@@ -105,6 +105,7 @@ class MyraVoiceService : Service() {
     private var pendingLocalSpeech: String? = null
     private var pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
     private var pendingLocalSpeechAllowsSilence = false
+    private var quarantinedLocalSpeech: String? = null
     private var validatingLocalSpeech: String? = null
     private var localSpeechValidationToken = 0L
     private var localSpeechValidationAttempt = 0
@@ -1163,6 +1164,7 @@ class MyraVoiceService : Service() {
         localSpeechValidationToken++
         validatingLocalSpeech = null
         pendingLocalSpeech = null
+        quarantinedLocalSpeech = null
         pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
         pendingLocalSpeechAllowsSilence = false
         localSpeechAudio.clear()
@@ -1201,7 +1203,23 @@ class MyraVoiceService : Service() {
         if (validatingLocalSpeech == null) {
             allowUntranscribedLocalSpeech = allowUntranscribedAudio
             localSpeechValidationPolicy = validationPolicy
-            beginValidatedLocalSpeech(message)
+            if (validationPolicy == LocalSpeechValidationPolicy.MEMORY) {
+                // A cancelled Gemini reply can still deliver a few late WebSocket
+                // chunks. Keep validation closed while those chunks are suppressed,
+                // otherwise they can be mistaken for the new deterministic reply and
+                // create a second or clipped voice before the intended memory speech.
+                quarantinedLocalSpeech = message
+                val drainToken = ++localSpeechValidationToken
+                mainHandler.postDelayed({
+                    if (drainToken != localSpeechValidationToken || validatingLocalSpeech != null ||
+                        quarantinedLocalSpeech != message
+                    ) return@postDelayed
+                    quarantinedLocalSpeech = null
+                    beginValidatedLocalSpeech(message)
+                }, CANCELLED_MODEL_AUDIO_DRAIN_MS)
+            } else {
+                beginValidatedLocalSpeech(message)
+            }
         }
         else {
             pendingLocalSpeech = message
@@ -1573,6 +1591,7 @@ class MyraVoiceService : Service() {
         private const val MEMORY_COMMAND_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
+        private const val CANCELLED_MODEL_AUDIO_DRAIN_MS = 500L
         private const val LOCAL_SPEECH_AUDIO_DRAIN_MS = 800L
         private const val RELATIONSHIP_CONTEXT_MS = 45_000L
         private const val MAX_RELATIONSHIP_CONTEXT_TURNS = 3

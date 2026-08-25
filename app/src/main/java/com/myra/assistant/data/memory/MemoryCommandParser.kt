@@ -19,6 +19,7 @@ object MemoryCommandParser {
     )
     private val relationshipForget = listOf(
         Regex("^(?:delete|remove)\\s+(?:karo|kar\\s+do)\\s+([\\p{L}][\\p{L}'-]{1,30})\\s+ko$", RegexOption.IGNORE_CASE),
+        Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+ko\\s+(?:delete|remove)\\s+(?:karo|kar\\s+do|kero)$", RegexOption.IGNORE_CASE),
         Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+ko\\s+(?:meri\\s+)?memory\\s+se\\s+(?:hata\\s+do|hatao|delete\\s+(?:kar\\s+do|karo|kero)|remove\\s+(?:kar\\s+do|karo|kero))$", RegexOption.IGNORE_CASE),
         Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+mera\\s+(?:best\\s+)?(?:friend|frend|dost)\\s+nahi\\s+hai(?:,?\\s*(?:ye|yeh)\\s+bhool\\s+jao)?$", RegexOption.IGNORE_CASE)
     )
@@ -36,7 +37,7 @@ object MemoryCommandParser {
     )
 
     fun looksLikeIntent(raw: String): Boolean = Regex(
-        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^(?:delete|remove)\\s+(?:karo|kar\\s+do)\\s+[\\p{L}][\\p{L}'-]{1,30}\\s+ko$|^.{2,120}\\s+(?:ko\\s+)?(?:meri\\s+)?memor(?:y|ies)(?:\\s+se)?\\s+(?:hata|delete|remove)\\b|^[\\p{L}][\\p{L}'-]{1,30}\\s+(?:ko\\s+(?:meri\\s+)?memory\\s+se|mera\\s+(?:best\\s+)?(?:friend|frend|dost)\\s+nahi)|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate|janti|jaanti|janati)|^(?:who|kon|koun|kaun|kauna)\\s+(?:is\\s+)?(?:my|mera|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)|^(?:my|mera|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)\\s+(?:kon|koun|kaun|kauna)",
+        "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^(?:delete|remove)\\s+(?:karo|kar\\s+do)\\s+[\\p{L}][\\p{L}'-]{1,30}\\s+ko$|^[\\p{L}][\\p{L}'-]{1,30}\\s+ko\\s+(?:delete|remove)\\s+(?:karo|kar\\s+do|kero)$|^.{2,120}\\s+(?:ko\\s+)?(?:meri\\s+)?memor(?:y|ies)(?:\\s+se)?\\s+(?:hata|delete|remove)\\b|^[\\p{L}][\\p{L}'-]{1,30}\\s+(?:ko\\s+(?:meri\\s+)?memory\\s+se|mera\\s+(?:best\\s+)?(?:friend|frend|dost)\\s+nahi)|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate|janti|jaanti|janati)|^(?:who|kon|koun|kaun|kauna)\\s+(?:is\\s+)?(?:my|mera|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)|^(?:my|mera|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)\\s+(?:kon|koun|kaun|kauna)",
         RegexOption.IGNORE_CASE
     ).containsMatchIn(raw.trim())
 
