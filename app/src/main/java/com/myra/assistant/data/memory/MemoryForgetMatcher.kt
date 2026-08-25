@@ -9,11 +9,13 @@ object MemoryForgetMatcher {
         if (target.length < 2) return null
 
         memories.firstOrNull { containsToken(it.normalizedFact, target) }?.let { return it }
-        if (!target.matches(Regex("[\\p{L}]{4,}"))) return null
+        val significantTargetTokens = target.split(' ').filter { it.matches(Regex("[\\p{L}]{4,}")) }
+        if (significantTargetTokens.isEmpty()) return null
 
         val fuzzyMatches = memories.filter { memory ->
-            normalize(memory.normalizedFact).split(' ').any { token ->
-                token.length >= 4 && editDistanceAtMostOne(token, target)
+            val factTokens = normalize(memory.normalizedFact).split(' ')
+            significantTargetTokens.all { wanted ->
+                factTokens.any { token -> token.length >= 4 && editDistanceAtMostOne(token, wanted) }
             }
         }
         return fuzzyMatches.singleOrNull()

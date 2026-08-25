@@ -21,4 +21,14 @@ class PersonalMemoryRecallFormatterTest {
             PersonalMemoryRecallFormatter.format(listOf("Zopy is 26 years old"))
         )
     }
+
+    @Test
+    fun formatsValidPreferenceAndHidesLegacyMalformedPreference() {
+        assertEquals(
+            "Tumhe horror movies pasand hain.",
+            PersonalMemoryRecallFormatter.format(
+                listOf("Zopy likes na ghumana", "Zopy likes horror movies")
+            )
+        )
+    }
 }

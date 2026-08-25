@@ -107,4 +107,11 @@ class MemoryCommandParserTest {
         val command = MemoryCommandParser.parse("Kareen ko memory se delete kero") as MemoryCommand.Forget
         assertEquals("kareen", command.query)
     }
+
+    @Test fun parsesNaturalPreferenceRemovalFromObservedRecording() {
+        val command = MemoryCommandParser.parse(
+            "Tumhare like na ghumna memory se delete kar do"
+        ) as MemoryCommand.Forget
+        assertEquals("na ghumna", command.query)
+    }
 }

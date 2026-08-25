@@ -39,6 +39,7 @@ class AutomaticMemoryExtractorTest {
         assertNull(AutomaticMemoryExtractor.extract("mujhe meri dost pasand hai"))
         assertNull(AutomaticMemoryExtractor.extract("I like password secret123"))
         assertNull(AutomaticMemoryExtractor.extract("mujhe health advice pasand hai"))
+        assertNull(AutomaticMemoryExtractor.extract("mujhe na ghumana pasand hai"))
     }
 
     @Test fun ignoresOrdinaryConversationAndCommands() {

@@ -22,6 +22,14 @@ object PersonalMemoryRecallFormatter {
             .matchEntire(clean)?.let { return "tumhara goal ${it.groupValues[1].trim()} hai" }
         Regex("^Zopy is working on (.+)$", RegexOption.IGNORE_CASE)
             .matchEntire(clean)?.let { return "tum ${it.groupValues[1].trim()} par kaam kar rahe ho" }
+        Regex("^Zopy likes (.+)$", RegexOption.IGNORE_CASE)
+            .matchEntire(clean)?.let {
+                val subject = it.groupValues[1].trim()
+                if (subject.startsWith("na ", ignoreCase = true)) return null
+                return "tumhe $subject pasand hain"
+            }
+        Regex("^I (?:like|love|prefer) (.+)$", RegexOption.IGNORE_CASE)
+            .matchEntire(clean)?.let { return "tumhe ${it.groupValues[1].trim()} pasand hain" }
         return clean.replace(Regex("^Zopy(?:'s)?\\s*", RegexOption.IGNORE_CASE), "Tumhara ")
     }
 }

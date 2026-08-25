@@ -16,7 +16,7 @@ object AutomaticMemoryExtractor {
         RegexOption.IGNORE_CASE
     )
     private val negation = Regex(
-        """\b(?:do\s+not|don't|dont|not|never|nahi|nahin|pasand\s+nahi)\b""",
+        """\b(?:do\s+not|don't|dont|not|never|na|nahi|nahin|pasand\s+nahi)\b""",
         RegexOption.IGNORE_CASE
     )
 

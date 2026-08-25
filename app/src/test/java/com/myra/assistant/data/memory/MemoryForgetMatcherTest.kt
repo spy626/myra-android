@@ -23,6 +23,11 @@ class MemoryForgetMatcherTest {
         assertNull(MemoryForgetMatcher.find("ram", listOf(memory("1", "Raj tumhara dost hai"))))
     }
 
+    @Test fun findsLegacyMalformedPreferenceFromNaturalDeleteTarget() {
+        val malformed = memory("1", "Zopy likes na ghumana")
+        assertEquals("1", MemoryForgetMatcher.find("na ghumna", listOf(malformed))?.id)
+    }
+
     private fun memory(id: String, fact: String) = MemoryEntity(
         id = id,
         stableKey = "person:$id",
