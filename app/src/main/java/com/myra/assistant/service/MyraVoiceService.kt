@@ -354,7 +354,9 @@ class MyraVoiceService : Service() {
                 val detectedPersonalMemory =
                     PersonalMemoryExtractor.extract(romanDisplayText(currentTranscript))
                 if (detectedPersonalMemory != null) {
-                    if (MemorySafetyPolicy.decide(detectedPersonalMemory) == MemorySaveDecision.AUTO_SAVE) {
+                    if (MemoryRelationshipPolicy.isBestFriend(detectedPersonalMemory) ||
+                        MemorySafetyPolicy.decide(detectedPersonalMemory) == MemorySaveDecision.AUTO_SAVE
+                    ) {
                         // Clear, ordinary personal facts are learned silently at turn
                         // completion so LYRA's natural conversational reply continues.
                         pendingDetectedPersonalMemory = null
@@ -540,7 +542,11 @@ class MyraVoiceService : Service() {
                         ?: contextualRelationshipCandidate(displayUserText)
                     if (personalCandidate != null) {
                         recentRelationshipTurns.clear()
-                        if (MemorySafetyPolicy.decide(personalCandidate) == MemorySaveDecision.AUTO_SAVE) {
+                        if (MemoryRelationshipPolicy.isBestFriend(personalCandidate)) {
+                            // Explicit completed best-friend statements add that person to
+                            // the set silently. They never replace another person implicitly.
+                            serviceScope.launch { memoryRepository.saveAdditionalBestFriend(personalCandidate) }
+                        } else if (MemorySafetyPolicy.decide(personalCandidate) == MemorySaveDecision.AUTO_SAVE) {
                             serviceScope.launch { memoryRepository.save(personalCandidate) }
                         } else {
                             requestPersonalMemoryPermission(personalCandidate)
@@ -890,14 +896,18 @@ class MyraVoiceService : Service() {
                 live?.sendToolResponse(id, "propose_user_memory", true, "Already remembered; continue naturally without mentioning memory")
                 return@launch
             }
-            when (MemorySafetyPolicy.decide(candidate)) {
-                MemorySaveDecision.REJECT ->
+            when {
+                MemoryRelationshipPolicy.isBestFriend(candidate) -> {
+                    memoryRepository.saveAdditionalBestFriend(candidate)
+                    live?.sendToolResponse(id, "propose_user_memory", true, "Saved silently; continue the conversation naturally without mentioning memory")
+                }
+                MemorySafetyPolicy.decide(candidate) == MemorySaveDecision.REJECT ->
                     live?.sendToolResponse(id, "propose_user_memory", false, "Android rejected this memory")
-                MemorySaveDecision.AUTO_SAVE -> {
+                MemorySafetyPolicy.decide(candidate) == MemorySaveDecision.AUTO_SAVE -> {
                     memoryRepository.save(candidate)
                     live?.sendToolResponse(id, "propose_user_memory", true, "Saved silently; continue the conversation naturally without mentioning memory")
                 }
-                MemorySaveDecision.ASK_PERMISSION -> mainHandler.post {
+                else -> mainHandler.post {
                     // Stop Gemini from speaking its own confirmation. Android asks one
                     // deterministic question and saves only after the user's answer.
                     suppressModelForTurn = true

@@ -93,6 +93,7 @@ class MemoryCommandParserTest {
 
     @Test fun parsesNaturalRelationshipRemoval() {
         listOf(
+            "Delete karo Naufal ko",
             "Kareem ko meri memory se hata do",
             "Kareem ko memory se delete kar do",
             "Kareem ko memory se delete karo",
@@ -100,7 +101,8 @@ class MemoryCommandParserTest {
         ).forEach { phrase ->
             assertTrue(phrase, MemoryCommandParser.looksLikeIntent(phrase))
             val command = MemoryCommandParser.parse(phrase) as MemoryCommand.Forget
-            assertEquals("kareem", command.query)
+            val expected = if (phrase.contains("Naufal", ignoreCase = true)) "naufal" else "kareem"
+            assertEquals(expected, command.query)
         }
     }
 

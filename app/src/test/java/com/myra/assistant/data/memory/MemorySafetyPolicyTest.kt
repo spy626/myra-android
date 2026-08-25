@@ -18,9 +18,9 @@ class MemorySafetyPolicyTest {
         )
     }
 
-    @Test fun automaticallyExtractedBestFriendNeedsConfirmation() {
+    @Test fun explicitCompletedBestFriendStatementCanSaveAutomatically() {
         assertEquals(
-            MemorySaveDecision.ASK_PERMISSION,
+            MemorySaveDecision.AUTO_SAVE,
             MemorySafetyPolicy.decide(
                 MemoryCandidate(
                     category = MemoryCategory.PERSON,

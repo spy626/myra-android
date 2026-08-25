@@ -36,6 +36,16 @@ class PersonalMemoryExtractorTest {
     }
 
     @Test
+    fun extractsEnglishBestFriendStatementsForSilentAddition() {
+        listOf("Kareem is my best friend", "Ayesha is my best friend", "Naufal is my best friend")
+            .forEach { statement ->
+                val candidate = PersonalMemoryExtractor.extract(statement)
+                assertEquals("person:best_friend", candidate?.stableKey)
+                assertTrue(candidate?.fact?.startsWith("Zopy's best friend is ") == true)
+            }
+    }
+
+    @Test
     fun handlesObservedVoiceTranscriptionMistakes() {
         val age = PersonalMemoryExtractor.extract("maim 26 sala ka hum.")
         assertEquals("Zopy is 26 years old", age?.fact)
