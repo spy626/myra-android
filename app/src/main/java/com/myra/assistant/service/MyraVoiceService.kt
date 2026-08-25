@@ -9,6 +9,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.Build
 import android.icu.text.Transliterator
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.myra.assistant.ai.AudioEngine
 import com.myra.assistant.ai.CommandParser
@@ -239,6 +240,11 @@ class MyraVoiceService : Service() {
                 mainHandler.post { handleSemanticToolCall(id, functionName, args) }
             }
             client.onAudio = {
+                voiceLog(
+                    "service_audio_received bytes=${it.size} validating=${validatingLocalSpeech != null} " +
+                        "streaming=$localSpeechStreamedDirectly suppressed=$suppressModelForTurn " +
+                        "localSpeaking=$localAudioSpeaking"
+                )
                 if (validatingLocalSpeech != null) {
                     localSpeechHasContent = true
                     if (localSpeechStreamedDirectly) {
@@ -246,8 +252,13 @@ class MyraVoiceService : Service() {
                         // Continue streaming the remaining natural voice without waiting
                         // for the complete sentence.
                         audio?.queueAudio(it)
+                        voiceLog("service_audio_routed route=direct_playback bytes=${it.size}")
                     } else {
                         localSpeechAudio += it.copyOf()
+                        voiceLog(
+                            "service_audio_routed route=validation_buffer bytes=${it.size} " +
+                                "bufferChunks=${localSpeechAudio.size}"
+                        )
                         startLocalSpeechWhenPrefixMatches()
                     }
                 }
@@ -262,6 +273,9 @@ class MyraVoiceService : Service() {
                     // her own active AudioTrack for external YouTube playback.
                     mediaGuard.beginAssistantTurn()
                     audio?.queueAudio(it)
+                    voiceLog("service_audio_routed route=ordinary_model bytes=${it.size}")
+                } else {
+                    voiceLog("service_audio_dropped reason=model_audio_guard bytes=${it.size}")
                 }
             }
             client.onInputTranscript = inputTranscript@ { part ->
@@ -555,6 +569,10 @@ class MyraVoiceService : Service() {
             audio?.onMicChunk = { client.sendAudio(it) }
             audio?.onAmplitude = { listener?.onAmplitude(it) }
             audio?.onSpeakingChanged = { speaking ->
+                voiceLog(
+                    "service_playback_state speaking=$speaking active=$localPlaybackActive " +
+                        "generationComplete=$localSpeechGenerationComplete"
+                )
                 localAudioSpeaking = speaking
                 listener?.onSpeaking(speaking)
                 updateNotification(if (speaking) "LYRA is speaking" else "LYRA is listening")
@@ -1144,10 +1162,17 @@ class MyraVoiceService : Service() {
     ) {
         val now = android.os.SystemClock.elapsedRealtime()
         val key = normalizeSpeech(message)
-        if (key == lastLocalSpeechKey && now - lastLocalSpeechAt < 4_000L) return
+        if (key == lastLocalSpeechKey && now - lastLocalSpeechAt < 4_000L) {
+            voiceLog("local_speech_dropped reason=duplicate ageMs=${now - lastLocalSpeechAt}")
+            return
+        }
         lastLocalSpeechKey = key
         lastLocalSpeechAt = now
         suppressModelForTurn = true
+        voiceLog(
+            "local_speech_queued chars=${message.length} policy=${policyName(validationPolicy)} " +
+                "alreadyValidating=${validatingLocalSpeech != null} allowNoTranscript=$allowUntranscribedAudio"
+        )
         // Keep the echo-cancelled microphone open so the user can interrupt or issue
         // the next short command without waiting for LYRA's acknowledgement to finish.
         audio?.setMuted(false)
@@ -1166,6 +1191,7 @@ class MyraVoiceService : Service() {
     private fun beginValidatedLocalSpeech(message: String, retry: Boolean = false) {
         val client = live
         if (client == null) {
+            voiceLog("local_speech_unavailable reason=no_live_client chars=${message.length}")
             finishUnavailableNaturalLocalSpeech(message)
             return
         }
@@ -1180,6 +1206,10 @@ class MyraVoiceService : Service() {
         localSpeechAudio.clear()
         localSpeechTranscript.clear()
         suppressModelForTurn = true
+        voiceLog(
+            "local_speech_generation_start token=$token attempt=$localSpeechValidationAttempt " +
+                "chars=${message.length} policy=${policyName(localSpeechValidationPolicy)}"
+        )
         // Continuous mic packets can race with clientContent and cancel this short
         // deterministic memory utterance before Gemini returns audio. Listening is
         // restored by every playback-complete and unavailable-audio path below.
@@ -1189,6 +1219,10 @@ class MyraVoiceService : Service() {
         client.sendText("Say exactly these words once, with the selected natural voice. Do not add, remove, translate, explain, or introduce them: ${org.json.JSONObject.quote(message)}")
         mainHandler.postDelayed({
             if (token == localSpeechValidationToken && validatingLocalSpeech != null) {
+                voiceLog(
+                    "local_speech_timeout token=$token audioChunks=${localSpeechAudio.size} " +
+                        "audioBytes=${localSpeechAudio.sumOf { it.size }} transcriptChars=${localSpeechTranscript.length}"
+                )
                 finishValidatedLocalSpeech()
             }
         }, localSpeechValidationPolicy.timeoutMs)
@@ -1202,11 +1236,16 @@ class MyraVoiceService : Service() {
                 localSpeechTranscript.toString(),
                 expected
             )) {
+            voiceLog(
+                "local_speech_waiting_for_validation audioChunks=${localSpeechAudio.size} " +
+                    "transcriptChars=${localSpeechTranscript.length}"
+            )
             return
         }
 
         localSpeechStreamedDirectly = true
         localPlaybackActive = true
+        voiceLog("local_speech_released_early audioChunks=${localSpeechAudio.size}")
         localSpeechAudio.forEach { audio?.queueAudio(it) }
         localSpeechAudio.clear()
     }
@@ -1235,9 +1274,15 @@ class MyraVoiceService : Service() {
             localSpeechValidationPolicy.trustBufferedNaturalAudio &&
                 localSpeechHasContent &&
                 LocalSpeechGate.hasEnoughBufferedNaturalAudio(bufferedAudioBytes, expected)
+        voiceLog(
+            "local_speech_validation_result transcriptMatch=$transcriptMatches " +
+                "trustedAudio=$trustedNaturalAudio hasContent=$localSpeechHasContent " +
+                "audioBytes=$bufferedAudioBytes actualChars=${actual.length} expectedChars=${expected.length}"
+        )
         if ((transcriptMatches || trustedNaturalAudio) && localSpeechAudio.isNotEmpty()) {
             localSpeechGenerationComplete = true
             localPlaybackActive = true
+            voiceLog("local_speech_released_after_validation audioChunks=${localSpeechAudio.size}")
             localSpeechAudio.forEach { audio?.queueAudio(it) }
             localSpeechAudio.clear()
             localSpeechTranscript.clear()
@@ -1245,14 +1290,20 @@ class MyraVoiceService : Service() {
             localSpeechAudio.clear()
             localSpeechTranscript.clear()
             if (localSpeechValidationAttempt < localSpeechValidationPolicy.maxAttempts && live != null) {
+                voiceLog("local_speech_retry nextAttempt=${localSpeechValidationAttempt + 1}")
                 beginValidatedLocalSpeech(expected, retry = true)
             } else {
+                voiceLog("local_speech_dropped reason=validation_failed attempts=$localSpeechValidationAttempt")
                 finishUnavailableNaturalLocalSpeech(expected)
             }
         }
     }
 
     private fun finishUnavailableNaturalLocalSpeech(message: String) {
+        voiceLog(
+            "local_speech_unavailable chars=${message.length} fallback=${localSpeechValidationPolicy.speakFallback} " +
+                "allowNoTranscript=$allowUntranscribedLocalSpeech"
+        )
         if (localSpeechValidationPolicy.speakFallback || !allowUntranscribedLocalSpeech) {
             fallbackLocalSpeech(message)
             return
@@ -1272,6 +1323,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun finishLocalPlayback() {
+        voiceLog("local_speech_playback_finished")
         val resumeMicImmediately =
             localSpeechValidationPolicy.resumeMicImmediatelyAfterPlayback
         allowUntranscribedLocalSpeech = false
@@ -1291,6 +1343,18 @@ class MyraVoiceService : Service() {
                 audio?.setMuted(false)
                 emitState("Sun rahi hoon…")
             }
+        }
+    }
+
+    private fun policyName(policy: LocalSpeechValidationPolicy): String = when (policy) {
+        LocalSpeechValidationPolicy.MEMORY -> "MEMORY"
+        LocalSpeechValidationPolicy.DEFAULT -> "DEFAULT"
+        else -> "CUSTOM"
+    }
+
+    private fun voiceLog(message: String) {
+        if (VOICE_AUDIO_DEBUG_LOGGING) {
+            Log.d(VOICE_AUDIO_LOG_TAG, "$message tMs=${android.os.SystemClock.elapsedRealtime()}")
         }
     }
 
@@ -1499,6 +1563,8 @@ class MyraVoiceService : Service() {
         private const val SECOND_IDLE_NUDGE_MS = 5 * 60 * 1000L
         private const val IDLE_RECHECK_MS = 30 * 1000L
         private const val MAX_IDLE_NUDGES = 2
+        private const val VOICE_AUDIO_DEBUG_LOGGING = true
+        private const val VOICE_AUDIO_LOG_TAG = "LyraVoicePipeline"
         private val PHANTOM_TRANSCRIPT = Regex(
             "^(?:in|si|sí|hm+|hmm+|um+|uh+|ah+|oh+|mm+)(?:\\s+(?:in|si|sí|hm+|hmm+|um+|uh+|ah+|oh+|mm+))*$",
             RegexOption.IGNORE_CASE
@@ -1530,6 +1596,7 @@ class MyraVoiceService : Service() {
         fun setUiVisible(visible: Boolean) {
             uiVisible = visible
             instance?.let { service ->
+                service.voiceLog("ui_visibility visible=$visible")
                 service.mainHandler.removeCallbacks(service.idleNudgeRunnable)
                 if (visible) service.markUserInteraction()
             }

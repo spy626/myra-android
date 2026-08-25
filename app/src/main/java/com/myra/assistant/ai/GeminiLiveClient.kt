@@ -11,6 +11,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 class GeminiLiveClient(
     private val apiKey: String,
@@ -41,6 +42,7 @@ class GeminiLiveClient(
     private var pendingTurnFallback: ScheduledFuture<*>? = null
     private var inputTranscriptTurn = 1L
     private var inputTranscriptChunk = 0L
+    private val receivedAudioChunk = AtomicLong(0)
 
     fun connect() {
         if (apiKey.isBlank()) { onError?.invoke("Add your Gemini API key in Settings"); return }
@@ -252,7 +254,17 @@ class GeminiLiveClient(
             val parts = content.optJSONObject("modelTurn")?.optJSONArray("parts")
             if (parts != null) for (i in 0 until parts.length()) {
                 val data = parts.optJSONObject(i)?.optJSONObject("inlineData")?.optString("data")
-                if (!data.isNullOrBlank()) onAudio?.invoke(Base64.decode(data, Base64.DEFAULT))
+                if (!data.isNullOrBlank()) {
+                    val pcm = Base64.decode(data, Base64.DEFAULT)
+                    if (VOICE_AUDIO_DEBUG_LOGGING) {
+                        Log.d(
+                            VOICE_AUDIO_LOG_TAG,
+                            "ws_audio_received tMs=${android.os.SystemClock.elapsedRealtime()} " +
+                                "seq=${receivedAudioChunk.incrementAndGet()} bytes=${pcm.size}"
+                        )
+                    }
+                    onAudio?.invoke(pcm)
+                }
             }
             content.optJSONObject("inputTranscription")?.let { transcription ->
                 val text = transcription.optString("text")
@@ -374,6 +386,8 @@ class GeminiLiveClient(
         // been captured because input transcripts may contain private conversation.
         const val TRANSCRIPT_DEBUG_LOGGING = true
         const val TRANSCRIPT_LOG_TAG = "LyraInputTranscript"
+        const val VOICE_AUDIO_DEBUG_LOGGING = true
+        const val VOICE_AUDIO_LOG_TAG = "LyraVoicePipeline"
     }
 
     fun disconnect() {

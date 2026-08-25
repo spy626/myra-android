@@ -8,6 +8,7 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
+import android.util.Log
 import androidx.core.content.ContextCompat
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -33,6 +34,8 @@ class AudioEngine(private val context: Context) {
     private var micThread: Thread? = null
     private var speakerThread: Thread? = null
     private val playbackLock = Any()
+    private var queuedAudioChunk = 0L
+    private var writtenAudioBytes = 0L
 
     fun start() {
         if (running.getAndSet(true)) return
@@ -96,6 +99,10 @@ class AudioEngine(private val context: Context) {
             .setAudioAttributes(playbackAttributes)
             .setAudioFormat(AudioFormat.Builder().setSampleRate(24000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
             .setBufferSizeInBytes(maxOf(min, 8192)).setTransferMode(AudioTrack.MODE_STREAM).build()
+        voiceLog(
+            "audio_track_created state=${track?.state} playState=${track?.playState} " +
+                "minBuffer=$min session=${track?.audioSessionId}"
+        )
         speakerThread = thread(name = "myra-speaker") {
             while (running.get()) {
                 val bytes = queue.poll(SPEECH_END_GRACE_MS, TimeUnit.MILLISECONDS)
@@ -106,6 +113,10 @@ class AudioEngine(private val context: Context) {
                     // listening and deferred actions resume only after the full reply.
                     if (speaking.compareAndSet(true, false)) {
                         synchronized(playbackLock) { runCatching { track?.pause() } }
+                        voiceLog(
+                            "playback_end queued=${queue.size} totalWrittenBytes=$writtenAudioBytes " +
+                                "playState=${track?.playState}"
+                        )
                         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime() + MIC_ECHO_COOLDOWN_MS
                         onSpeakingChanged?.invoke(false)
                     }
@@ -115,21 +126,41 @@ class AudioEngine(private val context: Context) {
                     if (!running.get()) return@synchronized
                     runCatching {
                         if (track?.playState != AudioTrack.PLAYSTATE_PLAYING) track?.play()
-                        if (speaking.compareAndSet(false, true)) onSpeakingChanged?.invoke(true)
-                        track?.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING)
+                        if (speaking.compareAndSet(false, true)) {
+                            voiceLog(
+                                "playback_start bytes=${bytes.size} queued=${queue.size} " +
+                                    "state=${track?.state} playState=${track?.playState}"
+                            )
+                            onSpeakingChanged?.invoke(true)
+                        }
+                        val written = track?.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING) ?: 0
+                        if (written > 0) writtenAudioBytes += written
+                        voiceLog(
+                            "audio_track_write requested=${bytes.size} written=$written " +
+                                "queued=${queue.size} playState=${track?.playState}"
+                        )
+                    }.onFailure { error ->
+                        Log.e(VOICE_AUDIO_LOG_TAG, "audio_track_failure tMs=${nowMs()}", error)
                     }
                 }
             }
         }
     }
 
-    fun queueAudio(bytes: ByteArray) = queue.offer(bytes)
+    fun queueAudio(bytes: ByteArray) {
+        val accepted = queue.offer(bytes)
+        voiceLog(
+            "playback_queued seq=${++queuedAudioChunk} bytes=${bytes.size} " +
+                "accepted=$accepted queueSize=${queue.size} running=${running.get()}"
+        )
+    }
     fun setMuted(value: Boolean) { muted.set(value) }
     fun resumeListeningNow() {
         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime()
         muted.set(false)
     }
     fun interrupt() {
+        voiceLog("playback_interrupt queueSize=${queue.size} speaking=${speaking.get()}")
         queue.clear()
         synchronized(playbackLock) { runCatching { track?.pause(); track?.flush() } }
         speaking.set(false)
@@ -158,7 +189,15 @@ class AudioEngine(private val context: Context) {
     private companion object {
         const val SPEECH_END_GRACE_MS = 350L
         const val MIC_ECHO_COOLDOWN_MS = 600L
+        const val VOICE_AUDIO_DEBUG_LOGGING = true
+        const val VOICE_AUDIO_LOG_TAG = "LyraVoicePipeline"
     }
+
+    private fun voiceLog(message: String) {
+        if (VOICE_AUDIO_DEBUG_LOGGING) Log.d(VOICE_AUDIO_LOG_TAG, "$message tMs=${nowMs()}")
+    }
+
+    private fun nowMs(): Long = android.os.SystemClock.elapsedRealtime()
 
     private fun rms(bytes: ByteArray): Float {
         if (bytes.size < 2) return 0f
