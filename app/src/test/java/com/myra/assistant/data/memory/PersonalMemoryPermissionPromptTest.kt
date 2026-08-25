@@ -17,7 +17,7 @@ class PersonalMemoryPermissionPromptTest {
     fun repeatsInterpretedFriendNameForVerification() {
         val candidate = PersonalMemoryExtractor.extract("ayusa meri besta phrenda hai")!!
         assertEquals(
-            "Ayusa tumhari best friend hai. Kya main yeh yaad rakhun?",
+            "Ayusa tumhari best friend hai—sahi? Haan bologe toh yaad rakhungi.",
             PersonalMemoryPermissionPrompt.format(candidate)
         )
     }

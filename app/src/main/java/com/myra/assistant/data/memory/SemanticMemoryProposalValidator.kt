@@ -17,6 +17,10 @@ object SemanticMemoryProposalValidator {
         """\b(?:zopy|tum|user)\s+likes\s+to\b|\bre-?visit\s+travel\s+destinations?\b""",
         RegexOption.IGNORE_CASE
     )
+    private val preferenceSignal = Regex(
+        "\\b(?:like|likes|liked|love|loves|prefer|prefers|favorite|favourite|enjoy|enjoys|pasand)\\b",
+        RegexOption.IGNORE_CASE
+    )
     private val stopWords = setOf(
         "a", "an", "the", "is", "are", "am", "was", "were", "to", "of", "and", "or",
         "my", "meri", "mera", "mere", "hai", "hain", "he", "hoon", "hun", "ka", "ki", "ke",
@@ -50,6 +54,12 @@ object SemanticMemoryProposalValidator {
         val evidenceGrounding = evidenceTokens.count(contextTokens::contains).toDouble() / evidenceTokens.size
         val factGrounding = factTokens.count(contextTokens::contains).toDouble() / factTokens.size.coerceAtLeast(1)
         if (evidenceGrounding < 0.70 || factGrounding < 0.40) return null
+        // Entity overlap alone is not evidence of sentiment. For example, "visited
+        // Munnar" must never become "likes Munnar" unless preference wording exists
+        // in the user's actual conversation.
+        if (preferenceSignal.containsMatchIn(cleanFact) &&
+            !preferenceSignal.containsMatchIn(conversationContext)
+        ) return null
 
         val sensitivity = when {
             sensitive.containsMatchIn(cleanFact) || sensitive.containsMatchIn(cleanEvidence) ->
@@ -57,14 +67,14 @@ object SemanticMemoryProposalValidator {
             category == MemoryCategory.PREFERENCE -> MemorySensitivity.LOW
             else -> MemorySensitivity.PERSONAL
         }
-        return MemoryCandidate(
+        return MemoryRelationshipPolicy.canonicalize(MemoryCandidate(
             category = category,
             fact = cleanFact,
             stableKey = "semantic:${category.name.lowercase(Locale.ROOT)}:$key",
             sensitivity = sensitivity,
             confidence = confidence.coerceIn(0.0, 0.95),
             source = "gemini_grounded_conversation"
-        )
+        ))
     }
 
     private fun meaningfulTokens(value: String): Set<String> = normalize(value)

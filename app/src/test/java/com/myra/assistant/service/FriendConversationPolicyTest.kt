@@ -7,9 +7,9 @@ import org.junit.Test
 class FriendConversationPolicyTest {
     @Test fun casualRepliesDefaultToShortAnswersWithoutQuestions() {
         val policy = FriendConversationPolicy.REPLY_DISCIPLINE
-        assertTrue(policy.contains("one or two short natural sentences"))
-        assertTrue(policy.contains("answer directly and stop"))
-        assertTrue(policy.contains("Do not force every exchange"))
+        assertTrue(policy.contains("Default to one short natural sentence"))
+        assertTrue(policy.contains("Answer complete questions directly and stop"))
+        assertTrue(policy.contains("never append a closing question"))
         assertTrue(policy.contains("only question in the entire reply"))
         assertTrue(policy.contains("help kar sakti hoon"))
         assertTrue(policy.contains("isse zyada main kya boloon"))

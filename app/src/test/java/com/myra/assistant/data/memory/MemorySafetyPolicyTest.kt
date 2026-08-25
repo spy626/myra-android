@@ -18,6 +18,21 @@ class MemorySafetyPolicyTest {
         )
     }
 
+    @Test fun automaticallyExtractedBestFriendNeedsConfirmation() {
+        assertEquals(
+            MemorySaveDecision.ASK_PERMISSION,
+            MemorySafetyPolicy.decide(
+                MemoryCandidate(
+                    category = MemoryCategory.PERSON,
+                    fact = "Kareem is Zopy's male best friend",
+                    stableKey = "semantic:person:best_friend",
+                    sensitivity = MemorySensitivity.PERSONAL,
+                    confidence = 0.95
+                )
+            )
+        )
+    }
+
     @Test fun sensitiveInformationStillNeedsPermission() {
         assertEquals(
             MemorySaveDecision.ASK_PERMISSION,

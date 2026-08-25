@@ -21,6 +21,7 @@ class SavedMemoryContextFormatterTest {
         assertTrue(context.contains("Zopy likes science-fiction movies"))
         assertTrue(context.contains("Zopy likes horror movies"))
         assertTrue(context.contains("Never invent"))
+        assertTrue(context.contains("visited does not mean liked"))
     }
 
     @Test fun removesLineBreaksDuplicatesAndExcessFacts() {
@@ -30,5 +31,13 @@ class SavedMemoryContextFormatterTest {
         assertFalse(context.contains("\nmovies"))
         assertEquals(1, Regex("Zopy likes horror movies").findAll(context).count())
         assertFalse(context.contains("memory 12"))
+    }
+
+    @Test fun keepsOnlyNewestUniqueBestFriendFact() {
+        val context = SavedMemoryContextFormatter.format(
+            listOf("Zopy's best friend is Karima", "Kareem is Zopy's male best friend")
+        )
+        assertTrue(context.contains("Karima"))
+        assertFalse(context.contains("Kareem"))
     }
 }

@@ -32,6 +32,7 @@ import com.myra.assistant.data.memory.PersonalMemoryContextCorrection
 import com.myra.assistant.data.memory.PersonalMemoryPermissionPrompt
 import com.myra.assistant.data.memory.PersonalMemoryRecallFormatter
 import com.myra.assistant.data.memory.MemoryRepository
+import com.myra.assistant.data.memory.MemoryRelationshipPolicy
 import com.myra.assistant.data.memory.SavedMemoryContextFormatter
 import com.myra.assistant.data.memory.MemoryWriteResult
 import com.myra.assistant.data.memory.MemorySafetyPolicy
@@ -55,10 +56,10 @@ import kotlinx.coroutines.launch
 
 internal object FriendConversationPolicy {
     const val REPLY_DISCIPLINE =
-        "Keep ordinary casual replies to one or two short natural sentences. " +
+        "Default to one short natural sentence for ordinary conversation; use a second only when needed. " +
             "Use more only when Zopy explicitly asks for detail or the topic requires a safety explanation. " +
-            "Sometimes react briefly; sometimes answer directly and stop. Do not force every exchange to continue. " +
-            "Ask no follow-up unless one question would materially improve the answer; " +
+            "Answer complete questions directly and stop—never append a closing question, topic prompt, or 'aur sunao'. " +
+            "Ask no follow-up unless missing information prevents a useful answer; " +
             "if you ask one, it must be the only question in the entire reply. " +
             "Never use customer-support wording such as 'help kar sakti hoon', and never sound dismissive with " +
             "phrases such as 'isse zyada main kya boloon' or pressure the user to give a specific topic."
@@ -565,10 +566,12 @@ class MyraVoiceService : Service() {
         }
     }
 
-    private suspend fun buildSavedMemoryContext(): String =
-        SavedMemoryContextFormatter.format(
+    private suspend fun buildSavedMemoryContext(): String {
+        memoryRepository.reconcileUniqueRelationships()
+        return SavedMemoryContextFormatter.format(
             memoryRepository.relevant("", 8).map { it.fact }
         )
+    }
 
     private fun learnSafePreferenceFromCompletedTurn(userText: String) {
         val romanUserText = romanDisplayText(userText)
@@ -635,9 +638,17 @@ class MyraVoiceService : Service() {
         live?.interrupt()
         serviceScope.launch {
             val alreadySaved = memoryRepository.isAlreadySaved(candidate)
+            val conflict = memoryRepository.uniqueRelationshipConflict(candidate)
             mainHandler.post {
                 val message = if (alreadySaved) {
                     "Haan, mujhe yaad hai."
+                } else if (conflict != null && MemoryRelationshipPolicy.isBestFriend(candidate)) {
+                    val oldName = MemoryRelationshipPolicy.personName(conflict.fact) ?: "koi aur"
+                    val newName = MemoryRelationshipPolicy.personName(candidate.fact) ?: "ye person"
+                    pendingPersonalMemory = candidate
+                    pendingPersonalMemoryExpiresAt =
+                        android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
+                    "Abhi ${oldName} tumhari best friend saved hai. ${newName} se replace karun?"
                 } else {
                     pendingPersonalMemory = candidate
                     pendingPersonalMemoryExpiresAt =

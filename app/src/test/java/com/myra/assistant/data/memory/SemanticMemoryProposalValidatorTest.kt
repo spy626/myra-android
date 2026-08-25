@@ -15,9 +15,9 @@ class SemanticMemoryProposalValidatorTest {
             confidence = 0.94,
             conversationContext = "Mera ek male best friend hai uska naam Kareem hai woh bahut accha dost hai"
         )!!
-        assertEquals("semantic:person:best_friend", candidate.stableKey)
+        assertEquals("person:best_friend", candidate.stableKey)
         assertEquals(MemorySensitivity.PERSONAL, candidate.sensitivity)
-        assertEquals(MemorySaveDecision.AUTO_SAVE, MemorySafetyPolicy.decide(candidate))
+        assertEquals(MemorySaveDecision.ASK_PERMISSION, MemorySafetyPolicy.decide(candidate))
     }
 
     @Test fun acceptsSafePreferenceForSilentLearning() {
@@ -64,5 +64,28 @@ class SemanticMemoryProposalValidatorTest {
             confidence = 0.93,
             conversationContext = "Goom naam hai main re-visit karta hun"
         ))
+    }
+
+    @Test fun visitingMunnarDoesNotBecomeAPreference() {
+        assertNull(SemanticMemoryProposalValidator.validate(
+            fact = "Zopy likes Munnar",
+            categoryName = "PREFERENCE",
+            memoryKey = "travel_destination",
+            evidence = "Main Munnar mein bahut jagah ja ke aaya hoon",
+            confidence = 0.95,
+            conversationContext = "Main Munnar mein bahut jagah ja ke aaya hoon"
+        ))
+    }
+
+    @Test fun explicitMunnarPreferenceIsStillAccepted() {
+        val candidate = SemanticMemoryProposalValidator.validate(
+            fact = "Zopy likes Munnar",
+            categoryName = "PREFERENCE",
+            memoryKey = "travel_destination",
+            evidence = "Mujhe Munnar bahut pasand hai",
+            confidence = 0.95,
+            conversationContext = "Mujhe Munnar bahut pasand hai"
+        )
+        assertEquals("Zopy likes Munnar", candidate?.fact)
     }
 }

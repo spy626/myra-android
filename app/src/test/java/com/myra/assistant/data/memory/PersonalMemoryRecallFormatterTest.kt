@@ -31,4 +31,14 @@ class PersonalMemoryRecallFormatterTest {
             )
         )
     }
+
+    @Test
+    fun neverRecallsTwoPeopleAsTheUniqueBestFriend() {
+        assertEquals(
+            "Karima tumhari best friend hai.",
+            PersonalMemoryRecallFormatter.format(
+                listOf("Zopy's best friend is Karima", "Kareem is Zopy's male best friend")
+            )
+        )
+    }
 }
