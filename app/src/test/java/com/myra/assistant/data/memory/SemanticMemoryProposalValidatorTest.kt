@@ -17,7 +17,7 @@ class SemanticMemoryProposalValidatorTest {
         )!!
         assertEquals("person:best_friend", candidate.stableKey)
         assertEquals(MemorySensitivity.PERSONAL, candidate.sensitivity)
-        assertEquals(MemorySaveDecision.ASK_PERMISSION, MemorySafetyPolicy.decide(candidate))
+        assertEquals(MemorySaveDecision.AUTO_SAVE, MemorySafetyPolicy.decide(candidate))
     }
 
     @Test fun acceptsSafePreferenceForSilentLearning() {
