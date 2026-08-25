@@ -102,7 +102,11 @@ class MemoryCommandParserTest {
         ).forEach { phrase ->
             assertTrue(phrase, MemoryCommandParser.looksLikeIntent(phrase))
             val command = MemoryCommandParser.parse(phrase) as MemoryCommand.Forget
-            val expected = if (phrase.contains("Naufal", ignoreCase = true)) "naufal" else "kareem"
+            val expected = when {
+                phrase.contains("Naufal", ignoreCase = true) -> "naufal"
+                phrase.contains("Ayesha", ignoreCase = true) -> "ayesha"
+                else -> "kareem"
+            }
             assertEquals(expected, command.query)
         }
     }
