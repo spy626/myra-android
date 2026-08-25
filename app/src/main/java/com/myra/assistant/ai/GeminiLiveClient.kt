@@ -2,7 +2,6 @@ package com.myra.assistant.ai
 
 import android.util.Base64
 import android.util.Log
-import com.myra.assistant.BuildConfig
 import okhttp3.*
 import okio.ByteString
 import org.json.JSONArray
@@ -259,7 +258,7 @@ class GeminiLiveClient(
                 val text = transcription.optString("text")
                 if (text.isNotEmpty()) {
                     inputTranscriptChunk += 1
-                    if (BuildConfig.DEBUG) {
+                    if (TRANSCRIPT_DEBUG_LOGGING) {
                         // Log the untouched API value before any assembler, formatter,
                         // command parser, or UI code sees it. JSONObject.quote keeps
                         // spaces and escaped characters visible in Logcat.
@@ -358,7 +357,7 @@ class GeminiLiveClient(
             pendingTurnFallback?.cancel(false)
             pendingTurnFallback = null
         }
-        if (BuildConfig.DEBUG) {
+        if (TRANSCRIPT_DEBUG_LOGGING) {
             Log.d(
                 TRANSCRIPT_LOG_TAG,
                 "input_turn_complete tMs=${System.nanoTime() / 1_000_000} " +
@@ -371,6 +370,9 @@ class GeminiLiveClient(
     }
 
     private companion object {
+        // Temporary diagnostic switch. Remove after one failing long utterance has
+        // been captured because input transcripts may contain private conversation.
+        const val TRANSCRIPT_DEBUG_LOGGING = true
         const val TRANSCRIPT_LOG_TAG = "LyraInputTranscript"
     }
 
