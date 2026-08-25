@@ -42,9 +42,22 @@ class PersonalMemoryRecallFormatterTest {
     @Test
     fun recallsTwoBestFriendsWhenUserExplicitlyKeptBoth() {
         assertEquals(
-            "Karima tumhari best friend hai, aur Kareem tumhari best friend hai.",
+            "Karima aur Kareem tumhari best friends hain.",
             PersonalMemoryRecallFormatter.format(
                 listOf("Zopy's best friend is Karima", "Kareem is Zopy's male best friend")
+            )
+        )
+    }
+
+    @Test fun recallsThreeBestFriendsAsOneNaturalSentence() {
+        assertEquals(
+            "Kareem, Ayesha aur Naufal tumhari best friends hain.",
+            PersonalMemoryRecallFormatter.format(
+                listOf(
+                    "Zopy's best friend is Kareem",
+                    "Zopy's best friend is Ayesha",
+                    "The user's best friend is Naufal"
+                )
             )
         )
     }
