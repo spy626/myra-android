@@ -11,10 +11,17 @@ class MemorySafetyPolicyTest {
         )
     }
 
-    @Test fun relationshipNeedsPermission() {
+    @Test fun clearRelationshipCanSaveAutomatically() {
+        assertEquals(
+            MemorySaveDecision.AUTO_SAVE,
+            MemorySafetyPolicy.decide(candidate(MemorySensitivity.PERSONAL, confidence = 0.95))
+        )
+    }
+
+    @Test fun sensitiveInformationStillNeedsPermission() {
         assertEquals(
             MemorySaveDecision.ASK_PERMISSION,
-            MemorySafetyPolicy.decide(candidate(MemorySensitivity.PERSONAL, confidence = 0.95))
+            MemorySafetyPolicy.decide(candidate(MemorySensitivity.SENSITIVE, confidence = 0.95))
         )
     }
 
@@ -32,6 +39,12 @@ class MemorySafetyPolicyTest {
             MemorySaveDecision.REJECT,
             MemorySafetyPolicy.decide(
                 candidate(MemorySensitivity.LOW, fact = "My OTP is 123456", confidence = 0.99, explicitlyRequested = true)
+            )
+        )
+        assertEquals(
+            MemorySaveDecision.REJECT,
+            MemorySafetyPolicy.decide(
+                candidate(MemorySensitivity.PERSONAL, fact = "My bank account number is 12345", confidence = 0.99, explicitlyRequested = true)
             )
         )
     }

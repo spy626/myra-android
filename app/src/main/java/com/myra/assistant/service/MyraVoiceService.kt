@@ -337,6 +337,13 @@ class MyraVoiceService : Service() {
                 val detectedPersonalMemory =
                     PersonalMemoryExtractor.extract(romanDisplayText(currentTranscript))
                 if (detectedPersonalMemory != null) {
+                    if (MemorySafetyPolicy.decide(detectedPersonalMemory) == MemorySaveDecision.AUTO_SAVE) {
+                        // Clear, ordinary personal facts are learned silently at turn
+                        // completion so LYRA's natural conversational reply continues.
+                        pendingDetectedPersonalMemory = null
+                        mainHandler.removeCallbacks(personalMemoryPauseRunnable)
+                        return@inputTranscript
+                    }
                     // A short pause lets streamed ASR finish the fact, then Android can
                     // ask permission without waiting for Gemini's full turn boundary.
                     suppressModelForTurn = true
@@ -516,10 +523,14 @@ class MyraVoiceService : Service() {
                         ?: contextualRelationshipCandidate(displayUserText)
                     if (personalCandidate != null) {
                         recentRelationshipTurns.clear()
-                        requestPersonalMemoryPermission(personalCandidate)
-                        resetTurnBuffers()
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
+                        if (MemorySafetyPolicy.decide(personalCandidate) == MemorySaveDecision.AUTO_SAVE) {
+                            serviceScope.launch { memoryRepository.save(personalCandidate) }
+                        } else {
+                            requestPersonalMemoryPermission(personalCandidate)
+                            resetTurnBuffers()
+                            waitingForFreshInputAfterCommand = true
+                            return@turnComplete
+                        }
                     }
                     rememberRecentRelationshipTurn(displayUserText)
                     learnSafePreferenceFromCompletedTurn(userText)
@@ -803,6 +814,7 @@ class MyraVoiceService : Service() {
             return
         }
         if (pendingPersonalMemory != null || pendingDetectedPersonalMemory != null ||
+            PersonalMemoryExtractor.extract(romanDisplayText(guardedText)) != null ||
             AutomaticMemoryChangeParser.parse(romanDisplayText(guardedText)) is AutomaticMemoryChange.Save
         ) {
             live?.sendToolResponse(id, "propose_user_memory", true, "This fact is already being handled by Android")

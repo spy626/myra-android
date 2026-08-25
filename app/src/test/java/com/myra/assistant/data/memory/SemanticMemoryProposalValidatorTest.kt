@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SemanticMemoryProposalValidatorTest {
-    @Test fun acceptsGroundedRelationshipAndRequiresPermission() {
+    @Test fun acceptsGroundedRelationshipForAutomaticLearning() {
         val candidate = SemanticMemoryProposalValidator.validate(
             fact = "Kareem is Zopy's male best friend",
             categoryName = "PERSON",
@@ -17,6 +17,7 @@ class SemanticMemoryProposalValidatorTest {
         )!!
         assertEquals("semantic:person:best_friend", candidate.stableKey)
         assertEquals(MemorySensitivity.PERSONAL, candidate.sensitivity)
+        assertEquals(MemorySaveDecision.AUTO_SAVE, MemorySafetyPolicy.decide(candidate))
     }
 
     @Test fun acceptsSafePreferenceForSilentLearning() {

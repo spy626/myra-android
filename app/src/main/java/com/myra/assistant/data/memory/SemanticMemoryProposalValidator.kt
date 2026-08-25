@@ -6,7 +6,7 @@ import java.util.Locale
 object SemanticMemoryProposalValidator {
     private val safeKey = Regex("[a-z0-9][a-z0-9:_-]{1,49}")
     private val prohibited = Regex(
-        """\b(?:otp|password|passcode|pin|cvv|security code|verification code|recovery code|private key|seed phrase)\b""",
+        """\b(?:otp|password|passcode|pin|cvv|security code|verification code|recovery code|private key|seed phrase|bank|account number|card number|aadhaar|aadhar|pan number|passport number)\b""",
         RegexOption.IGNORE_CASE
     )
     private val sensitive = Regex(
