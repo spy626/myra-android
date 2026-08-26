@@ -35,7 +35,20 @@ class MemoryRepository(private val dao: MemoryDao) {
                 ?.let(BestFriendNameCanonicalizer::canonicalize)
                 ?: "unknown"
         }
-        Log.d(MEMORY_LOG_TAG, "$stage activeBestFriends=" + groups.mapValues { it.value.size })
+        memoryLog("$stage activeBestFriends=" + groups.mapValues { it.value.size })
+    }
+
+    suspend fun logPersonIdentity(stage: String, vararg names: String): List<MemoryEntity> {
+        val rows = dao.recent(50).filter {
+            PersonLinkedMemoryIdentity.belongsTo(it, names.toList())
+        }
+        memoryLog(
+            "$stage names=${names.toList()} rowCount=${rows.size} records=" +
+                rows.joinToString(prefix = "[", postfix = "]") {
+                    "{id=${it.id}, key=${it.stableKey}, fact=${it.fact}, active=${it.active}}"
+                }
+        )
+        return rows
     }
 
     suspend fun isAlreadySaved(candidate: MemoryCandidate): Boolean {
@@ -128,7 +141,7 @@ class MemoryRepository(private val dao: MemoryDao) {
         val canonicalQuery = BestFriendNameCanonicalizer.canonicalize(query)
         val matches = BestFriendDeleteMatcher.findAll(canonicalQuery, activeMemories)
         if (matches.isEmpty()) {
-            Log.d(MEMORY_LOG_TAG, "after_delete query=$canonicalQuery matched=0 remaining=0")
+            memoryLog("after_delete query=$canonicalQuery matched=0 remaining=0")
             return false
         }
         val now = System.currentTimeMillis()
@@ -148,8 +161,7 @@ class MemoryRepository(private val dao: MemoryDao) {
                     BestFriendNameSimilarity.likelySame(storedName, canonicalQuery)
                 )
         }
-        Log.d(
-            MEMORY_LOG_TAG,
+        memoryLog(
             "after_delete query=$canonicalQuery matched=${matches.size} affected=$affected remaining=$remaining"
         )
         return affected > 0 && remaining == 0
@@ -216,6 +228,10 @@ class MemoryRepository(private val dao: MemoryDao) {
                 dao.rename(row.id, renamed.stableKey, renamed.fact, normalize(renamed.fact), now)
             }
         }
+    }
+
+    private fun memoryLog(message: String) {
+        runCatching { Log.d(MEMORY_LOG_TAG, message) }
     }
 
     suspend fun clearAll() = dao.deleteAll()

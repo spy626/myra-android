@@ -5,6 +5,13 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class BestFriendNameCorrectionParserTest {
+    @Test fun parsesCommonNehiAsrCorrection() {
+        assertEquals(
+            BestFriendNameCorrection("Nauphara", "Naufal"),
+            BestFriendNameCorrectionParser.parse("Nauphara nehi, Naufal", "Nauphara")
+        )
+    }
+
     @Test fun explicitCorrectionRenamesTheLastSavedPerson() {
         val correction = BestFriendNameCorrectionParser.parse("Nahi, Kareem", "Karima")
         assertEquals("Karima", correction?.oldName)

@@ -8,11 +8,11 @@ data class BestFriendNameCorrection(val oldName: String, val newName: String)
 object BestFriendNameCorrectionParser {
     private val explicitPair = listOf(
         Regex(
-            "^([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:nahi|nahin|not)[, ]+([\\p{L}][\\p{L} .'-]{1,39})$",
+            "^([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:nahi|nahin|nehi|nai|not)[, ]+([\\p{L}][\\p{L} .'-]{1,39})$",
             RegexOption.IGNORE_CASE
         ),
         Regex(
-            "^([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:nahi|nahin|not)[, ]+([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:mera|meri|mere)\\s+best\\s+(?:friend|frend)\\s+(?:hai|he)$",
+            "^([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:nahi|nahin|nehi|nai|not)[, ]+([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:mera|meri|mere)\\s+best\\s+(?:friend|frend)\\s+(?:hai|he)$",
             RegexOption.IGNORE_CASE
         )
     )

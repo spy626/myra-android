@@ -158,6 +158,7 @@ class MyraVoiceService : Service() {
     private var localSpeechStreamedDirectly = false
     private var localSpeechGenerationComplete = false
     private var localAudioSpeaking = false
+    private var pendingCanonicalRename: kotlinx.coroutines.Job? = null
     private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
     private var pendingConfirmedCommand: AppCommand? = null
     private var pendingConfirmationExpiresAt = 0L
@@ -611,14 +612,27 @@ class MyraVoiceService : Service() {
                         displayUserText,
                         recentName
                     )
+                    voiceLog(
+                        "name_correction_detected raw=${displayUserText.take(100)} " +
+                            "recent=$recentName parsed=$nameCorrection"
+                    )
                     if (nameCorrection != null) {
                         // Previously this correction lived only in Gemini's conversation
                         // reply. Update the same Room row and stable key so recall/delete
                         // cannot keep using the first stale ASR spelling.
-                        serviceScope.launch {
-                            memoryRepository.renameBestFriend(
+                        pendingCanonicalRename = serviceScope.launch {
+                            val renamed = memoryRepository.renameBestFriend(
                                 nameCorrection.oldName,
                                 nameCorrection.newName
+                            )
+                            val rows = memoryRepository.logPersonIdentity(
+                                "after_correction renamed=$renamed",
+                                nameCorrection.oldName,
+                                nameCorrection.newName
+                            )
+                            voiceLog(
+                                "name_correction_persisted success=$renamed records=" +
+                                    rows.joinToString { "${it.stableKey}:${it.fact}" }
                             )
                         }
                         replaceRecentRelationshipName(nameCorrection.oldName, nameCorrection.newName)
@@ -734,6 +748,8 @@ class MyraVoiceService : Service() {
                     MemoryWriteResult.NeedsPermission, null -> "Save karne ki permission clear nahi hui."
                 }
                 is MemoryCommand.Read -> {
+                    // Recall must not race a correction write from the previous turn.
+                    pendingCanonicalRename?.join()
                     memoryRepository.logActiveBestFriends("before_recall query=${command.query}")
                     val memories = memoryRepository.relevant(command.query, 5)
                     PersonalMemoryRecallFormatter.format(memories.map { it.fact })
