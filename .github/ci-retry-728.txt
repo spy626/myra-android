@@ -1,1 +1,1 @@
-CI trigger for turn-owned controlled voice and safe spelling regression tests.
+CI trigger for identity-based exactly-once finalized user transcript commits.
