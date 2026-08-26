@@ -582,9 +582,13 @@ class MyraVoiceService : Service() {
                         android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
                             BEST_FRIEND_CORRECTION_CONTEXT_MS
                     }
-                    val nameCorrection = if (personalCandidate == null) {
-                        BestFriendNameCorrectionParser.parse(displayUserText, recentName)
-                    } else null
+                    // Parse explicit old->new corrections before the ordinary extractor;
+                    // otherwise "Karima nahi, Kareem" becomes a new Kareem row while
+                    // the stale Karima row remains active.
+                    val nameCorrection = BestFriendNameCorrectionParser.parse(
+                        displayUserText,
+                        recentName
+                    )
                     if (nameCorrection != null) {
                         // Previously this correction lived only in Gemini's conversation
                         // reply. Update the same Room row and stable key so recall/delete

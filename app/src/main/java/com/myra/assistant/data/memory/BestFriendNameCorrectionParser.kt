@@ -6,6 +6,16 @@ import kotlin.math.abs
 data class BestFriendNameCorrection(val oldName: String, val newName: String)
 
 object BestFriendNameCorrectionParser {
+    private val explicitPair = listOf(
+        Regex(
+            "^([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:nahi|nahin|not)[, ]+([\\p{L}][\\p{L} .'-]{1,39})$",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "^([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:nahi|nahin|not)[, ]+([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:mera|meri|mere)\\s+best\\s+(?:friend|frend)\\s+(?:hai|he)$",
+            RegexOption.IGNORE_CASE
+        )
+    )
     private val explicit = Regex(
         "^(?:(?:no|nahi|nahin|actually|sorry)[, ]+|(?:i said|maine kaha|naam)\\s+)([\\p{L}][\\p{L} .'-]{1,39})$",
         RegexOption.IGNORE_CASE
@@ -13,8 +23,14 @@ object BestFriendNameCorrectionParser {
     private val rejected = setOf("haan", "han", "yes", "nahi", "no", "okay", "ok", "thanks", "thank you")
 
     fun parse(raw: String, lastSavedName: String?): BestFriendNameCorrection? {
-        val old = lastSavedName?.takeIf { it.isNotBlank() } ?: return null
         val clean = raw.trim().trimEnd('.', ',', '?', '!', '।').replace(Regex("\\s+"), " ")
+        explicitPair.firstNotNullOfOrNull { it.matchEntire(clean) }?.let { match ->
+            return BestFriendNameCorrection(
+                oldName = BestFriendNameCanonicalizer.canonicalize(match.groupValues[1]),
+                newName = BestFriendNameCanonicalizer.canonicalize(match.groupValues[2])
+            )
+        }
+        val old = lastSavedName?.takeIf { it.isNotBlank() } ?: return null
         if (clean.lowercase(Locale.ROOT) in rejected) return null
         val explicitName = explicit.matchEntire(clean)?.groupValues?.get(1)?.trim()
         val shortName = clean.takeIf {
