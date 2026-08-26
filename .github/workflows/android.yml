@@ -17,7 +17,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+      - name: Configure stable APK signing when secrets exist
+        env:
+          LYRA_KEYSTORE_BASE64: ${{ secrets.LYRA_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$LYRA_KEYSTORE_BASE64" ]; then
+            echo "$LYRA_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/lyra-ci.jks"
+          fi
       - run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
+        env:
+          LYRA_KEYSTORE_PATH: ${{ runner.temp }}/lyra-ci.jks
+          LYRA_KEYSTORE_PASSWORD: ${{ secrets.LYRA_KEYSTORE_PASSWORD }}
+          LYRA_KEY_ALIAS: ${{ secrets.LYRA_KEY_ALIAS }}
+          LYRA_KEY_PASSWORD: ${{ secrets.LYRA_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: myra-debug-apk

@@ -133,7 +133,13 @@ class MemoryRepository(private val dao: MemoryDao) {
         }
         val now = System.currentTimeMillis()
         var affected = 0
-        for (match in matches) affected += dao.deactivate(match.id, now)
+        val matchedNames = matches.mapNotNull { MemoryRelationshipPolicy.personName(it.fact) }
+        // Delete the identity as one unit. Previously only the best-friend row was
+        // removed, so a linked channel fact could keep the deleted person in recall.
+        val identityRows = activeMemories.filter {
+            PersonLinkedMemoryIdentity.belongsTo(it, matchedNames + canonicalQuery)
+        }
+        for (match in identityRows) affected += dao.deactivate(match.id, now)
         val remaining = dao.recent(50).count { memory ->
             val storedName = MemoryRelationshipPolicy.personName(memory.fact)
                 ?.let(BestFriendNameCanonicalizer::canonicalize)
@@ -149,9 +155,14 @@ class MemoryRepository(private val dao: MemoryDao) {
         return affected > 0 && remaining == 0
     }
 
-    /** Renames the same persistent row so stale spelling and stable key cannot diverge. */
+    /**
+     * Renames the canonical identity and every linked row in place. The old code only
+     * renamed the best-friend row; person:<old-name>:gaming_channel therefore retained
+     * the first ASR spelling and made conversation and persistent recall diverge.
+     */
     suspend fun renameBestFriend(oldName: String, correctedName: String): Boolean {
-        val memories = dao.recent(50).filter(MemoryRelationshipPolicy::isBestFriend)
+        val allMemories = dao.recent(50)
+        val memories = allMemories.filter(MemoryRelationshipPolicy::isBestFriend)
         val oldRows = BestFriendDeleteMatcher.findAll(oldName, memories)
         val old = oldRows.firstOrNull() ?: return false
         val canonicalName = BestFriendNameCanonicalizer.canonicalize(correctedName)
@@ -171,6 +182,7 @@ class MemoryRepository(private val dao: MemoryDao) {
             val now = System.currentTimeMillis()
             var affected = 0
             for (row in oldRows) affected += dao.deactivate(row.id, now)
+            renameLinkedPersonRows(allMemories, oldRows, oldName, canonicalName, now)
             return affected > 0
         }
         val now = System.currentTimeMillis()
@@ -182,7 +194,28 @@ class MemoryRepository(private val dao: MemoryDao) {
             now
         ) > 0
         oldRows.filter { it.id != old.id }.forEach { dao.deactivate(it.id, now) }
+        renameLinkedPersonRows(allMemories, oldRows, oldName, canonicalName, now)
         return renamed
+    }
+
+    private suspend fun renameLinkedPersonRows(
+        allMemories: List<MemoryEntity>,
+        bestFriendRows: List<MemoryEntity>,
+        oldName: String,
+        canonicalName: String,
+        now: Long
+    ) {
+        val aliases = (bestFriendRows.mapNotNull { MemoryRelationshipPolicy.personName(it.fact) } + oldName)
+            .distinctBy { it.lowercase(Locale.ROOT) }
+        allMemories.filterNot(MemoryRelationshipPolicy::isBestFriend).forEach { row ->
+            val renamed = PersonLinkedMemoryIdentity.rename(row, aliases, canonicalName) ?: return@forEach
+            val target = dao.findByStableKey(renamed.stableKey)
+            if (target != null && target.id != row.id) {
+                dao.deactivate(row.id, now)
+            } else if (renamed.stableKey != row.stableKey || renamed.fact != row.fact) {
+                dao.rename(row.id, renamed.stableKey, renamed.fact, normalize(renamed.fact), now)
+            }
+        }
     }
 
     suspend fun clearAll() = dao.deleteAll()

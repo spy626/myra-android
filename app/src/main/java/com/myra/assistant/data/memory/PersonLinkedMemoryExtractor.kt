@@ -39,6 +39,11 @@ object PersonLinkedMemoryExtractor {
             "\\s+(?:hai|he|about\\s+gaming)\\b",
         RegexOption.IGNORE_CASE
     )
+    private val gamingCreatorSignal = Regex(
+        "\\b(?:gaming|game|geming)\\s+(?:videos?|content)\\s+(?:banata|banati|banate|creates?|makes?)\\b|" +
+            "\\b(?:videos?|content)\\s+(?:banata|banati|banate|creates?|makes?)\\b.*\\b(?:gaming|games?)\\b",
+        RegexOption.IGNORE_CASE
+    )
 
     fun extractAll(raw: String): List<MemoryCandidate> {
         val text = raw.trim().replace(Regex("\\s+"), " ")
@@ -53,6 +58,7 @@ object PersonLinkedMemoryExtractor {
 
         val facts = mutableListOf(bestFriend(name))
         if (gamingChannelSignal.containsMatchIn(text)) facts += gamingChannel(name)
+        if (gamingCreatorSignal.containsMatchIn(text)) facts += gamingCreator(name)
         return facts
     }
 
@@ -71,6 +77,15 @@ object PersonLinkedMemoryExtractor {
         stableKey = "person:${stableToken(name)}:gaming_channel",
         sensitivity = MemorySensitivity.PERSONAL,
         confidence = 0.94,
+        source = "automatic_person_facts"
+    )
+
+    private fun gamingCreator(name: String) = MemoryCandidate(
+        category = MemoryCategory.PERSON,
+        fact = "$name creates gaming videos",
+        stableKey = "person:${stableToken(name)}:gaming_creator",
+        sensitivity = MemorySensitivity.PERSONAL,
+        confidence = 0.92,
         source = "automatic_person_facts"
     )
 

@@ -16,8 +16,30 @@ android {
         versionName "1.0.0-alpha01"
     }
 
+    def signingValues = [
+        storeFile: System.getenv('LYRA_KEYSTORE_PATH'),
+        storePassword: System.getenv('LYRA_KEYSTORE_PASSWORD'),
+        keyAlias: System.getenv('LYRA_KEY_ALIAS'),
+        keyPassword: System.getenv('LYRA_KEY_PASSWORD')
+    ]
+    def hasStableSigning = signingValues.values().every { it != null && !it.trim().isEmpty() } &&
+        file(signingValues.storeFile ?: 'missing-keystore').isFile()
+    signingConfigs {
+        if (hasStableSigning) {
+            ciStable {
+                storeFile file(signingValues.storeFile)
+                storePassword signingValues.storePassword
+                keyAlias signingValues.keyAlias
+                keyPassword signingValues.keyPassword
+            }
+        }
+    }
     buildTypes {
-        release { minifyEnabled false }
+        debug { if (hasStableSigning) signingConfig signingConfigs.ciStable }
+        release {
+            minifyEnabled false
+            if (hasStableSigning) signingConfig signingConfigs.ciStable
+        }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

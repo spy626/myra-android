@@ -1280,7 +1280,9 @@ class MyraVoiceService : Service() {
     ) {
         val now = android.os.SystemClock.elapsedRealtime()
         val key = normalizeSpeech(message)
-        if (key == lastLocalSpeechKey && now - lastLocalSpeechAt < 4_000L) {
+        val speechBusy = validatingLocalSpeech != null || quarantinedLocalSpeech != null ||
+            pendingLocalSpeech != null || localPlaybackActive || localAudioSpeaking
+        if (LocalSpeechDuplicateGuard.shouldDrop(key == lastLocalSpeechKey, speechBusy)) {
             voiceLog("local_speech_dropped reason=duplicate ageMs=${now - lastLocalSpeechAt}")
             return
         }

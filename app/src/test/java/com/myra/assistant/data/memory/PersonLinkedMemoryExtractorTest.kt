@@ -57,4 +57,13 @@ class PersonLinkedMemoryExtractorTest {
             facts.map { it.fact }
         )
     }
+    @Test fun learnsDurableGamingCreatorFactButNotSleepExaggeration() {
+        val facts = PersonLinkedMemoryExtractor.extractAll(
+            "mera best friend Naufal hai, gaming videos banata hai aur bina soye khelta hai"
+        )
+        assertEquals(
+            listOf("Zopy's best friend is Naufal", "Naufal creates gaming videos"),
+            facts.map { it.fact }
+        )
+    }
 }
