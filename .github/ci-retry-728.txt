@@ -1,1 +1,1 @@
-Retry requested because GitHub Actions run #728 remained queued with zero jobs and could not be cancelled.
+CI trigger for clarified best-friend correction persistence tests.
