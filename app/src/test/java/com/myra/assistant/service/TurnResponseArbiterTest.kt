@@ -23,4 +23,24 @@ class TurnResponseArbiterTest {
         arbiter.claimControlled(11)
         repeat(20) { assertFalse(arbiter.acceptsOrdinaryModel()) }
     }
+
+    @Test fun turnCompleteBeforePlaybackEndDoesNotReleaseSuppression() {
+        val arbiter = TurnResponseArbiter()
+        arbiter.claimControlled(21)
+        arbiter.controlledGenerationComplete()
+        assertFalse(arbiter.releaseIfComplete())
+        assertFalse(arbiter.acceptsOrdinaryModel())
+        arbiter.controlledPlaybackComplete()
+        assertTrue(arbiter.releaseIfComplete())
+    }
+
+    @Test fun playbackEndBeforeTurnCompleteDoesNotReleaseSuppression() {
+        val arbiter = TurnResponseArbiter()
+        arbiter.claimControlled(22)
+        arbiter.controlledPlaybackComplete()
+        assertFalse(arbiter.releaseIfComplete())
+        assertFalse(arbiter.acceptsOrdinaryModel())
+        arbiter.controlledGenerationComplete()
+        assertTrue(arbiter.releaseIfComplete())
+    }
 }

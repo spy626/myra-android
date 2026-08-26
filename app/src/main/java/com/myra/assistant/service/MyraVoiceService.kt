@@ -117,7 +117,6 @@ class MyraVoiceService : Service() {
     private var pendingLocalSpeech: String? = null
     private var pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
     private var pendingLocalSpeechAllowsSilence = false
-    private var quarantinedLocalSpeech: String? = null
     private var validatingLocalSpeech: String? = null
     private var localSpeechValidationToken = 0L
     private var localSpeechValidationAttempt = 0
@@ -172,6 +171,15 @@ class MyraVoiceService : Service() {
     private var localPlaybackActive = false
     private var localSpeechStreamedDirectly = false
     private var localSpeechGenerationComplete = false
+    private var localSpeechTimeoutRunnable: Runnable? = null
+    private var localSpeechTimeoutToken = 0L
+    private val localSpeechTimeoutGate = ControlledSpeechTimeoutGate()
+    private var localSpeechQueuedAt = 0L
+    private var localSpeechRequestSentAt = 0L
+    private var localSpeechFirstAudioReceivedAt = 0L
+    private var localSpeechFirstAudioAcceptedAt = 0L
+    private var localSpeechFirstPlaybackWriteAt = 0L
+    private var localSpeechLastAudioReceivedAt = 0L
     private var localAudioSpeaking = false
     private var pendingCanonicalRename: kotlinx.coroutines.Job? = null
     private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
@@ -265,6 +273,7 @@ class MyraVoiceService : Service() {
                 mainHandler.post { handleSemanticToolCall(id, functionName, args) }
             }
             client.onAudio = {
+                val audioReceivedAt = android.os.SystemClock.elapsedRealtime()
                 voiceLog(
                     "service_audio_received bytes=${it.size} validating=${validatingLocalSpeech != null} " +
                         "streaming=$localSpeechStreamedDirectly suppressed=$suppressModelForTurn " +
@@ -272,6 +281,14 @@ class MyraVoiceService : Service() {
                 )
                 if (validatingLocalSpeech != null) {
                     localSpeechHasContent = true
+                    if (localSpeechFirstAudioReceivedAt == 0L) {
+                        localSpeechFirstAudioReceivedAt = audioReceivedAt
+                        voiceLog(
+                            "controlled_first_audio_received turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
+                                "firstAudioReceivedAt=$audioReceivedAt requestToFirstAudioMs=${audioReceivedAt - localSpeechRequestSentAt}"
+                        )
+                    }
+                    localSpeechLastAudioReceivedAt = audioReceivedAt
                     if (localSpeechStreamedDirectly) {
                         // The transcript prefix already matched the prepared response.
                         // Continue streaming the remaining natural voice without waiting
@@ -491,16 +508,6 @@ class MyraVoiceService : Service() {
                 else voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} responseOwner=${responseArbiter.owner} route=ordinary_model_text")
             }
             client.onTurnComplete = turnComplete@ {
-                quarantinedLocalSpeech?.let { message ->
-                    // The cancelled ordinary Gemini turn has now delivered its final
-                    // boundary. Only now request deterministic memory speech, so no
-                    // late audio from the old reply can enter the new voice buffer.
-                    val drainToken = localSpeechValidationToken
-                    mainHandler.postDelayed({
-                        releaseQuarantinedLocalSpeech(drainToken, message)
-                    }, CANCELLED_MODEL_TURN_DRAIN_MS)
-                    return@turnComplete
-                }
                 if (validatingLocalSpeech != null) {
                     // Sending clientContent interrupts the previous Gemini generation.
                     // Its interrupted turnComplete can arrive before the new confirmation.
@@ -517,7 +524,8 @@ class MyraVoiceService : Service() {
                         }, LOCAL_SPEECH_AUDIO_DRAIN_MS)
                     }
                     responseArbiter.controlledGenerationComplete()
-                    voiceLog("turn_complete_received turnId=${responseArbiter.turnId} generationId=$controlledGenerationId responseOwner=${responseArbiter.owner}")
+                    val turnCompleteAt = android.os.SystemClock.elapsedRealtime()
+                    voiceLog("turn_complete_received turnId=${responseArbiter.turnId} generationId=$controlledGenerationId responseOwner=${responseArbiter.owner} turnCompleteAt=$turnCompleteAt lastAudioReceivedAt=$localSpeechLastAudioReceivedAt")
                     resetTurnBuffers("controlled_generation_complete")
                     return@turnComplete
                 }
@@ -1374,9 +1382,9 @@ class MyraVoiceService : Service() {
         // Clear validation/playback state before AudioEngine emits its interruption
         // callback. Otherwise finishLocalPlayback() can revive an expired model turn.
         localSpeechValidationToken++
+        cancelLocalSpeechTimeout("speech_cancelled")
         validatingLocalSpeech = null
         pendingLocalSpeech = null
-        quarantinedLocalSpeech = null
         pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
         pendingLocalSpeechAllowsSilence = false
         localSpeechAudio.clear()
@@ -1398,7 +1406,7 @@ class MyraVoiceService : Service() {
     ) {
         val now = android.os.SystemClock.elapsedRealtime()
         val key = normalizeSpeech(message)
-        val speechBusy = validatingLocalSpeech != null || quarantinedLocalSpeech != null ||
+        val speechBusy = validatingLocalSpeech != null ||
             pendingLocalSpeech != null || localPlaybackActive || localAudioSpeaking
         if (LocalSpeechDuplicateGuard.shouldDrop(key == lastLocalSpeechKey, speechBusy)) {
             voiceLog("local_speech_dropped reason=duplicate ageMs=${now - lastLocalSpeechAt}")
@@ -1415,9 +1423,11 @@ class MyraVoiceService : Service() {
         // Remove any ordinary-model PCM already queued before the deterministic
         // correction/delete/recall response takes ownership.
         audio?.interrupt()
+        localSpeechQueuedAt = now
         voiceLog(
             "local_speech_queued chars=${message.length} policy=${policyName(validationPolicy)} " +
-                "alreadyValidating=${validatingLocalSpeech != null} allowNoTranscript=$allowUntranscribedAudio"
+                "alreadyValidating=${validatingLocalSpeech != null} allowNoTranscript=$allowUntranscribedAudio " +
+                "turnId=$ownerTurnId responseOwner=CONTROLLED_LOCAL localSpeechQueuedAt=$localSpeechQueuedAt"
         )
         // Keep the echo-cancelled microphone open so the user can interrupt or issue
         // the next short command without waiting for LYRA's acknowledgement to finish.
@@ -1425,35 +1435,17 @@ class MyraVoiceService : Service() {
         if (validatingLocalSpeech == null) {
             allowUntranscribedLocalSpeech = allowUntranscribedAudio
             localSpeechValidationPolicy = validationPolicy
-            if (validationPolicy == LocalSpeechValidationPolicy.MEMORY) {
-                // A cancelled Gemini reply can still deliver a few late WebSocket
-                // chunks. Keep validation closed while those chunks are suppressed,
-                // otherwise they can be mistaken for the new deterministic reply and
-                // create a second or clipped voice before the intended memory speech.
-                quarantinedLocalSpeech = message
-                val drainToken = ++localSpeechValidationToken
-                mainHandler.postDelayed({
-                    // Fallback for a turn whose completion boundary arrived before the
-                    // local parser took control. The token prevents stale speech.
-                    releaseQuarantinedLocalSpeech(drainToken, message)
-                }, CANCELLED_MODEL_TURN_TIMEOUT_MS)
-            } else {
-                beginValidatedLocalSpeech(message)
-            }
+            // The turn owner suppresses ordinary output, and the existing transcript
+            // validation gate will not release unmatched late PCM as controlled speech.
+            // The former MEMORY quarantine added a fixed 2-second delay even after the
+            // database-backed reply was ready, without adding another playback check.
+            beginValidatedLocalSpeech(message)
         }
         else {
             pendingLocalSpeech = message
             pendingLocalSpeechPolicy = validationPolicy
             pendingLocalSpeechAllowsSilence = allowUntranscribedAudio
         }
-    }
-
-    private fun releaseQuarantinedLocalSpeech(token: Long, message: String) {
-        if (token != localSpeechValidationToken || validatingLocalSpeech != null ||
-            quarantinedLocalSpeech != message
-        ) return
-        quarantinedLocalSpeech = null
-        beginValidatedLocalSpeech(message)
     }
 
     private fun beginValidatedLocalSpeech(message: String, retry: Boolean = false) {
@@ -1474,10 +1466,16 @@ class MyraVoiceService : Service() {
         localSpeechGenerationComplete = false
         localSpeechAudio.clear()
         localSpeechTranscript.clear()
+        localSpeechFirstAudioReceivedAt = 0L
+        localSpeechFirstAudioAcceptedAt = 0L
+        localSpeechFirstPlaybackWriteAt = 0L
+        localSpeechLastAudioReceivedAt = 0L
         suppressModelForTurn = true
+        val generationStartAt = android.os.SystemClock.elapsedRealtime()
         voiceLog(
             "local_speech_generation_start turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token attempt=$localSpeechValidationAttempt " +
-                "chars=${message.length} policy=${policyName(localSpeechValidationPolicy)}"
+                "chars=${message.length} policy=${policyName(localSpeechValidationPolicy)} generationStartAt=$generationStartAt " +
+                "queuedToGenerationStartMs=${generationStartAt - localSpeechQueuedAt}"
         )
         // Continuous mic packets can race with clientContent and cancel this short
         // deterministic memory utterance before Gemini returns audio. Listening is
@@ -1485,16 +1483,33 @@ class MyraVoiceService : Service() {
         if (localSpeechValidationPolicy.isolateFromMicDuringGeneration) {
             audio?.setMuted(true)
         }
+        localSpeechRequestSentAt = android.os.SystemClock.elapsedRealtime()
         client.sendText("Say exactly these words once, with the selected natural voice. Do not add, remove, translate, explain, or introduce them: ${org.json.JSONObject.quote(message)}")
-        mainHandler.postDelayed({
-            if (token == localSpeechValidationToken && validatingLocalSpeech != null) {
+        voiceLog(
+            "controlled_request_sent turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token " +
+                "controlledRequestSentAt=$localSpeechRequestSentAt queuedToRequestSentMs=${localSpeechRequestSentAt - localSpeechQueuedAt}"
+        )
+        cancelLocalSpeechTimeout("new_generation")
+        localSpeechTimeoutToken = token
+        localSpeechTimeoutGate.start(token)
+        val timeoutRunnable = Runnable {
+            val timeoutFiredAt = android.os.SystemClock.elapsedRealtime()
+            if (token == localSpeechValidationToken && validatingLocalSpeech != null &&
+                localSpeechTimeoutGate.shouldFire(token)
+            ) {
                 voiceLog(
-                    "local_speech_timeout token=$token audioChunks=${localSpeechAudio.size} " +
+                    "local_speech_timeout turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token timeoutFiredAt=$timeoutFiredAt audioChunks=${localSpeechAudio.size} " +
                         "audioBytes=${localSpeechAudio.sumOf { it.size }} transcriptChars=${localSpeechTranscript.length}"
                 )
                 finishValidatedLocalSpeech()
+            } else {
+                voiceLog("local_speech_timeout_ignored token=$token activeToken=$localSpeechValidationToken reason=stale_generation")
             }
-        }, localSpeechValidationPolicy.timeoutMs)
+        }
+        localSpeechTimeoutRunnable = timeoutRunnable
+        val timeoutScheduledAt = android.os.SystemClock.elapsedRealtime()
+        voiceLog("local_speech_timeout_scheduled generationId=$controlledGenerationId timeoutToken=$token timeoutScheduledAt=$timeoutScheduledAt")
+        mainHandler.postDelayed(timeoutRunnable, localSpeechValidationPolicy.timeoutMs)
     }
 
     private fun startLocalSpeechWhenPrefixMatches() {
@@ -1514,9 +1529,32 @@ class MyraVoiceService : Service() {
 
         localSpeechStreamedDirectly = true
         localPlaybackActive = true
-        voiceLog("local_speech_released_early audioChunks=${localSpeechAudio.size}")
+        localSpeechFirstAudioAcceptedAt = android.os.SystemClock.elapsedRealtime()
+        if (localSpeechTimeoutGate.acceptFirstAudio(localSpeechValidationToken)) {
+            cancelLocalSpeechTimeout("first_audio_accepted")
+        }
+        voiceLog(
+            "local_speech_released_early turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
+                "audioChunks=${localSpeechAudio.size} firstAudioAcceptedAt=$localSpeechFirstAudioAcceptedAt"
+        )
         localSpeechAudio.forEach { audio?.queueAudio(it) }
+        localSpeechFirstPlaybackWriteAt = android.os.SystemClock.elapsedRealtime()
+        voiceLog(
+            "controlled_first_playback_write turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
+                "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt}"
+        )
         localSpeechAudio.clear()
+    }
+
+    private fun cancelLocalSpeechTimeout(reason: String) {
+        val runnable = localSpeechTimeoutRunnable ?: return
+        mainHandler.removeCallbacks(runnable)
+        localSpeechTimeoutRunnable = null
+        localSpeechTimeoutGate.clear(localSpeechTimeoutToken)
+        voiceLog(
+            "local_speech_timeout_cancelled turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
+                "timeoutToken=$localSpeechTimeoutToken timeoutCancelledAt=${android.os.SystemClock.elapsedRealtime()} reason=$reason"
+        )
     }
 
     private fun finishValidatedLocalSpeech() {
@@ -1549,10 +1587,18 @@ class MyraVoiceService : Service() {
                 "audioBytes=$bufferedAudioBytes actualChars=${actual.length} expectedChars=${expected.length}"
         )
         if ((transcriptMatches || trustedNaturalAudio) && localSpeechAudio.isNotEmpty()) {
+            if (localSpeechTimeoutGate.acceptFirstAudio(localSpeechValidationToken)) {
+                cancelLocalSpeechTimeout("validated_audio_accepted")
+            }
             localSpeechGenerationComplete = true
             localPlaybackActive = true
             voiceLog("local_speech_released_after_validation audioChunks=${localSpeechAudio.size}")
             localSpeechAudio.forEach { audio?.queueAudio(it) }
+            localSpeechFirstPlaybackWriteAt = android.os.SystemClock.elapsedRealtime()
+            voiceLog(
+                "controlled_first_playback_write turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
+                    "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt}"
+            )
             localSpeechAudio.clear()
             localSpeechTranscript.clear()
         } else {
@@ -1569,6 +1615,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun finishUnavailableNaturalLocalSpeech(message: String) {
+        cancelLocalSpeechTimeout("natural_audio_unavailable")
         voiceLog(
             "local_speech_unavailable chars=${message.length} fallback=${localSpeechValidationPolicy.speakFallback} " +
                 "allowNoTranscript=$allowUntranscribedLocalSpeech"
@@ -1595,7 +1642,8 @@ class MyraVoiceService : Service() {
     }
 
     private fun finishLocalPlayback() {
-        voiceLog("local_speech_playback_finished")
+        val playbackEndAt = android.os.SystemClock.elapsedRealtime()
+        voiceLog("local_speech_playback_finished turnId=${responseArbiter.turnId} generationId=$controlledGenerationId playbackEndAt=$playbackEndAt")
         val resumeMicImmediately =
             localSpeechValidationPolicy.resumeMicImmediatelyAfterPlayback
         allowUntranscribedLocalSpeech = false
@@ -1935,8 +1983,6 @@ class MyraVoiceService : Service() {
         private const val DELETE_CLARIFICATION_TIMEOUT_MS = 30_000L
         private const val PERSONAL_MEMORY_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
-        private const val CANCELLED_MODEL_TURN_DRAIN_MS = 120L
-        private const val CANCELLED_MODEL_TURN_TIMEOUT_MS = 2_000L
         private const val LOCAL_SPEECH_AUDIO_DRAIN_MS = 800L
         private const val RELATIONSHIP_CONTEXT_MS = 45_000L
         private const val MAX_RELATIONSHIP_CONTEXT_TURNS = 3
