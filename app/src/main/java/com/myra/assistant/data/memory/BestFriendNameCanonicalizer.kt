@@ -14,7 +14,14 @@ object BestFriendNameCanonicalizer {
     fun canonicalize(raw: String): String {
         val clean = raw.trim().trim('.', ',', '?', '!', '\'', '"')
             .replace(Regex("\\s+"), " ")
-        val normalized = clean.lowercase(Locale.ROOT)
+        // Gemini/ASR has produced stored values such as "Named Karim". "Named" is
+        // conversational scaffolding, not part of the person's identity. Keeping it
+        // created a second best-friend row that survived rename, recall and delete.
+        val identity = clean.replace(
+            Regex("^(?:named|name(?:\\s+is)?|called)\\s+", RegexOption.IGNORE_CASE),
+            ""
+        ).trim()
+        val normalized = identity.lowercase(Locale.ROOT)
         return when (normalized) {
             in naufal -> "Naufal"
             in kareem -> "Kareem"
@@ -22,7 +29,7 @@ object BestFriendNameCanonicalizer {
             // Do not keep adding every ASR spelling to a lookup table. A corrected
             // pronunciation such as "now fal" is close enough to the established
             // canonical identity, while unrelated names remain untouched.
-            else -> preferredByDistance(normalized) ?: clean.replaceFirstChar {
+            else -> preferredByDistance(normalized) ?: identity.replaceFirstChar {
                 if (it.isLowerCase()) it.uppercaseChar().toString() else it.toString()
             }
         }

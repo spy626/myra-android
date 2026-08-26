@@ -44,6 +44,7 @@ import com.myra.assistant.data.memory.MemorySafetyPolicy
 import com.myra.assistant.data.memory.MemorySaveDecision
 import com.myra.assistant.data.memory.SemanticMemoryProposalValidator
 import com.myra.assistant.data.memory.UnclearDeleteIntentGuard
+import com.myra.assistant.data.memory.PendingDeleteClarification
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.MyApplication
@@ -121,6 +122,7 @@ class MyraVoiceService : Service() {
     private var allowUntranscribedLocalSpeech = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingMemoryCommand: MemoryCommand? = null
+    private var pendingDeleteClarificationUntil = 0L
     private val memoryCommandRunnable = Runnable {
         val command = pendingMemoryCommand
         pendingMemoryCommand = null
@@ -546,8 +548,15 @@ class MyraVoiceService : Service() {
                         waitingForFreshInputAfterCommand = true
                         return@turnComplete
                     }
-                    val memoryCommand = MemoryCommandParser.parse(romanDisplayText(userText))
+                    val displayText = romanDisplayText(userText)
+                    val pendingDelete = android.os.SystemClock.elapsedRealtime() <=
+                        pendingDeleteClarificationUntil
+                    val memoryCommand = if (pendingDelete) {
+                        PendingDeleteClarification.resolve(displayText)
+                            ?: MemoryCommandParser.parse(displayText)
+                    } else MemoryCommandParser.parse(displayText)
                     if (memoryCommand != null) {
+                        pendingDeleteClarificationUntil = 0L
                         handleMemoryCommand(memoryCommand)
                         resetTurnBuffers()
                         waitingForFreshInputAfterCommand = true
@@ -572,6 +581,11 @@ class MyraVoiceService : Service() {
                         suppressModelForTurn = true
                         output.clear()
                         audio?.interrupt()
+                        // Keep the question actionable. Previously a one-word reply such
+                        // as "Kareem" went to Gemini, which spoke a false success without
+                        // ever calling MemoryRepository.forgetMatching().
+                        pendingDeleteClarificationUntil = android.os.SystemClock.elapsedRealtime() +
+                            DELETE_CLARIFICATION_TIMEOUT_MS
                         listener?.onMyraText(clarification)
                         emitState(clarification)
                         queueLocalSpeech(clarification, allowUntranscribedAudio = true)
@@ -1737,7 +1751,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -1749,6 +1763,7 @@ class MyraVoiceService : Service() {
         private const val CHANNEL_ID = "myra_voice"
         private const val NOTIFICATION_ID = 1001
         private const val MEMORY_COMMAND_PAUSE_MS = 450L
+        private const val DELETE_CLARIFICATION_TIMEOUT_MS = 30_000L
         private const val PERSONAL_MEMORY_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
         private const val CANCELLED_MODEL_TURN_DRAIN_MS = 120L

@@ -21,4 +21,8 @@ class BestFriendNameCanonicalizerTest {
         assertEquals("Naufal", BestFriendNameCanonicalizer.canonicalize("Now fal"))
         assertEquals("Naufal", BestFriendNameCanonicalizer.canonicalize("Naufara"))
     }
+    @Test fun removesModelScaffoldingFromPersonName() {
+        assertEquals("Kareem", BestFriendNameCanonicalizer.canonicalize("Named Karim"))
+        assertEquals("Kareem", BestFriendNameCanonicalizer.canonicalize("name is Kareem"))
+    }
 }

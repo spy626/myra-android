@@ -63,6 +63,22 @@ class MemoryRepositoryLinkedPersonTest {
         })
     }
 
+    @Test fun recordedNamedKarimAliasIsMergedAndDeleteRemovesWholeIdentity() = runBlocking {
+        val dao = FakeMemoryDao()
+        val repository = MemoryRepository(dao)
+        repository.saveAdditionalBestFriend(bestFriend("Karima"))
+        repository.save(gamingChannel("Karima"))
+        repository.saveAdditionalBestFriend(bestFriend("Named Karim"))
+
+        assertTrue(repository.renameBestFriend("Karima", "Kareem"))
+        assertEquals(
+            setOf("Zopy's best friend is Kareem", "Kareem has a gaming channel"),
+            dao.recent(50).map { it.fact }.toSet()
+        )
+
+        assertTrue(repository.forgetMatching("Kareem"))
+        assertTrue(dao.recent(50).isEmpty())
+    }
     private fun bestFriend(name: String) = MemoryCandidate(
         MemoryCategory.PERSON, "Zopy's best friend is $name",
         MemoryRelationshipPolicy.BEST_FRIEND_KEY, MemorySensitivity.PERSONAL, .96, source = "test"

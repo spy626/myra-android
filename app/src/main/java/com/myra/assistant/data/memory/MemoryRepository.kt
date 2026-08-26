@@ -178,6 +178,11 @@ class MemoryRepository(private val dao: MemoryDao) {
         val oldRows = BestFriendDeleteMatcher.findAll(oldName, memories)
         val old = oldRows.firstOrNull() ?: return false
         val canonicalName = BestFriendNameCanonicalizer.canonicalize(correctedName)
+        // Include every row already resolving to the corrected identity. In the
+        // failing phone path "Named Karim" and "Kareem" were separate stable keys;
+        // renaming only Karima left that alias active and recall listed two people.
+        val identityRows = (oldRows + BestFriendDeleteMatcher.findAll(canonicalName, memories))
+            .distinctBy { it.id }
         val replacement = MemoryRelationshipPolicy.canonicalizeAdditional(
             MemoryCandidate(
                 category = MemoryCategory.PERSON,
@@ -188,26 +193,12 @@ class MemoryRepository(private val dao: MemoryDao) {
                 source = old.source
             )
         )
-        val existingTarget = dao.findByStableKey(replacement.stableKey)
-        if (existingTarget != null && existingTarget.id != old.id) {
-            persist(replacement, replaceBestFriends = false)
-            val now = System.currentTimeMillis()
-            var affected = 0
-            for (row in oldRows) affected += dao.deactivate(row.id, now)
-            renameLinkedPersonRows(allMemories, oldRows, oldName, canonicalName, now)
-            return affected > 0 && verifyRenameCommitted(oldName, canonicalName)
-        }
         val now = System.currentTimeMillis()
-        val renamed = dao.rename(
-            old.id,
-            replacement.stableKey,
-            replacement.fact,
-            normalize(replacement.fact),
-            now
-        ) > 0
-        oldRows.filter { it.id != old.id }.forEach { dao.deactivate(it.id, now) }
-        renameLinkedPersonRows(allMemories, oldRows, oldName, canonicalName, now)
-        return renamed && verifyRenameCommitted(oldName, canonicalName)
+        val saved = persist(replacement, replaceBestFriends = false) as? MemoryWriteResult.Saved
+            ?: return false
+        identityRows.filter { it.id != saved.id }.forEach { dao.deactivate(it.id, now) }
+        renameLinkedPersonRows(allMemories, identityRows, oldName, canonicalName, now)
+        return verifyRenameCommitted(oldName, canonicalName)
     }
 
     /** Never report success until Room contains the target and no exact stale alias. */
@@ -226,11 +217,18 @@ class MemoryRepository(private val dao: MemoryDao) {
                 Regex("^${Regex.escape(oldName)}\\b", RegexOption.IGNORE_CASE)
                     .containsMatchIn(row.fact)
         }
+        val staleTargetAlias = active.any { row ->
+            val stored = MemoryRelationshipPolicy.personName(row.fact) ?: return@any false
+            BestFriendNameCanonicalizer.canonicalize(stored)
+                .equals(canonicalName, ignoreCase = true) &&
+                !stored.equals(canonicalName, ignoreCase = true)
+        }
         memoryLog(
             "verify_rename old=$oldName new=$canonicalName canonical=$hasCanonicalPerson " +
-                "staleOld=$staleOldIdentity active=${active.map { it.stableKey to it.fact }}"
+                "staleOld=$staleOldIdentity staleTargetAlias=$staleTargetAlias " +
+                "active=${active.map { it.stableKey to it.fact }}"
         )
-        return hasCanonicalPerson && !staleOldIdentity
+        return hasCanonicalPerson && !staleOldIdentity && !staleTargetAlias
     }
 
     private suspend fun renameLinkedPersonRows(
