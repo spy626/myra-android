@@ -18,4 +18,14 @@ class LiveTranscriptAssemblerTest {
         LiveTranscriptAssembler.append(text, "Munnar bahut jagah")
         assertEquals("Munnar bahut jagah", text.toString())
     }
+
+    @Test fun finalizedAccumulatorResetKeepsConsecutiveQuestionsSeparate() {
+        val text = StringBuilder()
+        LiveTranscriptAssembler.append(text, "Mera best friend kaun hai?")
+        val first = text.toString()
+        text.clear() // same reset performed at each service turnComplete boundary
+        LiveTranscriptAssembler.append(text, "Mere baare mein kya jaante ho?")
+        assertEquals("Mera best friend kaun hai?", first)
+        assertEquals("Mere baare mein kya jaante ho?", text.toString())
+    }
 }

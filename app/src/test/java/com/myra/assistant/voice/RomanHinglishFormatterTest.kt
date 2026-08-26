@@ -4,6 +4,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class RomanHinglishFormatterTest {
+    @Test fun preservesKarimaKareemContrastBeforeRemovingDiacritics() {
+        assertEquals(
+            "Karima nahi Kareem",
+            RomanHinglishFormatter.format("karīmā nahīṁ karīma")
+        )
+    }
     @Test fun cleansObservedLiteralHindiTransliteration() {
         assertEquals(
             "Mera ek male best friend hai. Uska naam karima hai.",

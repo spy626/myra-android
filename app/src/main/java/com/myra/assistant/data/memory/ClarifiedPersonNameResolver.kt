@@ -1,34 +1,40 @@
 package com.myra.assistant.data.memory
 
-/** Resolves only a bare name or unambiguous letter-by-letter spelling. */
+sealed interface ClarifiedNameResult {
+    data class Accepted(val name: String) : ClarifiedNameResult
+    data class NeedsConfirmation(val heardLetters: String, val proposedName: String) : ClarifiedNameResult
+    data object Unclear : ClarifiedNameResult
+}
+
+/** Dedicated conservative parser for a pending rename clarification. */
 object ClarifiedPersonNameResolver {
     private val rejected = setOf("haan", "yes", "no", "nahi", "okay", "ok")
+    private val preferred = listOf("Kareem", "Naufal", "Ayesha")
 
-    fun resolve(raw: String): String? {
+    fun resolve(raw: String): ClarifiedNameResult {
         val clean = raw.trim().trim('.', ',', '?', '!', '।', '"', '\'')
+        if (clean.lowercase() in rejected) return ClarifiedNameResult.Unclear
         val tokens = clean.split(Regex("[\\s-]+")).filter(String::isNotBlank)
-        val letters = tokens.takeIf { it.size >= 3 && it.all { token -> token.length == 1 && token[0].isLetter() } }
-            ?.joinToString("")
-        val candidate = letters ?: clean.takeIf {
+        if (tokens.size >= 3 && tokens.all { it.length == 1 && it[0].isLetter() }) {
+            return resolveSpelling(tokens.map { it.uppercase() })
+        }
+        val bare = clean.takeIf {
             it.split(Regex("\\s+")).size <= 2 &&
                 it.matches(Regex("[\\p{L}][\\p{L} .'-]{1,39}"))
-        } ?: return null
-        if (candidate.lowercase() in rejected) return null
-        val canonical = BestFriendNameCanonicalizer.canonicalize(candidate)
-        return phoneticPreferred(canonical) ?: canonical.takeIf { it.length >= 3 }
+        } ?: return ClarifiedNameResult.Unclear
+        return ClarifiedNameResult.Accepted(BestFriendNameCanonicalizer.canonicalize(bare))
     }
 
-    private fun phoneticPreferred(value: String): String? {
-        val key = soundKey(value)
-        return listOf("Kareem", "Naufal", "Ayesha").singleOrNull {
-            val target = soundKey(it)
-            key.firstOrNull() == target.firstOrNull() && editDistance(key, target) <= 1
+    private fun resolveSpelling(letters: List<String>): ClarifiedNameResult {
+        val heard = letters.joinToString("")
+        preferred.singleOrNull { it.equals(heard, ignoreCase = true) }?.let {
+            return ClarifiedNameResult.Accepted(it)
         }
+        val proposed = preferred.singleOrNull {
+            editDistance(heard.lowercase(), it.lowercase()) <= 2
+        } ?: return ClarifiedNameResult.Unclear
+        return ClarifiedNameResult.NeedsConfirmation(letters.joinToString("-"), proposed)
     }
-
-    private fun soundKey(value: String) = value.lowercase()
-        .replace('q', 'k').replace("ph", "f")
-        .replace(Regex("[^a-z]"), "").filterNot { it in "aeiou" }
 
     private fun editDistance(left: String, right: String): Int {
         val row = IntArray(right.length + 1) { it }

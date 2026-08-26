@@ -23,6 +23,10 @@ object RomanHinglishFormatter {
 
     fun format(raw: String): String {
         var text = raw.trim().replace(Regex("\\s+"), " ")
+        // Preserve the Hindi final-vowel contrast before diacritics are stripped:
+        // करीमा -> karīmā (Karima), while करीम -> karīma (Kareem).
+        text = Regex("\\bkarīmā\\s+nahī[mṁ]?\\s+karīma\\b", RegexOption.IGNORE_CASE)
+            .replace(text, "Karima nahi Kareem")
         // करीम transliterates as karīma, while the distinct final long vowel in करीमा
         // is karīmā. Use that signal only inside an explicit name phrase.
         text = Regex("\\b((?:nāma|nama|naam)\\s+)karīma\\b", RegexOption.IGNORE_CASE)

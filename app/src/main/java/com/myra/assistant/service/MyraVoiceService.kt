@@ -25,7 +25,9 @@ import com.myra.assistant.data.memory.BestFriendNameCorrectionParser
 import com.myra.assistant.data.memory.BestFriendNameCanonicalizer
 import com.myra.assistant.data.memory.BestFriendNameCorrection
 import com.myra.assistant.data.memory.ClarifiedPersonNameResolver
+import com.myra.assistant.data.memory.ClarifiedNameResult
 import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
+import com.myra.assistant.data.memory.CorrectionTranscriptNormalizer
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
@@ -127,6 +129,11 @@ class MyraVoiceService : Service() {
     private var pendingDeleteClarificationUntil = 0L
     private var pendingBestFriendCorrectionOldName: String? = null
     private var pendingBestFriendCorrectionUntil = 0L
+    private var pendingSpellingConfirmationName: String? = null
+    private var turnSequence = 0L
+    private var activeTurnId = 0L
+    private var controlledGenerationId = 0L
+    private val responseArbiter = TurnResponseArbiter()
     private val memoryCommandRunnable = Runnable {
         val command = pendingMemoryCommand
         pendingMemoryCommand = null
@@ -278,7 +285,7 @@ class MyraVoiceService : Service() {
                         startLocalSpeechWhenPrefixMatches()
                     }
                 }
-                else if (LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
+                else if (responseArbiter.acceptsOrdinaryModel() && LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
                         suppressed = suppressModelForTurn,
                         assistantAlreadySpeaking = localAudioSpeaking,
                         mediaGuardAllowsResponse = mediaGuard.allowModelResponse()
@@ -289,12 +296,17 @@ class MyraVoiceService : Service() {
                     // her own active AudioTrack for external YouTube playback.
                     mediaGuard.beginAssistantTurn()
                     audio?.queueAudio(it)
-                    voiceLog("service_audio_routed route=ordinary_model bytes=${it.size}")
+                    voiceLog("route_decision turnId=$activeTurnId responseOwner=MODEL route=ordinary_model accepted=true bytes=${it.size}")
                 } else {
-                    voiceLog("service_audio_dropped reason=model_audio_guard bytes=${it.size}")
+                    voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} responseOwner=${responseArbiter.owner} route=ordinary_model bytes=${it.size}")
                 }
             }
             client.onInputTranscript = inputTranscript@ { part ->
+                if (input.isEmpty()) {
+                    activeTurnId = ++turnSequence
+                    responseArbiter.begin(activeTurnId)
+                    voiceLog("input_turn_started turnId=$activeTurnId session=${hashCode()}")
+                }
                 if (handlePendingPersonalMemoryPermission(part)) return@inputTranscript
                 if (handlePendingConfirmation(part)) return@inputTranscript
                 if (isPhantomTranscript(part)) {
@@ -361,7 +373,9 @@ class MyraVoiceService : Service() {
                 // normal model output.
                 if (waitingForFreshInputAfterCommand) {
                     waitingForFreshInputAfterCommand = false
-                    suppressModelForTurn = false
+                    // Fresh mic input must not steal a turn still owned by a controlled
+                    // Gemini generation; its late model text/audio remains suppressed.
+                    suppressModelForTurn = !responseArbiter.acceptsOrdinaryModel()
                     localCommandExecutedThisTurn = false
                 }
                 appendTranscript(input, part); appendTranscript(commandProbe, part)
@@ -469,7 +483,10 @@ class MyraVoiceService : Service() {
                     appendTranscript(localSpeechTranscript, it)
                     startLocalSpeechWhenPrefixMatches()
                 }
-                else if (!suppressModelForTurn && !hideNextModelTranscript && mediaGuard.allowModelResponse()) appendTranscript(output, it)
+                else if (responseArbiter.acceptsOrdinaryModel() && !suppressModelForTurn &&
+                    !hideNextModelTranscript && mediaGuard.allowModelResponse()
+                ) appendTranscript(output, it)
+                else voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} responseOwner=${responseArbiter.owner} route=ordinary_model_text")
             }
             client.onTurnComplete = turnComplete@ {
                 quarantinedLocalSpeech?.let { message ->
@@ -497,6 +514,9 @@ class MyraVoiceService : Service() {
                             }
                         }, LOCAL_SPEECH_AUDIO_DRAIN_MS)
                     }
+                    responseArbiter.controlledGenerationComplete()
+                    voiceLog("turn_complete_received turnId=${responseArbiter.turnId} generationId=$controlledGenerationId responseOwner=${responseArbiter.owner}")
+                    resetTurnBuffers("controlled_generation_complete")
                     return@turnComplete
                 }
                 pendingLocalSpeech?.let { message ->
@@ -509,14 +529,12 @@ class MyraVoiceService : Service() {
                 }
                 if (mediaBlockedTurn && !mediaGuard.isAwake()) {
                     mediaBlockedTurn = false
-                    input.clear(); output.clear(); commandProbe.clear(); commandUserTextEmitted = false
-                    localCommandExecutedThisTurn = false
-                    probableActionTurn = false
+                    resetTurnBuffers("media_blocked_turn_complete")
                     return@turnComplete
                 }
                 if (hideNextModelTranscript) {
                     hideNextModelTranscript = false
-                    input.clear(); output.clear(); commandProbe.clear(); commandUserTextEmitted = false
+                    resetTurnBuffers("hidden_model_turn_complete")
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
@@ -525,12 +543,16 @@ class MyraVoiceService : Service() {
                 mainHandler.removeCallbacks(personalMemoryPauseRunnable)
                 pendingDetectedPersonalMemory = null
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
-                val normalizedFinalUserText = romanDisplayText(userText)
-                val displayedFinalUserText = if (
+                val normalizedFinalUserText = CorrectionTranscriptNormalizer.normalize(
+                    userText,
+                    romanDisplayText(userText)
+                )
+                val displayResolution = if (
                     pendingBestFriendCorrectionOldName != null &&
                     android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
-                ) ClarifiedPersonNameResolver.resolve(normalizedFinalUserText) ?: normalizedFinalUserText
-                else normalizedFinalUserText
+                ) ClarifiedPersonNameResolver.resolve(normalizedFinalUserText) else ClarifiedNameResult.Unclear
+                val displayedFinalUserText = (displayResolution as? ClarifiedNameResult.Accepted)?.name
+                    ?: normalizedFinalUserText
                 voiceLog(
                     "final_input_transcript raw=${userText.take(160)} " +
                         "normalized=${normalizedFinalUserText.take(160)} " +
@@ -563,24 +585,51 @@ class MyraVoiceService : Service() {
                         waitingForFreshInputAfterCommand = true
                         return@turnComplete
                     }
-                    val displayText = romanDisplayText(userText)
+                    val displayText = normalizedFinalUserText
                     val pendingCorrectionOld = pendingBestFriendCorrectionOldName?.takeIf {
                         android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
                     }
                     if (pendingCorrectionOld != null) {
+                        val confirmationName = pendingSpellingConfirmationName
+                        if (confirmationName != null && normalizeSpeech(displayText) in setOf("haan", "han", "yes")) {
+                            pendingSpellingConfirmationName = null
+                            pendingBestFriendCorrectionOldName = null
+                            pendingBestFriendCorrectionUntil = 0L
+                            startCanonicalRename(BestFriendNameCorrection(pendingCorrectionOld, confirmationName))
+                            resetTurnBuffers("spelling_confirmed")
+                            waitingForFreshInputAfterCommand = true
+                            return@turnComplete
+                        }
                         val resolved = ClarifiedPersonNameResolver.resolve(displayText)
                         voiceLog(
                             "correction_clarification pendingType=BEST_FRIEND_RENAME " +
                                 "target=$pendingCorrectionOld raw=${userText.take(100)} " +
                                 "normalized=${displayText.take(100)} resolved=$resolved"
                         )
-                        if (resolved != null) {
-                            pendingBestFriendCorrectionOldName = null
-                            pendingBestFriendCorrectionUntil = 0L
-                            startCanonicalRename(BestFriendNameCorrection(pendingCorrectionOld, resolved))
-                            resetTurnBuffers()
-                            waitingForFreshInputAfterCommand = true
-                            return@turnComplete
+                        when (resolved) {
+                            is ClarifiedNameResult.Accepted -> {
+                                pendingSpellingConfirmationName = null
+                                pendingBestFriendCorrectionOldName = null
+                                pendingBestFriendCorrectionUntil = 0L
+                                startCanonicalRename(BestFriendNameCorrection(pendingCorrectionOld, resolved.name))
+                                resetTurnBuffers("clarified_name_accepted")
+                                waitingForFreshInputAfterCommand = true
+                                return@turnComplete
+                            }
+                            is ClarifiedNameResult.NeedsConfirmation -> {
+                                pendingSpellingConfirmationName = resolved.proposedName
+                                val clarification = "Maine ${resolved.heardLetters} suna. Kya naam ${resolved.proposedName} hai?"
+                                suppressModelForTurn = true
+                                localCommandExecutedThisTurn = true
+                                output.clear(); audio?.interrupt()
+                                listener?.onMyraText(clarification)
+                                emitState(clarification)
+                                queueLocalSpeech(clarification, allowUntranscribedAudio = true)
+                                resetTurnBuffers("incomplete_spelling_confirmation")
+                                waitingForFreshInputAfterCommand = true
+                                return@turnComplete
+                            }
+                            ClarifiedNameResult.Unclear -> Unit
                         }
                     }
                     val pendingDelete = android.os.SystemClock.elapsedRealtime() <=
@@ -656,7 +705,7 @@ class MyraVoiceService : Service() {
                     }
                 }
                 if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
-                    val displayUserText = romanDisplayText(userText)
+                    val displayUserText = normalizedFinalUserText
                     val linkedPersonCandidates = PersonLinkedMemoryExtractor.extractAll(displayUserText)
                     val personalCandidate = linkedPersonCandidates.firstOrNull {
                         MemoryRelationshipPolicy.isBestFriend(it)
@@ -709,10 +758,10 @@ class MyraVoiceService : Service() {
                     rememberRecentRelationshipTurn(displayUserText)
                     learnSafePreferenceFromCompletedTurn(userText)
                 }
-                if (myraText.isNotBlank() && !suppressModelForTurn) listener?.onMyraText(romanDisplayText(myraText))
-                input.clear(); output.clear(); commandProbe.clear()
-                commandUserTextEmitted = false
-                probableActionTurn = false
+                if (myraText.isNotBlank() && !suppressModelForTurn && responseArbiter.acceptsOrdinaryModel()) {
+                    listener?.onMyraText(romanDisplayText(myraText))
+                }
+                resetTurnBuffers("normal_turn_complete")
                 if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
                 if (mediaGuard.isAwake()) mediaGuard.finishInteraction()
                 pendingLocalSpeech?.let { message ->
@@ -1349,6 +1398,14 @@ class MyraVoiceService : Service() {
         lastLocalSpeechKey = key
         lastLocalSpeechAt = now
         suppressModelForTurn = true
+        val ownerTurnId = activeTurnId.takeIf { it != 0L }
+            ?: responseArbiter.turnId.takeIf { it != 0L }
+            ?: ++turnSequence
+        responseArbiter.claimControlled(ownerTurnId)
+        voiceLog("suppression_start turnId=$ownerTurnId responseOwner=CONTROLLED_LOCAL reason=controlled_reply")
+        // Remove any ordinary-model PCM already queued before the deterministic
+        // correction/delete/recall response takes ownership.
+        audio?.interrupt()
         voiceLog(
             "local_speech_queued chars=${message.length} policy=${policyName(validationPolicy)} " +
                 "alreadyValidating=${validatingLocalSpeech != null} allowNoTranscript=$allowUntranscribedAudio"
@@ -1401,6 +1458,7 @@ class MyraVoiceService : Service() {
         localSpeechValidationAttempt++
         localSpeechValidationToken++
         val token = localSpeechValidationToken
+        controlledGenerationId++
         validatingLocalSpeech = message
         localSpeechHasContent = false
         localSpeechStreamedDirectly = false
@@ -1409,7 +1467,7 @@ class MyraVoiceService : Service() {
         localSpeechTranscript.clear()
         suppressModelForTurn = true
         voiceLog(
-            "local_speech_generation_start token=$token attempt=$localSpeechValidationAttempt " +
+            "local_speech_generation_start turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token attempt=$localSpeechValidationAttempt " +
                 "chars=${message.length} policy=${policyName(localSpeechValidationPolicy)}"
         )
         // Continuous mic packets can race with clientContent and cancel this short
@@ -1518,6 +1576,9 @@ class MyraVoiceService : Service() {
         localPlaybackActive = false
         localSpeechStreamedDirectly = false
         localSpeechGenerationComplete = false
+        responseArbiter.controlledGenerationComplete()
+        responseArbiter.controlledPlaybackComplete()
+        if (responseArbiter.releaseIfComplete()) voiceLog("suppression_end turnId=${responseArbiter.turnId} reason=unavailable_natural_audio")
         if (!runPendingActionAfterSpeech()) {
             audio?.setMuted(false)
             emitState("Sun rahi hoon…")
@@ -1532,6 +1593,10 @@ class MyraVoiceService : Service() {
         localPlaybackActive = false
         localSpeechStreamedDirectly = false
         localSpeechGenerationComplete = false
+        responseArbiter.controlledPlaybackComplete()
+        if (responseArbiter.releaseIfComplete()) {
+            voiceLog("suppression_end turnId=${responseArbiter.turnId} generationId=$controlledGenerationId reason=matching_generation_and_playback_complete")
+        }
         if (!runPendingActionAfterSpeech()) {
             if (resumeMicImmediately) audio?.resumeListeningNow()
             else audio?.setMuted(false)
@@ -1560,7 +1625,11 @@ class MyraVoiceService : Service() {
         }
     }
 
-    private fun resetTurnBuffers() {
+    private fun resetTurnBuffers(reason: String = "turn_committed") {
+        voiceLog(
+            "transcript_accumulator_reset turnId=$activeTurnId session=${hashCode()} " +
+                "reason=$reason inputChars=${input.length} commandChars=${commandProbe.length}"
+        )
         input.clear()
         output.clear()
         commandProbe.clear()
@@ -1569,6 +1638,7 @@ class MyraVoiceService : Service() {
         mediaBlockedTurn = false
         ambiguousMessageTurn = false
         incompleteActionFragmentTurn = false
+        activeTurnId = 0L
     }
 
     private fun romanDisplayText(value: String): String {

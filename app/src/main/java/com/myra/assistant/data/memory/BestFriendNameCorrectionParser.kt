@@ -29,12 +29,13 @@ object BestFriendNameCorrectionParser {
             val recentOld = lastSavedName?.takeIf {
                 looksLikeSameSpokenName(it, spokenOld)
             }
-            return BestFriendNameCorrection(
+            val correction = BestFriendNameCorrection(
                 // The old word can be another ASR variant (Now Farah -> Nowar).
                 // Target the recently persisted identity when there is one clear match.
                 oldName = recentOld ?: spokenOld,
                 newName = BestFriendNameCanonicalizer.canonicalize(match.groupValues[2])
             )
+            return correction.takeUnless { it.oldName.equals(it.newName, ignoreCase = true) }
         }
         val old = lastSavedName?.takeIf { it.isNotBlank() } ?: return null
         if (clean.lowercase(Locale.ROOT) in rejected) return null

@@ -43,6 +43,20 @@ class MemoryRepositoryLinkedPersonTest {
         assertFalse(dao.all().filter { it.active }.any { it.stableKey.startsWith("person:naufal:") })
     }
 
+    @Test fun deletingKareemAndLinkedFactRemainsAbsentAfterReconnect() = runBlocking {
+        val dao = FakeMemoryDao()
+        MemoryRepository(dao).apply {
+            saveAdditionalBestFriend(bestFriend("Kareem"))
+            save(gamingChannel("Kareem"))
+            assertTrue(forgetMatching("Kareem"))
+        }
+        repeat(2) {
+            val reopened = MemoryRepository(dao)
+            assertTrue(reopened.relevant("Kareem", 10).isEmpty())
+            assertTrue(dao.recent(50).isEmpty())
+        }
+    }
+
     @Test fun karimaCorrectionConsolidatesExistingKareemAndLinkedFact() = runBlocking {
         val dao = FakeMemoryDao()
         val repository = MemoryRepository(dao)
