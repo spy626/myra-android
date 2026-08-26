@@ -43,12 +43,12 @@ class MemoryRepositoryLinkedPersonTest {
 
     private fun bestFriend(name: String) = MemoryCandidate(
         MemoryCategory.PERSON, "Zopy's best friend is $name",
-        MemoryRelationshipPolicy.BEST_FRIEND_KEY, MemorySensitivity.PERSONAL, .96, "test"
+        MemoryRelationshipPolicy.BEST_FRIEND_KEY, MemorySensitivity.PERSONAL, .96, source = "test"
     )
 
     private fun gamingChannel(name: String) = MemoryCandidate(
         MemoryCategory.PERSON, "$name has a gaming channel",
-        "person:${name.lowercase()}:gaming_channel", MemorySensitivity.PERSONAL, .94, "test"
+        "person:${name.lowercase()}:gaming_channel", MemorySensitivity.PERSONAL, .94, source = "test"
     )
 }
 
