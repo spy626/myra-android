@@ -20,6 +20,7 @@ class AudioEngine(private val context: Context) {
     var onMicChunk: ((ByteArray) -> Unit)? = null
     var onAmplitude: ((Float) -> Unit)? = null
     var onSpeakingChanged: ((Boolean) -> Unit)? = null
+    var onSpeechActivityChanged: ((Boolean) -> Unit)? = null
 
     private val running = AtomicBoolean(false)
     private val muted = AtomicBoolean(false)
@@ -37,6 +38,7 @@ class AudioEngine(private val context: Context) {
     private val playbackLock = Any()
     private var queuedAudioChunk = 0L
     private var writtenAudioBytes = 0L
+    private val speechActivityDetector = SpeechActivityDetector()
 
     fun start() {
         if (running.getAndSet(true)) return
@@ -56,12 +58,20 @@ class AudioEngine(private val context: Context) {
         }
         recorder?.startRecording()
         micThread = thread(name = "myra-mic") {
-            val data = ByteArray(3200) // 100 ms, recommended by Live API
+            val data = ByteArray(1600) // 50 ms: low-latency VAD and Live API input
             while (running.get()) {
                 val count = runCatching { recorder?.read(data, 0, data.size) ?: 0 }.getOrDefault(0)
                 if (count > 0) {
                     val chunk = data.copyOf(count)
-                    onAmplitude?.invoke(rms(chunk))
+                    val level = rms(chunk)
+                    onAmplitude?.invoke(level)
+                    if (!muted.get()) {
+                        when (speechActivityDetector.update(level)) {
+                            SpeechActivityEvent.STARTED -> onSpeechActivityChanged?.invoke(true)
+                            SpeechActivityEvent.ENDED -> onSpeechActivityChanged?.invoke(false)
+                            SpeechActivityEvent.NONE -> Unit
+                        }
+                    }
                     // Never feed LYRA's own speaker output back into Gemini. Platform
                     // echo cancellation is helpful but not reliable on every phone.
                     if (MicBargeInPolicy.shouldForward(muted.get(), speaking.get(), bargeInEnabled.get()) &&
@@ -155,7 +165,10 @@ class AudioEngine(private val context: Context) {
                 "accepted=$accepted queueSize=${queue.size} running=${running.get()}"
         )
     }
-    fun setMuted(value: Boolean) { muted.set(value) }
+    fun setMuted(value: Boolean) {
+        muted.set(value)
+        if (value) speechActivityDetector.reset()
+    }
     fun setBargeInEnabled(value: Boolean) { bargeInEnabled.set(value) }
     fun resumeListeningNow() {
         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime()
