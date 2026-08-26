@@ -57,6 +57,14 @@ object BestFriendNameCorrectionParser {
             .equals(BestFriendNameCanonicalizer.canonicalize(match.groupValues[2]), ignoreCase = true)
     }
 
+    /** Keeps the database target when ASR heard both sides as the same name. */
+    fun ambiguousOldName(raw: String, lastSavedName: String?): String? {
+        val clean = raw.trim().trimEnd('.', ',', '?', '!', '।').replace(Regex("\\s+"), " ")
+        val match = explicitPair.firstNotNullOfOrNull { it.matchEntire(clean) } ?: return null
+        val spokenOld = BestFriendNameCanonicalizer.canonicalize(match.groupValues[1])
+        return lastSavedName?.takeIf { looksLikeSameSpokenName(it, spokenOld) } ?: spokenOld
+    }
+
     private fun looksLikeSameSpokenName(left: String, right: String): Boolean {
         val a = soundKey(left)
         val b = soundKey(right)

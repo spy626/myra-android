@@ -23,6 +23,8 @@ import com.myra.assistant.data.memory.AutomaticMemoryChange
 import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
 import com.myra.assistant.data.memory.BestFriendNameCorrectionParser
 import com.myra.assistant.data.memory.BestFriendNameCanonicalizer
+import com.myra.assistant.data.memory.BestFriendNameCorrection
+import com.myra.assistant.data.memory.ClarifiedPersonNameResolver
 import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
@@ -123,6 +125,8 @@ class MyraVoiceService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingMemoryCommand: MemoryCommand? = null
     private var pendingDeleteClarificationUntil = 0L
+    private var pendingBestFriendCorrectionOldName: String? = null
+    private var pendingBestFriendCorrectionUntil = 0L
     private val memoryCommandRunnable = Runnable {
         val command = pendingMemoryCommand
         pendingMemoryCommand = null
@@ -521,6 +525,17 @@ class MyraVoiceService : Service() {
                 mainHandler.removeCallbacks(personalMemoryPauseRunnable)
                 pendingDetectedPersonalMemory = null
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
+                val normalizedFinalUserText = romanDisplayText(userText)
+                val displayedFinalUserText = if (
+                    pendingBestFriendCorrectionOldName != null &&
+                    android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
+                ) ClarifiedPersonNameResolver.resolve(normalizedFinalUserText) ?: normalizedFinalUserText
+                else normalizedFinalUserText
+                voiceLog(
+                    "final_input_transcript raw=${userText.take(160)} " +
+                        "normalized=${normalizedFinalUserText.take(160)} " +
+                        "display=${displayedFinalUserText.take(160)}"
+                )
                 if (incompleteActionFragmentTurn &&
                     CommandParser.isLikelyIncompleteActionFragment(userText)
                 ) {
@@ -532,7 +547,7 @@ class MyraVoiceService : Service() {
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
-                if (userText.isNotBlank() && !commandUserTextEmitted) listener?.onUserText(romanDisplayText(userText))
+                if (userText.isNotBlank() && !commandUserTextEmitted) listener?.onUserText(displayedFinalUserText)
                 // Run one final parse over the complete transcript. Partial Live transcript
                 // chunks can omit or mistranscribe the action word even when the final text
                 // contains enough context to identify the device command.
@@ -549,6 +564,25 @@ class MyraVoiceService : Service() {
                         return@turnComplete
                     }
                     val displayText = romanDisplayText(userText)
+                    val pendingCorrectionOld = pendingBestFriendCorrectionOldName?.takeIf {
+                        android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
+                    }
+                    if (pendingCorrectionOld != null) {
+                        val resolved = ClarifiedPersonNameResolver.resolve(displayText)
+                        voiceLog(
+                            "correction_clarification pendingType=BEST_FRIEND_RENAME " +
+                                "target=$pendingCorrectionOld raw=${userText.take(100)} " +
+                                "normalized=${displayText.take(100)} resolved=$resolved"
+                        )
+                        if (resolved != null) {
+                            pendingBestFriendCorrectionOldName = null
+                            pendingBestFriendCorrectionUntil = 0L
+                            startCanonicalRename(BestFriendNameCorrection(pendingCorrectionOld, resolved))
+                            resetTurnBuffers()
+                            waitingForFreshInputAfterCommand = true
+                            return@turnComplete
+                        }
+                    }
                     val pendingDelete = android.os.SystemClock.elapsedRealtime() <=
                         pendingDeleteClarificationUntil
                     val memoryCommand = if (pendingDelete) {
@@ -568,6 +602,19 @@ class MyraVoiceService : Service() {
                         suppressModelForTurn = true
                         output.clear()
                         audio?.interrupt()
+                        val recentName = lastSavedBestFriendName?.takeIf {
+                            android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
+                                BEST_FRIEND_CORRECTION_CONTEXT_MS
+                        }
+                        pendingBestFriendCorrectionOldName =
+                            BestFriendNameCorrectionParser.ambiguousOldName(displayText, recentName)
+                        pendingBestFriendCorrectionUntil = android.os.SystemClock.elapsedRealtime() +
+                            BEST_FRIEND_CORRECTION_CONTEXT_MS
+                        voiceLog(
+                            "correction_clarification_set type=BEST_FRIEND_RENAME " +
+                                "target=${pendingBestFriendCorrectionOldName} raw=${userText.take(100)} " +
+                                "normalized=${displayText.take(100)}"
+                        )
                         listener?.onMyraText(clarification)
                         emitState(clarification)
                         queueLocalSpeech(clarification, allowUntranscribedAudio = true)
@@ -634,50 +681,7 @@ class MyraVoiceService : Service() {
                         // Gemini can conversationally acknowledge a correction even when
                         // Room did not change. Hide that unverified answer and confirm only
                         // after the repository returns and its rows have been read back.
-                        suppressModelForTurn = true
-                        localCommandExecutedThisTurn = true
-                        output.clear()
-                        audio?.interrupt()
-                        // Previously this correction lived only in Gemini's conversation
-                        // reply. Update the same Room row and stable key so recall/delete
-                        // cannot keep using the first stale ASR spelling.
-                        pendingCanonicalRename = serviceScope.launch {
-                            val renamed = memoryRepository.renameBestFriend(
-                                nameCorrection.oldName,
-                                nameCorrection.newName
-                            )
-                            val rows = memoryRepository.logPersonIdentity(
-                                "after_correction renamed=$renamed",
-                                nameCorrection.oldName,
-                                nameCorrection.newName
-                            )
-                            voiceLog(
-                                "name_correction_persisted success=$renamed records=" +
-                                    rows.joinToString { "${it.stableKey}:${it.fact}" }
-                            )
-                            val reply = if (renamed) {
-                                "Theek hai, ab ${nameCorrection.newName} naam save hai."
-                            } else {
-                                "Purana naam match nahi hua. Naam ek baar clearly repeat karo."
-                            }
-                            mainHandler.post {
-                                listener?.onMyraText(reply)
-                                emitState(reply)
-                                queueLocalSpeech(
-                                    reply,
-                                    allowUntranscribedAudio = true,
-                                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                                )
-                                if (renamed) {
-                                    replaceRecentRelationshipName(
-                                        nameCorrection.oldName,
-                                        nameCorrection.newName
-                                    )
-                                    lastSavedBestFriendName = nameCorrection.newName
-                                    lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
-                                }
-                            }
-                        }
+                        startCanonicalRename(nameCorrection)
                     } else if (personalCandidate != null) {
                         recentRelationshipTurns.clear()
                         if (MemoryRelationshipPolicy.isBestFriend(personalCandidate)) {
@@ -1605,6 +1609,59 @@ class MyraVoiceService : Service() {
                 Regex("\\b${Regex.escape(oldName)}\\b", RegexOption.IGNORE_CASE),
                 newName
             )
+        }
+    }
+
+    private fun startCanonicalRename(correction: BestFriendNameCorrection) {
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        output.clear()
+        audio?.interrupt()
+        // Do not trust Gemini's conversational acknowledgement. Only this verified
+        // repository result is allowed to produce a success bubble or spoken reply.
+        pendingCanonicalRename = serviceScope.launch {
+            val before = memoryRepository.logPersonIdentity(
+                "before_correction", correction.oldName, correction.newName
+            )
+            voiceLog(
+                "correction_transaction old=${correction.oldName} new=${correction.newName} " +
+                    "matchingRowIds=${before.map { it.id }}"
+            )
+            val renamed = memoryRepository.renameBestFriend(correction.oldName, correction.newName)
+            val rows = memoryRepository.logPersonIdentity(
+                "after_correction renamed=$renamed", correction.oldName, correction.newName
+            )
+            val verified = renamed && rows.any {
+                MemoryRelationshipPolicy.personName(it.fact)
+                    ?.equals(correction.newName, ignoreCase = true) == true
+            } && rows.none {
+                MemoryRelationshipPolicy.personName(it.fact)
+                    ?.equals(correction.oldName, ignoreCase = true) == true
+            }
+            voiceLog(
+                "correction_transaction_result writeSuccess=$renamed verified=$verified " +
+                    "finalRows=${rows.joinToString { "${it.id}:${it.stableKey}:${it.fact}" }}"
+            )
+            val reply = if (verified) {
+                "Theek hai, ab ${correction.newName} naam save hai."
+            } else {
+                "Naam update nahi ho paya. Ek baar phir try karo."
+            }
+            mainHandler.post {
+                if (verified) {
+                    replaceRecentRelationshipName(correction.oldName, correction.newName)
+                    lastSavedBestFriendName = correction.newName
+                    lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
+                    voiceLog("correction_cache_invalidated old=${correction.oldName} new=${correction.newName}")
+                }
+                listener?.onMyraText(reply)
+                emitState(reply)
+                queueLocalSpeech(
+                    reply,
+                    allowUntranscribedAudio = true,
+                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
+                )
+            }
         }
     }
 

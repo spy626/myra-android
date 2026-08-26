@@ -48,5 +48,9 @@ class BestFriendNameCorrectionParserTest {
     @Test fun identicalMistranscribedCorrectionRequiresClearRepeat() {
         assertEquals(true, BestFriendNameCorrectionParser.needsClearCorrectedName("Karima nahi karima"))
         assertEquals(false, BestFriendNameCorrectionParser.needsClearCorrectedName("Karima nahi Kareem"))
+        assertEquals(
+            "Karima",
+            BestFriendNameCorrectionParser.ambiguousOldName("Karima nahi karima", "Karima")
+        )
     }
 }

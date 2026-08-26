@@ -63,6 +63,29 @@ class MemoryRepositoryLinkedPersonTest {
         })
     }
 
+    @Test fun karimaCorrectionPersistsAcrossTwoRepositorySessions() = runBlocking {
+        val dao = FakeMemoryDao()
+        MemoryRepository(dao).apply {
+            saveAdditionalBestFriend(bestFriend("Karima"))
+            save(gamingChannel("Karima"))
+            assertTrue(renameBestFriend("Karima", "Kareem"))
+        }
+
+        repeat(2) {
+            val reopened = MemoryRepository(dao)
+            assertEquals(
+                setOf("Zopy's best friend is Kareem", "Kareem has a gaming channel"),
+                reopened.relevant("Kareem", 10).map { row -> row.fact }.toSet()
+            )
+            assertTrue(reopened.relevant("Karima", 10).isEmpty())
+        }
+    }
+
+    @Test fun failedRenameCannotPassReadAfterWriteVerification() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        assertFalse(repository.renameBestFriend("Karima", "Kareem"))
+    }
+
     @Test fun recordedNamedKarimAliasIsMergedAndDeleteRemovesWholeIdentity() = runBlocking {
         val dao = FakeMemoryDao()
         val repository = MemoryRepository(dao)
