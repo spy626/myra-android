@@ -43,6 +43,26 @@ class MemoryRepositoryLinkedPersonTest {
         assertFalse(dao.all().filter { it.active }.any { it.stableKey.startsWith("person:naufal:") })
     }
 
+    @Test fun karimaCorrectionConsolidatesExistingKareemAndLinkedFact() = runBlocking {
+        val dao = FakeMemoryDao()
+        val repository = MemoryRepository(dao)
+        repository.saveAdditionalBestFriend(bestFriend("Karima"))
+        repository.save(gamingChannel("Karima"))
+        repository.saveAdditionalBestFriend(bestFriend("Kareem"))
+
+        assertTrue(repository.renameBestFriend("Karima", "Kareem"))
+
+        val active = dao.recent(50)
+        assertEquals(1, active.count { MemoryRelationshipPolicy.isBestFriend(it) })
+        assertEquals(
+            setOf("Zopy's best friend is Kareem", "Kareem has a gaming channel"),
+            active.map { it.fact }.toSet()
+        )
+        assertTrue(active.none {
+            it.fact.contains("Karima", true) || it.stableKey.contains("karima", true)
+        })
+    }
+
     private fun bestFriend(name: String) = MemoryCandidate(
         MemoryCategory.PERSON, "Zopy's best friend is $name",
         MemoryRelationshipPolicy.BEST_FRIEND_KEY, MemorySensitivity.PERSONAL, .96, source = "test"

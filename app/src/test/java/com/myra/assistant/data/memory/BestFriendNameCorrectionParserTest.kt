@@ -31,6 +31,13 @@ class BestFriendNameCorrectionParserTest {
         assertEquals("Kareem", correction?.newName)
     }
 
+    @Test fun karimaToKareemTargetsTheStoredOldIdentity() {
+        assertEquals(
+            BestFriendNameCorrection("Karima", "Kareem"),
+            BestFriendNameCorrectionParser.parse("Karima nahi, Kareem", "Karima")
+        )
+    }
+
     @Test fun shortObservedNaufalCorrectionIsAcceptedButNewPersonIsNot() {
         // Now Pal canonicalizes to Naufal immediately, so repeating Nauphala is not a rename.
         assertNull(BestFriendNameCorrectionParser.parse("Nauphala", "Now Pal"))

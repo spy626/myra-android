@@ -195,7 +195,7 @@ class MemoryRepository(private val dao: MemoryDao) {
             var affected = 0
             for (row in oldRows) affected += dao.deactivate(row.id, now)
             renameLinkedPersonRows(allMemories, oldRows, oldName, canonicalName, now)
-            return affected > 0
+            return affected > 0 && verifyRenameCommitted(oldName, canonicalName)
         }
         val now = System.currentTimeMillis()
         val renamed = dao.rename(
@@ -207,7 +207,30 @@ class MemoryRepository(private val dao: MemoryDao) {
         ) > 0
         oldRows.filter { it.id != old.id }.forEach { dao.deactivate(it.id, now) }
         renameLinkedPersonRows(allMemories, oldRows, oldName, canonicalName, now)
-        return renamed
+        return renamed && verifyRenameCommitted(oldName, canonicalName)
+    }
+
+    /** Never report success until Room contains the target and no exact stale alias. */
+    private suspend fun verifyRenameCommitted(oldName: String, canonicalName: String): Boolean {
+        val active = dao.recent(50)
+        val hasCanonicalPerson = active.any {
+            MemoryRelationshipPolicy.isBestFriend(it) &&
+                MemoryRelationshipPolicy.personName(it.fact)
+                    ?.equals(canonicalName, ignoreCase = true) == true
+        }
+        val oldToken = PersonLinkedMemoryIdentity.stableToken(oldName)
+        val staleOldIdentity = active.any { row ->
+            MemoryRelationshipPolicy.personName(row.fact)
+                ?.equals(oldName, ignoreCase = true) == true ||
+                row.stableKey.startsWith("person:$oldToken:") ||
+                Regex("^${Regex.escape(oldName)}\\b", RegexOption.IGNORE_CASE)
+                    .containsMatchIn(row.fact)
+        }
+        memoryLog(
+            "verify_rename old=$oldName new=$canonicalName canonical=$hasCanonicalPerson " +
+                "staleOld=$staleOldIdentity active=${active.map { it.stableKey to it.fact }}"
+        )
+        return hasCanonicalPerson && !staleOldIdentity
     }
 
     private suspend fun renameLinkedPersonRows(
