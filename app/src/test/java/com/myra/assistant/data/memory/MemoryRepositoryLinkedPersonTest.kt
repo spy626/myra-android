@@ -10,22 +10,22 @@ class MemoryRepositoryLinkedPersonTest {
     @Test fun linkedFactMovesToNewNameAndOldNameReturnsNothing() = runBlocking {
         val dao = FakeMemoryDao()
         val repository = MemoryRepository(dao)
-        // Reproduce the phone case: storage froze "Naufara", while the user
-        // referred to the old spelling as "Nauphara" during correction.
-        repository.saveAdditionalBestFriend(bestFriend("Naufara"))
-        repository.save(gamingChannel("Naufara"))
+        // Reproduce the video: ASR froze "Now Farah". The correction parser
+        // resolves spoken "Nowar" back to this persisted identity.
+        repository.saveAdditionalBestFriend(bestFriend("Now Farah"))
+        repository.save(gamingChannel("Now Farah"))
 
-        assertTrue(repository.renameBestFriend("Nauphara", "Naufal"))
+        assertTrue(repository.renameBestFriend("Now Farah", "Naufal"))
 
         val active = dao.recent(50)
         val newLookup = repository.relevant("Naufal", 10)
-        val oldLookup = repository.relevant("Nauphara", 10)
+        val oldLookup = repository.relevant("Now Farah", 10)
         assertEquals(
             setOf("Zopy's best friend is Naufal", "Naufal has a gaming channel"),
             active.map { it.fact }.toSet()
         )
         assertTrue(active.none {
-            it.fact.contains("Naufara", true) || it.stableKey.contains("naufara", true)
+            it.fact.contains("Now Farah", true) || it.stableKey.contains("now_farah", true)
         })
         assertEquals(2, newLookup.size)
         assertTrue(oldLookup.isEmpty())
