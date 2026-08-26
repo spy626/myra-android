@@ -617,6 +617,13 @@ class MyraVoiceService : Service() {
                             "recent=$recentName parsed=$nameCorrection"
                     )
                     if (nameCorrection != null) {
+                        // Gemini can conversationally acknowledge a correction even when
+                        // Room did not change. Hide that unverified answer and confirm only
+                        // after the repository returns and its rows have been read back.
+                        suppressModelForTurn = true
+                        localCommandExecutedThisTurn = true
+                        output.clear()
+                        audio?.interrupt()
                         // Previously this correction lived only in Gemini's conversation
                         // reply. Update the same Room row and stable key so recall/delete
                         // cannot keep using the first stale ASR spelling.
@@ -634,10 +641,29 @@ class MyraVoiceService : Service() {
                                 "name_correction_persisted success=$renamed records=" +
                                     rows.joinToString { "${it.stableKey}:${it.fact}" }
                             )
+                            val reply = if (renamed) {
+                                "Theek hai, ab ${nameCorrection.newName} naam save hai."
+                            } else {
+                                "Purana naam match nahi hua. Naam ek baar clearly repeat karo."
+                            }
+                            mainHandler.post {
+                                listener?.onMyraText(reply)
+                                emitState(reply)
+                                queueLocalSpeech(
+                                    reply,
+                                    allowUntranscribedAudio = true,
+                                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
+                                )
+                                if (renamed) {
+                                    replaceRecentRelationshipName(
+                                        nameCorrection.oldName,
+                                        nameCorrection.newName
+                                    )
+                                    lastSavedBestFriendName = nameCorrection.newName
+                                    lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
+                                }
+                            }
                         }
-                        replaceRecentRelationshipName(nameCorrection.oldName, nameCorrection.newName)
-                        lastSavedBestFriendName = nameCorrection.newName
-                        lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
                     } else if (personalCandidate != null) {
                         recentRelationshipTurns.clear()
                         if (MemoryRelationshipPolicy.isBestFriend(personalCandidate)) {

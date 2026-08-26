@@ -25,8 +25,14 @@ object BestFriendNameCorrectionParser {
     fun parse(raw: String, lastSavedName: String?): BestFriendNameCorrection? {
         val clean = raw.trim().trimEnd('.', ',', '?', '!', '।').replace(Regex("\\s+"), " ")
         explicitPair.firstNotNullOfOrNull { it.matchEntire(clean) }?.let { match ->
+            val spokenOld = BestFriendNameCanonicalizer.canonicalize(match.groupValues[1])
+            val recentOld = lastSavedName?.takeIf {
+                looksLikeSameSpokenName(it, spokenOld)
+            }
             return BestFriendNameCorrection(
-                oldName = BestFriendNameCanonicalizer.canonicalize(match.groupValues[1]),
+                // The old word can be another ASR variant (Now Farah -> Nowar).
+                // Target the recently persisted identity when there is one clear match.
+                oldName = recentOld ?: spokenOld,
                 newName = BestFriendNameCanonicalizer.canonicalize(match.groupValues[2])
             )
         }

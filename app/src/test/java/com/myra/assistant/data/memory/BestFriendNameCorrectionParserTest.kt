@@ -12,6 +12,13 @@ class BestFriendNameCorrectionParserTest {
         )
     }
 
+    @Test fun correctionTargetsRecentStoredAliasAndCanonicalizesNewPronunciation() {
+        assertEquals(
+            BestFriendNameCorrection("Now Farah", "Naufal"),
+            BestFriendNameCorrectionParser.parse("Nowar nahi, now fal", "Now Farah")
+        )
+    }
+
     @Test fun explicitCorrectionRenamesTheLastSavedPerson() {
         val correction = BestFriendNameCorrectionParser.parse("Nahi, Kareem", "Karima")
         assertEquals("Karima", correction?.oldName)

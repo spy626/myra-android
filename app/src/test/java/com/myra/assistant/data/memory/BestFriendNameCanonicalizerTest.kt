@@ -16,4 +16,9 @@ class BestFriendNameCanonicalizerTest {
     @Test fun doesNotGuessThatLegitimateKarimaMeansKareem() {
         assertEquals("Karima", BestFriendNameCanonicalizer.canonicalize("Karima"))
     }
+
+    @Test fun canonicalizesUnlistedCloseCorrectionWithoutAnotherLookupEntry() {
+        assertEquals("Naufal", BestFriendNameCanonicalizer.canonicalize("Now fal"))
+        assertEquals("Naufal", BestFriendNameCanonicalizer.canonicalize("Naufara"))
+    }
 }
