@@ -35,7 +35,7 @@ class MemoryRepositoryLinkedPersonTest {
         repository.saveAdditionalBestFriend(bestFriend("Naufal"))
         repository.save(gamingChannel("Naufal"))
 
-        assertTrue(repository.forgetMatching("Naukra"))
+        assertTrue(repository.forgetMatching("Naufal"))
 
         assertTrue(dao.recent(50).isEmpty())
         assertFalse(dao.all().filter { it.active }.any { it.stableKey.startsWith("person:naufal:") })
