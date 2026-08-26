@@ -32,6 +32,7 @@ import com.myra.assistant.data.memory.MemoryConfirmationDecision
 import com.myra.assistant.data.memory.MemoryConfirmationParser
 import com.myra.assistant.data.memory.MemoryCandidate
 import com.myra.assistant.data.memory.PersonalMemoryExtractor
+import com.myra.assistant.data.memory.PersonLinkedMemoryExtractor
 import com.myra.assistant.data.memory.PersonalMemoryContextCorrection
 import com.myra.assistant.data.memory.PersonalMemoryPermissionPrompt
 import com.myra.assistant.data.memory.PersonalMemoryRecallFormatter
@@ -594,7 +595,10 @@ class MyraVoiceService : Service() {
                 }
                 if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
                     val displayUserText = romanDisplayText(userText)
-                    val personalCandidate = PersonalMemoryExtractor.extract(displayUserText)
+                    val linkedPersonCandidates = PersonLinkedMemoryExtractor.extractAll(displayUserText)
+                    val personalCandidate = linkedPersonCandidates.firstOrNull {
+                        MemoryRelationshipPolicy.isBestFriend(it)
+                    } ?: PersonalMemoryExtractor.extract(displayUserText)
                         ?: contextualRelationshipCandidate(displayUserText)
                     val recentName = lastSavedBestFriendName?.takeIf {
                         android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
@@ -636,6 +640,14 @@ class MyraVoiceService : Service() {
                             return@turnComplete
                         }
                     }
+                    // One natural sentence can contain more than the relationship.
+                    // Persist only additional durable, grounded person facts; temporary
+                    // claims such as playing without sleep never enter this list.
+                    linkedPersonCandidates
+                        .filterNot(MemoryRelationshipPolicy::isBestFriend)
+                        .forEach { linkedFact ->
+                            serviceScope.launch { memoryRepository.save(linkedFact) }
+                        }
                     rememberRecentRelationshipTurn(displayUserText)
                     learnSafePreferenceFromCompletedTurn(userText)
                 }
@@ -956,6 +968,7 @@ class MyraVoiceService : Service() {
         }
         if (pendingPersonalMemory != null || pendingDetectedPersonalMemory != null ||
             PersonalMemoryExtractor.extract(romanDisplayText(guardedText)) != null ||
+            PersonLinkedMemoryExtractor.extractAll(romanDisplayText(guardedText)).isNotEmpty() ||
             AutomaticMemoryChangeParser.parse(romanDisplayText(guardedText)) is AutomaticMemoryChange.Save
         ) {
             live?.sendToolResponse(id, "propose_user_memory", true, "This fact is already being handled by Android")

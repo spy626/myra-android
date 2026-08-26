@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.app.ActivityManager
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.IntentFilter
 import android.provider.Settings
 import android.os.BatteryManager
@@ -293,6 +295,12 @@ class MainActivity : AppCompatActivity() {
             movementMethod = LinkMovementMethod.getInstance()
             linksClickable = true
             setBackgroundResource(if (isUser) com.myra.assistant.R.drawable.bg_chat_user else com.myra.assistant.R.drawable.bg_chat_myra)
+            setOnLongClickListener {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("LYRA chat message", text))
+                Toast.makeText(this@MainActivity, "Message copied", Toast.LENGTH_SHORT).show()
+                true
+            }
         }
         val row = LinearLayout(this).apply {
             gravity = if (isUser) Gravity.END else Gravity.START
