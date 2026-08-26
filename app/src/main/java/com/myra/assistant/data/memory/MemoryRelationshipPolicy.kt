@@ -29,7 +29,7 @@ object MemoryRelationshipPolicy {
 
     fun canonicalize(candidate: MemoryCandidate): MemoryCandidate {
         if (!isBestFriend(candidate)) return candidate
-        val name = personName(candidate.fact)
+        val name = personName(candidate.fact)?.let(BestFriendNameCanonicalizer::canonicalize)
         return candidate.copy(
             stableKey = BEST_FRIEND_KEY,
             fact = name?.let { "Zopy's best friend is $it" } ?: candidate.fact

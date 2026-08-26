@@ -21,6 +21,8 @@ import com.myra.assistant.ai.LyraPlaybackCapturePolicy
 import com.myra.assistant.ai.LiveTranscriptAssembler
 import com.myra.assistant.data.memory.AutomaticMemoryChange
 import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
+import com.myra.assistant.data.memory.BestFriendNameCorrectionParser
+import com.myra.assistant.data.memory.BestFriendNameCanonicalizer
 import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
@@ -40,6 +42,7 @@ import com.myra.assistant.data.memory.MemoryWriteResult
 import com.myra.assistant.data.memory.MemorySafetyPolicy
 import com.myra.assistant.data.memory.MemorySaveDecision
 import com.myra.assistant.data.memory.SemanticMemoryProposalValidator
+import com.myra.assistant.data.memory.UnclearDeleteIntentGuard
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.MyApplication
@@ -90,6 +93,8 @@ class MyraVoiceService : Service() {
     private val commandProbe = StringBuilder()
     private var lastUserIntentText = ""
     private val recentRelationshipTurns = mutableListOf<Pair<Long, String>>()
+    private var lastSavedBestFriendName: String? = null
+    private var lastSavedBestFriendAt = 0L
     private var suppressModelForTurn = false
     private var waitingForFreshInputAfterCommand = false
     private var commandUserTextEmitted = false
@@ -397,6 +402,13 @@ class MyraVoiceService : Service() {
                     suppressModelForTurn = false
                 }
                 val romanMemoryTranscript = romanDisplayText(commandProbe.toString())
+                if (UnclearDeleteIntentGuard.needsClarification(romanMemoryTranscript)) {
+                    // Never let a garbled delete phrase reach Gemini as an invitation
+                    // to guess that the user wants an app uninstalled.
+                    suppressModelForTurn = true
+                    output.clear()
+                    audio?.interrupt()
+                }
                 if (MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {
                     suppressModelForTurn = true
                     output.clear()
@@ -534,6 +546,19 @@ class MyraVoiceService : Service() {
                         waitingForFreshInputAfterCommand = true
                         return@turnComplete
                     }
+                    if (UnclearDeleteIntentGuard.needsClarification(romanDisplayText(userText))) {
+                        val clarification = "Kis memory ko delete karna hai? Naam ek baar saaf bol do."
+                        localCommandExecutedThisTurn = true
+                        suppressModelForTurn = true
+                        output.clear()
+                        audio?.interrupt()
+                        listener?.onMyraText(clarification)
+                        emitState(clarification)
+                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
+                        resetTurnBuffers()
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
                     val parsed = CommandParser.parse(userText)
                     if (parsed != null) {
                         executeCommand(parsed)
@@ -553,12 +578,33 @@ class MyraVoiceService : Service() {
                     val displayUserText = romanDisplayText(userText)
                     val personalCandidate = PersonalMemoryExtractor.extract(displayUserText)
                         ?: contextualRelationshipCandidate(displayUserText)
-                    if (personalCandidate != null) {
+                    val recentName = lastSavedBestFriendName?.takeIf {
+                        android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
+                            BEST_FRIEND_CORRECTION_CONTEXT_MS
+                    }
+                    val nameCorrection = if (personalCandidate == null) {
+                        BestFriendNameCorrectionParser.parse(displayUserText, recentName)
+                    } else null
+                    if (nameCorrection != null) {
+                        // Previously this correction lived only in Gemini's conversation
+                        // reply. Update the same Room row and stable key so recall/delete
+                        // cannot keep using the first stale ASR spelling.
+                        serviceScope.launch {
+                            memoryRepository.renameBestFriend(
+                                nameCorrection.oldName,
+                                nameCorrection.newName
+                            )
+                        }
+                        replaceRecentRelationshipName(nameCorrection.oldName, nameCorrection.newName)
+                        lastSavedBestFriendName = nameCorrection.newName
+                        lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
+                    } else if (personalCandidate != null) {
                         recentRelationshipTurns.clear()
                         if (MemoryRelationshipPolicy.isBestFriend(personalCandidate)) {
                             // Explicit completed best-friend statements add that person to
                             // the set silently. They never replace another person implicitly.
                             serviceScope.launch { memoryRepository.saveAdditionalBestFriend(personalCandidate) }
+                            rememberBestFriendForCorrection(personalCandidate)
                         } else if (MemorySafetyPolicy.decide(personalCandidate) == MemorySaveDecision.AUTO_SAVE) {
                             serviceScope.launch { memoryRepository.save(personalCandidate) }
                         } else {
@@ -1452,6 +1498,22 @@ class MyraVoiceService : Service() {
         }
     }
 
+    private fun rememberBestFriendForCorrection(candidate: MemoryCandidate) {
+        lastSavedBestFriendName = MemoryRelationshipPolicy.personName(candidate.fact)
+            ?.let(BestFriendNameCanonicalizer::canonicalize)
+        lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
+    }
+
+    private fun replaceRecentRelationshipName(oldName: String, newName: String) {
+        for (index in recentRelationshipTurns.indices) {
+            val (time, text) = recentRelationshipTurns[index]
+            recentRelationshipTurns[index] = time to text.replace(
+                Regex("\\b${Regex.escape(oldName)}\\b", RegexOption.IGNORE_CASE),
+                newName
+            )
+        }
+    }
+
     private fun isPhantomTranscript(value: String): Boolean {
         return PhantomTranscriptFilter.shouldIgnore(value)
     }
@@ -1503,7 +1565,7 @@ class MyraVoiceService : Service() {
         } else {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
-        val genderStyle = "$baseGenderStyle When natural conversation clearly reveals one durable fact about the user, call propose_user_memory once with the user's actual supporting words. Never call it for guesses, temporary feelings, secrets, or information already present in saved memory; never claim it was saved or ask permission yourself. The user may have multiple best friends. When an explicit completed statement names another best friend, accept it naturally and never ask which name is correct, whether to replace someone, or whether the user is sure; Android adds each named person silently."
+        val genderStyle = "$baseGenderStyle When natural conversation clearly reveals one durable fact about the user, call propose_user_memory once with the user's actual supporting words. Never call it for guesses, temporary feelings, secrets, or information already present in saved memory; never claim it was saved or ask permission yourself. The user may have multiple best friends. When an explicit completed statement names another best friend, accept it naturally and never ask which name is correct, whether to replace someone, or whether the user is sure; Android adds each named person silently. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means."
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
         return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Express emotion through the natural voice, not by announcing emotion or writing stage directions. Match vocal delivery to both the user's mood and the meaning of the conversation: sound brighter, warmer, and slightly more energetic for happiness or exciting news; softer, slower, and gently reassuring for sadness, worry, or vulnerability; calm, steady, and patient for frustration or anger; lightly teasing and playful during mutual joking; naturally surprised when something is genuinely unexpected; and focused with less playfulness for serious topics. Emotional changes must be subtle and human, never theatrical. Never fake sobbing, crying sounds, panic, jealousy, guilt, or emotional dependence. Do not mirror intense anger back at the user. When uncertain about mood, use a warm neutral voice. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Remember, forget, and what-do-you-remember requests are memory intent, never phone actions. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }
@@ -1614,6 +1676,7 @@ class MyraVoiceService : Service() {
         private const val LOCAL_SPEECH_AUDIO_DRAIN_MS = 800L
         private const val RELATIONSHIP_CONTEXT_MS = 45_000L
         private const val MAX_RELATIONSHIP_CONTEXT_TURNS = 3
+        private const val BEST_FRIEND_CORRECTION_CONTEXT_MS = 45_000L
         private const val FIRST_IDLE_NUDGE_MS = 2 * 60 * 1000L
         private const val SECOND_IDLE_NUDGE_MS = 5 * 60 * 1000L
         private const val IDLE_RECHECK_MS = 30 * 1000L

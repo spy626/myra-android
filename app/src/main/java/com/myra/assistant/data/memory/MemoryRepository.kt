@@ -52,13 +52,51 @@ class MemoryRepository(private val dao: MemoryDao) {
         }
     }
 
-    /** Repairs duplicate rows for the same person without deleting legitimate multiple best friends. */
+    /**
+     * Repairs stale pre-canonical rows on reconnect. Before this migration, the first
+     * ASR spelling was frozen into both fact and stableKey, so a later correction could
+     * sound right in Gemini while persistent recall still returned "Now Pal".
+     */
     suspend fun reconcileUniqueRelationships() {
-        val duplicates = dao.recent(50).filter(MemoryRelationshipPolicy::isBestFriend)
-        duplicates.groupBy {
-            MemoryRelationshipPolicy.personName(it.fact)?.lowercase() ?: it.normalizedFact
-        }.values.forEach { samePerson ->
-            samePerson.drop(1).forEach { dao.deactivate(it.id, System.currentTimeMillis()) }
+        val now = System.currentTimeMillis()
+        val canonicalRows = dao.recent(50)
+            .filter(MemoryRelationshipPolicy::isBestFriend)
+            .mapNotNull { memory ->
+                val name = MemoryRelationshipPolicy.personName(memory.fact) ?: return@mapNotNull null
+                val candidate = MemoryRelationshipPolicy.canonicalizeAdditional(
+                    MemoryCandidate(
+                        category = MemoryCategory.PERSON,
+                        fact = "Zopy's best friend is $name",
+                        stableKey = MemoryRelationshipPolicy.BEST_FRIEND_KEY,
+                        sensitivity = MemorySensitivity.valueOf(memory.sensitivity),
+                        confidence = memory.confidence,
+                        source = memory.source
+                    )
+                )
+                memory to candidate
+            }
+        canonicalRows.groupBy { it.second.stableKey }.values.forEach { samePerson ->
+            val selected = samePerson.firstOrNull { (memory, canonical) ->
+                memory.stableKey == canonical.stableKey
+            } ?: samePerson.first()
+            val (keeper, canonical) = selected
+            samePerson.filter { it.first.id != keeper.id }
+                .forEach { (duplicate, _) -> dao.deactivate(duplicate.id, now) }
+            if (keeper.stableKey != canonical.stableKey || keeper.fact != canonical.fact) {
+                val existingTarget = dao.findByStableKey(canonical.stableKey)
+                if (existingTarget != null && existingTarget.id != keeper.id) {
+                    persist(canonical, replaceBestFriends = false)
+                    dao.deactivate(keeper.id, now)
+                } else {
+                    dao.rename(
+                        keeper.id,
+                        canonical.stableKey,
+                        canonical.fact,
+                        normalize(canonical.fact),
+                        now
+                    )
+                }
+            }
         }
     }
 
@@ -79,8 +117,33 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     suspend fun forgetMatching(query: String): Boolean {
         val activeMemories = dao.recent(50)
-        val match = MemoryForgetMatcher.find(query, activeMemories) ?: return false
+        val canonicalQuery = BestFriendNameCanonicalizer.canonicalize(query)
+        val match = MemoryForgetMatcher.find(canonicalQuery, activeMemories) ?: return false
         return forget(match.id)
+    }
+
+    /** Renames the same persistent row so stale spelling and stable key cannot diverge. */
+    suspend fun renameBestFriend(oldName: String, correctedName: String): Boolean {
+        val memories = dao.recent(50).filter(MemoryRelationshipPolicy::isBestFriend)
+        val old = MemoryForgetMatcher.find(oldName, memories) ?: return false
+        val canonicalName = BestFriendNameCanonicalizer.canonicalize(correctedName)
+        val replacement = MemoryRelationshipPolicy.canonicalizeAdditional(
+            MemoryCandidate(
+                category = MemoryCategory.PERSON,
+                fact = "Zopy's best friend is $canonicalName",
+                stableKey = MemoryRelationshipPolicy.BEST_FRIEND_KEY,
+                sensitivity = MemorySensitivity.valueOf(old.sensitivity),
+                confidence = old.confidence,
+                source = old.source
+            )
+        )
+        val existingTarget = dao.findByStableKey(replacement.stableKey)
+        if (existingTarget != null && existingTarget.id != old.id) {
+            persist(replacement, replaceBestFriends = false)
+            return forget(old.id)
+        }
+        val now = System.currentTimeMillis()
+        return dao.rename(old.id, replacement.stableKey, replacement.fact, normalize(replacement.fact), now) > 0
     }
 
     suspend fun clearAll() = dao.deleteAll()

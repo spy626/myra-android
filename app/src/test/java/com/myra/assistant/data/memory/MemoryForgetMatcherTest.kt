@@ -5,6 +5,13 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class MemoryForgetMatcherTest {
+    @Test fun matchesObservedNaufalDeleteSpellingsToCanonicalRecord() {
+        val memories = listOf(memory("1", "Zopy's best friend is Naufal"))
+        listOf("noval", "naipal").forEach { query ->
+            assertEquals(query, "1", MemoryForgetMatcher.find(query, memories)?.id)
+        }
+    }
+
     @Test fun findsExactNameInsideSavedFact() {
         assertEquals("1", MemoryForgetMatcher.find("kareem", listOf(memory("1", "Kareem tumhara best friend hai")))?.id)
     }

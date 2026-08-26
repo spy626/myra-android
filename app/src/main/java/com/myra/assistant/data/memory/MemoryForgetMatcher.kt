@@ -36,6 +36,9 @@ object MemoryForgetMatcher {
     }
 
     private fun consonantKey(value: String): String = value
+        .replace("ph", "f")
+        .replace('v', 'f')
+        .replace('p', 'f')
         .replace(Regex("([a-z])\\1+"), "\$1")
         .filterNot { it in "aeiou" }
 
