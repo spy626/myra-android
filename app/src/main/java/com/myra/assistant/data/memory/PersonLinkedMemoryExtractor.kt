@@ -19,11 +19,11 @@ object PersonLinkedMemoryExtractor {
     )
     private val namedFriendPatterns = listOf(
         Regex(
-            "(?:meri|mari|mere)\\s+(?:ek\\s+)?(?:best|besta)\\s+(?:friend|frend|phrend|phrenda)\\s+(?:hai|he)\\s+([\\p{L}][\\p{L}'-]{1,29})",
+            "(?:mera|meri|mari|mere)\\s+(?:ek\\s+)?(?:best|besta)\\s+(?:friend|frend|phrend|phrenda)\\s+(?:hai|he)\\s+([\\p{L}][\\p{L}'-]{1,29})",
             RegexOption.IGNORE_CASE
         ),
         Regex(
-            "(?:meri|mari|mere)\\s+(?:ek\\s+)?(?:best|besta)\\s+(?:friend|frend|phrend|phrenda)\\s+([\\p{L}][\\p{L}'-]{1,29})\\s+(?:hai|he)",
+            "(?:mera|meri|mari|mere)\\s+(?:ek\\s+)?(?:best|besta)\\s+(?:friend|frend|phrend|phrenda)\\s+([\\p{L}][\\p{L}'-]{1,29})\\s+(?:hai|he)",
             RegexOption.IGNORE_CASE
         ),
         Regex(
@@ -33,7 +33,10 @@ object PersonLinkedMemoryExtractor {
         Regex("my\\s+best\\s+friend\\s+is\\s+([\\p{L}][\\p{L}'-]{1,29})", RegexOption.IGNORE_CASE)
     )
     private val gamingChannelSignal = Regex(
-        "\\b(?:gaming|game|गेमिंग)\\s+(?:youtube\\s+)?channel\\b|\\b(?:youtube\\s+)?channel\\s+(?:hai|he|about\\s+gaming)\\b",
+        "\\b(?:gaming|gaminga|geming|geminga|game|गेमिंग)\\s+(?:youtube\\s+)?" +
+            "(?:channel|chanel|cainal|cainala|canal|canala)\\b|" +
+            "\\b(?:youtube\\s+)?(?:channel|chanel|cainal|cainala|canal|canala)" +
+            "\\s+(?:hai|he|about\\s+gaming)\\b",
         RegexOption.IGNORE_CASE
     )
 

@@ -34,4 +34,27 @@ class PersonLinkedMemoryExtractorTest {
 
         assertEquals(listOf("Zopy's best friend is Naufal"), facts.map { it.fact })
     }
+
+    @Test fun learnsFromClearMeraTranscriptObservedOnPhone() {
+        val facts = PersonLinkedMemoryExtractor.extractAll(
+            "Mera ek best friend hai Naufal, Uska gaming channel hai. Bina soye game khelta hai"
+        )
+
+        assertEquals(
+            listOf("Zopy's best friend is Naufal", "Naufal has a gaming channel"),
+            facts.map { it.fact }
+        )
+        assertEquals(MemorySaveDecision.AUTO_SAVE, MemorySafetyPolicy.decide(facts.last()))
+    }
+
+    @Test fun learnsFromGarbledChannelTranscriptObservedOnPhone() {
+        val facts = PersonLinkedMemoryExtractor.extractAll(
+            "Mera ek best friend nauphala hai, uska geminga cainala hai aura bina soe gema khelata hai"
+        )
+
+        assertEquals(
+            listOf("Zopy's best friend is Naufal", "Naufal has a gaming channel"),
+            facts.map { it.fact }
+        )
+    }
 }
