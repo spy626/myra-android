@@ -21,10 +21,12 @@ class GeminiLiveClient(
     private val systemPrompt: String
 ) : WebSocketListener() {
     var onReady: (() -> Unit)? = null
-    var onAudio: ((ByteArray) -> Unit)? = null
-    var onInputTranscript: ((String) -> Unit)? = null
+    var onAudio: ((ByteArray, Long) -> Unit)? = null
+    var onInputTranscript: ((String, Long) -> Unit)? = null
     var onOutputTranscript: ((String) -> Unit)? = null
     var onTurnComplete: (() -> Unit)? = null
+    var onGenerationComplete: ((Long) -> Unit)? = null
+    var onInterrupted: ((Long) -> Unit)? = null
     var onToolCall: ((String, String, JSONObject) -> Unit)? = null
     var onState: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
@@ -44,6 +46,8 @@ class GeminiLiveClient(
     private var inputTranscriptTurn = 1L
     private var inputTranscriptChunk = 0L
     private val receivedAudioChunk = AtomicLong(0)
+    private val modelGenerationId = AtomicLong(0)
+    @Volatile private var modelGenerationOpen = false
 
     fun connect() {
         if (apiKey.isBlank()) { onError?.invoke("Add your Gemini API key in Settings"); return }
@@ -256,13 +260,18 @@ class GeminiLiveClient(
             if (parts != null) for (i in 0 until parts.length()) {
                 val data = parts.optJSONObject(i)?.optJSONObject("inlineData")?.optString("data")
                 if (!data.isNullOrBlank()) {
+                    if (!modelGenerationOpen) {
+                        modelGenerationId.incrementAndGet()
+                        modelGenerationOpen = true
+                    }
+                    val generationId = modelGenerationId.get()
                     val pcm = Base64.decode(data, Base64.DEFAULT)
                     if (VOICE_AUDIO_DEBUG_LOGGING) {
                         VoicePipelineLogger.debug(
-                            "ws_audio_received seq=${receivedAudioChunk.incrementAndGet()} bytes=${pcm.size}"
+                            "ws_audio_received seq=${receivedAudioChunk.incrementAndGet()} generationId=$generationId bytes=${pcm.size}"
                         )
                     }
-                    onAudio?.invoke(pcm)
+                    onAudio?.invoke(pcm, generationId)
                 }
             }
             content.optJSONObject("inputTranscription")?.let { transcription ->
@@ -280,12 +289,21 @@ class GeminiLiveClient(
                                 "text=${JSONObject.quote(text)}"
                         )
                     }
-                    onInputTranscript?.invoke(text)
+                    onInputTranscript?.invoke(text, modelGenerationId.get())
                     reschedulePendingTurnBoundary()
                 }
             }
             content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let { onOutputTranscript?.invoke(it) }
-            if (content.optBoolean("turnComplete")) deferTurnCompleteUntilTranscriptIsQuiet()
+            if (content.optBoolean("interrupted")) {
+                onInterrupted?.invoke(modelGenerationId.get())
+            }
+            if (content.optBoolean("generationComplete")) {
+                onGenerationComplete?.invoke(modelGenerationId.get())
+            }
+            if (content.optBoolean("turnComplete")) {
+                modelGenerationOpen = false
+                deferTurnCompleteUntilTranscriptIsQuiet()
+            }
         } catch (e: Exception) { onError?.invoke("Invalid Live response: ${e.message}") }
     }
 

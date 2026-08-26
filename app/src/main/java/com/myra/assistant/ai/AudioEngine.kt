@@ -24,6 +24,7 @@ class AudioEngine(private val context: Context) {
     private val running = AtomicBoolean(false)
     private val muted = AtomicBoolean(false)
     private val speaking = AtomicBoolean(false)
+    private val bargeInEnabled = AtomicBoolean(false)
     @Volatile private var ignoreMicUntilMs = 0L
     private val queue = LinkedBlockingQueue<ByteArray>()
     private var recorder: AudioRecord? = null
@@ -63,7 +64,7 @@ class AudioEngine(private val context: Context) {
                     onAmplitude?.invoke(rms(chunk))
                     // Never feed LYRA's own speaker output back into Gemini. Platform
                     // echo cancellation is helpful but not reliable on every phone.
-                    if (!muted.get() && !speaking.get() &&
+                    if (MicBargeInPolicy.shouldForward(muted.get(), speaking.get(), bargeInEnabled.get()) &&
                         android.os.SystemClock.elapsedRealtime() >= ignoreMicUntilMs
                     ) onMicChunk?.invoke(chunk)
                 }
@@ -155,6 +156,7 @@ class AudioEngine(private val context: Context) {
         )
     }
     fun setMuted(value: Boolean) { muted.set(value) }
+    fun setBargeInEnabled(value: Boolean) { bargeInEnabled.set(value) }
     fun resumeListeningNow() {
         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime()
         muted.set(false)
@@ -162,6 +164,7 @@ class AudioEngine(private val context: Context) {
     fun interrupt() {
         voiceLog("playback_interrupt queueSize=${queue.size} speaking=${speaking.get()}")
         queue.clear()
+        bargeInEnabled.set(false)
         synchronized(playbackLock) { runCatching { track?.pause(); track?.flush() } }
         speaking.set(false)
         onSpeakingChanged?.invoke(false)

@@ -133,6 +133,7 @@ class MyraVoiceService : Service() {
     private var activeTurnId = 0L
     private var controlledGenerationId = 0L
     private val responseArbiter = TurnResponseArbiter()
+    private val ordinaryModelAudioGate = OrdinaryModelAudioGate()
     private val transcriptSessionId = java.util.UUID.randomUUID().toString()
     private val finalUserMessageCommitter = FinalUserMessageCommitter()
     private val memoryCommandRunnable = Runnable {
@@ -180,6 +181,10 @@ class MyraVoiceService : Service() {
     private var localSpeechFirstAudioAcceptedAt = 0L
     private var localSpeechFirstPlaybackWriteAt = 0L
     private var localSpeechLastAudioReceivedAt = 0L
+    private var modelAudioDroppedBeforeTurnCompleteCount = 0
+    private var modelAudioDroppedBeforeTurnCompleteBytes = 0L
+    private var acceptedModelGenerationForTurn = 0L
+    private var speechActivityStartedAt = 0L
     private var localAudioSpeaking = false
     private var pendingCanonicalRename: kotlinx.coroutines.Job? = null
     private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
@@ -272,10 +277,10 @@ class MyraVoiceService : Service() {
             client.onToolCall = { id, functionName, args ->
                 mainHandler.post { handleSemanticToolCall(id, functionName, args) }
             }
-            client.onAudio = {
+            client.onAudio = { pcm, modelGenerationId ->
                 val audioReceivedAt = android.os.SystemClock.elapsedRealtime()
                 voiceLog(
-                    "service_audio_received bytes=${it.size} validating=${validatingLocalSpeech != null} " +
+                    "service_audio_received bytes=${pcm.size} modelGenerationId=$modelGenerationId validating=${validatingLocalSpeech != null} " +
                         "streaming=$localSpeechStreamedDirectly suppressed=$suppressModelForTurn " +
                         "localSpeaking=$localAudioSpeaking"
                 )
@@ -293,12 +298,12 @@ class MyraVoiceService : Service() {
                         // The transcript prefix already matched the prepared response.
                         // Continue streaming the remaining natural voice without waiting
                         // for the complete sentence.
-                        audio?.queueAudio(it)
-                        voiceLog("service_audio_routed route=direct_playback bytes=${it.size}")
+                        audio?.queueAudio(pcm)
+                        voiceLog("service_audio_routed route=direct_playback bytes=${pcm.size}")
                     } else {
-                        localSpeechAudio += it.copyOf()
+                        localSpeechAudio += pcm.copyOf()
                         voiceLog(
-                            "service_audio_routed route=validation_buffer bytes=${it.size} " +
+                            "service_audio_routed route=validation_buffer bytes=${pcm.size} " +
                                 "bufferChunks=${localSpeechAudio.size}"
                         )
                         startLocalSpeechWhenPrefixMatches()
@@ -313,18 +318,70 @@ class MyraVoiceService : Service() {
                     // Capturable LYRA speech uses USAGE_MEDIA. Once the first valid
                     // chunk is accepted, keep Media Guard awake so LYRA never mistakes
                     // her own active AudioTrack for external YouTube playback.
-                    mediaGuard.beginAssistantTurn()
-                    audio?.queueAudio(it)
-                    voiceLog("route_decision turnId=$activeTurnId responseOwner=MODEL route=ordinary_model accepted=true bytes=${it.size}")
+                    when (val decision = ordinaryModelAudioGate.decide(modelGenerationId)) {
+                        ModelAudioDecision.ACCEPT -> {
+                            if (speechActivityStartedAt > 0L && acceptedModelGenerationForTurn != modelGenerationId) {
+                                acceptedModelGenerationForTurn = modelGenerationId
+                                val userTurnCompleteAt = audioReceivedAt
+                                voiceLog(
+                                    "user_turn_complete turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
+                                        "userTurnCompleteAt=$userTurnCompleteAt source=server_model_generation_start " +
+                                        "speechEndToFirstAcceptedModelAudioMs=0 inputTurnStartToModelAudioMs=${userTurnCompleteAt - speechActivityStartedAt}"
+                                )
+                            }
+                            mediaGuard.beginAssistantTurn()
+                            audio?.setBargeInEnabled(true)
+                            audio?.queueAudio(pcm)
+                            voiceLog("route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL route=ordinary_model accepted=true firstModelAudioAcceptedAt=$audioReceivedAt bytes=${pcm.size}")
+                        }
+                        else -> {
+                            modelAudioDroppedBeforeTurnCompleteCount++
+                            modelAudioDroppedBeforeTurnCompleteBytes += pcm.size
+                            voiceLog(
+                                "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL " +
+                                    "route=ordinary_model accepted=false rejectionReason=$decision staleGeneration=${decision == ModelAudioDecision.DROP_STALE_GENERATION} " +
+                                    "modelAudioBufferedBeforeTurnCompleteCount=0 modelAudioBufferedBeforeTurnCompleteBytes=0 " +
+                                    "modelAudioDroppedBeforeTurnCompleteCount=$modelAudioDroppedBeforeTurnCompleteCount " +
+                                    "modelAudioDroppedBeforeTurnCompleteBytes=$modelAudioDroppedBeforeTurnCompleteBytes bytes=${pcm.size}"
+                            )
+                        }
+                    }
                 } else {
-                    voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} responseOwner=${responseArbiter.owner} route=ordinary_model bytes=${it.size}")
+                    voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} modelGenerationId=$modelGenerationId responseOwner=${responseArbiter.owner} route=ordinary_model bytes=${pcm.size}")
                 }
             }
-            client.onInputTranscript = inputTranscript@ { part ->
+            client.onInterrupted = { modelGenerationId ->
+                if (validatingLocalSpeech == null && responseArbiter.acceptsOrdinaryModel()) {
+                    ordinaryModelAudioGate.onInputTurnStarted(modelGenerationId)
+                    speechActivityStartedAt = android.os.SystemClock.elapsedRealtime()
+                    acceptedModelGenerationForTurn = 0L
+                    audio?.interrupt()
+                    voiceLog(
+                        "playback_cancelled_by_barge_in turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
+                            "playbackCancelledByBargeIn=true speechActivityStartedAt=$speechActivityStartedAt"
+                    )
+                } else voiceLog(
+                    "interrupted_event_ignored turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
+                        "reason=controlled_owner responseOwner=${responseArbiter.owner}"
+                )
+            }
+            client.onGenerationComplete = { modelGenerationId ->
+                voiceLog("model_generation_complete turnId=$activeTurnId modelGenerationId=$modelGenerationId at=${android.os.SystemClock.elapsedRealtime()}")
+            }
+            client.onInputTranscript = inputTranscript@ { part, latestModelGenerationId ->
                 if (input.isEmpty()) {
                     activeTurnId = ++turnSequence
                     responseArbiter.begin(activeTurnId)
-                    voiceLog("input_turn_started turnId=$activeTurnId session=${hashCode()}")
+                    ordinaryModelAudioGate.onInputTurnStarted(latestModelGenerationId)
+                    speechActivityStartedAt = android.os.SystemClock.elapsedRealtime()
+                    acceptedModelGenerationForTurn = 0L
+                    modelAudioDroppedBeforeTurnCompleteCount = 0
+                    modelAudioDroppedBeforeTurnCompleteBytes = 0L
+                    // A transcript chunk is authoritative evidence that the user has
+                    // started a new activity. Stop any prior response immediately;
+                    // Gemini's interrupted event repeats this safely if it arrives too.
+                    audio?.interrupt()
+                    voiceLog("input_turn_started turnId=$activeTurnId session=${hashCode()} inputTurnStartedAt=$speechActivityStartedAt speechActivityStartedAt=$speechActivityStartedAt latestModelGenerationId=$latestModelGenerationId")
                 }
                 if (handlePendingPersonalMemoryPermission(part)) return@inputTranscript
                 if (handlePendingConfirmation(part)) return@inputTranscript
@@ -553,6 +610,8 @@ class MyraVoiceService : Service() {
                 mainHandler.removeCallbacks(personalMemoryPauseRunnable)
                 pendingDetectedPersonalMemory = null
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
+                ordinaryModelAudioGate.onInputTurnCommitted()
+                val finalInputTranscriptAt = android.os.SystemClock.elapsedRealtime()
                 val normalizedFinalUserText = CorrectionTranscriptNormalizer.normalize(
                     userText,
                     romanDisplayText(userText)
@@ -566,7 +625,7 @@ class MyraVoiceService : Service() {
                 voiceLog(
                     "final_input_transcript raw=${userText.take(160)} " +
                         "normalized=${normalizedFinalUserText.take(160)} " +
-                        "display=${displayedFinalUserText.take(160)}"
+                        "display=${displayedFinalUserText.take(160)} finalInputTranscriptAt=$finalInputTranscriptAt"
                 )
                 if (incompleteActionFragmentTurn &&
                     CommandParser.isLikelyIncompleteActionFragment(userText)
@@ -1419,6 +1478,7 @@ class MyraVoiceService : Service() {
             ?: responseArbiter.turnId.takeIf { it != 0L }
             ?: ++turnSequence
         responseArbiter.claimControlled(ownerTurnId)
+        audio?.setBargeInEnabled(false)
         voiceLog("suppression_start turnId=$ownerTurnId responseOwner=CONTROLLED_LOCAL reason=controlled_reply")
         // Remove any ordinary-model PCM already queued before the deterministic
         // correction/delete/recall response takes ownership.
