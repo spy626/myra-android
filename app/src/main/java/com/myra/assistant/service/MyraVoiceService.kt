@@ -134,13 +134,15 @@ class MyraVoiceService : Service() {
     private var activeTurnId = 0L
     private var controlledGenerationId = 0L
     private val responseArbiter = TurnResponseArbiter()
+    private val transcriptSessionId = java.util.UUID.randomUUID().toString()
+    private val finalUserMessageCommitter = FinalUserMessageCommitter()
     private val memoryCommandRunnable = Runnable {
         val command = pendingMemoryCommand
         pendingMemoryCommand = null
         if (command != null && !localCommandExecutedThisTurn) {
             val spoken = commandProbe.toString().trim()
             if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                listener?.onUserText(romanDisplayText(spoken))
+                commitFinalUserMessage(spoken, "MEMORY_COMMAND_RUNNABLE")
                 commandUserTextEmitted = true
             }
             handleMemoryCommand(command)
@@ -153,7 +155,7 @@ class MyraVoiceService : Service() {
         if (candidate != null && pendingPersonalMemory == null && !localCommandExecutedThisTurn) {
             val spoken = commandProbe.toString().trim()
             if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                listener?.onUserText(romanDisplayText(spoken))
+                commitFinalUserMessage(spoken, "PERSONAL_MEMORY_PAUSE")
                 commandUserTextEmitted = true
             }
             requestPersonalMemoryPermission(candidate)
@@ -342,7 +344,7 @@ class MyraVoiceService : Service() {
                             }
                             val spoken = commandProbe.toString().trim()
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                                listener?.onUserText(romanDisplayText(spoken))
+                                commitFinalUserMessage(spoken, "DIRECT_MEDIA_COMMAND")
                                 commandUserTextEmitted = true
                             }
                             mediaBlockedTurn = false
@@ -471,7 +473,7 @@ class MyraVoiceService : Service() {
                 if (command != null && (command !is AppCommand.OpenApp || explicitOpen) && command !is AppCommand.DeepResearch) {
                     val spoken = commandProbe.toString().trim()
                     if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                        listener?.onUserText(romanDisplayText(spoken))
+                        commitFinalUserMessage(spoken, "PARTIAL_COMMAND")
                         commandUserTextEmitted = true
                     }
                     executeCommand(command)
@@ -569,7 +571,14 @@ class MyraVoiceService : Service() {
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
-                if (userText.isNotBlank() && !commandUserTextEmitted) listener?.onUserText(displayedFinalUserText)
+                if (userText.isNotBlank() && !commandUserTextEmitted) {
+                    commitFinalUserMessage(
+                        raw = userText,
+                        source = "TURN_COMPLETE",
+                        normalized = normalizedFinalUserText,
+                        display = displayedFinalUserText
+                    )
+                }
                 // Run one final parse over the complete transcript. Partial Live transcript
                 // chunks can omit or mistranscribe the action word even when the final text
                 // contains enough context to identify the device command.
@@ -923,7 +932,7 @@ class MyraVoiceService : Service() {
             waitingForFreshInputAfterCommand = true
             commandUserTextEmitted = true
             output.clear()
-            listener?.onUserText(romanRaw)
+            commitFinalUserMessage(raw, "PERSONAL_MEMORY_CONTEXT_CORRECTION", romanRaw, romanRaw)
             requestPersonalMemoryPermission(replacement)
             resetTurnBuffers()
             return true
@@ -949,7 +958,7 @@ class MyraVoiceService : Service() {
         // validation state so the result confirmation starts immediately.
         cancelSpeechForNewAction()
         live?.interrupt()
-        listener?.onUserText(romanDisplayText(raw.trim()))
+        commitFinalUserMessage(raw.trim(), "PERSONAL_MEMORY_CONFIRMATION")
 
         if (decision == MemoryConfirmationDecision.NO) {
             val message = "Theek hai, save nahi karungi."
@@ -1144,7 +1153,7 @@ class MyraVoiceService : Service() {
         waitingForFreshInputAfterCommand = false
         localCommandExecutedThisTurn = false
         commandUserTextEmitted = true
-        listener?.onUserText(romanDisplayText(raw.trim()))
+        commitFinalUserMessage(raw.trim(), "PHONE_ACTION_CONFIRMATION")
         if (yes) {
             executeCommand(pending)
         } else {
@@ -1622,6 +1631,39 @@ class MyraVoiceService : Service() {
     private fun voiceLog(message: String) {
         if (VOICE_AUDIO_DEBUG_LOGGING) {
             VoicePipelineLogger.debug(message)
+        }
+    }
+
+    private fun commitFinalUserMessage(
+        raw: String,
+        source: String,
+        normalized: String = romanDisplayText(raw),
+        display: String = normalized
+    ) {
+        val turnId = activeTurnId.takeIf { it != 0L }
+            ?: responseArbiter.turnId.takeIf { it != 0L }
+            ?: ++turnSequence
+        val utteranceId = "$transcriptSessionId:$turnId"
+        voiceLog(
+            "user_message_commit_attempt sessionId=$transcriptSessionId turnId=$turnId " +
+                "utteranceId=$utteranceId source=$source raw=${raw.take(160)} " +
+                "normalized=${normalized.take(160)} display=${display.take(160)}"
+        )
+        when (val result = finalUserMessageCommitter.commit(
+            FinalUserMessage(transcriptSessionId, turnId, utteranceId, raw, normalized, display)
+        )) {
+            is UserMessageCommitResult.Accepted -> {
+                voiceLog(
+                    "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
+                        "utteranceId=$utteranceId source=$source accepted=true messageId=${result.messageId}"
+                )
+                listener?.onUserText(result.message.display)
+            }
+            is UserMessageCommitResult.AlreadyCommitted -> voiceLog(
+                "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
+                    "utteranceId=$utteranceId source=$source accepted=false " +
+                    "reason=already_committed existingMessageId=${result.existingMessageId}"
+            )
         }
     }
 
