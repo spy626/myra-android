@@ -1,1 +1,1 @@
-CI trigger for clarified best-friend correction persistence tests.
+CI trigger for turn-owned controlled voice and safe spelling regression tests.
