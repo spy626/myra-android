@@ -1,14 +1,14 @@
 package com.myra.assistant.data.memory
 
+import android.util.Log
 import java.util.Locale
 import java.util.UUID
 
 class MemoryRepository(private val dao: MemoryDao) {
     suspend fun save(candidate: MemoryCandidate, permissionGranted: Boolean = false): MemoryWriteResult {
-        val canonical = MemoryRelationshipPolicy.canonicalizeForSave(
-            candidate,
-            replaceExisting = permissionGranted
-        )
+        val canonical = if (!permissionGranted && MemoryRelationshipPolicy.isBestFriend(candidate)) {
+            canonicalizeAgainstExistingBestFriends(candidate)
+        } else MemoryRelationshipPolicy.canonicalizeForSave(candidate, replaceExisting = permissionGranted)
         return when (MemorySafetyPolicy.decide(canonical)) {
             MemorySaveDecision.REJECT -> MemoryWriteResult.Rejected("This information is unsafe, empty, or too uncertain to remember.")
             MemorySaveDecision.ASK_PERMISSION -> if (!permissionGranted) {
@@ -27,6 +27,15 @@ class MemoryRepository(private val dao: MemoryDao) {
         val normalized = normalize(query)
         if (normalized.length < 2) return dao.recent(limit.coerceIn(1, 10))
         return dao.search(normalized, limit.coerceIn(1, 10))
+    }
+
+    suspend fun logActiveBestFriends(stage: String) {
+        val groups = dao.recent(50).filter(MemoryRelationshipPolicy::isBestFriend).groupBy {
+            MemoryRelationshipPolicy.personName(it.fact)
+                ?.let(BestFriendNameCanonicalizer::canonicalize)
+                ?: "unknown"
+        }
+        Log.d(MEMORY_LOG_TAG, "$stage activeBestFriends=" + groups.mapValues { it.value.size })
     }
 
     suspend fun isAlreadySaved(candidate: MemoryCandidate): Boolean {
@@ -59,11 +68,10 @@ class MemoryRepository(private val dao: MemoryDao) {
      */
     suspend fun reconcileUniqueRelationships() {
         val now = System.currentTimeMillis()
-        val canonicalRows = dao.recent(50)
-            .filter(MemoryRelationshipPolicy::isBestFriend)
-            .mapNotNull { memory ->
-                val name = MemoryRelationshipPolicy.personName(memory.fact) ?: return@mapNotNull null
-                val candidate = MemoryRelationshipPolicy.canonicalizeAdditional(
+        val canonicalRows = mutableListOf<Pair<MemoryEntity, MemoryCandidate>>()
+        for (memory in dao.recent(50).filter(MemoryRelationshipPolicy::isBestFriend)) {
+            val name = MemoryRelationshipPolicy.personName(memory.fact) ?: continue
+            val candidate = canonicalizeAgainstExistingBestFriends(
                     MemoryCandidate(
                         category = MemoryCategory.PERSON,
                         fact = "Zopy's best friend is $name",
@@ -73,8 +81,8 @@ class MemoryRepository(private val dao: MemoryDao) {
                         source = memory.source
                     )
                 )
-                memory to candidate
-            }
+            canonicalRows += memory to candidate
+        }
         canonicalRows.groupBy { it.second.stableKey }.values.forEach { samePerson ->
             val selected = samePerson.firstOrNull { (memory, canonical) ->
                 memory.stableKey == canonical.stableKey
@@ -101,7 +109,7 @@ class MemoryRepository(private val dao: MemoryDao) {
     }
 
     suspend fun saveAdditionalBestFriend(candidate: MemoryCandidate): MemoryWriteResult {
-        val additional = MemoryRelationshipPolicy.canonicalizeAdditional(candidate)
+        val additional = canonicalizeAgainstExistingBestFriends(candidate)
         if (!MemoryRelationshipPolicy.isBestFriend(additional)) return save(candidate, permissionGranted = true)
         return when (MemorySafetyPolicy.decide(additional)) {
             MemorySaveDecision.REJECT -> MemoryWriteResult.Rejected("This information is unsafe to remember.")
@@ -118,14 +126,34 @@ class MemoryRepository(private val dao: MemoryDao) {
     suspend fun forgetMatching(query: String): Boolean {
         val activeMemories = dao.recent(50)
         val canonicalQuery = BestFriendNameCanonicalizer.canonicalize(query)
-        val match = MemoryForgetMatcher.find(canonicalQuery, activeMemories) ?: return false
-        return forget(match.id)
+        val matches = BestFriendDeleteMatcher.findAll(canonicalQuery, activeMemories)
+        if (matches.isEmpty()) {
+            Log.d(MEMORY_LOG_TAG, "after_delete query=$canonicalQuery matched=0 remaining=0")
+            return false
+        }
+        val now = System.currentTimeMillis()
+        var affected = 0
+        for (match in matches) affected += dao.deactivate(match.id, now)
+        val remaining = dao.recent(50).count { memory ->
+            val storedName = MemoryRelationshipPolicy.personName(memory.fact)
+                ?.let(BestFriendNameCanonicalizer::canonicalize)
+            storedName != null && (
+                storedName.equals(canonicalQuery, ignoreCase = true) ||
+                    BestFriendNameSimilarity.likelySame(storedName, canonicalQuery)
+                )
+        }
+        Log.d(
+            MEMORY_LOG_TAG,
+            "after_delete query=$canonicalQuery matched=${matches.size} affected=$affected remaining=$remaining"
+        )
+        return affected > 0 && remaining == 0
     }
 
     /** Renames the same persistent row so stale spelling and stable key cannot diverge. */
     suspend fun renameBestFriend(oldName: String, correctedName: String): Boolean {
         val memories = dao.recent(50).filter(MemoryRelationshipPolicy::isBestFriend)
-        val old = MemoryForgetMatcher.find(oldName, memories) ?: return false
+        val oldRows = BestFriendDeleteMatcher.findAll(oldName, memories)
+        val old = oldRows.firstOrNull() ?: return false
         val canonicalName = BestFriendNameCanonicalizer.canonicalize(correctedName)
         val replacement = MemoryRelationshipPolicy.canonicalizeAdditional(
             MemoryCandidate(
@@ -140,13 +168,44 @@ class MemoryRepository(private val dao: MemoryDao) {
         val existingTarget = dao.findByStableKey(replacement.stableKey)
         if (existingTarget != null && existingTarget.id != old.id) {
             persist(replacement, replaceBestFriends = false)
-            return forget(old.id)
+            val now = System.currentTimeMillis()
+            var affected = 0
+            for (row in oldRows) affected += dao.deactivate(row.id, now)
+            return affected > 0
         }
         val now = System.currentTimeMillis()
-        return dao.rename(old.id, replacement.stableKey, replacement.fact, normalize(replacement.fact), now) > 0
+        val renamed = dao.rename(
+            old.id,
+            replacement.stableKey,
+            replacement.fact,
+            normalize(replacement.fact),
+            now
+        ) > 0
+        oldRows.filter { it.id != old.id }.forEach { dao.deactivate(it.id, now) }
+        return renamed
     }
 
     suspend fun clearAll() = dao.deleteAll()
+
+    private suspend fun canonicalizeAgainstExistingBestFriends(candidate: MemoryCandidate): MemoryCandidate {
+        val proposed = MemoryRelationshipPolicy.canonicalizeAdditional(candidate)
+        if (!MemoryRelationshipPolicy.isBestFriend(proposed)) return proposed
+        val proposedName = MemoryRelationshipPolicy.personName(proposed.fact) ?: return proposed
+        if (BestFriendNameCanonicalizer.isPreferredCanonical(proposedName)) return proposed
+        val equivalentNames = dao.recent(50).filter(MemoryRelationshipPolicy::isBestFriend)
+            .mapNotNull { MemoryRelationshipPolicy.personName(it.fact) }
+            .map(BestFriendNameCanonicalizer::canonicalize)
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .filter {
+                !it.equals(proposedName, ignoreCase = true) &&
+                    BestFriendNameCanonicalizer.isPreferredCanonical(it) &&
+                    BestFriendNameSimilarity.likelySame(it, proposedName)
+            }
+        val existingName = equivalentNames.singleOrNull() ?: return proposed
+        return MemoryRelationshipPolicy.canonicalizeAdditional(
+            proposed.copy(fact = "Zopy's best friend is $existingName")
+        )
+    }
 
     private suspend fun persist(
         candidate: MemoryCandidate,
@@ -191,4 +250,8 @@ class MemoryRepository(private val dao: MemoryDao) {
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
+
+    private companion object {
+        const val MEMORY_LOG_TAG = "LyraMemoryStore"
+    }
 }

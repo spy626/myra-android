@@ -9,6 +9,10 @@ object PhantomTranscriptFilter {
     )
     private val repeatedCharacter = Regex("^([a-z])\\1+$", RegexOption.IGNORE_CASE)
     private val consonantNoise = Regex("^[bcdfghjklmnpqrstvwxyz]{1,8}$", RegexOption.IGNORE_CASE)
+    private val transcriptionInstruction = Regex(
+        "^the following speech is spoken by someone who knows english transcribe the following speech$",
+        RegexOption.IGNORE_CASE
+    )
 
     fun shouldIgnore(raw: String): Boolean {
         val clean = raw.lowercase(Locale.ROOT)
@@ -16,6 +20,7 @@ object PhantomTranscriptFilter {
             .replace(Regex("\\s+"), " ")
             .trim()
         if (clean.isBlank()) return true
+        if (transcriptionInstruction.matches(clean)) return true
         return clean.split(' ').all { word ->
             word in knownNoise || repeatedCharacter.matches(word) || consonantNoise.matches(word)
         }

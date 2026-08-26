@@ -22,4 +22,7 @@ object BestFriendNameCanonicalizer {
             else -> clean.replaceFirstChar { if (it.isLowerCase()) it.uppercaseChar().toString() else it.toString() }
         }
     }
+
+    fun isPreferredCanonical(raw: String): Boolean =
+        canonicalize(raw) in setOf("Naufal", "Kareem", "Ayesha")
 }

@@ -44,6 +44,13 @@ object BestFriendNameCorrectionParser {
         return BestFriendNameCorrection(old, newName)
     }
 
+    fun needsClearCorrectedName(raw: String): Boolean {
+        val clean = raw.trim().trimEnd('.', ',', '?', '!', '।').replace(Regex("\\s+"), " ")
+        val match = explicitPair.firstNotNullOfOrNull { it.matchEntire(clean) } ?: return false
+        return BestFriendNameCanonicalizer.canonicalize(match.groupValues[1])
+            .equals(BestFriendNameCanonicalizer.canonicalize(match.groupValues[2]), ignoreCase = true)
+    }
+
     private fun looksLikeSameSpokenName(left: String, right: String): Boolean {
         val a = soundKey(left)
         val b = soundKey(right)

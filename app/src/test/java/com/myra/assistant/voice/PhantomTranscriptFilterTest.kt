@@ -14,4 +14,12 @@ class PhantomTranscriptFilterTest {
         listOf("hi", "no", "Naufal", "Mera best friend kaun hai", "Ayesha meri best friend hai")
             .forEach { assertFalse(it, PhantomTranscriptFilter.shouldIgnore(it)) }
     }
+
+    @Test fun ignoresLiteralTranscriptionInstructionArtifact() {
+        assertTrue(
+            PhantomTranscriptFilter.shouldIgnore(
+                "The following speech is spoken by someone who knows English. Transcribe the following speech."
+            )
+        )
+    }
 }

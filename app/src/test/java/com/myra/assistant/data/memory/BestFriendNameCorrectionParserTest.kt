@@ -23,4 +23,9 @@ class BestFriendNameCorrectionParserTest {
         assertNull(BestFriendNameCorrectionParser.parse("Ayesha", "Karima"))
         assertNull(BestFriendNameCorrectionParser.parse("haan", "Karima"))
     }
+
+    @Test fun identicalMistranscribedCorrectionRequiresClearRepeat() {
+        assertEquals(true, BestFriendNameCorrectionParser.needsClearCorrectedName("Karima nahi karima"))
+        assertEquals(false, BestFriendNameCorrectionParser.needsClearCorrectedName("Karima nahi Kareem"))
+    }
 }
