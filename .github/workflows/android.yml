@@ -1,4 +1,4 @@
-# Recovery touch: run 728 became orphaned with zero jobs.
+# Recovery retry after repository Actions permissions reset.
 name: Build Android APK
 on:
   push:
