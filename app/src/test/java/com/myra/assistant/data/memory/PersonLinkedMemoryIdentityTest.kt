@@ -18,4 +18,12 @@ class PersonLinkedMemoryIdentityTest {
             "Ayesha has a gaming channel", "", "PERSONAL", .94, "test", 1, 1, 1)
         assertTrue(PersonLinkedMemoryIdentity.rename(row, listOf("Nauphara"), "Naufal") == null)
     }
+
+    @Test fun fuzzyAliasRenamesTheActualStoredLinkedPrefixAndKey() {
+        val row = MemoryEntity("1", "person:naufara:gaming_channel", "PERSON",
+            "Naufara has a gaming channel", "", "PERSONAL", .94, "test", 1, 1, 1)
+        val renamed = PersonLinkedMemoryIdentity.rename(row, listOf("Nauphara"), "Naufal")!!
+        assertEquals("person:naufal:gaming_channel", renamed.stableKey)
+        assertEquals("Naufal has a gaming channel", renamed.fact)
+    }
 }
