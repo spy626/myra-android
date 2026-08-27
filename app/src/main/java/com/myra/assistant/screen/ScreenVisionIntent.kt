@@ -30,4 +30,14 @@ object ScreenVisionIntentParser {
             else -> ScreenVisionIntent.ANALYZE
         }
     }
+
+    /** Conservative enough for streamed ASR: it cannot fire for a generic mention of a video. */
+    fun parseStableQuery(text: String): ScreenVisionIntent? {
+        val normalized = text.lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+        val explicit = Regex(
+            """\b(?:what is on (?:my|the) screen|what do you see|kya dikh raha|kya dikh rha|screen (?:par|pe|mein|me) kya|tumhe kya dikh|analy[sz]e (?:my |the )?screen|screen dekho)\b""",
+            RegexOption.IGNORE_CASE
+        )
+        return if (explicit.containsMatchIn(normalized)) ScreenVisionIntent.ANALYZE else null
+    }
 }

@@ -39,7 +39,16 @@ class AccessibilityHelperService : AccessibilityService() {
     private var overlayPanel: View? = null
     private var overlayState: ScreenShareState = ScreenShareState.IDLE
     override fun onServiceConnected() { instance = this; super.onServiceConnected(); updateScreenVisionOverlay(ScreenCaptureService.currentState) }
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val reason = when (event?.eventType) {
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> "accessibility_scroll"
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "accessibility_window_state"
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "accessibility_window_content"
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> "accessibility_text_changed"
+            else -> null
+        }
+        if (reason != null) ScreenCaptureService.markScreenDirty(reason)
+    }
     override fun onInterrupt() = Unit
     override fun onDestroy() { hideScreenVisionOverlay(); if (instance === this) instance = null; super.onDestroy() }
 

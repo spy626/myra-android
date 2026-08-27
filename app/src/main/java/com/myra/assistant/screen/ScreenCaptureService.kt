@@ -36,6 +36,7 @@ class ScreenCaptureService : Service() {
     private var workerThread: HandlerThread? = null
     private var worker: Handler? = null
     private val changeDetector = ScreenFrameChangeDetector()
+    private val adaptiveRoutePolicy = AdaptiveScreenRoutePolicy()
     private val stateMachine = ScreenShareStateMachine(currentState)
     private var lastProcessedAt = 0L
     private var lastLocalCacheAt = 0L
@@ -110,12 +111,11 @@ class ScreenCaptureService : Service() {
         val image = source.acquireLatestImage() ?: return
         try {
             if (currentState != ScreenShareState.ACTIVE) return
-            val captureStartedAt = System.currentTimeMillis()
+            val captureStartedAt = android.os.SystemClock.elapsedRealtime()
             val now = android.os.SystemClock.elapsedRealtime()
             val explicit = freshRequests.isNotEmpty()
-            val interval = ScreenVisionPreferences(this).analysisIntervalMs
             val localCacheDue = now - lastLocalCacheAt >= LOCAL_FRAME_CACHE_INTERVAL_MS
-            val passiveDue = now - lastProcessedAt >= interval
+            val passiveDue = now - lastProcessedAt >= ADAPTIVE_CHANGE_CHECK_INTERVAL_MS
             if (!explicit && !localCacheDue && !passiveDue) return
             val plane = image.planes.firstOrNull() ?: return
             val rowPadding = plane.rowStride - plane.pixelStride * width
@@ -132,7 +132,7 @@ class ScreenCaptureService : Service() {
                     if (!explicit && !localCacheDue && !passiveChanged) return
                     val output = ByteArrayOutputStream()
                     cropped.compress(Bitmap.CompressFormat.JPEG, 76, output)
-                    val encodedAt = System.currentTimeMillis()
+                    val encodedAt = android.os.SystemClock.elapsedRealtime()
                     val sourceName = when {
                         explicit -> "explicit_query"
                         passiveChanged -> "passive"
@@ -142,14 +142,17 @@ class ScreenCaptureService : Service() {
                     latestFrame = record.bytes
                     latestFrameAt = record.capturedAt
                     lastLocalCacheAt = now
-                    if (passiveChanged) lastProcessedAt = now
+                    if (passiveDue) lastProcessedAt = now
                     if (explicit || passiveChanged) {
                         val frameLog = "frame_captured screen_session_id=${record.sessionId} frame_id=${record.frameId} frame_hash=${record.hash} source=${record.source} frameCapturedAt=${record.capturedAt} frameEncodedAt=${record.encodedAt} captureToEncodeMs=${record.encodedAt - record.capturedAt} bytes=${record.bytes.size}"
                         Log.d(TAG, frameLog); VoicePipelineLogger.debug(frameLog)
                     }
                     // Only meaningful passive observations go to the periodic Gemini
                     // video transport. Local cache frames never become continuous uploads.
-                    if (passiveChanged && !explicit) listeners.forEach { it(currentState, latestFrame) }
+                    if (!explicit && adaptiveRoutePolicy.shouldRoute(now, passiveChanged, false)) {
+                        VoicePipelineLogger.debug("passive_visual_send screen_session_id=${record.sessionId} frame_id=${record.frameId} adaptive_route_reason=${if (passiveChanged) "meaningful_change" else "static_keepalive"}")
+                        listeners.forEach { it(currentState, latestFrame) }
+                    }
                     if (explicit) {
                         freshRequests.keys.toList().forEach { queryId ->
                             val callback = freshRequests.remove(queryId) ?: return@forEach
@@ -177,6 +180,7 @@ class ScreenCaptureService : Service() {
         latestFrame = null
         latestFrameAt = 0L
         lastLocalCacheAt = 0L
+        adaptiveRoutePolicy.reset()
         changeDetector.reset()
         Log.d(TAG, "screen_stop_invalidated_frames cancelledQueries=${cancelled.size}")
         updateState(finalState)
@@ -261,10 +265,10 @@ class ScreenCaptureService : Service() {
         }
         fun hasFreshFrame(maxAgeMs: Long = 15_000L): Boolean =
             currentState == ScreenShareState.ACTIVE && latestFrame != null &&
-                System.currentTimeMillis() - latestFrameAt <= maxAgeMs
+                android.os.SystemClock.elapsedRealtime() - latestFrameAt <= maxAgeMs
 
         fun requestFreshFrame(userTurnId: Long, callback: (FreshFrameResult) -> Unit): ScreenQuery? {
-            val query = session.createQuery(userTurnId, System.currentTimeMillis()) ?: return null
+            val query = session.createQuery(userTurnId, android.os.SystemClock.elapsedRealtime()) ?: return null
             val service = serviceInstance
             if (service == null) {
                 callback(FreshFrameResult.Unavailable(query, "capture_service_unavailable"))
@@ -276,12 +280,12 @@ class ScreenCaptureService : Service() {
             // frame immediately when it is already current instead of waiting for the
             // periodic 3/5/10 second observation interval or a compositor nudge.
             val immediate = session.completeWithLatest(
-                query.queryId, System.currentTimeMillis(), IMMEDIATE_QUERY_FRAME_MAX_AGE_MS
+                query.queryId, android.os.SystemClock.elapsedRealtime(), IMMEDIATE_QUERY_FRAME_MAX_AGE_MS
             )
             if (immediate is FreshFrameResult.Ready) {
                 VoicePipelineLogger.debug(
                     "screen_query_cache_hit screen_query_id=${query.queryId} frame_id=${immediate.frame.frameId} " +
-                        "frame_age_ms=${System.currentTimeMillis() - immediate.frame.capturedAt}"
+                        "frameSource=CACHED_LATEST frameAgeAtQueryMs=${android.os.SystemClock.elapsedRealtime() - immediate.frame.capturedAt}"
                 )
                 callback(immediate)
                 return query
@@ -299,12 +303,12 @@ class ScreenCaptureService : Service() {
             service.worker?.postDelayed({
                 val pending = service.freshRequests.remove(query.queryId) ?: return@postDelayed
                 val fallback = session.completeWithLatest(
-                    query.queryId, System.currentTimeMillis(), QUERY_FALLBACK_FRAME_MAX_AGE_MS
+                    query.queryId, android.os.SystemClock.elapsedRealtime(), QUERY_FALLBACK_FRAME_MAX_AGE_MS
                 )
                 if (fallback is FreshFrameResult.Ready) {
                     VoicePipelineLogger.debug(
                         "screen_query_cache_fallback screen_query_id=${query.queryId} frame_id=${fallback.frame.frameId} " +
-                            "frame_age_ms=${System.currentTimeMillis() - fallback.frame.capturedAt}"
+                        "frameSource=CACHED_LATEST frameAgeAtQueryMs=${android.os.SystemClock.elapsedRealtime() - fallback.frame.capturedAt}"
                     )
                     pending(fallback)
                 } else session.cancel(query.queryId, "fresh_capture_timeout")?.let(pending)
@@ -312,7 +316,14 @@ class ScreenCaptureService : Service() {
             return query
         }
         fun currentFrame(): ScreenFrame? = session.latestFrame
+        fun markScreenDirty(reason: String) {
+            serviceInstance?.let {
+                it.adaptiveRoutePolicy.markDirty()
+                VoicePipelineLogger.debug("screen_dirty_reason=$reason screen_session_id=${session.sessionId}")
+            }
+        }
         private const val LOCAL_FRAME_CACHE_INTERVAL_MS = 400L
+        private const val ADAPTIVE_CHANGE_CHECK_INTERVAL_MS = 300L
         private const val IMMEDIATE_QUERY_FRAME_MAX_AGE_MS = 500L
         private const val QUERY_FALLBACK_FRAME_MAX_AGE_MS = 1_250L
         private const val FRESH_CAPTURE_TIMEOUT_MS = 650L

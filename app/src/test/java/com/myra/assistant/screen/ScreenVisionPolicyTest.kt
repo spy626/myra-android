@@ -70,6 +70,20 @@ class ScreenVisionPolicyTest {
         assertEquals(ScreenVisionIntent.CONTROL_TARGET, ScreenVisionIntentParser.parse("Center wala video open karo"))
         assertEquals(ScreenVisionIntent.CONTROL_TARGET, ScreenVisionIntentParser.parse("Open that one"))
         assertNull(ScreenVisionIntentParser.parse("I watched a video yesterday"))
+        assertEquals(ScreenVisionIntent.ANALYZE, ScreenVisionIntentParser.parseStableQuery("Abhi kya dikh raha hai?"))
+        assertEquals(ScreenVisionIntent.ANALYZE, ScreenVisionIntentParser.parseStableQuery("Screen pe kya dikh raha hai?"))
+        assertNull(ScreenVisionIntentParser.parseStableQuery("This video is good"))
+    }
+
+    @Test fun adaptiveRoutingPrioritizesChangesWithoutBuildingATimerBacklog() {
+        val policy = AdaptiveScreenRoutePolicy(changedMinIntervalMs = 500, staticKeepAliveMs = 5_000)
+        assertTrue(policy.shouldRoute(100, changed = true, explicit = false))
+        assertFalse(policy.shouldRoute(200, changed = true, explicit = false))
+        assertTrue(policy.shouldRoute(600, changed = true, explicit = false))
+        assertTrue(policy.shouldRoute(601, changed = false, explicit = true))
+        assertFalse(policy.shouldRoute(700, changed = false, explicit = false))
+        policy.markDirty()
+        assertTrue(policy.shouldRoute(1_100, changed = false, explicit = false))
     }
 
     @Test fun screenMemoryRejectsSensitiveAndWeakObservations() {

@@ -40,11 +40,12 @@
             android:text="Save Screen Memories" android:textColor="#EEEEEE" />
         <Switch android:id="@+id/sensitiveSwitch" android:layout_width="match_parent" android:layout_height="52dp"
             android:text="Sensitive Content Protection" android:textColor="#EEEEEE" />
-        <TextView style="@style/MyraLabel" android:text="FRAME INTERVAL" />
-        <Spinner android:id="@+id/intervalSpinner" android:layout_width="match_parent" android:layout_height="52dp" />
+        <TextView style="@style/MyraLabel" android:text="SCREEN AWARENESS" />
+        <TextView android:layout_width="match_parent" android:layout_height="52dp"
+            android:gravity="center_vertical" android:text="Live awareness · Adaptive"
+            android:textColor="#EEEEEE" android:textSize="16sp" />
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp"
             android:text="Frames are temporary and are not saved to the phone. Android always shows a notification while sharing is active."
             android:textColor="#777077" android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>
-

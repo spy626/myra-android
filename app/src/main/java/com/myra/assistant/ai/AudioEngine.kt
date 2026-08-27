@@ -49,6 +49,7 @@ class AudioEngine(private val context: Context) {
     private val mediaSpeechActivityDetector = SpeechActivityDetector(
         startThreshold = 0.055f, continueThreshold = 0.020f, startFrames = 5, endFrames = 12
     )
+    private val mediaAwareVadGate = MediaAwareVadGate()
     private val audioFocus by lazy { AudioFocusManager(context, {}, {}) }
     private val audioManager by lazy { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     @Volatile private var playbackGeneration = 0L
@@ -88,6 +89,7 @@ class AudioEngine(private val context: Context) {
                     onAmplitude?.invoke(level)
                     if (!muted.get()) {
                         val mediaActive = audioManager.isMusicActive
+                        if (!mediaActive && !speaking.get()) mediaAwareVadGate.reset()
                         val detector = when {
                             speaking.get() -> playbackSpeechActivityDetector
                             mediaActive -> mediaSpeechActivityDetector
@@ -96,6 +98,14 @@ class AudioEngine(private val context: Context) {
                         val dynamicStart = if (speaking.get()) max(0.060f, playbackReferenceRms * 0.25f) else null
                         when (detector.update(level, dynamicStart)) {
                             SpeechActivityEvent.STARTED -> {
+                                if (mediaActive && !speaking.get()) {
+                                    mediaAwareVadGate.onEnergyStarted()
+                                    voiceLog(
+                                        "vad_decision vadEnergy=$level playbackActive=false mediaActive=true probableMediaLeak=true " +
+                                            "vadState=POSSIBLE_MEDIA vadDecision=WAIT_FOR_ASR vadConfirmationReason=media_requires_transcript"
+                                    )
+                                    continue
+                                }
                                 voiceLog(
                                     "vad_decision vadEnergy=$level vadTriggerDurationMs=${if (speaking.get()) 200 else if (mediaActive) 250 else 50} " +
                                         "playbackActive=${speaking.get()} mediaActive=$mediaActive probableSelfPlayback=${speaking.get()} " +
@@ -104,6 +114,17 @@ class AudioEngine(private val context: Context) {
                                 onSpeechActivityChanged?.invoke(true)
                             }
                             SpeechActivityEvent.ENDED -> {
+                                if (mediaActive && !speaking.get()) {
+                                    when (mediaAwareVadGate.onEnergyEnded()) {
+                                        MediaAwareVadGate.Result.CONFIRMED_USER -> onSpeechActivityChanged?.invoke(false)
+                                        MediaAwareVadGate.Result.REJECTED_MEDIA -> voiceLog(
+                                            "vad_decision vadEnergy=$level mediaActive=true probableMediaLeak=true " +
+                                                "vadState=NO_SPEECH mediaLeakRejected=true vadRejectedReason=no_asr_confirmation"
+                                        )
+                                        else -> Unit
+                                    }
+                                    continue
+                                }
                                 voiceLog("vad_decision vadEnergy=$level playbackActive=${speaking.get()} mediaActive=$mediaActive vadDecision=END")
                                 onSpeechActivityChanged?.invoke(false)
                             }
@@ -183,6 +204,7 @@ class AudioEngine(private val context: Context) {
                         playbackScreenQueryId = ""
                         playbackSpeechActivityDetector.reset()
                         mediaSpeechActivityDetector.reset()
+                        mediaAwareVadGate.reset()
                         onSpeakingChanged?.invoke(false)
                     }
                     continue
@@ -241,6 +263,13 @@ class AudioEngine(private val context: Context) {
         if (value) speechActivityDetector.reset()
     }
     fun setBargeInEnabled(value: Boolean) { bargeInEnabled.set(value) }
+    /** Called only when Gemini ASR emits meaningful text over an active media candidate. */
+    fun confirmMediaSpeechFromTranscript() {
+        if (mediaAwareVadGate.confirmFromTranscript() == MediaAwareVadGate.Result.CONFIRMED_USER) {
+            voiceLog("vad_decision mediaActive=true vadState=CONFIRMED_USER realUserConfirmed=true vadConfirmationReason=asr_text_emerged")
+            onSpeechActivityChanged?.invoke(true)
+        }
+    }
     fun resumeListeningNow() {
         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime()
         muted.set(false)
@@ -256,6 +285,7 @@ class AudioEngine(private val context: Context) {
         playbackScreenQueryId = ""
         playbackSpeechActivityDetector.reset()
         mediaSpeechActivityDetector.reset()
+        mediaAwareVadGate.reset()
         speaking.set(false)
         onSpeakingChanged?.invoke(false)
     }

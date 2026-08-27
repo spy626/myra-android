@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
-import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -47,25 +46,10 @@ class ScreenVisionSettingsActivity : AppCompatActivity() {
         binding.learningSwitch.isChecked = preferences.automaticLearning
         binding.saveMemorySwitch.isChecked = preferences.saveScreenMemories
         binding.sensitiveSwitch.isChecked = preferences.sensitiveContentProtection
-        val intervals = listOf("3 seconds", "5 seconds", "10 seconds")
-        val intervalValues = listOf(3_000L, 5_000L, 10_000L)
-        binding.intervalSpinner.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item, intervals
-        )
-        binding.intervalSpinner.setSelection(
-            intervalValues.indexOf(preferences.analysisIntervalMs).takeIf { it >= 0 } ?: 0
-        )
         binding.visionSwitch.setOnCheckedChangeListener { _, checked -> preferences.visionEnabled = checked }
         binding.learningSwitch.setOnCheckedChangeListener { _, checked -> preferences.automaticLearning = checked }
         binding.saveMemorySwitch.setOnCheckedChangeListener { _, checked -> preferences.saveScreenMemories = checked }
         binding.sensitiveSwitch.setOnCheckedChangeListener { _, checked -> preferences.sensitiveContentProtection = checked }
-        binding.intervalSpinner.setSelection(binding.intervalSpinner.selectedItemPosition)
-        binding.intervalSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
-                preferences.analysisIntervalMs = intervalValues[position]
-            }
-        }
         binding.shareButton.setOnClickListener { requestCapture() }
         binding.pauseButton.setOnClickListener {
             startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_PAUSE))
