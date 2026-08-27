@@ -23,7 +23,7 @@ class GeminiLiveClient(
     var onReady: (() -> Unit)? = null
     var onAudio: ((ByteArray, Long) -> Unit)? = null
     var onInputTranscript: ((String, Long) -> Unit)? = null
-    var onOutputTranscript: ((String) -> Unit)? = null
+    var onOutputTranscript: ((String, Long) -> Unit)? = null
     var onTurnComplete: (() -> Unit)? = null
     var onGenerationComplete: ((Long) -> Unit)? = null
     var onInterrupted: ((Long) -> Unit)? = null
@@ -198,12 +198,12 @@ class GeminiLiveClient(
     fun sendImage(image: ByteArray, mimeType: String, prompt: String) {
         if (image.isEmpty()) return
         val parts = JSONArray()
-            .put(JSONObject().put("text", prompt.ifBlank {
-                "Analyze this screenshot. Explain naturally what is visible and help me understand any problem."
-            }))
             .put(JSONObject().put("inlineData", JSONObject()
                 .put("mimeType", mimeType.ifBlank { "image/jpeg" })
                 .put("data", Base64.encodeToString(image, Base64.NO_WRAP))))
+            .put(JSONObject().put("text", prompt.ifBlank {
+                "Analyze this screenshot. Explain naturally what is visible and help me understand any problem."
+            }))
         val turn = JSONObject().put("role", "user").put("parts", parts)
         sendWhenReady(JSONObject().put("clientContent", JSONObject()
             .put("turns", JSONArray().put(turn))
@@ -324,7 +324,9 @@ class GeminiLiveClient(
                     reschedulePendingTurnBoundary()
                 }
             }
-            content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let { onOutputTranscript?.invoke(it) }
+            content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let {
+                onOutputTranscript?.invoke(it, modelGenerationId.get())
+            }
             if (content.optBoolean("interrupted")) {
                 onInterrupted?.invoke(modelGenerationId.get())
             }

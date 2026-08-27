@@ -62,6 +62,7 @@ import com.myra.assistant.screen.ScreenShareState
 import com.myra.assistant.screen.ScreenVisionIntentParser
 import com.myra.assistant.screen.ScreenVisionPreferences
 import com.myra.assistant.screen.FreshFrameResult
+import com.myra.assistant.screen.ScreenResponseBinding
 import com.myra.assistant.voice.LocalSpeechGate
 import com.myra.assistant.voice.FinalTranscriptDisplayFormatter
 import com.myra.assistant.voice.FinalSemanticUserUtterance
@@ -208,6 +209,10 @@ class MyraVoiceService : Service() {
     private var screenResponseHasContent = false
     private var screenResponseGenerationComplete = false
     private var screenResponseTextCommitted = false
+    private var screenResponseUserTurnId = 0L
+    private var screenResponseAfterGenerationId = 0L
+    private var screenResponseGenerationId = 0L
+    private var screenResponseBinding: ScreenResponseBinding? = null
     private var screenResponseSessionId = ""
     private var screenResponseQueryId = ""
     private var screenQuestionDetectedAt = 0L
@@ -251,8 +256,11 @@ class MyraVoiceService : Service() {
         if (state == ScreenShareState.ACTIVE && frame != null &&
             screenVisionPreferences.visionEnabled && isNaturalVoiceReady
         ) {
-            live?.sendScreenFrame(frame)
-            voiceLog("screen_frame_routed bytes=${frame.size} source=media_projection temporary=true")
+            val record = ScreenCaptureService.currentFrame()
+            if (record?.source != "explicit_query") {
+                live?.sendScreenFrame(frame)
+                voiceLog("screen_frame_routed bytes=${frame.size} source=media_projection frame_id=${record?.frameId ?: 0L} temporary=true")
+            }
         }
     }
 
@@ -359,14 +367,24 @@ class MyraVoiceService : Service() {
                     }
                 }
                 else if (screenResponseActive && ScreenCaptureService.session.isCurrent(screenResponseSessionId)) {
-                    screenResponseHasContent = true
-                    mediaGuard.beginAssistantTurn()
-                    audio?.setBargeInEnabled(true)
-                    audio?.queueAudio(pcm)
-                    voiceLog(
-                        "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=CONTROLLED_SCREEN " +
-                            "screen_query_id=$screenResponseQueryId route=screen_response accepted=true firstResponseAudioAt=$audioReceivedAt"
-                    )
+                    val generationAccepted = screenResponseBinding?.acceptsGeneration(modelGenerationId) == true
+                    screenResponseGenerationId = screenResponseBinding?.screenGenerationId ?: 0L
+                    if (!generationAccepted) {
+                        voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId expectedAfter=$screenResponseAfterGenerationId boundGenerationId=$screenResponseGenerationId")
+                    } else {
+                        screenResponseHasContent = true
+                        mediaGuard.beginAssistantTurn()
+                        audio?.setPlaybackContext(modelGenerationId, screenResponseQueryId)
+                        audio?.setBargeInEnabled(true)
+                        audio?.queueAudio(pcm)
+                        voiceLog(
+                            "route_decision turnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId responseOwner=CONTROLLED_SCREEN " +
+                                "screen_query_id=$screenResponseQueryId route=screen_response accepted=true firstResponseAudioAt=$audioReceivedAt " +
+                                "geminiSendToFirstResponseMs=${if (screenFrameSentAt > 0L) audioReceivedAt - screenFrameSentAt else -1L} " +
+                                "speechEndToFirstAudibleMs=${if (speechActivityEndedAt > 0L) audioReceivedAt - speechActivityEndedAt else -1L} " +
+                                "screen_response_turn_consistency=${screenResponseUserTurnId != 0L}"
+                        )
+                    }
                 }
                 else if (responseArbiter.acceptsOrdinaryModel() && LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
                         suppressed = suppressModelForTurn,
@@ -438,6 +456,13 @@ class MyraVoiceService : Service() {
                 voiceLog("model_generation_complete turnId=$activeTurnId modelGenerationId=$modelGenerationId at=${android.os.SystemClock.elapsedRealtime()}")
             }
             client.onInputTranscript = inputTranscript@ { part, latestModelGenerationId ->
+                if (screenResponseActive) {
+                    voiceLog(
+                        "screen_response_input_ignored screen_query_id=$screenResponseQueryId " +
+                            "userTurnId=$screenResponseUserTurnId reason=no_confirmed_real_barge_in textChars=${part.length}"
+                    )
+                    return@inputTranscript
+                }
                 if (input.isEmpty()) {
                     activeTurnId = ++turnSequence
                     inputTurnStartedAt = android.os.SystemClock.elapsedRealtime()
@@ -664,20 +689,23 @@ class MyraVoiceService : Service() {
                     executeCommand(command)
                 }
             }
-            client.onOutputTranscript = {
+            client.onOutputTranscript = { transcript, modelGenerationId ->
                 if (validatingLocalSpeech != null) {
                     localSpeechHasContent = true
-                    appendTranscript(localSpeechTranscript, it)
+                    appendTranscript(localSpeechTranscript, transcript)
                     startLocalSpeechWhenPrefixMatches()
                 }
                 else if (screenResponseActive && ScreenCaptureService.session.isCurrent(screenResponseSessionId)) {
-                    screenResponseHasContent = true
-                    appendTranscript(output, it)
-                    voiceLog("screen_query_result_received screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId firstResponseTextAt=${android.os.SystemClock.elapsedRealtime()}")
+                    if (screenResponseBinding?.acceptsGeneration(modelGenerationId) == true) {
+                        screenResponseGenerationId = screenResponseBinding?.screenGenerationId ?: 0L
+                        screenResponseHasContent = true
+                        appendTranscript(output, transcript)
+                        voiceLog("screen_query_result_received screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId userTurnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId firstResponseTextAt=${android.os.SystemClock.elapsedRealtime()} screen_response_turn_consistency=true")
+                    } else voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId reason=wrong_generation")
                 }
                 else if (responseArbiter.acceptsOrdinaryModel() && !suppressModelForTurn &&
                     !hideNextModelTranscript && mediaGuard.allowModelResponse()
-                ) appendTranscript(output, it)
+                ) appendTranscript(output, transcript)
                 else voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} responseOwner=${responseArbiter.owner} route=ordinary_model_text")
             }
             client.onTurnComplete = turnComplete@ {
@@ -1481,6 +1509,13 @@ class MyraVoiceService : Service() {
                         screenResponseHasContent = false
                         screenResponseGenerationComplete = false
                         screenResponseTextCommitted = false
+                        screenResponseUserTurnId = result.query.userTurnId
+                        screenResponseAfterGenerationId = latestObservedModelGenerationId
+                        screenResponseGenerationId = 0L
+                        screenResponseBinding = ScreenResponseBinding(
+                            result.query.userTurnId, result.query.queryId, result.query.sessionId,
+                            latestObservedModelGenerationId
+                        )
                         screenResponseSessionId = result.query.sessionId
                         screenResponseQueryId = result.query.queryId
                         screenFreshFrameCapturedAt = frame.capturedAt
@@ -1491,13 +1526,15 @@ class MyraVoiceService : Service() {
                             "frame_used_for_query screen_query_id=${result.query.queryId} userTurnId=${result.query.userTurnId} " +
                                 "screen_session_id=${frame.sessionId} frame_id=${frame.frameId} frame_age_ms=${now - frame.capturedAt} " +
                                 "frame_hash=${frame.hash} speechEndAt=$speechActivityEndedAt screenQuestionDetectedAt=$screenQuestionDetectedAt " +
-                                "freshCaptureRequestedAt=${result.query.requestedAt} freshFrameCapturedAt=${frame.capturedAt} frameSentToGeminiAt=$screenFrameSentAt"
+                                "freshCaptureRequestedAt=${result.query.requestedAt} freshFrameCapturedAt=${frame.capturedAt} frameEncodedAt=${frame.encodedAt} " +
+                                "queryToCaptureMs=${frame.capturedAt - result.query.requestedAt} captureToEncodeMs=${frame.encodedAt - frame.capturedAt} " +
+                                "encodeToGeminiSendMs=${System.currentTimeMillis() - frame.encodedAt} frameSentToGeminiAt=$screenFrameSentAt"
                         )
                         live?.sendImage(
                             frame.bytes, "image/jpeg",
                             "$question\nThis image is the exact fresh Android screen for query ${result.query.queryId}. " +
-                                "Answer only from this image and these current accessibility elements:\n$ui\n" +
-                                "Do not use an older screen. Keep the spoken answer short and complete."
+                                "Screen sharing is ACTIVE and this frame is valid. Answer only from THIS frame and these current accessibility elements:\n$ui\n" +
+                                "Never say screen sharing is off. Do not use older visual context. Keep the spoken answer to one or two complete sentences."
                         )
                     }
                 }
@@ -1512,6 +1549,10 @@ class MyraVoiceService : Service() {
         screenResponseHasContent = false
         screenResponseGenerationComplete = false
         screenResponseTextCommitted = false
+        screenResponseUserTurnId = 0L
+        screenResponseAfterGenerationId = 0L
+        screenResponseGenerationId = 0L
+        screenResponseBinding = null
         screenResponseSessionId = ""
         screenResponseQueryId = ""
         listener?.onMyraText(message, true)
@@ -1525,6 +1566,10 @@ class MyraVoiceService : Service() {
         screenResponseHasContent = false
         screenResponseGenerationComplete = false
         screenResponseTextCommitted = false
+        screenResponseUserTurnId = 0L
+        screenResponseAfterGenerationId = 0L
+        screenResponseGenerationId = 0L
+        screenResponseBinding = null
         screenResponseSessionId = ""
         screenResponseQueryId = ""
         resetTurnBuffers("screen_response_$reason")

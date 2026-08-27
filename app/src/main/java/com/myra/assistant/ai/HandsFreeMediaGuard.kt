@@ -18,6 +18,7 @@ class HandsFreeMediaGuard(context: Context) {
     private val probe = StringBuilder()
     private var awakeUntil = 0L
     private var focusRequest: AudioFocusRequest? = null
+    private var listeningFocusHeld = false
     private val releaseRunnable = Runnable { finishInteraction() }
 
     fun inspect(transcriptPart: String): Gate {
@@ -31,30 +32,39 @@ class HandsFreeMediaGuard(context: Context) {
     }
 
     fun allowModelResponse(): Boolean = !isExternalMediaPlaying() || isAwake()
-    fun beginAssistantTurn() = beginInteraction()
+    fun beginAssistantTurn() {
+        // AudioEngine becomes the sole focus owner during audible playback.
+        // Previously every audio chunk created another request and overwrote the
+        // reference to the old one, leaking focus owners until playback requests failed.
+        abandonListeningFocus("assistant_playback")
+        awakeUntil = SystemClock.elapsedRealtime() + LISTEN_WINDOW_MS
+    }
     fun isAwake(): Boolean = SystemClock.elapsedRealtime() < awakeUntil
     fun isExternalMediaPlaying(): Boolean = audioManager.isMusicActive
 
     private fun beginInteraction() {
         awakeUntil = SystemClock.elapsedRealtime() + LISTEN_WINDOW_MS
         handler.removeCallbacks(releaseRunnable)
-        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        if (focusRequest == null) focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setAcceptsDelayedFocusGain(false).setOnAudioFocusChangeListener { }.build()
-        focusRequest = request
-        audioManager.requestAudioFocus(request)
+        if (!listeningFocusHeld) listeningFocusHeld = audioManager.requestAudioFocus(requireNotNull(focusRequest)) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         handler.postDelayed(releaseRunnable, LISTEN_WINDOW_MS)
     }
 
     fun finishInteraction() {
         awakeUntil = 0L
         handler.removeCallbacks(releaseRunnable)
-        focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-        focusRequest = null
+        abandonListeningFocus("interaction_finished")
         probe.clear()
     }
 
     fun release() = finishInteraction()
+
+    private fun abandonListeningFocus(reason: String) {
+        if (listeningFocusHeld) focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        listeningFocusHeld = false
+    }
 
     private fun normalize(value: String) = value.lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
 

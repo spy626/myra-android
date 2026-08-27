@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlin.math.sqrt
+import kotlin.math.max
 
 class AudioEngine(private val context: Context) {
     var onMicChunk: ((ByteArray) -> Unit)? = null
@@ -45,7 +46,15 @@ class AudioEngine(private val context: Context) {
     private val playbackSpeechActivityDetector = SpeechActivityDetector(
         startThreshold = 0.060f, continueThreshold = 0.018f, startFrames = 4, endFrames = 10
     )
+    private val mediaSpeechActivityDetector = SpeechActivityDetector(
+        startThreshold = 0.055f, continueThreshold = 0.020f, startFrames = 5, endFrames = 12
+    )
     private val audioFocus by lazy { AudioFocusManager(context, {}, {}) }
+    private val audioManager by lazy { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    @Volatile private var playbackGeneration = 0L
+    @Volatile private var playbackScreenQueryId = ""
+    @Volatile private var playbackReferenceRms = 0f
+    private var lastVadRejectLogAt = 0L
 
     fun start() {
         if (running.getAndSet(true)) return
@@ -63,6 +72,11 @@ class AudioEngine(private val context: Context) {
             if (NoiseSuppressor.isAvailable()) noiseSuppressor = NoiseSuppressor.create(session)?.apply { enabled = true }
             if (AutomaticGainControl.isAvailable()) gainControl = AutomaticGainControl.create(session)?.apply { enabled = true }
         }
+        voiceLog(
+            "audio_record_config audioRecordSource=VOICE_COMMUNICATION audioSessionId=${recorder?.audioSessionId} " +
+                "acousticEchoCancelerAvailable=${AcousticEchoCanceler.isAvailable()} acousticEchoCancelerEnabled=${echoCanceler?.enabled == true} " +
+                "noiseSuppressorAvailable=${NoiseSuppressor.isAvailable()} noiseSuppressorEnabled=${noiseSuppressor?.enabled == true}"
+        )
         recorder?.startRecording()
         micThread = thread(name = "myra-mic") {
             val data = ByteArray(1600) // 50 ms: low-latency VAD and Live API input
@@ -73,11 +87,37 @@ class AudioEngine(private val context: Context) {
                     val level = rms(chunk)
                     onAmplitude?.invoke(level)
                     if (!muted.get()) {
-                        val detector = if (speaking.get()) playbackSpeechActivityDetector else speechActivityDetector
-                        when (detector.update(level)) {
-                            SpeechActivityEvent.STARTED -> onSpeechActivityChanged?.invoke(true)
-                            SpeechActivityEvent.ENDED -> onSpeechActivityChanged?.invoke(false)
-                            SpeechActivityEvent.NONE -> Unit
+                        val mediaActive = audioManager.isMusicActive
+                        val detector = when {
+                            speaking.get() -> playbackSpeechActivityDetector
+                            mediaActive -> mediaSpeechActivityDetector
+                            else -> speechActivityDetector
+                        }
+                        val dynamicStart = if (speaking.get()) max(0.060f, playbackReferenceRms * 0.25f) else null
+                        when (detector.update(level, dynamicStart)) {
+                            SpeechActivityEvent.STARTED -> {
+                                voiceLog(
+                                    "vad_decision vadEnergy=$level vadTriggerDurationMs=${if (speaking.get()) 200 else if (mediaActive) 250 else 50} " +
+                                        "playbackActive=${speaking.get()} mediaActive=$mediaActive probableSelfPlayback=${speaking.get()} " +
+                                        "probableMediaLeak=${mediaActive && !speaking.get()} vadDecision=ACCEPT_SUSTAINED"
+                                )
+                                onSpeechActivityChanged?.invoke(true)
+                            }
+                            SpeechActivityEvent.ENDED -> {
+                                voiceLog("vad_decision vadEnergy=$level playbackActive=${speaking.get()} mediaActive=$mediaActive vadDecision=END")
+                                onSpeechActivityChanged?.invoke(false)
+                            }
+                            SpeechActivityEvent.NONE -> {
+                                val now = android.os.SystemClock.elapsedRealtime()
+                                if ((speaking.get() || mediaActive) && level >= 0.018f && now - lastVadRejectLogAt >= 1_000L) {
+                                    lastVadRejectLogAt = now
+                                    voiceLog(
+                                        "vad_decision vadEnergy=$level playbackActive=${speaking.get()} mediaActive=$mediaActive " +
+                                            "playbackReferenceRms=$playbackReferenceRms dynamicThreshold=${dynamicStart ?: 0.055f} " +
+                                            "vadDecision=REJECT_TRANSIENT vadRejectedReason=${if (speaking.get()) "probable_self_playback" else "probable_media_leak"}"
+                                    )
+                                }
+                            }
                         }
                     }
                     // Never feed LYRA's own speaker output back into Gemini. Platform
@@ -137,9 +177,10 @@ class AudioEngine(private val context: Context) {
                                 "playState=${track?.playState}"
                         )
                         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime() + MIC_ECHO_COOLDOWN_MS
-                        audioFocus.abandon()
+                        audioFocus.abandon("playback_end")
                         voiceLog("audio_focus_release reason=playback_end")
                         playbackSpeechActivityDetector.reset()
+                        mediaSpeechActivityDetector.reset()
                         onSpeakingChanged?.invoke(false)
                     }
                     continue
@@ -149,10 +190,11 @@ class AudioEngine(private val context: Context) {
                     runCatching {
                         if (track?.playState != AudioTrack.PLAYSTATE_PLAYING) track?.play()
                         if (speaking.compareAndSet(false, true)) {
-                            val focusGranted = audioFocus.request()
-                            voiceLog("audio_focus_request gain=TRANSIENT_MAY_DUCK audio_focus_result=$focusGranted")
+                            val focusGranted = audioFocus.request(playbackGeneration, playbackScreenQueryId)
+                            voiceLog("audio_focus_result granted=$focusGranted playbackGeneration=$playbackGeneration screenQueryId=$playbackScreenQueryId")
                             speechActivityDetector.reset()
                             playbackSpeechActivityDetector.reset()
+                            mediaSpeechActivityDetector.reset()
                             voiceLog(
                                 "playback_start bytes=${bytes.size} queued=${queue.size} " +
                                     "state=${track?.state} playState=${track?.playState}"
@@ -160,6 +202,7 @@ class AudioEngine(private val context: Context) {
                             onSpeakingChanged?.invoke(true)
                         }
                         val written = track?.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING) ?: 0
+                        playbackReferenceRms = rms(bytes)
                         if (written > 0) writtenAudioBytes += written
                         voiceLog(
                             "audio_track_write requested=${bytes.size} written=$written " +
@@ -180,6 +223,10 @@ class AudioEngine(private val context: Context) {
                 "accepted=$accepted queueSize=${queue.size} running=${running.get()}"
         )
     }
+    fun setPlaybackContext(generationId: Long, screenQueryId: String = "") {
+        playbackGeneration = generationId
+        playbackScreenQueryId = screenQueryId
+    }
     fun setMuted(value: Boolean) {
         muted.set(value)
         if (value) speechActivityDetector.reset()
@@ -194,9 +241,10 @@ class AudioEngine(private val context: Context) {
         queue.clear()
         bargeInEnabled.set(false)
         synchronized(playbackLock) { runCatching { track?.pause(); track?.flush() } }
-        audioFocus.abandon()
+        audioFocus.abandon("playback_interrupt")
         voiceLog("audio_focus_release reason=playback_interrupt")
         playbackSpeechActivityDetector.reset()
+        mediaSpeechActivityDetector.reset()
         speaking.set(false)
         onSpeakingChanged?.invoke(false)
     }
@@ -214,7 +262,7 @@ class AudioEngine(private val context: Context) {
             runCatching { track?.stop() }
             runCatching { track?.release() }
         }
-        audioFocus.abandon()
+        audioFocus.abandon("engine_release")
         recorder = null
         track = null
         micThread = null

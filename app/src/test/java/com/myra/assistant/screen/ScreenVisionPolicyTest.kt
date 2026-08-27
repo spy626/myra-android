@@ -4,13 +4,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ScreenVisionPolicyTest {
+    @Test fun screenResponseStaysBoundToOriginalTurnQuerySessionAndOneNewGeneration() {
+        val binding = ScreenResponseBinding(43, "query-1", "session-1", generationFloor = 46)
+        assertFalse(binding.acceptsGeneration(46))
+        assertTrue(binding.acceptsGeneration(47))
+        assertFalse(binding.acceptsGeneration(48))
+        assertTrue(binding.matches("query-1", "session-1", 43))
+        assertFalse(binding.matches("query-1", "session-1", 44))
+        assertFalse(binding.matches("stale-query", "session-1", 43))
+    }
     @Test fun explicitQueryUsesCurrentSessionFrameAndStopInvalidatesEverything() {
         val session = ScreenVisionSession()
         val firstSession = session.start()
         session.setState(ScreenShareState.ACTIVE)
-        val periodic = requireNotNull(session.publish(byteArrayOf(1), 100, "passive"))
+        val periodic = requireNotNull(session.publish(byteArrayOf(1), 100, source = "passive"))
         val query = requireNotNull(session.createQuery(7, 110))
-        val fresh = requireNotNull(session.publish(byteArrayOf(2), 120, "explicit_query"))
+        val fresh = requireNotNull(session.publish(byteArrayOf(2), 120, source = "explicit_query"))
         val result = session.complete(query.queryId, fresh) as FreshFrameResult.Ready
         assertEquals(firstSession, result.frame.sessionId)
         assertTrue(result.frame.frameId > periodic.frameId)
@@ -27,7 +36,7 @@ class ScreenVisionPolicyTest {
     @Test fun frameFromPreviousSessionCannotCompleteNewQuery() {
         val session = ScreenVisionSession()
         session.start(); session.setState(ScreenShareState.ACTIVE)
-        val old = requireNotNull(session.publish(byteArrayOf(1), 1, "passive"))
+        val old = requireNotNull(session.publish(byteArrayOf(1), 1, source = "passive"))
         session.invalidate(ScreenShareState.STOPPED)
         session.start(); session.setState(ScreenShareState.ACTIVE)
         val query = requireNotNull(session.createQuery(2, 2))

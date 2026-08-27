@@ -23,6 +23,7 @@ import androidx.core.app.NotificationCompat
 import com.myra.assistant.R
 import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.service.AccessibilityHelperService
+import com.myra.assistant.diagnostics.VoicePipelineLogger
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.ConcurrentHashMap
@@ -84,7 +85,7 @@ class ScreenCaptureService : Service() {
             }, worker)
         }
         val metrics = resources.displayMetrics
-        val maxWidth = 1080
+        val maxWidth = 960
         val scale = minOf(1f, maxWidth.toFloat() / metrics.widthPixels)
         val width = (metrics.widthPixels * scale).toInt().coerceAtLeast(2)
         val height = (metrics.heightPixels * scale).toInt().coerceAtLeast(2)
@@ -108,6 +109,7 @@ class ScreenCaptureService : Service() {
         val image = source.acquireLatestImage() ?: return
         try {
             if (currentState != ScreenShareState.ACTIVE) return
+            val captureStartedAt = System.currentTimeMillis()
             val now = android.os.SystemClock.elapsedRealtime()
             val explicit = freshRequests.isNotEmpty()
             val interval = ScreenVisionPreferences(this).analysisIntervalMs
@@ -122,13 +124,14 @@ class ScreenCaptureService : Service() {
                 try {
                     if (!explicit && !changeDetector.changed(cropped) && latestFrame != null) return
                     val output = ByteArrayOutputStream()
-                    cropped.compress(Bitmap.CompressFormat.JPEG, 82, output)
-                    val capturedAt = System.currentTimeMillis()
-                    val record = session.publish(output.toByteArray(), capturedAt, if (explicit) "explicit_query" else "passive") ?: return
+                    cropped.compress(Bitmap.CompressFormat.JPEG, 76, output)
+                    val encodedAt = System.currentTimeMillis()
+                    val record = session.publish(output.toByteArray(), captureStartedAt, encodedAt, if (explicit) "explicit_query" else "passive") ?: return
                     latestFrame = record.bytes
                     latestFrameAt = record.capturedAt
                     lastProcessedAt = now
-                    Log.d(TAG, "frame_captured screen_session_id=${record.sessionId} frame_id=${record.frameId} frame_hash=${record.hash} source=${record.source}")
+                    val frameLog = "frame_captured screen_session_id=${record.sessionId} frame_id=${record.frameId} frame_hash=${record.hash} source=${record.source} frameCapturedAt=${record.capturedAt} frameEncodedAt=${record.encodedAt} captureToEncodeMs=${record.encodedAt - record.capturedAt} bytes=${record.bytes.size}"
+                    Log.d(TAG, frameLog); VoicePipelineLogger.debug(frameLog)
                     listeners.forEach { it(currentState, latestFrame) }
                     if (explicit) {
                         freshRequests.keys.toList().forEach { queryId ->
@@ -250,7 +253,17 @@ class ScreenCaptureService : Service() {
                 return query
             }
             service.freshRequests[query.queryId] = callback
-            Log.d(TAG, "frame_capture_requested screen_session_id=${query.sessionId} screen_query_id=${query.queryId} userTurnId=$userTurnId")
+            val requestLog = "frame_capture_requested screen_session_id=${query.sessionId} screen_query_id=${query.queryId} userTurnId=$userTurnId freshCaptureRequestedAt=${query.requestedAt}"
+            Log.d(TAG, requestLog); VoicePipelineLogger.debug(requestLog)
+            service.worker?.post {
+                // A static screen may not produce another buffer immediately. Reattaching
+                // the existing projection surface requests one fresh compositor frame;
+                // it does not restart MediaProjection or create a second display.
+                runCatching {
+                    service.display?.setSurface(null)
+                    service.display?.setSurface(service.reader?.surface)
+                }.onFailure { VoicePipelineLogger.debug("frame_capture_nudge_failed screen_query_id=${query.queryId} reason=${it.javaClass.simpleName}") }
+            }
             service.worker?.postDelayed({
                 val pending = service.freshRequests.remove(query.queryId) ?: return@postDelayed
                 session.cancel(query.queryId, "fresh_capture_timeout")?.let(pending)

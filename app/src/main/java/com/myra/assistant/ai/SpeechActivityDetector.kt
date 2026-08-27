@@ -15,9 +15,9 @@ internal class SpeechActivityDetector(
     private var voicedFrames = 0
     private var quietFrames = 0
 
-    @Synchronized fun update(rms: Float): SpeechActivityEvent {
+    @Synchronized fun update(rms: Float, startThresholdOverride: Float? = null): SpeechActivityEvent {
         if (!active) {
-            voicedFrames = if (rms >= startThreshold) voicedFrames + 1 else 0
+            voicedFrames = if (rms >= (startThresholdOverride ?: startThreshold)) voicedFrames + 1 else 0
             if (voicedFrames >= startFrames) {
                 active = true
                 voicedFrames = 0

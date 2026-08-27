@@ -6,7 +6,7 @@ import org.junit.Test
 
 class PhantomTranscriptFilterTest {
     @Test fun ignoresObservedNoiseFragments() {
-        listOf("jj", "hhhh", "kk", "tt", "as", "ddhgh", "M m", "Ja")
+        listOf("jj", "hhhh", "kk", "tt", "as", "ddhgh", "M m", "Ja", "gra")
             .forEach { assertTrue(it, PhantomTranscriptFilter.shouldIgnore(it)) }
     }
 

@@ -9,6 +9,7 @@ data class ScreenFrame(
     val sessionId: String,
     val frameId: Long,
     val capturedAt: Long,
+    val encodedAt: Long,
     val hash: String,
     val bytes: ByteArray,
     val source: String
@@ -52,10 +53,10 @@ class ScreenVisionSession {
 
     @Synchronized fun setState(next: ScreenShareState) { state = next }
 
-    @Synchronized fun publish(bytes: ByteArray, capturedAt: Long, source: String): ScreenFrame? {
+    @Synchronized fun publish(bytes: ByteArray, capturedAt: Long, encodedAt: Long = capturedAt, source: String): ScreenFrame? {
         if (state != ScreenShareState.ACTIVE || sessionId.isBlank()) return null
         val frame = ScreenFrame(
-            sessionId, frameSequence.incrementAndGet(), capturedAt,
+            sessionId, frameSequence.incrementAndGet(), capturedAt, encodedAt,
             MessageDigest.getInstance("SHA-256").digest(bytes).take(8)
                 .joinToString("") { "%02x".format(it) },
             bytes.copyOf(), source

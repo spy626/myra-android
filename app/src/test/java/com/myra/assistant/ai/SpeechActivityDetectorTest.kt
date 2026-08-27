@@ -31,4 +31,11 @@ class SpeechActivityDetectorTest {
         repeat(3) { assertEquals(SpeechActivityEvent.NONE, detector.update(.09f)) }
         assertEquals(SpeechActivityEvent.STARTED, detector.update(.09f))
     }
+
+    @Test fun playbackReferenceCanRaiseThresholdWithoutDisablingRealBargeIn() {
+        val detector = SpeechActivityDetector(.060f, .018f, 4, 10)
+        repeat(6) { assertEquals(SpeechActivityEvent.NONE, detector.update(.05f, .08f)) }
+        repeat(3) { assertEquals(SpeechActivityEvent.NONE, detector.update(.10f, .08f)) }
+        assertEquals(SpeechActivityEvent.STARTED, detector.update(.10f, .08f))
+    }
 }
