@@ -26,7 +26,12 @@ class AudioFocusManager(context: Context, private val onLost: () -> Unit, privat
             .setAcceptsDelayedFocusGain(false).setOnAudioFocusChangeListener(listener).build()
     } else null
 
-    fun request(playbackGeneration: Long = 0L, screenQueryId: String = "", forceTransient: Boolean = false): Boolean {
+    fun request(
+        playbackGeneration: Long = 0L,
+        screenQueryId: String = "",
+        responseOwner: String = "MODEL",
+        forceTransient: Boolean = true
+    ): Boolean {
         if (held) return true
         activeRequestId = requestIds.incrementAndGet()
         val initialGain = AudioFocusGainPolicy.initialGain(forceTransient)
@@ -46,7 +51,7 @@ class AudioFocusManager(context: Context, private val onLost: () -> Unit, privat
         VoicePipelineLogger.debug(
             "audio_focus_request focusRequestId=$activeRequestId requestedGain=$requestedGain " +
                 "usage=USAGE_ASSISTANT contentType=CONTENT_TYPE_SPEECH rawResult=$raw " +
-                "state=${AudioFocusResultPolicy.interpret(raw)} playbackGeneration=$playbackGeneration screenQueryId=$screenQueryId"
+                "state=${AudioFocusResultPolicy.interpret(raw)} playbackGeneration=$playbackGeneration responseOwner=$responseOwner screenQueryId=$screenQueryId"
         )
         return held
     }
@@ -78,4 +83,9 @@ internal object AudioFocusGainPolicy {
     fun initialGain(screenResponse: Boolean): Int =
         if (screenResponse) AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
         else AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+}
+
+internal object AssistantPlaybackFocusPolicy {
+    fun requiresTransient(responseOwner: String): Boolean =
+        responseOwner in setOf("MODEL", "CONTROLLED_LOCAL", "CONTROLLED_SCREEN")
 }

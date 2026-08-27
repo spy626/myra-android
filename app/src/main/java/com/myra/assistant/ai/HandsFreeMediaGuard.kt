@@ -39,6 +39,13 @@ class HandsFreeMediaGuard(context: Context) {
         abandonListeningFocus("assistant_playback")
         awakeUntil = SystemClock.elapsedRealtime() + LISTEN_WINDOW_MS
     }
+    /** AEC/VAD plus coherent microphone ASR confirmed a real user over active media. */
+    fun confirmUserSpeech() {
+        abandonListeningFocus("confirmed_user_speech")
+        awakeUntil = SystemClock.elapsedRealtime() + LISTEN_WINDOW_MS
+        handler.removeCallbacks(releaseRunnable)
+        handler.postDelayed(releaseRunnable, LISTEN_WINDOW_MS)
+    }
     fun isAwake(): Boolean = SystemClock.elapsedRealtime() < awakeUntil
     fun isExternalMediaPlaying(): Boolean = audioManager.isMusicActive
 

@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import com.myra.assistant.diagnostics.VoicePipelineLogger
 import com.myra.assistant.voice.AudioFocusManager
+import com.myra.assistant.voice.AssistantPlaybackFocusPolicy
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -54,6 +55,7 @@ class AudioEngine(private val context: Context) {
     private val audioManager by lazy { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     @Volatile private var playbackGeneration = 0L
     @Volatile private var playbackScreenQueryId = ""
+    @Volatile private var playbackResponseOwner = "MODEL"
     @Volatile private var playbackReferenceRms = 0f
     private var lastVadRejectLogAt = 0L
 
@@ -202,6 +204,7 @@ class AudioEngine(private val context: Context) {
                         voiceLog("audio_focus_release reason=playback_end")
                         playbackGeneration = 0L
                         playbackScreenQueryId = ""
+                        playbackResponseOwner = "MODEL"
                         playbackSpeechActivityDetector.reset()
                         mediaSpeechActivityDetector.reset()
                         mediaAwareVadGate.reset()
@@ -220,9 +223,10 @@ class AudioEngine(private val context: Context) {
                             val focusGranted = audioFocus.request(
                                 playbackGeneration,
                                 playbackScreenQueryId,
-                                forceTransient = playbackScreenQueryId.isNotBlank()
+                                responseOwner = playbackResponseOwner,
+                                forceTransient = AssistantPlaybackFocusPolicy.requiresTransient(playbackResponseOwner)
                             )
-                            voiceLog("audio_focus_result granted=$focusGranted playbackGeneration=$playbackGeneration screenQueryId=$playbackScreenQueryId")
+                            voiceLog("audio_focus_result granted=$focusGranted playbackGeneration=$playbackGeneration responseOwner=$playbackResponseOwner screenQueryId=$playbackScreenQueryId")
                             speechActivityDetector.reset()
                             playbackSpeechActivityDetector.reset()
                             mediaSpeechActivityDetector.reset()
@@ -254,9 +258,10 @@ class AudioEngine(private val context: Context) {
                 "accepted=$accepted queueSize=${queue.size} running=${running.get()}"
         )
     }
-    fun setPlaybackContext(generationId: Long, screenQueryId: String = "") {
+    fun setPlaybackContext(generationId: Long, screenQueryId: String = "", responseOwner: String = "MODEL") {
         playbackGeneration = generationId
         playbackScreenQueryId = screenQueryId
+        playbackResponseOwner = responseOwner
     }
     fun setMuted(value: Boolean) {
         muted.set(value)
@@ -264,11 +269,15 @@ class AudioEngine(private val context: Context) {
     }
     fun setBargeInEnabled(value: Boolean) { bargeInEnabled.set(value) }
     /** Called only when Gemini ASR emits meaningful text over an active media candidate. */
-    fun confirmMediaSpeechFromTranscript(text: String = "") {
+    fun confirmMediaSpeechFromTranscript(text: String = ""): Boolean {
+        val ended = mediaAwareVadGate.endedBeforeConfirmation()
         if (mediaAwareVadGate.confirmFromTranscript(text) == MediaAwareVadGate.Result.CONFIRMED_USER) {
             voiceLog("vad_decision mediaActive=true vadState=CONFIRMED_USER realUserConfirmed=true vadConfirmationReason=validated_asr_intent candidateId=${mediaAwareVadGate.candidateId} transcriptChars=${text.length}")
             onSpeechActivityChanged?.invoke(true)
+            if (ended) onSpeechActivityChanged?.invoke(false)
+            return true
         }
+        return false
     }
     fun resumeListeningNow() {
         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime()
@@ -283,6 +292,7 @@ class AudioEngine(private val context: Context) {
         voiceLog("audio_focus_release reason=playback_interrupt")
         playbackGeneration = 0L
         playbackScreenQueryId = ""
+        playbackResponseOwner = "MODEL"
         playbackSpeechActivityDetector.reset()
         mediaSpeechActivityDetector.reset()
         mediaAwareVadGate.reset()

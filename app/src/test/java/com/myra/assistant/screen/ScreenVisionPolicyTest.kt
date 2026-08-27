@@ -111,6 +111,12 @@ class ScreenVisionPolicyTest {
         assertFalse(ScreenQueryDispatchPolicy.shouldDispatch(true, dispatchedTurnId = 0, currentTurnId = 46))
     }
 
+    @Test fun screenLatencyUsesSpeechEndOnlyFromTheSameLogicalTurn() {
+        assertEquals(ScreenQuerySpeechTiming(true, 1_200), ScreenQueryTimingPolicy.bind(27, 27, 1_200))
+        assertEquals(ScreenQuerySpeechTiming(false, 0), ScreenQueryTimingPolicy.bind(27, 26, 1_200))
+        assertEquals(ScreenQuerySpeechTiming(false, 0), ScreenQueryTimingPolicy.bind(27, 27, 0))
+    }
+
     @Test fun sharingLifecycleRejectsImpossibleTransitions() {
         val machine = ScreenShareStateMachine()
         assertFalse(machine.transition(ScreenShareState.ACTIVE))

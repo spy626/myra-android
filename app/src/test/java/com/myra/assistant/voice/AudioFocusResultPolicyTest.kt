@@ -11,8 +11,11 @@ class AudioFocusResultPolicyTest {
         assertEquals("FAILED", AudioFocusResultPolicy.interpret(AudioManager.AUDIOFOCUS_REQUEST_FAILED))
     }
 
-    @Test fun screenResponseUsesTransientFocusWhileOrdinaryVoiceUsesDucking() {
+    @Test fun everyAudibleAssistantOwnerCanUseTransientFocusOverMedia() {
         assertEquals(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT, AudioFocusGainPolicy.initialGain(true))
         assertEquals(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK, AudioFocusGainPolicy.initialGain(false))
+        assertEquals(true, AssistantPlaybackFocusPolicy.requiresTransient("MODEL"))
+        assertEquals(true, AssistantPlaybackFocusPolicy.requiresTransient("CONTROLLED_LOCAL"))
+        assertEquals(true, AssistantPlaybackFocusPolicy.requiresTransient("CONTROLLED_SCREEN"))
     }
 }

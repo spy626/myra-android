@@ -19,6 +19,7 @@ import com.myra.assistant.ai.DeepResearchClient
 import com.myra.assistant.ai.HandsFreeMediaGuard
 import com.myra.assistant.ai.LyraPlaybackCapturePolicy
 import com.myra.assistant.ai.LiveTranscriptAssembler
+import com.myra.assistant.ai.MediaSpeechCoherencePolicy
 import com.myra.assistant.data.memory.AutomaticMemoryChange
 import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
 import com.myra.assistant.data.memory.BestFriendNameCorrectionParser
@@ -61,6 +62,7 @@ import com.myra.assistant.screen.ScreenPrivacyPolicy
 import com.myra.assistant.screen.ScreenFramePrivacyFilter
 import com.myra.assistant.screen.ScreenPrivacyResult
 import com.myra.assistant.screen.ScreenQueryDispatchPolicy
+import com.myra.assistant.screen.ScreenQueryTimingPolicy
 import com.myra.assistant.screen.ScreenShareState
 import com.myra.assistant.screen.ScreenVisionIntentParser
 import com.myra.assistant.screen.ScreenVisionPreferences
@@ -202,6 +204,7 @@ class MyraVoiceService : Service() {
     private var acceptedModelGenerationForTurn = 0L
     private var speechActivityStartedAt = 0L
     private var speechActivityEndedAt = 0L
+    private var speechTimingTurnId = 0L
     private var inputTurnStartedAt = 0L
     private var latestObservedModelGenerationId = 0L
     private var earlyModelAudioGenerationId = 0L
@@ -222,6 +225,8 @@ class MyraVoiceService : Service() {
     private var screenQuestionDetectedAt = 0L
     private var screenFreshFrameCapturedAt = 0L
     private var screenFrameSentAt = 0L
+    private var screenResponseSpeechEndedAt = 0L
+    private var screenQuerySpeechTurnConsistency = false
     private var armedScreenQuestion = ""
     private var armedScreenQuestionTurnId = 0L
     private var armedScreenQuestionDetectedAt = 0L
@@ -387,15 +392,16 @@ class MyraVoiceService : Service() {
                         }
                         screenResponseHasContent = true
                         mediaGuard.beginAssistantTurn()
-                        audio?.setPlaybackContext(modelGenerationId, screenResponseQueryId)
+                        audio?.setPlaybackContext(modelGenerationId, screenResponseQueryId, "CONTROLLED_SCREEN")
                         audio?.setBargeInEnabled(true)
                         audio?.queueAudio(pcm)
                         voiceLog(
                             "route_decision turnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId responseOwner=CONTROLLED_SCREEN " +
                                 "screen_query_id=$screenResponseQueryId route=screen_response accepted=true firstResponseAudioAt=$audioReceivedAt " +
                                 "geminiSendToFirstResponseMs=${if (screenFrameSentAt > 0L) audioReceivedAt - screenFrameSentAt else -1L} " +
-                                "speechEndToFirstAudibleMs=${if (speechActivityEndedAt > 0L) audioReceivedAt - speechActivityEndedAt else -1L} " +
-                                "screen_response_turn_consistency=${screenResponseUserTurnId != 0L}"
+                                "speechEndToFirstAudibleMs=${if (screenQuerySpeechTurnConsistency) audioReceivedAt - screenResponseSpeechEndedAt else -1L} " +
+                                "screen_response_turn_consistency=${screenResponseUserTurnId != 0L} " +
+                                "screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency"
                         )
                     }
                 }
@@ -412,6 +418,7 @@ class MyraVoiceService : Service() {
                         ModelAudioDecision.ACCEPT -> {
                             acceptedModelGenerationForTurn = modelGenerationId
                             mediaGuard.beginAssistantTurn()
+                            audio?.setPlaybackContext(modelGenerationId, responseOwner = "MODEL")
                             audio?.setBargeInEnabled(true)
                             audio?.queueAudio(pcm)
                             voiceLog(
@@ -485,6 +492,7 @@ class MyraVoiceService : Service() {
                 if (input.isEmpty()) {
                     activeTurnId = ++turnSequence
                     inputTurnStartedAt = android.os.SystemClock.elapsedRealtime()
+                    if (speechTimingTurnId == 0L && speechActivityStartedAt > 0L) speechTimingTurnId = activeTurnId
                     responseArbiter.begin(activeTurnId)
                     acceptedModelGenerationForTurn = 0L
                     modelAudioDroppedBeforeTurnCompleteCount = 0
@@ -557,15 +565,33 @@ class MyraVoiceService : Service() {
                             executeCommand(directCommand)
                             return@inputTranscript
                         }
-                        if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
-                            probableActionTurn = true
-                            suppressModelForTurn = true
+                        val coherentMediaSpeech = romanDisplayText(commandProbe.toString())
+                        if (MediaSpeechCoherencePolicy.isCoherent(coherentMediaSpeech) &&
+                            audio?.confirmMediaSpeechFromTranscript(coherentMediaSpeech) == true
+                        ) {
+                            // A coherent ASR result backed by the active near-field VAD
+                            // candidate is real user speech, even when it is ordinary
+                            // conversation rather than a screen/device command.
+                            mediaGuard.confirmUserSpeech()
+                            mediaBlockedTurn = false
+                            suppressModelForTurn = false
+                            input.clear()
+                            input.append(commandProbe)
+                            voiceLog(
+                                "media_candidate_promoted reason=coherent_conversation candidateTextChars=${coherentMediaSpeech.length} " +
+                                    "userTurnId=$activeTurnId responseOwner=MODEL"
+                            )
+                        } else {
+                            if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
+                                probableActionTurn = true
+                                suppressModelForTurn = true
+                                output.clear()
+                            }
+                            if (!mediaBlockedTurn) emitState("Media Guard active — listening for your voice")
+                            mediaBlockedTurn = true
                             output.clear()
+                            return@inputTranscript
                         }
-                        if (!mediaBlockedTurn) emitState("Media Guard active — direct search, close and WhatsApp commands are ready")
-                        mediaBlockedTurn = true
-                        output.clear()
-                        return@inputTranscript
                     }
                     HandsFreeMediaGuard.Gate.WAKE_DETECTED -> {
                         audio?.confirmMediaSpeechFromTranscript(part)
@@ -820,6 +846,29 @@ class MyraVoiceService : Service() {
                         beginFreshScreenQuery(blockedText, activeTurnId)
                         resetTurnBuffers("media_confirmed_screen_query")
                         waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
+                    if (MediaSpeechCoherencePolicy.isCoherent(blockedText) &&
+                        audio?.confirmMediaSpeechFromTranscript(blockedText) == true
+                    ) {
+                        val promotedTurnId = activeTurnId
+                        mediaBlockedTurn = false
+                        mediaGuard.confirmUserSpeech()
+                        suppressModelForTurn = false
+                        if (!commandUserTextEmitted) {
+                            commitFinalUserMessage(blockedText, "MEDIA_CONFIRMED_CONVERSATION")
+                            commandUserTextEmitted = true
+                        }
+                        voiceLog(
+                            "media_candidate_promoted reason=coherent_conversation_at_boundary " +
+                                "commandChars=${commandProbe.length} userTurnId=$promotedTurnId responseOwner=MODEL"
+                        )
+                        resetTurnBuffers("media_confirmed_conversation")
+                        // The speculative reply may already have been suppressed while
+                        // classification was pending. Ask the same Live session for one
+                        // ordinary natural response; do not create a local/TTS path.
+                        responseArbiter.begin(promotedTurnId)
+                        live?.sendText(blockedText)
                         return@turnComplete
                     }
                     mediaBlockedTurn = false
@@ -1553,10 +1602,20 @@ class MyraVoiceService : Service() {
 
     private fun beginFreshScreenQuery(question: String, userTurnId: Long) {
         screenQuestionDetectedAt = android.os.SystemClock.elapsedRealtime()
+        val speechTiming = ScreenQueryTimingPolicy.bind(userTurnId, speechTimingTurnId, speechActivityEndedAt)
+        screenQuerySpeechTurnConsistency = speechTiming.consistent
+        screenResponseSpeechEndedAt = speechTiming.speechEndAt
+        voiceLog(
+            "screen_query_timing_bound userTurnId=$userTurnId speechTimingTurnId=$speechTimingTurnId " +
+                "speechStartAt=$speechActivityStartedAt speechEndAt=$screenResponseSpeechEndedAt " +
+                "intentDetectedAt=$screenQuestionDetectedAt screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency"
+        )
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
         output.clear()
-        audio?.interrupt()
+        // Preserve an active media-speech candidate when LYRA is already silent;
+        // interrupt/reset is only needed for a genuine barge-in on LYRA playback.
+        if (localAudioSpeaking) audio?.interrupt()
         if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
             voiceLog("screen_query_terminal state=REJECTED_SCREEN_INACTIVE userTurnId=$userTurnId")
             speakScreenUnavailable(
@@ -1630,11 +1689,13 @@ class MyraVoiceService : Service() {
                         voiceLog(
                             "frame_used_for_query screen_query_id=${result.query.queryId} userTurnId=${result.query.userTurnId} " +
                                 "screen_session_id=${frame.sessionId} frame_id=${frame.frameId} frame_age_ms=${now - frame.capturedAt} " +
-                                "frame_hash=${frame.hash} speechEndAt=$speechActivityEndedAt screenQuestionDetectedAt=$screenQuestionDetectedAt " +
+                                "frame_hash=${frame.hash} speechEndAt=$screenResponseSpeechEndedAt screenQuestionDetectedAt=$screenQuestionDetectedAt " +
                                 "freshCaptureRequestedAt=${result.query.requestedAt} freshFrameCapturedAt=${frame.capturedAt} frameEncodedAt=${frame.encodedAt} " +
                                 "frameSource=${frame.source} frameAgeAtQueryMs=${(now - frame.capturedAt).coerceAtLeast(0L)} " +
                                 "intentToFrameMs=${(now - screenQuestionDetectedAt).coerceAtLeast(0L)} captureToEncodeMs=${frame.encodedAt - frame.capturedAt} " +
-                                "frameToGeminiSendMs=${(screenFrameSentAt - frame.encodedAt).coerceAtLeast(0L)} frameSentToGeminiAt=$screenFrameSentAt"
+                                "frameToGeminiSendMs=${(screenFrameSentAt - frame.encodedAt).coerceAtLeast(0L)} frameSentToGeminiAt=$screenFrameSentAt " +
+                                "screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency " +
+                                "speechEndToIntentMs=${if (screenQuerySpeechTurnConsistency) (screenQuestionDetectedAt - screenResponseSpeechEndedAt).coerceAtLeast(0L) else -1L}"
                         )
                         voiceLog("screen_query_state screenQueryId=${result.query.queryId} state=SENT frameId=${frame.frameId}")
                         live?.sendImage(
@@ -2071,6 +2132,7 @@ class MyraVoiceService : Service() {
         if (ordinaryModelAudioGate.isSpeechActive()) return
         speechActivityStartedAt = android.os.SystemClock.elapsedRealtime()
         speechActivityEndedAt = 0L
+        speechTimingTurnId = activeTurnId
         val cancelledGeneration = ordinaryModelAudioGate.onSpeechActivityStarted(latestGenerationId)
         acceptedModelGenerationForTurn = 0L
         if (earlyModelAudio.isNotEmpty()) {
@@ -2080,7 +2142,9 @@ class MyraVoiceService : Service() {
             earlyModelAudioBytes = 0L
             earlyModelAudioGenerationId = 0L
         }
-        audio?.interrupt()
+        // If LYRA is silent, do not reset the media candidate that was just
+        // confirmed from coherent ASR; real playback barge-in still interrupts.
+        if (localAudioSpeaking) audio?.interrupt()
         voiceLog(
             "speech_activity_started turnId=$activeTurnId modelGenerationId=$latestGenerationId " +
                 "speechActivityStartedAt=$speechActivityStartedAt source=$source " +
@@ -2095,6 +2159,7 @@ class MyraVoiceService : Service() {
         voiceLog(
             "authoritative_user_turn_complete turnId=$activeTurnId modelGenerationId=$earlyModelAudioGenerationId " +
                 "speechActivityEndedAt=$speechActivityEndedAt authoritativeUserTurnCompleteAt=$speechActivityEndedAt " +
+                "speechTimingTurnId=$speechTimingTurnId speechDurationMs=${(speechActivityEndedAt - speechActivityStartedAt).coerceAtLeast(0L)} " +
                 "source=local_vad userSpeechActive=false earlyModelAudioBufferedCount=${earlyModelAudio.size} " +
                 "earlyModelAudioBufferedBytes=$earlyModelAudioBytes"
         )
@@ -2116,6 +2181,7 @@ class MyraVoiceService : Service() {
         }
         acceptedModelGenerationForTurn = generationId
         mediaGuard.beginAssistantTurn()
+        audio?.setPlaybackContext(generationId, responseOwner = "MODEL")
         audio?.setBargeInEnabled(true)
         chunks.forEach { audio?.queueAudio(it) }
         val acceptedAt = android.os.SystemClock.elapsedRealtime()
@@ -2213,6 +2279,7 @@ class MyraVoiceService : Service() {
         localSpeechValidationToken++
         val token = localSpeechValidationToken
         controlledGenerationId++
+        audio?.setPlaybackContext(controlledGenerationId, responseOwner = "CONTROLLED_LOCAL")
         validatingLocalSpeech = message
         localSpeechHasContent = false
         localSpeechStreamedDirectly = false
@@ -2482,6 +2549,11 @@ class MyraVoiceService : Service() {
         ambiguousMessageTurn = false
         incompleteActionFragmentTurn = false
         activeTurnId = 0L
+        if (!screenResponseActive) {
+            speechTimingTurnId = 0L
+            speechActivityStartedAt = 0L
+            speechActivityEndedAt = 0L
+        }
         if (!screenResponseActive) {
             armedScreenQuestion = ""
             armedScreenQuestionTurnId = 0L
