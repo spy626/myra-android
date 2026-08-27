@@ -2446,7 +2446,7 @@ class MyraVoiceService : Service() {
                     if (!it.screenVisionPreferences.visionEnabled ||
                         !ScreenCaptureService.hasFreshFrame() || frame == null
                     ) {
-                        it.listener?.onMyraText(
+                        listener?.onMyraText(
                             "Screen Vision active nahi hai. Settings se screen share start karo.", true
                         )
                     } else {
@@ -2457,7 +2457,10 @@ class MyraVoiceService : Service() {
                                 "Answer only from visible evidence. For an explicit visible-target action, use perform_screen_action."
                         )
                     }
-                } else if (!it.handleExplicitMemoryText(text)) it.live?.sendText(text)
+                } else if (!it.handleExplicitMemoryText(text)) {
+                    it.live?.sendText(text)
+                }
+                Unit
             }
         }
         fun sendImage(image: ByteArray, mimeType: String, prompt: String) { instance?.live?.sendImage(image, mimeType, prompt) }
