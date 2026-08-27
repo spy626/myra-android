@@ -813,13 +813,20 @@ class MyraVoiceService : Service() {
                     // Parse explicit old->new corrections before the ordinary extractor;
                     // otherwise "Karima nahi, Kareem" becomes a new Kareem row while
                     // the stale Karima row remains active.
-                    val nameCorrection = BestFriendNameCorrectionParser.parse(
+                    val correctionDecision = BestFriendNameCorrectionParser.analyze(
                         displayUserText,
                         recentName
                     )
+                    val nameCorrection = correctionDecision.correction
                     voiceLog(
-                        "name_correction_detected raw=${displayUserText.take(100)} " +
-                            "recent=$recentName parsed=$nameCorrection"
+                        "name_correction_gate raw=${displayUserText.take(100)} " +
+                            "correctionIntentDetected=${correctionDecision.correctionIntentDetected} " +
+                            "correctionIntentPattern=${correctionDecision.correctionIntentPattern} " +
+                            "oldNameCandidate=${correctionDecision.oldNameCandidate} " +
+                            "newNameCandidate=${correctionDecision.newNameCandidate} " +
+                            "newNameValidation=${correctionDecision.newNameValidation} " +
+                            "rejectionReason=${correctionDecision.rejectionReason} " +
+                            "databaseMutationAllowed=${correctionDecision.databaseMutationAllowed}"
                     )
                     if (nameCorrection != null) {
                         // Gemini can conversationally acknowledge a correction even when
@@ -1926,10 +1933,33 @@ class MyraVoiceService : Service() {
     }
 
     private fun startCanonicalRename(correction: BestFriendNameCorrection) {
+        val validationFailure = BestFriendNameCorrectionParser.validateNewName(correction.newName)
+        if (validationFailure != null || correction.oldName.equals(correction.newName, ignoreCase = true)) {
+            voiceLog(
+                "name_correction_rejected oldNameCandidate=${correction.oldName} " +
+                    "newNameCandidate=${correction.newName} newNameValidation=rejected " +
+                    "rejectionReason=${validationFailure ?: "old_and_new_names_are_identical"} " +
+                    "databaseMutationAllowed=false"
+            )
+            val clarification = "Correct naam clear nahi hua. Ek baar naam clearly repeat karo."
+            suppressModelForTurn = true
+            localCommandExecutedThisTurn = true
+            output.clear()
+            audio?.interrupt()
+            listener?.onMyraText(clarification)
+            emitState(clarification)
+            queueLocalSpeech(clarification, allowUntranscribedAudio = true)
+            return
+        }
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
         output.clear()
         audio?.interrupt()
+        voiceLog(
+            "name_correction_mutation oldNameCandidate=${correction.oldName} " +
+                "newNameCandidate=${correction.newName} newNameValidation=valid " +
+                "databaseMutationAllowed=true"
+        )
         // Do not trust Gemini's conversational acknowledgement. Only this verified
         // repository result is allowed to produce a success bubble or spoken reply.
         pendingCanonicalRename = serviceScope.launch {

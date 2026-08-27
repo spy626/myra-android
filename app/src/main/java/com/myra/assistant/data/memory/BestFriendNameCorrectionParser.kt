@@ -5,66 +5,129 @@ import kotlin.math.abs
 
 data class BestFriendNameCorrection(val oldName: String, val newName: String)
 
+data class BestFriendNameCorrectionDecision(
+    val correctionIntentDetected: Boolean,
+    val correctionIntentPattern: String? = null,
+    val oldNameCandidate: String? = null,
+    val newNameCandidate: String? = null,
+    val newNameValidation: String = "not_evaluated",
+    val rejectionReason: String? = null,
+    val correction: BestFriendNameCorrection? = null
+) {
+    val databaseMutationAllowed: Boolean get() = correction != null
+}
+
 object BestFriendNameCorrectionParser {
-    private val explicitPair = listOf(
-        Regex(
-            "^([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:nahi|nahin|nehi|nai|not)[, ]+([\\p{L}][\\p{L} .'-]{1,39})$",
-            RegexOption.IGNORE_CASE
-        ),
-        Regex(
-            "^([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:nahi|nahin|nehi|nai|not)[, ]+([\\p{L}][\\p{L} .'-]{1,39})\\s+(?:mera|meri|mere)\\s+best\\s+(?:friend|frend)\\s+(?:hai|he)$",
-            RegexOption.IGNORE_CASE
-        )
+    private data class IntentMatch(val pattern: String, val oldName: String?, val newName: String)
+
+    private val relationshipPair = Regex(
+        "^([\\p{L}][\\p{L} .'-]{0,39})\\s+(?:nahi|nahin|nehi|nai|not)[, ]+" +
+            "([\\p{L}][\\p{L} .'-]{0,39})\\s+(?:mera|meri|mere)\\s+best\\s+(?:friend|frend)\\s+(?:hai|he)$",
+        RegexOption.IGNORE_CASE
     )
-    private val explicit = Regex(
-        "^(?:(?:no|nahi|nahin|actually|sorry)[, ]+|(?:i said|maine kaha|naam)\\s+)([\\p{L}][\\p{L} .'-]{1,39})$",
+    private val saidPair = Regex(
+        "^(?:maine|mainne)\\s+([\\p{L}][\\p{L} .'-]{0,39})\\s+(?:nahi|nahin|nehi|nai)\\s+" +
+            "(?:kaha|bola)[, ]+([\\p{L}][\\p{L} .'-]{0,39})\\s+(?:kaha|bola)$",
+        RegexOption.IGNORE_CASE
+    )
+    private val nameIsPair = Regex(
+        "^([\\p{L}][\\p{L} .'-]{0,39})\\s+ka\\s+naam\\s+([\\p{L}][\\p{L} .'-]{0,39})\\s+(?:hai|he)$",
+        RegexOption.IGNORE_CASE
+    )
+    private val directPair = Regex(
+        "^([\\p{L}][\\p{L} .'-]{0,39})\\s+(?:nahi|nahin|nehi|nai|not)[, ]+([\\p{L}][\\p{L} .'-]{0,39})$",
+        RegexOption.IGNORE_CASE
+    )
+    private val explicitSingle = Regex(
+        "^(?:(?:no|nahi|nahin|actually|sorry)[, ]+|(?:i said|maine kaha|naam)\\s+)([\\p{L}][\\p{L} .'-]{0,39})$",
         RegexOption.IGNORE_CASE
     )
     private val rejected = setOf("haan", "han", "yes", "nahi", "no", "okay", "ok", "thanks", "thank you")
+    private val hindiParticles = setOf("ne", "ko", "se", "ka", "ki", "ke", "mein", "me", "par")
+    private val validNameShape = Regex("[\\p{L}][\\p{L}'-]*(?: [\\p{L}][\\p{L}'-]*){0,2}")
 
-    fun parse(raw: String, lastSavedName: String?): BestFriendNameCorrection? {
-        val clean = raw.trim().trimEnd('.', ',', '?', '!', '।').replace(Regex("\\s+"), " ")
-        explicitPair.firstNotNullOfOrNull { it.matchEntire(clean) }?.let { match ->
-            val spokenOld = BestFriendNameCanonicalizer.canonicalize(match.groupValues[1])
-            val recentOld = lastSavedName?.takeIf {
-                looksLikeSameSpokenName(it, spokenOld)
-            }
-            val correction = BestFriendNameCorrection(
-                // The old word can be another ASR variant (Now Farah -> Nowar).
-                // Target the recently persisted identity when there is one clear match.
-                oldName = recentOld ?: spokenOld,
-                newName = BestFriendNameCanonicalizer.canonicalize(match.groupValues[2])
-            )
-            return correction.takeUnless { it.oldName.equals(it.newName, ignoreCase = true) }
+    fun parse(raw: String, lastSavedName: String?): BestFriendNameCorrection? =
+        analyze(raw, lastSavedName).correction
+
+    fun analyze(raw: String, lastSavedName: String?): BestFriendNameCorrectionDecision {
+        val clean = clean(raw)
+        val intent = detectIntent(clean) ?: return BestFriendNameCorrectionDecision(
+            correctionIntentDetected = false,
+            rejectionReason = "no_explicit_correction_intent"
+        )
+
+        val spokenOld = intent.oldName?.let(BestFriendNameCanonicalizer::canonicalize)
+        val oldName = if (spokenOld != null) {
+            lastSavedName?.takeIf { looksLikeSameSpokenName(it, spokenOld) } ?: spokenOld
+        } else {
+            lastSavedName?.takeIf { it.isNotBlank() }
         }
-        val old = lastSavedName?.takeIf { it.isNotBlank() } ?: return null
-        if (clean.lowercase(Locale.ROOT) in rejected) return null
-        val explicitName = explicit.matchEntire(clean)?.groupValues?.get(1)?.trim()
-        val shortName = clean.takeIf {
-            it.split(' ').size <= 3 && it.matches(Regex("[\\p{L}][\\p{L} .'-]{1,39}"))
+        if (oldName == null) return rejected(intent, spokenOld, "missing_old_entity")
+
+        val validation = validateNewName(intent.newName)
+        if (validation != null) return rejected(intent, oldName, validation)
+
+        val newName = BestFriendNameCanonicalizer.canonicalize(intent.newName.trim())
+        val canonicalOld = BestFriendNameCanonicalizer.canonicalize(oldName)
+        if (newName.equals(canonicalOld, ignoreCase = true)) {
+            return rejected(intent, canonicalOld, "old_and_new_names_are_identical", newName)
         }
-        val rawNew = explicitName ?: shortName ?: return null
-        val newName = BestFriendNameCanonicalizer.canonicalize(rawNew)
-        val canonicalOld = BestFriendNameCanonicalizer.canonicalize(old)
-        if (newName.equals(canonicalOld, ignoreCase = true)) return null
-        if (explicitName == null && !looksLikeSameSpokenName(canonicalOld, newName)) return null
-        return BestFriendNameCorrection(old, newName)
+        return BestFriendNameCorrectionDecision(
+            correctionIntentDetected = true,
+            correctionIntentPattern = intent.pattern,
+            oldNameCandidate = canonicalOld,
+            newNameCandidate = newName,
+            newNameValidation = "valid",
+            correction = BestFriendNameCorrection(canonicalOld, newName)
+        )
+    }
+
+    /** Returns null only for a conservatively valid complete person name. */
+    fun validateNewName(candidate: String): String? {
+        val clean = candidate.trim().replace(Regex("\\s+"), " ")
+        if (!validNameShape.matches(clean)) return "invalid_name_shape"
+        val words = clean.lowercase(Locale.ROOT).split(' ')
+        if (words.any { it in hindiParticles }) return "contains_hindi_particle"
+        if (words.joinToString(" ") in rejected) return "not_a_person_name"
+        return null
     }
 
     fun needsClearCorrectedName(raw: String): Boolean {
-        val clean = raw.trim().trimEnd('.', ',', '?', '!', '।').replace(Regex("\\s+"), " ")
-        val match = explicitPair.firstNotNullOfOrNull { it.matchEntire(clean) } ?: return false
-        return BestFriendNameCanonicalizer.canonicalize(match.groupValues[1])
-            .equals(BestFriendNameCanonicalizer.canonicalize(match.groupValues[2]), ignoreCase = true)
+        val intent = detectIntent(clean(raw)) ?: return false
+        val old = intent.oldName ?: return false
+        return BestFriendNameCanonicalizer.canonicalize(old)
+            .equals(BestFriendNameCanonicalizer.canonicalize(intent.newName), ignoreCase = true)
     }
 
     /** Keeps the database target when ASR heard both sides as the same name. */
     fun ambiguousOldName(raw: String, lastSavedName: String?): String? {
-        val clean = raw.trim().trimEnd('.', ',', '?', '!', '।').replace(Regex("\\s+"), " ")
-        val match = explicitPair.firstNotNullOfOrNull { it.matchEntire(clean) } ?: return null
-        val spokenOld = BestFriendNameCanonicalizer.canonicalize(match.groupValues[1])
+        val intent = detectIntent(clean(raw)) ?: return null
+        val spokenOld = intent.oldName?.let(BestFriendNameCanonicalizer::canonicalize) ?: return null
         return lastSavedName?.takeIf { looksLikeSameSpokenName(it, spokenOld) } ?: spokenOld
     }
+
+    private fun detectIntent(clean: String): IntentMatch? {
+        relationshipPair.matchEntire(clean)?.let { return IntentMatch("not_pair_with_relationship", it.groupValues[1], it.groupValues[2]) }
+        saidPair.matchEntire(clean)?.let { return IntentMatch("said_not_pair", it.groupValues[1], it.groupValues[2]) }
+        nameIsPair.matchEntire(clean)?.let { return IntentMatch("name_is_pair", it.groupValues[1], it.groupValues[2]) }
+        directPair.matchEntire(clean)?.let { return IntentMatch("direct_not_pair", it.groupValues[1], it.groupValues[2]) }
+        explicitSingle.matchEntire(clean)?.let { return IntentMatch("explicit_single_with_recent_target", null, it.groupValues[1]) }
+        return null
+    }
+
+    private fun rejected(intent: IntentMatch, oldName: String?, reason: String, newName: String = intent.newName.trim()) =
+        BestFriendNameCorrectionDecision(
+            correctionIntentDetected = true,
+            correctionIntentPattern = intent.pattern,
+            oldNameCandidate = oldName,
+            newNameCandidate = newName,
+            newNameValidation = if (reason == "missing_old_entity") "not_evaluated" else "rejected",
+            rejectionReason = reason
+        )
+
+    private fun clean(raw: String): String = raw.trim()
+        .trimEnd('.', ',', '?', '!', '।')
+        .replace(Regex("\\s+"), " ")
 
     private fun looksLikeSameSpokenName(left: String, right: String): Boolean {
         val a = soundKey(left)

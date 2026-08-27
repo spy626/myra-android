@@ -53,4 +53,41 @@ class BestFriendNameCorrectionParserTest {
             BestFriendNameCorrectionParser.ambiguousOldName("Karima nahi karima", "Karima")
         )
     }
+
+    @Test fun ordinaryHindiFragmentsNeverManufactureCorrectionIntent() {
+        listOf(
+            "Karima ne", "Karima ko", "Karima se", "Karima ka", "Karima hai",
+            "Kareem acha hai", "Karima ne mujhe call kiya"
+        ).forEach { transcript ->
+            val decision = BestFriendNameCorrectionParser.analyze(transcript, "Kareem")
+            assertEquals(transcript, false, decision.correctionIntentDetected)
+            assertEquals(transcript, false, decision.databaseMutationAllowed)
+            assertEquals(transcript, "no_explicit_correction_intent", decision.rejectionReason)
+        }
+    }
+
+    @Test fun parsesAllSupportedExplicitCorrectionStructures() {
+        assertEquals(
+            BestFriendNameCorrection("Karima", "Kareem"),
+            BestFriendNameCorrectionParser.parse("Karima ka naam Kareem hai", null)
+        )
+        assertEquals(
+            BestFriendNameCorrection("Karima", "Kareem"),
+            BestFriendNameCorrectionParser.parse("Maine Karima nahi kaha, Kareem kaha", null)
+        )
+    }
+
+    @Test fun explicitIntentStillRejectsIncompleteParticleName() {
+        val decision = BestFriendNameCorrectionParser.analyze("Kareem nahi, Karima ne", "Kareem")
+        assertEquals(true, decision.correctionIntentDetected)
+        assertEquals("contains_hindi_particle", decision.rejectionReason)
+        assertEquals(false, decision.databaseMutationAllowed)
+        assertNull(decision.correction)
+    }
+
+    @Test fun rejectedFalseCorrectionLeavesPreviouslyVerifiedNameUnchanged() {
+        var storedName = "Kareem"
+        BestFriendNameCorrectionParser.parse("Karima ne", storedName)?.let { storedName = it.newName }
+        assertEquals("Kareem", storedName)
+    }
 }
