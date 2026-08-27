@@ -23,4 +23,12 @@ class SpeechActivityDetectorTest {
         repeat(8) { detector.update(0.001f) }
         assertEquals(SpeechActivityEvent.NONE, detector.update(0.02f))
     }
+
+    @Test fun playbackLeakSpikeDoesNotBecomeBargeInButSustainedUserSpeechDoes() {
+        val detector = SpeechActivityDetector(.060f, .018f, 4, 10)
+        assertEquals(SpeechActivityEvent.NONE, detector.update(.09f))
+        assertEquals(SpeechActivityEvent.NONE, detector.update(.01f))
+        repeat(3) { assertEquals(SpeechActivityEvent.NONE, detector.update(.09f)) }
+        assertEquals(SpeechActivityEvent.STARTED, detector.update(.09f))
+    }
 }

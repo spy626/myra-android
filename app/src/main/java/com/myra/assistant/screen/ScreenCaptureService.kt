@@ -22,8 +22,10 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.myra.assistant.R
 import com.myra.assistant.ui.main.MainActivity
+import com.myra.assistant.service.AccessibilityHelperService
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.ConcurrentHashMap
 
 /** Real MediaProjection capture. Frames remain in memory and are never written to disk. */
 class ScreenCaptureService : Service() {
@@ -35,6 +37,7 @@ class ScreenCaptureService : Service() {
     private val changeDetector = ScreenFrameChangeDetector()
     private val stateMachine = ScreenShareStateMachine(currentState)
     private var lastProcessedAt = 0L
+    private val freshRequests = ConcurrentHashMap<String, (FreshFrameResult) -> Unit>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -61,6 +64,8 @@ class ScreenCaptureService : Service() {
 
     private fun startCapture(intent: Intent) {
         if (projection != null) return
+        val createdSession = session.start()
+        Log.d(TAG, "screen_session_created screen_session_id=$createdSession")
         updateState(ScreenShareState.REQUESTING_PERMISSION)
         startForeground(NOTIFICATION_ID, notification("Screen sharing is starting…"))
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
@@ -104,8 +109,9 @@ class ScreenCaptureService : Service() {
         try {
             if (currentState != ScreenShareState.ACTIVE) return
             val now = android.os.SystemClock.elapsedRealtime()
+            val explicit = freshRequests.isNotEmpty()
             val interval = ScreenVisionPreferences(this).analysisIntervalMs
-            if (now - lastProcessedAt < interval) return
+            if (!explicit && now - lastProcessedAt < interval) return
             val plane = image.planes.firstOrNull() ?: return
             val rowPadding = plane.rowStride - plane.pixelStride * width
             val paddedWidth = width + rowPadding / plane.pixelStride
@@ -114,13 +120,22 @@ class ScreenCaptureService : Service() {
                 padded.copyPixelsFromBuffer(plane.buffer)
                 val cropped = Bitmap.createBitmap(padded, 0, 0, width, height)
                 try {
-                    if (!changeDetector.changed(cropped) && latestFrame != null) return
+                    if (!explicit && !changeDetector.changed(cropped) && latestFrame != null) return
                     val output = ByteArrayOutputStream()
                     cropped.compress(Bitmap.CompressFormat.JPEG, 82, output)
-                    latestFrame = output.toByteArray()
-                    latestFrameAt = System.currentTimeMillis()
+                    val capturedAt = System.currentTimeMillis()
+                    val record = session.publish(output.toByteArray(), capturedAt, if (explicit) "explicit_query" else "passive") ?: return
+                    latestFrame = record.bytes
+                    latestFrameAt = record.capturedAt
                     lastProcessedAt = now
+                    Log.d(TAG, "frame_captured screen_session_id=${record.sessionId} frame_id=${record.frameId} frame_hash=${record.hash} source=${record.source}")
                     listeners.forEach { it(currentState, latestFrame) }
+                    if (explicit) {
+                        freshRequests.keys.toList().forEach { queryId ->
+                            val callback = freshRequests.remove(queryId) ?: return@forEach
+                            session.complete(queryId, record)?.let(callback)
+                        }
+                    }
                 } finally { cropped.recycle() }
             } finally { padded.recycle() }
         } catch (error: Exception) {
@@ -136,9 +151,13 @@ class ScreenCaptureService : Service() {
         reader?.close(); reader = null
         val activeProjection = projection; projection = null
         runCatching { activeProjection?.stop() }
+        val cancelled = session.invalidate(finalState)
+        cancelled.forEach { query -> freshRequests.remove(query.queryId)?.invoke(FreshFrameResult.Unavailable(query, "screen_stopped")) }
+        freshRequests.clear()
         latestFrame = null
         latestFrameAt = 0L
         changeDetector.reset()
+        Log.d(TAG, "screen_stop_invalidated_frames cancelledQueries=${cancelled.size}")
         updateState(finalState)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -148,6 +167,7 @@ class ScreenCaptureService : Service() {
         if (projection != null || display != null || reader != null) stopCapture(ScreenShareState.STOPPED)
         workerThread?.quitSafely()
         workerThread = null; worker = null
+        if (serviceInstance === this) serviceInstance = null
         super.onDestroy()
     }
 
@@ -157,6 +177,8 @@ class ScreenCaptureService : Service() {
             return
         }
         currentState = state
+        session.setState(state)
+        AccessibilityHelperService.instance?.updateScreenVisionOverlay(state)
         listeners.forEach { it(state, latestFrame) }
         Log.d(TAG, "screen_share_state=$state frameAvailable=${latestFrame != null}")
     }
@@ -203,6 +225,8 @@ class ScreenCaptureService : Service() {
             private set
         @Volatile var latestFrameAt: Long = 0L
             private set
+        val session = ScreenVisionSession()
+        @Volatile private var serviceInstance: ScreenCaptureService? = null
         val listeners = CopyOnWriteArraySet<(ScreenShareState, ByteArray?) -> Unit>()
         fun markPermissionRequesting() {
             currentState = ScreenShareState.REQUESTING_PERMISSION
@@ -217,5 +241,25 @@ class ScreenCaptureService : Service() {
         fun hasFreshFrame(maxAgeMs: Long = 15_000L): Boolean =
             currentState == ScreenShareState.ACTIVE && latestFrame != null &&
                 System.currentTimeMillis() - latestFrameAt <= maxAgeMs
+
+        fun requestFreshFrame(userTurnId: Long, callback: (FreshFrameResult) -> Unit): ScreenQuery? {
+            val query = session.createQuery(userTurnId, System.currentTimeMillis()) ?: return null
+            val service = serviceInstance
+            if (service == null) {
+                callback(FreshFrameResult.Unavailable(query, "capture_service_unavailable"))
+                return query
+            }
+            service.freshRequests[query.queryId] = callback
+            Log.d(TAG, "frame_capture_requested screen_session_id=${query.sessionId} screen_query_id=${query.queryId} userTurnId=$userTurnId")
+            service.worker?.postDelayed({
+                val pending = service.freshRequests.remove(query.queryId) ?: return@postDelayed
+                session.cancel(query.queryId, "fresh_capture_timeout")?.let(pending)
+            }, FRESH_CAPTURE_TIMEOUT_MS)
+            return query
+        }
+        fun currentFrame(): ScreenFrame? = session.latestFrame
+        private const val FRESH_CAPTURE_TIMEOUT_MS = 1_500L
     }
+
+    init { serviceInstance = this }
 }

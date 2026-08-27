@@ -14,7 +14,16 @@ class AudioFocusManager(context: Context, private val onLost: () -> Unit, privat
     private val request = if (Build.VERSION.SDK_INT >= 26) AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
         .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
         .setOnAudioFocusChangeListener(listener).build() else null
-    fun request(): Boolean = if (Build.VERSION.SDK_INT >= 26) manager.requestAudioFocus(request!!) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    @Volatile private var held = false
+    fun request(): Boolean {
+        if (held) return true
+        held = if (Build.VERSION.SDK_INT >= 26) manager.requestAudioFocus(request!!) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         else @Suppress("DEPRECATION") (manager.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
-    fun abandon() { if (Build.VERSION.SDK_INT >= 26) manager.abandonAudioFocusRequest(request!!) else @Suppress("DEPRECATION") manager.abandonAudioFocus(listener) }
+        return held
+    }
+    fun abandon() {
+        if (!held) return
+        if (Build.VERSION.SDK_INT >= 26) manager.abandonAudioFocusRequest(request!!) else @Suppress("DEPRECATION") manager.abandonAudioFocus(listener)
+        held = false
+    }
 }

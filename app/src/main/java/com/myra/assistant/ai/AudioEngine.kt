@@ -10,6 +10,7 @@ import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import androidx.core.content.ContextCompat
 import com.myra.assistant.diagnostics.VoicePipelineLogger
+import com.myra.assistant.voice.AudioFocusManager
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -39,6 +40,12 @@ class AudioEngine(private val context: Context) {
     private var queuedAudioChunk = 0L
     private var writtenAudioBytes = 0L
     private val speechActivityDetector = SpeechActivityDetector()
+    // Playback-aware VAD rejects a single loud frame from LYRA/YouTube leakage while
+    // retaining genuine barge-in after four sustained 50 ms speech frames.
+    private val playbackSpeechActivityDetector = SpeechActivityDetector(
+        startThreshold = 0.060f, continueThreshold = 0.018f, startFrames = 4, endFrames = 10
+    )
+    private val audioFocus by lazy { AudioFocusManager(context, {}, {}) }
 
     fun start() {
         if (running.getAndSet(true)) return
@@ -66,7 +73,8 @@ class AudioEngine(private val context: Context) {
                     val level = rms(chunk)
                     onAmplitude?.invoke(level)
                     if (!muted.get()) {
-                        when (speechActivityDetector.update(level)) {
+                        val detector = if (speaking.get()) playbackSpeechActivityDetector else speechActivityDetector
+                        when (detector.update(level)) {
                             SpeechActivityEvent.STARTED -> onSpeechActivityChanged?.invoke(true)
                             SpeechActivityEvent.ENDED -> onSpeechActivityChanged?.invoke(false)
                             SpeechActivityEvent.NONE -> Unit
@@ -129,6 +137,9 @@ class AudioEngine(private val context: Context) {
                                 "playState=${track?.playState}"
                         )
                         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime() + MIC_ECHO_COOLDOWN_MS
+                        audioFocus.abandon()
+                        voiceLog("audio_focus_release reason=playback_end")
+                        playbackSpeechActivityDetector.reset()
                         onSpeakingChanged?.invoke(false)
                     }
                     continue
@@ -138,6 +149,10 @@ class AudioEngine(private val context: Context) {
                     runCatching {
                         if (track?.playState != AudioTrack.PLAYSTATE_PLAYING) track?.play()
                         if (speaking.compareAndSet(false, true)) {
+                            val focusGranted = audioFocus.request()
+                            voiceLog("audio_focus_request gain=TRANSIENT_MAY_DUCK audio_focus_result=$focusGranted")
+                            speechActivityDetector.reset()
+                            playbackSpeechActivityDetector.reset()
                             voiceLog(
                                 "playback_start bytes=${bytes.size} queued=${queue.size} " +
                                     "state=${track?.state} playState=${track?.playState}"
@@ -179,6 +194,9 @@ class AudioEngine(private val context: Context) {
         queue.clear()
         bargeInEnabled.set(false)
         synchronized(playbackLock) { runCatching { track?.pause(); track?.flush() } }
+        audioFocus.abandon()
+        voiceLog("audio_focus_release reason=playback_interrupt")
+        playbackSpeechActivityDetector.reset()
         speaking.set(false)
         onSpeakingChanged?.invoke(false)
     }
@@ -196,6 +214,7 @@ class AudioEngine(private val context: Context) {
             runCatching { track?.stop() }
             runCatching { track?.release() }
         }
+        audioFocus.abandon()
         recorder = null
         track = null
         micThread = null

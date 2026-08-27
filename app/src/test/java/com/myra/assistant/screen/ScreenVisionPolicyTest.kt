@@ -4,6 +4,36 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ScreenVisionPolicyTest {
+    @Test fun explicitQueryUsesCurrentSessionFrameAndStopInvalidatesEverything() {
+        val session = ScreenVisionSession()
+        val firstSession = session.start()
+        session.setState(ScreenShareState.ACTIVE)
+        val periodic = requireNotNull(session.publish(byteArrayOf(1), 100, "passive"))
+        val query = requireNotNull(session.createQuery(7, 110))
+        val fresh = requireNotNull(session.publish(byteArrayOf(2), 120, "explicit_query"))
+        val result = session.complete(query.queryId, fresh) as FreshFrameResult.Ready
+        assertEquals(firstSession, result.frame.sessionId)
+        assertTrue(result.frame.frameId > periodic.frameId)
+        assertArrayEquals(byteArrayOf(2), result.frame.bytes)
+
+        val pending = requireNotNull(session.createQuery(8, 130))
+        assertEquals(1, session.invalidate(ScreenShareState.STOPPED).count { it.queryId == pending.queryId })
+        assertNull(session.latestFrame)
+        assertFalse(session.isCurrent(firstSession))
+        assertNull(session.complete(pending.queryId, fresh))
+        assertNull(session.createQuery(9, 140))
+    }
+
+    @Test fun frameFromPreviousSessionCannotCompleteNewQuery() {
+        val session = ScreenVisionSession()
+        session.start(); session.setState(ScreenShareState.ACTIVE)
+        val old = requireNotNull(session.publish(byteArrayOf(1), 1, "passive"))
+        session.invalidate(ScreenShareState.STOPPED)
+        session.start(); session.setState(ScreenShareState.ACTIVE)
+        val query = requireNotNull(session.createQuery(2, 2))
+        assertTrue(session.complete(query.queryId, old) is FreshFrameResult.Unavailable)
+    }
+
     @Test fun screenQuestionsAndVisibleTargetCommandsAreDetected() {
         assertEquals(ScreenVisionIntent.ANALYZE, ScreenVisionIntentParser.parse("What is on my screen?"))
         assertEquals(ScreenVisionIntent.READ, ScreenVisionIntentParser.parse("Read this"))

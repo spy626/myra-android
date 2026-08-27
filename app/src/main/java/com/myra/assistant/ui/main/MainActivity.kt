@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.app.ActivityManager
+import android.media.projection.MediaProjectionManager
 import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -45,6 +46,8 @@ import com.myra.assistant.commands.Command
 import com.myra.assistant.databinding.ActivityMainBinding
 import com.myra.assistant.databinding.SheetSettingsBinding
 import com.myra.assistant.ui.settings.SettingsActivity
+import com.myra.assistant.screen.ScreenCaptureService
+import com.myra.assistant.screen.ScreenShareState
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -82,6 +85,18 @@ class MainActivity : AppCompatActivity() {
     private val commandProbe = StringBuilder()
     private val input = StringBuilder(); private val output = StringBuilder()
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { if (!it) showStatus("Microphone permission required") }
+    private val screenProjectionPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != RESULT_OK || result.data == null) {
+            ScreenCaptureService.markPermissionDenied(); updateScreenVisionButton(ScreenShareState.ERROR)
+        } else {
+            val service = Intent(this, ScreenCaptureService::class.java)
+                .setAction(ScreenCaptureService.ACTION_START)
+                .putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
+                .putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, result.data)
+            ContextCompat.startForegroundService(this, service)
+        }
+    }
+    private val screenStateListener: (ScreenShareState, ByteArray?) -> Unit = { state, _ -> runOnUiThread { updateScreenVisionButton(state) } }
     private var pendingImage: ByteArray? = null
     private var pendingImageMimeType = "image/jpeg"
     private val screenshotPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -112,6 +127,7 @@ class MainActivity : AppCompatActivity() {
         appActions = AppActionExecutor(this)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) permission.launch(Manifest.permission.RECORD_AUDIO)
         b.settingsButton.setOnClickListener { showSettings() }
+        b.screenVisionButton.setOnClickListener { handleScreenVisionButton() }
         b.chatToggleButton.setOnClickListener { expandComposer() }
         b.characterSurface.onCharacterTapped = { speakCharacterTouchReaction() }
         updateDeviceStatus()
@@ -157,6 +173,44 @@ class MainActivity : AppCompatActivity() {
         }
         b.stopButton.setOnClickListener { MyraVoiceService.interrupt(); assistantController.stop(); showStatus("Stopped") }
         b.muteButton.setOnClickListener { muted = !muted; startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_MUTE).putExtra(MyraVoiceService.EXTRA_MUTED, muted)); b.muteButton.alpha = if (muted) 1f else .6f; showStatus(if (muted) "Microphone muted" else "Sun rahi hoon…") }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        ScreenCaptureService.listeners += screenStateListener
+        updateScreenVisionButton(ScreenCaptureService.currentState)
+    }
+
+    override fun onStop() {
+        ScreenCaptureService.listeners -= screenStateListener
+        super.onStop()
+    }
+
+    private fun handleScreenVisionButton() {
+        when (ScreenCaptureService.currentState) {
+            ScreenShareState.ACTIVE -> AlertDialog.Builder(this).setTitle("Screen Vision")
+                .setItems(arrayOf("Pause", "Stop")) { _, which ->
+                    startService(Intent(this, ScreenCaptureService::class.java).setAction(if (which == 0) ScreenCaptureService.ACTION_PAUSE else ScreenCaptureService.ACTION_STOP))
+                }.show()
+            ScreenShareState.PAUSED -> startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_RESUME))
+            ScreenShareState.REQUESTING_PERMISSION, ScreenShareState.RESUMING, ScreenShareState.STOPPING -> Unit
+            else -> {
+                ScreenCaptureService.markPermissionRequesting()
+                val manager = getSystemService(MediaProjectionManager::class.java)
+                screenProjectionPermission.launch(manager.createScreenCaptureIntent())
+            }
+        }
+    }
+
+    private fun updateScreenVisionButton(state: ScreenShareState) {
+        b.screenVisionButton.text = when (state) {
+            ScreenShareState.ACTIVE -> "LIVE"
+            ScreenShareState.PAUSED -> "PAUSE"
+            ScreenShareState.REQUESTING_PERMISSION, ScreenShareState.RESUMING -> "WAIT"
+            ScreenShareState.ERROR -> "RETRY"
+            else -> "OFF"
+        }
+        b.screenVisionButton.alpha = if (state == ScreenShareState.ACTIVE) 1f else .75f
     }
     private fun speakCharacterTouchReaction() {
         val reactions = listOf(

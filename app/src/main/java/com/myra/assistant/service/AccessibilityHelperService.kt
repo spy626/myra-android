@@ -9,14 +9,25 @@ import android.media.AudioManager
 import android.net.Uri
 import android.graphics.Rect
 import android.graphics.Path
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.KeyEvent
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.LinearLayout
+import android.widget.TextView
 import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.screen.VisibleScreenElement
+import com.myra.assistant.screen.ScreenCaptureService
+import com.myra.assistant.screen.ScreenShareState
 import java.util.Locale
 
 class AccessibilityHelperService : AccessibilityService() {
@@ -24,10 +35,87 @@ class AccessibilityHelperService : AccessibilityService() {
     private var previousVideoQuery: String? = null
     private var pendingHistoryRestoreQuery: String? = null
     private var lastScrollDown = true
-    override fun onServiceConnected() { instance = this; super.onServiceConnected() }
+    private var screenOverlay: View? = null
+    private var overlayPanel: View? = null
+    private var overlayState: ScreenShareState = ScreenShareState.IDLE
+    override fun onServiceConnected() { instance = this; super.onServiceConnected(); updateScreenVisionOverlay(ScreenCaptureService.currentState) }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
-    override fun onDestroy() { if (instance === this) instance = null; super.onDestroy() }
+    override fun onDestroy() { hideScreenVisionOverlay(); if (instance === this) instance = null; super.onDestroy() }
+
+    fun updateScreenVisionOverlay(state: ScreenShareState) {
+        Handler(Looper.getMainLooper()).post {
+            overlayState = state
+            if (state !in setOf(ScreenShareState.ACTIVE, ScreenShareState.PAUSED, ScreenShareState.RESUMING)) {
+                hideScreenVisionOverlay(); return@post
+            }
+            if (screenOverlay == null) showScreenVisionOverlay()
+            (screenOverlay as? TextView)?.text = if (state == ScreenShareState.PAUSED) "▶" else "◉"
+        }
+    }
+
+    private fun showScreenVisionOverlay() {
+        if (screenOverlay != null) return
+        val window = getSystemService(WINDOW_SERVICE) as WindowManager
+        val bubble = TextView(this).apply {
+            text = "◉"; textSize = 22f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(31, 108, 63)); setStroke(2, Color.rgb(157, 234, 170)) }
+        }
+        val size = (52 * resources.displayMetrics.density).toInt()
+        val params = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.TOP or Gravity.START; x = resources.displayMetrics.widthPixels - size - 18; y = resources.displayMetrics.heightPixels / 3
+        }
+        var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
+        bubble.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { downX = event.rawX; downY = event.rawY; startX = params.x; startY = params.y; moved = false; true }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - downX).toInt(); val dy = (event.rawY - downY).toInt(); moved = moved || kotlin.math.abs(dx) + kotlin.math.abs(dy) > 12
+                    params.x = (startX + dx).coerceIn(0, resources.displayMetrics.widthPixels - size)
+                    params.y = (startY + dy).coerceIn(0, resources.displayMetrics.heightPixels - size)
+                    runCatching { window.updateViewLayout(bubble, params) }; true
+                }
+                MotionEvent.ACTION_UP -> { if (!moved) toggleOverlayPanel(params); true }
+                else -> false
+            }
+        }
+        runCatching { window.addView(bubble, params); screenOverlay = bubble }
+    }
+
+    private fun toggleOverlayPanel(bubbleParams: WindowManager.LayoutParams) {
+        if (overlayPanel != null) { hideOverlayPanel(); return }
+        val window = getSystemService(WINDOW_SERVICE) as WindowManager
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(12, 10, 12, 10)
+            background = GradientDrawable().apply { cornerRadius = 18f; setColor(Color.rgb(16, 31, 22)); setStroke(2, Color.rgb(109, 201, 125)) }
+        }
+        fun action(label: String, run: () -> Unit) = TextView(this).apply {
+            text = label; textSize = 15f; setTextColor(Color.WHITE); setPadding(20, 14, 20, 14); setOnClickListener { run(); hideOverlayPanel() }
+        }
+        panel.addView(action(if (overlayState == ScreenShareState.PAUSED) "Resume" else "Pause") {
+            startService(Intent(this, ScreenCaptureService::class.java).setAction(if (overlayState == ScreenShareState.PAUSED) ScreenCaptureService.ACTION_RESUME else ScreenCaptureService.ACTION_PAUSE))
+        })
+        panel.addView(action("Open LYRA") { returnToMyra() })
+        panel.addView(action("Stop") { startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_STOP)) })
+        val width = (138 * resources.displayMetrics.density).toInt()
+        val params = WindowManager.LayoutParams(width, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.TOP or Gravity.START; x = (bubbleParams.x - width).coerceAtLeast(0); y = bubbleParams.y
+        }
+        runCatching { window.addView(panel, params); overlayPanel = panel }
+    }
+
+    private fun hideOverlayPanel() {
+        overlayPanel?.let { runCatching { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) } }
+        overlayPanel = null
+    }
+
+    fun hideScreenVisionOverlay() {
+        hideOverlayPanel()
+        screenOverlay?.let { runCatching { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) } }
+        screenOverlay = null
+    }
     fun returnToMyra(): Boolean {
         // Put the foreground app in the background first. Starting MYRA directly can be
         // blocked by Android's background-activity rules on some phones; an enabled
