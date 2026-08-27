@@ -24,6 +24,7 @@ class ScreenVisionSettingsActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode != Activity.RESULT_OK || result.data == null) {
+            ScreenCaptureService.markPermissionDenied()
             Toast.makeText(this, "Screen sharing permission was not granted", Toast.LENGTH_SHORT).show()
             renderState()
             return@registerForActivityResult
@@ -90,6 +91,8 @@ class ScreenVisionSettingsActivity : AppCompatActivity() {
 
     private fun requestCapture() {
         val manager = getSystemService(MediaProjectionManager::class.java)
+        ScreenCaptureService.markPermissionRequesting()
+        renderState()
         permissionLauncher.launch(manager.createScreenCaptureIntent())
     }
 
@@ -107,4 +110,3 @@ class ScreenVisionSettingsActivity : AppCompatActivity() {
         } else binding.preview.setImageDrawable(null)
     }
 }
-

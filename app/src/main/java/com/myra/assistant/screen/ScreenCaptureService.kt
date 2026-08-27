@@ -204,6 +204,16 @@ class ScreenCaptureService : Service() {
         @Volatile var latestFrameAt: Long = 0L
             private set
         val listeners = CopyOnWriteArraySet<(ScreenShareState, ByteArray?) -> Unit>()
+        fun markPermissionRequesting() {
+            currentState = ScreenShareState.REQUESTING_PERMISSION
+            listeners.forEach { it(currentState, latestFrame) }
+        }
+        fun markPermissionDenied() {
+            currentState = ScreenShareState.ERROR
+            latestFrame = null
+            latestFrameAt = 0L
+            listeners.forEach { it(currentState, null) }
+        }
         fun hasFreshFrame(maxAgeMs: Long = 15_000L): Boolean =
             currentState == ScreenShareState.ACTIVE && latestFrame != null &&
                 System.currentTimeMillis() - latestFrameAt <= maxAgeMs
