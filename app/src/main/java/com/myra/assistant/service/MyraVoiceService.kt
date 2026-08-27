@@ -57,6 +57,7 @@ import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.voice.LocalSpeechGate
 import com.myra.assistant.voice.FinalTranscriptDisplayFormatter
 import com.myra.assistant.voice.FinalSemanticUserUtterance
+import com.myra.assistant.voice.FinalTranscriptPlausibilityGate
 import com.myra.assistant.voice.PhantomTranscriptFilter
 import com.myra.assistant.voice.RomanHinglishFormatter
 import com.myra.assistant.voice.VoiceResponseFormatter
@@ -137,6 +138,7 @@ class MyraVoiceService : Service() {
     private val responseArbiter = TurnResponseArbiter()
     private val ordinaryModelAudioGate = OrdinaryModelAudioGate()
     private val transcriptSessionId = java.util.UUID.randomUUID().toString()
+    private val transcriptPlausibilityGate = FinalTranscriptPlausibilityGate()
     private val finalUserMessageCommitter = FinalUserMessageCommitter()
     private val memoryCommandRunnable = Runnable {
         val command = pendingMemoryCommand
@@ -492,6 +494,24 @@ class MyraVoiceService : Service() {
                 appendTranscript(input, part); appendTranscript(commandProbe, part)
                 lastUserIntentText = input.toString().trim()
                 val currentTranscript = commandProbe.toString().trim()
+                val plausibilityPreview = transcriptPlausibilityGate.preview(currentTranscript)
+                if (!plausibilityPreview.semanticProcessingAllowed) {
+                    // Stop speculative MODEL output as soon as an unrelated dominant
+                    // script appears. The immutable FINAL transcript makes the decision.
+                    suppressModelForTurn = true
+                    output.clear()
+                    audio?.interrupt()
+                    voiceLog(
+                        "input_transcript_plausibility_preview raw=${currentTranscript.take(120)} " +
+                            "dominantScript=${plausibilityPreview.dominantScript} " +
+                            "transcriptPlausibility=${plausibilityPreview.transcriptPlausibility} " +
+                            "anomalyReason=${plausibilityPreview.anomalyReason}"
+                    )
+                    // Keep collecting raw chunks for the authoritative FINAL decision,
+                    // but do not let partial foreign-script text reach memory, correction,
+                    // delete, command, or permission parsers.
+                    return@inputTranscript
+                }
                 val detectedPersonalMemory =
                     PersonalMemoryExtractor.extract(romanDisplayText(currentTranscript))
                 if (detectedPersonalMemory != null) {
@@ -646,13 +666,41 @@ class MyraVoiceService : Service() {
                 pendingDetectedPersonalMemory = null
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
                 val finalInputTranscriptAt = android.os.SystemClock.elapsedRealtime()
-                val finalDisplay = finalTranscriptDisplay(userText)
-                val semanticTurnId = activeTurnId.takeIf { it != 0L }
+                val plausibility = transcriptPlausibilityGate.assessFinal(userText)
+                val plausibilityTurnId = activeTurnId.takeIf { it != 0L }
                     ?: responseArbiter.turnId.takeIf { it != 0L }
                     ?: ++turnSequence
+                val plausibilityUtteranceId = "$transcriptSessionId:$plausibilityTurnId"
+                voiceLog(
+                    "final_transcript_plausibility utteranceId=$plausibilityUtteranceId " +
+                        "rawGeminiTranscript=${userText.take(160)} " +
+                        "detectedScripts=${plausibility.detectedScripts} " +
+                        "dominantScript=${plausibility.dominantScript} " +
+                        "recentSessionLanguageProfile=${plausibility.recentSessionLanguageProfile} " +
+                        "transcriptPlausibility=${plausibility.transcriptPlausibility} " +
+                        "anomalyReason=${plausibility.anomalyReason} " +
+                        "semanticProcessingAllowed=${plausibility.semanticProcessingAllowed} " +
+                        "userBubbleCommitAllowed=${plausibility.userBubbleCommitAllowed} " +
+                        "memoryMutationAllowed=${plausibility.memoryMutationAllowed}"
+                )
+                if (!plausibility.semanticProcessingAllowed) {
+                    suppressModelForTurn = true
+                    localCommandExecutedThisTurn = true
+                    output.clear(); audio?.interrupt()
+                    listener?.onMyraText(FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY)
+                    emitState(FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY)
+                    queueLocalSpeech(
+                        FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY,
+                        allowUntranscribedAudio = true
+                    )
+                    resetTurnBuffers("suspicious_final_transcript")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
+                }
+                val finalDisplay = finalTranscriptDisplay(userText)
                 val finalUtterance = FinalSemanticUserUtterance.from(
                     sessionId = transcriptSessionId,
-                    turnId = semanticTurnId,
+                    turnId = plausibilityTurnId,
                     rawGeminiTranscript = userText,
                     formatted = finalDisplay
                 )
