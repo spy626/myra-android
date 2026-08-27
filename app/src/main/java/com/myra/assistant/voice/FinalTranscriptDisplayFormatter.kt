@@ -15,6 +15,7 @@ object FinalTranscriptDisplayFormatter {
         val display: String,
         val latinWordsPreserved: Boolean,
         val properNameProtected: Boolean,
+        val protectedNameTokens: List<String>,
         val appliedRuleIds: List<String>
     )
 
@@ -41,6 +42,7 @@ object FinalTranscriptDisplayFormatter {
         val rules = linkedSetOf<String>()
         var latinPreserved = false
         var nameProtected = false
+        val protectedNameTokens = mutableListOf<String>()
         val rendered = mutableListOf<String>()
         val transliteratedTokens = mutableListOf<String>()
 
@@ -56,7 +58,7 @@ object FinalTranscriptDisplayFormatter {
                 protectedNames.containsKey(token) -> {
                     nameProtected = true
                     rules += "protected_hindi_name"
-                    protectedNames.getValue(token)
+                    protectedNames.getValue(token).also(protectedNameTokens::add)
                 }
                 stableWords.containsKey(token) -> {
                     rules += "exact_hindi_readability"
@@ -85,6 +87,7 @@ object FinalTranscriptDisplayFormatter {
             display = display,
             latinWordsPreserved = latinPreserved,
             properNameProtected = nameProtected,
+            protectedNameTokens = protectedNameTokens,
             appliedRuleIds = rules.toList()
         )
     }

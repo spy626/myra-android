@@ -27,7 +27,7 @@ import com.myra.assistant.data.memory.BestFriendNameCorrection
 import com.myra.assistant.data.memory.ClarifiedPersonNameResolver
 import com.myra.assistant.data.memory.ClarifiedNameResult
 import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
-import com.myra.assistant.data.memory.CorrectionTranscriptNormalizer
+import com.myra.assistant.data.memory.CorrectionSuccessPolicy
 import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
@@ -56,6 +56,7 @@ import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.voice.LocalSpeechGate
 import com.myra.assistant.voice.FinalTranscriptDisplayFormatter
+import com.myra.assistant.voice.FinalSemanticUserUtterance
 import com.myra.assistant.voice.PhantomTranscriptFilter
 import com.myra.assistant.voice.RomanHinglishFormatter
 import com.myra.assistant.voice.VoiceResponseFormatter
@@ -395,6 +396,19 @@ class MyraVoiceService : Service() {
                     modelAudioDroppedBeforeTurnCompleteCount = 0
                     modelAudioDroppedBeforeTurnCompleteBytes = 0L
                     voiceLog("input_turn_started turnId=$activeTurnId session=${hashCode()} inputTurnStartedAt=$inputTurnStartedAt speechActivityStartedAt=$speechActivityStartedAt latestModelGenerationId=$latestModelGenerationId")
+                    if (pendingBestFriendCorrectionOldName != null &&
+                        android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
+                    ) {
+                        // Reserve a pending clarification turn before Gemini can emit an
+                        // ordinary acknowledgement. Ownership becomes CONTROLLED_LOCAL
+                        // when the validated clarification reply is queued.
+                        suppressModelForTurn = true
+                        output.clear()
+                        voiceLog(
+                            "pending_correction_turn_reserved turnId=$activeTurnId " +
+                                "databaseMutationAllowed=false successAcknowledgementAllowed=false"
+                        )
+                    }
                 }
                 if (handlePendingPersonalMemoryPermission(part)) return@inputTranscript
                 if (handlePendingConfirmation(part)) return@inputTranscript
@@ -466,6 +480,14 @@ class MyraVoiceService : Service() {
                     // Gemini generation; its late model text/audio remains suppressed.
                     suppressModelForTurn = !responseArbiter.acceptsOrdinaryModel()
                     localCommandExecutedThisTurn = false
+                }
+                if (pendingBestFriendCorrectionOldName != null &&
+                    android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
+                ) {
+                    // Media-guard and fresh-input state transitions above may normally
+                    // re-enable MODEL output. A pending correction must remain reserved.
+                    suppressModelForTurn = true
+                    output.clear()
                 }
                 appendTranscript(input, part); appendTranscript(commandProbe, part)
                 lastUserIntentText = input.toString().trim()
@@ -625,14 +647,17 @@ class MyraVoiceService : Service() {
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
                 val finalInputTranscriptAt = android.os.SystemClock.elapsedRealtime()
                 val finalDisplay = finalTranscriptDisplay(userText)
-                val normalizedFinalUserText = CorrectionTranscriptNormalizer.normalize(
-                    userText,
-                    romanDisplayText(userText)
+                val semanticTurnId = activeTurnId.takeIf { it != 0L }
+                    ?: responseArbiter.turnId.takeIf { it != 0L }
+                    ?: ++turnSequence
+                val finalUtterance = FinalSemanticUserUtterance.from(
+                    sessionId = transcriptSessionId,
+                    turnId = semanticTurnId,
+                    rawGeminiTranscript = userText,
+                    formatted = finalDisplay
                 )
-                // Display comes only from the immutable FINAL transcript. A clarification
-                // resolver may drive the memory transaction, but must never rewrite the
-                // red bubble using a competing canonical-name result.
-                val displayedFinalUserText = finalDisplay.display
+                val normalizedFinalUserText = finalUtterance.canonicalSemanticText
+                val displayedFinalUserText = finalUtterance.displayText
                 voiceLog(
                     "final_input_transcript raw=${userText.take(160)} " +
                         "normalized=${normalizedFinalUserText.take(160)} " +
@@ -645,6 +670,19 @@ class MyraVoiceService : Service() {
                         "latinWordsPreserved=${finalDisplay.latinWordsPreserved} " +
                         "properNameProtected=${finalDisplay.properNameProtected} " +
                         "ruleIds=${finalDisplay.appliedRuleIds.joinToString(",")}"
+                )
+                voiceLog(
+                    "final_semantic_utterance utteranceId=${finalUtterance.utteranceId} " +
+                        "rawGeminiTranscript=${userText.take(160)} " +
+                        "canonicalSemanticText=${normalizedFinalUserText.take(160)} " +
+                        "displayText=${displayedFinalUserText.take(160)} " +
+                        "canonicalNameTokens=${finalUtterance.canonicalNameTokens} " +
+                        "displayNameTokens=${finalUtterance.displayNameTokens} " +
+                        "memoryExtractorInput=${finalUtterance.memoryExtractorInput.take(160)} " +
+                        "correctionParserInput=${finalUtterance.correctionParserInput.take(160)} " +
+                        "deleteParserInput=${finalUtterance.deleteParserInput.take(160)} " +
+                        "clarificationResolverInput=${finalUtterance.clarificationResolverInput.take(160)} " +
+                        "semanticConsistency=${finalUtterance.semanticConsistency}"
                 )
                 if (incompleteActionFragmentTurn &&
                     CommandParser.isLikelyIncompleteActionFragment(userText)
@@ -724,7 +762,25 @@ class MyraVoiceService : Service() {
                                 waitingForFreshInputAfterCommand = true
                                 return@turnComplete
                             }
-                            ClarifiedNameResult.Unclear -> Unit
+                            ClarifiedNameResult.Unclear -> {
+                                // A pending correction owns this turn. Never let Gemini
+                                // improvise a success acknowledgement when no validated
+                                // name or verified database transaction exists.
+                                val clarification = CorrectionSuccessPolicy.UNRESOLVED_CLARIFICATION_REPLY
+                                suppressModelForTurn = true
+                                localCommandExecutedThisTurn = true
+                                output.clear(); audio?.interrupt()
+                                voiceLog(
+                                    "correction_clarification_unresolved target=$pendingCorrectionOld " +
+                                        "databaseMutationAllowed=false successAcknowledgementAllowed=false"
+                                )
+                                listener?.onMyraText(clarification)
+                                emitState(clarification)
+                                queueLocalSpeech(clarification, allowUntranscribedAudio = true)
+                                resetTurnBuffers("clarification_unresolved")
+                                waitingForFreshInputAfterCommand = true
+                                return@turnComplete
+                            }
                         }
                     }
                     val pendingDelete = android.os.SystemClock.elapsedRealtime() <=
@@ -740,7 +796,7 @@ class MyraVoiceService : Service() {
                         waitingForFreshInputAfterCommand = true
                         return@turnComplete
                     }
-                    if (BestFriendNameCorrectionParser.needsClearCorrectedName(romanDisplayText(userText))) {
+                    if (BestFriendNameCorrectionParser.needsClearCorrectedName(finalUtterance.correctionParserInput)) {
                         val clarification = "Correct naam clear nahi hua. Ek baar spelling ya naam clearly repeat karo."
                         localCommandExecutedThisTurn = true
                         suppressModelForTurn = true
@@ -766,7 +822,7 @@ class MyraVoiceService : Service() {
                         waitingForFreshInputAfterCommand = true
                         return@turnComplete
                     }
-                    if (UnclearDeleteIntentGuard.needsClarification(romanDisplayText(userText))) {
+                    if (UnclearDeleteIntentGuard.needsClarification(finalUtterance.deleteParserInput)) {
                         val clarification = "Kis memory ko delete karna hai? Naam ek baar saaf bol do."
                         localCommandExecutedThisTurn = true
                         suppressModelForTurn = true
@@ -800,7 +856,7 @@ class MyraVoiceService : Service() {
                     }
                 }
                 if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
-                    val displayUserText = normalizedFinalUserText
+                    val displayUserText = finalUtterance.memoryExtractorInput
                     val linkedPersonCandidates = PersonLinkedMemoryExtractor.extractAll(displayUserText)
                     val personalCandidate = linkedPersonCandidates.firstOrNull {
                         MemoryRelationshipPolicy.isBestFriend(it)
@@ -828,11 +884,27 @@ class MyraVoiceService : Service() {
                             "rejectionReason=${correctionDecision.rejectionReason} " +
                             "databaseMutationAllowed=${correctionDecision.databaseMutationAllowed}"
                     )
-                    if (nameCorrection != null) {
+                    if (nameCorrection != null && finalUtterance.semanticConsistency) {
                         // Gemini can conversationally acknowledge a correction even when
                         // Room did not change. Hide that unverified answer and confirm only
                         // after the repository returns and its rows have been read back.
                         startCanonicalRename(nameCorrection)
+                    } else if (nameCorrection != null) {
+                        val clarification = CorrectionSuccessPolicy.UNRESOLVED_CLARIFICATION_REPLY
+                        voiceLog(
+                            "name_correction_rejected utteranceId=${finalUtterance.utteranceId} " +
+                                "reason=semantic_name_mismatch databaseMutationAllowed=false " +
+                                "successAcknowledgementAllowed=false"
+                        )
+                        suppressModelForTurn = true
+                        localCommandExecutedThisTurn = true
+                        output.clear(); audio?.interrupt()
+                        listener?.onMyraText(clarification)
+                        emitState(clarification)
+                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
+                        resetTurnBuffers("semantic_name_mismatch")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
                     } else if (personalCandidate != null) {
                         recentRelationshipTurns.clear()
                         if (MemoryRelationshipPolicy.isBestFriend(personalCandidate)) {
@@ -1983,15 +2055,20 @@ class MyraVoiceService : Service() {
             }
             voiceLog(
                 "correction_transaction_result writeSuccess=$renamed verified=$verified " +
+                    "successAcknowledgementAllowed=$verified " +
                     "finalRows=${rows.joinToString { "${it.id}:${it.stableKey}:${it.fact}" }}"
             )
-            val reply = if (verified) {
+            val successAcknowledgementAllowed = CorrectionSuccessPolicy.acknowledgementAllowed(
+                writeSuccess = renamed,
+                verified = verified
+            )
+            val reply = if (successAcknowledgementAllowed) {
                 "Theek hai, ab ${correction.newName} naam save hai."
             } else {
                 "Naam update nahi ho paya. Ek baar phir try karo."
             }
             mainHandler.post {
-                if (verified) {
+                if (successAcknowledgementAllowed) {
                     replaceRecentRelationshipName(correction.oldName, correction.newName)
                     lastSavedBestFriendName = correction.newName
                     lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
