@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -33,6 +34,7 @@
         </provider>
         <activity android:name=".ui.settings.SettingsActivity" android:exported="false" />
         <activity android:name=".ui.settings.MemorySettingsActivity" android:exported="false" android:screenOrientation="portrait" />
+        <activity android:name=".ui.settings.ScreenVisionSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.ApiCloudSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.DeepResearchSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.VoiceAiSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
@@ -61,6 +63,11 @@
             android:name=".service.MyraVoiceService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+        <service
+            android:name=".screen.ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection"
+            android:stopWithTask="false" />
         <service
             android:name=".service.WhatsAppNotificationService"
             android:exported="true"

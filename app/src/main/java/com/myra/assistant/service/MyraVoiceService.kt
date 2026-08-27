@@ -46,6 +46,8 @@ import com.myra.assistant.data.memory.SavedMemoryContextFormatter
 import com.myra.assistant.data.memory.MemoryWriteResult
 import com.myra.assistant.data.memory.MemorySafetyPolicy
 import com.myra.assistant.data.memory.MemorySaveDecision
+import com.myra.assistant.data.memory.MemoryCategory
+import com.myra.assistant.data.memory.MemorySensitivity
 import com.myra.assistant.data.memory.SemanticMemoryProposalValidator
 import com.myra.assistant.data.memory.UnclearDeleteIntentGuard
 import com.myra.assistant.data.memory.PendingDeleteClarification
@@ -54,6 +56,11 @@ import com.myra.assistant.phone.AppActionExecutor
 import com.myra.assistant.MyApplication
 import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
+import com.myra.assistant.screen.ScreenCaptureService
+import com.myra.assistant.screen.ScreenPrivacyPolicy
+import com.myra.assistant.screen.ScreenShareState
+import com.myra.assistant.screen.ScreenVisionIntentParser
+import com.myra.assistant.screen.ScreenVisionPreferences
 import com.myra.assistant.voice.LocalSpeechGate
 import com.myra.assistant.voice.FinalTranscriptDisplayFormatter
 import com.myra.assistant.voice.FinalSemanticUserUtterance
@@ -221,6 +228,15 @@ class MyraVoiceService : Service() {
     private val appActions by lazy { AppActionExecutor(this) }
     private val memoryRepository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
     private val assistantController by lazy { (application as MyApplication).assistantController }
+    private val screenVisionPreferences by lazy { ScreenVisionPreferences(this) }
+    private val screenCaptureListener: (ScreenShareState, ByteArray?) -> Unit = { state, frame ->
+        if (state == ScreenShareState.ACTIVE && frame != null &&
+            screenVisionPreferences.visionEnabled && isNaturalVoiceReady
+        ) {
+            live?.sendScreenFrame(frame)
+            voiceLog("screen_frame_routed bytes=${frame.size} source=media_projection temporary=true")
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -231,6 +247,7 @@ class MyraVoiceService : Service() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LYRA:BackgroundVoice")
             .apply { setReferenceCounted(false); acquire() }
         isRunning = true
+        ScreenCaptureService.listeners += screenCaptureListener
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -275,6 +292,9 @@ class MyraVoiceService : Service() {
             client.onReady = {
                 isNaturalVoiceReady = true
                 audio?.start()
+                if (screenVisionPreferences.visionEnabled && ScreenCaptureService.hasFreshFrame()) {
+                    ScreenCaptureService.latestFrame?.let(client::sendScreenFrame)
+                }
                 listener?.onReady()
                 if (!hasGreeted) {
                     hasGreeted = true
@@ -751,6 +771,21 @@ class MyraVoiceService : Service() {
                         display = displayedFinalUserText
                     )
                 }
+                val screenIntent = ScreenVisionIntentParser.parse(normalizedFinalUserText)
+                if (screenIntent != null &&
+                    (!screenVisionPreferences.visionEnabled || !ScreenCaptureService.hasFreshFrame())
+                ) {
+                    val unavailable = "Screen Vision active nahi hai. Settings se screen share start karo."
+                    suppressModelForTurn = true
+                    localCommandExecutedThisTurn = true
+                    output.clear(); audio?.interrupt()
+                    listener?.onMyraText(unavailable, true)
+                    emitState(unavailable)
+                    queueLocalSpeech(unavailable, allowUntranscribedAudio = true)
+                    resetTurnBuffers("screen_frame_unavailable")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
+                }
                 // Run one final parse over the complete transcript. Partial Live transcript
                 // chunks can omit or mistranscribe the action word even when the final text
                 // contains enough context to identify the device command.
@@ -1225,6 +1260,14 @@ class MyraVoiceService : Service() {
                 handleSemanticMemoryProposal(id, args)
                 return
             }
+            "perform_screen_action" -> {
+                handleScreenActionTool(id, args)
+                return
+            }
+            "propose_screen_memory" -> {
+                handleScreenMemoryProposal(id, args)
+                return
+            }
             "perform_phone_action" -> Unit
             else -> {
                 live?.sendToolResponse(id, functionName, false, "Unsupported tool")
@@ -1293,6 +1336,88 @@ class MyraVoiceService : Service() {
         waitingForFreshInputAfterCommand = false
         executeCommand(command)
         live?.sendToolResponse(id, functionName, true, "Android accepted the validated action")
+    }
+
+    private fun handleScreenActionTool(id: String, args: org.json.JSONObject) {
+        val intentText = lastUserIntentText.ifBlank { input.toString().trim() }
+        if (!screenVisionPreferences.visionEnabled || !ScreenCaptureService.hasFreshFrame()) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "Screen Vision has no current shared frame")
+            return
+        }
+        if (ScreenVisionIntentParser.parse(intentText) == null) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "No explicit visible-screen action was requested")
+            return
+        }
+        val target = args.optString("target_text").trim().takeIf { it.isNotBlank() }
+        val position = args.optString("position").trim().takeIf { it.isNotBlank() && it != "unspecified" }
+        val ordinal = args.optInt("ordinal", 0).takeIf { it > 0 }
+        if (target == null && position == null && ordinal == null) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "Visible target is ambiguous; ask the user to choose")
+            return
+        }
+        val accessibility = AccessibilityHelperService.instance
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "LYRA Accessibility is disabled")
+            return
+        }
+        val before = accessibility.visibleScreenSignature()
+        val accepted = accessibility.tapVisibleTarget(target, position, ordinal)
+        if (!accepted) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "No unambiguous clickable target matched the current screen")
+            return
+        }
+        mainHandler.postDelayed({
+            val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
+            voiceLog("screen_action_verified target=$target position=$position ordinal=$ordinal tapAccepted=true screenChanged=$changed")
+            live?.sendToolResponse(
+                id, "perform_screen_action", changed,
+                if (changed) "The accessibility target was tapped and the visible screen changed"
+                else "The target was tapped but the expected screen change was not verified"
+            )
+        }, 700L)
+    }
+
+    private fun handleScreenMemoryProposal(id: String, args: org.json.JSONObject) {
+        val prefs = screenVisionPreferences
+        if (!prefs.visionEnabled || !prefs.automaticLearning || !prefs.saveScreenMemories ||
+            !ScreenCaptureService.hasFreshFrame()
+        ) {
+            live?.sendToolResponse(id, "propose_screen_memory", false, "Automatic screen memory is disabled")
+            return
+        }
+        val fact = args.optString("fact").trim().replace(Regex("\\s+"), " ")
+        val categoryName = args.optString("category").uppercase(Locale.ROOT)
+        val confidence = args.optDouble("confidence", 0.0)
+        val stableKey = args.optString("memory_key").lowercase(Locale.ROOT)
+            .replace(Regex("[^a-z0-9_:]+"), "_").trim('_').take(80)
+        if (fact.length !in 5..200 || stableKey.isBlank() ||
+            !ScreenPrivacyPolicy.isMemoryWorthy(categoryName, confidence) ||
+            (prefs.sensitiveContentProtection && ScreenPrivacyPolicy.blocksLongTermMemory(fact))
+        ) {
+            live?.sendToolResponse(id, "propose_screen_memory", false, "Screen observation was not safe and durable enough to save")
+            return
+        }
+        val category = runCatching { MemoryCategory.valueOf(categoryName) }.getOrNull()
+        if (category == null) {
+            live?.sendToolResponse(id, "propose_screen_memory", false, "Unsupported memory category")
+            return
+        }
+        serviceScope.launch {
+            val candidate = MemoryCandidate(
+                category, fact, "screen:$stableKey", MemorySensitivity.LOW,
+                confidence, source = "screen_observation"
+            )
+            val result = if (memoryRepository.isAlreadySaved(candidate)) {
+                MemoryWriteResult.Saved("existing")
+            } else memoryRepository.save(candidate)
+            val saved = result is MemoryWriteResult.Saved
+            voiceLog("screen_memory_write fact=${fact.take(80)} source=screen_observation saved=$saved")
+            live?.sendToolResponse(
+                id, "propose_screen_memory", saved,
+                if (saved) "Structured screen observation saved in the existing Memory Brain"
+                else "Screen observation was not saved"
+            )
+        }
     }
 
     private fun handleSemanticMemoryProposal(id: String, args: org.json.JSONObject) {
@@ -2184,7 +2309,7 @@ class MyraVoiceService : Service() {
         } else {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
-        val genderStyle = "$baseGenderStyle When natural conversation clearly reveals one durable fact about the user, call propose_user_memory once with the user's actual supporting words. Never call it for guesses, temporary feelings, secrets, or information already present in saved memory; never claim it was saved or ask permission yourself. The user may have multiple best friends. When an explicit completed statement names another best friend, accept it naturally and never ask which name is correct, whether to replace someone, or whether the user is sure; Android adds each named person silently. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means."
+        val genderStyle = "$baseGenderStyle When natural conversation clearly reveals one durable fact about the user, call propose_user_memory once with the user's actual supporting words. Never call it for guesses, temporary feelings, secrets, or information already present in saved memory; never claim it was saved or ask permission yourself. The user may have multiple best friends. When an explicit completed statement names another best friend, accept it naturally and never ask which name is correct, whether to replace someone, or whether the user is sure; Android adds each named person silently. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action so Android accessibility selects and verifies the existing UI target; never invent coordinates or claim success before verification. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
         return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Express emotion through the natural voice, not by announcing emotion or writing stage directions. Match vocal delivery to both the user's mood and the meaning of the conversation: sound brighter, warmer, and slightly more energetic for happiness or exciting news; softer, slower, and gently reassuring for sadness, worry, or vulnerability; calm, steady, and patient for frustration or anger; lightly teasing and playful during mutual joking; naturally surprised when something is genuinely unexpected; and focused with less playfulness for serious topics. Emotional changes must be subtle and human, never theatrical. Never fake sobbing, crying sounds, panic, jealousy, guilt, or emotional dependence. Do not mirror intense anger back at the user. When uncertain about mood, use a warm neutral voice. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Remember, forget, and what-do-you-remember requests are memory intent, never phone actions. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }
@@ -2277,7 +2402,12 @@ class MyraVoiceService : Service() {
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
     private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
-    override fun onDestroy() { instance = null; if (isRunning) stopSession(); super.onDestroy() }
+    override fun onDestroy() {
+        ScreenCaptureService.listeners -= screenCaptureListener
+        instance = null
+        if (isRunning) stopSession()
+        super.onDestroy()
+    }
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
@@ -2310,7 +2440,24 @@ class MyraVoiceService : Service() {
             instance?.let {
                 it.markUserInteraction()
                 it.lastUserIntentText = text.trim()
-                if (!it.handleExplicitMemoryText(text)) it.live?.sendText(text)
+                val screenIntent = ScreenVisionIntentParser.parse(text)
+                if (screenIntent != null) {
+                    val frame = ScreenCaptureService.latestFrame
+                    if (!it.screenVisionPreferences.visionEnabled ||
+                        !ScreenCaptureService.hasFreshFrame() || frame == null
+                    ) {
+                        it.listener?.onMyraText(
+                            "Screen Vision active nahi hai. Settings se screen share start karo.", true
+                        )
+                    } else {
+                        val ui = AccessibilityHelperService.instance?.visibleScreenSummary().orEmpty()
+                        it.live?.sendImage(
+                            frame, "image/jpeg",
+                            "$text\nUse this current Android screen frame. Accessibility elements:\n$ui\n" +
+                                "Answer only from visible evidence. For an explicit visible-target action, use perform_screen_action."
+                        )
+                    }
+                } else if (!it.handleExplicitMemoryText(text)) it.live?.sendText(text)
             }
         }
         fun sendImage(image: ByteArray, mimeType: String, prompt: String) { instance?.live?.sendImage(image, mimeType, prompt) }

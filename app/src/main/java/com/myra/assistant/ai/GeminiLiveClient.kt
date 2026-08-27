@@ -117,7 +117,10 @@ class GeminiLiveClient(
             .put("tools", JSONArray().put(JSONObject().put(
                 "functionDeclarations",
                 JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration())
+                    .put(screenActionDeclaration()).put(screenMemoryProposalDeclaration())
             )))
+            .put("realtimeInputConfig", JSONObject()
+                .put("turnCoverage", "TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO"))
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject()))
         webSocket.send(setup.toString())
@@ -161,6 +164,25 @@ class GeminiLiveClient(
                 .put("confidence", JSONObject().put("type", "NUMBER")))
             .put("required", JSONArray(listOf("fact", "category", "memory_key", "evidence", "confidence"))))
 
+    private fun screenActionDeclaration() = JSONObject()
+        .put("name", "perform_screen_action")
+        .put("description", "Select one currently visible UI target using accessibility-backed screen elements. Use only when Screen Vision is active and the user explicitly asks to tap, click, press, or open a visible target. Never guess when multiple targets are equally plausible.")
+        .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("target_text", JSONObject().put("type", "STRING"))
+            .put("position", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("top", "bottom", "left", "right", "center", "middle", "unspecified"))))
+            .put("ordinal", JSONObject().put("type", "INTEGER"))
+        ))
+
+    private fun screenMemoryProposalDeclaration() = JSONObject()
+        .put("name", "propose_screen_memory")
+        .put("description", "Propose one durable, useful, non-sensitive project, goal, or preference fact directly visible on the shared screen. Never propose credentials, messages, health/banking data, temporary screen state, UI labels, or guesses.")
+        .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("fact", JSONObject().put("type", "STRING"))
+            .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("PROJECT", "GOAL", "PREFERENCE"))))
+            .put("memory_key", JSONObject().put("type", "STRING"))
+            .put("confidence", JSONObject().put("type", "NUMBER"))
+        ).put("required", JSONArray(listOf("fact", "category", "memory_key", "confidence"))))
+
     fun sendAudio(bytes: ByteArray) {
         if (!ready.get() || bytes.isEmpty()) return
         val audio = JSONObject().put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("mimeType", "audio/pcm;rate=16000")
@@ -186,6 +208,15 @@ class GeminiLiveClient(
         sendWhenReady(JSONObject().put("clientContent", JSONObject()
             .put("turns", JSONArray().put(turn))
             .put("turnComplete", true)).toString())
+    }
+
+    /** Adds a changed screen frame to the active Live session without ending a user turn. */
+    fun sendScreenFrame(image: ByteArray, mimeType: String = "image/jpeg") {
+        if (image.isEmpty()) return
+        val video = JSONObject()
+            .put("data", Base64.encodeToString(image, Base64.NO_WRAP))
+            .put("mimeType", mimeType)
+        sendWhenReady(JSONObject().put("realtimeInput", JSONObject().put("video", video)).toString())
     }
 
     fun sendToolResponse(id: String, name: String, success: Boolean, message: String) {

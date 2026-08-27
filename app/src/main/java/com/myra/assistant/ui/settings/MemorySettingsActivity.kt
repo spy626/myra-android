@@ -70,7 +70,11 @@ class MemorySettingsActivity : AppCompatActivity() {
         })
         card.addView(TextView(this).apply {
             text = "${memory.category.lowercase().replaceFirstChar { it.uppercase() }} · " +
-                if (memory.source == ManualMemoryPolicy.SOURCE) "Added in Settings" else "Learned by LYRA"
+                when (memory.source) {
+                    ManualMemoryPolicy.SOURCE -> "Added in Settings"
+                    "screen_observation" -> "Observed on screen"
+                    else -> "Learned by LYRA"
+                }
             setTextColor(Color.rgb(119, 112, 119))
             textSize = 11f
             setPadding(0, dp(6), 0, dp(6))
