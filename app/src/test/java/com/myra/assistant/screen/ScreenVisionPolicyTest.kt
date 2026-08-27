@@ -43,6 +43,26 @@ class ScreenVisionPolicyTest {
         assertTrue(session.complete(query.queryId, old) is FreshFrameResult.Unavailable)
     }
 
+    @Test fun recentLocalCacheCompletesQueryWithoutWaitingForPeriodicUpload() {
+        val session = ScreenVisionSession()
+        session.start(); session.setState(ScreenShareState.ACTIVE)
+        val cached = requireNotNull(session.publish(byteArrayOf(7), 1_000, source = "local_cache"))
+        val query = requireNotNull(session.createQuery(4, 1_300))
+        val result = session.completeWithLatest(query.queryId, now = 1_350, maxAgeMs = 500)
+            as FreshFrameResult.Ready
+        assertEquals(cached.frameId, result.frame.frameId)
+        assertEquals("local_cache", result.frame.source)
+    }
+
+    @Test fun staleCacheCannotCompleteExplicitQuery() {
+        val session = ScreenVisionSession()
+        session.start(); session.setState(ScreenShareState.ACTIVE)
+        session.publish(byteArrayOf(7), 1_000, source = "local_cache")
+        val query = requireNotNull(session.createQuery(4, 2_000))
+        assertNull(session.completeWithLatest(query.queryId, now = 2_000, maxAgeMs = 500))
+        assertNotNull(session.cancel(query.queryId, "fresh_capture_timeout"))
+    }
+
     @Test fun screenQuestionsAndVisibleTargetCommandsAreDetected() {
         assertEquals(ScreenVisionIntent.ANALYZE, ScreenVisionIntentParser.parse("What is on my screen?"))
         assertEquals(ScreenVisionIntent.READ, ScreenVisionIntentParser.parse("Read this"))

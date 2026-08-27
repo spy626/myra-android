@@ -179,6 +179,8 @@ class AudioEngine(private val context: Context) {
                         ignoreMicUntilMs = android.os.SystemClock.elapsedRealtime() + MIC_ECHO_COOLDOWN_MS
                         audioFocus.abandon("playback_end")
                         voiceLog("audio_focus_release reason=playback_end")
+                        playbackGeneration = 0L
+                        playbackScreenQueryId = ""
                         playbackSpeechActivityDetector.reset()
                         mediaSpeechActivityDetector.reset()
                         onSpeakingChanged?.invoke(false)
@@ -190,7 +192,14 @@ class AudioEngine(private val context: Context) {
                     runCatching {
                         if (track?.playState != AudioTrack.PLAYSTATE_PLAYING) track?.play()
                         if (speaking.compareAndSet(false, true)) {
-                            val focusGranted = audioFocus.request(playbackGeneration, playbackScreenQueryId)
+                            // Screen answers must remain intelligible over YouTube.
+                            // TRANSIENT pauses competing media temporarily; ordinary
+                            // conversation keeps the less disruptive ducking strategy.
+                            val focusGranted = audioFocus.request(
+                                playbackGeneration,
+                                playbackScreenQueryId,
+                                forceTransient = playbackScreenQueryId.isNotBlank()
+                            )
                             voiceLog("audio_focus_result granted=$focusGranted playbackGeneration=$playbackGeneration screenQueryId=$playbackScreenQueryId")
                             speechActivityDetector.reset()
                             playbackSpeechActivityDetector.reset()
@@ -243,6 +252,8 @@ class AudioEngine(private val context: Context) {
         synchronized(playbackLock) { runCatching { track?.pause(); track?.flush() } }
         audioFocus.abandon("playback_interrupt")
         voiceLog("audio_focus_release reason=playback_interrupt")
+        playbackGeneration = 0L
+        playbackScreenQueryId = ""
         playbackSpeechActivityDetector.reset()
         mediaSpeechActivityDetector.reset()
         speaking.set(false)

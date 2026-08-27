@@ -26,14 +26,17 @@ class AudioFocusManager(context: Context, private val onLost: () -> Unit, privat
             .setAcceptsDelayedFocusGain(false).setOnAudioFocusChangeListener(listener).build()
     } else null
 
-    fun request(playbackGeneration: Long = 0L, screenQueryId: String = ""): Boolean {
+    fun request(playbackGeneration: Long = 0L, screenQueryId: String = "", forceTransient: Boolean = false): Boolean {
         if (held) return true
         activeRequestId = requestIds.incrementAndGet()
-        val duckRaw = requestRaw(duckRequest, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-        var selected = duckRequest
-        var requestedGain = "TRANSIENT_MAY_DUCK"
-        var raw = duckRaw
-        if (duckRaw != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+        val initialGain = AudioFocusGainPolicy.initialGain(forceTransient)
+        var selected = if (initialGain == AudioManager.AUDIOFOCUS_GAIN_TRANSIENT) transientRequest else duckRequest
+        var requestedGain = if (initialGain == AudioManager.AUDIOFOCUS_GAIN_TRANSIENT) "TRANSIENT" else "TRANSIENT_MAY_DUCK"
+        var raw = requestRaw(
+            selected,
+            initialGain
+        )
+        if (!forceTransient && raw != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             raw = requestRaw(transientRequest, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             selected = transientRequest
             requestedGain = "TRANSIENT"
@@ -69,4 +72,10 @@ internal object AudioFocusResultPolicy {
         AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> "DELAYED"
         else -> "FAILED"
     }
+}
+
+internal object AudioFocusGainPolicy {
+    fun initialGain(screenResponse: Boolean): Int =
+        if (screenResponse) AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+        else AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
 }

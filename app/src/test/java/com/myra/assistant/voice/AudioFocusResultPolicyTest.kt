@@ -10,4 +10,9 @@ class AudioFocusResultPolicyTest {
         assertEquals("DELAYED", AudioFocusResultPolicy.interpret(AudioManager.AUDIOFOCUS_REQUEST_DELAYED))
         assertEquals("FAILED", AudioFocusResultPolicy.interpret(AudioManager.AUDIOFOCUS_REQUEST_FAILED))
     }
+
+    @Test fun screenResponseUsesTransientFocusWhileOrdinaryVoiceUsesDucking() {
+        assertEquals(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT, AudioFocusGainPolicy.initialGain(true))
+        assertEquals(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK, AudioFocusGainPolicy.initialGain(false))
+    }
 }

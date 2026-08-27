@@ -79,6 +79,21 @@ class ScreenVisionSession {
         } else FreshFrameResult.Unavailable(query, "stale_screen_session")
     }
 
+    /**
+     * Completes a query from the continuously refreshed in-memory frame cache.
+     * The frame stays query-safe because both identities must belong to the
+     * current projection session and its age is checked at the point of use.
+     */
+    fun completeWithLatest(queryId: String, now: Long, maxAgeMs: Long): FreshFrameResult? {
+        val query = pending[queryId] ?: return null
+        val frame = latestFrame ?: return null
+        val age = (now - frame.capturedAt).coerceAtLeast(0L)
+        if (state != ScreenShareState.ACTIVE || query.sessionId != sessionId ||
+            frame.sessionId != sessionId || age > maxAgeMs
+        ) return null
+        return complete(queryId, frame)
+    }
+
     fun cancel(queryId: String, reason: String): FreshFrameResult.Unavailable? =
         pending.remove(queryId)?.let { FreshFrameResult.Unavailable(it, reason) }
 
