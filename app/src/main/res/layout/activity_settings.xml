@@ -21,6 +21,10 @@
             <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Voice &amp; AI Models" /><TextView style="@style/MyraSettingsSubtitle" android:text="Live model, voice and personality" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
         </LinearLayout>
         <TextView style="@style/MyraLabel" android:text="PERSONALIZATION" />
+        <LinearLayout android:id="@+id/memoryCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="◆" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Memory" /><TextView style="@style/MyraSettingsSubtitle" android:text="View, add and delete saved memories" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
         <LinearLayout android:id="@+id/orbCard" style="@style/MyraSettingsCard">
             <TextView style="@style/MyraSettingsIcon" android:text="●" />
             <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Orb Customization" /><TextView style="@style/MyraSettingsSubtitle" android:text="Color, size and animation style" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />

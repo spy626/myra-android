@@ -116,6 +116,58 @@ class MemoryRepositoryLinkedPersonTest {
         assertTrue(repository.forgetMatching("Kareem"))
         assertTrue(dao.recent(50).isEmpty())
     }
+
+    @Test fun settingsDeleteOfBestFriendAlsoDeletesLinkedFacts() = runBlocking {
+        val dao = FakeMemoryDao()
+        val repository = MemoryRepository(dao)
+        repository.saveAdditionalBestFriend(bestFriend("Kareem"))
+        repository.save(gamingChannel("Kareem"))
+        val relationship = repository.allActive().first(MemoryRelationshipPolicy::isBestFriend)
+
+        assertTrue(repository.forgetFromSettings(relationship))
+        assertTrue(repository.allActive().isEmpty())
+    }
+
+    @Test fun manualSettingsFactsUseSafetyPolicyAndCanBeEdited() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val rejected = repository.saveManualFact("My OTP is 123456", MemoryCategory.IDENTITY)
+        assertTrue(rejected is MemoryWriteResult.Rejected)
+
+        val saved = repository.saveManualFact("Zopy likes astronomy", MemoryCategory.PREFERENCE)
+        assertTrue(saved is MemoryWriteResult.Saved)
+        val row = repository.allActive().single()
+        assertEquals(ManualMemoryPolicy.SOURCE, row.source)
+
+        val updated = repository.updateManualFact(
+            row.id,
+            "Zopy likes astronomy and space documentaries",
+            MemoryCategory.PREFERENCE
+        )
+        assertTrue(updated is MemoryWriteResult.Saved)
+        assertEquals(
+            "Zopy likes astronomy and space documentaries",
+            repository.allActive().single().fact
+        )
+    }
+
+    @Test fun manualBestFriendAddUsesAdditionalIdentityWithoutReplacingExistingFriend() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        repository.saveAdditionalBestFriend(bestFriend("Ayesha"))
+
+        val result = repository.saveManualFact(
+            "Mera best friend Kareem hai",
+            MemoryCategory.PERSON
+        )
+
+        assertTrue(result is MemoryWriteResult.Saved)
+        assertEquals(
+            setOf("Ayesha", "Kareem"),
+            repository.allActive()
+                .filter(MemoryRelationshipPolicy::isBestFriend)
+                .mapNotNull { MemoryRelationshipPolicy.personName(it.fact) }
+                .toSet()
+        )
+    }
     private fun bestFriend(name: String) = MemoryCandidate(
         MemoryCategory.PERSON, "Zopy's best friend is $name",
         MemoryRelationshipPolicy.BEST_FRIEND_KEY, MemorySensitivity.PERSONAL, .96, source = "test"

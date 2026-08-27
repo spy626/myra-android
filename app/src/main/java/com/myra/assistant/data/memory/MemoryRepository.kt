@@ -5,6 +5,85 @@ import java.util.Locale
 import java.util.UUID
 
 class MemoryRepository(private val dao: MemoryDao) {
+    suspend fun allActive(limit: Int = 100): List<MemoryEntity> =
+        dao.recent(limit.coerceIn(1, 200))
+
+    suspend fun saveManualFact(fact: String, category: MemoryCategory): MemoryWriteResult {
+        val clean = fact.trim().replace(Regex("\\s+"), " ")
+        val linked = PersonLinkedMemoryExtractor.extractAll(clean)
+        if (linked.isNotEmpty()) {
+            var firstSaved: MemoryWriteResult.Saved? = null
+            for (candidate in linked) {
+                val result = if (MemoryRelationshipPolicy.isBestFriend(candidate)) {
+                    saveAdditionalBestFriend(candidate.copy(explicitlyRequested = true, source = ManualMemoryPolicy.SOURCE))
+                } else {
+                    save(candidate.copy(explicitlyRequested = true, source = ManualMemoryPolicy.SOURCE), permissionGranted = true)
+                }
+                if (result is MemoryWriteResult.Rejected) return result
+                if (result is MemoryWriteResult.Saved && firstSaved == null) firstSaved = result
+            }
+            return firstSaved ?: MemoryWriteResult.Rejected("Memory could not be saved.")
+        }
+        PersonalMemoryExtractor.extract(clean)?.let { extracted ->
+            val explicit = extracted.copy(explicitlyRequested = true, source = ManualMemoryPolicy.SOURCE)
+            return if (MemoryRelationshipPolicy.isBestFriend(explicit)) {
+                saveAdditionalBestFriend(explicit)
+            } else save(explicit, permissionGranted = true)
+        }
+        val candidate = ManualMemoryPolicy.candidate(clean, category)
+            ?: return MemoryWriteResult.Rejected("Memory must contain 3 to 200 characters.")
+        if (MemoryRelationshipPolicy.isBestFriend(candidate)) {
+            return MemoryWriteResult.Rejected(
+                "Use a clear format such as: Mera best friend Kareem hai."
+            )
+        }
+        return save(candidate, permissionGranted = true)
+    }
+
+    suspend fun updateManualFact(
+        id: String,
+        fact: String,
+        category: MemoryCategory
+    ): MemoryWriteResult {
+        val existing = dao.recent(200).firstOrNull { it.id == id && it.active }
+            ?: return MemoryWriteResult.Rejected("Memory no longer exists.")
+        if (existing.source != ManualMemoryPolicy.SOURCE || !existing.stableKey.startsWith("manual:")) {
+            return MemoryWriteResult.Rejected(
+                "Learned memories must be corrected through LYRA so linked facts stay consistent."
+            )
+        }
+        val candidate = ManualMemoryPolicy.candidate(fact, category, existing.stableKey)
+            ?: return MemoryWriteResult.Rejected("Memory must contain 3 to 200 characters.")
+        if (MemoryRelationshipPolicy.isBestFriend(candidate)) {
+            return MemoryWriteResult.Rejected(
+                "Relationship memories must be corrected through LYRA."
+            )
+        }
+        if (MemorySafetyPolicy.decide(candidate) == MemorySaveDecision.REJECT) {
+            return MemoryWriteResult.Rejected("Passwords, OTPs and financial details cannot be saved.")
+        }
+        val now = System.currentTimeMillis()
+        dao.upsert(
+            existing.copy(
+                category = category.name,
+                fact = candidate.fact,
+                normalizedFact = normalize(candidate.fact),
+                sensitivity = candidate.sensitivity.name,
+                confidence = candidate.confidence,
+                updatedAt = now,
+                lastConfirmedAt = now,
+                active = true
+            )
+        )
+        return MemoryWriteResult.Saved(existing.id)
+    }
+
+    suspend fun forgetFromSettings(memory: MemoryEntity): Boolean {
+        val personName = memory.takeIf(MemoryRelationshipPolicy::isBestFriend)
+            ?.let { MemoryRelationshipPolicy.personName(it.fact) }
+        return if (personName != null) forgetMatching(personName) else forget(memory.id)
+    }
+
     suspend fun save(candidate: MemoryCandidate, permissionGranted: Boolean = false): MemoryWriteResult {
         val canonical = if (!permissionGranted && MemoryRelationshipPolicy.isBestFriend(candidate)) {
             canonicalizeAgainstExistingBestFriends(candidate)

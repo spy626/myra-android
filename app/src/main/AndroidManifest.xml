@@ -32,6 +32,7 @@
                 android:resource="@xml/file_paths" />
         </provider>
         <activity android:name=".ui.settings.SettingsActivity" android:exported="false" />
+        <activity android:name=".ui.settings.MemorySettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.ApiCloudSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.DeepResearchSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.VoiceAiSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
