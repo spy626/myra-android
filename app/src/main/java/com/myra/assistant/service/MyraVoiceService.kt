@@ -58,6 +58,9 @@ import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenPrivacyPolicy
+import com.myra.assistant.screen.ScreenFramePrivacyFilter
+import com.myra.assistant.screen.ScreenPrivacyResult
+import com.myra.assistant.screen.ScreenQueryDispatchPolicy
 import com.myra.assistant.screen.ScreenShareState
 import com.myra.assistant.screen.ScreenVisionIntentParser
 import com.myra.assistant.screen.ScreenVisionPreferences
@@ -207,6 +210,7 @@ class MyraVoiceService : Service() {
     private var localAudioSpeaking = false
     private var screenResponseActive = false
     private var screenResponseHasContent = false
+    private var screenResponseStartedLogged = false
     private var screenResponseGenerationComplete = false
     private var screenResponseTextCommitted = false
     private var screenResponseUserTurnId = 0L
@@ -222,6 +226,7 @@ class MyraVoiceService : Service() {
     private var armedScreenQuestionTurnId = 0L
     private var armedScreenQuestionDetectedAt = 0L
     private var earlyScreenQueryAwaitingFinalTranscript = false
+    private var earlyScreenQueryDispatchedTurnId = 0L
     private var pendingCanonicalRename: kotlinx.coroutines.Job? = null
     private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
     private var pendingConfirmedCommand: AppCommand? = null
@@ -376,6 +381,10 @@ class MyraVoiceService : Service() {
                     if (!generationAccepted) {
                         voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId expectedAfter=$screenResponseAfterGenerationId boundGenerationId=$screenResponseGenerationId")
                     } else {
+                        if (!screenResponseStartedLogged) {
+                            screenResponseStartedLogged = true
+                            voiceLog("screen_query_state screenQueryId=$screenResponseQueryId state=RESPONSE_STARTED source=AUDIO modelGenerationId=$modelGenerationId")
+                        }
                         screenResponseHasContent = true
                         mediaGuard.beginAssistantTurn()
                         audio?.setPlaybackContext(modelGenerationId, screenResponseQueryId)
@@ -510,7 +519,7 @@ class MyraVoiceService : Service() {
                         appendTranscript(commandProbe, part)
                         val earlyScreenText = romanDisplayText(commandProbe.toString())
                         if (ScreenVisionIntentParser.parseStableQuery(earlyScreenText) != null) {
-                            audio?.confirmMediaSpeechFromTranscript()
+                            audio?.confirmMediaSpeechFromTranscript(earlyScreenText)
                             mediaBlockedTurn = false
                             suppressModelForTurn = true
                             output.clear()
@@ -529,7 +538,7 @@ class MyraVoiceService : Service() {
                             directCommand = null
                         }
                         if (directCommand != null) {
-                            audio?.confirmMediaSpeechFromTranscript()
+                            audio?.confirmMediaSpeechFromTranscript(commandProbe.toString())
                             // Media Guard runs before the normal fresh-input reset below.
                             // A genuine direct command heard during playback starts a new
                             // user turn, so release the completed previous command here.
@@ -559,7 +568,7 @@ class MyraVoiceService : Service() {
                         return@inputTranscript
                     }
                     HandsFreeMediaGuard.Gate.WAKE_DETECTED -> {
-                        audio?.confirmMediaSpeechFromTranscript()
+                        audio?.confirmMediaSpeechFromTranscript(part)
                         mediaBlockedTurn = false
                         suppressModelForTurn = false
                         waitingForFreshInputAfterCommand = false
@@ -724,6 +733,10 @@ class MyraVoiceService : Service() {
                 else if (screenResponseActive && ScreenCaptureService.session.isCurrent(screenResponseSessionId)) {
                     if (screenResponseBinding?.acceptsGeneration(modelGenerationId) == true) {
                         screenResponseGenerationId = screenResponseBinding?.screenGenerationId ?: 0L
+                        if (!screenResponseStartedLogged) {
+                            screenResponseStartedLogged = true
+                            voiceLog("screen_query_state screenQueryId=$screenResponseQueryId state=RESPONSE_STARTED source=TEXT modelGenerationId=$modelGenerationId")
+                        }
                         screenResponseHasContent = true
                         appendTranscript(output, transcript)
                         voiceLog("screen_query_result_received screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId userTurnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId firstResponseTextAt=${android.os.SystemClock.elapsedRealtime()} screen_response_turn_consistency=true")
@@ -795,6 +808,20 @@ class MyraVoiceService : Service() {
                     return@turnComplete
                 }
                 if (mediaBlockedTurn && !mediaGuard.isAwake()) {
+                    val blockedText = romanDisplayText(commandProbe.toString().trim())
+                    if (ScreenVisionIntentParser.parseStableQuery(blockedText) != null) {
+                        mediaBlockedTurn = false
+                        audio?.confirmMediaSpeechFromTranscript(blockedText)
+                        if (blockedText.isNotBlank() && !commandUserTextEmitted) {
+                            commitFinalUserMessage(blockedText, "MEDIA_CONFIRMED_SCREEN_QUERY")
+                            commandUserTextEmitted = true
+                        }
+                        voiceLog("media_candidate_promoted reason=validated_screen_query commandChars=${commandProbe.length} userTurnId=$activeTurnId")
+                        beginFreshScreenQuery(blockedText, activeTurnId)
+                        resetTurnBuffers("media_confirmed_screen_query")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
                     mediaBlockedTurn = false
                     resetTurnBuffers("media_blocked_turn_complete")
                     return@turnComplete
@@ -898,7 +925,9 @@ class MyraVoiceService : Service() {
                 }
                 val screenIntent = ScreenVisionIntentParser.parse(normalizedFinalUserText)
                 if (screenIntent != null) {
-                    if (!screenResponseActive && armedScreenQuestionTurnId != activeTurnId) {
+                    if (ScreenQueryDispatchPolicy.shouldDispatch(
+                            screenResponseActive, earlyScreenQueryDispatchedTurnId, activeTurnId
+                        )) {
                         beginFreshScreenQuery(normalizedFinalUserText, activeTurnId)
                     }
                     resetTurnBuffers("screen_query_fresh_capture_requested")
@@ -1529,6 +1558,7 @@ class MyraVoiceService : Service() {
         output.clear()
         audio?.interrupt()
         if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
+            voiceLog("screen_query_terminal state=REJECTED_SCREEN_INACTIVE userTurnId=$userTurnId")
             speakScreenUnavailable(
                 if (ScreenCaptureService.currentState == ScreenShareState.PAUSED) "Screen Vision paused hai. Floating control se resume karo."
                 else "Screen Vision abhi active nahi hai."
@@ -1540,6 +1570,7 @@ class MyraVoiceService : Service() {
                 when (result) {
                     is FreshFrameResult.Unavailable -> {
                         voiceLog("screen_frame_unavailable reason=${result.reason} screen_query_id=${result.query.queryId} screen_session_id=${result.query.sessionId}")
+                        voiceLog("screen_query_terminal screenQueryId=${result.query.queryId} state=CAPTURE_FAILED reason=${result.reason}")
                         speakScreenUnavailable("Fresh screen frame nahi mili. Ek baar phir try karo.")
                     }
                     is FreshFrameResult.Ready -> {
@@ -1548,8 +1579,37 @@ class MyraVoiceService : Service() {
                             voiceLog("screen_query_result_dropped_stale screen_query_id=${result.query.queryId} screen_session_id=${result.query.sessionId} reason=session_invalid_before_send")
                             return@post
                         }
+                        voiceLog("screen_query_state screenQueryId=${result.query.queryId} state=FRAME_SELECTED frameId=${frame.frameId}")
+                        val accessibility = AccessibilityHelperService.instance
+                        val elements = accessibility?.visibleElements(100).orEmpty()
+                        val privacyResult = ScreenFramePrivacyFilter.apply(
+                            jpeg = frame.bytes,
+                            elements = elements,
+                            screenWidth = resources.displayMetrics.widthPixels,
+                            screenHeight = resources.displayMetrics.heightPixels,
+                            enabled = screenVisionPreferences.sensitiveContentProtection
+                        )
+                        if (privacyResult is ScreenPrivacyResult.Blocked) {
+                            voiceLog(
+                                "screen_privacy_filter screenQueryId=${result.query.queryId} frameId=${frame.frameId} " +
+                                    "sensitiveProtectionEnabled=true sensitiveScanResult=SENSITIVE sensitiveCategoryDetected=${privacyResult.categories} " +
+                                    "sensitiveRegionCount=0 redactionApplied=false fullFrameBlocked=true blockReason=${privacyResult.reason} safePixelsPreserved=false"
+                            )
+                            voiceLog("screen_query_terminal screenQueryId=${result.query.queryId} state=REJECTED_PRIVACY")
+                            speakScreenPrivacyBlocked()
+                            return@post
+                        }
+                        val allowed = privacyResult as ScreenPrivacyResult.Allowed
+                        voiceLog(
+                            "screen_privacy_filter screenQueryId=${result.query.queryId} frameId=${frame.frameId} " +
+                                "sensitiveProtectionEnabled=${screenVisionPreferences.sensitiveContentProtection} " +
+                                "sensitiveScanResult=${if (allowed.regionCount > 0) "REDACTED" else "SAFE"} " +
+                                "sensitiveCategoryDetected=${allowed.categories} sensitiveRegionCount=${allowed.regionCount} " +
+                                "redactionApplied=${allowed.redactionApplied} fullFrameBlocked=false blockReason=none safePixelsPreserved=true"
+                        )
                         screenResponseActive = true
                         screenResponseHasContent = false
+                        screenResponseStartedLogged = false
                         screenResponseGenerationComplete = false
                         screenResponseTextCommitted = false
                         screenResponseUserTurnId = result.query.userTurnId
@@ -1563,7 +1623,9 @@ class MyraVoiceService : Service() {
                         screenResponseQueryId = result.query.queryId
                         screenFreshFrameCapturedAt = frame.capturedAt
                         val now = android.os.SystemClock.elapsedRealtime()
-                        val ui = AccessibilityHelperService.instance?.visibleScreenSummary().orEmpty()
+                        val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }.joinToString("\n") {
+                            "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]${if (it.clickable) " clickable" else ""}"
+                        }.take(12_000)
                         screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
                         voiceLog(
                             "frame_used_for_query screen_query_id=${result.query.queryId} userTurnId=${result.query.userTurnId} " +
@@ -1574,18 +1636,25 @@ class MyraVoiceService : Service() {
                                 "intentToFrameMs=${(now - screenQuestionDetectedAt).coerceAtLeast(0L)} captureToEncodeMs=${frame.encodedAt - frame.capturedAt} " +
                                 "frameToGeminiSendMs=${(screenFrameSentAt - frame.encodedAt).coerceAtLeast(0L)} frameSentToGeminiAt=$screenFrameSentAt"
                         )
+                        voiceLog("screen_query_state screenQueryId=${result.query.queryId} state=SENT frameId=${frame.frameId}")
                         live?.sendImage(
-                            frame.bytes, "image/jpeg",
-                            "$question\nThis image is the exact fresh Android screen for query ${result.query.queryId}. " +
-                                "Screen sharing is ACTIVE and this frame is valid. Answer only from THIS frame and these current accessibility elements:\n$ui\n" +
-                                "Never say screen sharing is off. Do not use older visual context. Keep the spoken answer to one or two complete sentences."
+                            allowed.bytes, "image/jpeg",
+                            "$question\nDescribe only the newest supplied screen frame for query ${result.query.queryId}. " +
+                                "Do not answer from older visual context. If text is readable, summarize only the visible page; never invent hidden or offscreen content. " +
+                                "Screen sharing is ACTIVE. Current safe accessibility elements:\n$ui\n" +
+                                "If uncertain, say exactly what is uncertain. Keep the spoken answer to one or two complete sentences."
                         )
+                        mainHandler.postDelayed({
+                            if (screenResponseActive && screenResponseQueryId == result.query.queryId && !screenResponseHasContent) {
+                                voiceLog("screen_query_orphaned screenQueryId=${result.query.queryId} lastState=SENT userTurnId=${result.query.userTurnId}")
+                            }
+                        }, SCREEN_QUERY_DIAGNOSTIC_TIMEOUT_MS)
                     }
                 }
             }
         }
         if (query == null) speakScreenUnavailable("Screen Vision initialize ho raha hai. Ek baar phir try karo.")
-        else voiceLog("screen_query_created screen_query_id=${query.queryId} screen_session_id=${query.sessionId} userTurnId=$userTurnId")
+        else voiceLog("screen_query_created screen_query_id=${query.queryId} screen_session_id=${query.sessionId} userTurnId=$userTurnId state=CREATED")
     }
 
     private fun armScreenQuestion(question: String, userTurnId: Long, source: String) {
@@ -1616,6 +1685,7 @@ class MyraVoiceService : Service() {
                 "intentToDispatchMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
         )
         earlyScreenQueryAwaitingFinalTranscript = true
+        earlyScreenQueryDispatchedTurnId = turnId
         beginFreshScreenQuery(question, turnId)
         armedScreenQuestion = ""
     }
@@ -1623,6 +1693,7 @@ class MyraVoiceService : Service() {
     private fun speakScreenUnavailable(message: String) {
         screenResponseActive = false
         screenResponseHasContent = false
+        screenResponseStartedLogged = false
         screenResponseGenerationComplete = false
         screenResponseTextCommitted = false
         screenResponseUserTurnId = 0L
@@ -1636,10 +1707,19 @@ class MyraVoiceService : Service() {
         queueLocalSpeech(message, allowUntranscribedAudio = true)
     }
 
+    private fun speakScreenPrivacyBlocked() {
+        val message = "Sensitive information visible hai, isliye main screen details read nahi kar rahi."
+        listener?.onMyraText(message, true)
+        emitState(message)
+        queueLocalSpeech(message, allowUntranscribedAudio = true)
+    }
+
     private fun finishScreenResponse(reason: String) {
+        voiceLog("screen_query_terminal screenQueryId=$screenResponseQueryId state=${if (reason == "real_user_barge_in") "CANCELLED_REAL_BARGE_IN" else "COMPLETED"} reason=$reason")
         voiceLog("screen_response_playback_end screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId reason=$reason")
         screenResponseActive = false
         screenResponseHasContent = false
+        screenResponseStartedLogged = false
         screenResponseGenerationComplete = false
         screenResponseTextCommitted = false
         screenResponseUserTurnId = 0L
@@ -2407,6 +2487,7 @@ class MyraVoiceService : Service() {
             armedScreenQuestionTurnId = 0L
             armedScreenQuestionDetectedAt = 0L
             earlyScreenQueryAwaitingFinalTranscript = false
+            earlyScreenQueryDispatchedTurnId = 0L
         }
     }
 
@@ -2702,6 +2783,7 @@ class MyraVoiceService : Service() {
         private const val PERSONAL_MEMORY_PAUSE_MS = 450L
         private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
         private const val LOCAL_SPEECH_AUDIO_DRAIN_MS = 800L
+        private const val SCREEN_QUERY_DIAGNOSTIC_TIMEOUT_MS = 8_000L
         private const val RELATIONSHIP_CONTEXT_MS = 45_000L
         private const val MAX_RELATIONSHIP_CONTEXT_TURNS = 3
         private const val BEST_FRIEND_CORRECTION_CONTEXT_MS = 45_000L

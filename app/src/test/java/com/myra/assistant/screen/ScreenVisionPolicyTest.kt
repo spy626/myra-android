@@ -95,6 +95,22 @@ class ScreenVisionPolicyTest {
         assertFalse(ScreenPrivacyPolicy.isMemoryWorthy("LIFE_EVENT", .99))
     }
 
+    @Test fun privacyAllowsPublicPagesAndFlagsOnlyActualSensitiveValues() {
+        assertNull(ScreenPrivacyPolicy.sensitiveCategory("Google results for AI news"))
+        assertNull(ScreenPrivacyPolicy.sensitiveCategory("Public article: New AI model launched today"))
+        assertNull(ScreenPrivacyPolicy.sensitiveCategory("YouTube video title and comments"))
+        assertEquals("OTP", ScreenPrivacyPolicy.sensitiveCategory("OTP 123456"))
+        assertEquals("PASSWORD", ScreenPrivacyPolicy.sensitiveCategory("Password: secret"))
+        assertEquals("BANK_ACCOUNT", ScreenPrivacyPolicy.sensitiveCategory("Bank account number 1234567890"))
+        assertEquals("CARD", ScreenPrivacyPolicy.sensitiveCategory("Card number 4111 1111 1111 1111"))
+    }
+
+    @Test fun armedButUndispatchedScreenQuestionStillDispatchesAtFinalBoundary() {
+        assertTrue(ScreenQueryDispatchPolicy.shouldDispatch(false, dispatchedTurnId = 0, currentTurnId = 46))
+        assertFalse(ScreenQueryDispatchPolicy.shouldDispatch(false, dispatchedTurnId = 46, currentTurnId = 46))
+        assertFalse(ScreenQueryDispatchPolicy.shouldDispatch(true, dispatchedTurnId = 0, currentTurnId = 46))
+    }
+
     @Test fun sharingLifecycleRejectsImpossibleTransitions() {
         val machine = ScreenShareStateMachine()
         assertFalse(machine.transition(ScreenShareState.ACTIVE))

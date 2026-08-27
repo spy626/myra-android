@@ -99,7 +99,7 @@ class AudioEngine(private val context: Context) {
                         when (detector.update(level, dynamicStart)) {
                             SpeechActivityEvent.STARTED -> {
                                 if (mediaActive && !speaking.get()) {
-                                    mediaAwareVadGate.onEnergyStarted()
+                                    mediaAwareVadGate.onEnergyStarted(energy = level)
                                     voiceLog(
                                         "vad_decision vadEnergy=$level playbackActive=false mediaActive=true probableMediaLeak=true " +
                                             "vadState=POSSIBLE_MEDIA vadDecision=WAIT_FOR_ASR vadConfirmationReason=media_requires_transcript"
@@ -264,9 +264,9 @@ class AudioEngine(private val context: Context) {
     }
     fun setBargeInEnabled(value: Boolean) { bargeInEnabled.set(value) }
     /** Called only when Gemini ASR emits meaningful text over an active media candidate. */
-    fun confirmMediaSpeechFromTranscript() {
-        if (mediaAwareVadGate.confirmFromTranscript() == MediaAwareVadGate.Result.CONFIRMED_USER) {
-            voiceLog("vad_decision mediaActive=true vadState=CONFIRMED_USER realUserConfirmed=true vadConfirmationReason=asr_text_emerged")
+    fun confirmMediaSpeechFromTranscript(text: String = "") {
+        if (mediaAwareVadGate.confirmFromTranscript(text) == MediaAwareVadGate.Result.CONFIRMED_USER) {
+            voiceLog("vad_decision mediaActive=true vadState=CONFIRMED_USER realUserConfirmed=true vadConfirmationReason=validated_asr_intent candidateId=${mediaAwareVadGate.candidateId} transcriptChars=${text.length}")
             onSpeechActivityChanged?.invoke(true)
         }
     }

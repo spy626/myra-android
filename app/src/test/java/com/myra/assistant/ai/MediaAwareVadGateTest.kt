@@ -12,8 +12,11 @@ class MediaAwareVadGateTest {
 
     @Test fun meaningfulAsrEvidenceConfirmsRealUserOverMedia() {
         val gate = MediaAwareVadGate()
-        gate.onEnergyStarted()
-        assertEquals(MediaAwareVadGate.Result.CONFIRMED_USER, gate.confirmFromTranscript())
+        gate.onEnergyStarted(now = 100, energy = .7f)
+        assertEquals(MediaAwareVadGate.Result.CONFIRMED_USER, gate.confirmFromTranscript("Abhi kya dikh raha hai?"))
+        assertEquals("Abhi kya dikh raha hai?", gate.transcriptEvidence)
+        assertEquals(100, gate.startedAt)
+        assertEquals(.7f, gate.peakEnergy, 0.001f)
         assertEquals(MediaAwareVadGate.Result.CONFIRMED_USER, gate.onEnergyEnded())
     }
 
