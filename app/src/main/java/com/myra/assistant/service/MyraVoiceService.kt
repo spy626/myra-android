@@ -55,6 +55,7 @@ import com.myra.assistant.MyApplication
 import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.voice.LocalSpeechGate
+import com.myra.assistant.voice.FinalTranscriptDisplayFormatter
 import com.myra.assistant.voice.PhantomTranscriptFilter
 import com.myra.assistant.voice.RomanHinglishFormatter
 import com.myra.assistant.voice.VoiceResponseFormatter
@@ -623,20 +624,27 @@ class MyraVoiceService : Service() {
                 pendingDetectedPersonalMemory = null
                 val userText = input.toString().trim(); val myraText = output.toString().trim()
                 val finalInputTranscriptAt = android.os.SystemClock.elapsedRealtime()
+                val finalDisplay = finalTranscriptDisplay(userText)
                 val normalizedFinalUserText = CorrectionTranscriptNormalizer.normalize(
                     userText,
                     romanDisplayText(userText)
                 )
-                val displayResolution = if (
-                    pendingBestFriendCorrectionOldName != null &&
-                    android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
-                ) ClarifiedPersonNameResolver.resolve(normalizedFinalUserText) else ClarifiedNameResult.Unclear
-                val displayedFinalUserText = (displayResolution as? ClarifiedNameResult.Accepted)?.name
-                    ?: normalizedFinalUserText
+                // Display comes only from the immutable FINAL transcript. A clarification
+                // resolver may drive the memory transaction, but must never rewrite the
+                // red bubble using a competing canonical-name result.
+                val displayedFinalUserText = finalDisplay.display
                 voiceLog(
                     "final_input_transcript raw=${userText.take(160)} " +
                         "normalized=${normalizedFinalUserText.take(160)} " +
                         "display=${displayedFinalUserText.take(160)} finalInputTranscriptAt=$finalInputTranscriptAt"
+                )
+                voiceLog(
+                    "final_transcript_display turnId=$activeTurnId utteranceId=${transcriptSessionId}:$activeTurnId " +
+                        "raw=${userText.take(160)} transliterated=${finalDisplay.transliterated.take(160)} " +
+                        "display=${displayedFinalUserText.take(160)} " +
+                        "latinWordsPreserved=${finalDisplay.latinWordsPreserved} " +
+                        "properNameProtected=${finalDisplay.properNameProtected} " +
+                        "ruleIds=${finalDisplay.appliedRuleIds.joinToString(",")}"
                 )
                 if (incompleteActionFragmentTurn &&
                     CommandParser.isLikelyIncompleteActionFragment(userText)
@@ -1877,6 +1885,12 @@ class MyraVoiceService : Service() {
         val transliterated = romanTransliterator?.transliterate(value)?.trim().orEmpty()
             .ifBlank { value.trim() }
         return RomanHinglishFormatter.format(transliterated)
+    }
+
+    private fun finalTranscriptDisplay(value: String): FinalTranscriptDisplayFormatter.Result {
+        return FinalTranscriptDisplayFormatter.format(value) { token ->
+            romanTransliterator?.transliterate(token)?.trim().orEmpty().ifBlank { token }
+        }
     }
 
     private fun contextualRelationshipCandidate(currentTurn: String): MemoryCandidate? {
