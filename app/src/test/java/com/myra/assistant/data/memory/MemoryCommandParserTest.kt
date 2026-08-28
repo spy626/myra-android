@@ -35,6 +35,13 @@ class MemoryCommandParserTest {
         assertEquals(MemoryCategory.IDENTITY, command.candidate.category)
         assertEquals("identity:age", command.candidate.stableKey)
     }
+
+    @Test fun explicitResponseStyleUpdatesSameStableKey() {
+        val short = MemoryCommandParser.parse("Remember that I prefer short answers") as MemoryCommand.Remember
+        val detailed = MemoryCommandParser.parse("Remember that I prefer detailed responses") as MemoryCommand.Remember
+        assertEquals("preference:response_style", short.candidate.stableKey)
+        assertEquals(short.candidate.stableKey, detailed.candidate.stableKey)
+    }
     @Test fun parsesNaturalRecallVariants() {
         val variants = listOf(
             "What remember about me",

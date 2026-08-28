@@ -20,6 +20,10 @@ import com.myra.assistant.ai.HandsFreeMediaGuard
 import com.myra.assistant.ai.LyraPlaybackCapturePolicy
 import com.myra.assistant.ai.LiveTranscriptAssembler
 import com.myra.assistant.ai.MediaSpeechCoherencePolicy
+import com.myra.assistant.brain.BrainDecision
+import com.myra.assistant.brain.LyraBrainCoordinator
+import com.myra.assistant.brain.ScreenTargetReference
+import com.myra.assistant.brain.ScrollDirection as BrainScrollDirection
 import com.myra.assistant.data.memory.AutomaticMemoryChange
 import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
 import com.myra.assistant.data.memory.BestFriendNameCorrectionParser
@@ -120,6 +124,7 @@ class MyraVoiceService : Service() {
     private val input = StringBuilder()
     private val output = StringBuilder()
     private val commandProbe = StringBuilder()
+    private val brain = LyraBrainCoordinator()
     private var lastUserIntentText = ""
     private val recentRelationshipTurns = mutableListOf<Pair<Long, String>>()
     private var lastSavedBestFriendName: String? = null
@@ -990,6 +995,42 @@ class MyraVoiceService : Service() {
                         display = displayedFinalUserText
                     )
                 }
+                val brainDecision = brain.interpret(normalizedFinalUserText)
+                voiceLog(
+                    "brain_decision turnId=$activeTurnId intent=${LyraBrainCoordinator.classify(normalizedFinalUserText)} " +
+                        "decision=${brainDecision.javaClass.simpleName} state=${brain.snapshot()}"
+                )
+                when (brainDecision) {
+                    is BrainDecision.Cancel -> {
+                        handleBrainCancellation(brainDecision.taskToken)
+                        resetTurnBuffers("brain_task_cancelled")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
+                    is BrainDecision.ScrollThenOpenVideo -> {
+                        executeBrainMultiStep(brainDecision)
+                        resetTurnBuffers("brain_multi_step_started")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
+                    is BrainDecision.ScreenAction -> {
+                        executeContextualScreenAction(brainDecision.target)
+                        resetTurnBuffers("brain_contextual_screen_action")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
+                    is BrainDecision.Clarify -> {
+                        suppressModelForTurn = true
+                        localCommandExecutedThisTurn = true
+                        listener?.onMyraText(brainDecision.message)
+                        emitState(brainDecision.message)
+                        queueLocalSpeech(brainDecision.message, allowUntranscribedAudio = true)
+                        resetTurnBuffers("brain_reference_clarification")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
+                    BrainDecision.PassThrough -> Unit
+                }
                 val screenIntent = ScreenVisionIntentParser.parse(normalizedFinalUserText)
                 if (screenIntent != null) {
                     if (ScreenQueryDispatchPolicy.shouldDispatch(
@@ -1572,13 +1613,18 @@ class MyraVoiceService : Service() {
             live?.sendToolResponse(id, "perform_screen_action", false, "No explicit visible-screen action was requested")
             return
         }
-        val target = args.optString("target_text").trim().takeIf { it.isNotBlank() }
-        val position = args.optString("position").trim().takeIf { it.isNotBlank() && it != "unspecified" }
-        val ordinal = args.optInt("ordinal", 0).takeIf { it > 0 }
-        if (target == null && position == null && ordinal == null) {
+        val resolvedTarget = brain.resolveScreenTarget(
+            args.optString("target_text"),
+            args.optString("position"),
+            args.optInt("ordinal", 0)
+        )
+        if (resolvedTarget == null) {
             live?.sendToolResponse(id, "perform_screen_action", false, "Visible target is ambiguous; ask the user to choose")
             return
         }
+        val target = resolvedTarget.targetText
+        val position = resolvedTarget.position
+        val ordinal = resolvedTarget.ordinal
         val accessibility = AccessibilityHelperService.instance
         if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
             live?.sendToolResponse(id, "perform_screen_action", false, "LYRA Accessibility is disabled")
@@ -1591,6 +1637,7 @@ class MyraVoiceService : Service() {
         val accepted = accessibility.tapVisibleTarget(target, position, ordinal)
         voiceLog("screen_action_tap_attempt target=$target accepted=$accepted screen_session_id=$actionSessionId")
         if (!accepted) {
+            brain.recordScreenAction(resolvedTarget, false)
             live?.sendToolResponse(id, "perform_screen_action", false, "No unambiguous clickable target matched the current screen")
             return
         }
@@ -1607,6 +1654,7 @@ class MyraVoiceService : Service() {
                             "postTapFrameId=${post?.frameId ?: 0L} frameChanged=$frameChanged accessibilityChanged=$accessibilityChanged"
                     )
                     voiceLog("screen_action_verification_result target=$target tapAccepted=true verified=$verified")
+                    brain.recordScreenAction(resolvedTarget, verified)
                     live?.sendToolResponse(
                         id, "perform_screen_action", verified,
                         if (verified) "The target was tapped and a new screen state was verified"
@@ -2017,6 +2065,11 @@ class MyraVoiceService : Service() {
             speak = false,
             notifyListeners = false
         )
+        brain.recordPhoneAction(
+            app = (command as? AppCommand.OpenApp)?.appName,
+            action = command.toString(),
+            success = result.success && result.verified
+        )
         val silentRepeatedScroll =
             command is AppCommand.ScrollYouTube &&
                 command.direction == null &&
@@ -2038,6 +2091,141 @@ class MyraVoiceService : Service() {
             result.spokenMessage,
             allowUntranscribedAudio = result.success && isSafeUntranscribedConfirmation(command)
         )
+    }
+
+    private fun handleBrainCancellation(taskToken: Long) {
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        waitingForFreshInputAfterCommand = true
+        pendingActionAfterLocalSpeech = null
+        pendingConfirmedCommand = null
+        pendingConfirmationExpiresAt = 0L
+        output.clear(); commandProbe.clear()
+        cancelSpeechForNewAction()
+        brain.finishTask(taskToken, true)
+        val message = "Theek hai, rok diya."
+        listener?.onMyraText(message)
+        emitState(message)
+        queueLocalSpeech(message, allowUntranscribedAudio = true)
+        voiceLog("brain_task_cancelled taskToken=$taskToken")
+    }
+
+    private fun executeBrainMultiStep(plan: BrainDecision.ScrollThenOpenVideo) {
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        waitingForFreshInputAfterCommand = true
+        cancelSpeechForNewAction()
+        val accessibility = AccessibilityHelperService.instance
+        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
+            finishBrainTask(plan.taskToken, false, "Screen Vision active nahi hai.")
+            return
+        }
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            finishBrainTask(plan.taskToken, false, "LYRA Accessibility enable karo.")
+            return
+        }
+        val down = plan.direction == BrainScrollDirection.DOWN
+        voiceLog("brain_plan_started taskToken=${plan.taskToken} plan=scroll_then_open ordinal=${plan.ordinal} direction=${plan.direction}")
+        val accepted = accessibility.scrollYouTubeVerified(down) { scrolled ->
+            mainHandler.post {
+                if (!brain.isTaskCurrent(plan.taskToken)) return@post
+                if (!scrolled) {
+                    finishBrainTask(plan.taskToken, false, "Screen scroll nahi hua.")
+                    return@post
+                }
+                ScreenCaptureService.requestFreshFrame(activeTurnId) { fresh ->
+                    mainHandler.post {
+                        if (!brain.isTaskCurrent(plan.taskToken)) return@post
+                        val beforeFrame = (fresh as? FreshFrameResult.Ready)?.frame
+                        val beforeSignature = accessibility.visibleScreenSignature()
+                        val tapped = accessibility.tapVisibleYouTubeVideo(plan.ordinal)
+                        voiceLog("brain_plan_step taskToken=${plan.taskToken} step=tap ordinal=${plan.ordinal} accepted=$tapped")
+                        if (!tapped) {
+                            finishBrainTask(plan.taskToken, false, "Second video clear nahi mila.")
+                            return@post
+                        }
+                        mainHandler.postDelayed({
+                            ScreenCaptureService.requestFreshFrame(activeTurnId) { postResult ->
+                                mainHandler.post {
+                                    if (!brain.isTaskCurrent(plan.taskToken)) return@post
+                                    val postFrame = (postResult as? FreshFrameResult.Ready)?.frame
+                                    val accessibilityChanged = beforeSignature.isNotBlank() &&
+                                        accessibility.visibleScreenSignature() != beforeSignature
+                                    val frameChanged = beforeFrame != null && postFrame != null &&
+                                        postFrame.sessionId == beforeFrame.sessionId &&
+                                        postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
+                                    val verified = accessibilityChanged || frameChanged
+                                    brain.recordScreenAction(
+                                        ScreenTargetReference(targetText = "video", ordinal = plan.ordinal),
+                                        verified
+                                    )
+                                    finishBrainTask(
+                                        plan.taskToken,
+                                        verified,
+                                        if (verified) "Video open ho gaya."
+                                        else "Tap hua, lekin video open hona verify nahi hua."
+                                    )
+                                }
+                            }
+                        }, 400L)
+                    }
+                }
+            }
+        }
+        if (!accepted) finishBrainTask(plan.taskToken, false, "YouTube scroll start nahi hua.")
+    }
+
+    private fun executeContextualScreenAction(target: ScreenTargetReference) {
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        waitingForFreshInputAfterCommand = true
+        cancelSpeechForNewAction()
+        val accessibility = AccessibilityHelperService.instance
+        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
+            finishBrainTask(brain.snapshot().taskToken, false, "Screen Vision active nahi hai.")
+            return
+        }
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            finishBrainTask(brain.snapshot().taskToken, false, "LYRA Accessibility enable karo.")
+            return
+        }
+        val beforeSignature = accessibility.visibleScreenSignature()
+        val beforeFrame = ScreenCaptureService.currentFrame()
+        val accepted = accessibility.tapVisibleTarget(target.targetText, target.position, target.ordinal)
+        if (!accepted) {
+            brain.recordScreenAction(target, false)
+            finishBrainTask(brain.snapshot().taskToken, false, "Doosra target clear nahi mila.")
+            return
+        }
+        mainHandler.postDelayed({
+            ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
+                mainHandler.post {
+                    val postFrame = (result as? FreshFrameResult.Ready)?.frame
+                    val accessibilityChanged = beforeSignature.isNotBlank() &&
+                        accessibility.visibleScreenSignature() != beforeSignature
+                    val frameChanged = beforeFrame != null && postFrame != null &&
+                        postFrame.sessionId == beforeFrame.sessionId &&
+                        postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
+                    val verified = accessibilityChanged || frameChanged
+                    brain.recordScreenAction(target, verified)
+                    finishBrainTask(
+                        brain.snapshot().taskToken,
+                        verified,
+                        if (verified) "Doosra wala open ho gaya."
+                        else "Tap hua, lekin screen change verify nahi hua."
+                    )
+                }
+            }
+        }, 400L)
+    }
+
+    private fun finishBrainTask(taskToken: Long, success: Boolean, message: String) {
+        if (!brain.isTaskCurrent(taskToken)) return
+        brain.finishTask(taskToken, success)
+        listener?.onMyraText(message, !success)
+        emitState(message)
+        queueLocalSpeech(message, allowUntranscribedAudio = success)
+        voiceLog("brain_task_finished taskToken=$taskToken success=$success message=${message.take(100)}")
     }
 
     private fun executeVerifiedScroll(command: AppCommand.ScrollYouTube) {

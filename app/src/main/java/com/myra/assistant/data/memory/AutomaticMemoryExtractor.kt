@@ -45,7 +45,7 @@ object AutomaticMemoryExtractor {
 
     private fun englishPreference(text: String): String? =
         Regex(
-            """^(?:i|i\s+really)\s+(?:like|love|prefer|enjoy)\s+(.+)$""",
+            """^(?:i|i\s+(?:really|always))\s+(?:like|love|prefer|enjoy)\s+(.+)$""",
             RegexOption.IGNORE_CASE
         ).matchEntire(text)?.groupValues?.get(1)
 
@@ -69,10 +69,14 @@ object AutomaticMemoryExtractor {
 
     private fun preference(rawSubject: String): MemoryCandidate? {
         val subject = cleanSubject(rawSubject)?.let(::canonicalSubject) ?: return null
+        val responseStyle = Regex(
+            """^(?:short|concise|brief|detailed|long)\s+(?:answer|answers|reply|replies|response|responses)$""",
+            RegexOption.IGNORE_CASE
+        ).matches(subject)
         return MemoryCandidate(
             category = MemoryCategory.PREFERENCE,
-            fact = "Zopy likes $subject",
-            stableKey = "preference:likes:${normalize(subject)}",
+            fact = if (responseStyle) "Zopy prefers $subject" else "Zopy likes $subject",
+            stableKey = if (responseStyle) "preference:response_style" else "preference:likes:${normalize(subject)}",
             sensitivity = MemorySensitivity.LOW,
             confidence = 0.93,
             source = "automatic_conversation"

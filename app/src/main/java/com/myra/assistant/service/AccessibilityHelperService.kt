@@ -405,6 +405,10 @@ class AccessibilityHelperService : AccessibilityService() {
         return clicked
     }
 
+    /** Reuses the existing YouTube accessibility candidate map; ordinal is one-based. */
+    fun tapVisibleYouTubeVideo(ordinal: Int): Boolean =
+        clickVisibleYouTubeVideo(afterPlayer = false, selectionIndex = (ordinal - 1).coerceAtLeast(0))
+
     private fun findCurrentVideoQuery(root: AccessibilityNodeInfo, screenHeight: Int): String? {
         val candidates = mutableListOf<Pair<Int, String>>()
         fun inspect(node: AccessibilityNodeInfo) {

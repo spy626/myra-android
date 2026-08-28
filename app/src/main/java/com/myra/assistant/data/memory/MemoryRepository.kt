@@ -103,9 +103,8 @@ class MemoryRepository(private val dao: MemoryDao) {
     }
 
     suspend fun relevant(query: String, limit: Int = 5): List<MemoryEntity> {
-        val normalized = normalize(query)
-        if (normalized.length < 2) return dao.recent(limit.coerceIn(1, 10))
-        return dao.search(normalized, limit.coerceIn(1, 10))
+        val active = dao.recent(100)
+        return MemoryRelevanceSelector.select(query, active, limit)
     }
 
     suspend fun logActiveBestFriends(stage: String) {

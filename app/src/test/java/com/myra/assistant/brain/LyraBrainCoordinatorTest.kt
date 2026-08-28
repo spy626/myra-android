@@ -1,0 +1,59 @@
+package com.myra.assistant.brain
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class LyraBrainCoordinatorTest {
+    @Test fun classifiesEnglishHindiAndHinglishIntents() {
+        assertEquals(BrainIntent.PHONE_ACTION, LyraBrainCoordinator.classify("Open YouTube"))
+        assertEquals(BrainIntent.SCREEN_ANALYSIS, LyraBrainCoordinator.classify("What's on my screen?"))
+        assertEquals(BrainIntent.MEMORY, LyraBrainCoordinator.classify("Remember that I like this"))
+        assertEquals(BrainIntent.SCREEN_ACTION, LyraBrainCoordinator.classify("Jo beech mein hai usko open karo"))
+        assertEquals(BrainIntent.CANCELLATION, LyraBrainCoordinator.classify("No, stop"))
+    }
+
+    @Test fun plansScrollThenSecondVideoAsOneCancellableTask() {
+        val brain = LyraBrainCoordinator()
+        val decision = brain.interpret("Scroll down and open the second video")
+            as BrainDecision.ScrollThenOpenVideo
+
+        assertEquals(ScrollDirection.DOWN, decision.direction)
+        assertEquals(2, decision.ordinal)
+        assertTrue(brain.isTaskCurrent(decision.taskToken))
+    }
+
+    @Test fun cancellationInvalidatesPendingMultiStepTask() {
+        val brain = LyraBrainCoordinator()
+        val plan = brain.interpret("Scroll down and open the second video")
+            as BrainDecision.ScrollThenOpenVideo
+        val cancellation = brain.interpret("Never mind") as BrainDecision.Cancel
+
+        assertFalse(brain.isTaskCurrent(plan.taskToken))
+        assertTrue(brain.isTaskCurrent(cancellation.taskToken))
+    }
+
+    @Test fun otherOneUsesPreviousOrderedTarget() {
+        val brain = LyraBrainCoordinator()
+        brain.resolveScreenTarget(targetText = null, position = "center", ordinal = 1)
+        brain.recordScreenAction(ScreenTargetReference(position = "center", ordinal = 1), true)
+
+        val decision = brain.interpret("Nahi, doosra wala") as BrainDecision.ScreenAction
+        assertEquals("center", decision.target.position)
+        assertEquals(2, decision.target.ordinal)
+        assertTrue(decision.contextual)
+    }
+
+    @Test fun ambiguousOtherReferenceAsksInsteadOfGuessing() {
+        val brain = LyraBrainCoordinator()
+        assertTrue(brain.interpret("Doosra wala") is BrainDecision.Clarify)
+    }
+
+    @Test fun repeatedReferenceReusesKnownTargetOnly() {
+        val brain = LyraBrainCoordinator()
+        brain.resolveScreenTarget("AI agents", null, 1)
+        val repeat = brain.interpret("Do that again") as BrainDecision.ScreenAction
+        assertEquals("AI agents", repeat.target.targetText)
+    }
+}

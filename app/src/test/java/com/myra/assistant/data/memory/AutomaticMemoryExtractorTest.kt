@@ -69,4 +69,13 @@ class AutomaticMemoryExtractorTest {
             AutomaticMemoryExtractor.extract("mujhe ghumana pasand hai")?.fact
         )
     }
+
+    @Test fun responseStyleUsesOneReplaceableStableKey() {
+        val short = AutomaticMemoryExtractor.extract("I always prefer short answers")
+        val detailed = AutomaticMemoryExtractor.extract("I prefer detailed responses")
+
+        assertEquals("preference:response_style", short?.stableKey)
+        assertEquals("Zopy prefers short answers", short?.fact)
+        assertEquals("preference:response_style", detailed?.stableKey)
+    }
 }

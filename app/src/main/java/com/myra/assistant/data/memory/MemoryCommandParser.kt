@@ -89,6 +89,14 @@ object MemoryCommandParser {
 
     private fun stableKey(category: MemoryCategory, normalized: String): String {
         if (category == MemoryCategory.IDENTITY && Regex("\\b(?:age|years?\\s+old|saal)\\b").containsMatchIn(normalized)) return "identity:age"
+        if (category == MemoryCategory.PREFERENCE &&
+            Regex("\\b(?:short|concise|brief|detailed|long)\\s+(?:answer|answers|reply|replies|response|responses)\\b")
+                .containsMatchIn(normalized)
+        ) return "preference:response_style"
+        if (category == MemoryCategory.PROJECT &&
+            Regex("\\b(?:project|app|website)\\b.*\\b(?:called|named|name is|naam)\\b")
+                .containsMatchIn(normalized)
+        ) return "project:current:name"
         return category.name.lowercase(Locale.ROOT) + ":" + normalized
     }
 
