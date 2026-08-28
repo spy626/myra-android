@@ -69,6 +69,10 @@ import com.myra.assistant.screen.ScreenQueryDispatchPolicy
 import com.myra.assistant.screen.ScreenQueryTimingPolicy
 import com.myra.assistant.screen.ScreenShareState
 import com.myra.assistant.screen.ScreenVisionIntentParser
+import com.myra.assistant.screen.InstantScreenQuery
+import com.myra.assistant.screen.ScreenCacheUse
+import com.myra.assistant.screen.ScreenContextStore
+import com.myra.assistant.screen.HotScreenCachePolicy
 import com.myra.assistant.screen.ScreenVisionPreferences
 import com.myra.assistant.screen.FreshFrameResult
 import com.myra.assistant.screen.ScreenResponseBinding
@@ -221,6 +225,9 @@ class MyraVoiceService : Service() {
     private var localSpeechFirstAudioAcceptedAt = 0L
     private var localSpeechFirstPlaybackWriteAt = 0L
     private var localSpeechLastAudioReceivedAt = 0L
+    private var instantScreenQueryId = ""
+    private var instantScreenQueryStartedAt = 0L
+    private var instantScreenCacheAgeMs = 0L
     private var modelAudioDroppedBeforeTurnCompleteCount = 0
     private var modelAudioDroppedBeforeTurnCompleteBytes = 0L
     private var acceptedModelGenerationForTurn = 0L
@@ -407,6 +414,15 @@ class MyraVoiceService : Service() {
                             "controlled_first_audio_received turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
                                 "firstAudioReceivedAt=$audioReceivedAt requestToFirstAudioMs=${audioReceivedAt - localSpeechRequestSentAt}"
                         )
+                        if (instantScreenQueryId.isNotBlank()) {
+                            voiceLog(
+                                "TOTAL_SCREEN_RESPONSE screenQueryId=$instantScreenQueryId route=HOT_SCREEN_CACHE " +
+                                    "voice_ms=-1 capture_ms=0 accessibility_ms=0 vision_ms=0 gemini_ms=${audioReceivedAt - localSpeechRequestSentAt} " +
+                                    "tts_ms=${audioReceivedAt - localSpeechRequestSentAt} total_ms=${audioReceivedAt - instantScreenQueryStartedAt} " +
+                                    "frame_age_ms=$instantScreenCacheAgeMs"
+                            )
+                            instantScreenQueryId = ""
+                        }
                     }
                     localSpeechLastAudioReceivedAt = audioReceivedAt
                     if (localSpeechStreamedDirectly) {
@@ -1720,6 +1736,24 @@ class MyraVoiceService : Service() {
             return
         }
         val contextRequestedAt = android.os.SystemClock.elapsedRealtime()
+        val cachedContext = ScreenContextStore.freshSnapshot(
+            ScreenCaptureService.session.sessionId, contextRequestedAt, ScreenCacheUse.ACTION
+        )
+        val cachedFrame = ScreenCaptureService.session.latestFrame?.takeIf {
+            cachedContext != null && it.sessionId == cachedContext.screenSessionId &&
+                it.frameId == cachedContext.frameId &&
+                (contextRequestedAt - it.capturedAt).coerceAtLeast(0L) <= HotScreenCachePolicy.maxAgeMs(
+                    cachedContext.currentPackage, cachedContext.lastScrollAt, contextRequestedAt, ScreenCacheUse.ACTION
+                )
+        }
+        if (cachedFrame != null) {
+            voiceLog(
+                "screen_action_context_ready target=$target source=HOT_SCREEN_CACHE frame_id=${cachedFrame.frameId} " +
+                    "frame_age_ms=${(contextRequestedAt - cachedFrame.capturedAt).coerceAtLeast(0L)} contextWaitMs=0"
+            )
+            performScreenActionTool(id, resolvedTarget, accessibility, cachedFrame)
+            return
+        }
         val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
             mainHandler.post {
                 val ready = result as? FreshFrameResult.Ready
@@ -1852,6 +1886,7 @@ class MyraVoiceService : Service() {
             )
             return
         }
+        if (tryInstantScreenAnswer(question, userTurnId)) return
         val query = ScreenCaptureService.requestFreshFrame(userTurnId) { result ->
             mainHandler.post {
                 when (result) {
@@ -1948,6 +1983,51 @@ class MyraVoiceService : Service() {
         }
         if (query == null) speakScreenUnavailable("Screen Vision initialize ho raha hai. Ek baar phir try karo.")
         else voiceLog("screen_query_created screen_query_id=${query.queryId} screen_session_id=${query.sessionId} userTurnId=$userTurnId state=CREATED")
+    }
+
+    private fun tryInstantScreenAnswer(question: String, userTurnId: Long): Boolean {
+        val queryType = ScreenVisionIntentParser.parseInstantQuery(question) ?: return false
+        val now = android.os.SystemClock.elapsedRealtime()
+        val context = ScreenContextStore.freshSnapshot(
+            ScreenCaptureService.session.sessionId, now, ScreenCacheUse.QUESTION
+        ) ?: run {
+            voiceLog("FRAME_STALE userTurnId=$userTurnId route=HOT_SCREEN_CACHE fallback=VISION")
+            return false
+        }
+        val safeText = context.summary.visibleText.filter {
+            ScreenPrivacyPolicy.sensitiveCategory(it) == null
+        }
+        val app = context.summary.appName ?: context.summary.packageName?.substringAfterLast('.')
+        val answer = when (queryType) {
+            InstantScreenQuery.CURRENT_APP -> app?.let { "$it open hai." }
+            InstantScreenQuery.OVERVIEW -> {
+                val useful = safeText.filter { it.length >= 3 }.distinct().take(3)
+                when {
+                    useful.isNotEmpty() && app != null -> "$app open hai. Screen par ${useful.joinToString(", ")} dikh raha hai."
+                    useful.isNotEmpty() -> "Screen par ${useful.joinToString(", ")} dikh raha hai."
+                    app != null -> "$app open hai, lekin readable text clear nahi hai."
+                    else -> null
+                }
+            }
+        } ?: return false
+        val newestAt = maxOf(context.frameTimestamp, context.accessibilityTimestamp)
+        instantScreenQueryId = "hot-$userTurnId-${now.toString(16)}"
+        instantScreenQueryStartedAt = screenResponseSpeechEndedAt.takeIf {
+            screenQuerySpeechTurnConsistency && it > 0L
+        } ?: now
+        instantScreenCacheAgeMs = (now - newestAt).coerceAtLeast(0L)
+        voiceLog(
+            "FRAME_SELECTED screenQueryId=$instantScreenQueryId userTurnId=$userTurnId source=HOT_SCREEN_CACHE " +
+                "screen_session_id=${context.screenSessionId} frame_id=${context.frameId} frame_age_ms=$instantScreenCacheAgeMs"
+        )
+        voiceLog(
+            "TOTAL_SCREEN_RESPONSE screenQueryId=$instantScreenQueryId route=HOT_SCREEN_CACHE stage=ANSWER_READY " +
+                "voice_ms=-1 capture_ms=0 accessibility_ms=0 vision_ms=0 gemini_ms=0 tts_ms=-1 " +
+                "total_ms=${(now - instantScreenQueryStartedAt).coerceAtLeast(0L)}"
+        )
+        emitState(answer)
+        queueLocalSpeech(answer, allowUntranscribedAudio = true)
+        return true
     }
 
     private fun armScreenQuestion(question: String, userTurnId: Long, source: String) {

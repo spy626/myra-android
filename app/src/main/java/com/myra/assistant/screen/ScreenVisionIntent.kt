@@ -3,6 +3,7 @@ package com.myra.assistant.screen
 import java.util.Locale
 
 enum class ScreenVisionIntent { ANALYZE, READ, EXPLAIN, FIND_ERROR, CONTROL_TARGET }
+enum class InstantScreenQuery { OVERVIEW, CURRENT_APP }
 
 object ScreenVisionIntentParser {
     private val screenSignal = Regex(
@@ -39,5 +40,17 @@ object ScreenVisionIntentParser {
             RegexOption.IGNORE_CASE
         )
         return if (explicit.containsMatchIn(normalized)) ScreenVisionIntent.ANALYZE else null
+    }
+
+    /** Only questions answerable safely from the pre-analyzed accessibility summary. */
+    fun parseInstantQuery(text: String): InstantScreenQuery? {
+        val normalized = text.lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+        return when {
+            Regex("\\b(?:which app is open|what app is open|kaunsi app (?:open|khuli))\\b").containsMatchIn(normalized) ->
+                InstantScreenQuery.CURRENT_APP
+            Regex("\\b(?:what do you see|what is on (?:my|the) screen|kya dikh raha|kya dikh rha|screen (?:par|pe|mein|me) kya)\\b")
+                .containsMatchIn(normalized) -> InstantScreenQuery.OVERVIEW
+            else -> null
+        }
     }
 }

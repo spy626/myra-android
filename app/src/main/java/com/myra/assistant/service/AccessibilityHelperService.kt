@@ -49,7 +49,22 @@ class AccessibilityHelperService : AccessibilityService() {
     private var overlayPanel: View? = null
     private var overlayState: ScreenShareState = ScreenShareState.IDLE
     @Volatile private var accessibilitySnapshotAt: Long = 0L
-    override fun onServiceConnected() { instance = this; super.onServiceConnected(); updateScreenVisionOverlay(ScreenCaptureService.currentState) }
+    private val screenWatcherHandler = Handler(Looper.getMainLooper())
+    private val screenWatcher = object : Runnable {
+        override fun run() {
+            if (ScreenCaptureService.currentState == ScreenShareState.ACTIVE) refreshScreenContext()
+            val now = android.os.SystemClock.elapsedRealtime()
+            val scrolling = now - com.myra.assistant.screen.ScreenContextStore.snapshot().lastScrollAt <= 1_000L
+            screenWatcherHandler.postDelayed(this, if (scrolling) 300L else 1_000L)
+        }
+    }
+    override fun onServiceConnected() {
+        instance = this
+        super.onServiceConnected()
+        updateScreenVisionOverlay(ScreenCaptureService.currentState)
+        screenWatcherHandler.removeCallbacks(screenWatcher)
+        screenWatcherHandler.post(screenWatcher)
+    }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val reason = when (event?.eventType) {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> "accessibility_scroll"
@@ -60,12 +75,20 @@ class AccessibilityHelperService : AccessibilityService() {
         }
         if (reason != null) {
             accessibilitySnapshotAt = android.os.SystemClock.elapsedRealtime()
+            if (event?.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+                com.myra.assistant.screen.ScreenContextStore.markScrolling(accessibilitySnapshotAt)
+            }
             ScreenCaptureService.markScreenDirty(reason)
             refreshScreenContext(accessibilitySnapshotAt)
         }
     }
     override fun onInterrupt() = Unit
-    override fun onDestroy() { hideScreenVisionOverlay(); if (instance === this) instance = null; super.onDestroy() }
+    override fun onDestroy() {
+        screenWatcherHandler.removeCallbacks(screenWatcher)
+        hideScreenVisionOverlay()
+        if (instance === this) instance = null
+        super.onDestroy()
+    }
 
     fun updateScreenVisionOverlay(state: ScreenShareState) {
         Handler(Looper.getMainLooper()).post {
@@ -779,7 +802,8 @@ class AccessibilityHelperService : AccessibilityService() {
         }
         val elements = visibleElements(120)
         com.myra.assistant.screen.ScreenContextStore.onAccessibility(
-            ScreenCaptureService.session.sessionId, packageName, appName, elements, observedAt
+            ScreenCaptureService.session.sessionId, packageName, appName, elements, observedAt,
+            resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels
         )
         com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
             "SCREEN_CONTEXT_UPDATED screen_session_id=${ScreenCaptureService.session.sessionId} " +
