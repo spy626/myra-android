@@ -138,7 +138,13 @@ class ScreenCaptureService : Service() {
                         passiveChanged -> "passive"
                         else -> "local_cache"
                     }
-                    val record = session.publish(output.toByteArray(), captureStartedAt, encodedAt, sourceName) ?: return
+                    val accessibility = AccessibilityHelperService.instance
+                    val packageName = accessibility?.currentPackageName()
+                    val accessibilityAt = accessibility?.lastSnapshotAt() ?: 0L
+                    val record = session.publish(
+                        output.toByteArray(), captureStartedAt, encodedAt, sourceName,
+                        width, height, packageName, accessibilityAt
+                    ) ?: return
                     latestFrame = record.bytes
                     latestFrameAt = record.capturedAt
                     lastLocalCacheAt = now
@@ -146,6 +152,11 @@ class ScreenCaptureService : Service() {
                     if (explicit || passiveChanged) {
                         val frameLog = "frame_captured screen_session_id=${record.sessionId} frame_id=${record.frameId} frame_hash=${record.hash} source=${record.source} frameCapturedAt=${record.capturedAt} frameEncodedAt=${record.encodedAt} captureToEncodeMs=${record.encodedAt - record.capturedAt} bytes=${record.bytes.size}"
                         Log.d(TAG, frameLog); VoicePipelineLogger.debug(frameLog)
+                        VoicePipelineLogger.debug("FRAME_CAPTURED screen_session_id=${record.sessionId} frame_id=${record.frameId} timestamp=${record.capturedAt} source=${record.source}")
+                        VoicePipelineLogger.debug(
+                            "FRAME_CACHE_UPDATED screen_session_id=${record.sessionId} frame_id=${record.frameId} " +
+                                "timestamp=${record.capturedAt} width=${record.width} height=${record.height} package=${record.packageName}"
+                        )
                     }
                     // Only meaningful passive observations go to the periodic Gemini
                     // video transport. Local cache frames never become continuous uploads.
@@ -206,6 +217,15 @@ class ScreenCaptureService : Service() {
         AccessibilityHelperService.instance?.updateScreenVisionOverlay(state)
         listeners.forEach { it(state, latestFrame) }
         Log.d(TAG, "screen_share_state=$state frameAvailable=${latestFrame != null}")
+        val stateEvent = when (state) {
+            ScreenShareState.ACTIVE -> "MEDIA_PROJECTION_CONNECTED"
+            ScreenShareState.RESUMING -> "MEDIA_PROJECTION_RECONNECTING"
+            ScreenShareState.STOPPED, ScreenShareState.ERROR, ScreenShareState.IDLE -> "MEDIA_PROJECTION_DISCONNECTED"
+            else -> null
+        }
+        if (stateEvent != null) VoicePipelineLogger.debug(
+            "$stateEvent screen_session_id=${session.sessionId} timestamp=${android.os.SystemClock.elapsedRealtime()} state=$state"
+        )
     }
 
     private fun notification(text: String): android.app.Notification {

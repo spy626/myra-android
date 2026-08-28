@@ -41,6 +41,7 @@ class AccessibilityHelperService : AccessibilityService() {
     private var screenOverlay: View? = null
     private var overlayPanel: View? = null
     private var overlayState: ScreenShareState = ScreenShareState.IDLE
+    @Volatile private var accessibilitySnapshotAt: Long = 0L
     override fun onServiceConnected() { instance = this; super.onServiceConnected(); updateScreenVisionOverlay(ScreenCaptureService.currentState) }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val reason = when (event?.eventType) {
@@ -50,7 +51,11 @@ class AccessibilityHelperService : AccessibilityService() {
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> "accessibility_text_changed"
             else -> null
         }
-        if (reason != null) ScreenCaptureService.markScreenDirty(reason)
+        if (reason != null) {
+            accessibilitySnapshotAt = android.os.SystemClock.elapsedRealtime()
+            ScreenCaptureService.markScreenDirty(reason)
+            refreshScreenContext(accessibilitySnapshotAt)
+        }
     }
     override fun onInterrupt() = Unit
     override fun onDestroy() { hideScreenVisionOverlay(); if (instance === this) instance = null; super.onDestroy() }
@@ -647,6 +652,142 @@ class AccessibilityHelperService : AccessibilityService() {
 
     fun visibleScreenSignature(): String = visibleElements(100).joinToString("|") {
         "${it.label.lowercase(Locale.ROOT)}:${it.bounds.centerX()}:${it.bounds.centerY()}"
+    }
+
+    fun detectContentType(): com.myra.assistant.screen.ScreenContentType {
+        val root = rootInActiveWindow ?: return com.myra.assistant.screen.ScreenContentType.OTHER
+        val packageName = root.packageName?.toString().orEmpty().lowercase(Locale.ROOT)
+        if (packageName == YOUTUBE_PACKAGE || packageName.contains("youtube")) {
+            return com.myra.assistant.screen.ScreenContentType.VIDEO_PLATFORM
+        }
+        if (packageName.contains("instagram") || packageName.contains("facebook") ||
+            packageName.contains("twitter") || packageName.contains("tiktok") || packageName.contains("reddit")
+        ) return com.myra.assistant.screen.ScreenContentType.SOCIAL_FEED
+
+        val elements = visibleElements(160)
+        val text = elements.joinToString(" ") { it.label }.lowercase(Locale.ROOT)
+        val articleSignals = listOf("article", "published", "updated", "minute read", "read time", "by ")
+            .count(text::contains)
+        val meaningfulLines = articleBodyLines(elements)
+        val articleChars = meaningfulLines.sumOf(String::length)
+        val browserLike = packageName.contains("chrome") || packageName.contains("browser") || packageName.contains("firefox")
+        return when {
+            articleSignals >= 1 && articleChars >= 300 ->
+                com.myra.assistant.screen.ScreenContentType.ARTICLE
+            browserLike && articleChars >= 500 &&
+                (meaningfulLines.size >= 2 || (meaningfulLines.maxOfOrNull(String::length) ?: 0) >= 400) ->
+                com.myra.assistant.screen.ScreenContentType.ARTICLE
+            browserLike ->
+                com.myra.assistant.screen.ScreenContentType.WEB_PAGE
+            else -> com.myra.assistant.screen.ScreenContentType.OTHER
+        }
+    }
+
+    fun visibleArticleText(): List<String> = articleBodyLines(visibleElements(180))
+
+    private fun articleBodyLines(elements: List<VisibleScreenElement>): List<String> {
+        val screenHeight = resources.displayMetrics.heightPixels
+        return elements.asSequence()
+            .filter { it.bounds.top >= 0 && it.bounds.bottom <= screenHeight && it.bounds.height() > 0 }
+            .map { it.label.trim().replace(Regex("\\s+"), " ") }
+            .filter { line ->
+                line.length >= 24 && !Regex(
+                    "^(?:home|menu|search|share|sign in|log in|subscribe|comments?|related|recommended|advertisement|cookie|privacy|next|previous)$",
+                    RegexOption.IGNORE_CASE
+                ).matches(line)
+            }
+            .distinct()
+            .toList()
+    }
+
+    /** Generic adaptive article scroll. It is hard-blocked for video/social surfaces. */
+    fun scrollArticleVerified(onResult: (Boolean) -> Unit): Boolean {
+        if (detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE) return false
+        val before = visibleScreenSignature()
+        val root = rootInActiveWindow ?: return false
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val scrollables = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
+        fun collect(node: AccessibilityNodeInfo) {
+            if (node.isVisibleToUser && node.isScrollable) {
+                val bounds = Rect().also(node::getBoundsInScreen)
+                if (bounds.width() >= screenWidth * 0.55 && bounds.height() >= screenHeight * 0.35) {
+                    scrollables += bounds.width() * bounds.height() to node
+                }
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
+        }
+        collect(root)
+        val accepted = scrollables.sortedByDescending { it.first }
+            .any { (_, node) -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }
+        val gestureAccepted = if (accepted) true else {
+            val path = Path().apply {
+                moveTo(screenWidth * 0.82f, screenHeight * 0.80f)
+                // Retain roughly 25% overlap for duplicate detection.
+                lineTo(screenWidth * 0.82f, screenHeight * 0.28f)
+            }
+            dispatchGesture(
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0L, 300L)).build(),
+                null, null
+            )
+        }
+        if (!gestureAccepted) return false
+        Handler(Looper.getMainLooper()).postDelayed({
+            val changed = before.isNotBlank() && visibleScreenSignature() != before
+            if (changed) refreshScreenContext()
+            onResult(changed)
+        }, 500L)
+        return true
+    }
+
+    fun scrollArticleToBeginning(onResult: (Boolean) -> Unit): Boolean {
+        if (detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE) return false
+        fun step(remaining: Int, moved: Boolean) {
+            if (remaining <= 0) { onResult(moved); return }
+            val root = rootInActiveWindow ?: run { onResult(moved); return }
+            val before = visibleScreenSignature()
+            val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
+            fun collect(node: AccessibilityNodeInfo) {
+                if (node.isVisibleToUser && node.isScrollable) {
+                    val bounds = Rect().also(node::getBoundsInScreen)
+                    candidates += bounds.width() * bounds.height() to node
+                }
+                for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
+            }
+            collect(root)
+            val accepted = candidates.sortedByDescending { it.first }
+                .any { (_, node) -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) }
+            if (!accepted) { onResult(moved); return }
+            Handler(Looper.getMainLooper()).postDelayed({
+                val changed = before.isNotBlank() && visibleScreenSignature() != before
+                if (!changed) onResult(moved) else step(remaining - 1, true)
+            }, 300L)
+        }
+        step(12, false)
+        return true
+    }
+
+    fun currentPackageName(): String? = rootInActiveWindow?.packageName?.toString()
+    fun lastSnapshotAt(): Long = accessibilitySnapshotAt
+
+    fun refreshScreenContext(observedAt: Long = android.os.SystemClock.elapsedRealtime()) {
+        val root = rootInActiveWindow ?: return
+        val packageName = root.packageName?.toString()
+        val appName = packageName?.let { value ->
+            runCatching {
+                val info = packageManager.getApplicationInfo(value, 0)
+                packageManager.getApplicationLabel(info).toString()
+            }.getOrNull()
+        }
+        val elements = visibleElements(120)
+        com.myra.assistant.screen.ScreenContextStore.onAccessibility(
+            ScreenCaptureService.session.sessionId, packageName, appName, elements, observedAt
+        )
+        com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
+            "SCREEN_CONTEXT_UPDATED screen_session_id=${ScreenCaptureService.session.sessionId} " +
+                "timestamp=$observedAt package=$packageName visibleElements=${elements.size}"
+        )
     }
 
     fun tapVisibleTarget(

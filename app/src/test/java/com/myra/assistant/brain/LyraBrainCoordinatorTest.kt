@@ -6,6 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LyraBrainCoordinatorTest {
+    @Test fun `classifies reading and reference actions separately`() {
+        assertEquals(BrainIntent.READING_REQUEST, LyraBrainCoordinator.classify("Read this article"))
+        assertEquals(BrainIntent.SCREEN_REFERENCE_ACTION, LyraBrainCoordinator.classify("Open it"))
+        assertEquals(BrainIntent.CONVERSATION, LyraBrainCoordinator.classify("What is 10 plus 5"))
+    }
     @Test fun classifiesEnglishHindiAndHinglishIntents() {
         assertEquals(BrainIntent.PHONE_ACTION, LyraBrainCoordinator.classify("Open YouTube"))
         assertEquals(BrainIntent.SCREEN_ANALYSIS, LyraBrainCoordinator.classify("What's on my screen?"))

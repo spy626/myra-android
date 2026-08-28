@@ -4,7 +4,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 enum class BrainIntent {
-    CONVERSATION, PHONE_ACTION, SCREEN_ANALYSIS, SCREEN_ACTION, MEMORY,
+    CONVERSATION, PHONE_ACTION, SCREEN_ANALYSIS, SCREEN_ACTION, SCREEN_REFERENCE_ACTION, READING_REQUEST, MEMORY,
     CORRECTION, CANCELLATION, MULTI_STEP
 }
 
@@ -167,8 +167,11 @@ class LyraBrainCoordinator {
             return when {
                 isCancellation(text) -> BrainIntent.CANCELLATION
                 parseMultiStep(text) != null -> BrainIntent.MULTI_STEP
+                Regex("\\b(?:read|padh|padho)\\b.*\\b(?:article|page|news|story)\\b|^(?:continue reading|read the next section|read only the new content|resume reading)$")
+                    .containsMatchIn(text) -> BrainIntent.READING_REQUEST
                 Regex("\\b(?:remember|forget|yaad|memory|bhool)\\b").containsMatchIn(text) -> BrainIntent.MEMORY
                 Regex("\\b(?:nahi|no|instead|actually|doosra|other one)\\b").containsMatchIn(text) -> BrainIntent.CORRECTION
+                isRepeatReference(text) || Regex("^(?:open|play|tap) (?:this|that|it)$").matches(text) -> BrainIntent.SCREEN_REFERENCE_ACTION
                 Regex("\\b(?:what.*screen|screen.*kya|kya dikh|read this|explain this)\\b").containsMatchIn(text) -> BrainIntent.SCREEN_ANALYSIS
                 Regex("\\b(?:tap|click|open|kholo|khol|chalao|dabao)\\b").containsMatchIn(text) &&
                     Regex("\\b(?:video|button|item|result|card|wala|one|it|beech|upar|neeche|left|right|usko|isko)\\b").containsMatchIn(text) -> BrainIntent.SCREEN_ACTION

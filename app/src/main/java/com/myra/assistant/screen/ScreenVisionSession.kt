@@ -12,7 +12,11 @@ data class ScreenFrame(
     val encodedAt: Long,
     val hash: String,
     val bytes: ByteArray,
-    val source: String
+    val source: String,
+    val width: Int = 0,
+    val height: Int = 0,
+    val packageName: String? = null,
+    val accessibilitySnapshotAt: Long = 0L
 )
 
 data class ScreenQuery(
@@ -53,15 +57,25 @@ class ScreenVisionSession {
 
     @Synchronized fun setState(next: ScreenShareState) { state = next }
 
-    @Synchronized fun publish(bytes: ByteArray, capturedAt: Long, encodedAt: Long = capturedAt, source: String): ScreenFrame? {
+    @Synchronized fun publish(
+        bytes: ByteArray,
+        capturedAt: Long,
+        encodedAt: Long = capturedAt,
+        source: String,
+        width: Int = 0,
+        height: Int = 0,
+        packageName: String? = null,
+        accessibilitySnapshotAt: Long = 0L
+    ): ScreenFrame? {
         if (state != ScreenShareState.ACTIVE || sessionId.isBlank()) return null
         val frame = ScreenFrame(
             sessionId, frameSequence.incrementAndGet(), capturedAt, encodedAt,
             MessageDigest.getInstance("SHA-256").digest(bytes).take(8)
                 .joinToString("") { "%02x".format(it) },
-            bytes.copyOf(), source
+            bytes.copyOf(), source, width, height, packageName, accessibilitySnapshotAt
         )
         latestFrame = frame
+        ScreenContextStore.onFrame(frame)
         return frame
     }
 
@@ -106,6 +120,7 @@ class ScreenVisionSession {
         latestFrame = null
         state = finalState
         sessionId = ""
+        ScreenContextStore.invalidate()
         return cancelled
     }
 }
