@@ -40,4 +40,14 @@ class MemoryRelevanceSelectorTest {
         )
         assertEquals(listOf("3", "2"), MemoryRelevanceSelector.select("", memories, 2).map { it.id })
     }
+
+    @Test fun stalePersonAliasInInternalKeyCannotResurrectOldName() {
+        val memories = listOf(
+            memory("1", "person:now_farah:gaming_channel", "Naufal has a gaming channel", 20),
+            memory("2", "person:best_friend:naufal", "Zopy's best friend is Naufal", 10)
+        )
+
+        assertTrue(MemoryRelevanceSelector.select("Now Farah", memories, 10).isEmpty())
+        assertEquals(2, MemoryRelevanceSelector.select("Naufal", memories, 10).size)
+    }
 }

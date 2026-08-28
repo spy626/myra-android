@@ -15,11 +15,17 @@ object MemoryRelevanceSelector {
         return memories.asSequence()
             .filter(MemoryEntity::active)
             .map { memory ->
-                val factTokens = tokens(memory.fact) + tokens(memory.stableKey)
-                val overlap = queryTokens.intersect(factTokens.toSet()).size
+                val factTokens = tokens(memory.fact).toSet()
+                val keyTokens = tokens(memory.stableKey).toSet()
+                val factOverlap = queryTokens.intersect(factTokens).size
+                // Stable keys are useful for conceptual slots such as response_style,
+                // but person aliases in a key must never resurrect an old identity.
+                val conceptualKeyOverlap = queryTokens.intersect(keyTokens)
+                    .count(CONCEPT_TOKENS::contains)
                 val exactPhrase = normalize(memory.fact).contains(normalize(query)) ||
                     normalize(query).contains(normalize(memory.fact))
-                val score = overlap * 10 + if (exactPhrase) 25 else 0
+                val score = factOverlap * 10 + conceptualKeyOverlap * 4 +
+                    if (exactPhrase) 25 else 0
                 memory to score
             }
             .filter { it.second > 0 }
@@ -39,6 +45,10 @@ object MemoryRelevanceSelector {
 
     private val STOP_WORDS = setOf(
         "what", "which", "do", "does", "is", "are", "my", "mera", "meri", "mere",
-        "kya", "hai", "he", "prefer", "preference", "style", "about", "mein", "me"
+        "kya", "hai", "he", "prefer", "about", "mein", "me"
+    )
+
+    private val CONCEPT_TOKENS = setOf(
+        "preference", "response", "style", "project", "goal", "workflow", "language"
     )
 }

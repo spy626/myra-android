@@ -173,7 +173,7 @@ class LyraBrainCoordinator {
         private fun isOtherReference(text: String): Boolean = listOf(
             Regex("^(?:nahi|no)[, ]+(?:ye|this|that)? ?(?:wala|one)? ?(?:nahi)?[, ]*(?:doosra|dusra|other)(?: wala| one)?$"),
             Regex("^(?:ye|this|that) wala nahi[, ]*(?:doosra|dusra|other)(?: wala| one)?$"),
-            Regex("^(?:doosra|dusra|the other one|other one)$")
+            Regex("^(?:doosra|dusra)(?: wala)?$|^(?:the other one|other one)$")
         ).any { it.matches(text) }
 
         private fun isRepeatReference(text: String): Boolean = listOf(
