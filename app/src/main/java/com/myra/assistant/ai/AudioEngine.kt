@@ -25,6 +25,8 @@ class AudioEngine(private val context: Context) {
     var onSpeakingChanged: ((Boolean) -> Unit)? = null
     var onSpeechActivityChanged: ((Boolean) -> Unit)? = null
 
+    fun currentMediaCandidateId(): Long = mediaAwareVadGate.candidateId
+
     private val running = AtomicBoolean(false)
     private val muted = AtomicBoolean(false)
     private val speaking = AtomicBoolean(false)

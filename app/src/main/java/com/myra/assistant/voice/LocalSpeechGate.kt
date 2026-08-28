@@ -19,7 +19,23 @@ object LocalSpeechGate {
     }
 
     fun matchesExpectedExactly(actual: String, expected: String): Boolean =
-        normalize(actual).isNotBlank() && normalize(actual) == normalize(expected)
+        normalize(actual).isNotBlank() && (
+            normalize(actual) == normalize(expected) || semanticallyEquivalent(actual, expected)
+        )
+
+    /** Inputs are conservative Roman renderings produced by the existing formatter. */
+    fun semanticallyEquivalent(actualRoman: String, expectedRoman: String): Boolean {
+        val actual = normalize(actualRoman)
+        val expected = normalize(expectedRoman)
+        if (actual.isBlank() || expected.isBlank()) return false
+        if (actual == expected) return true
+        val actualWords = actual.split(' ').filter(String::isNotBlank)
+        val expectedWords = expected.split(' ').filter(String::isNotBlank)
+        if (minOf(actualWords.size, expectedWords.size) < 3) return false
+        if (kotlin.math.abs(actualWords.size - expectedWords.size) > 2) return false
+        val longest = maxOf(actual.length, expected.length)
+        return 1.0 - editDistance(actual, expected).toDouble() / longest >= 0.76
+    }
 
     fun hasEnoughBufferedNaturalAudio(audioBytes: Int, expected: String): Boolean {
         if (audioBytes <= 0) return false
@@ -34,6 +50,16 @@ object LocalSpeechGate {
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .trim()
         .replace(Regex("\\s+"), " ")
+
+    private fun editDistance(a: String, b: String): Int {
+        var previous = IntArray(b.length + 1) { it }
+        for (i in a.indices) {
+            val current = IntArray(b.length + 1); current[0] = i + 1
+            for (j in b.indices) current[j + 1] = minOf(current[j] + 1, previous[j + 1] + 1, previous[j] + if (a[i] == b[j]) 0 else 1)
+            previous = current
+        }
+        return previous[b.length]
+    }
 
     private const val MINIMUM_PREFIX_WORDS = 2
     private const val PCM_24K_MONO_BYTES_PER_MS = 48

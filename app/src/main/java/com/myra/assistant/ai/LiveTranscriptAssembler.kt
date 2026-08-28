@@ -11,6 +11,9 @@ internal object LiveTranscriptAssembler {
         // far. Replace that cumulative hypothesis instead of duplicating it.
         val existing = target.toString()
         val comparableIncoming = incoming.trimStart()
+        // Gemini Live may repeat an identical cumulative hypothesis before the
+        // boundary. That is not a second utterance.
+        if (existing.isNotEmpty() && comparableIncoming == existing) return
         if (existing.isNotEmpty() &&
             comparableIncoming.length > existing.length &&
             comparableIncoming.startsWith(existing)

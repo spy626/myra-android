@@ -19,6 +19,13 @@ class LiveTranscriptAssemblerTest {
         assertEquals("Munnar bahut jagah", text.toString())
     }
 
+    @Test fun ignoresRepeatedIdenticalCumulativeHypothesis() {
+        val text = StringBuilder()
+        LiveTranscriptAssembler.append(text, "Mera favourite game kya hai?")
+        LiveTranscriptAssembler.append(text, "Mera favourite game kya hai?")
+        assertEquals("Mera favourite game kya hai?", text.toString())
+    }
+
     @Test fun finalizedAccumulatorResetKeepsConsecutiveQuestionsSeparate() {
         val text = StringBuilder()
         LiveTranscriptAssembler.append(text, "Mera best friend kaun hai?")

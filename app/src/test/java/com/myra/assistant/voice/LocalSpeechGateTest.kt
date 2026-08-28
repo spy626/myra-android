@@ -49,6 +49,20 @@ class LocalSpeechGateTest {
         assertTrue(LocalSpeechGate.matchesExpectedExactly("Ayasa tumhari best friend hai.", "Ayasa tumhari best friend hai"))
     }
 
+    @Test fun acceptsConservativeRomanizationVariation() {
+        assertTrue(LocalSpeechGate.semanticallyEquivalent(
+            "Screen vijana abhi active nahim hai",
+            "Screen Vision abhi active nahi hai"
+        ))
+    }
+
+    @Test fun rejectsUnrelatedControlledSpeech() {
+        assertFalse(LocalSpeechGate.semanticallyEquivalent(
+            "YouTube par ek video chal raha hai",
+            "Screen Vision abhi active nahi hai"
+        ))
+    }
+
     @Test fun bufferedMemoryReplyWaitsForCompleteGeminiTurn() {
         assertFalse(
             LocalSpeechGate.shouldReleaseBeforeTurnComplete(
