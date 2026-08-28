@@ -35,14 +35,35 @@ object ScreenTargetResolver {
     ): ScreenTargetResolution {
         val clickable = candidates.filter { it.clickable && it.right > it.left && it.bottom > it.top }
         if (clickable.isEmpty()) return ScreenTargetResolution.NotFound
+
+        val requestedVideo = Regex("\\b(?:video|youtube|वीडियो)\\b", RegexOption.IGNORE_CASE)
+            .containsMatchIn(targetText.orEmpty())
+        if (requestedVideo) {
+            val videoCandidates = clickable.filter {
+                it.role.equals("video", true) ||
+                    Regex("\\b(?:video|thumbnail|youtube)\\b", RegexOption.IGNORE_CASE).containsMatchIn(it.label) ||
+                    it.role.contains("video", true)
+            }
+            if (videoCandidates.isNotEmpty()) {
+                val result = YouTubeActionResolver.resolveVideoTarget(
+                    videoCandidates.map { YouTubeActionResolver.VideoCandidate(it) },
+                    targetText, position, ordinal, screenWidth, screenHeight
+                )
+                return when (result) {
+                    is YouTubeActionResolver.Result.Selected ->
+                        ScreenTargetResolution.Selected(result.candidate.element, result.confidence)
+                    is YouTubeActionResolver.Result.Ambiguous ->
+                        ScreenTargetResolution.Ambiguous(result.candidates.map { it.element })
+                    YouTubeActionResolver.Result.NotFound -> ScreenTargetResolution.NotFound
+                }
+            }
+        }
+
         val requestedRole = requestedRole(targetText)
         val roleMatches = if (requestedRole == null) clickable else clickable.filter {
             it.role.equals(requestedRole, true) || normalize(it.label).contains(requestedRole)
         }
         val queryTokens = tokens(targetText).filterNot(GENERIC_WORDS::contains).toSet()
-        // Explicit title text is authoritative. Position is a fallback only when no
-        // meaningful title tokens exist, so a stale/incorrect "center" hint cannot
-        // override a newly spoken video name.
         val scoped = if (queryTokens.isNotEmpty()) roleMatches else roleMatches.filter {
             matchesPosition(it, position, screenWidth, screenHeight)
         }
@@ -67,7 +88,9 @@ object ScreenTargetResolver {
 
         if (position.equals("center", true) || position.equals("middle", true)) {
             val diagonal = hypot(screenWidth.toDouble(), screenHeight.toDouble()).coerceAtLeast(1.0)
-            val ranked = ordered.sortedBy { hypot((it.centerX - screenWidth / 2).toDouble(), (it.centerY - screenHeight / 2).toDouble()) }
+            val ranked = ordered.sortedBy {
+                hypot((it.centerX - screenWidth / 2).toDouble(), (it.centerY - screenHeight / 2).toDouble())
+            }
             val best = ranked.first()
             val confidence = 1.0 - hypot(
                 (best.centerX - screenWidth / 2).toDouble(),
