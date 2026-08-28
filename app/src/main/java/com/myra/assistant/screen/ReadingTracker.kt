@@ -19,6 +19,7 @@ data class ReadingSession(
     val contentType: ScreenContentType,
     val explicitlyRequested: Boolean,
     val state: ReadingState,
+    val scrollContainerId: String? = null,
     val readFingerprints: Set<String> = emptySet(),
     val lastVisibleFingerprints: List<String> = emptyList(),
     val currentSectionFingerprint: String? = null,
@@ -76,13 +77,36 @@ class ReadingTracker(
         contentType: ScreenContentType,
         explicitlyRequested: Boolean,
         url: String? = null,
-        articleTitle: String? = null
+        articleTitle: String? = null,
+        scrollContainerId: String? = null
     ): ReadingSession? {
         if (!explicitlyRequested || contentType != ScreenContentType.ARTICLE || screenSessionId.isBlank()) return null
+        if (foregroundPackage.isBlank() || isVideoOrSocialPackage(foregroundPackage)) return null
         return ReadingSession(
             UUID.randomUUID().toString(), screenSessionId, pageIdentity, url, articleTitle,
-            foregroundPackage, contentType, explicitlyRequested, ReadingState.READING
+            foregroundPackage, contentType, explicitlyRequested, ReadingState.READING,
+            scrollContainerId?.takeIf(String::isNotBlank)
         ).also { session = it }
+    }
+
+    @Synchronized fun bindScrollContainer(containerId: String): Boolean {
+        val current = session ?: return false
+        if (current.state !in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL)) return false
+        if (containerId.isBlank()) return false
+        session = current.copy(scrollContainerId = containerId)
+        return true
+    }
+
+    @Synchronized fun acceptsScrollContainer(containerId: String?, screenSessionId: String, foregroundPackage: String): Boolean {
+        val current = session ?: return false
+        return current.explicitlyRequested &&
+            current.contentType == ScreenContentType.ARTICLE &&
+            current.state in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL) &&
+            current.screenSessionId == screenSessionId &&
+            current.foregroundPackage == foregroundPackage &&
+            !isVideoOrSocialPackage(foregroundPackage) &&
+            !current.scrollContainerId.isNullOrBlank() &&
+            current.scrollContainerId == containerId
     }
 
     @Synchronized fun pause(): Boolean = updateState(ReadingState.PAUSED)
@@ -147,11 +171,7 @@ class ReadingTracker(
     @Synchronized fun markVerifyingNewContent(frameId: Long, accessibilityAt: Long): Boolean {
         val current = session ?: return false
         if (current.state != ReadingState.SCROLLING) return false
-        session = current.copy(
-            state = ReadingState.VERIFYING_NEW_CONTENT,
-            lastFrameId = frameId,
-            lastAccessibilitySnapshot = accessibilityAt
-        )
+        session = current.copy(state = ReadingState.VERIFYING_NEW_CONTENT, lastFrameId = frameId, lastAccessibilitySnapshot = accessibilityAt)
         return true
     }
 
@@ -165,9 +185,10 @@ class ReadingTracker(
     fun canAutoScroll(): Boolean = session?.let(::canAutoScroll) == true
 
     private fun canAutoScroll(value: ReadingSession): Boolean =
-        value.state in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL) && value.explicitlyRequested &&
-            value.contentType == ScreenContentType.ARTICLE &&
-            value.consecutiveAutoScrollCount < maxAutoScrolls && value.noNewContentCount < maxNoNewContent
+        value.state in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL) &&
+            value.explicitlyRequested && value.contentType == ScreenContentType.ARTICLE &&
+            value.consecutiveAutoScrollCount < maxAutoScrolls && value.noNewContentCount < maxNoNewContent &&
+            !value.scrollContainerId.isNullOrBlank() && !isVideoOrSocialPackage(value.foregroundPackage)
 
     private fun updateState(next: ReadingState): Boolean {
         val current = session ?: return false
@@ -184,8 +205,7 @@ class ReadingTracker(
 
     companion object {
         fun normalize(value: String): String = value.lowercase(Locale.ROOT)
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
-            .replace(Regex("\\s+"), " ").trim()
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
 
         fun fingerprint(value: String): String = MessageDigest.getInstance("SHA-256")
             .digest(normalize(value).toByteArray()).take(12).joinToString("") { "%02x".format(it) }
@@ -193,5 +213,11 @@ class ReadingTracker(
         private fun isChrome(value: String): Boolean = value.length < 60 && Regex(
             "^(?:home|menu|search|share|sign in|log in|subscribe|comments?|related|recommended|advertisement|cookie|privacy|next|previous)$"
         ).matches(value)
+
+        private fun isVideoOrSocialPackage(packageName: String): Boolean {
+            val p = packageName.lowercase(Locale.ROOT)
+            return p == "com.google.android.youtube" || p.contains("youtube") ||
+                p.contains("instagram") || p.contains("facebook") || p.contains("tiktok")
+        }
     }
 }
