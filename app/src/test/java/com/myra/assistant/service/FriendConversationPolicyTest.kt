@@ -24,4 +24,22 @@ class FriendConversationPolicyTest {
         assertTrue(policy.contains("sakte ho"))
         assertTrue(policy.contains("never address him as sakti ho"))
     }
+
+    @Test
+    fun bossStyleIsOccasionalAndRequiresVerifiedActions() {
+        val policy = FriendConversationPolicy.BOSS_ASSISTANT_STYLE.lowercase()
+
+        assertTrue(policy.contains("occasionally"))
+        assertTrue(policy.contains("never in every reply"))
+        assertTrue(policy.contains("before android verifies it"))
+        assertFalse(policy.contains("always say 'boss'"))
+    }
+
+    @Test
+    fun friendModeStaysNaturalRatherThanCustomerService() {
+        val policy = FriendConversationPolicy.REPLY_DISCIPLINE.lowercase()
+
+        assertTrue(policy.contains("one short natural sentence"))
+        assertTrue(policy.contains("never use customer-support wording"))
+    }
 }
