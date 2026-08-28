@@ -28,6 +28,9 @@ import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.screen.VisibleScreenElement
 import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenShareState
+import com.myra.assistant.screen.ScreenTargetCandidate
+import com.myra.assistant.screen.ScreenTargetResolution
+import com.myra.assistant.screen.ScreenTargetResolver
 import java.util.Locale
 
 class AccessibilityHelperService : AccessibilityService() {
@@ -654,7 +657,7 @@ class AccessibilityHelperService : AccessibilityService() {
         val root = rootInActiveWindow ?: return false
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        data class Candidate(val node: AccessibilityNodeInfo, val label: String, val bounds: Rect)
+        data class Candidate(val id: Int, val node: AccessibilityNodeInfo, val label: String, val bounds: Rect, val role: String)
         val candidates = mutableListOf<Candidate>()
         fun collect(node: AccessibilityNodeInfo) {
             if (node.isVisibleToUser) {
@@ -663,37 +666,35 @@ class AccessibilityHelperService : AccessibilityService() {
                     .joinToString(" ").trim().replace(Regex("\\s+"), " ")
                 if (clickable != null && label.isNotBlank()) {
                     val bounds = Rect().also(clickable::getBoundsInScreen)
-                    if (!bounds.isEmpty) candidates += Candidate(clickable, label, bounds)
+                    if (!bounds.isEmpty) {
+                        val className = node.className?.toString().orEmpty()
+                        val role = when {
+                            className.contains("button", true) -> "button"
+                            root.packageName?.toString() == YOUTUBE_PACKAGE &&
+                                !NON_VIDEO_CONTROLS.matches(label.trim()) && !AD_SIGNAL.containsMatchIn(label) &&
+                                bounds.width() >= screenWidth * 0.35 && bounds.height() >= screenHeight * 0.06 -> "video"
+                            else -> "interactive"
+                        }
+                        candidates += Candidate(candidates.size, clickable, label, bounds, role)
+                    }
                 }
             }
             for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
         }
         collect(root)
         val unique = candidates.distinctBy { "${it.label.lowercase(Locale.ROOT)}:${it.bounds}" }
-        val queryWords = targetText.orEmpty().lowercase(Locale.ROOT)
-            .split(Regex("[^\\p{L}\\p{N}]+"))
-            .filter { it.length >= 2 }
-        val labelMatches = if (queryWords.isEmpty()) unique else unique.filter { candidate ->
-            val label = candidate.label.lowercase(Locale.ROOT)
-            queryWords.count(label::contains) >= maxOf(1, (queryWords.size + 1) / 2)
-        }
-        val positionMatches = labelMatches.filter { candidate ->
-            when (position?.lowercase(Locale.ROOT)) {
-                "top" -> candidate.bounds.centerY() < screenHeight * 0.40
-                "bottom" -> candidate.bounds.centerY() > screenHeight * 0.60
-                "left" -> candidate.bounds.centerX() < screenWidth * 0.45
-                "right" -> candidate.bounds.centerX() > screenWidth * 0.55
-                "center", "middle" -> candidate.bounds.centerY() in (screenHeight * 0.30).toInt()..(screenHeight * 0.70).toInt()
-                else -> true
-            }
-        }
-        val sorted = positionMatches.sortedWith(compareBy<Candidate> { it.bounds.top }.thenBy { it.bounds.left })
-        val selected = if (ordinal != null && ordinal > 0) sorted.getOrNull(ordinal - 1) else {
-            if (position.equals("center", true) || position.equals("middle", true)) {
-                sorted.minByOrNull { kotlin.math.abs(it.bounds.centerY() - screenHeight / 2) }
-            } else sorted.singleOrNull() ?: sorted.firstOrNull()
-        } ?: return false
-        return selected.node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        val resolution = ScreenTargetResolver.resolve(
+            unique.map {
+                ScreenTargetCandidate(
+                    it.id, it.label, it.role, it.bounds.left, it.bounds.top,
+                    it.bounds.right, it.bounds.bottom
+                )
+            },
+            targetText, position, ordinal, screenWidth, screenHeight
+        )
+        val selected = (resolution as? ScreenTargetResolution.Selected)?.candidate ?: return false
+        val node = unique.firstOrNull { it.id == selected.id }?.node ?: return false
+        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
     private fun findClickable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {

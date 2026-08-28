@@ -75,6 +75,15 @@ class LyraBrainCoordinator {
             return BrainDecision.ScrollThenOpenVideo(direction, ordinal, token)
         }
 
+        parseRelativeCorrection(text)?.let { position ->
+            val previous = state.lastScreenTarget
+                ?: return BrainDecision.Clarify("Kaunsa item? Screen par target ek baar bata do.")
+            val token = sequence.incrementAndGet()
+            val corrected = previous.copy(position = position, ordinal = null)
+            state = state.copy(lastScreenTarget = corrected, unresolvedReference = null, taskToken = token)
+            return BrainDecision.ScreenAction(corrected, contextual = true)
+        }
+
         if (isOtherReference(text)) {
             val previous = state.lastScreenTarget
                 ?: return BrainDecision.Clarify("Kaunsa doosra item? Screen par target ek baar bata do.")
@@ -88,13 +97,16 @@ class LyraBrainCoordinator {
                 // by the accessibility layer; keeping the position preserves scope.
                 position = previous.position
             )
-            state = state.copy(lastScreenTarget = next, unresolvedReference = null)
+            val token = sequence.incrementAndGet()
+            state = state.copy(lastScreenTarget = next, unresolvedReference = null, taskToken = token)
             return BrainDecision.ScreenAction(next, contextual = true)
         }
 
         if (isRepeatReference(text)) {
             val previous = state.lastScreenTarget
                 ?: return BrainDecision.Clarify("Kya dobara karna hai?")
+            val token = sequence.incrementAndGet()
+            state = state.copy(taskToken = token)
             return BrainDecision.ScreenAction(previous, contextual = true)
         }
 
@@ -173,8 +185,16 @@ class LyraBrainCoordinator {
         private fun isOtherReference(text: String): Boolean = listOf(
             Regex("^(?:nahi|no)[, ]+(?:ye|this|that)? ?(?:wala|one)? ?(?:nahi)?[, ]*(?:doosra|dusra|other)(?: wala| one)?$"),
             Regex("^(?:ye|this|that) wala nahi[, ]*(?:doosra|dusra|other)(?: wala| one)?$"),
-            Regex("^(?:doosra|dusra)(?: wala)?$|^(?:the other one|other one)$")
+            Regex("^(?:doosra|dusra)(?: wala)?$|^(?:the other one|other one|not that one)$")
         ).any { it.matches(text) }
+
+        private fun parseRelativeCorrection(text: String): String? = when {
+            Regex("\\b(?:upar|upper|above|top)\\b").containsMatchIn(text) &&
+                Regex("\\b(?:nahi|no|actually|instead|wala|one|video)\\b").containsMatchIn(text) -> "top"
+            Regex("\\b(?:neeche|below|bottom)\\b").containsMatchIn(text) &&
+                Regex("\\b(?:nahi|no|actually|instead|wala|one|video)\\b").containsMatchIn(text) -> "bottom"
+            else -> null
+        }
 
         private fun isRepeatReference(text: String): Boolean = listOf(
             "do that again", "same one again", "dobara karo", "phir se karo", "open it", "play it"

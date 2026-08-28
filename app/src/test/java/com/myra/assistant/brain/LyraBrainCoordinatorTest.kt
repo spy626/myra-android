@@ -56,4 +56,16 @@ class LyraBrainCoordinatorTest {
         val repeat = brain.interpret("Do that again") as BrainDecision.ScreenAction
         assertEquals("AI agents", repeat.target.targetText)
     }
+
+    @Test fun relativeCorrectionUpdatesPreviousTarget() {
+        val brain = LyraBrainCoordinator()
+        brain.resolveScreenTarget(targetText = "video", position = "center", ordinal = null)
+        brain.recordScreenAction(ScreenTargetReference(targetText = "video", position = "center"), true)
+
+        val correction = brain.interpret("Nahi, upar wala") as BrainDecision.ScreenAction
+
+        assertEquals("video", correction.target.targetText)
+        assertEquals("top", correction.target.position)
+        assertEquals(null, correction.target.ordinal)
+    }
 }

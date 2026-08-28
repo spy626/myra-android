@@ -1605,7 +1605,7 @@ class MyraVoiceService : Service() {
 
     private fun handleScreenActionTool(id: String, args: org.json.JSONObject) {
         val intentText = lastUserIntentText.ifBlank { input.toString().trim() }
-        if (!screenVisionPreferences.visionEnabled || !ScreenCaptureService.hasFreshFrame()) {
+        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
             live?.sendToolResponse(id, "perform_screen_action", false, "Screen Vision has no current shared frame")
             return
         }
@@ -1630,11 +1630,45 @@ class MyraVoiceService : Service() {
             live?.sendToolResponse(id, "perform_screen_action", false, "LYRA Accessibility is disabled")
             return
         }
+        val contextRequestedAt = android.os.SystemClock.elapsedRealtime()
+        val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
+            mainHandler.post {
+                val ready = result as? FreshFrameResult.Ready
+                if (ready == null || !ScreenCaptureService.session.isCurrent(ready.query.sessionId)) {
+                    brain.recordScreenAction(resolvedTarget, false)
+                    live?.sendToolResponse(id, "perform_screen_action", false, "A fresh current screen was unavailable")
+                    return@post
+                }
+                val selectedAt = android.os.SystemClock.elapsedRealtime()
+                voiceLog(
+                    "screen_action_context_ready target=$target screen_query_id=${ready.query.queryId} " +
+                        "frame_id=${ready.frame.frameId} frame_age_ms=${(selectedAt - ready.frame.capturedAt).coerceAtLeast(0L)} " +
+                        "contextWaitMs=${(selectedAt - contextRequestedAt).coerceAtLeast(0L)}"
+                )
+                performScreenActionTool(id, resolvedTarget, accessibility, ready.frame)
+            }
+        }
+        if (query == null) live?.sendToolResponse(id, "perform_screen_action", false, "Screen session ended before target resolution")
+    }
+
+    private fun performScreenActionTool(
+        id: String,
+        resolvedTarget: ScreenTargetReference,
+        accessibility: AccessibilityHelperService,
+        preTapFrame: com.myra.assistant.screen.ScreenFrame
+    ) {
+        val target = resolvedTarget.targetText
+        val position = resolvedTarget.position
+        val ordinal = resolvedTarget.ordinal
         val before = accessibility.visibleScreenSignature()
-        val preTapFrame = ScreenCaptureService.currentFrame()
-        val actionSessionId = preTapFrame?.sessionId ?: ScreenCaptureService.session.sessionId
-        voiceLog("screen_action_target_resolved target=$target position=$position ordinal=$ordinal screen_session_id=$actionSessionId preTapFrameId=${preTapFrame?.frameId ?: 0L}")
+        val actionSessionId = preTapFrame.sessionId
+        val resolveStartedAt = android.os.SystemClock.elapsedRealtime()
         val accepted = accessibility.tapVisibleTarget(target, position, ordinal)
+        voiceLog(
+            "screen_action_target_resolved target=$target position=$position ordinal=$ordinal " +
+                "screen_session_id=$actionSessionId preTapFrameId=${preTapFrame.frameId} " +
+                "resolveAndTapMs=${(android.os.SystemClock.elapsedRealtime() - resolveStartedAt).coerceAtLeast(0L)}"
+        )
         voiceLog("screen_action_tap_attempt target=$target accepted=$accepted screen_session_id=$actionSessionId")
         if (!accepted) {
             brain.recordScreenAction(resolvedTarget, false)
@@ -1646,11 +1680,11 @@ class MyraVoiceService : Service() {
                 mainHandler.post {
                     val post = (result as? FreshFrameResult.Ready)?.frame
                     val accessibilityChanged = before.isNotBlank() && accessibility.visibleScreenSignature() != before
-                    val frameChanged = post != null && preTapFrame != null && post.sessionId == actionSessionId &&
+                    val frameChanged = post != null && post.sessionId == actionSessionId &&
                         post.frameId > preTapFrame.frameId && post.hash != preTapFrame.hash
                     val verified = ScreenCaptureService.session.isCurrent(actionSessionId) && (accessibilityChanged || frameChanged)
                     voiceLog(
-                        "screen_action_post_frame screen_session_id=$actionSessionId preTapFrameId=${preTapFrame?.frameId ?: 0L} " +
+                        "screen_action_post_frame screen_session_id=$actionSessionId preTapFrameId=${preTapFrame.frameId} " +
                             "postTapFrameId=${post?.frameId ?: 0L} frameChanged=$frameChanged accessibilityChanged=$accessibilityChanged"
                     )
                     voiceLog("screen_action_verification_result target=$target tapAccepted=true verified=$verified")
@@ -2137,6 +2171,10 @@ class MyraVoiceService : Service() {
                     mainHandler.post {
                         if (!brain.isTaskCurrent(plan.taskToken)) return@post
                         val beforeFrame = (fresh as? FreshFrameResult.Ready)?.frame
+                        if (beforeFrame == null || !ScreenCaptureService.session.isCurrent(beforeFrame.sessionId)) {
+                            finishBrainTask(plan.taskToken, false, "Scroll ke baad fresh screen nahi mili.")
+                            return@post
+                        }
                         val beforeSignature = accessibility.visibleScreenSignature()
                         val tapped = accessibility.tapVisibleYouTubeVideo(plan.ordinal)
                         voiceLog("brain_plan_step taskToken=${plan.taskToken} step=tap ordinal=${plan.ordinal} accepted=$tapped")
@@ -2151,10 +2189,10 @@ class MyraVoiceService : Service() {
                                     val postFrame = (postResult as? FreshFrameResult.Ready)?.frame
                                     val accessibilityChanged = beforeSignature.isNotBlank() &&
                                         accessibility.visibleScreenSignature() != beforeSignature
-                                    val frameChanged = beforeFrame != null && postFrame != null &&
-                                        postFrame.sessionId == beforeFrame.sessionId &&
+                                    val frameChanged = postFrame != null && postFrame.sessionId == beforeFrame.sessionId &&
                                         postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
-                                    val verified = accessibilityChanged || frameChanged
+                                    val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
+                                        (accessibilityChanged || frameChanged)
                                     brain.recordScreenAction(
                                         ScreenTargetReference(targetText = "video", ordinal = plan.ordinal),
                                         verified
@@ -2189,34 +2227,46 @@ class MyraVoiceService : Service() {
             finishBrainTask(brain.snapshot().taskToken, false, "LYRA Accessibility enable karo.")
             return
         }
-        val beforeSignature = accessibility.visibleScreenSignature()
-        val beforeFrame = ScreenCaptureService.currentFrame()
-        val accepted = accessibility.tapVisibleTarget(target.targetText, target.position, target.ordinal)
-        if (!accepted) {
-            brain.recordScreenAction(target, false)
-            finishBrainTask(brain.snapshot().taskToken, false, "Doosra target clear nahi mila.")
-            return
-        }
-        mainHandler.postDelayed({
-            ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
-                mainHandler.post {
-                    val postFrame = (result as? FreshFrameResult.Ready)?.frame
-                    val accessibilityChanged = beforeSignature.isNotBlank() &&
-                        accessibility.visibleScreenSignature() != beforeSignature
-                    val frameChanged = beforeFrame != null && postFrame != null &&
-                        postFrame.sessionId == beforeFrame.sessionId &&
-                        postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
-                    val verified = accessibilityChanged || frameChanged
-                    brain.recordScreenAction(target, verified)
-                    finishBrainTask(
-                        brain.snapshot().taskToken,
-                        verified,
-                        if (verified) "Doosra wala open ho gaya."
-                        else "Tap hua, lekin screen change verify nahi hua."
-                    )
+        val taskToken = brain.snapshot().taskToken
+        val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { freshResult ->
+            mainHandler.post {
+                if (!brain.isTaskCurrent(taskToken)) return@post
+                val beforeFrame = (freshResult as? FreshFrameResult.Ready)?.frame
+                if (beforeFrame == null || !ScreenCaptureService.session.isCurrent(beforeFrame.sessionId)) {
+                    finishBrainTask(taskToken, false, "Fresh screen context nahi mila.")
+                    return@post
                 }
+                val beforeSignature = accessibility.visibleScreenSignature()
+                val accepted = accessibility.tapVisibleTarget(target.targetText, target.position, target.ordinal)
+                if (!accepted) {
+                    brain.recordScreenAction(target, false)
+                    finishBrainTask(taskToken, false, "Doosra target clear nahi mila.")
+                    return@post
+                }
+                mainHandler.postDelayed({
+                    ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
+                        mainHandler.post {
+                            if (!brain.isTaskCurrent(taskToken)) return@post
+                            val postFrame = (result as? FreshFrameResult.Ready)?.frame
+                            val accessibilityChanged = beforeSignature.isNotBlank() &&
+                                accessibility.visibleScreenSignature() != beforeSignature
+                            val frameChanged = postFrame != null && postFrame.sessionId == beforeFrame.sessionId &&
+                                postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
+                            val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
+                                (accessibilityChanged || frameChanged)
+                            brain.recordScreenAction(target, verified)
+                            finishBrainTask(
+                                taskToken,
+                                verified,
+                                if (verified) "Doosra wala open ho gaya."
+                                else "Tap hua, lekin screen change verify nahi hua."
+                            )
+                        }
+                    }
+                }, 400L)
             }
-        }, 400L)
+        }
+        if (query == null) finishBrainTask(taskToken, false, "Screen Vision active nahi hai.")
     }
 
     private fun finishBrainTask(taskToken: Long, success: Boolean, message: String) {
