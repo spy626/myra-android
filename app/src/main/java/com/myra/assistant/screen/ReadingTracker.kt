@@ -5,19 +5,27 @@ import java.util.Locale
 import java.util.UUID
 
 enum class ScreenContentType { ARTICLE, WEB_PAGE, VIDEO_PLATFORM, SOCIAL_FEED, OTHER }
-enum class ReadingState { IDLE, ACTIVE, PAUSED, COMPLETE, STOPPED }
+enum class ReadingState { IDLE, READING, WAITING_FOR_SCROLL, SCROLLING, VERIFYING_NEW_CONTENT, PAUSED, COMPLETED, STOPPED }
 
 data class ReadingSegment(val text: String, val fingerprint: String)
 
 data class ReadingSession(
     val readingSessionId: String,
     val screenSessionId: String,
-    val contentIdentity: String,
+    val pageIdentity: String,
+    val url: String? = null,
+    val articleTitle: String? = null,
+    val foregroundPackage: String,
     val contentType: ScreenContentType,
     val explicitlyRequested: Boolean,
     val state: ReadingState,
     val readFingerprints: Set<String> = emptySet(),
     val lastVisibleFingerprints: List<String> = emptyList(),
+    val currentSectionFingerprint: String? = null,
+    val spokenTextFingerprint: String? = null,
+    val currentScrollPosition: Int = 0,
+    val lastFrameId: Long = 0L,
+    val lastAccessibilitySnapshot: Long = 0L,
     val consecutiveAutoScrollCount: Int = 0,
     val noNewContentCount: Int = 0,
     val lastReadAt: Long = 0L
@@ -63,14 +71,17 @@ class ReadingTracker(
 
     @Synchronized fun start(
         screenSessionId: String,
-        contentIdentity: String,
+        pageIdentity: String,
+        foregroundPackage: String,
         contentType: ScreenContentType,
-        explicitlyRequested: Boolean
+        explicitlyRequested: Boolean,
+        url: String? = null,
+        articleTitle: String? = null
     ): ReadingSession? {
         if (!explicitlyRequested || contentType != ScreenContentType.ARTICLE || screenSessionId.isBlank()) return null
         return ReadingSession(
-            UUID.randomUUID().toString(), screenSessionId, contentIdentity,
-            contentType, explicitlyRequested, ReadingState.ACTIVE
+            UUID.randomUUID().toString(), screenSessionId, pageIdentity, url, articleTitle,
+            foregroundPackage, contentType, explicitlyRequested, ReadingState.READING
         ).also { session = it }
     }
 
@@ -78,17 +89,17 @@ class ReadingTracker(
     @Synchronized fun resume(): Boolean {
         val current = session ?: return false
         if (current.state !in setOf(ReadingState.PAUSED, ReadingState.STOPPED)) return false
-        session = current.copy(state = ReadingState.ACTIVE)
+        session = current.copy(state = ReadingState.READING)
         return true
     }
     @Synchronized fun stop(): Boolean = updateState(ReadingState.STOPPED)
-    @Synchronized fun complete(): Boolean = updateState(ReadingState.COMPLETE)
+    @Synchronized fun complete(): Boolean = updateState(ReadingState.COMPLETED)
     @Synchronized fun forget() { session = null }
 
     @Synchronized fun resetProgress(): Boolean {
         val current = session ?: return false
         session = current.copy(
-            state = ReadingState.ACTIVE,
+            state = ReadingState.READING,
             readFingerprints = emptySet(), lastVisibleFingerprints = emptyList(),
             consecutiveAutoScrollCount = 0, noNewContentCount = 0
         )
@@ -97,7 +108,7 @@ class ReadingTracker(
 
     @Synchronized fun acceptVisibleText(lines: List<String>, now: Long): List<ReadingSegment> {
         val current = session ?: return emptyList()
-        if (current.state != ReadingState.ACTIVE) return emptyList()
+        if (current.state !in setOf(ReadingState.READING, ReadingState.VERIFYING_NEW_CONTENT)) return emptyList()
         val segments = lines.asSequence()
             .map(::normalize)
             .filter { it.length >= 24 && !isChrome(it) }
@@ -108,8 +119,11 @@ class ReadingTracker(
         session = current.copy(
             readFingerprints = current.readFingerprints + fresh.map { it.fingerprint },
             lastVisibleFingerprints = segments.map { it.fingerprint },
+            currentSectionFingerprint = segments.lastOrNull()?.fingerprint,
+            spokenTextFingerprint = fresh.lastOrNull()?.fingerprint ?: current.spokenTextFingerprint,
             noNewContentCount = if (fresh.isEmpty()) current.noNewContentCount + 1 else 0,
-            lastReadAt = if (fresh.isEmpty()) current.lastReadAt else now
+            lastReadAt = if (fresh.isEmpty()) current.lastReadAt else now,
+            state = ReadingState.READING
         )
         return fresh
     }
@@ -117,20 +131,54 @@ class ReadingTracker(
     @Synchronized fun recordAutoScroll(): Boolean {
         val current = session ?: return false
         if (!canAutoScroll(current)) return false
-        session = current.copy(consecutiveAutoScrollCount = current.consecutiveAutoScrollCount + 1)
+        session = current.copy(
+            consecutiveAutoScrollCount = current.consecutiveAutoScrollCount + 1,
+            currentScrollPosition = current.currentScrollPosition + 1,
+            state = ReadingState.SCROLLING
+        )
+        return true
+    }
+
+    @Synchronized fun markWaitingForScroll(): Boolean = transition(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL)
+    @Synchronized fun recordObservation(frameId: Long, accessibilityAt: Long) {
+        val current = session ?: return
+        session = current.copy(lastFrameId = frameId, lastAccessibilitySnapshot = accessibilityAt)
+    }
+    @Synchronized fun markVerifyingNewContent(frameId: Long, accessibilityAt: Long): Boolean {
+        val current = session ?: return false
+        if (current.state != ReadingState.SCROLLING) return false
+        session = current.copy(
+            state = ReadingState.VERIFYING_NEW_CONTENT,
+            lastFrameId = frameId,
+            lastAccessibilitySnapshot = accessibilityAt
+        )
+        return true
+    }
+
+    @Synchronized fun pauseIfContextChanged(screenSessionId: String, foregroundPackage: String): Boolean {
+        val current = session ?: return false
+        if (current.screenSessionId == screenSessionId && current.foregroundPackage == foregroundPackage) return false
+        session = current.copy(state = ReadingState.PAUSED)
         return true
     }
 
     fun canAutoScroll(): Boolean = session?.let(::canAutoScroll) == true
 
     private fun canAutoScroll(value: ReadingSession): Boolean =
-        value.state == ReadingState.ACTIVE && value.explicitlyRequested &&
+        value.state in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL) && value.explicitlyRequested &&
             value.contentType == ScreenContentType.ARTICLE &&
             value.consecutiveAutoScrollCount < maxAutoScrolls && value.noNewContentCount < maxNoNewContent
 
     private fun updateState(next: ReadingState): Boolean {
         val current = session ?: return false
         session = current.copy(state = next)
+        return true
+    }
+
+    private fun transition(from: ReadingState, to: ReadingState): Boolean {
+        val current = session ?: return false
+        if (current.state != from) return false
+        session = current.copy(state = to)
         return true
     }
 

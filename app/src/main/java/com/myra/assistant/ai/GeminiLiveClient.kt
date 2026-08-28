@@ -10,8 +10,8 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 class GeminiLiveClient(
@@ -32,11 +32,13 @@ class GeminiLiveClient(
     var onError: ((String) -> Unit)? = null
 
     private val manualClose = AtomicBoolean(false)
-    private val reconnecting = AtomicBoolean(false)
-    private val generation = AtomicInteger(0)
-    private val reconnectAttempt = AtomicInteger(0)
+    private val connectionState = GeminiConnectionStateMachine()
+    private val reconnectScheduler = Executors.newSingleThreadScheduledExecutor()
+    private val reconnectLock = Any()
+    private var reconnectFuture: ScheduledFuture<*>? = null
     private val client = OkHttpClient.Builder().pingInterval(8, TimeUnit.SECONDS).build()
     private var socket: WebSocket? = null
+    private val socketGenerations = ConcurrentHashMap<WebSocket, Int>()
     private var renewThread: Thread? = null
     private val ready = AtomicBoolean(false)
     private val transcriptionLock = Any()
@@ -52,35 +54,55 @@ class GeminiLiveClient(
     fun connect() {
         if (apiKey.isBlank()) { onError?.invoke("Add your Gemini API key in Settings"); return }
         manualClose.set(false)
-        val attempt = generation.incrementAndGet()
+        val current = connectionState.snapshot().state
+        if (current in setOf(GeminiConnectionState.CONNECTING, GeminiConnectionState.CONNECTED)) return
+        startConnect(reconnect = current == GeminiConnectionState.RECONNECTING)
+    }
+
+    private fun startConnect(reconnect: Boolean) {
+        if (manualClose.get()) return
+        val attempt = connectionState.beginConnect(android.os.SystemClock.elapsedRealtime(), reconnect)
+        val generation = attempt.generation
+        VoicePipelineLogger.debug(
+            "${if (reconnect) "GEMINI_RECONNECT_STARTED" else "GEMINI_CONNECT_START"} " +
+                "connectionAttemptId=${attempt.connectionAttemptId} generation=$generation " +
+                "timestamp=${attempt.startedAt}"
+        )
         onState?.invoke("Checking Gemini access…")
         ready.set(false)
         val modelId = model.removePrefix("models/")
         val check = Request.Builder().url("https://generativelanguage.googleapis.com/v1beta/models/$modelId").header("x-goog-api-key", apiKey).build()
         client.newCall(check).enqueue(object : Callback {
             override fun onFailure(call: Call, e: java.io.IOException) {
-                if (generation.get() == attempt && !manualClose.get()) {
-                    onState?.invoke("Network unavailable — reconnecting…")
-                    reconnecting.set(false)
-                    scheduleReconnect()
+                if (!connectionState.isCurrent(generation) || manualClose.get()) {
+                    logStaleCallback(generation, "preflight_failure")
+                    return
                 }
+                scheduleReconnect(generation, "preflight_failure")
             }
             override fun onResponse(call: Call, response: Response) {
                 response.use {
-                    if (generation.get() != attempt || manualClose.get()) return
+                    if (!connectionState.isCurrent(generation) || manualClose.get()) {
+                        logStaleCallback(generation, "preflight_response")
+                        return
+                    }
                     if (!it.isSuccessful) {
                         val raw = it.body?.string().orEmpty()
                         val message = try { JSONObject(raw).optJSONObject("error")?.optString("message") } catch (_: Exception) { null }
                         onError?.invoke("Gemini access error (${it.code}): ${message ?: it.message}")
                         return
                     }
-                    openLiveSocket(attempt)
+                    openLiveSocket(generation)
                 }
             }
         })
     }
 
     private fun openLiveSocket(attempt: Int) {
+        if (!connectionState.markSocketConnecting(attempt)) {
+            logStaleCallback(attempt, "open_socket")
+            return
+        }
         onState?.invoke("Connecting…")
         val encodedKey = java.net.URLEncoder.encode(apiKey, Charsets.UTF_8.name())
         val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$encodedKey"
@@ -91,11 +113,12 @@ class GeminiLiveClient(
             return
         }
         socket = opened
+        socketGenerations[opened] = attempt
         Thread {
             Thread.sleep(15_000)
-            if (generation.get() == attempt && socket === opened && !ready.get() && !manualClose.get()) {
-                onError?.invoke("Connection timed out. Check API key, internet, and Gemini Live access.")
+            if (connectionState.isCurrent(attempt) && socket === opened && !ready.get() && !manualClose.get()) {
                 opened.cancel()
+                scheduleReconnect(attempt, "connection_timeout")
             }
         }.start()
     }
@@ -239,14 +262,14 @@ class GeminiLiveClient(
         val active = socket
         if (!ready.get() || active == null) {
             onState?.invoke("Reconnecting…")
-            scheduleReconnect()
+            scheduleReconnect(connectionState.snapshot().generation, "send_without_ready_socket")
             return false
         }
         val accepted = active.send(payload)
         if (!accepted) {
             ready.set(false)
             onState?.invoke("Reconnecting…")
-            scheduleReconnect()
+            scheduleReconnect(connectionState.snapshot().generation, "socket_send_rejected")
         }
         return accepted
     }
@@ -258,6 +281,11 @@ class GeminiLiveClient(
     fun interrupt() = Unit
 
     override fun onMessage(webSocket: WebSocket, text: String) {
+        val callbackGeneration = socketGenerations[webSocket] ?: -1
+        if (socket !== webSocket || manualClose.get()) {
+            logStaleCallback(callbackGeneration, "message")
+            return
+        }
         try {
             val root = JSONObject(text)
             root.optJSONObject("error")?.let {
@@ -269,8 +297,19 @@ class GeminiLiveClient(
             }
             if (root.has("setupComplete")) {
                 ready.set(true)
-                reconnectAttempt.set(0)
-                reconnecting.set(false)
+                val connectedAt = android.os.SystemClock.elapsedRealtime()
+                if (!connectionState.markConnected(callbackGeneration, connectedAt)) {
+                    logStaleCallback(callbackGeneration, "setup_complete")
+                    return
+                }
+                synchronized(reconnectLock) {
+                    reconnectFuture?.cancel(false)
+                    reconnectFuture = null
+                }
+                VoicePipelineLogger.debug(
+                    "GEMINI_CONNECTED generation=$callbackGeneration timestamp=$connectedAt " +
+                        "reconnectLatencyMs=${(connectedAt - connectionState.snapshot().startedAt).coerceAtLeast(0L)}"
+                )
                 onState?.invoke("Ready")
                 onReady?.invoke()
                 return
@@ -345,41 +384,63 @@ class GeminiLiveClient(
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-        if (socket !== webSocket || manualClose.get()) return
+        val callbackGeneration = socketGenerations[webSocket] ?: -1
+        if (socket !== webSocket || manualClose.get()) {
+            logStaleCallback(callbackGeneration, "socket_failure")
+            return
+        }
         ready.set(false)
         val detail = response?.let { "HTTP ${it.code} ${it.message}" } ?: (t.message ?: "Network failure")
-        onError?.invoke("Gemini connection failed: $detail")
-        scheduleReconnect()
+        VoicePipelineLogger.debug("GEMINI_DISCONNECTED generation=$callbackGeneration reason=${detail.take(160)}")
+        scheduleReconnect(callbackGeneration, "socket_failure")
     }
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-        ready.set(false)
-        if (!manualClose.get() && code != 1000 && reason.isNotBlank()) {
-            onError?.invoke("Gemini connection interrupted. Reconnecting…")
+        if (socket !== webSocket || manualClose.get()) {
+            logStaleCallback(socketGenerations[webSocket] ?: -1, "socket_closing")
+            return
         }
+        ready.set(false)
     }
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-        if (socket !== webSocket) return
+        val callbackGeneration = socketGenerations.remove(webSocket) ?: -1
+        if (socket !== webSocket || manualClose.get()) {
+            logStaleCallback(callbackGeneration, "socket_closed")
+            return
+        }
         ready.set(false)
-        if (!manualClose.get()) {
+        scheduleReconnect(callbackGeneration, "socket_closed_$code")
+    }
+    private fun scheduleReconnect(callbackGeneration: Int, reason: String) {
+        if (manualClose.get()) return
+        synchronized(reconnectLock) {
+            if (reconnectFuture?.isDone == false) return
+            val retry = connectionState.markFailure(callbackGeneration)
+            if (retry == null) {
+                if (connectionState.exhausted()) {
+                    VoicePipelineLogger.debug("GEMINI_RECONNECT_FAILED generation=$callbackGeneration reason=retry_budget_exhausted")
+                    onError?.invoke("Gemini connection failed after repeated retries. Check internet and try again.")
+                } else logStaleCallback(callbackGeneration, "schedule_reconnect")
+                return
+            }
+            val delayMs = connectionState.backoffMs(retry, callbackGeneration + retry)
             onState?.invoke("Reconnecting…")
-            scheduleReconnect()
+            VoicePipelineLogger.debug(
+                "GEMINI_RECONNECT_SCHEDULED generation=$callbackGeneration retry=$retry delayMs=$delayMs reason=$reason"
+            )
+            reconnectFuture = reconnectScheduler.schedule({
+                synchronized(reconnectLock) { reconnectFuture = null }
+                if (!manualClose.get() && connectionState.isCurrent(callbackGeneration)) {
+                    startConnect(reconnect = true)
+                } else logStaleCallback(callbackGeneration, "reconnect_worker")
+            }, delayMs, TimeUnit.MILLISECONDS)
         }
     }
-    private fun scheduleReconnect() {
-        if (!reconnecting.compareAndSet(false, true) || manualClose.get()) return
-        val attempt = reconnectAttempt.incrementAndGet().coerceAtMost(5)
-        val delayMs = (3_000L * attempt).coerceAtMost(15_000L)
-        Thread {
-            try {
-                Thread.sleep(delayMs)
-                if (!manualClose.get()) {
-                    reconnecting.set(false)
-                    connect()
-                }
-            } catch (_: InterruptedException) {
-                reconnecting.set(false)
-            }
-        }.start()
+
+    private fun logStaleCallback(callbackGeneration: Int, source: String) {
+        VoicePipelineLogger.debug(
+            "GEMINI_STALE_CALLBACK_IGNORED callbackGeneration=$callbackGeneration " +
+                "currentGeneration=${connectionState.snapshot().generation} source=$source"
+        )
     }
     private fun deferTurnCompleteUntilTranscriptIsQuiet() {
         synchronized(transcriptionLock) {
@@ -442,7 +503,11 @@ class GeminiLiveClient(
 
     fun disconnect() {
         manualClose.set(true)
-        generation.incrementAndGet()
+        connectionState.markStopping()
+        synchronized(reconnectLock) {
+            reconnectFuture?.cancel(false)
+            reconnectFuture = null
+        }
         renewThread?.interrupt()
         synchronized(transcriptionLock) {
             pendingTurnFallback?.cancel(false)
@@ -450,7 +515,10 @@ class GeminiLiveClient(
             pendingTurnComplete = false
         }
         transcriptionScheduler.shutdownNow()
+        reconnectScheduler.shutdownNow()
         socket?.close(1000, "App closed")
         socket = null
+        socketGenerations.clear()
+        connectionState.markDisconnected()
     }
 }

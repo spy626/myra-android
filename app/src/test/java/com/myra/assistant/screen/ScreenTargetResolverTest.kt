@@ -79,4 +79,15 @@ class ScreenTargetResolverTest {
         assertEquals(2, second.candidate.id)
         assertTrue(ScreenTargetResolver.resolve(candidates, "video", null, 3, width, height) is ScreenTargetResolution.NotFound)
     }
+
+    @Test fun `explicit title outranks conflicting center hint`() {
+        val candidates = listOf(
+            candidate(1, "Random center video", 350, 750, 650, 1_150),
+            candidate(2, "Miss Interwala official video", 10, 200, 990, 500)
+        )
+        val selected = ScreenTargetResolver.resolve(
+            candidates, "Miss Interwala video", "center", null, width, height
+        ) as ScreenTargetResolution.Selected
+        assertEquals(2, selected.candidate.id)
+    }
 }

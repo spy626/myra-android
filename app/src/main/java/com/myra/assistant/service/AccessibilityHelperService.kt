@@ -33,6 +33,13 @@ import com.myra.assistant.screen.ScreenTargetResolution
 import com.myra.assistant.screen.ScreenTargetResolver
 import java.util.Locale
 
+data class VisibleTargetTapResult(
+    val accepted: Boolean,
+    val candidate: ScreenTargetCandidate? = null,
+    val confidence: Double = 0.0,
+    val resolution: String
+)
+
 class AccessibilityHelperService : AccessibilityService() {
     private var currentVideoQuery: String? = null
     private var previousVideoQuery: String? = null
@@ -720,19 +727,9 @@ class AccessibilityHelperService : AccessibilityService() {
         collect(root)
         val accepted = scrollables.sortedByDescending { it.first }
             .any { (_, node) -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }
-        val gestureAccepted = if (accepted) true else {
-            val path = Path().apply {
-                moveTo(screenWidth * 0.82f, screenHeight * 0.80f)
-                // Retain roughly 25% overlap for duplicate detection.
-                lineTo(screenWidth * 0.82f, screenHeight * 0.28f)
-            }
-            dispatchGesture(
-                GestureDescription.Builder()
-                    .addStroke(GestureDescription.StrokeDescription(path, 0L, 300L)).build(),
-                null, null
-            )
-        }
-        if (!gestureAccepted) return false
+        // Article reading never falls back to a generic page gesture. If the current
+        // accessibility tree exposes no article/page scroll container, stop safely.
+        if (!accepted) return false
         Handler(Looper.getMainLooper()).postDelayed({
             val changed = before.isNotBlank() && visibleScreenSignature() != before
             if (changed) refreshScreenContext()
@@ -794,8 +791,16 @@ class AccessibilityHelperService : AccessibilityService() {
         targetText: String?,
         position: String?,
         ordinal: Int?
-    ): Boolean {
-        val root = rootInActiveWindow ?: return false
+    ): Boolean = resolveAndTapVisibleTarget(targetText, position, ordinal).accepted
+
+    fun resolveAndTapVisibleTarget(
+        targetText: String?,
+        position: String?,
+        ordinal: Int?,
+        authorizeTap: ((ScreenTargetCandidate, Double) -> Boolean)? = null
+    ): VisibleTargetTapResult {
+        val root = rootInActiveWindow
+            ?: return VisibleTargetTapResult(false, resolution = "no_accessibility_root")
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
         data class Candidate(val id: Int, val node: AccessibilityNodeInfo, val label: String, val bounds: Rect, val role: String)
@@ -833,9 +838,22 @@ class AccessibilityHelperService : AccessibilityService() {
             },
             targetText, position, ordinal, screenWidth, screenHeight
         )
-        val selected = (resolution as? ScreenTargetResolution.Selected)?.candidate ?: return false
-        val node = unique.firstOrNull { it.id == selected.id }?.node ?: return false
-        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        val selected = (resolution as? ScreenTargetResolution.Selected)
+            ?: return VisibleTargetTapResult(
+                false,
+                resolution = if (resolution is ScreenTargetResolution.Ambiguous) "ambiguous" else "not_found"
+            )
+        val node = unique.firstOrNull { it.id == selected.candidate.id }?.node
+            ?: return VisibleTargetTapResult(false, selected.candidate, selected.confidence, "stale_candidate")
+        if (authorizeTap?.invoke(selected.candidate, selected.confidence) == false) {
+            return VisibleTargetTapResult(false, selected.candidate, selected.confidence, "authorization_rejected")
+        }
+        return VisibleTargetTapResult(
+            node.performAction(AccessibilityNodeInfo.ACTION_CLICK),
+            selected.candidate,
+            selected.confidence,
+            "selected"
+        )
     }
 
     private fun findClickable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {

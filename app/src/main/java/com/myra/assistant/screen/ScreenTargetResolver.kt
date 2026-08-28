@@ -39,15 +39,20 @@ object ScreenTargetResolver {
         val roleMatches = if (requestedRole == null) clickable else clickable.filter {
             it.role.equals(requestedRole, true) || normalize(it.label).contains(requestedRole)
         }
-        val positioned = roleMatches.filter { matchesPosition(it, position, screenWidth, screenHeight) }
-        if (positioned.isEmpty()) return ScreenTargetResolution.NotFound
-        val ordered = positioned.sortedWith(compareBy<ScreenTargetCandidate> { it.top }.thenBy { it.left })
+        val queryTokens = tokens(targetText).filterNot(GENERIC_WORDS::contains).toSet()
+        // Explicit title text is authoritative. Position is a fallback only when no
+        // meaningful title tokens exist, so a stale/incorrect "center" hint cannot
+        // override a newly spoken video name.
+        val scoped = if (queryTokens.isNotEmpty()) roleMatches else roleMatches.filter {
+            matchesPosition(it, position, screenWidth, screenHeight)
+        }
+        if (scoped.isEmpty()) return ScreenTargetResolution.NotFound
+        val ordered = scoped.sortedWith(compareBy<ScreenTargetCandidate> { it.top }.thenBy { it.left })
         if (ordinal != null && ordinal > 0) {
             return ordered.getOrNull(ordinal - 1)?.let { ScreenTargetResolution.Selected(it, 1.0) }
                 ?: ScreenTargetResolution.NotFound
         }
 
-        val queryTokens = tokens(targetText).filterNot(GENERIC_WORDS::contains).toSet()
         if (queryTokens.isNotEmpty()) {
             val scored = ordered.map { candidate -> candidate to titleScore(queryTokens, candidate.label) }
                 .filter { it.second >= MIN_TITLE_CONFIDENCE }

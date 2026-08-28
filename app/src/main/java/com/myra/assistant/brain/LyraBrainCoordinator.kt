@@ -124,11 +124,13 @@ class LyraBrainCoordinator {
                 ?.takeIf { it.isNotBlank() && it != "unspecified" },
             ordinal = ordinal?.takeIf { it > 0 }
         )
-        val resolved = if (supplied.targetText != null || supplied.position != null || supplied.ordinal != null) {
-            supplied
-        } else state.lastScreenTarget
-        if (resolved != null) state = state.copy(lastScreenTarget = resolved, unresolvedReference = null)
-        return resolved
+        val hasExplicitTarget = supplied.targetText != null || supplied.position != null || supplied.ordinal != null
+        if (!hasExplicitTarget) return null
+        // A new explicit command owns a new target. Previous target state is never
+        // used to fill missing fields; only interpret() may resolve explicit contextual
+        // phrases such as "open it" or "doosra wala".
+        state = state.copy(lastScreenTarget = supplied, unresolvedReference = null)
+        return supplied
     }
 
     @Synchronized fun recordScreenAction(target: ScreenTargetReference, success: Boolean) {

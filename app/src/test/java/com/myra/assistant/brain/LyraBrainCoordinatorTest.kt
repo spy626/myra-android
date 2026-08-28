@@ -73,4 +73,16 @@ class LyraBrainCoordinatorTest {
         assertEquals("top", correction.target.position)
         assertEquals(null, correction.target.ordinal)
     }
+
+    @Test fun `new explicit action never falls back to old screen target`() {
+        val brain = LyraBrainCoordinator()
+        brain.resolveScreenTarget("Old center video", "center", null)
+        brain.recordScreenAction(ScreenTargetReference("Old center video", "center"), true)
+
+        assertEquals(null, brain.resolveScreenTarget(null, null, null))
+        assertEquals(
+            "Miss Interwala video",
+            brain.resolveScreenTarget("Miss Interwala video", null, null)?.targetText
+        )
+    }
 }
