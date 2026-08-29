@@ -1,5 +1,7 @@
 package com.myra.assistant.screen
 
+import android.graphics.Rect
+import com.myra.assistant.service.AccessibilityHelperService
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
@@ -82,11 +84,19 @@ class ReadingTracker(
     ): ReadingSession? {
         if (!explicitlyRequested || contentType != ScreenContentType.ARTICLE || screenSessionId.isBlank()) return null
         if (foregroundPackage.isBlank() || isVideoOrSocialPackage(foregroundPackage)) return null
+        val boundContainer = scrollContainerId?.takeIf(String::isNotBlank) ?: currentArticleContainerId()
+        if (boundContainer.isNullOrBlank()) return null
         return ReadingSession(
             UUID.randomUUID().toString(), screenSessionId, pageIdentity, url, articleTitle,
             foregroundPackage, contentType, explicitlyRequested, ReadingState.READING,
-            scrollContainerId?.takeIf(String::isNotBlank)
-        ).also { session = it }
+            boundContainer
+        ).also {
+            session = it
+            AccessibilityHelperService.instance?.let { service ->
+                val now = android.os.SystemClock.elapsedRealtime()
+                service.voicePipelineLog("ARTICLE_CONTAINER_BOUND reading_session_id=${it.readingSessionId} screen_session_id=$screenSessionId container_id=$boundContainer package=$foregroundPackage timestamp=$now")
+            }
+        }
     }
 
     @Synchronized fun bindScrollContainer(containerId: String): Boolean {
@@ -95,6 +105,24 @@ class ReadingTracker(
         if (containerId.isBlank()) return false
         session = current.copy(scrollContainerId = containerId)
         return true
+    }
+
+    @Synchronized fun bindCurrentScrollContainer(): Boolean =
+        currentArticleContainerId()?.let(::bindScrollContainer) == true
+
+    fun currentBoundScrollContainerId(): String? = session?.scrollContainerId
+
+    fun validateCurrentScrollContainer(): Boolean {
+        val current = session ?: return false
+        val expected = current.scrollContainerId ?: return false
+        val actual = currentArticleContainerId()
+        val valid = actual == expected && current.state in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL, ReadingState.SCROLLING, ReadingState.VERIFYING_NEW_CONTENT)
+        if (!valid) {
+            AccessibilityHelperService.instance?.voicePipelineLog(
+                "ARTICLE_SCROLL_REJECTED reading_session_id=${current.readingSessionId} expected_container=$expected actual_container=${actual.orEmpty()} package=${current.foregroundPackage} reason=container_mismatch"
+            )
+        }
+        return valid
     }
 
     @Synchronized fun acceptsScrollContainer(containerId: String?, screenSessionId: String, foregroundPackage: String): Boolean {
@@ -145,7 +173,7 @@ class ReadingTracker(
 
     @Synchronized fun recordAutoScroll(): Boolean {
         val current = session ?: return false
-        if (!canAutoScroll(current)) return false
+        if (!canAutoScroll(current) || !validateCurrentScrollContainer()) return false
         session = current.copy(consecutiveAutoScrollCount = current.consecutiveAutoScrollCount + 1,
             currentScrollPosition = current.currentScrollPosition + 1, state = ReadingState.SCROLLING)
         return true
@@ -165,18 +193,48 @@ class ReadingTracker(
 
     @Synchronized fun pauseIfContextChanged(screenSessionId: String, foregroundPackage: String): Boolean {
         val current = session ?: return false
-        if (current.screenSessionId == screenSessionId && current.foregroundPackage == foregroundPackage) return false
+        if (current.screenSessionId == screenSessionId && current.foregroundPackage == foregroundPackage && validateCurrentScrollContainer()) return false
         session = current.copy(state = ReadingState.PAUSED)
         return true
     }
 
-    fun canAutoScroll(): Boolean = session?.let(::canAutoScroll) == true
+    fun canAutoScroll(): Boolean = session?.let(::canAutoScroll) == true && validateCurrentScrollContainer()
 
     private fun canAutoScroll(value: ReadingSession): Boolean =
         value.state in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL) &&
             value.explicitlyRequested && value.contentType == ScreenContentType.ARTICLE &&
             value.consecutiveAutoScrollCount < maxAutoScrolls && value.noNewContentCount < maxNoNewContent &&
-            !isVideoOrSocialPackage(value.foregroundPackage)
+            !value.scrollContainerId.isNullOrBlank() && !isVideoOrSocialPackage(value.foregroundPackage)
+
+    private fun currentArticleContainerId(): String? {
+        val service = AccessibilityHelperService.instance ?: return null
+        val root = service.rootInActiveWindow ?: return null
+        val packageName = root.packageName?.toString().orEmpty()
+        if (packageName.isBlank() || isVideoOrSocialPackage(packageName)) return null
+        val candidates = mutableListOf<String>()
+        fun collect(node: android.view.accessibility.AccessibilityNodeInfo) {
+            if (node.isVisibleToUser && node.isScrollable) {
+                val bounds = Rect().also(node::getBoundsInScreen)
+                if (!bounds.isEmpty && bounds.width() > 0 && bounds.height() > 0) {
+                    val id = listOf(
+                        packageName,
+                        node.viewIdResourceName.orEmpty(),
+                        node.className?.toString().orEmpty(),
+                        bounds.left.toString(), bounds.top.toString(),
+                        bounds.right.toString(), bounds.bottom.toString()
+                    ).joinToString("|")
+                    candidates += id
+                }
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
+        }
+        collect(root)
+        return candidates.maxByOrNull { it.hashCode() xor it.length }?.let(::containerFingerprint)
+    }
+
+    private fun containerFingerprint(identity: String): String =
+        MessageDigest.getInstance("SHA-256").digest(identity.toByteArray()).take(12)
+            .joinToString("") { "%02x".format(it) }
 
     private fun updateState(next: ReadingState): Boolean {
         val current = session ?: return false
