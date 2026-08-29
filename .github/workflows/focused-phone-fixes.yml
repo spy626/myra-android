@@ -1,0 +1,143 @@
+name: Focused Phone Fixes
+
+on:
+  push:
+    branches: [agent/myra-phase-1]
+
+permissions:
+  contents: write
+
+env:
+  PATCH_MARKER: .github/.focused_phone_fixes_applied
+
+jobs:
+  focused-fix:
+    if: ${{ !contains(github.event.head_commit.message, '[focused-fixes-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/myra-phase-1
+          fetch-depth: 0
+
+      - name: Apply focused AudioEngine ownership fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/myra/assistant/ai/AudioEngine.kt')
+          s=p.read_text()
+          s=s.replace('private val queue = LinkedBlockingQueue<ByteArray>()', '''private data class AudioChunk(val generationId: Long, val playbackId: Long, val bytes: ByteArray)\n    private val queue = LinkedBlockingQueue<AudioChunk>()''')
+          s=s.replace('@Volatile private var playbackReferenceRms = 0f', '''@Volatile private var playbackReferenceRms = 0f\n    @Volatile private var activePlaybackId = 0L\n    private var playbackSequence = 0L''')
+          s=s.replace('''                val bytes = queue.poll(SPEECH_END_GRACE_MS, TimeUnit.MILLISECONDS)\n                if (!running.get()) break\n                if (bytes == null) {''','''                val chunk = queue.poll(SPEECH_END_GRACE_MS, TimeUnit.MILLISECONDS)\n                if (!running.get()) break\n                if (chunk == null) {''')
+          s=s.replace('''                synchronized(playbackLock) {\n                    if (!running.get()) return@synchronized\n                    runCatching {''','''                if (chunk.generationId != playbackGeneration) {\n                    voiceLog("DUPLICATE_AUDIO_BLOCKED playbackId=${chunk.playbackId} chunkGeneration=${chunk.generationId} activeGeneration=$playbackGeneration reason=stale_generation")\n                    continue\n                }\n                synchronized(playbackLock) {\n                    if (!running.get()) return@synchronized\n                    if (chunk.generationId != playbackGeneration) {\n                        voiceLog("DUPLICATE_AUDIO_BLOCKED playbackId=${chunk.playbackId} reason=generation_changed_before_write")\n                        return@synchronized\n                    }\n                    runCatching {''')
+          s=s.replace('''                                    playbackGeneration,\n                                    playbackScreenQueryId,''','''                                    playbackGeneration,\n                                    playbackScreenQueryId,''')
+          s=s.replace('''                                "playback_start bytes=${bytes.size} queued=${queue.size} " +''','''                                "playback_start playbackId=${chunk.playbackId} generationId=${chunk.generationId} bytes=${chunk.bytes.size} queued=${queue.size} " +''')
+          s=s.replace('''                        val written = track?.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING) ?: 0\n                        playbackReferenceRms = rms(bytes)''','''                        activePlaybackId = chunk.playbackId\n                        val written = track?.write(chunk.bytes, 0, chunk.bytes.size, AudioTrack.WRITE_BLOCKING) ?: 0\n                        playbackReferenceRms = rms(chunk.bytes)''')
+          s=s.replace('''                            "audio_track_write requested=${bytes.size} written=$written " +''','''                            "audio_track_write playbackId=${chunk.playbackId} generationId=${chunk.generationId} requested=${chunk.bytes.size} written=$written " +''')
+          old='''    fun queueAudio(bytes: ByteArray) {\n        val accepted = queue.offer(bytes)\n        voiceLog(\n            "playback_queued seq=${++queuedAudioChunk} bytes=${bytes.size} " +\n                "accepted=$accepted queueSize=${queue.size} running=${running.get()}"\n        )\n    }\n    fun setPlaybackContext(generationId: Long, screenQueryId: String = "", responseOwner: String = "MODEL") {\n        playbackGeneration = generationId\n        playbackScreenQueryId = screenQueryId\n        playbackResponseOwner = responseOwner\n    }'''
+          new='''    fun queueAudio(bytes: ByteArray) {\n        val generation = playbackGeneration\n        val playbackId = ++playbackSequence\n        val accepted = queue.offer(AudioChunk(generation, playbackId, bytes.copyOf()))\n        voiceLog(\n            "playback_queued playbackId=$playbackId generationId=$generation seq=${++queuedAudioChunk} bytes=${bytes.size} " +\n                "accepted=$accepted queueSize=${queue.size} activePlaybackId=$activePlaybackId running=${running.get()}"\n        )\n    }\n    fun setPlaybackContext(generationId: Long, screenQueryId: String = "", responseOwner: String = "MODEL") {\n        val previous = playbackGeneration\n        if (previous != 0L && generationId != 0L && previous != generationId) {\n            cancelPlayback("new_generation", generationId)\n        }\n        playbackGeneration = generationId\n        playbackScreenQueryId = screenQueryId\n        playbackResponseOwner = responseOwner\n        voiceLog("audio_owner_changed generationId=$generationId previousGeneration=$previous owner=$responseOwner screenQueryId=$screenQueryId")\n    }\n    private fun cancelPlayback(reason: String, replacementGenerationId: Long = 0L) {\n        val cancelledId = activePlaybackId\n        queue.clear()\n        playbackGeneration = replacementGenerationId\n        synchronized(playbackLock) {\n            runCatching { track?.pause() }\n            runCatching { track?.flush() }\n        }\n        speaking.set(false)\n        bargeInEnabled.set(false)\n        audioFocus.abandon("$reason")\n        voiceLog("AUDIO_PLAYBACK_CANCELLED playbackId=$cancelledId replacementGenerationId=$replacementGenerationId reason=$reason activeAudioOwner=$playbackResponseOwner")\n        onSpeakingChanged?.invoke(false)\n    }'''
+          if old not in s: raise SystemExit('AudioEngine queue/context block not found')
+          s=s.replace(old,new)
+          s=s.replace('''        voiceLog("playback_interrupt queueSize=${queue.size} speaking=${speaking.get()}")\n        queue.clear()''','''        voiceLog("playback_interrupt queueSize=${queue.size} speaking=${speaking.get()} activePlaybackId=$activePlaybackId generationId=$playbackGeneration")\n        queue.clear()''')
+          s=s.replace('''        playbackGeneration = 0L\n        playbackScreenQueryId = ""''','''        playbackGeneration = 0L\n        activePlaybackId = 0L\n        playbackScreenQueryId = ""''')
+          s=s.replace('''        queue.offer(ByteArray(0))''','''        queue.offer(AudioChunk(playbackGeneration, ++playbackSequence, ByteArray(0)))''')
+          p.write_text(s)
+          PY
+
+      - name: Bind article reading to one accessibility container
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/myra/assistant/service/AccessibilityHelperService.kt')
+          s=p.read_text()
+          marker='''    /** Generic adaptive article scroll. It is hard-blocked for video/social surfaces. */\n    fun scrollArticleVerified(onResult: (Boolean) -> Unit): Boolean {'''
+          replacement='''    fun currentArticleScrollContainerId(): String? {\n        if (detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE) return null\n        val root = rootInActiveWindow ?: return null\n        val screenWidth = resources.displayMetrics.widthPixels\n        val screenHeight = resources.displayMetrics.heightPixels\n        val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()\n        fun collect(node: AccessibilityNodeInfo) {\n            if (node.isVisibleToUser && node.isScrollable) {\n                val bounds = Rect().also(node::getBoundsInScreen)\n                if (bounds.width() >= screenWidth * 0.55 && bounds.height() >= screenHeight * 0.35) {\n                    candidates += bounds.width() * bounds.height() to node\n                }\n            }\n            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)\n        }\n        collect(root)\n        val node = candidates.maxByOrNull { it.first }?.second ?: return null\n        val viewId = node.viewIdResourceName?.toString().orEmpty()\n        val className = node.className?.toString().orEmpty()\n        return listOf(root.packageName?.toString().orEmpty(), viewId, className)\n            .joinToString("|").takeIf { it != "||" }\n    }\n\n    /** Generic adaptive article scroll. It is hard-blocked for video/social surfaces. */\n    fun scrollArticleVerified(expectedContainerId: String? = null, onResult: (Boolean) -> Unit): Boolean {'''
+          if marker not in s: raise SystemExit('scroll marker not found')
+          s=s.replace(marker,replacement)
+          old='''        if (detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE) return false\n        val before = visibleScreenSignature()\n        val root = rootInActiveWindow ?: return false'''
+          new='''        if (detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE) return false\n        if (rootInActiveWindow?.packageName?.toString().orEmpty().isBlank()) return false\n        val currentContainerId = currentArticleScrollContainerId() ?: return false\n        if (expectedContainerId.isNullOrBlank() || currentContainerId != expectedContainerId) return false\n        val before = visibleScreenSignature()\n        val root = rootInActiveWindow ?: return false'''
+          if old not in s: raise SystemExit('article scroll preamble not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+
+      - name: Bind ReadingTracker to container and enforce it before scrolling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt')
+          s=p.read_text()
+          old='''        val context = com.myra.assistant.screen.ScreenContextStore.snapshot()\n        val identity = listOfNotNull(context.currentPackage, accessibility.visibleArticleText().firstOrNull())\n            .joinToString(":").take(300)\n        val session = readingTracker.start(\n            ScreenCaptureService.session.sessionId, identity,\n            accessibility.currentPackageName().orEmpty(), contentType, explicitlyRequested = true\n        ) ?: run {'''
+          new='''        val context = com.myra.assistant.screen.ScreenContextStore.snapshot()\n        val identity = listOfNotNull(context.currentPackage, accessibility.visibleArticleText().firstOrNull())\n            .joinToString(":").take(300)\n        val containerId = accessibility.currentArticleScrollContainerId()\n        if (containerId.isNullOrBlank()) {\n            voiceLog("ARTICLE_SCROLL_REJECTED turnId=$turnId reason=no_article_scroll_container")\n            speakReadingStatus("Article ka safe scroll area nahi mila.", error = true)\n            return\n        }\n        val session = readingTracker.start(\n            ScreenCaptureService.session.sessionId, identity,\n            accessibility.currentPackageName().orEmpty(), contentType, explicitlyRequested = true,\n            scrollContainerId = containerId\n        ) ?: run {'''
+          if old not in s: raise SystemExit('reading start block not found')
+          s=s.replace(old,new)
+          old2='''        val accessibility = AccessibilityHelperService.instance ?: run { finishArticleAtEnd(); return }\n        voiceLog(\n            "READING_AUTO_SCROLL_STARTED reading_session_id=${session.readingSessionId} " +'''
+          new2='''        val accessibility = AccessibilityHelperService.instance ?: run { finishArticleAtEnd(); return }\n        val boundContainerId = session.scrollContainerId\n        val currentContainerId = accessibility.currentArticleScrollContainerId()\n        if (boundContainerId.isNullOrBlank() || currentContainerId != boundContainerId ||\n            !readingTracker.acceptsScrollContainer(currentContainerId, ScreenCaptureService.session.sessionId, foregroundPackage)) {\n            pendingActionAfterLocalSpeech = null\n            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=container_mismatch bound=$boundContainerId current=$currentContainerId package=$foregroundPackage")\n            readingTracker.pause()\n            return\n        }\n        voiceLog(\n            "READING_AUTO_SCROLL_STARTED reading_session_id=${session.readingSessionId} " +'''
+          if old2 not in s: raise SystemExit('auto scroll preamble not found')
+          s=s.replace(old2,new2)
+          s=s.replace('''        val accepted = accessibility.scrollArticleVerified { changed ->''','''        val accepted = accessibility.scrollArticleVerified(boundContainerId) { changed ->''')
+          p.write_text(s)
+          PY
+
+      - name: Add focused regression tests
+        run: |
+          cat > app/src/test/java/com/myra/assistant/screen/FocusedPhoneFixesTest.kt <<'EOF'
+          package com.myra.assistant.screen
+
+          import org.junit.Assert.*
+          import org.junit.Test
+
+          class FocusedPhoneFixesTest {
+              @Test fun articleSessionBindsContainer() {
+                  val tracker = ReadingTracker()
+                  val session = tracker.start("screen-1", "page", "com.android.chrome", ScreenContentType.ARTICLE, true, scrollContainerId = "com.android.chrome|content|android.webkit.WebView")
+                  assertNotNull(session)
+                  assertTrue(tracker.acceptsScrollContainer("com.android.chrome|content|android.webkit.WebView", "screen-1", "com.android.chrome"))
+                  assertFalse(tracker.acceptsScrollContainer("com.google.android.youtube|content|android.webkit.WebView", "screen-1", "com.android.chrome"))
+              }
+
+              @Test fun youtubeCannotUseArticleSession() {
+                  val tracker = ReadingTracker()
+                  assertNull(tracker.start("screen-1", "page", "com.google.android.youtube", ScreenContentType.VIDEO_PLATFORM, true, scrollContainerId = "youtube|content|WebView"))
+              }
+
+              @Test fun staleReadingSessionCannotAcceptNewScreenSession() {
+                  val tracker = ReadingTracker()
+                  tracker.start("screen-1", "page", "com.android.chrome", ScreenContentType.ARTICLE, true, scrollContainerId = "chrome|content|WebView")
+                  assertFalse(tracker.acceptsScrollContainer("chrome|content|WebView", "screen-2", "com.android.chrome"))
+              }
+
+              @Test fun duplicateArticleContentIsSkipped() {
+                  val tracker = ReadingTracker()
+                  tracker.start("screen-1", "page", "com.android.chrome", ScreenContentType.ARTICLE, true, scrollContainerId = "chrome|content|WebView")
+                  val first = tracker.acceptVisibleText(listOf("This is a sufficiently long article paragraph that should be read once."), 1L)
+                  val second = tracker.acceptVisibleText(listOf("This is a sufficiently long article paragraph that should be read once."), 2L)
+                  assertEquals(1, first.size)
+                  assertTrue(second.isEmpty())
+              }
+          }
+          EOF
+
+      - name: Mark patch
+        run: echo applied > "$PATCH_MARKER"
+
+      - name: Run tests and build
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug --stacktrace
+
+      - name: Commit focused changes and remove one-shot workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f .github/workflows/focused-phone-fixes.yml
+          git add app/src/main/java/com/myra/assistant/ai/AudioEngine.kt app/src/main/java/com/myra/assistant/service/AccessibilityHelperService.kt app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt app/src/test/java/com/myra/assistant/screen/FocusedPhoneFixesTest.kt
+          git commit -m "Fix audio ownership and article scroll safety [focused-fixes-applied]"
+          git push origin HEAD:agent/myra-phase-1
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: myra-focused-phone-fix-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
