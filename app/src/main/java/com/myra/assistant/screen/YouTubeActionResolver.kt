@@ -29,11 +29,17 @@ object YouTubeActionResolver {
         }
         val ordered = visible.sortedWith(compareBy<VideoCandidate> { it.element.top }.thenBy { it.element.left })
         if (ordinal != null && ordinal > 0) return ordered.getOrNull(ordinal - 1)?.let { Result.Selected(it, 1.0) } ?: Result.NotFound
-        if (position.equals("center", true) || position.equals("middle", true)) {
-            val ranked = ordered.sortedBy { hypot((it.element.centerX - screenWidth / 2).toDouble(), (it.element.centerY - screenHeight / 2).toDouble()) }
-            val best = ranked.first()
-            val diagonal = hypot(screenWidth.toDouble(), screenHeight.toDouble()).coerceAtLeast(1.0)
+        val best = when (position?.lowercase(Locale.ROOT)) {
+            "center", "middle" -> ordered.minByOrNull { hypot((it.element.centerX - screenWidth / 2).toDouble(), (it.element.centerY - screenHeight / 2).toDouble()) }
+            "left" -> ordered.minByOrNull { it.element.centerX }
+            "right" -> ordered.maxByOrNull { it.element.centerX }
+            "top" -> ordered.minByOrNull { it.element.centerY }
+            "bottom" -> ordered.maxByOrNull { it.element.centerY }
+            else -> null
+        }
+        if (best != null) {
             val distance = hypot((best.element.centerX - screenWidth / 2).toDouble(), (best.element.centerY - screenHeight / 2).toDouble())
+            val diagonal = hypot(screenWidth.toDouble(), screenHeight.toDouble()).coerceAtLeast(1.0)
             return Result.Selected(best, (1.0 - distance / diagonal).coerceIn(0.0, 1.0))
         }
         return if (ordered.size == 1) Result.Selected(ordered.first(), 1.0) else Result.Ambiguous(ordered.take(3))
