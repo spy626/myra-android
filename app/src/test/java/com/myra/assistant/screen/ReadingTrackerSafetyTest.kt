@@ -1,9 +1,9 @@
 package com.myra.assistant.screen
 
-import kotlin.test.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 class ReadingTrackerSafetyTest {
     @Test fun youtube_cannot_start_article_session() {
