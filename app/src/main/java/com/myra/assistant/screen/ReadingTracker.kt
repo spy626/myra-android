@@ -101,7 +101,8 @@ class ReadingTracker(
         val current = session ?: return false
         return current.explicitlyRequested && current.contentType == ScreenContentType.ARTICLE &&
             current.state in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL) &&
-            current.screenSessionId == screenSessionId && current.foregroundPackage == foregroundPackage &&
+            current.screenSessionId == screenSessionId && foregroundPackage.isNotBlank() &&
+            current.foregroundPackage == foregroundPackage &&
             !isVideoOrSocialPackage(foregroundPackage) && !current.scrollContainerId.isNullOrBlank() &&
             current.scrollContainerId == containerId
     }
