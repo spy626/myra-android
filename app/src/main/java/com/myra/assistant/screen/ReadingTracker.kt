@@ -90,13 +90,7 @@ class ReadingTracker(
             UUID.randomUUID().toString(), screenSessionId, pageIdentity, url, articleTitle,
             foregroundPackage, contentType, explicitlyRequested, ReadingState.READING,
             boundContainer
-        ).also {
-            session = it
-            AccessibilityHelperService.instance?.let { service ->
-                val now = android.os.SystemClock.elapsedRealtime()
-                service.voicePipelineLog("ARTICLE_CONTAINER_BOUND reading_session_id=${it.readingSessionId} screen_session_id=$screenSessionId container_id=$boundContainer package=$foregroundPackage timestamp=$now")
-            }
-        }
+        ).also { session = it }
     }
 
     @Synchronized fun bindScrollContainer(containerId: String): Boolean {
@@ -116,11 +110,17 @@ class ReadingTracker(
         val current = session ?: return false
         val expected = current.scrollContainerId ?: return false
         val actual = currentArticleContainerId()
-        val valid = actual == expected && current.state in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL, ReadingState.SCROLLING, ReadingState.VERIFYING_NEW_CONTENT)
+        val valid = actual == expected && current.state in setOf(
+            ReadingState.READING, ReadingState.WAITING_FOR_SCROLL,
+            ReadingState.SCROLLING, ReadingState.VERIFYING_NEW_CONTENT
+        )
         if (!valid) {
-            AccessibilityHelperService.instance?.voicePipelineLog(
-                "ARTICLE_SCROLL_REJECTED reading_session_id=${current.readingSessionId} expected_container=$expected actual_container=${actual.orEmpty()} package=${current.foregroundPackage} reason=container_mismatch"
-            )
+            AccessibilityHelperService.instance?.let {
+                android.util.Log.d(
+                    "LyraReading",
+                    "ARTICLE_SCROLL_REJECTED reading_session_id=${current.readingSessionId} expected_container=$expected actual_container=${actual.orEmpty()} package=${current.foregroundPackage} reason=container_mismatch"
+                )
+            }
         }
         return valid
     }
@@ -211,25 +211,26 @@ class ReadingTracker(
         val root = service.rootInActiveWindow ?: return null
         val packageName = root.packageName?.toString().orEmpty()
         if (packageName.isBlank() || isVideoOrSocialPackage(packageName)) return null
-        val candidates = mutableListOf<String>()
+        data class ContainerCandidate(val area: Long, val identity: String)
+        val candidates = mutableListOf<ContainerCandidate>()
         fun collect(node: android.view.accessibility.AccessibilityNodeInfo) {
             if (node.isVisibleToUser && node.isScrollable) {
                 val bounds = Rect().also(node::getBoundsInScreen)
                 if (!bounds.isEmpty && bounds.width() > 0 && bounds.height() > 0) {
-                    val id = listOf(
+                    val identity = listOf(
                         packageName,
                         node.viewIdResourceName.orEmpty(),
                         node.className?.toString().orEmpty(),
                         bounds.left.toString(), bounds.top.toString(),
                         bounds.right.toString(), bounds.bottom.toString()
                     ).joinToString("|")
-                    candidates += id
+                    candidates += ContainerCandidate(bounds.width().toLong() * bounds.height(), identity)
                 }
             }
             for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
         }
         collect(root)
-        return candidates.maxByOrNull { it.hashCode() xor it.length }?.let(::containerFingerprint)
+        return candidates.maxByOrNull { it.area }?.identity?.let(::containerFingerprint)
     }
 
     private fun containerFingerprint(identity: String): String =
