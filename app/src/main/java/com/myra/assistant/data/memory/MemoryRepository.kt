@@ -370,6 +370,14 @@ class MemoryRepository(private val dao: MemoryDao) {
             MemoryRelationshipPolicy.canonicalize(candidate)
         }
         val now = System.currentTimeMillis()
+        if (canonical.stableKey == RESPONSE_STYLE_KEY) {
+            // Phase 3A briefly wrote the same preference under communication:response_style.
+            // Retire that alias before updating the canonical slot so only one active
+            // response-style preference can ever reach recall context.
+            dao.findByStableKey(LEGACY_RESPONSE_STYLE_KEY)
+                ?.takeIf { it.active }
+                ?.let { dao.deactivate(it.id, now) }
+        }
         if (replaceBestFriends && MemoryRelationshipPolicy.isBestFriend(canonical)) {
             // A confirmed replacement must deactivate old semantic keys as well as the
             // canonical key, otherwise both people leak into recall context.
@@ -408,5 +416,7 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     private companion object {
         const val MEMORY_LOG_TAG = "LyraMemoryStore"
+        const val RESPONSE_STYLE_KEY = "preference:response_style"
+        const val LEGACY_RESPONSE_STYLE_KEY = "communication:response_style"
     }
 }

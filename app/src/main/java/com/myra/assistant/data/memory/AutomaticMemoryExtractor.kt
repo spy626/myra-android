@@ -30,7 +30,7 @@ object AutomaticMemoryExtractor {
             return durableCandidate(
                 MemoryCategory.COMMUNICATION_STYLE,
                 "Zopy prefers $value",
-                "communication:$slot",
+                if (slot == "response_style") RESPONSE_STYLE_KEY else "communication:$slot",
                 0.95
             )
         }
@@ -176,7 +176,7 @@ object AutomaticMemoryExtractor {
         return MemoryCandidate(
             category = MemoryCategory.PREFERENCE,
             fact = if (responseStyle) "Zopy prefers $subject" else "Zopy likes $subject",
-            stableKey = if (responseStyle) "preference:response_style" else "preference:likes:${normalize(subject)}",
+            stableKey = if (responseStyle) RESPONSE_STYLE_KEY else "preference:likes:${normalize(subject)}",
             sensitivity = MemorySensitivity.LOW,
             confidence = 0.93,
             source = "automatic_conversation"
@@ -209,4 +209,6 @@ object AutomaticMemoryExtractor {
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
+
+    private const val RESPONSE_STYLE_KEY = "preference:response_style"
 }

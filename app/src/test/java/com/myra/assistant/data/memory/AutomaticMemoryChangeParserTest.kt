@@ -37,6 +37,19 @@ class AutomaticMemoryChangeParserTest {
         assertEquals("Zopy's favorite game is Minecraft", change.candidate.fact)
     }
 
+    @Test fun correctedResponseStyleUsesSameStableKeyAsInitialPreference() {
+        val initial = AutomaticMemoryChangeParser.parse(
+            "Give me short answers"
+        ) as AutomaticMemoryChange.Save
+        val corrected = AutomaticMemoryChangeParser.parse(
+            "Actually, give me detailed answers"
+        ) as AutomaticMemoryChange.Save
+
+        assertEquals("preference:response_style", initial.candidate.stableKey)
+        assertEquals(initial.candidate.stableKey, corrected.candidate.stableKey)
+        assertEquals("Zopy prefers detailed answers", corrected.candidate.fact)
+    }
+
     @Test fun vagueAndPersonalNegativesDoNotChangeMemory() {
         assertNull(AutomaticMemoryChangeParser.parse("I don't like that anymore"))
         assertNull(AutomaticMemoryChangeParser.parse("mujhe meri dost ab pasand nahi hai"))

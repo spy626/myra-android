@@ -169,17 +169,25 @@ class MemoryRepositoryLinkedPersonTest {
         )
     }
     @Test fun stablePreferenceKeyUpdatesInsteadOfDuplicating() = runBlocking {
-        val repository = MemoryRepository(FakeMemoryDao())
-        val short = AutomaticMemoryExtractor.extract("Give me short answers")!!
-        val detailed = AutomaticMemoryExtractor.extract("Give me detailed answers")!!
+        val dao = FakeMemoryDao()
+        val repository = MemoryRepository(dao)
+        val short = (AutomaticMemoryChangeParser.parse("Give me short answers") as AutomaticMemoryChange.Save).candidate
+        val detailed = (AutomaticMemoryChangeParser.parse(
+            "Actually, give me detailed answers"
+        ) as AutomaticMemoryChange.Save).candidate
 
         repository.save(short)
+        // Reproduce data written by the temporary Phase 3A alias as well.
+        dao.upsert(dao.recent(10).single().copy(
+            id = "legacy-style",
+            stableKey = "communication:response_style",
+            fact = "Zopy prefers short answers"
+        ))
         repository.save(detailed)
 
-        val active = repository.allActive().filter {
-            it.stableKey == "communication:response_style"
-        }
+        val active = repository.allActive().filter { it.stableKey.endsWith("response_style") }
         assertEquals(1, active.size)
+        assertEquals("preference:response_style", active.single().stableKey)
         assertEquals("Zopy prefers detailed answers", active.single().fact)
     }
 

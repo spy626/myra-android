@@ -84,7 +84,7 @@ class AutomaticMemoryExtractorTest {
         val language = AutomaticMemoryExtractor.extract("I prefer answers in Hinglish")
 
         assertEquals(MemoryCategory.COMMUNICATION_STYLE, style?.category)
-        assertEquals("communication:response_style", style?.stableKey)
+        assertEquals("preference:response_style", style?.stableKey)
         assertEquals("Zopy prefers simple answers", style?.fact)
         assertEquals("communication:language", language?.stableKey)
     }
