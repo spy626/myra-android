@@ -233,13 +233,19 @@ object CommandParser {
         return query?.takeIf { it.length in 2..80 }?.let(AppCommand::PlayYouTube)
     }
 
-    private fun parseYouTubeScroll(text: String): AppCommand.ScrollYouTube? = when {
-        Regex("^(?:niche|neeche|down)\\s+(?:scroll|swipe)(?:\\s+karo)?$").matches(text) ->
-            AppCommand.ScrollYouTube(AppCommand.ScrollDirection.DOWN)
-        Regex("^(?:upar|upper|up)\\s+(?:scroll|swipe)(?:\\s+karo)?$").matches(text) ->
-            AppCommand.ScrollYouTube(AppCommand.ScrollDirection.UP)
-        Regex("^(?:scroll|swipe)(?:\\s+karo)?$").matches(text) -> AppCommand.ScrollYouTube(null)
-        else -> null
+    private fun parseYouTubeScroll(text: String): AppCommand.ScrollYouTube? {
+        val explicitApp = if (Regex("(?:^|\\s)(?:youtube|यूट्यूब)(?:$|\\s)").containsMatchIn(text)) "YouTube" else null
+        val withoutApp = text.replace(Regex("(?:^|\\s)(?:youtube|यूट्यूब)(?:$|\\s)"), " ")
+            .replace(Regex("\\s+"), " ").trim()
+        return when {
+            Regex("^(?:(?:niche|neeche|down)\\s+(?:scroll|swipe)|(?:scroll|swipe)(?:\\s+(?:down|niche|neeche))?)(?:\\s+karo)?$").matches(withoutApp) ->
+                AppCommand.ScrollYouTube(AppCommand.ScrollDirection.DOWN, explicitApp)
+            Regex("^(?:(?:upar|upper|up)\\s+(?:scroll|swipe)|(?:scroll|swipe)\\s+(?:up|upar|upper))(?:\\s+karo)?$").matches(withoutApp) ->
+                AppCommand.ScrollYouTube(AppCommand.ScrollDirection.UP, explicitApp)
+            Regex("^(?:scroll|swipe)(?:\\s+karo)?$").matches(withoutApp) ->
+                AppCommand.ScrollYouTube(null, explicitApp)
+            else -> null
+        }
     }
 
     private fun parseExactMediaControl(text: String): AppCommand.ControlMedia? {
