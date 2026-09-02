@@ -89,6 +89,20 @@ class AutomaticMemoryExtractorTest {
         assertEquals("communication:language", language?.stableKey)
     }
 
+    @Test fun responseVerbosityPhrasesShareOneSemanticDimension() {
+        listOf(
+            "Give me short answers",
+            "Keep answers brief",
+            "Be concise",
+            "Actually give me detailed answers",
+            "Give longer explanations",
+            "Explain things in detail"
+        ).forEach { phrase ->
+            val change = AutomaticMemoryChangeParser.parse(phrase) as AutomaticMemoryChange.Save
+            assertEquals(phrase, "preference:response_style", change.candidate.stableKey)
+        }
+    }
+
     @Test fun learnsRecurringAppUsageAndWorkflow() {
         val app = AutomaticMemoryExtractor.extract("I usually use Chrome for reading articles")
         val workflow = AutomaticMemoryExtractor.extract("I always test on my Android phone for app releases")

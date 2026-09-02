@@ -5,8 +5,10 @@ import java.util.Locale
 import java.util.UUID
 
 class MemoryRepository(private val dao: MemoryDao) {
-    suspend fun allActive(limit: Int = 100): List<MemoryEntity> =
-        dao.recent(limit.coerceIn(1, 200))
+    suspend fun allActive(limit: Int = 100): List<MemoryEntity> {
+        reconcilePreferenceDimensions()
+        return dao.recent(limit.coerceIn(1, 200))
+    }
 
     suspend fun saveManualFact(fact: String, category: MemoryCategory): MemoryWriteResult {
         val clean = fact.trim().replace(Regex("\\s+"), " ")
@@ -135,7 +137,9 @@ class MemoryRepository(private val dao: MemoryDao) {
     }
 
     suspend fun isAlreadySaved(candidate: MemoryCandidate): Boolean {
-        val canonical = MemoryRelationshipPolicy.canonicalize(candidate)
+        val canonical = PreferenceMemoryIdentity.canonicalize(
+            MemoryRelationshipPolicy.canonicalize(candidate)
+        )
         if (MemoryRelationshipPolicy.isBestFriend(canonical)) {
             val name = MemoryRelationshipPolicy.personName(canonical.fact)
             return dao.recent(50).any {
@@ -202,6 +206,32 @@ class MemoryRepository(private val dao: MemoryDao) {
                 }
             }
         }
+    }
+
+    /** Repairs category/key variants of the same mutually-exclusive preference slot. */
+    suspend fun reconcilePreferenceDimensions() {
+        val variants = dao.recent(200)
+            .filter(PreferenceMemoryIdentity::isResponseVerbosity)
+            .sortedByDescending { it.updatedAt }
+        if (variants.isEmpty()) return
+        val newest = variants.first()
+        val canonicalExisting = dao.findByStableKey(PreferenceMemoryIdentity.RESPONSE_VERBOSITY_KEY)
+        val now = System.currentTimeMillis()
+        val keeperId = canonicalExisting?.id ?: newest.id
+        variants.filter { it.id != keeperId }.forEach { dao.deactivate(it.id, now) }
+        dao.upsert(
+            newest.copy(
+                id = keeperId,
+                stableKey = PreferenceMemoryIdentity.RESPONSE_VERBOSITY_KEY,
+                category = MemoryCategory.PREFERENCE.name,
+                createdAt = canonicalExisting?.createdAt ?: newest.createdAt,
+                updatedAt = newest.updatedAt,
+                lastConfirmedAt = newest.lastConfirmedAt,
+                active = true,
+                useCount = maxOf(canonicalExisting?.useCount ?: 0, newest.useCount),
+                lastUsedAt = maxOf(canonicalExisting?.lastUsedAt ?: 0, newest.lastUsedAt)
+            )
+        )
     }
 
     suspend fun saveAdditionalBestFriend(candidate: MemoryCandidate): MemoryWriteResult {
@@ -364,19 +394,18 @@ class MemoryRepository(private val dao: MemoryDao) {
         candidate: MemoryCandidate,
         replaceBestFriends: Boolean = true
     ): MemoryWriteResult {
-        val canonical = if (candidate.stableKey.startsWith("${MemoryRelationshipPolicy.BEST_FRIEND_KEY}:")) {
+        val relationshipCanonical = if (candidate.stableKey.startsWith("${MemoryRelationshipPolicy.BEST_FRIEND_KEY}:")) {
             candidate
         } else {
             MemoryRelationshipPolicy.canonicalize(candidate)
         }
+        val canonical = PreferenceMemoryIdentity.canonicalize(relationshipCanonical)
         val now = System.currentTimeMillis()
-        if (canonical.stableKey == RESPONSE_STYLE_KEY) {
-            // Phase 3A briefly wrote the same preference under communication:response_style.
-            // Retire that alias before updating the canonical slot so only one active
-            // response-style preference can ever reach recall context.
-            dao.findByStableKey(LEGACY_RESPONSE_STYLE_KEY)
-                ?.takeIf { it.active }
-                ?.let { dao.deactivate(it.id, now) }
+        if (canonical.stableKey == PreferenceMemoryIdentity.RESPONSE_VERBOSITY_KEY) {
+            dao.recent(200)
+                .filter(PreferenceMemoryIdentity::isResponseVerbosity)
+                .filter { it.stableKey != PreferenceMemoryIdentity.RESPONSE_VERBOSITY_KEY }
+                .forEach { dao.deactivate(it.id, now) }
         }
         if (replaceBestFriends && MemoryRelationshipPolicy.isBestFriend(canonical)) {
             // A confirmed replacement must deactivate old semantic keys as well as the
@@ -416,7 +445,5 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     private companion object {
         const val MEMORY_LOG_TAG = "LyraMemoryStore"
-        const val RESPONSE_STYLE_KEY = "preference:response_style"
-        const val LEGACY_RESPONSE_STYLE_KEY = "communication:response_style"
     }
 }

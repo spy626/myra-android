@@ -84,9 +84,26 @@ object AutomaticMemoryExtractor {
             return "response_style" to "$style answers"
         }
         Regex(
+            """^(?:please\s+)?keep\s+(?:the\s+)?(?:answer|answers|reply|replies|response|responses)\s+(short|concise|brief|detailed)$""",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(text)?.let { match ->
+            return "response_style" to "${match.groupValues[1].lowercase(Locale.ROOT)} answers"
+        }
+        Regex(
             """^i\s+(?:prefer|want)\s+(?:you\s+to\s+answer\s+in|answers?\s+in)\s+(english|hindi|hinglish)$""",
             RegexOption.IGNORE_CASE
         ).matchEntire(text)?.let { return "language" to "answers in ${it.groupValues[1]}" }
+        Regex(
+            """^(?:please\s+)?(?:be|stay)\s+(concise|brief|detailed)$""",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(text)?.let { match ->
+            val value = if (match.groupValues[1].equals("detailed", true)) "detailed" else "short"
+            return "response_style" to "$value answers"
+        }
+        Regex(
+            """^(?:please\s+)?(?:give\s+me\s+)?(?:longer|more\s+detailed)\s+explanations$|^explain\s+(?:things|it)\s+in\s+(?:more\s+)?detail$""",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(text)?.let { return "response_style" to "detailed answers" }
         return null
     }
 
@@ -210,5 +227,5 @@ object AutomaticMemoryExtractor {
         .replace(Regex("\\s+"), " ")
         .trim()
 
-    private const val RESPONSE_STYLE_KEY = "preference:response_style"
+    private const val RESPONSE_STYLE_KEY = PreferenceMemoryIdentity.RESPONSE_VERBOSITY_KEY
 }

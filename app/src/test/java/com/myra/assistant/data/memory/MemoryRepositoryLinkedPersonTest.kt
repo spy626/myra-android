@@ -191,6 +191,57 @@ class MemoryRepositoryLinkedPersonTest {
         assertEquals("Zopy prefers detailed answers", active.single().fact)
     }
 
+    @Test fun crossCategoryPreferenceIsReplacedAndUnrelatedPreferenceSurvives() = runBlocking {
+        val dao = FakeMemoryDao()
+        val repository = MemoryRepository(dao)
+        repository.save(MemoryCandidate(
+            MemoryCategory.COMMUNICATION_STYLE, "Zopy prefers short answers",
+            "communication:response_style", MemorySensitivity.LOW, .95
+        ))
+        repository.save(MemoryCandidate(
+            MemoryCategory.PREFERENCE, "Zopy likes horror movies",
+            "preference:likes:horror movies", MemorySensitivity.LOW, .93
+        ))
+        val detailed = MemoryCandidate(
+            MemoryCategory.PREFERENCE, "Zopy prefers detailed explanations",
+            "semantic:preference:answer_length", MemorySensitivity.LOW, .94
+        )
+
+        repository.save(detailed)
+        repository.save(detailed.copy(fact = "Zopy prefers long detailed responses"))
+
+        val active = repository.allActive()
+        val styles = active.filter(PreferenceMemoryIdentity::isResponseVerbosity)
+        assertEquals(1, styles.size)
+        assertEquals("preference:response_style", styles.single().stableKey)
+        assertEquals("Zopy prefers long detailed responses", styles.single().fact)
+        assertTrue(active.any { it.fact == "Zopy likes horror movies" })
+    }
+
+    @Test fun reconnectReconciliationRepairsAlreadyStoredConflictingRows() = runBlocking {
+        val dao = FakeMemoryDao()
+        val repository = MemoryRepository(dao)
+        val now = System.currentTimeMillis()
+        dao.upsert(MemoryEntity(
+            "old-style", "communication:response_style", MemoryCategory.COMMUNICATION_STYLE.name,
+            "Zopy prefers short answers", "zopy prefers short answers", MemorySensitivity.LOW.name,
+            .95, "automatic_conversation", now - 100, now - 100, now - 100
+        ))
+        dao.upsert(MemoryEntity(
+            "new-style", "semantic:preference:answer_length", MemoryCategory.PREFERENCE.name,
+            "Zopy prefers detailed answers", "zopy prefers detailed answers", MemorySensitivity.LOW.name,
+            .94, "gemini_grounded_conversation", now, now, now
+        ))
+
+        repository.reconcilePreferenceDimensions()
+
+        val active = repository.allActive()
+        assertEquals(1, active.size)
+        assertEquals("preference:response_style", active.single().stableKey)
+        assertEquals(MemoryCategory.PREFERENCE.name, active.single().category)
+        assertEquals("Zopy prefers detailed answers", active.single().fact)
+    }
+
     @Test fun relevantRetrievalRecordsUsageWithoutDuplicatingMemory() = runBlocking {
         val repository = MemoryRepository(FakeMemoryDao())
         repository.save(AutomaticMemoryExtractor.extract("I usually use Chrome for reading articles")!!)

@@ -67,14 +67,14 @@ object SemanticMemoryProposalValidator {
             category in LOW_RISK_CATEGORIES -> MemorySensitivity.LOW
             else -> MemorySensitivity.PERSONAL
         }
-        return MemoryRelationshipPolicy.canonicalize(MemoryCandidate(
+        return PreferenceMemoryIdentity.canonicalize(MemoryRelationshipPolicy.canonicalize(MemoryCandidate(
             category = category,
             fact = cleanFact,
             stableKey = "semantic:${category.name.lowercase(Locale.ROOT)}:$key",
             sensitivity = sensitivity,
             confidence = confidence.coerceIn(0.0, 0.95),
             source = "gemini_grounded_conversation"
-        ))
+        )))
     }
 
     private fun meaningfulTokens(value: String): Set<String> = normalize(value)
