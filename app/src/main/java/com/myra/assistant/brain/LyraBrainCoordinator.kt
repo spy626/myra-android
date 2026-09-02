@@ -78,6 +78,18 @@ class LyraBrainCoordinator {
             return BrainDecision.ScrollThenOpenVideo(direction, ordinal, token)
         }
 
+        parseOrdinalVideoAction(text)?.let { ordinal ->
+            val token = sequence.incrementAndGet()
+            val target = ScreenTargetReference(targetText = "video", ordinal = ordinal)
+            state = state.copy(
+                lastScreenTarget = target,
+                lastAction = "open_ordinal_video",
+                lastActionSucceeded = null,
+                taskToken = token
+            )
+            return BrainDecision.ScreenAction(target, contextual = false)
+        }
+
         parseRelativeCorrection(text)?.let { position ->
             val previous = state.lastScreenTarget
                 ?: return BrainDecision.Clarify("Kaunsa item? Screen par target ek baar bata do.")
@@ -145,6 +157,11 @@ class LyraBrainCoordinator {
         )
     }
 
+    @Synchronized fun observeForegroundApp(packageName: String?) {
+        val livePackage = packageName?.trim()?.takeIf(String::isNotBlank) ?: return
+        state = state.copy(currentApp = livePackage)
+    }
+
     @Synchronized fun recordPhoneAction(app: String?, action: String, success: Boolean) {
         state = state.copy(
             currentApp = app?.takeIf { success } ?: state.currentApp,
@@ -208,6 +225,19 @@ class LyraBrainCoordinator {
             "do that again", "same one again", "dobara karo", "phir se karo", "open it", "play it",
             "click this", "click that", "click that one", "open this", "open that", "open that one"
         ).any(text::equals)
+
+        private fun parseOrdinalVideoAction(text: String): Int? {
+            val hasVideo = Regex("\\b(?:video|वीडियो)\\b").containsMatchIn(text)
+            val hasAction = Regex("\\b(?:open|play|tap|click|kholo|khol|chalao|dabao|karo)\\b")
+                .containsMatchIn(text)
+            if (!hasVideo || !hasAction || Regex("\\b(?:scroll|swipe)\\b").containsMatchIn(text)) return null
+            return when {
+                Regex("\\b(?:third|teesra|tisra|3rd)\\b").containsMatchIn(text) -> 3
+                Regex("\\b(?:second|doosra|dusra|2nd)\\b").containsMatchIn(text) -> 2
+                Regex("\\b(?:first|pehla|pehli|1st)\\b").containsMatchIn(text) -> 1
+                else -> null
+            }
+        }
 
         private fun parseMultiStep(text: String): Pair<ScrollDirection, Int>? {
             val hasScroll = Regex("\\b(?:scroll|swipe)\\b").containsMatchIn(text)
