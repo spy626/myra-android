@@ -1802,14 +1802,16 @@ class MyraVoiceService : Service() {
             createdIntent = screenActionRegistry.create(
                 activeTurnId, actionSessionId, lastUserIntentText,
                 target, position, ordinal, accessibility.currentPackageName(),
-                android.os.SystemClock.elapsedRealtime(), preTapFrame.frameId, confidence
+                android.os.SystemClock.elapsedRealtime(), preTapFrame.frameId, confidence,
+                actionScope.expectedWindowId, actionScope.expectedGeneration
             )
             true
         }
         val actionIntent = createdIntent ?: screenActionRegistry.create(
             activeTurnId, actionSessionId, lastUserIntentText,
             target, position, ordinal, accessibility.currentPackageName(),
-            android.os.SystemClock.elapsedRealtime(), preTapFrame.frameId, tapResult.confidence
+            android.os.SystemClock.elapsedRealtime(), preTapFrame.frameId, tapResult.confidence,
+            actionScope.expectedWindowId, actionScope.expectedGeneration
         )
         voiceLog(
             "SCREEN_ACTION_CREATED actionId=${actionIntent.actionId} turnId=${actionIntent.turnId} " +
@@ -1842,7 +1844,10 @@ class MyraVoiceService : Service() {
         mainHandler.postDelayed({
             val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
                 mainHandler.post {
-                    if (!screenActionRegistry.isCurrent(actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId)) {
+                    if (!screenActionRegistry.isExecutable(
+                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId,
+                        accessibility.currentForegroundContext()
+                    )) {
                         voiceLog("SCREEN_TARGET_STALE actionId=${actionIntent.actionId} turnId=${actionIntent.turnId} reason=replaced_before_verification")
                         return@post
                     }
@@ -2672,7 +2677,10 @@ class MyraVoiceService : Service() {
                             ScreenCaptureService.requestFreshFrame(activeTurnId) { postResult ->
                                 mainHandler.post {
                                     if (!brain.isTaskCurrent(plan.taskToken)) return@post
-                                    if (!screenActionRegistry.isCurrent(actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId)) {
+                                    if (!screenActionRegistry.isExecutable(
+                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId,
+                        accessibility.currentForegroundContext()
+                    )) {
                                         voiceLog("SCREEN_ACTION_CANCELLED actionId=${actionIntent.actionId} reason=replaced_before_verification")
                                         return@post
                                     }
@@ -2749,7 +2757,8 @@ class MyraVoiceService : Service() {
                         activeTurnId, beforeFrame.sessionId, lastUserIntentText,
                         target.targetText, target.position, target.ordinal,
                         accessibility.currentPackageName(), android.os.SystemClock.elapsedRealtime(),
-                        beforeFrame.frameId, confidence
+                        beforeFrame.frameId, confidence,
+                        actionScope.expectedWindowId, actionScope.expectedGeneration
                     )
                     true
                 }
@@ -2766,7 +2775,10 @@ class MyraVoiceService : Service() {
                         mainHandler.post {
                             if (!brain.isTaskCurrent(taskToken)) return@post
                             val action = ownedAction ?: return@post
-                            if (!screenActionRegistry.isCurrent(action.actionId, action.turnId, action.screenSessionId)) {
+                            if (!screenActionRegistry.isExecutable(
+                                action.actionId, action.turnId, action.screenSessionId,
+                                accessibility.currentForegroundContext()
+                            )) {
                                 voiceLog("SCREEN_ACTION_CANCELLED actionId=${action.actionId} reason=replaced_before_verification")
                                 return@post
                             }
