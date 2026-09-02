@@ -138,4 +138,21 @@ class LyraBrainCoordinatorTest {
             LyraBrainCoordinator.classify("open the second video")
         )
     }
+
+    @Test
+    fun `center video is a deterministic accessibility action`() {
+        val decision = LyraBrainCoordinator().interpret("center wala video kholo")
+            as BrainDecision.ScreenAction
+        assertEquals("center", decision.target.position)
+        assertEquals("video", decision.target.targetText)
+    }
+
+    @Test
+    fun `named video keeps title as primary accessibility target`() {
+        val decision = LyraBrainCoordinator().interpret("Miss Interwala video open karo")
+            as BrainDecision.ScreenAction
+        assertEquals("miss interwala", decision.target.targetText)
+        assertEquals(null, decision.target.position)
+        assertEquals(null, decision.target.ordinal)
+    }
 }
