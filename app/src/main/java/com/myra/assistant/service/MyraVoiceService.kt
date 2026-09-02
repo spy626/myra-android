@@ -1759,7 +1759,7 @@ class MyraVoiceService : Service() {
             mainHandler.post {
                 val ready = result as? FreshFrameResult.Ready
                 if (ready == null || !ScreenCaptureService.session.isCurrent(ready.query.sessionId)) {
-                    brain.recordScreenAction(resolvedTarget, false)
+                    brain.recordScreenAction(ownedTarget, false)
                     live?.sendToolResponse(id, "perform_screen_action", false, "A fresh current screen was unavailable")
                     return@post
                 }
@@ -1792,6 +1792,11 @@ class MyraVoiceService : Service() {
             live?.sendToolResponse(id, "perform_screen_action", false, "The foreground app changed before target resolution")
             return
         }
+        val ownedTarget = resolvedTarget.copy(
+            appPackage = actionScope.expectedPackage,
+            activeWindowId = actionScope.expectedWindowId,
+            screenContextGeneration = actionScope.expectedGeneration
+        )
         val before = accessibility.visibleScreenSignature()
         val actionSessionId = preTapFrame.sessionId
         val resolveStartedAt = android.os.SystemClock.elapsedRealtime()
@@ -1836,7 +1841,7 @@ class MyraVoiceService : Service() {
         voiceLog("screen_action_tap_attempt target=$target accepted=$accepted screen_session_id=$actionSessionId")
         if (!accepted) {
             screenActionRegistry.cancel(actionIntent.actionId)
-            brain.recordScreenAction(resolvedTarget, false)
+            brain.recordScreenAction(ownedTarget, false)
             voiceLog("SCREEN_ACTION_FAILED actionId=${actionIntent.actionId} reason=${tapResult.resolution}")
             live?.sendToolResponse(id, "perform_screen_action", false, "No unambiguous clickable target matched the current screen")
             return
@@ -1870,7 +1875,7 @@ class MyraVoiceService : Service() {
                         "SCREEN_ACTION_VERIFIED actionId=${actionIntent.actionId} screen_session_id=$actionSessionId pre_frame_id=${preTapFrame.frameId} " +
                             "post_frame_id=${post?.frameId ?: 0L} timestamp=${android.os.SystemClock.elapsedRealtime()} verified=$verified"
                     )
-                    brain.recordScreenAction(resolvedTarget, verified)
+                    brain.recordScreenAction(ownedTarget, verified)
                     screenActionRegistry.cancel(actionIntent.actionId)
                     live?.sendToolResponse(
                         id, "perform_screen_action", verified,
@@ -2734,6 +2739,19 @@ class MyraVoiceService : Service() {
             finishBrainTask(taskToken, false, "Current app clear nahi mila.")
             return
         }
+        if (target.appPackage != null &&
+            (target.appPackage != actionScope.expectedPackage ||
+                target.activeWindowId != actionScope.expectedWindowId ||
+                target.screenContextGeneration != actionScope.expectedGeneration)
+        ) {
+            finishBrainTask(taskToken, false, "Screen badal gayi hai. Kaunsa item?")
+            return
+        }
+        val ownedTarget = target.copy(
+            appPackage = actionScope.expectedPackage,
+            activeWindowId = actionScope.expectedWindowId,
+            screenContextGeneration = actionScope.expectedGeneration
+        )
         val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { freshResult ->
             mainHandler.post {
                 if (!brain.isTaskCurrent(taskToken)) return@post
@@ -2766,7 +2784,7 @@ class MyraVoiceService : Service() {
                 val accepted = tapResult.accepted && ownedAction != null
                 if (!accepted) {
                     ownedAction?.let { screenActionRegistry.cancel(it.actionId) }
-                    brain.recordScreenAction(target, false)
+                    brain.recordScreenAction(ownedTarget, false)
                     finishBrainTask(taskToken, false, "Doosra target clear nahi mila.")
                     return@post
                 }
@@ -2793,7 +2811,7 @@ class MyraVoiceService : Service() {
                                 )
                             val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
                                 foregroundStillOwned && (accessibilityChanged || frameChanged)
-                            brain.recordScreenAction(target, verified)
+                            brain.recordScreenAction(ownedTarget, verified)
                             screenActionRegistry.cancel(action.actionId)
                             finishBrainTask(
                                 taskToken,
