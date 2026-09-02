@@ -101,7 +101,7 @@ object AutomaticMemoryExtractor {
             return "response_style" to "$value answers"
         }
         Regex(
-            """^(?:please\s+)?(?:give\s+me\s+)?(?:longer|more\s+detailed)\s+explanations$|^explain\s+(?:things|it)\s+in\s+(?:more\s+)?detail$""",
+            """^(?:please\s+)?(?:give(?:\s+me)?\s+)?(?:longer|more\s+detailed)\s+explanations$|^explain\s+(?:things|it)\s+in\s+(?:more\s+)?detail$""",
             RegexOption.IGNORE_CASE
         ).matchEntire(text)?.let { return "response_style" to "detailed answers" }
         return null
