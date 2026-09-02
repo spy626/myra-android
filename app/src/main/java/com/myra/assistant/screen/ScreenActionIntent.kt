@@ -15,7 +15,9 @@ data class ScreenActionIntent(
     val targetResolutionTimestamp: Long,
     val sourceFrameId: Long,
     val confidence: Double,
-    val resolverVersion: String = ScreenActionIntentRegistry.RESOLVER_VERSION
+    val resolverVersion: String = ScreenActionIntentRegistry.RESOLVER_VERSION,
+    val activeWindowId: Int? = null,
+    val screenContextGeneration: Long = 0L
 )
 
 /** One current screen action. Creating a newer action invalidates every older callback. */
@@ -32,12 +34,24 @@ class ScreenActionIntentRegistry {
         appPackage: String?,
         resolvedAt: Long,
         sourceFrameId: Long,
-        confidence: Double
+        confidence: Double,
+        activeWindowId: Int? = null,
+        screenContextGeneration: Long = 0L
     ): ScreenActionIntent {
         return ScreenActionIntent(
-            UUID.randomUUID().toString(), turnId, screenSessionId, requestedText.trim(),
-            normalize(target), position?.lowercase(Locale.ROOT), ordinal, appPackage,
-            resolvedAt, sourceFrameId, confidence.coerceIn(0.0, 1.0)
+            actionId = UUID.randomUUID().toString(),
+            turnId = turnId,
+            screenSessionId = screenSessionId,
+            requestedText = requestedText.trim(),
+            normalizedTarget = normalize(target),
+            position = position?.lowercase(Locale.ROOT),
+            ordinal = ordinal,
+            appPackage = appPackage,
+            targetResolutionTimestamp = resolvedAt,
+            sourceFrameId = sourceFrameId,
+            confidence = confidence.coerceIn(0.0, 1.0),
+            activeWindowId = activeWindowId,
+            screenContextGeneration = screenContextGeneration
         ).also { current = it }
     }
 
@@ -47,6 +61,19 @@ class ScreenActionIntentRegistry {
         val value = current ?: return false
         return value.actionId == actionId && value.turnId == turnId &&
             value.screenSessionId == screenSessionId
+    }
+
+    fun isExecutable(
+        actionId: String,
+        turnId: Long,
+        screenSessionId: String,
+        foreground: ForegroundAppContext?
+    ): Boolean {
+        val value = current ?: return false
+        if (!isCurrent(actionId, turnId, screenSessionId) || foreground == null) return false
+        return value.appPackage == foreground.packageName &&
+            value.activeWindowId == foreground.windowId &&
+            value.screenContextGeneration == foreground.generation
     }
 
     @Synchronized fun cancel(actionId: String? = null): ScreenActionIntent? {
