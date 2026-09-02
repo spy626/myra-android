@@ -30,8 +30,11 @@ object MemoryRelevanceSelector {
                     normalize(query).contains(normalize(memory.fact))
                 val categoryBoost = if (contextualReference) contextBoost(memory.category) else 0
                 val usageBoost = memory.useCount.coerceAtMost(5) * 2
-                val score = factOverlap * 10 + conceptualKeyOverlap * 4 + categoryBoost +
-                    usageBoost + if (exactPhrase) 25 else 0
+                val semanticScore = factOverlap * 10 + conceptualKeyOverlap * 4 + categoryBoost +
+                    if (exactPhrase) 25 else 0
+                // Frequency ranks relevant memories; it must never make an unrelated
+                // memory relevant or resurrect an old person alias.
+                val score = if (semanticScore > 0) semanticScore + usageBoost else 0
                 memory to score
             }
             .filter { it.second > 0 }

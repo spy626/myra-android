@@ -2,7 +2,7 @@ package com.myra.assistant.data.memory
 
 object MemorySafetyPolicy {
     private val prohibited = Regex(
-        """\b(?:otp|one\s*time\s*password|pin|passcode|password|cvv|security\s*code|verification\s*code|recovery\s*code|private\s*key|seed\s*phrase|bank|account\s*number|card\s*number|aadhaar|aadhar|pan\s*number|passport\s*number)\b""",
+        """\b(?:otp|one\s*time\s*password|pin|passcode|passwords?|cvv|security\s*code|verification\s*code|recovery\s*code|authentication\s*token|auth\s*token|api\s*key|private\s*key|seed\s*phrase|bank|account\s*number|card\s*number|aadhaar|aadhar|pan\s*number|passport\s*number)\b""",
         RegexOption.IGNORE_CASE
     )
 

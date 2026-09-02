@@ -8,7 +8,7 @@ import java.util.Locale
  */
 object AutomaticMemoryExtractor {
     private val prohibitedOrPersonal = Regex(
-        """\b(?:otp|password|passcode|pin|cvv|security\s*code|verification\s*code|recovery\s*code|private\s*key|seed\s*phrase|bank|account|address|health|disease|diagnosis|religion|sexual|trauma|fear|afraid|friend|dost|girlfriend|boyfriend|wife|husband|mother|father|brother|sister|relationship|age|years?\s+old|saal)\b""",
+        """\b(?:otp|passwords?|passcode|pin|cvv|security\s*code|verification\s*code|recovery\s*code|authentication\s*token|auth\s*token|api\s*key|private\s*key|seed\s*phrase|bank|account|address|health|disease|diagnosis|religion|sexual|trauma|fear|afraid|friend|dost|girlfriend|boyfriend|wife|husband|mother|father|brother|sister|relationship|age|years?\s+old|saal)\b""",
         RegexOption.IGNORE_CASE
     )
     private val ambiguousSubject = Regex(
