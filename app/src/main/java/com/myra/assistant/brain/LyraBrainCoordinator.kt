@@ -11,7 +11,10 @@ enum class BrainIntent {
 data class ScreenTargetReference(
     val targetText: String? = null,
     val position: String? = null,
-    val ordinal: Int? = null
+    val ordinal: Int? = null,
+    val appPackage: String? = null,
+    val activeWindowId: Int? = null,
+    val screenContextGeneration: Long = 0L
 )
 
 data class BrainTaskState(
@@ -202,7 +205,8 @@ class LyraBrainCoordinator {
         }
 
         private fun isRepeatReference(text: String): Boolean = listOf(
-            "do that again", "same one again", "dobara karo", "phir se karo", "open it", "play it"
+            "do that again", "same one again", "dobara karo", "phir se karo", "open it", "play it",
+            "click this", "click that", "click that one", "open this", "open that", "open that one"
         ).any(text::equals)
 
         private fun parseMultiStep(text: String): Pair<ScrollDirection, Int>? {
