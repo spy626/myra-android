@@ -28,6 +28,21 @@ class ReadingTrackerTest {
         assertEquals(listOf("charlie is entirely new article content on the next screen"), second.map { it.text })
     }
 
+    @Test fun `combined overlapping text returns only unread remainder`() {
+        val tracker = ReadingTracker()
+        start(tracker)
+        tracker.acceptVisibleText(
+            listOf("The first consumed article paragraph contains enough meaningful words for reading."), 10L
+        )
+        val fresh = tracker.acceptVisibleText(
+            listOf(
+                "The first consumed article paragraph contains enough meaningful words for reading. " +
+                    "This second paragraph is new and should be spoken only once."
+            ), 20L
+        )
+        assertEquals(listOf("this second paragraph is new and should be spoken only once"), fresh.map { it.text })
+    }
+
     @Test fun `minor punctuation and spacing differences deduplicate`() {
         val tracker = ReadingTracker()
         start(tracker)
@@ -88,6 +103,25 @@ class ReadingTrackerTest {
         // physical scroll instead of guessing. The state transition itself is covered.
         assertFalse(tracker.recordAutoScroll())
         assertEquals(ReadingState.WAITING_FOR_SCROLL, tracker.snapshot()?.state)
+    }
+
+    @Test fun `automatic scroll decision requires matching article ownership`() {
+        val tracker = ReadingTracker()
+        start(tracker, session = "screen-1", packageName = "com.android.chrome")
+        assertTrue(tracker.markWaitingForScroll())
+        assertTrue(tracker.shouldAutoScroll("test-container", "screen-1", "com.android.chrome"))
+        assertFalse(tracker.shouldAutoScroll("other-container", "screen-1", "com.android.chrome"))
+        assertFalse(tracker.shouldAutoScroll("test-container", "old-screen", "com.android.chrome"))
+        assertFalse(tracker.shouldAutoScroll("test-container", "screen-1", "com.google.android.youtube"))
+    }
+
+    @Test fun `repeated empty article content reaches safe end`() {
+        val tracker = ReadingTracker(maxNoNewContent = 2)
+        start(tracker)
+        tracker.acceptVisibleText(emptyList(), 1L)
+        assertFalse(tracker.reachedArticleEnd())
+        tracker.acceptVisibleText(emptyList(), 2L)
+        assertTrue(tracker.reachedArticleEnd())
     }
 
     @Test fun `explicit container identity can be replaced only while waiting or reading`() {

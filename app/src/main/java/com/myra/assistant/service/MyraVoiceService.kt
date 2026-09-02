@@ -2394,9 +2394,12 @@ class MyraVoiceService : Service() {
             ReadingCommand.StartAgain -> {
                 readingTracker.resetProgress()
                 val accessibility = AccessibilityHelperService.instance
-                val accepted = accessibility?.scrollArticleToBeginning { _ ->
-                    mainHandler.post { readCurrentArticleContent(turnId, allowAutoScroll = true) }
-                } == true
+                val active = readingTracker.snapshot()
+                val accepted = if (accessibility != null && active?.scrollContainerId != null) {
+                    accessibility.scrollArticleToBeginning(
+                        active.scrollContainerId, active.foregroundPackage, active.screenSessionId
+                    ) { _ -> mainHandler.post { readCurrentArticleContent(turnId, allowAutoScroll = true) } }
+                } else false
                 if (!accepted) readCurrentArticleContent(turnId, allowAutoScroll = true)
             }
             ReadingCommand.ReadAgain -> readCurrentArticleContent(turnId, allowAutoScroll = false, forceRepeat = true)
@@ -2437,16 +2440,23 @@ class MyraVoiceService : Service() {
         val context = com.myra.assistant.screen.ScreenContextStore.snapshot()
         val identity = listOfNotNull(context.currentPackage, accessibility.visibleArticleText().firstOrNull())
             .joinToString(":").take(300)
+        val containerId = accessibility.currentArticleScrollContainerId() ?: run {
+            voiceLog("READING_START_REJECTED contentType=$contentType turnId=$turnId reason=no_article_scroll_container")
+            speakReadingStatus("Article ka safe scroll area nahi mila. Auto-scroll start nahi karungi.", error = true)
+            return
+        }
         val session = readingTracker.start(
             ScreenCaptureService.session.sessionId, identity,
-            accessibility.currentPackageName().orEmpty(), contentType, explicitlyRequested = true
+            accessibility.currentPackageName().orEmpty(), contentType, explicitlyRequested = true,
+            scrollContainerId = containerId
         ) ?: run {
             speakReadingStatus("Article reading start nahi hui.", error = true)
             return
         }
         voiceLog(
             "READING_SESSION_STARTED reading_session_id=${session.readingSessionId} " +
-                "screen_session_id=${session.screenSessionId} timestamp=${android.os.SystemClock.elapsedRealtime()} contentType=$contentType"
+                "screen_session_id=${session.screenSessionId} container_id=${session.scrollContainerId} " +
+                "timestamp=${android.os.SystemClock.elapsedRealtime()} contentType=$contentType"
         )
         readCurrentArticleContent(turnId, allowAutoScroll = true)
     }
@@ -2521,16 +2531,25 @@ class MyraVoiceService : Service() {
             voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=package_changed package=$foregroundPackage")
             return
         }
-        if (!readingTracker.recordAutoScroll()) {
+        val accessibility = AccessibilityHelperService.instance ?: run { finishArticleAtEnd(); return }
+        val containerId = session.scrollContainerId ?: run {
+            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=unbound_container")
             finishArticleAtEnd()
             return
         }
-        val accessibility = AccessibilityHelperService.instance ?: run { finishArticleAtEnd(); return }
+        if (!readingTracker.shouldAutoScroll(containerId, session.screenSessionId, foregroundPackage) ||
+            !readingTracker.recordAutoScroll()
+        ) {
+            finishArticleAtEnd()
+            return
+        }
         voiceLog(
             "READING_AUTO_SCROLL_STARTED reading_session_id=${session.readingSessionId} " +
                 "timestamp=${android.os.SystemClock.elapsedRealtime()} count=${readingTracker.snapshot()?.consecutiveAutoScrollCount}"
         )
-        val accepted = accessibility.scrollArticleVerified { changed ->
+        val accepted = accessibility.scrollArticleVerified(
+            containerId, session.foregroundPackage, session.screenSessionId
+        ) { changed ->
             mainHandler.post {
                 val active = readingTracker.snapshot()
                 if (active?.state != ReadingState.SCROLLING) return@post

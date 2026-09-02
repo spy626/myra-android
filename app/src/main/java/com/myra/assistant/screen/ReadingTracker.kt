@@ -1,6 +1,5 @@
 package com.myra.assistant.screen
 
-import android.graphics.Rect
 import com.myra.assistant.service.AccessibilityHelperService
 import java.security.MessageDigest
 import java.util.Locale
@@ -23,6 +22,7 @@ data class ReadingSession(
     val state: ReadingState,
     val scrollContainerId: String? = null,
     val readFingerprints: Set<String> = emptySet(),
+    val consumedNormalizedText: List<String> = emptyList(),
     val lastVisibleFingerprints: List<String> = emptyList(),
     val currentSectionFingerprint: String? = null,
     val spokenTextFingerprint: String? = null,
@@ -149,7 +149,8 @@ class ReadingTracker(
     @Synchronized fun resetProgress(): Boolean {
         val current = session ?: return false
         session = current.copy(state = ReadingState.READING, readFingerprints = emptySet(),
-            lastVisibleFingerprints = emptyList(), consecutiveAutoScrollCount = 0, noNewContentCount = 0)
+            consumedNormalizedText = emptyList(), lastVisibleFingerprints = emptyList(),
+            consecutiveAutoScrollCount = 0, noNewContentCount = 0)
         return true
     }
 
@@ -158,9 +159,14 @@ class ReadingTracker(
         if (current.state !in setOf(ReadingState.READING, ReadingState.VERIFYING_NEW_CONTENT)) return emptyList()
         val segments = lines.asSequence().map(::normalize).filter { it.length >= 24 && !isChrome(it) }
             .distinct().map { ReadingSegment(it, fingerprint(it)) }.toList()
-        val fresh = segments.filterNot { it.fingerprint in current.readFingerprints }
+        val fresh = segments.mapNotNull { segment ->
+            unreadRemainder(segment.text, current.consumedNormalizedText)?.let {
+                ReadingSegment(it, fingerprint(it))
+            }
+        }.filterNot { it.fingerprint in current.readFingerprints }.distinctBy { it.fingerprint }
         session = current.copy(
             readFingerprints = current.readFingerprints + fresh.map { it.fingerprint },
+            consumedNormalizedText = (current.consumedNormalizedText + fresh.map { it.text }).takeLast(300),
             lastVisibleFingerprints = segments.map { it.fingerprint },
             currentSectionFingerprint = segments.lastOrNull()?.fingerprint,
             spokenTextFingerprint = fresh.lastOrNull()?.fingerprint ?: current.spokenTextFingerprint,
@@ -200,6 +206,15 @@ class ReadingTracker(
 
     fun canAutoScroll(): Boolean = session?.let(::canAutoScroll) == true && validateCurrentScrollContainer()
 
+    fun shouldAutoScroll(containerId: String?, screenSessionId: String, foregroundPackage: String): Boolean {
+        val current = session ?: return false
+        return canAutoScroll(current) && acceptsScrollContainer(containerId, screenSessionId, foregroundPackage)
+    }
+
+    fun reachedArticleEnd(): Boolean = session?.let {
+        it.consecutiveAutoScrollCount >= maxAutoScrolls || it.noNewContentCount >= maxNoNewContent
+    } ?: true
+
     private fun canAutoScroll(value: ReadingSession): Boolean =
         value.state in setOf(ReadingState.READING, ReadingState.WAITING_FOR_SCROLL) &&
             value.explicitlyRequested && value.contentType == ScreenContentType.ARTICLE &&
@@ -207,35 +222,17 @@ class ReadingTracker(
             !value.scrollContainerId.isNullOrBlank() && !isVideoOrSocialPackage(value.foregroundPackage)
 
     private fun currentArticleContainerId(): String? {
-        val service = AccessibilityHelperService.instance ?: return null
-        val root = service.rootInActiveWindow ?: return null
-        val packageName = root.packageName?.toString().orEmpty()
-        if (packageName.isBlank() || isVideoOrSocialPackage(packageName)) return null
-        data class ContainerCandidate(val area: Long, val identity: String)
-        val candidates = mutableListOf<ContainerCandidate>()
-        fun collect(node: android.view.accessibility.AccessibilityNodeInfo) {
-            if (node.isVisibleToUser && node.isScrollable) {
-                val bounds = Rect().also(node::getBoundsInScreen)
-                if (!bounds.isEmpty && bounds.width() > 0 && bounds.height() > 0) {
-                    val identity = listOf(
-                        packageName,
-                        node.viewIdResourceName.orEmpty(),
-                        node.className?.toString().orEmpty(),
-                        bounds.left.toString(), bounds.top.toString(),
-                        bounds.right.toString(), bounds.bottom.toString()
-                    ).joinToString("|")
-                    candidates += ContainerCandidate(bounds.width().toLong() * bounds.height(), identity)
-                }
-            }
-            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
-        }
-        collect(root)
-        return candidates.maxByOrNull { it.area }?.identity?.let(::containerFingerprint)
+        return AccessibilityHelperService.instance?.currentArticleScrollContainerId()
     }
 
-    private fun containerFingerprint(identity: String): String =
-        MessageDigest.getInstance("SHA-256").digest(identity.toByteArray()).take(12)
-            .joinToString("") { "%02x".format(it) }
+    private fun unreadRemainder(text: String, consumed: List<String>): String? {
+        var remainder = text
+        consumed.sortedByDescending(String::length).forEach { old ->
+            if (old == remainder || old.contains(remainder)) return null
+            if (remainder.contains(old)) remainder = normalize(remainder.replace(old, " "))
+        }
+        return remainder.takeIf { it.length >= 24 }
+    }
 
     private fun updateState(next: ReadingState): Boolean {
         val current = session ?: return false

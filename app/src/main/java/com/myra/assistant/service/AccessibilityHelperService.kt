@@ -730,28 +730,28 @@ class AccessibilityHelperService : AccessibilityService() {
             .toList()
     }
 
-    /** Generic adaptive article scroll. It is hard-blocked for video/social surfaces. */
-    fun scrollArticleVerified(onResult: (Boolean) -> Unit): Boolean {
-        if (detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE) return false
+    fun currentArticleScrollContainerId(): String? {
+        if (detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE) return null
+        val root = rootInActiveWindow ?: return null
+        return articleScrollContainers(root).firstOrNull()?.identity
+    }
+
+    /** Scrolls only the exact container owned by the active article session. */
+    fun scrollArticleVerified(
+        expectedContainerId: String,
+        expectedPackage: String,
+        expectedScreenSessionId: String,
+        onResult: (Boolean) -> Unit
+    ): Boolean {
+        if (!ScreenCaptureService.session.isCurrent(expectedScreenSessionId) ||
+            currentPackageName() != expectedPackage ||
+            detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE
+        ) return false
         val before = visibleScreenSignature()
         val root = rootInActiveWindow ?: return false
-        val screenWidth = resources.displayMetrics.widthPixels
-        val screenHeight = resources.displayMetrics.heightPixels
-        val scrollables = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
-        fun collect(node: AccessibilityNodeInfo) {
-            if (node.isVisibleToUser && node.isScrollable) {
-                val bounds = Rect().also(node::getBoundsInScreen)
-                if (bounds.width() >= screenWidth * 0.55 && bounds.height() >= screenHeight * 0.35) {
-                    scrollables += bounds.width() * bounds.height() to node
-                }
-            }
-            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
-        }
-        collect(root)
-        val accepted = scrollables.sortedByDescending { it.first }
-            .any { (_, node) -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }
-        // Article reading never falls back to a generic page gesture. If the current
-        // accessibility tree exposes no article/page scroll container, stop safely.
+        val container = articleScrollContainers(root).firstOrNull { it.identity == expectedContainerId }
+            ?: return false
+        val accepted = container.node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
         if (!accepted) return false
         Handler(Looper.getMainLooper()).postDelayed({
             val changed = before.isNotBlank() && visibleScreenSignature() != before
@@ -761,23 +761,23 @@ class AccessibilityHelperService : AccessibilityService() {
         return true
     }
 
-    fun scrollArticleToBeginning(onResult: (Boolean) -> Unit): Boolean {
-        if (detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE) return false
+    fun scrollArticleToBeginning(
+        expectedContainerId: String,
+        expectedPackage: String,
+        expectedScreenSessionId: String,
+        onResult: (Boolean) -> Unit
+    ): Boolean {
+        if (!ScreenCaptureService.session.isCurrent(expectedScreenSessionId) ||
+            currentPackageName() != expectedPackage ||
+            detectContentType() != com.myra.assistant.screen.ScreenContentType.ARTICLE
+        ) return false
         fun step(remaining: Int, moved: Boolean) {
             if (remaining <= 0) { onResult(moved); return }
             val root = rootInActiveWindow ?: run { onResult(moved); return }
             val before = visibleScreenSignature()
-            val candidates = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
-            fun collect(node: AccessibilityNodeInfo) {
-                if (node.isVisibleToUser && node.isScrollable) {
-                    val bounds = Rect().also(node::getBoundsInScreen)
-                    candidates += bounds.width() * bounds.height() to node
-                }
-                for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
-            }
-            collect(root)
-            val accepted = candidates.sortedByDescending { it.first }
-                .any { (_, node) -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) }
+            val container = articleScrollContainers(root).firstOrNull { it.identity == expectedContainerId }
+                ?: run { onResult(moved); return }
+            val accepted = container.node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
             if (!accepted) { onResult(moved); return }
             Handler(Looper.getMainLooper()).postDelayed({
                 val changed = before.isNotBlank() && visibleScreenSignature() != before
@@ -786,6 +786,39 @@ class AccessibilityHelperService : AccessibilityService() {
         }
         step(12, false)
         return true
+    }
+
+    private data class ArticleScrollContainer(
+        val area: Long,
+        val identity: String,
+        val node: AccessibilityNodeInfo
+    )
+
+    private fun articleScrollContainers(root: AccessibilityNodeInfo): List<ArticleScrollContainer> {
+        val packageName = root.packageName?.toString().orEmpty()
+        if (packageName.isBlank() || packageName == YOUTUBE_PACKAGE) return emptyList()
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val result = mutableListOf<ArticleScrollContainer>()
+        fun collect(node: AccessibilityNodeInfo, path: String) {
+            if (node.isVisibleToUser && node.isScrollable) {
+                val bounds = Rect().also(node::getBoundsInScreen)
+                if (bounds.width() >= screenWidth * 0.55 && bounds.height() >= screenHeight * 0.35) {
+                    val raw = listOf(
+                        packageName, node.viewIdResourceName.orEmpty(), node.className?.toString().orEmpty(),
+                        path
+                    ).joinToString("|")
+                    val identity = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(raw.toByteArray()).take(12).joinToString("") { "%02x".format(it) }
+                    result += ArticleScrollContainer(bounds.width().toLong() * bounds.height(), identity, node)
+                }
+            }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let { collect(it, "$path/$index") }
+            }
+        }
+        collect(root, "root")
+        return result.sortedByDescending { it.area }
     }
 
     fun currentPackageName(): String? = rootInActiveWindow?.packageName?.toString()
