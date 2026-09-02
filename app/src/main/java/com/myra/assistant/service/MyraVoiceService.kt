@@ -1759,7 +1759,7 @@ class MyraVoiceService : Service() {
             mainHandler.post {
                 val ready = result as? FreshFrameResult.Ready
                 if (ready == null || !ScreenCaptureService.session.isCurrent(ready.query.sessionId)) {
-                    brain.recordScreenAction(ownedTarget, false)
+                    brain.recordScreenAction(resolvedTarget, false)
                     live?.sendToolResponse(id, "perform_screen_action", false, "A fresh current screen was unavailable")
                     return@post
                 }
