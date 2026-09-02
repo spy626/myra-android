@@ -1784,11 +1784,21 @@ class MyraVoiceService : Service() {
         val target = resolvedTarget.targetText
         val position = resolvedTarget.position
         val ordinal = resolvedTarget.ordinal
+        val foreground = accessibility.currentForegroundContext()
+        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
+        if (actionScope == null ||
+            (preTapFrame.packageName != null && preTapFrame.packageName != actionScope.expectedPackage)
+        ) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "The foreground app changed before target resolution")
+            return
+        }
         val before = accessibility.visibleScreenSignature()
         val actionSessionId = preTapFrame.sessionId
         val resolveStartedAt = android.os.SystemClock.elapsedRealtime()
         var createdIntent: ScreenActionIntent? = null
-        val tapResult = accessibility.resolveAndTapVisibleTarget(target, position, ordinal) { _, confidence ->
+        val tapResult = accessibility.resolveAndTapVisibleTarget(
+            target, position, ordinal, actionScope
+        ) { _, confidence ->
             createdIntent = screenActionRegistry.create(
                 activeTurnId, actionSessionId, lastUserIntentText,
                 target, position, ordinal, accessibility.currentPackageName(),
@@ -1840,7 +1850,12 @@ class MyraVoiceService : Service() {
                     val accessibilityChanged = before.isNotBlank() && accessibility.visibleScreenSignature() != before
                     val frameChanged = post != null && post.sessionId == actionSessionId &&
                         post.frameId > preTapFrame.frameId && post.hash != preTapFrame.hash
-                    val verified = ScreenCaptureService.session.isCurrent(actionSessionId) && (accessibilityChanged || frameChanged)
+                    val foregroundStillOwned =
+                        com.myra.assistant.screen.ForegroundActionPolicy.canExecute(
+                            actionScope, accessibility.currentForegroundContext()
+                        )
+                    val verified = ScreenCaptureService.session.isCurrent(actionSessionId) &&
+                        foregroundStillOwned && (accessibilityChanged || frameChanged)
                     voiceLog(
                         "screen_action_post_frame screen_session_id=$actionSessionId preTapFrameId=${preTapFrame.frameId} " +
                             "postTapFrameId=${post?.frameId ?: 0L} frameChanged=$frameChanged accessibilityChanged=$accessibilityChanged"
@@ -2704,6 +2719,13 @@ class MyraVoiceService : Service() {
             return
         }
         val taskToken = brain.snapshot().taskToken
+        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(
+            accessibility.currentForegroundContext()
+        )
+        if (actionScope == null) {
+            finishBrainTask(taskToken, false, "Current app clear nahi mila.")
+            return
+        }
         val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { freshResult ->
             mainHandler.post {
                 if (!brain.isTaskCurrent(taskToken)) return@post
@@ -2714,8 +2736,14 @@ class MyraVoiceService : Service() {
                 }
                 val beforeSignature = accessibility.visibleScreenSignature()
                 var actionIntent: ScreenActionIntent? = null
+                if (beforeFrame.packageName != null &&
+                    beforeFrame.packageName != actionScope.expectedPackage
+                ) {
+                    finishBrainTask(taskToken, false, "App change ho gaya; old target use nahi kiya.")
+                    return@post
+                }
                 val tapResult = accessibility.resolveAndTapVisibleTarget(
-                    target.targetText, target.position, target.ordinal
+                    target.targetText, target.position, target.ordinal, actionScope
                 ) { _, confidence ->
                     actionIntent = screenActionRegistry.create(
                         activeTurnId, beforeFrame.sessionId, lastUserIntentText,
@@ -2747,8 +2775,12 @@ class MyraVoiceService : Service() {
                                 accessibility.visibleScreenSignature() != beforeSignature
                             val frameChanged = postFrame != null && postFrame.sessionId == beforeFrame.sessionId &&
                                 postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
+                            val foregroundStillOwned =
+                                com.myra.assistant.screen.ForegroundActionPolicy.canExecute(
+                                    actionScope, accessibility.currentForegroundContext()
+                                )
                             val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
-                                (accessibilityChanged || frameChanged)
+                                foregroundStillOwned && (accessibilityChanged || frameChanged)
                             brain.recordScreenAction(target, verified)
                             screenActionRegistry.cancel(action.actionId)
                             finishBrainTask(
@@ -2786,15 +2818,24 @@ class MyraVoiceService : Service() {
         val shouldAcknowledge = command.direction != null || !hasAcknowledgedScrollDirection
         val service = AccessibilityHelperService.instance
         if (service == null || !AccessibilityHelperService.isEnabled(this)) {
-            val error = "YouTube scroll ke liye LYRA Accessibility enable karo."
+            val error = "Scroll ke liye LYRA Accessibility enable karo."
             listener?.onMyraText(error, true)
             emitState(error)
             queueLocalSpeech(error)
             return
         }
-        val accepted = service.scrollYouTubeVerified(
-            resolvedDirection == AppCommand.ScrollDirection.DOWN
-        ) { success ->
+        val explicitYouTube = command.explicitlyRequestedApp.equals("YouTube", true)
+        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(
+            service.currentForegroundContext()
+        )
+        if (!explicitYouTube && actionScope == null) {
+            val error = "Current app clear nahi mila, isliye scroll nahi kiya."
+            listener?.onMyraText(error, true)
+            emitState(error)
+            queueLocalSpeech(error)
+            return
+        }
+        val callback: (Boolean) -> Unit = { success ->
             mainHandler.post {
                 if (success) {
                     lastScrollDirection = resolvedDirection
@@ -2813,20 +2854,36 @@ class MyraVoiceService : Service() {
                         emitState("Sun rahi hoon…")
                     }
                 } else {
-                    val error = "YouTube feed move nahi hua. Screen unlock rakho aur phir try karo."
+                    val error = "Current screen move nahi hua. Screen unlock rakho aur phir try karo."
                     listener?.onMyraText(error, true)
                     emitState(error)
                     queueLocalSpeech(error)
                 }
             }
         }
+        val accepted = if (explicitYouTube) {
+            service.scrollYouTubeVerified(
+                resolvedDirection == AppCommand.ScrollDirection.DOWN,
+                callback
+            )
+        } else {
+            service.scrollCurrentForegroundVerified(
+                actionScope!!,
+                resolvedDirection == AppCommand.ScrollDirection.DOWN,
+                callback
+            )
+        }
         if (!accepted) {
-            val error = "YouTube is phone mein nahi mila."
+            val error = if (explicitYouTube) {
+                "YouTube is phone mein nahi mila."
+            } else {
+                "Current app mein safe scroll area nahi mila."
+            }
             listener?.onMyraText(error, true)
             emitState(error)
             queueLocalSpeech(error)
         } else {
-            emitState("YouTube feed scroll kar rahi hoon…")
+            emitState(if (explicitYouTube) "YouTube scroll kar rahi hoon…" else "Current screen scroll kar rahi hoon…")
         }
     }
 
