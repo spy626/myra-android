@@ -31,6 +31,9 @@ import com.myra.assistant.screen.ScreenShareState
 import com.myra.assistant.screen.ScreenTargetCandidate
 import com.myra.assistant.screen.ScreenTargetResolution
 import com.myra.assistant.screen.ScreenTargetResolver
+import com.myra.assistant.screen.ForegroundAppContext
+import com.myra.assistant.screen.ForegroundActionScope
+import com.myra.assistant.screen.ForegroundActionPolicy
 import java.util.Locale
 
 data class VisibleTargetTapResult(
@@ -49,6 +52,9 @@ class AccessibilityHelperService : AccessibilityService() {
     private var overlayPanel: View? = null
     private var overlayState: ScreenShareState = ScreenShareState.IDLE
     @Volatile private var accessibilitySnapshotAt: Long = 0L
+    private var foregroundPackage: String? = null
+    private var foregroundWindowId: Int? = null
+    private var foregroundGeneration: Long = 0L
     private val screenWatcherHandler = Handler(Looper.getMainLooper())
     private val screenWatcher = object : Runnable {
         override fun run() {
@@ -822,6 +828,73 @@ class AccessibilityHelperService : AccessibilityService() {
     }
 
     fun currentPackageName(): String? = rootInActiveWindow?.packageName?.toString()
+
+    @Synchronized
+    fun currentForegroundContext(): ForegroundAppContext? {
+        val root = rootInActiveWindow ?: return null
+        val packageName = root.packageName?.toString().orEmpty()
+        if (packageName.isBlank()) return null
+        val windowId = root.windowId
+        if (foregroundPackage != packageName || foregroundWindowId != windowId) {
+            foregroundPackage = packageName
+            foregroundWindowId = windowId
+            foregroundGeneration += 1L
+        }
+        val appName = runCatching {
+            val info = packageManager.getApplicationInfo(packageName, 0)
+            packageManager.getApplicationLabel(info).toString()
+        }.getOrNull()
+        return ForegroundAppContext(
+            packageName = packageName,
+            appName = appName,
+            windowId = windowId,
+            generation = foregroundGeneration,
+            observedAt = android.os.SystemClock.elapsedRealtime()
+        )
+    }
+
+    /**
+     * Manual scroll is scoped to the live foreground window. It never launches an app,
+     * reuses an article binding, or falls back to gesture coordinates.
+     */
+    fun scrollCurrentForegroundVerified(
+        scope: ForegroundActionScope,
+        down: Boolean,
+        onResult: (Boolean) -> Unit
+    ): Boolean {
+        if (!ForegroundActionPolicy.canExecute(scope, currentForegroundContext())) return false
+        val root = rootInActiveWindow ?: return false
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val candidates = mutableListOf<Pair<Long, AccessibilityNodeInfo>>()
+        fun collect(node: AccessibilityNodeInfo) {
+            if (node.isVisibleToUser && node.isScrollable) {
+                val bounds = Rect().also(node::getBoundsInScreen)
+                if (bounds.width() >= screenWidth * 0.40 && bounds.height() >= screenHeight * 0.25) {
+                    candidates += bounds.width().toLong() * bounds.height() to node
+                }
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
+        }
+        collect(root)
+        val before = visibleScreenSignature()
+        val action = if (down) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        val accepted = candidates.sortedByDescending { it.first }
+            .firstOrNull { (_, node) ->
+                ForegroundActionPolicy.canExecute(scope, currentForegroundContext()) &&
+                    node.isVisibleToUser && node.performAction(action)
+            } != null
+        if (!accepted) return false
+        Handler(Looper.getMainLooper()).postDelayed({
+            val stillOwned = ForegroundActionPolicy.canExecute(scope, currentForegroundContext())
+            val changed = stillOwned && before.isNotBlank() && visibleScreenSignature() != before
+            if (changed) refreshScreenContext()
+            onResult(changed)
+        }, 420L)
+        return true
+    }
+
     fun lastSnapshotAt(): Long = accessibilitySnapshotAt
 
     fun refreshScreenContext(observedAt: Long = android.os.SystemClock.elapsedRealtime()) {
@@ -854,8 +927,14 @@ class AccessibilityHelperService : AccessibilityService() {
         targetText: String?,
         position: String?,
         ordinal: Int?,
+        expectedScope: ForegroundActionScope? = null,
         authorizeTap: ((ScreenTargetCandidate, Double) -> Boolean)? = null
     ): VisibleTargetTapResult {
+        val initialContext = currentForegroundContext()
+            ?: return VisibleTargetTapResult(false, resolution = "no_accessibility_root")
+        if (expectedScope != null && !ForegroundActionPolicy.canExecute(expectedScope, initialContext)) {
+            return VisibleTargetTapResult(false, resolution = "stale_foreground")
+        }
         val root = rootInActiveWindow
             ?: return VisibleTargetTapResult(false, resolution = "no_accessibility_root")
         val screenWidth = resources.displayMetrics.widthPixels
@@ -902,8 +981,21 @@ class AccessibilityHelperService : AccessibilityService() {
             )
         val node = unique.firstOrNull { it.id == selected.candidate.id }?.node
             ?: return VisibleTargetTapResult(false, selected.candidate, selected.confidence, "stale_candidate")
+        if (expectedScope != null &&
+            !ForegroundActionPolicy.canExecute(expectedScope, currentForegroundContext())
+        ) {
+            return VisibleTargetTapResult(false, selected.candidate, selected.confidence, "stale_foreground")
+        }
+        if (!node.isVisibleToUser) {
+            return VisibleTargetTapResult(false, selected.candidate, selected.confidence, "stale_candidate")
+        }
         if (authorizeTap?.invoke(selected.candidate, selected.confidence) == false) {
             return VisibleTargetTapResult(false, selected.candidate, selected.confidence, "authorization_rejected")
+        }
+        if (expectedScope != null &&
+            !ForegroundActionPolicy.canExecute(expectedScope, currentForegroundContext())
+        ) {
+            return VisibleTargetTapResult(false, selected.candidate, selected.confidence, "stale_foreground")
         }
         return VisibleTargetTapResult(
             node.performAction(AccessibilityNodeInfo.ACTION_CLICK),
