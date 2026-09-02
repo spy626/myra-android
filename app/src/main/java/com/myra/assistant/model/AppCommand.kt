@@ -20,7 +20,10 @@ sealed interface AppCommand {
     data object ListFeatures : AppCommand
     data class SetFlashlight(val enabled: Boolean) : AppCommand
     data class ControlMedia(val action: MediaAction) : AppCommand
-    data class ScrollYouTube(\n        val direction: ScrollDirection?,\n        val explicitlyRequestedApp: String? = null\n    ) : AppCommand
+    data class ScrollYouTube(
+        val direction: ScrollDirection?,
+        val explicitlyRequestedApp: String? = null
+    ) : AppCommand
 
     enum class ScrollDirection { DOWN, UP }
     enum class MediaAction { PAUSE, PLAY, NEXT, PREVIOUS, FIRST }
