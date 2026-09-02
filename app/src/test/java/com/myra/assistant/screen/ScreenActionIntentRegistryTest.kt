@@ -20,4 +20,39 @@ class ScreenActionIntentRegistryTest {
         val action = create(registry, 25L, "old", 4L)
         assertFalse(registry.isCurrent(action.actionId, 25L, "new"))
     }
+
+    @Test
+    fun foreground_change_rejects_resolved_action() {
+        val registry = ScreenActionIntentRegistry()
+        val action = registry.create(
+            turnId = 9L,
+            screenSessionId = "screen-a",
+            requestedText = "click that one",
+            target = "that one",
+            position = null,
+            ordinal = null,
+            appPackage = "com.android.chrome",
+            resolvedAt = 100L,
+            sourceFrameId = 4L,
+            confidence = 0.9,
+            activeWindowId = 7,
+            screenContextGeneration = 3L
+        )
+        assertTrue(
+            registry.isExecutable(
+                action.actionId,
+                9L,
+                "screen-a",
+                ForegroundAppContext("com.android.chrome", windowId = 7, generation = 3L, observedAt = 101L)
+            )
+        )
+        assertFalse(
+            registry.isExecutable(
+                action.actionId,
+                9L,
+                "screen-a",
+                ForegroundAppContext("com.android.chrome", windowId = 8, generation = 4L, observedAt = 102L)
+            )
+        )
+    }
 }
