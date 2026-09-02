@@ -1849,9 +1849,8 @@ class MyraVoiceService : Service() {
         mainHandler.postDelayed({
             val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
                 mainHandler.post {
-                    if (!screenActionRegistry.isExecutable(
-                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId,
-                        accessibility.currentForegroundContext()
+                    if (!screenActionRegistry.isCurrent(
+                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId
                     )) {
                         voiceLog("SCREEN_TARGET_STALE actionId=${actionIntent.actionId} turnId=${actionIntent.turnId} reason=replaced_before_verification")
                         return@post
@@ -1860,12 +1859,8 @@ class MyraVoiceService : Service() {
                     val accessibilityChanged = before.isNotBlank() && accessibility.visibleScreenSignature() != before
                     val frameChanged = post != null && post.sessionId == actionSessionId &&
                         post.frameId > preTapFrame.frameId && post.hash != preTapFrame.hash
-                    val foregroundStillOwned =
-                        com.myra.assistant.screen.ForegroundActionPolicy.canExecute(
-                            actionScope, accessibility.currentForegroundContext()
-                        )
                     val verified = ScreenCaptureService.session.isCurrent(actionSessionId) &&
-                        foregroundStillOwned && (accessibilityChanged || frameChanged)
+                        (accessibilityChanged || frameChanged)
                     voiceLog(
                         "screen_action_post_frame screen_session_id=$actionSessionId preTapFrameId=${preTapFrame.frameId} " +
                             "postTapFrameId=${post?.frameId ?: 0L} frameChanged=$frameChanged accessibilityChanged=$accessibilityChanged"
@@ -2682,9 +2677,8 @@ class MyraVoiceService : Service() {
                             ScreenCaptureService.requestFreshFrame(activeTurnId) { postResult ->
                                 mainHandler.post {
                                     if (!brain.isTaskCurrent(plan.taskToken)) return@post
-                                    if (!screenActionRegistry.isExecutable(
-                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId,
-                        accessibility.currentForegroundContext()
+                                    if (!screenActionRegistry.isCurrent(
+                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId
                     )) {
                                         voiceLog("SCREEN_ACTION_CANCELLED actionId=${actionIntent.actionId} reason=replaced_before_verification")
                                         return@post
@@ -2793,9 +2787,8 @@ class MyraVoiceService : Service() {
                         mainHandler.post {
                             if (!brain.isTaskCurrent(taskToken)) return@post
                             val action = ownedAction ?: return@post
-                            if (!screenActionRegistry.isExecutable(
-                                action.actionId, action.turnId, action.screenSessionId,
-                                accessibility.currentForegroundContext()
+                            if (!screenActionRegistry.isCurrent(
+                                action.actionId, action.turnId, action.screenSessionId
                             )) {
                                 voiceLog("SCREEN_ACTION_CANCELLED actionId=${action.actionId} reason=replaced_before_verification")
                                 return@post
@@ -2805,12 +2798,8 @@ class MyraVoiceService : Service() {
                                 accessibility.visibleScreenSignature() != beforeSignature
                             val frameChanged = postFrame != null && postFrame.sessionId == beforeFrame.sessionId &&
                                 postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
-                            val foregroundStillOwned =
-                                com.myra.assistant.screen.ForegroundActionPolicy.canExecute(
-                                    actionScope, accessibility.currentForegroundContext()
-                                )
                             val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
-                                foregroundStillOwned && (accessibilityChanged || frameChanged)
+                                (accessibilityChanged || frameChanged)
                             brain.recordScreenAction(ownedTarget, verified)
                             screenActionRegistry.cancel(action.actionId)
                             finishBrainTask(
