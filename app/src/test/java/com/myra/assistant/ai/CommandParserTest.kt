@@ -113,4 +113,18 @@ class CommandParserTest {
             assertTrue(it, !CommandParser.isLikelyIncompleteActionFragment(it))
         }
     }
+
+    @Test
+    fun implicit_scroll_is_not_marked_as_cross_app() {
+        val command = CommandParser.parse("scroll down") as AppCommand.ScrollYouTube
+        assertEquals(AppCommand.ScrollDirection.DOWN, command.direction)
+        assertEquals(null, command.explicitlyRequestedApp)
+    }
+
+    @Test
+    fun explicit_youtube_scroll_keeps_cross_app_permission() {
+        val command = CommandParser.parse("YouTube scroll down") as AppCommand.ScrollYouTube
+        assertEquals(AppCommand.ScrollDirection.DOWN, command.direction)
+        assertEquals("YouTube", command.explicitlyRequestedApp)
+    }
 }
