@@ -13,7 +13,10 @@ class ReadingTrackerSafetyTest {
 
     @Test fun bound_scroll_container_must_match_current_session() {
         val tracker = ReadingTracker()
-        val session = tracker.start("session", "page", "com.android.chrome", ScreenContentType.ARTICLE, true)
+        val session = tracker.start(
+            "session", "page", "com.android.chrome", ScreenContentType.ARTICLE, true,
+            scrollContainerId = "initial-article-container"
+        )
         assertNotNull(session)
         assertTrue(tracker.bindScrollContainer("article-body"))
         assertTrue(tracker.acceptsScrollContainer("article-body", "session", "com.android.chrome"))
@@ -24,7 +27,10 @@ class ReadingTrackerSafetyTest {
 
     @Test fun duplicate_visible_text_is_not_returned_as_new_content() {
         val tracker = ReadingTracker()
-        tracker.start("session", "page", "com.android.chrome", ScreenContentType.ARTICLE, true)
+        tracker.start(
+            "session", "page", "com.android.chrome", ScreenContentType.ARTICLE, true,
+            scrollContainerId = "article-body"
+        )
         val first = tracker.acceptVisibleText(listOf("This is the first article paragraph with enough meaningful content."), 1L)
         val second = tracker.acceptVisibleText(listOf("This is the first article paragraph with enough meaningful content."), 2L)
         assertTrue(first.isNotEmpty())
