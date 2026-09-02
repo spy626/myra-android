@@ -78,12 +78,11 @@ class LyraBrainCoordinator {
             return BrainDecision.ScrollThenOpenVideo(direction, ordinal, token)
         }
 
-        parseOrdinalVideoAction(text)?.let { ordinal ->
+        parseAccessibilityVideoAction(text)?.let { target ->
             val token = sequence.incrementAndGet()
-            val target = ScreenTargetReference(targetText = "video", ordinal = ordinal)
             state = state.copy(
                 lastScreenTarget = target,
-                lastAction = "open_ordinal_video",
+                lastAction = "open_accessible_video",
                 lastActionSucceeded = null,
                 taskToken = token
             )
@@ -226,17 +225,33 @@ class LyraBrainCoordinator {
             "click this", "click that", "click that one", "open this", "open that", "open that one"
         ).any(text::equals)
 
-        private fun parseOrdinalVideoAction(text: String): Int? {
+        private fun parseAccessibilityVideoAction(text: String): ScreenTargetReference? {
             val hasVideo = Regex("\\b(?:video|वीडियो)\\b").containsMatchIn(text)
             val hasAction = Regex("\\b(?:open|play|tap|click|kholo|khol|chalao|dabao|karo)\\b")
                 .containsMatchIn(text)
             if (!hasVideo || !hasAction || Regex("\\b(?:scroll|swipe)\\b").containsMatchIn(text)) return null
-            return when {
+            val ordinal = when {
                 Regex("\\b(?:third|teesra|tisra|3rd)\\b").containsMatchIn(text) -> 3
                 Regex("\\b(?:second|doosra|dusra|2nd)\\b").containsMatchIn(text) -> 2
                 Regex("\\b(?:first|pehla|pehli|1st)\\b").containsMatchIn(text) -> 1
                 else -> null
             }
+            if (ordinal != null) return ScreenTargetReference(targetText = "video", ordinal = ordinal)
+            val position = when {
+                Regex("\\b(?:center|middle|beech)\\b").containsMatchIn(text) -> "center"
+                Regex("\\b(?:top|upar|upper)\\b").containsMatchIn(text) -> "top"
+                Regex("\\b(?:bottom|neeche|niche|below)\\b").containsMatchIn(text) -> "bottom"
+                Regex("\\b(?:left)\\b").containsMatchIn(text) -> "left"
+                Regex("\\b(?:right)\\b").containsMatchIn(text) -> "right"
+                else -> null
+            }
+            if (position != null) return ScreenTargetReference(targetText = "video", position = position)
+            val generic = setOf(
+                "open", "play", "tap", "click", "kholo", "khol", "chalao", "dabao", "karo",
+                "video", "the", "a", "called", "named", "about", "wala", "wali", "please"
+            )
+            val title = text.split(' ').filterNot(generic::contains).joinToString(" ").trim()
+            return title.takeIf { it.length >= 2 }?.let { ScreenTargetReference(targetText = it) }
         }
 
         private fun parseMultiStep(text: String): Pair<ScrollDirection, Int>? {
