@@ -238,7 +238,7 @@ object CommandParser {
         val withoutApp = text.replace(Regex("(?:^|\\s)(?:youtube|यूट्यूब)(?:$|\\s)"), " ")
             .replace(Regex("\\s+"), " ").trim()
         return when {
-            Regex("^(?:(?:niche|neeche|down)\\s+(?:scroll|swipe)|(?:scroll|swipe)(?:\\s+(?:down|niche|neeche))?)(?:\\s+karo)?$").matches(withoutApp) ->
+            Regex("^(?:(?:niche|neeche|down)\\s+(?:scroll|swipe)|(?:scroll|swipe)\\s+(?:down|niche|neeche))(?:\\s+karo)?$").matches(withoutApp) ->
                 AppCommand.ScrollYouTube(AppCommand.ScrollDirection.DOWN, explicitApp)
             Regex("^(?:(?:upar|upper|up)\\s+(?:scroll|swipe)|(?:scroll|swipe)\\s+(?:up|upar|upper))(?:\\s+karo)?$").matches(withoutApp) ->
                 AppCommand.ScrollYouTube(AppCommand.ScrollDirection.UP, explicitApp)
