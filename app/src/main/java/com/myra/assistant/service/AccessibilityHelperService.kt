@@ -34,6 +34,8 @@ import com.myra.assistant.screen.ScreenTargetResolver
 import com.myra.assistant.screen.ForegroundAppContext
 import com.myra.assistant.screen.ForegroundActionScope
 import com.myra.assistant.screen.ForegroundActionPolicy
+import com.myra.assistant.screen.YouTubeVideoCandidate
+import com.myra.assistant.screen.YouTubeVideoCandidatePolicy
 import java.util.Locale
 
 data class VisibleTargetTapResult(
@@ -41,6 +43,14 @@ data class VisibleTargetTapResult(
     val candidate: ScreenTargetCandidate? = null,
     val confidence: Double = 0.0,
     val resolution: String
+)
+
+data class YouTubeVideoTapResult(
+    val accepted: Boolean,
+    val resolution: String,
+    val candidateCount: Int = 0,
+    val selectedLabel: String? = null,
+    val selectedBounds: Rect? = null
 )
 
 class AccessibilityHelperService : AccessibilityService() {
@@ -267,6 +277,23 @@ class AccessibilityHelperService : AccessibilityService() {
         return dispatchYouTubeSwipe(resolvedDown)
     }
 
+    fun scrollYouTubeForegroundVerified(
+        scope: ForegroundActionScope,
+        down: Boolean?,
+        onResult: (Boolean) -> Unit
+    ): Boolean {
+        if (!ForegroundActionPolicy.canExecute(scope, currentForegroundContext())) return false
+        val root = rootInActiveWindow ?: return false
+        if (!isYouTubeRoot(root)) return false
+        val resolvedDown = down ?: lastScrollDown
+        lastScrollDown = resolvedDown
+        performVerifiedScroll(resolvedDown, retry = true) { changed ->
+            val stillYouTube = ForegroundActionPolicy.canExecute(scope, currentForegroundContext())
+            onResult(changed && stillYouTube)
+        }
+        return true
+    }
+
     fun scrollYouTubeVerified(down: Boolean?, onResult: (Boolean) -> Unit): Boolean {
         val resolvedDown = down ?: lastScrollDown
         lastScrollDown = resolvedDown
@@ -449,9 +476,90 @@ class AccessibilityHelperService : AccessibilityService() {
         return clicked
     }
 
-    /** Reuses the existing YouTube accessibility candidate map; ordinal is one-based. */
-    fun tapVisibleYouTubeVideo(ordinal: Int): Boolean =
-        clickVisibleYouTubeVideo(afterPlayer = false, selectionIndex = (ordinal - 1).coerceAtLeast(0))
+    /**
+     * Resolves an ordinal against unique, non-ad YouTube video cards and revalidates
+     * foreground ownership immediately before ACTION_CLICK.
+     */
+    fun resolveAndTapYouTubeVideo(
+        ordinal: Int,
+        scope: ForegroundActionScope
+    ): YouTubeVideoTapResult {
+        if (!ForegroundActionPolicy.canExecute(scope, currentForegroundContext())) {
+            return YouTubeVideoTapResult(false, "stale_foreground")
+        }
+        val root = rootInActiveWindow ?: return YouTubeVideoTapResult(false, "no_accessibility_root")
+        if (!isYouTubeRoot(root)) return YouTubeVideoTapResult(false, "not_youtube")
+        val screenHeight = resources.displayMetrics.heightPixels
+        data class NodeCandidate(
+            val node: AccessibilityNodeInfo,
+            val metadata: YouTubeVideoCandidate,
+            val bounds: Rect
+        )
+        val candidates = mutableListOf<NodeCandidate>()
+        fun collect(node: AccessibilityNodeInfo) {
+            if (node.isVisibleToUser) {
+                val clickable = findClickable(node)
+                if (clickable != null && clickable.isVisibleToUser) {
+                    val bounds = Rect().also(clickable::getBoundsInScreen)
+                    val contextLabel = nodeContextLabel(node) + " " + nodeContextLabel(clickable)
+                    val title = extractVideoSearchQuery(clickable)
+                        ?: listOfNotNull(node.text, node.contentDescription)
+                            .joinToString(" ").trim()
+                    if (!bounds.isEmpty && bounds.top >= (screenHeight * 0.08f).toInt() &&
+                        bounds.top < (screenHeight * 0.96f).toInt()
+                    ) {
+                        val normalizedTitle = title.lowercase(Locale.ROOT)
+                            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+                            .replace(Regex("\\s+"), " ").trim()
+                        val row = bounds.centerY() / (screenHeight * 0.10f).toInt().coerceAtLeast(1)
+                        val groupKey = normalizedTitle.takeIf { it.length >= 6 } ?: "row:$row"
+                        val id = candidates.size
+                        candidates += NodeCandidate(
+                            clickable,
+                            YouTubeVideoCandidate(
+                                id = id,
+                                title = title,
+                                contextLabel = contextLabel,
+                                groupKey = groupKey,
+                                top = bounds.top
+                            ),
+                            bounds
+                        )
+                    }
+                }
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
+        }
+        collect(root)
+        val logical = YouTubeVideoCandidatePolicy.logicalVideos(candidates.map { it.metadata })
+        val selected = logical.getOrNull(ordinal - 1)
+            ?: return YouTubeVideoTapResult(
+                false,
+                if (logical.isEmpty()) "no_video_candidates" else "ordinal_out_of_range",
+                logical.size
+            )
+        val nodeCandidate = candidates.firstOrNull { it.metadata.id == selected.id }
+            ?: return YouTubeVideoTapResult(false, "stale_candidate", logical.size)
+        if (!ForegroundActionPolicy.canExecute(scope, currentForegroundContext()) ||
+            !nodeCandidate.node.isVisibleToUser
+        ) {
+            return YouTubeVideoTapResult(false, "stale_foreground", logical.size)
+        }
+        val clicked = nodeCandidate.node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        return YouTubeVideoTapResult(
+            clicked,
+            if (clicked) "selected" else "click_rejected",
+            logical.size,
+            selected.title.take(160),
+            nodeCandidate.bounds
+        )
+    }
+
+    /** Reuses the semantic YouTube accessibility candidate map; ordinal is one-based. */
+    fun tapVisibleYouTubeVideo(ordinal: Int): Boolean {
+        val scope = ForegroundActionPolicy.scope(currentForegroundContext()) ?: return false
+        return resolveAndTapYouTubeVideo(ordinal, scope).accepted
+    }
 
     private fun findCurrentVideoQuery(root: AccessibilityNodeInfo, screenHeight: Int): String? {
         val candidates = mutableListOf<Pair<Int, String>>()
