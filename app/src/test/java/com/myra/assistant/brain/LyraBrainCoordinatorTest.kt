@@ -85,4 +85,30 @@ class LyraBrainCoordinatorTest {
             brain.resolveScreenTarget("Miss Interwala video", null, null)?.targetText
         )
     }
+
+    @Test
+    fun `ambiguous click reference without current target asks instead of guessing`() {
+        val brain = LyraBrainCoordinator()
+        val decision = brain.interpret("click that one")
+        assertTrue(decision is BrainDecision.Clarify)
+    }
+
+    @Test
+    fun `contextual target retains foreground ownership metadata`() {
+        val brain = LyraBrainCoordinator()
+        brain.recordScreenAction(
+            ScreenTargetReference(
+                targetText = "second video",
+                ordinal = 2,
+                appPackage = "com.google.android.youtube",
+                activeWindowId = 12,
+                screenContextGeneration = 4L
+            ),
+            success = true
+        )
+        val decision = brain.interpret("open it") as BrainDecision.ScreenAction
+        assertEquals("com.google.android.youtube", decision.target.appPackage)
+        assertEquals(12, decision.target.activeWindowId)
+        assertEquals(4L, decision.target.screenContextGeneration)
+    }
 }
