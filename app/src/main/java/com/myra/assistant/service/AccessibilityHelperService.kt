@@ -1058,21 +1058,30 @@ class AccessibilityHelperService : AccessibilityService() {
                     val bounds = Rect().also(clickable::getBoundsInScreen)
                     if (!bounds.isEmpty) {
                         val className = node.className?.toString().orEmpty()
+                        val contextLabel = nodeContextLabel(node) + " " + nodeContextLabel(clickable)
+                        val youtubeVideo = root.packageName?.toString() == YOUTUBE_PACKAGE &&
+                            looksLikeVideoCard(contextLabel, afterPlayer = false) &&
+                            !AD_SIGNAL.containsMatchIn(contextLabel) &&
+                            !NON_VIDEO_CONTROLS.containsMatchIn(contextLabel)
                         val role = when {
+                            youtubeVideo -> "video"
                             className.contains("button", true) -> "button"
-                            root.packageName?.toString() == YOUTUBE_PACKAGE &&
-                                !NON_VIDEO_CONTROLS.matches(label.trim()) && !AD_SIGNAL.containsMatchIn(label) &&
-                                bounds.width() >= screenWidth * 0.35 && bounds.height() >= screenHeight * 0.06 -> "video"
                             else -> "interactive"
                         }
-                        candidates += Candidate(candidates.size, clickable, label, bounds, role)
+                        val semanticLabel = if (youtubeVideo) {
+                            extractVideoSearchQuery(clickable) ?: label
+                        } else label
+                        candidates += Candidate(candidates.size, clickable, semanticLabel, bounds, role)
                     }
                 }
             }
             for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
         }
         collect(root)
-        val unique = candidates.distinctBy { "${it.label.lowercase(Locale.ROOT)}:${it.bounds}" }
+        val unique = candidates
+            .groupBy { "${it.role.lowercase(Locale.ROOT)}:${it.bounds}" }
+            .map { (_, group) -> group.maxByOrNull { it.label.length } ?: group.first() }
+            .mapIndexed { index, item -> item.copy(id = index) }
         val resolution = ScreenTargetResolver.resolve(
             unique.map {
                 ScreenTargetCandidate(
