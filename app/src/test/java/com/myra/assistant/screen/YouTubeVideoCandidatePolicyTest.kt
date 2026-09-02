@@ -53,4 +53,26 @@ class YouTubeVideoCandidatePolicyTest {
         )
         assertEquals(3, YouTubeVideoCandidatePolicy.selectOrdinal(candidates, 1)?.id)
     }
+
+    @Test
+    fun video_open_selects_playable_child_not_profile_or_action_menu() {
+        val candidates = listOf(
+            candidate(1, "Video A", "video title 10K views", "a", 100),
+            candidate(2, "Video B", "video title 8K views", "b", 400).copy(semanticRole = YouTubeSemanticRole.VIDEO_TITLE),
+            candidate(3, "Jonathan profile", "Video B 8K views", "b", 410).copy(semanticRole = YouTubeSemanticRole.CHANNEL_PROFILE),
+            candidate(4, "Action menu for Video B", "Video B 8K views", "b", 420).copy(semanticRole = YouTubeSemanticRole.MORE_ACTIONS)
+        )
+        val selected = YouTubeVideoCandidatePolicy.selectOrdinal(candidates, 2)
+        assertEquals(2, selected?.id)
+        assertEquals(YouTubeSemanticRole.VIDEO_TITLE, selected?.semanticRole)
+    }
+
+    @Test
+    fun wrong_child_alone_is_not_a_video_open_target() {
+        val candidates = listOf(
+            candidate(1, "Action menu for Video A", "video title 10K views", "a", 100)
+                .copy(semanticRole = YouTubeSemanticRole.MORE_ACTIONS)
+        )
+        assertNull(YouTubeVideoCandidatePolicy.selectOrdinal(candidates, 1))
+    }
 }

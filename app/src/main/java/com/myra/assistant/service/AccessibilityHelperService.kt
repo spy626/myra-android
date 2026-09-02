@@ -14,6 +14,7 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.os.Bundle
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.Gravity
@@ -36,6 +37,11 @@ import com.myra.assistant.screen.ForegroundActionScope
 import com.myra.assistant.screen.ForegroundActionPolicy
 import com.myra.assistant.screen.YouTubeVideoCandidate
 import com.myra.assistant.screen.YouTubeVideoCandidatePolicy
+import com.myra.assistant.screen.YouTubeSemanticCommand
+import com.myra.assistant.screen.YouTubeSemanticElement
+import com.myra.assistant.screen.YouTubeSemanticResolution
+import com.myra.assistant.screen.YouTubeSemanticResolver
+import com.myra.assistant.screen.YouTubeSemanticRole
 import java.util.Locale
 
 data class VisibleTargetTapResult(
@@ -51,6 +57,13 @@ data class YouTubeVideoTapResult(
     val candidateCount: Int = 0,
     val selectedLabel: String? = null,
     val selectedBounds: Rect? = null
+)
+
+data class YouTubeSemanticActionResult(
+    val accepted: Boolean,
+    val resolution: String,
+    val role: YouTubeSemanticRole? = null,
+    val fieldIdentity: String? = null
 )
 
 class AccessibilityHelperService : AccessibilityService() {
@@ -502,6 +515,9 @@ class AccessibilityHelperService : AccessibilityService() {
                 if (clickable != null && clickable.isVisibleToUser) {
                     val bounds = Rect().also(clickable::getBoundsInScreen)
                     val contextLabel = nodeContextLabel(node) + " " + nodeContextLabel(clickable)
+                    val directLabel = listOfNotNull(node.text, node.contentDescription, node.viewIdResourceName)
+                        .joinToString(" ").trim()
+                    val role = youtubeSemanticRole(directLabel, contextLabel, node)
                     val title = extractVideoSearchQuery(clickable)
                         ?: listOfNotNull(node.text, node.contentDescription)
                             .joinToString(" ").trim()
@@ -521,7 +537,8 @@ class AccessibilityHelperService : AccessibilityService() {
                                 title = title,
                                 contextLabel = contextLabel,
                                 groupKey = groupKey,
-                                top = bounds.top
+                                top = bounds.top,
+                                semanticRole = role
                             ),
                             bounds
                         )
@@ -545,6 +562,9 @@ class AccessibilityHelperService : AccessibilityService() {
         ) {
             return YouTubeVideoTapResult(false, "stale_foreground", logical.size)
         }
+        if (!YouTubeVideoCandidatePolicy.isSafeVideoOpenRole(selected.semanticRole)) {
+            return YouTubeVideoTapResult(false, "wrong_semantic_role", logical.size, selected.title.take(160), nodeCandidate.bounds)
+        }
         val clicked = nodeCandidate.node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         return YouTubeVideoTapResult(
             clicked,
@@ -553,6 +573,107 @@ class AccessibilityHelperService : AccessibilityService() {
             selected.title.take(160),
             nodeCandidate.bounds
         )
+    }
+
+    fun performYouTubeSemanticAction(
+        command: YouTubeSemanticCommand,
+        scope: ForegroundActionScope
+    ): YouTubeSemanticActionResult {
+        if (!ForegroundActionPolicy.canExecute(scope, currentForegroundContext())) {
+            return YouTubeSemanticActionResult(false, "stale_foreground")
+        }
+        val root = rootInActiveWindow ?: return YouTubeSemanticActionResult(false, "no_accessibility_root")
+        if (!isYouTubeRoot(root)) return YouTubeSemanticActionResult(false, "not_youtube")
+        val nodes = mutableMapOf<String, AccessibilityNodeInfo>()
+        val elements = mutableListOf<YouTubeSemanticElement>()
+        fun collect(node: AccessibilityNodeInfo) {
+            if (node.isVisibleToUser) {
+                val actionable = when {
+                    node.isEditable -> node
+                    node.isClickable -> node
+                    else -> null
+                }
+                if (actionable != null) {
+                    val bounds = Rect().also(actionable::getBoundsInScreen)
+                    val direct = listOfNotNull(node.text, node.contentDescription, node.viewIdResourceName)
+                        .joinToString(" ").trim()
+                    val context = nodeContextLabel(node)
+                    val role = youtubeSemanticRole(direct, context, node)
+                    val cardKey = youtubeCardKey(node, bounds)
+                    val id = "${bounds.left}:${bounds.top}:${bounds.right}:${bounds.bottom}:${role.name}:${elements.size}"
+                    nodes[id] = actionable
+                    elements += YouTubeSemanticElement(
+                        id, role, (direct.ifBlank { context }).take(240), cardKey, bounds.top,
+                        actionable.isClickable || actionable.isEditable,
+                        actionable.isSelected || actionable.isChecked ||
+                            (role == YouTubeSemanticRole.LIKE_BUTTON && direct.contains("unlike", true)) ||
+                            (role == YouTubeSemanticRole.SUBSCRIBE_BUTTON && direct.contains("subscribed", true))
+                    )
+                }
+            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let(::collect)
+        }
+        collect(root)
+        val resolution = when (command) {
+            is YouTubeSemanticCommand.OpenChannel ->
+                YouTubeSemanticResolver.resolveChannel(elements, command.name, command.preferProfile)
+            YouTubeSemanticCommand.Like -> YouTubeSemanticResolver.resolveControl(elements, YouTubeSemanticRole.LIKE_BUTTON)
+            YouTubeSemanticCommand.OpenComments -> YouTubeSemanticResolver.resolveControl(elements, YouTubeSemanticRole.COMMENTS_SECTION)
+            YouTubeSemanticCommand.Subscribe -> YouTubeSemanticResolver.resolveControl(elements, YouTubeSemanticRole.SUBSCRIBE_BUTTON)
+            YouTubeSemanticCommand.Share -> YouTubeSemanticResolver.resolveControl(elements, YouTubeSemanticRole.SHARE_BUTTON)
+            YouTubeSemanticCommand.More -> YouTubeSemanticResolver.resolveControl(elements, YouTubeSemanticRole.MORE_ACTIONS)
+            is YouTubeSemanticCommand.TypeText -> YouTubeSemanticResolver.resolveControl(elements, YouTubeSemanticRole.TEXT_INPUT)
+            YouTubeSemanticCommand.SendComment -> YouTubeSemanticResolver.resolveControl(elements, YouTubeSemanticRole.SEND_COMMENT)
+            YouTubeSemanticCommand.CancelComment -> return YouTubeSemanticActionResult(true, "cancelled")
+        }
+        if (resolution is YouTubeSemanticResolution.AlreadyActive) {
+            return YouTubeSemanticActionResult(true, "already_active", resolution.element.role)
+        }
+        val selected = (resolution as? YouTubeSemanticResolution.Selected)?.element
+            ?: return YouTubeSemanticActionResult(false, if (resolution is YouTubeSemanticResolution.Ambiguous) "ambiguous" else "not_found")
+        if (!ForegroundActionPolicy.canExecute(scope, currentForegroundContext())) {
+            return YouTubeSemanticActionResult(false, "stale_foreground", selected.role)
+        }
+        val node = nodes[selected.id] ?: return YouTubeSemanticActionResult(false, "stale_candidate", selected.role)
+        val accepted = if (command is YouTubeSemanticCommand.TypeText) {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, command.payload)
+            }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        } else node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        return YouTubeSemanticActionResult(
+            accepted, if (accepted) "selected" else "action_rejected", selected.role,
+            selected.id.takeIf { selected.role == YouTubeSemanticRole.TEXT_INPUT }
+        )
+    }
+
+    private fun youtubeSemanticRole(
+        directLabel: String,
+        contextLabel: String,
+        node: AccessibilityNodeInfo
+    ): YouTubeSemanticRole {
+        val direct = directLabel.lowercase(Locale.ROOT)
+        val context = contextLabel.lowercase(Locale.ROOT)
+        return when {
+            node.isEditable && Regex("comment|reply|add a comment|write").containsMatchIn(context) -> YouTubeSemanticRole.TEXT_INPUT
+            Regex("^(?:send|post|comment)$|send comment|post comment").containsMatchIn(direct) -> YouTubeSemanticRole.SEND_COMMENT
+            Regex("action menu|more actions|more options|overflow").containsMatchIn(direct) -> YouTubeSemanticRole.MORE_ACTIONS
+            Regex("watch later|save|share").containsMatchIn(direct) && direct.contains("share") -> YouTubeSemanticRole.SHARE_BUTTON
+            Regex("profile|avatar|channel icon|channel photo").containsMatchIn(direct) -> YouTubeSemanticRole.CHANNEL_PROFILE
+            Regex("subscribe|subscribed").containsMatchIn(direct) -> YouTubeSemanticRole.SUBSCRIBE_BUTTON
+            Regex("comments?|comment section").containsMatchIn(direct) -> YouTubeSemanticRole.COMMENTS_SECTION
+            Regex("\\b(?:like|unlike|thumbs up)\\b").containsMatchIn(direct) && !context.contains("comment") -> YouTubeSemanticRole.LIKE_BUTTON
+            Regex("channel name|visit channel|go to channel").containsMatchIn(direct) -> YouTubeSemanticRole.CHANNEL_NAME
+            Regex("video[_ ]?title|title").containsMatchIn(direct) -> YouTubeSemanticRole.VIDEO_TITLE
+            else -> YouTubeSemanticRole.VIDEO_PLAY_SURFACE
+        }
+    }
+
+    private fun youtubeCardKey(node: AccessibilityNodeInfo, bounds: Rect): String {
+        val title = extractVideoSearchQuery(node)?.lowercase(Locale.ROOT)
+            ?.replace(Regex("[^\\p{L}\\p{N}]+"), " ")?.trim()
+        val row = bounds.centerY() / (resources.displayMetrics.heightPixels * 0.10f).toInt().coerceAtLeast(1)
+        return title?.takeIf { it.length >= 6 } ?: "row:$row"
     }
 
     /** Reuses the semantic YouTube accessibility candidate map; ordinal is one-based. */

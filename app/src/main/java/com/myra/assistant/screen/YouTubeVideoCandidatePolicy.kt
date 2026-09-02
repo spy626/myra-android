@@ -9,7 +9,9 @@ data class YouTubeVideoCandidate(
     val groupKey: String,
     val top: Int,
     val clickable: Boolean = true,
-    val visible: Boolean = true
+    val visible: Boolean = true,
+    val semanticRole: YouTubeSemanticRole = YouTubeSemanticRole.VIDEO_PLAY_SURFACE,
+    val selected: Boolean = false
 )
 
 /** Pure semantic filter used before applying an ordinal to YouTube accessibility nodes. */
@@ -24,11 +26,14 @@ object YouTubeVideoCandidatePolicy {
                     !AD_OR_CTA.containsMatchIn(combined) &&
                     !NON_VIDEO_CONTROL.containsMatchIn(combined)
             }
-            .sortedBy { it.top }
-            .distinctBy { candidate ->
+            .sortedWith(compareBy<YouTubeVideoCandidate> { it.top }.thenBy { rolePriority(it.semanticRole) })
+            .groupBy { candidate ->
                 candidate.groupKey.takeIf(String::isNotBlank)
                     ?: normalize(candidate.title)
             }
+            .mapNotNull { (_, children) -> children.minByOrNull { rolePriority(it.semanticRole) } }
+            .filter { it.semanticRole in setOf(YouTubeSemanticRole.VIDEO_PLAY_SURFACE, YouTubeSemanticRole.VIDEO_TITLE) }
+            .sortedBy { it.top }
             .toList()
 
     fun selectOrdinal(
@@ -41,6 +46,15 @@ object YouTubeVideoCandidatePolicy {
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
+
+    fun isSafeVideoOpenRole(role: YouTubeSemanticRole): Boolean =
+        role == YouTubeSemanticRole.VIDEO_PLAY_SURFACE || role == YouTubeSemanticRole.VIDEO_TITLE
+
+    private fun rolePriority(role: YouTubeSemanticRole): Int = when (role) {
+        YouTubeSemanticRole.VIDEO_PLAY_SURFACE -> 0
+        YouTubeSemanticRole.VIDEO_TITLE -> 1
+        else -> 10
+    }
 
     private val VIDEO_SIGNAL = Regex(
         "(?:video[_\\s]*(?:title|thumbnail)|thumbnail|\\bviews?\\b|watching|premiere|\\blive\\b|ago|\\d{1,2}:\\d{2})",
