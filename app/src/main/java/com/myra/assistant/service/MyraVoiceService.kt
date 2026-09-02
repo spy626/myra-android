@@ -1052,6 +1052,10 @@ class MyraVoiceService : Service() {
                         display = displayedFinalUserText
                     )
                 }
+                AccessibilityHelperService.instance?.currentForegroundContext()?.let {
+                    brain.observeForegroundApp(it.packageName)
+                    voiceLog("foreground_context_propagated turnId=$activeTurnId package=${it.packageName} windowId=${it.windowId} generation=${it.generation}")
+                }
                 val brainDecision = brain.interpret(normalizedFinalUserText)
                 voiceLog(
                     "brain_decision turnId=$activeTurnId intent=${LyraBrainCoordinator.classify(normalizedFinalUserText)} " +
@@ -2711,16 +2715,108 @@ class MyraVoiceService : Service() {
         if (!accepted) finishBrainTask(plan.taskToken, false, "YouTube scroll start nahi hua.")
     }
 
+    private fun executeAccessibilityFirstScreenAction(
+        target: ScreenTargetReference,
+        ownedTarget: ScreenTargetReference,
+        actionScope: com.myra.assistant.screen.ForegroundActionScope,
+        taskToken: Long,
+        accessibility: AccessibilityHelperService
+    ): Boolean {
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        val before = accessibility.visibleScreenSignature()
+        val actionSessionId = ScreenCaptureService.session.sessionId.takeIf(String::isNotBlank)
+            ?: "accessibility:${actionScope.expectedPackage}:${actionScope.expectedGeneration}"
+        var actionIntent: ScreenActionIntent? = null
+        var resolution = "not_found"
+        var candidateCount = 0
+        var selectedLabel: String? = null
+        val accepted = if (
+            actionScope.expectedPackage.equals("com.google.android.youtube", true) &&
+            target.ordinal != null &&
+            target.targetText.orEmpty().contains("video", true)
+        ) {
+            actionIntent = screenActionRegistry.create(
+                activeTurnId, actionSessionId, lastUserIntentText,
+                target.targetText, target.position, target.ordinal,
+                actionScope.expectedPackage, startedAt, 0L, 1.0,
+                actionScope.expectedWindowId, actionScope.expectedGeneration
+            )
+            val result = accessibility.resolveAndTapYouTubeVideo(target.ordinal, actionScope)
+            resolution = result.resolution
+            candidateCount = result.candidateCount
+            selectedLabel = result.selectedLabel
+            result.accepted
+        } else {
+            val result = accessibility.resolveAndTapVisibleTarget(
+                target.targetText, target.position, target.ordinal, actionScope
+            ) { _, confidence ->
+                actionIntent = screenActionRegistry.create(
+                    activeTurnId, actionSessionId, lastUserIntentText,
+                    target.targetText, target.position, target.ordinal,
+                    actionScope.expectedPackage, startedAt, 0L, confidence,
+                    actionScope.expectedWindowId, actionScope.expectedGeneration
+                )
+                true
+            }
+            resolution = result.resolution
+            selectedLabel = result.candidate?.label
+            result.accepted
+        }
+        voiceLog(
+            "screen_action_path turnId=$activeTurnId path=ACCESSIBILITY_FAST_PATH " +
+                "package=${actionScope.expectedPackage} ordinal=${target.ordinal} " +
+                "candidateCount=$candidateCount resolution=$resolution " +
+                "selected=${selectedLabel?.take(80)} dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
+        )
+        if (!accepted) {
+            actionIntent?.let { screenActionRegistry.cancel(it.actionId) }
+            return when (resolution) {
+                "ambiguous" -> {
+                    finishBrainTask(taskToken, false, "Kaunsa wala?")
+                    true
+                }
+                "stale_foreground", "stale_candidate" -> {
+                    finishBrainTask(taskToken, false, "Screen badal gayi, target use nahi kiya.")
+                    true
+                }
+                "ordinal_out_of_range" -> {
+                    finishBrainTask(taskToken, false, "Itne videos current screen par nahi mile.")
+                    true
+                }
+                "no_video_candidates", "click_rejected" -> {
+                    finishBrainTask(taskToken, false, "Current YouTube screen par real video target nahi mila.")
+                    true
+                }
+                else -> false
+            }
+        }
+        val intent = actionIntent ?: return false
+        mainHandler.postDelayed({
+            if (!brain.isTaskCurrent(taskToken) ||
+                !screenActionRegistry.isCurrent(intent.actionId, intent.turnId, intent.screenSessionId)
+            ) return@postDelayed
+            val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
+            brain.recordScreenAction(ownedTarget, changed)
+            screenActionRegistry.cancel(intent.actionId)
+            finishBrainTask(
+                taskToken,
+                changed,
+                if (changed) "Open ho gaya." else "Tap hua, lekin screen change verify nahi hua."
+            )
+            voiceLog(
+                "screen_action_fast_result actionId=${intent.actionId} verified=$changed " +
+                    "totalMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
+            )
+        }, 420L)
+        return true
+    }
+
     private fun executeContextualScreenAction(target: ScreenTargetReference) {
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
         waitingForFreshInputAfterCommand = true
         cancelSpeechForNewAction()
         val accessibility = AccessibilityHelperService.instance
-        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-            finishBrainTask(brain.snapshot().taskToken, false, "Screen Vision active nahi hai.")
-            return
-        }
         if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
             finishBrainTask(brain.snapshot().taskToken, false, "LYRA Accessibility enable karo.")
             return
@@ -2745,6 +2841,20 @@ class MyraVoiceService : Service() {
             appPackage = actionScope.expectedPackage,
             activeWindowId = actionScope.expectedWindowId,
             screenContextGeneration = actionScope.expectedGeneration
+        )
+        if (executeAccessibilityFirstScreenAction(
+                target, ownedTarget, actionScope, taskToken, accessibility
+            )
+        ) return
+        if (!screenVisionPreferences.visionEnabled ||
+            ScreenCaptureService.currentState != ScreenShareState.ACTIVE
+        ) {
+            finishBrainTask(taskToken, false, "Target Accessibility se clear nahi mila.")
+            return
+        }
+        voiceLog(
+            "screen_action_path turnId=$activeTurnId path=SCREEN_VISION_FALLBACK " +
+                "package=${actionScope.expectedPackage}"
         )
         val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { freshResult ->
             mainHandler.post {
@@ -2873,20 +2983,39 @@ class MyraVoiceService : Service() {
                         emitState("Sun rahi hoon…")
                     }
                 } else {
-                    val error = "Current screen move nahi hua. Screen unlock rakho aur phir try karo."
+                    val error = if (actionScope?.expectedPackage.equals("com.google.android.youtube", true)) {
+                        "YouTube ka current feed move nahi hua."
+                    } else {
+                        "Current app ka scrollable area move nahi hua."
+                    }
                     listener?.onMyraText(error, true)
                     emitState(error)
                     queueLocalSpeech(error)
                 }
             }
         }
-        val accepted = if (explicitYouTube) {
-            service.scrollYouTubeVerified(
+        val foregroundPackage = actionScope?.expectedPackage
+        val path = when {
+            explicitYouTube -> "ACCESSIBILITY_EXPLICIT_YOUTUBE"
+            foregroundPackage.equals("com.google.android.youtube", true) -> "ACCESSIBILITY_YOUTUBE_FOREGROUND"
+            else -> "ACCESSIBILITY_CURRENT_APP"
+        }
+        voiceLog(
+            "screen_action_fast_path turnId=$activeTurnId action=scroll path=$path " +
+                "package=$foregroundPackage direction=$resolvedDirection"
+        )
+        val accepted = when {
+            explicitYouTube -> service.scrollYouTubeVerified(
                 resolvedDirection == AppCommand.ScrollDirection.DOWN,
                 callback
             )
-        } else {
-            service.scrollCurrentForegroundVerified(
+            foregroundPackage.equals("com.google.android.youtube", true) ->
+                service.scrollYouTubeForegroundVerified(
+                    actionScope!!,
+                    resolvedDirection == AppCommand.ScrollDirection.DOWN,
+                    callback
+                )
+            else -> service.scrollCurrentForegroundVerified(
                 actionScope!!,
                 resolvedDirection == AppCommand.ScrollDirection.DOWN,
                 callback
