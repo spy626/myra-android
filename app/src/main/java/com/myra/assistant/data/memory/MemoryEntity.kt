@@ -20,5 +20,7 @@ data class MemoryEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val lastConfirmedAt: Long,
-    val active: Boolean = true
+    val active: Boolean = true,
+    val useCount: Int = 0,
+    val lastUsedAt: Long = 0
 )

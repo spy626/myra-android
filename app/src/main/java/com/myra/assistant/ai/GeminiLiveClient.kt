@@ -180,7 +180,8 @@ class GeminiLiveClient(
             .put("properties", JSONObject()
                 .put("fact", JSONObject().put("type", "STRING").put("description", "Concise third-person fact about Zopy."))
                 .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
-                    "IDENTITY", "PREFERENCE", "PERSON", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT"
+                    "IDENTITY", "PREFERENCE", "PERSON", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
+                    "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "SOLUTION"
                 ))))
                 .put("memory_key", JSONObject().put("type", "STRING").put("description", "Stable lowercase subject key such as best_friend, age, movie_genre, or current_project."))
                 .put("evidence", JSONObject().put("type", "STRING").put("description", "The supporting words the user actually said."))

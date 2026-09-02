@@ -33,6 +33,21 @@ class SemanticMemoryProposalValidatorTest {
         assertTrue(MemorySafetyPolicy.decide(candidate) == MemorySaveDecision.AUTO_SAVE)
     }
 
+    @Test fun acceptsGroundedWorkflowForSilentLearning() {
+        val candidate = SemanticMemoryProposalValidator.validate(
+            fact = "Zopy tests Android releases on his phone",
+            categoryName = "workflow",
+            memoryKey = "android_release_testing",
+            evidence = "I test Android releases on my phone",
+            confidence = 0.92,
+            conversationContext = "I always test Android releases on my phone"
+        )!!
+
+        assertEquals(MemoryCategory.WORKFLOW, candidate.category)
+        assertEquals(MemorySensitivity.LOW, candidate.sensitivity)
+        assertEquals(MemorySaveDecision.AUTO_SAVE, MemorySafetyPolicy.decide(candidate))
+    }
+
     @Test fun rejectsHallucinatedOrWeaklyGroundedFact() {
         assertNull(SemanticMemoryProposalValidator.validate(
             fact = "Zopy wants to move to Japan",

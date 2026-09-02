@@ -104,7 +104,12 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     suspend fun relevant(query: String, limit: Int = 5): List<MemoryEntity> {
         val active = dao.recent(100)
-        return MemoryRelevanceSelector.select(query, active, limit)
+        val selected = MemoryRelevanceSelector.select(query, active, limit)
+        if (query.isNotBlank()) {
+            val now = System.currentTimeMillis()
+            selected.forEach { dao.markUsed(it.id, now) }
+        }
+        return selected
     }
 
     suspend fun logActiveBestFriends(stage: String) {
@@ -387,7 +392,9 @@ class MemoryRepository(private val dao: MemoryDao) {
                 createdAt = existing?.createdAt ?: now,
                 updatedAt = now,
                 lastConfirmedAt = now,
-                active = true
+                active = true,
+                useCount = existing?.useCount ?: 0,
+                lastUsedAt = existing?.lastUsedAt ?: 0
             )
         )
         return MemoryWriteResult.Saved(id)

@@ -78,4 +78,41 @@ class AutomaticMemoryExtractorTest {
         assertEquals("Zopy prefers short answers", short?.fact)
         assertEquals("preference:response_style", detailed?.stableKey)
     }
+
+    @Test fun learnsCommunicationStyleWithoutRememberCommand() {
+        val style = AutomaticMemoryExtractor.extract("Give me simple answers")
+        val language = AutomaticMemoryExtractor.extract("I prefer answers in Hinglish")
+
+        assertEquals(MemoryCategory.COMMUNICATION_STYLE, style?.category)
+        assertEquals("communication:response_style", style?.stableKey)
+        assertEquals("Zopy prefers simple answers", style?.fact)
+        assertEquals("communication:language", language?.stableKey)
+    }
+
+    @Test fun learnsRecurringAppUsageAndWorkflow() {
+        val app = AutomaticMemoryExtractor.extract("I usually use Chrome for reading articles")
+        val workflow = AutomaticMemoryExtractor.extract("I always test on my Android phone for app releases")
+
+        assertEquals(MemoryCategory.APP_USAGE, app?.category)
+        assertEquals("app_usage:reading articles", app?.stableKey)
+        assertEquals("Zopy usually uses Chrome for reading articles", app?.fact)
+        assertEquals(MemoryCategory.WORKFLOW, workflow?.category)
+        assertEquals("workflow:app releases", workflow?.stableKey)
+    }
+
+    @Test fun learnsOnlyExplicitSuccessfulSolution() {
+        val solution = AutomaticMemoryExtractor.extract(
+            "Clearing the app cache worked for me for the login loop"
+        )
+
+        assertEquals(MemoryCategory.SOLUTION, solution?.category)
+        assertEquals("solution:the login loop", solution?.stableKey)
+        assertNull(AutomaticMemoryExtractor.extract("Maybe clearing cache could help"))
+    }
+
+    @Test fun newCategoriesStillRejectSensitiveInformation() {
+        assertNull(AutomaticMemoryExtractor.extract("I usually use Notes for passwords"))
+        assertNull(AutomaticMemoryExtractor.extract("Give me simple answers with my PIN 1234"))
+        assertNull(AutomaticMemoryExtractor.extract("My bank token fix worked for me for login"))
+    }
 }

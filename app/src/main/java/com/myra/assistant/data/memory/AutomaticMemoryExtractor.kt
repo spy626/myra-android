@@ -26,6 +26,30 @@ object AutomaticMemoryExtractor {
             prohibitedOrPersonal.containsMatchIn(text)
         ) return null
 
+        communicationStyle(text)?.let { (slot, value) ->
+            return durableCandidate(
+                MemoryCategory.COMMUNICATION_STYLE,
+                "Zopy prefers $value",
+                "communication:$slot",
+                0.95
+            )
+        }
+        appUsage(text)?.let { (task, app) ->
+            return durableCandidate(
+                MemoryCategory.APP_USAGE,
+                "Zopy usually uses $app for $task",
+                "app_usage:${normalize(task)}",
+                0.94
+            )
+        }
+        successfulSolution(text)?.let { (problem, solution) ->
+            return durableCandidate(
+                MemoryCategory.SOLUTION,
+                "$solution worked for Zopy's $problem",
+                "solution:${normalize(problem)}",
+                0.91
+            )
+        }
         englishPreference(text)?.let { subject -> return preference(subject) }
         hinglishPreference(text)?.let { subject -> return preference(subject) }
         favoritePreference(text)?.let { (kind, value) ->
@@ -40,8 +64,84 @@ object AutomaticMemoryExtractor {
                 source = "automatic_conversation"
             )
         }
+        workflow(text)?.let { (task, value) ->
+            return durableCandidate(
+                MemoryCategory.WORKFLOW,
+                "Zopy usually $value",
+                "workflow:${normalize(task)}",
+                0.92
+            )
+        }
         return null
     }
+
+    private fun communicationStyle(text: String): Pair<String, String>? {
+        Regex(
+            """^(?:please\s+)?(?:give|keep|make)\s+(?:me\s+)?(?:your\s+)?(short|concise|brief|detailed|step[ -]by[ -]step|simple)\s+(?:answer|answers|reply|replies|response|responses|instructions)$""",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(text)?.let { match ->
+            val style = match.groupValues[1].lowercase(Locale.ROOT).replace('-', ' ')
+            return "response_style" to "$style answers"
+        }
+        Regex(
+            """^i\s+(?:prefer|want)\s+(?:you\s+to\s+answer\s+in|answers?\s+in)\s+(english|hindi|hinglish)$""",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(text)?.let { return "language" to "answers in ${it.groupValues[1]}" }
+        return null
+    }
+
+    private fun workflow(text: String): Pair<String, String>? =
+        Regex(
+            """^i\s+(?:always|usually)\s+(.+?)\s+(?:when|for)\s+(.+)$""",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(text)?.let { match ->
+            val action = cleanSubject(match.groupValues[1]) ?: return@let null
+            val task = cleanSubject(match.groupValues[2]) ?: return@let null
+            task to "$action for $task"
+        }
+
+    private fun appUsage(text: String): Pair<String, String>? =
+        Regex(
+            """^i\s+(?:always|usually|normally)\s+use\s+([\p{L}\p{N} .+_-]{2,40})\s+for\s+(.+)$""",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(text)?.let { match ->
+            val app = cleanSubject(match.groupValues[1]) ?: return@let null
+            val task = cleanSubject(match.groupValues[2]) ?: return@let null
+            task to app
+        }
+
+    private fun successfulSolution(text: String): Pair<String, String>? {
+        Regex(
+            """^(.+?)\s+(?:worked|works)\s+for\s+me\s+(?:for|with)\s+(.+)$""",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(text)?.let { match ->
+            val solution = cleanSubject(match.groupValues[1]) ?: return@let null
+            val problem = cleanSubject(match.groupValues[2]) ?: return@let null
+            return problem to solution
+        }
+        Regex(
+            """^(?:this|that)\s+(?:fix|solution)\s+worked\s+for\s+(.+)$""",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(text)?.let { match ->
+            val problem = cleanSubject(match.groupValues[1]) ?: return@let null
+            return problem to "The confirmed solution"
+        }
+        return null
+    }
+
+    private fun durableCandidate(
+        category: MemoryCategory,
+        fact: String,
+        stableKey: String,
+        confidence: Double
+    ) = MemoryCandidate(
+        category = category,
+        fact = fact,
+        stableKey = stableKey,
+        sensitivity = MemorySensitivity.LOW,
+        confidence = confidence,
+        source = "automatic_conversation"
+    )
 
     private fun englishPreference(text: String): String? =
         Regex(

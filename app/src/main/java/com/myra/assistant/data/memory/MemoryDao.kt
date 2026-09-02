@@ -25,6 +25,9 @@ interface MemoryDao {
     @Query("UPDATE memories SET active = 0, updatedAt = :updatedAt WHERE stableKey = :stableKey AND active = 1")
     suspend fun deactivateByStableKey(stableKey: String, updatedAt: Long): Int
 
+    @Query("UPDATE memories SET useCount = useCount + 1, lastUsedAt = :usedAt WHERE id = :id AND active = 1")
+    suspend fun markUsed(id: String, usedAt: Long): Int
+
     @Query("UPDATE memories SET stableKey = :stableKey, fact = :fact, normalizedFact = :normalizedFact, updatedAt = :updatedAt, lastConfirmedAt = :updatedAt WHERE id = :id AND active = 1")
     suspend fun rename(id: String, stableKey: String, fact: String, normalizedFact: String, updatedAt: Long): Int
 

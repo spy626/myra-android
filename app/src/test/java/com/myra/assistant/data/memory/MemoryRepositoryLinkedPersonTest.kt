@@ -168,6 +168,33 @@ class MemoryRepositoryLinkedPersonTest {
                 .toSet()
         )
     }
+    @Test fun stablePreferenceKeyUpdatesInsteadOfDuplicating() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val short = AutomaticMemoryExtractor.extract("Give me short answers")!!
+        val detailed = AutomaticMemoryExtractor.extract("Give me detailed answers")!!
+
+        repository.save(short)
+        repository.save(detailed)
+
+        val active = repository.allActive().filter {
+            it.stableKey == "communication:response_style"
+        }
+        assertEquals(1, active.size)
+        assertEquals("Zopy prefers detailed answers", active.single().fact)
+    }
+
+    @Test fun relevantRetrievalRecordsUsageWithoutDuplicatingMemory() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        repository.save(AutomaticMemoryExtractor.extract("I usually use Chrome for reading articles")!!)
+
+        repository.relevant("Which app do I usually use for reading articles?", 1)
+        repository.relevant("Use my usual app for reading articles", 1)
+
+        val memory = repository.allActive().single()
+        assertEquals(2, memory.useCount)
+        assertTrue(memory.lastUsedAt > 0)
+    }
+
     private fun bestFriend(name: String) = MemoryCandidate(
         MemoryCategory.PERSON, "Zopy's best friend is $name",
         MemoryRelationshipPolicy.BEST_FRIEND_KEY, MemorySensitivity.PERSONAL, .96, source = "test"
@@ -207,6 +234,12 @@ private class FakeMemoryDao : MemoryDao {
     override suspend fun deactivateByStableKey(stableKey: String, updatedAt: Long): Int {
         val row = rows.values.firstOrNull { it.stableKey == stableKey && it.active } ?: return 0
         return deactivate(row.id, updatedAt)
+    }
+
+    override suspend fun markUsed(id: String, usedAt: Long): Int {
+        val row = rows[id]?.takeIf { it.active } ?: return 0
+        rows[id] = row.copy(useCount = row.useCount + 1, lastUsedAt = usedAt)
+        return 1
     }
 
     override suspend fun rename(

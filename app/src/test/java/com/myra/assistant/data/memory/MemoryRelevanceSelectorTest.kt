@@ -50,4 +50,30 @@ class MemoryRelevanceSelectorTest {
         assertTrue(MemoryRelevanceSelector.select("Now Farah", memories, 10).isEmpty())
         assertEquals(2, MemoryRelevanceSelector.select("Naufal", memories, 10).size)
     }
+
+    @Test fun contextualReferenceRetrievesPriorWorkflowAndUsualApp() {
+        val memories = listOf(
+            memory("1", "workflow:app releases", "Zopy usually tests on Android phone for app releases", 10)
+                .copy(category = MemoryCategory.WORKFLOW.name),
+            memory("2", "app_usage:reading articles", "Zopy usually uses Chrome for reading articles", 20)
+                .copy(category = MemoryCategory.APP_USAGE.name),
+            memory("3", "preference:likes:horror", "Zopy likes horror", 30)
+        )
+
+        val selected = MemoryRelevanceSelector.select("Do it like before", memories, 3)
+
+        assertEquals(listOf("2", "1", "3"), selected.map { it.id })
+    }
+
+    @Test fun frequentlyUsedRelevantMemoryHasHigherPriority() {
+        val newer = memory("1", "workflow:test", "Zopy uses phone testing", 20)
+            .copy(category = MemoryCategory.WORKFLOW.name)
+        val frequent = memory("2", "workflow:test", "Zopy uses device testing", 10)
+            .copy(category = MemoryCategory.WORKFLOW.name, useCount = 4, lastUsedAt = 30)
+
+        assertEquals(
+            "2",
+            MemoryRelevanceSelector.select("usual workflow test", listOf(newer, frequent), 1).single().id
+        )
+    }
 }

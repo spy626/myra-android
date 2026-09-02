@@ -64,7 +64,7 @@ object SemanticMemoryProposalValidator {
         val sensitivity = when {
             sensitive.containsMatchIn(cleanFact) || sensitive.containsMatchIn(cleanEvidence) ->
                 MemorySensitivity.SENSITIVE
-            category == MemoryCategory.PREFERENCE -> MemorySensitivity.LOW
+            category in LOW_RISK_CATEGORIES -> MemorySensitivity.LOW
             else -> MemorySensitivity.PERSONAL
         }
         return MemoryRelationshipPolicy.canonicalize(MemoryCandidate(
@@ -93,4 +93,12 @@ object SemanticMemoryProposalValidator {
         .replace(Regex("[^\\p{L}\\p{N}:_-]+"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
+
+    private val LOW_RISK_CATEGORIES = setOf(
+        MemoryCategory.PREFERENCE,
+        MemoryCategory.COMMUNICATION_STYLE,
+        MemoryCategory.WORKFLOW,
+        MemoryCategory.APP_USAGE,
+        MemoryCategory.SOLUTION
+    )
 }
