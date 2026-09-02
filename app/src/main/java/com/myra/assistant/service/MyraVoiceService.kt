@@ -2954,9 +2954,9 @@ class MyraVoiceService : Service() {
             return
         }
         val explicitYouTube = command.explicitlyRequestedApp.equals("YouTube", true)
-        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(
-            service.currentForegroundContext()
-        )
+        val liveForeground = service.currentForegroundContext()
+        brain.observeForegroundApp(liveForeground?.packageName)
+        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(liveForeground)
         if (!explicitYouTube && actionScope == null) {
             val error = "Current app clear nahi mila, isliye scroll nahi kiya."
             listener?.onMyraText(error, true)
