@@ -111,4 +111,31 @@ class LyraBrainCoordinatorTest {
         assertEquals(12, decision.target.activeWindowId)
         assertEquals(4L, decision.target.screenContextGeneration)
     }
+
+    @Test
+    fun `live accessibility package propagates into current app state`() {
+        val brain = LyraBrainCoordinator()
+        brain.observeForegroundApp("com.google.android.youtube")
+        assertEquals("com.google.android.youtube", brain.snapshot().currentApp)
+    }
+
+    @Test
+    fun `second video is a deterministic accessibility screen action`() {
+        val brain = LyraBrainCoordinator()
+        brain.observeForegroundApp("com.google.android.youtube")
+        val decision = brain.interpret("second video open karo")
+        assertTrue(decision is BrainDecision.ScreenAction)
+        decision as BrainDecision.ScreenAction
+        assertEquals(2, decision.target.ordinal)
+        assertEquals("video", decision.target.targetText)
+        assertFalse(decision.contextual)
+    }
+
+    @Test
+    fun `ordinal video action does not require screen vision classification`() {
+        assertEquals(
+            BrainIntent.SCREEN_ACTION,
+            LyraBrainCoordinator.classify("open the second video")
+        )
+    }
 }
