@@ -20,6 +20,15 @@ class YouTubeSemanticActionsTest {
         assertTrue(YouTubeSemanticCommandParser.parse("Send karo") is YouTubeSemanticCommand.SendComment)
     }
 
+    @Test fun recognises_hinglish_and_devanagari_current_video_controls_before_transliteration() {
+        assertTrue(YouTubeSemanticCommandParser.parse("comments kholo") is YouTubeSemanticCommand.OpenComments)
+        assertTrue(YouTubeSemanticCommandParser.parse("कमेंट ओपन करो") is YouTubeSemanticCommand.OpenComments)
+        assertTrue(YouTubeSemanticCommandParser.parse("कमेंट खोलो") is YouTubeSemanticCommand.OpenComments)
+        assertTrue(YouTubeSemanticCommandParser.parse("video like karo") is YouTubeSemanticCommand.Like)
+        assertTrue(YouTubeSemanticCommandParser.parse("वीडियो लाइक करो") is YouTubeSemanticCommand.Like)
+        assertTrue(YouTubeSemanticCommandParser.parse("subscribe karo") is YouTubeSemanticCommand.Subscribe)
+    }
+
     @Test fun profile_name_stays_bound_to_its_card() {
         val elements = listOf(
             YouTubeSemanticElement("a-name", YouTubeSemanticRole.CHANNEL_NAME, "Alice", "a"),
