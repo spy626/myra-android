@@ -48,7 +48,6 @@ import com.myra.assistant.databinding.SheetSettingsBinding
 import com.myra.assistant.ui.settings.SettingsActivity
 import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenShareState
-import com.myra.assistant.screen.PendingVisualActionStore
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -89,12 +88,10 @@ class MainActivity : AppCompatActivity() {
     private val screenProjectionPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != RESULT_OK || result.data == null) {
             ScreenCaptureService.markPermissionDenied()
-            PendingVisualActionStore.clear()
             MyraVoiceService.notifyScreenProjectionPermissionResult(false)
             updateScreenVisionButton(ScreenShareState.ERROR)
             finishVoicePermissionTransition()
         } else {
-            PendingVisualActionStore.markPermissionApproved()
             val service = Intent(this, ScreenCaptureService::class.java)
                 .setAction(ScreenCaptureService.ACTION_START)
                 .putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
@@ -230,7 +227,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestScreenProjectionPermission() {
         ScreenCaptureService.markPermissionRequesting()
-        PendingVisualActionStore.markPermissionRequesting()
         val manager = getSystemService(MediaProjectionManager::class.java)
         screenProjectionPermission.launch(manager.createScreenCaptureIntent())
     }

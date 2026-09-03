@@ -8,6 +8,7 @@ import android.content.Intent
 import android.media.AudioManager
 import android.net.Uri
 import android.graphics.Rect
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -15,11 +16,13 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.os.Bundle
+import android.os.Build
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.Display
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -42,6 +45,17 @@ import com.myra.assistant.screen.YouTubeSemanticElement
 import com.myra.assistant.screen.YouTubeSemanticResolution
 import com.myra.assistant.screen.YouTubeSemanticResolver
 import com.myra.assistant.screen.YouTubeSemanticRole
+import com.myra.assistant.screen.VisualAwarenessPreferences
+import com.myra.assistant.screen.VisualObservationPolicy
+import com.myra.assistant.screen.AccessibilityScreenshot
+import com.myra.assistant.agent.ActivityContextStore
+import com.myra.assistant.agent.CurrentActivityContext
+import com.myra.assistant.agent.SemanticElement
+import com.myra.assistant.agent.SemanticRoleClassifier
+import com.myra.assistant.agent.ScreenshotReference
+import com.myra.assistant.agent.UnifiedLyraAgentRuntime
+import java.io.ByteArrayOutputStream
+import java.util.UUID
 import java.util.Locale
 
 data class VisibleTargetTapResult(
@@ -74,6 +88,7 @@ class AccessibilityHelperService : AccessibilityService() {
     private var screenOverlay: View? = null
     private var overlayPanel: View? = null
     private var overlayState: ScreenShareState = ScreenShareState.IDLE
+    private val visualAwareness by lazy { VisualAwarenessPreferences(this) }
     @Volatile private var accessibilitySnapshotAt: Long = 0L
     private var foregroundPackage: String? = null
     private var foregroundWindowId: Int? = null
@@ -81,7 +96,9 @@ class AccessibilityHelperService : AccessibilityService() {
     private val screenWatcherHandler = Handler(Looper.getMainLooper())
     private val screenWatcher = object : Runnable {
         override fun run() {
-            if (ScreenCaptureService.currentState == ScreenShareState.ACTIVE) refreshScreenContext()
+            // Accessibility context is the normal always-lightweight observation path.
+            // MediaProjection state must not gate foreground/window awareness.
+            refreshScreenContext()
             val now = android.os.SystemClock.elapsedRealtime()
             val scrolling = now - com.myra.assistant.screen.ScreenContextStore.snapshot().lastScrollAt <= 1_000L
             screenWatcherHandler.postDelayed(this, if (scrolling) 300L else 1_000L)
@@ -91,6 +108,7 @@ class AccessibilityHelperService : AccessibilityService() {
         instance = this
         super.onServiceConnected()
         updateScreenVisionOverlay(ScreenCaptureService.currentState)
+        if (screenOverlay == null) showScreenVisionOverlay()
         screenWatcherHandler.removeCallbacks(screenWatcher)
         screenWatcherHandler.post(screenWatcher)
     }
@@ -122,11 +140,8 @@ class AccessibilityHelperService : AccessibilityService() {
     fun updateScreenVisionOverlay(state: ScreenShareState) {
         Handler(Looper.getMainLooper()).post {
             overlayState = state
-            if (state !in setOf(ScreenShareState.ACTIVE, ScreenShareState.PAUSED, ScreenShareState.RESUMING)) {
-                hideScreenVisionOverlay(); return@post
-            }
             if (screenOverlay == null) showScreenVisionOverlay()
-            (screenOverlay as? TextView)?.text = if (state == ScreenShareState.PAUSED) "▶" else "◉"
+            (screenOverlay as? TextView)?.text = if (visualAwareness.enabled) "◉" else "○"
         }
     }
 
@@ -152,7 +167,16 @@ class AccessibilityHelperService : AccessibilityService() {
                     params.y = (startY + dy).coerceIn(0, resources.displayMetrics.heightPixels - size)
                     runCatching { window.updateViewLayout(bubble, params) }; true
                 }
-                MotionEvent.ACTION_UP -> { if (!moved) toggleOverlayPanel(params); true }
+                MotionEvent.ACTION_UP -> {
+                    if (!moved) {
+                        visualAwareness.enabled = !visualAwareness.enabled
+                        bubble.text = if (visualAwareness.enabled) "◉" else "○"
+                        com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
+                            "visual_awareness_changed enabled=${visualAwareness.enabled} mediaProjectionState=$overlayState"
+                        )
+                    }
+                    true
+                }
                 else -> false
             }
         }
@@ -214,6 +238,54 @@ class AccessibilityHelperService : AccessibilityService() {
     }
 
     fun takeScreenshot(): Boolean = performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
+
+    /**
+     * Captures an in-memory Accessibility screenshot on Android 11+. This is LYRA's
+     * normal visual observation path and never starts MediaProjection.
+     */
+    fun requestVisualScreenshot(callback: (Result<AccessibilityScreenshot>) -> Unit): Boolean {
+        if (!VisualObservationPolicy.mayRequestScreenshot(visualAwareness.enabled, Build.VERSION.SDK_INT)) return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+        val expected = currentForegroundContext() ?: return false
+        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(result: ScreenshotResult) {
+                val current = currentForegroundContext()
+                if (current == null || current.packageName != expected.packageName ||
+                    current.windowId != expected.windowId || current.generation != expected.generation
+                ) {
+                    result.hardwareBuffer.close()
+                    callback(Result.failure(IllegalStateException("stale_accessibility_screenshot")))
+                    return
+                }
+                val buffer = result.hardwareBuffer
+                val wrapped = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
+                val bitmap = wrapped?.copy(Bitmap.Config.ARGB_8888, false)
+                buffer.close()
+                if (bitmap == null) {
+                    callback(Result.failure(IllegalStateException("screenshot_decode_failed")))
+                    return
+                }
+                val bytes = ByteArrayOutputStream().use { output ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 86, output)
+                    output.toByteArray()
+                }
+                val capturedAt = android.os.SystemClock.elapsedRealtime()
+                val screenshot = AccessibilityScreenshot(bytes, bitmap.width, bitmap.height, capturedAt,
+                    current.packageName, current.windowId, current.generation)
+                bitmap.recycle()
+                ActivityContextStore.attachScreenshot(
+                    ScreenshotReference(UUID.randomUUID().toString(), capturedAt, screenshot.width, screenshot.height),
+                    current.packageName, current.windowId
+                )
+                callback(Result.success(screenshot))
+            }
+
+            override fun onFailure(errorCode: Int) {
+                callback(Result.failure(IllegalStateException("accessibility_screenshot_error_$errorCode")))
+            }
+        })
+        return true
+    }
 
     fun openYouTubeShorts(): Boolean = clickNavigationTarget(
         YOUTUBE_PACKAGE,
@@ -1136,6 +1208,28 @@ class AccessibilityHelperService : AccessibilityService() {
             }.getOrNull()
         }
         val elements = visibleElements(120)
+        val foreground = currentForegroundContext()
+        if (foreground != null) {
+            val semantic = elements.mapIndexed { index, element ->
+                SemanticElement(
+                    id = "${foreground.windowId}:${foreground.generation}:$index",
+                    role = SemanticRoleClassifier.classify(element.label, element.className, element.clickable),
+                    label = element.label.take(240), left = element.bounds.left, top = element.bounds.top,
+                    right = element.bounds.right, bottom = element.bounds.bottom,
+                    actionable = element.clickable
+                )
+            }
+            val updated = ActivityContextStore.update(CurrentActivityContext(
+                packageName = foreground.packageName, appLabel = foreground.appName,
+                screenType = detectContentType().name, windowId = foreground.windowId,
+                generation = foreground.generation, visibleElements = semantic,
+                confidence = if (semantic.isEmpty()) 0.25 else 0.9, timestamp = observedAt
+            ))
+            UnifiedLyraAgentRuntime.agent.invalidateForContext(updated)
+            com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
+                "agent_observation package=${updated.packageName} windowGeneration=${updated.generation} semanticElements=${semantic.size} screenshotUsed=false"
+            )
+        }
         com.myra.assistant.screen.ScreenContextStore.onAccessibility(
             ScreenCaptureService.session.sessionId, packageName, appName, elements, observedAt,
             resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels

@@ -70,16 +70,15 @@ import com.myra.assistant.screen.ScreenQueryTimingPolicy
 import com.myra.assistant.screen.ScreenShareState
 import com.myra.assistant.screen.ScreenModeCommand
 import com.myra.assistant.screen.ScreenModeCommandParser
-import com.myra.assistant.screen.PendingVisualAction
-import com.myra.assistant.screen.PendingVisualActionStore
-import com.myra.assistant.screen.AccessibilityFirstVisualPolicy
-import com.myra.assistant.screen.VisualFallbackDecision
 import com.myra.assistant.screen.ScreenVisionIntentParser
 import com.myra.assistant.screen.InstantScreenQuery
 import com.myra.assistant.screen.ScreenCacheUse
 import com.myra.assistant.screen.ScreenContextStore
 import com.myra.assistant.screen.HotScreenCachePolicy
 import com.myra.assistant.screen.ScreenVisionPreferences
+import com.myra.assistant.screen.VisualAwarenessPreferences
+import com.myra.assistant.agent.ActivityContextStore
+import com.myra.assistant.agent.UnifiedLyraAgentRuntime
 import com.myra.assistant.screen.FreshFrameResult
 import com.myra.assistant.screen.ScreenResponseBinding
 import com.myra.assistant.screen.ReadingCommand
@@ -260,6 +259,8 @@ class MyraVoiceService : Service() {
     private var screenResponseGenerationId = 0L
     private var screenResponseBinding: ScreenResponseBinding? = null
     private var screenResponseSessionId = ""
+    private var screenResponseAccessibilityPackage = ""
+    private var screenResponseAccessibilityGeneration = 0L
     private var screenResponseQueryId = ""
     private var screenQuestionDetectedAt = 0L
     private var screenFreshFrameCapturedAt = 0L
@@ -297,10 +298,8 @@ class MyraVoiceService : Service() {
     private val memoryRepository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
     private val assistantController by lazy { (application as MyApplication).assistantController }
     private val screenVisionPreferences by lazy { ScreenVisionPreferences(this) }
+    private val visualAwarenessPreferences by lazy { VisualAwarenessPreferences(this) }
     private val screenCaptureListener: (ScreenShareState, ByteArray?) -> Unit = { state, frame ->
-        if (state == ScreenShareState.ACTIVE && PendingVisualActionStore.snapshot() != null) {
-            mainHandler.postDelayed({ resumePendingVisualAction(0) }, 350L)
-        }
         if (state == ScreenShareState.ACTIVE && readingTracker.snapshot() != null) {
             val packageName = AccessibilityHelperService.instance?.currentPackageName().orEmpty()
             if (packageName.isNotBlank() && readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, packageName)) {
@@ -319,7 +318,7 @@ class MyraVoiceService : Service() {
                 voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=screen_session_inactive")
             }
         }
-        if (state != ScreenShareState.ACTIVE && screenResponseActive) {
+        if (state != ScreenShareState.ACTIVE && screenResponseActive && !screenResponseSessionId.startsWith("accessibility:")) {
             voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId state=$state")
             screenResponseActive = false
             screenResponseSessionId = ""
@@ -453,7 +452,7 @@ class MyraVoiceService : Service() {
                         startLocalSpeechWhenPrefixMatches()
                     }
                 }
-                else if (screenResponseActive && ScreenCaptureService.session.isCurrent(screenResponseSessionId)) {
+                else if (screenResponseActive && isScreenResponseContextCurrent()) {
                     val generationAccepted = screenResponseBinding?.acceptsGeneration(modelGenerationId) == true
                     screenResponseGenerationId = screenResponseBinding?.screenGenerationId ?: 0L
                     if (!generationAccepted) {
@@ -829,7 +828,7 @@ class MyraVoiceService : Service() {
                     appendTranscript(localSpeechTranscript, transcript)
                     startLocalSpeechWhenPrefixMatches()
                 }
-                else if (screenResponseActive && ScreenCaptureService.session.isCurrent(screenResponseSessionId)) {
+                else if (screenResponseActive && isScreenResponseContextCurrent()) {
                     if (screenResponseBinding?.acceptsGeneration(modelGenerationId) == true) {
                         screenResponseGenerationId = screenResponseBinding?.screenGenerationId ?: 0L
                         if (!screenResponseStartedLogged) {
@@ -885,7 +884,7 @@ class MyraVoiceService : Service() {
                         voiceLog("screen_response_empty_boundary_ignored screen_query_id=$screenResponseQueryId")
                         return@turnComplete
                     }
-                    val current = ScreenCaptureService.session.isCurrent(screenResponseSessionId)
+                    val current = isScreenResponseContextCurrent()
                     val text = output.toString().trim()
                     if (current && text.isNotBlank() && !screenResponseTextCommitted) {
                         listener?.onMyraText(romanDisplayText(text))
@@ -1069,9 +1068,21 @@ class MyraVoiceService : Service() {
                     brain.observeForegroundApp(it.packageName)
                     voiceLog("foreground_context_propagated turnId=$activeTurnId package=${it.packageName} windowId=${it.windowId} generation=${it.generation}")
                 }
-                PendingVisualActionStore.snapshot()?.takeIf { it.turnId != activeTurnId }?.let {
-                    PendingVisualActionStore.clear()
-                    voiceLog("pending_visual_action_cancelled reason=replaced_by_turn oldTurnId=${it.turnId} newTurnId=$activeTurnId")
+                ActivityContextStore.snapshot()?.let { context ->
+                    val task = UnifiedLyraAgentRuntime.agent.createTask(
+                        userText, context, visualAwarenessPreferences.enabled
+                    )
+                    voiceLog(
+                        "agent_task_created taskId=${task.id} goal=${task.interpretedGoal} package=${context.packageName} " +
+                            "planSteps=${task.plan.size} confidence=${task.confidence}"
+                    )
+                    voiceLog("agent_goal_understood taskId=${task.id} goal=${task.interpretedGoal} confidence=${task.confidence}")
+                    voiceLog("agent_plan_created taskId=${task.id} steps=${task.plan.joinToString(",") { it.id }}")
+                }
+                if (executeUnifiedReferenceIfApplicable(userText)) {
+                    resetTurnBuffers("unified_agent_reference")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
                 }
                 val screenMode = ScreenModeCommandParser.parse(userText)
                     ?: ScreenModeCommandParser.parse(normalizedFinalUserText)
@@ -1731,11 +1742,9 @@ class MyraVoiceService : Service() {
         screenActionRegistry.cancel()?.let {
             voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=new_explicit_screen_command")
         }
-        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "Screen Vision has no current shared frame")
-            return
-        }
-        if (ScreenVisionIntentParser.parse(intentText) == null) {
+        if (ScreenVisionIntentParser.parse(intentText) == null &&
+            UnifiedLyraAgentRuntime.agent.currentTask()?.interpretedGoal != com.myra.assistant.agent.AgentGoalType.TAP
+        ) {
             live?.sendToolResponse(id, "perform_screen_action", false, "No explicit visible-screen action was requested")
             return
         }
@@ -1776,151 +1785,41 @@ class MyraVoiceService : Service() {
             live?.sendToolResponse(id, "perform_screen_action", false, "LYRA Accessibility is disabled")
             return
         }
-        val contextRequestedAt = android.os.SystemClock.elapsedRealtime()
-        val cachedContext = ScreenContextStore.freshSnapshot(
-            ScreenCaptureService.session.sessionId, contextRequestedAt, ScreenCacheUse.ACTION
-        )
-        val cachedFrame = ScreenCaptureService.session.latestFrame?.takeIf {
-            cachedContext != null && it.sessionId == cachedContext.screenSessionId &&
-                it.frameId == cachedContext.frameId &&
-                (contextRequestedAt - it.capturedAt).coerceAtLeast(0L) <= HotScreenCachePolicy.maxAgeMs(
-                    cachedContext.currentPackage, cachedContext.lastScrollAt, contextRequestedAt, ScreenCacheUse.ACTION
-                )
-        }
-        if (cachedFrame != null) {
-            voiceLog(
-                "screen_action_context_ready target=$target source=HOT_SCREEN_CACHE frame_id=${cachedFrame.frameId} " +
-                    "frame_age_ms=${(contextRequestedAt - cachedFrame.capturedAt).coerceAtLeast(0L)} contextWaitMs=0"
-            )
-            performScreenActionTool(id, resolvedTarget, accessibility, cachedFrame)
-            return
-        }
-        val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
-            mainHandler.post {
-                val ready = result as? FreshFrameResult.Ready
-                if (ready == null || !ScreenCaptureService.session.isCurrent(ready.query.sessionId)) {
-                    brain.recordScreenAction(resolvedTarget, false)
-                    live?.sendToolResponse(id, "perform_screen_action", false, "A fresh current screen was unavailable")
-                    return@post
-                }
-                val selectedAt = android.os.SystemClock.elapsedRealtime()
-                voiceLog(
-                    "screen_action_context_ready target=$target screen_query_id=${ready.query.queryId} " +
-                        "frame_id=${ready.frame.frameId} frame_age_ms=${(selectedAt - ready.frame.capturedAt).coerceAtLeast(0L)} " +
-                        "contextWaitMs=${(selectedAt - contextRequestedAt).coerceAtLeast(0L)}"
-                )
-                performScreenActionTool(id, resolvedTarget, accessibility, ready.frame)
-            }
-        }
-        if (query == null) live?.sendToolResponse(id, "perform_screen_action", false, "Screen session ended before target resolution")
-    }
-
-    private fun performScreenActionTool(
-        id: String,
-        resolvedTarget: ScreenTargetReference,
-        accessibility: AccessibilityHelperService,
-        preTapFrame: com.myra.assistant.screen.ScreenFrame
-    ) {
-        val target = resolvedTarget.targetText
-        val position = resolvedTarget.position
-        val ordinal = resolvedTarget.ordinal
         val foreground = accessibility.currentForegroundContext()
         val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
-        if (actionScope == null ||
-            (preTapFrame.packageName != null && preTapFrame.packageName != actionScope.expectedPackage)
-        ) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "The foreground app changed before target resolution")
+        if (actionScope == null) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "Current Accessibility window is unavailable")
             return
         }
-        val ownedTarget = resolvedTarget.copy(
-            appPackage = actionScope.expectedPackage,
-            activeWindowId = actionScope.expectedWindowId,
-            screenContextGeneration = actionScope.expectedGeneration
-        )
-        val before = accessibility.visibleScreenSignature()
-        val actionSessionId = preTapFrame.sessionId
-        val resolveStartedAt = android.os.SystemClock.elapsedRealtime()
-        var createdIntent: ScreenActionIntent? = null
-        val tapResult = accessibility.resolveAndTapVisibleTarget(
-            target, position, ordinal, actionScope
-        ) { _, confidence ->
-            createdIntent = screenActionRegistry.create(
-                activeTurnId, actionSessionId, lastUserIntentText,
-                target, position, ordinal, accessibility.currentPackageName(),
-                android.os.SystemClock.elapsedRealtime(), preTapFrame.frameId, confidence,
-                actionScope.expectedWindowId, actionScope.expectedGeneration
+        val beforeAccessibility = accessibility.visibleScreenSignature()
+        val direct = accessibility.resolveAndTapVisibleTarget(target, position, ordinal, actionScope) { _, _ -> true }
+        if (direct.accepted) {
+            voiceLog(
+                "agent_tool_selected tool=accessibility_click package=${actionScope.expectedPackage} " +
+                    "windowGeneration=${actionScope.expectedGeneration} targetResolution=${direct.resolution}"
             )
-            true
-        }
-        val actionIntent = createdIntent ?: screenActionRegistry.create(
-            activeTurnId, actionSessionId, lastUserIntentText,
-            target, position, ordinal, accessibility.currentPackageName(),
-            android.os.SystemClock.elapsedRealtime(), preTapFrame.frameId, tapResult.confidence,
-            actionScope.expectedWindowId, actionScope.expectedGeneration
-        )
-        voiceLog(
-            "SCREEN_ACTION_CREATED actionId=${actionIntent.actionId} turnId=${actionIntent.turnId} " +
-                "screenSessionId=${actionIntent.screenSessionId} frameId=${actionIntent.sourceFrameId} " +
-                "package=${actionIntent.appPackage} target=${actionIntent.normalizedTarget} confidence=${actionIntent.confidence} " +
-                "resolverVersion=${actionIntent.resolverVersion}"
-        )
-        voiceLog(
-            "SCREEN_TARGET_RESOLVED actionId=${actionIntent.actionId} resolution=${tapResult.resolution} " +
-                "candidate=${tapResult.candidate?.label?.take(160)} confidence=${tapResult.confidence}"
-        )
-        val accepted = tapResult.accepted
-        voiceLog(
-            "SCREEN_ACTION_STARTED screen_query_id=${screenResponseQueryId.ifBlank { "tool-$activeTurnId" }} " +
-                "screen_session_id=$actionSessionId frame_id=${preTapFrame.frameId} timestamp=$resolveStartedAt target=${target?.take(120)}"
-        )
-        voiceLog(
-            "screen_action_target_resolved target=$target position=$position ordinal=$ordinal " +
-                "screen_session_id=$actionSessionId preTapFrameId=${preTapFrame.frameId} " +
-                "resolveAndTapMs=${(android.os.SystemClock.elapsedRealtime() - resolveStartedAt).coerceAtLeast(0L)}"
-        )
-        voiceLog("screen_action_tap_attempt target=$target accepted=$accepted screen_session_id=$actionSessionId")
-        if (!accepted) {
-            screenActionRegistry.cancel(actionIntent.actionId)
-            brain.recordScreenAction(ownedTarget, false)
-            voiceLog("SCREEN_ACTION_FAILED actionId=${actionIntent.actionId} reason=${tapResult.resolution}")
-            live?.sendToolResponse(id, "perform_screen_action", false, "No unambiguous clickable target matched the current screen")
+            mainHandler.postDelayed({
+                val stillOwned = com.myra.assistant.screen.ForegroundActionPolicy.canExecute(
+                    actionScope, accessibility.currentForegroundContext()
+                )
+                val changed = stillOwned && beforeAccessibility.isNotBlank() &&
+                    accessibility.visibleScreenSignature() != beforeAccessibility
+                voiceLog("agent_verification tool=accessibility_click accepted=true verified=$changed")
+                live?.sendToolResponse(
+                    id, "perform_screen_action", changed,
+                    if (changed) "Accessibility action verified" else "Action was accepted but the expected screen change was not verified"
+                )
+            }, 350L)
             return
         }
-        mainHandler.postDelayed({
-            val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
-                mainHandler.post {
-                    if (!screenActionRegistry.isCurrent(
-                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId
-                    )) {
-                        voiceLog("SCREEN_TARGET_STALE actionId=${actionIntent.actionId} turnId=${actionIntent.turnId} reason=replaced_before_verification")
-                        return@post
-                    }
-                    val post = (result as? FreshFrameResult.Ready)?.frame
-                    val accessibilityChanged = before.isNotBlank() && accessibility.visibleScreenSignature() != before
-                    val frameChanged = post != null && post.sessionId == actionSessionId &&
-                        post.frameId > preTapFrame.frameId && post.hash != preTapFrame.hash
-                    val verified = ScreenCaptureService.session.isCurrent(actionSessionId) &&
-                        (accessibilityChanged || frameChanged)
-                    voiceLog(
-                        "screen_action_post_frame screen_session_id=$actionSessionId preTapFrameId=${preTapFrame.frameId} " +
-                            "postTapFrameId=${post?.frameId ?: 0L} frameChanged=$frameChanged accessibilityChanged=$accessibilityChanged"
-                    )
-                    voiceLog("screen_action_verification_result target=$target tapAccepted=true verified=$verified")
-                    voiceLog(
-                        "SCREEN_ACTION_VERIFIED actionId=${actionIntent.actionId} screen_session_id=$actionSessionId pre_frame_id=${preTapFrame.frameId} " +
-                            "post_frame_id=${post?.frameId ?: 0L} timestamp=${android.os.SystemClock.elapsedRealtime()} verified=$verified"
-                    )
-                    brain.recordScreenAction(ownedTarget, verified)
-                    screenActionRegistry.cancel(actionIntent.actionId)
-                    live?.sendToolResponse(
-                        id, "perform_screen_action", verified,
-                        if (verified) "The target was tapped and a new screen state was verified"
-                        else "The target was tapped but the expected screen change was not verified"
-                    )
-                }
-            }
-            if (query == null) live?.sendToolResponse(id, "perform_screen_action", false, "Screen session ended before post-tap verification")
-        }, 350L)
+        // Normal visual actions never request MediaProjection. The model already
+        // received a fresh Accessibility screenshot when visual fallback was used.
+        live?.sendToolResponse(
+            id, "perform_screen_action", false,
+            if (direct.resolution == "ambiguous") "Visible target is ambiguous; ask the user to choose"
+            else "No current Accessibility target matched; ask a short clarification"
+        )
+        return
     }
 
     private fun beginFreshScreenQuery(question: String, userTurnId: Long) {
@@ -1939,6 +1838,15 @@ class MyraVoiceService : Service() {
         // Preserve an active media-speech candidate when LYRA is already silent;
         // interrupt/reset is only needed for a genuine barge-in on LYRA playback.
         if (localAudioSpeaking) audio?.interrupt()
+        if (tryInstantAccessibilityAnswer(question, userTurnId)) return
+        if (visualAwarenessPreferences.enabled && beginAccessibilityScreenQuery(question, userTurnId)) return
+        if (!visualAwarenessPreferences.enabled) {
+            voiceLog("screen_query_terminal state=REJECTED_VISUAL_AWARENESS_OFF userTurnId=$userTurnId")
+            speakScreenUnavailable("Visual awareness off hai. Eye button on karo.")
+            return
+        }
+        // Android 10 and older do not expose AccessibilityService.takeScreenshot.
+        // A user-started continuous projection is the explicit legacy fallback.
         if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
             voiceLog("screen_query_terminal state=REJECTED_SCREEN_INACTIVE userTurnId=$userTurnId")
             speakScreenUnavailable(
@@ -2046,6 +1954,106 @@ class MyraVoiceService : Service() {
         else voiceLog("screen_query_created screen_query_id=${query.queryId} screen_session_id=${query.sessionId} userTurnId=$userTurnId state=CREATED")
     }
 
+    private fun tryInstantAccessibilityAnswer(question: String, userTurnId: Long): Boolean {
+        val queryType = ScreenVisionIntentParser.parseInstantQuery(question) ?: return false
+        val context = ActivityContextStore.snapshot() ?: return false
+        val now = android.os.SystemClock.elapsedRealtime()
+        if ((now - context.timestamp).coerceAtLeast(0L) > 1_500L) return false
+        val safe = context.visibleElements.asSequence().map { it.label }
+            .filter { it.length >= 3 && ScreenPrivacyPolicy.sensitiveCategory(it) == null }
+            .distinct().take(3).toList()
+        val answer = when (queryType) {
+            InstantScreenQuery.CURRENT_APP -> context.appLabel?.let { "$it open hai." }
+                ?: "${context.packageName.substringAfterLast('.')} open hai."
+            InstantScreenQuery.OVERVIEW -> when {
+                safe.isNotEmpty() -> "${context.appLabel ?: context.packageName.substringAfterLast('.')} open hai. Screen par ${safe.joinToString(", ")} dikh raha hai."
+                else -> null
+            }
+        } ?: return false
+        voiceLog("TOTAL_SCREEN_RESPONSE screenQueryId=a11y-cache-$userTurnId route=ACCESSIBILITY_CONTEXT total_ms=0 screenshotUsed=false")
+        emitState(answer)
+        queueLocalSpeech(answer, allowUntranscribedAudio = true)
+        return true
+    }
+
+    private fun beginAccessibilityScreenQuery(question: String, userTurnId: Long): Boolean {
+        val accessibility = AccessibilityHelperService.instance ?: return false
+        val foreground = accessibility.currentForegroundContext() ?: return false
+        val requestedAt = android.os.SystemClock.elapsedRealtime()
+        val queryId = "a11y-$userTurnId-${requestedAt.toString(16)}"
+        val accepted = accessibility.requestVisualScreenshot { result ->
+            mainHandler.post {
+                val screenshot = result.getOrNull()
+                if (screenshot == null) {
+                    voiceLog("agent_observation package=${foreground.packageName} screenshotUsed=false reason=accessibility_screenshot_failed")
+                    speakScreenUnavailable("Current screen image nahi mili.")
+                    return@post
+                }
+                val current = accessibility.currentForegroundContext()
+                if (current == null || current.packageName != screenshot.packageName ||
+                    current.windowId != screenshot.windowId || current.generation != screenshot.generation
+                ) {
+                    voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId reason=accessibility_context_changed")
+                    return@post
+                }
+                val elements = accessibility.visibleElements(100)
+                val privacyResult = ScreenFramePrivacyFilter.apply(
+                    screenshot.bytes, elements, screenshot.width, screenshot.height,
+                    screenVisionPreferences.sensitiveContentProtection
+                )
+                if (privacyResult is ScreenPrivacyResult.Blocked) {
+                    voiceLog("screen_query_terminal screenQueryId=$queryId state=REJECTED_PRIVACY source=ACCESSIBILITY_SCREENSHOT")
+                    speakScreenPrivacyBlocked()
+                    return@post
+                }
+                val allowed = privacyResult as ScreenPrivacyResult.Allowed
+                screenResponseActive = true
+                screenResponseHasContent = false
+                screenResponseStartedLogged = false
+                screenResponseGenerationComplete = false
+                screenResponseTextCommitted = false
+                screenResponseUserTurnId = userTurnId
+                screenResponseAfterGenerationId = latestObservedModelGenerationId
+                screenResponseGenerationId = 0L
+                val sessionId = "accessibility:${current.packageName}:${current.generation}"
+                screenResponseBinding = ScreenResponseBinding(userTurnId, queryId, sessionId, latestObservedModelGenerationId)
+                screenResponseSessionId = sessionId
+                screenResponseQueryId = queryId
+                screenResponseAccessibilityPackage = current.packageName
+                screenResponseAccessibilityGeneration = current.generation
+                screenFreshFrameCapturedAt = screenshot.capturedAt
+                screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
+                val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
+                    .joinToString("\n") { "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]" }
+                    .take(12_000)
+                voiceLog(
+                    "agent_observation package=${current.packageName} windowGeneration=${current.generation} " +
+                        "semanticElements=${ActivityContextStore.snapshot()?.visibleElements?.size ?: 0} screenshotUsed=true"
+                )
+                voiceLog(
+                    "VISION_REQUEST_STARTED screenQueryId=$queryId source=ACCESSIBILITY_SCREENSHOT " +
+                        "captureMs=${screenFrameSentAt - requestedAt} bytes=${allowed.bytes.size}"
+                )
+                live?.sendImage(
+                    allowed.bytes, "image/jpeg",
+                    "$question\nUse only this fresh Accessibility screenshot and current safe UI elements. " +
+                        "Do not infer hidden content. Keep the spoken answer to one or two complete sentences.\n$ui"
+                )
+            }
+        }
+        if (accepted) voiceLog("screen_query_created screen_query_id=$queryId source=ACCESSIBILITY_SCREENSHOT userTurnId=$userTurnId")
+        return accepted
+    }
+
+    private fun isScreenResponseContextCurrent(): Boolean {
+        if (!screenResponseSessionId.startsWith("accessibility:")) {
+            return ScreenCaptureService.session.isCurrent(screenResponseSessionId)
+        }
+        val current = AccessibilityHelperService.instance?.currentForegroundContext() ?: return false
+        return current.packageName == screenResponseAccessibilityPackage &&
+            current.generation == screenResponseAccessibilityGeneration
+    }
+
     private fun tryInstantScreenAnswer(question: String, userTurnId: Long): Boolean {
         val queryType = ScreenVisionIntentParser.parseInstantQuery(question) ?: return false
         val now = android.os.SystemClock.elapsedRealtime()
@@ -2135,6 +2143,8 @@ class MyraVoiceService : Service() {
         screenResponseGenerationId = 0L
         screenResponseBinding = null
         screenResponseSessionId = ""
+        screenResponseAccessibilityPackage = ""
+        screenResponseAccessibilityGeneration = 0L
         screenResponseQueryId = ""
         listener?.onMyraText(message, true)
         emitState(message)
@@ -2161,6 +2171,8 @@ class MyraVoiceService : Service() {
         screenResponseGenerationId = 0L
         screenResponseBinding = null
         screenResponseSessionId = ""
+        screenResponseAccessibilityPackage = ""
+        screenResponseAccessibilityGeneration = 0L
         screenResponseQueryId = ""
         resetTurnBuffers("screen_response_$reason")
     }
@@ -2796,26 +2808,10 @@ class MyraVoiceService : Service() {
                 "dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
         )
         if (!result.accepted) {
-            if (canUseVisualFallback(command)) {
-                when (AccessibilityFirstVisualPolicy.decide(false, ScreenCaptureService.currentState == ScreenShareState.ACTIVE)) {
-                    VisualFallbackDecision.USE_ACTIVE_VISION -> {
-                        requestFreshVisualRetry(command, foreground, activeTurnId, startedAt)
-                        return true
-                    }
-                    VisualFallbackDecision.REQUEST_PERMISSION -> {
-                        val pending = PendingVisualAction(
-                            command, foreground.packageName, activeTurnId, foreground.windowId,
-                            foreground.generation, android.os.SystemClock.elapsedRealtime()
-                        )
-                        PendingVisualActionStore.replace(pending)?.let {
-                            voiceLog("pending_visual_action_cancelled reason=replaced oldTurnId=${it.turnId}")
-                        }
-                        voiceLog("pending_visual_action_created turnId=$activeTurnId role=${command.javaClass.simpleName} package=${foreground.packageName} windowId=${foreground.windowId} generation=${foreground.generation} route=SCREEN_VISION_PERMISSION_REQUIRED")
-                        requestProjectionPermissionFromOwner()
-                        return true
-                    }
-                    VisualFallbackDecision.COMPLETE -> Unit
-                }
+            if (canUseVisualFallback(command) && visualAwarenessPreferences.enabled &&
+                requestAccessibilityVisualRetry(command, foreground, activeTurnId, startedAt)
+            ) {
+                return true
             }
             val message = when (result.resolution) {
                 "ambiguous" -> "Kaunsa wala?"
@@ -2871,6 +2867,82 @@ class MyraVoiceService : Service() {
         return true
     }
 
+    private fun executeUnifiedReferenceIfApplicable(raw: String): Boolean {
+        val normalized = raw.lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
+        val isReference = listOf("hand wala", "thumb wala", "second wala", "doosra wala", "dusra wala",
+            "ye wala", "isko kholo", "click this", "click that", "ye wala dabao", "woh nahi", "wo nahi")
+            .any(normalized::contains)
+        if (!isReference) return false
+        val context = ActivityContextStore.snapshot() ?: return false
+        val decision = UnifiedLyraAgentRuntime.agent.resolveReference(raw, context)
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        cancelSpeechForNewAction()
+        when (decision) {
+            is com.myra.assistant.agent.AgentDecision.Clarify -> {
+                listener?.onMyraText(decision.message)
+                emitState(decision.message)
+                queueLocalSpeech(decision.message, allowUntranscribedAudio = true)
+                voiceLog("agent_clarification taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} reason=ambiguous_reference")
+            }
+            is com.myra.assistant.agent.AgentDecision.Execute -> {
+                val target = decision.target ?: return false
+                val accessibility = AccessibilityHelperService.instance
+                val foreground = accessibility?.currentForegroundContext()
+                val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
+                if (accessibility == null || scope == null || context.packageName != scope.expectedPackage ||
+                    context.windowId != scope.expectedWindowId || context.generation != ActivityContextStore.snapshot()?.generation
+                ) {
+                    val message = "Screen badal gayi. Dobara target batao."
+                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                    return true
+                }
+                val before = accessibility.visibleScreenSignature()
+                val result = accessibility.resolveAndTapVisibleTarget(target.label, null, null, scope) { _, _ -> true }
+                val taskId = UnifiedLyraAgentRuntime.agent.currentTask()?.id
+                voiceLog("agent_action_dispatched taskId=$taskId tool=accessibility_click targetRole=${target.role} accepted=${result.accepted}")
+                if (!result.accepted) {
+                    UnifiedLyraAgentRuntime.agent.recordAction(
+                        com.myra.assistant.agent.AgentActionRecord("accessibility_click", target.id, false, false, android.os.SystemClock.elapsedRealtime()),
+                        ActivityContextStore.snapshot()
+                    )
+                    val message = if (result.resolution == "ambiguous") "Kaunsa wala?" else "Ye target clear nahi mila."
+                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                } else mainHandler.postDelayed({
+                    accessibility.refreshScreenContext()
+                    val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
+                    UnifiedLyraAgentRuntime.agent.recordAction(
+                        com.myra.assistant.agent.AgentActionRecord("accessibility_click", target.id, true, changed, android.os.SystemClock.elapsedRealtime()),
+                        ActivityContextStore.snapshot()
+                    )
+                    voiceLog("agent_verification taskId=$taskId accepted=true verified=$changed")
+                    if (!changed) {
+                        val message = "Tap hua, lekin result verify nahi hua."
+                        listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                    }
+                }, 350L)
+            }
+            is com.myra.assistant.agent.AgentDecision.ObserveMore -> {
+                val accessibility = AccessibilityHelperService.instance
+                if (!visualAwarenessPreferences.enabled || accessibility == null ||
+                    !accessibility.requestVisualScreenshot { result ->
+                        mainHandler.post {
+                            val message = if (result.isSuccess) "Kaunsa wala?" else "Current screen clear nahi mili."
+                            listener?.onMyraText(message, result.isFailure)
+                            queueLocalSpeech(message, allowUntranscribedAudio = result.isSuccess)
+                        }
+                    }
+                ) {
+                    val message = "Kaunsa wala?"
+                    listener?.onMyraText(message); queueLocalSpeech(message, allowUntranscribedAudio = true)
+                }
+            }
+            else -> return false
+        }
+        return true
+    }
+
     private fun finishYouTubeSemantic(
         success: Boolean,
         message: String,
@@ -2905,9 +2977,6 @@ class MyraVoiceService : Service() {
                 } else voiceLog("screen_mode_command mode=ON result=already_active spokenFeedbackSuppressed=true")
             }
             ScreenModeCommand.OFF -> {
-                PendingVisualActionStore.clear()?.let {
-                    voiceLog("pending_visual_action_cancelled reason=screen_mode_off turnId=${it.turnId}")
-                }
                 startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_STOP))
                 voiceLog("screen_mode_command mode=OFF result=stop_requested spokenFeedbackSuppressed=true")
             }
@@ -2922,26 +2991,25 @@ class MyraVoiceService : Service() {
         runCatching { startActivity(request) }
             .onSuccess { voiceLog("screen_projection_permission_owner_requested owner=MainActivity") }
             .onFailure {
-                PendingVisualActionStore.clear()
-                voiceLog("pending_visual_action_cancelled reason=permission_activity_start_failed error=${it.javaClass.simpleName}")
+                voiceLog("continuous_screen_permission_failed error=${it.javaClass.simpleName}")
                 listener?.onMyraText("Screen sharing permission open nahi hui.", true)
                 queueLocalSpeech("Screen sharing permission open nahi hui.", allowUntranscribedAudio = false)
             }
     }
 
-    private fun requestFreshVisualRetry(
+    private fun requestAccessibilityVisualRetry(
         command: YouTubeSemanticCommand,
         expected: com.myra.assistant.screen.ForegroundAppContext,
         turnId: Long,
         startedAt: Long
-    ) {
-        voiceLog("youtube_semantic_fallback route=SCREEN_VISION_ACTIVE turnId=$turnId role=${command.javaClass.simpleName}")
-        val query = ScreenCaptureService.requestFreshFrame(turnId) { fresh ->
+    ): Boolean {
+        val accessibility = AccessibilityHelperService.instance ?: return false
+        voiceLog("youtube_semantic_fallback route=ACCESSIBILITY_SCREENSHOT turnId=$turnId role=${command.javaClass.simpleName}")
+        return accessibility.requestVisualScreenshot { screenshotResult ->
             mainHandler.post {
-                val frame = (fresh as? FreshFrameResult.Ready)?.frame
-                val accessibility = AccessibilityHelperService.instance
-                val current = accessibility?.currentForegroundContext()
-                if (frame == null || current == null ||
+                val screenshot = screenshotResult.getOrNull()
+                val current = accessibility.currentForegroundContext()
+                if (screenshot == null || current == null ||
                     !current.packageName.equals(expected.packageName, true)
                 ) {
                     finishYouTubeSemantic(false, "Current YouTube screen verify nahi hui.", command, startedAt, "fresh_context_failed")
@@ -2949,29 +3017,25 @@ class MyraVoiceService : Service() {
                 }
                 val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(current)
                 val result = scope?.let { accessibility.performYouTubeSemanticAction(command, it) }
-                if (result?.accepted == true) finishYouTubeSemantic(true, "", command, startedAt, "fresh_visual_context")
-                else finishYouTubeSemantic(false, "Ye control current screen par clear nahi mila.", command, startedAt, "visual_not_resolved")
+                if (result?.accepted == true) {
+                    finishYouTubeSemantic(true, "", command, startedAt, "accessibility_screenshot_refreshed")
+                } else {
+                    // Supply the fresh visual observation to the existing Gemini Live
+                    // brain. It may describe/clarify, but Android will still validate
+                    // any resulting action against the current Accessibility window.
+                    suppressModelForTurn = false
+                    localCommandExecutedThisTurn = false
+                    screenCommandTurnGuard.clear()
+                    live?.sendImage(
+                        screenshot.bytes, "image/jpeg",
+                        "The user requested ${command.javaClass.simpleName}. Inspect this fresh current-screen image. " +
+                            "If exactly one target is clear, call perform_screen_action with its semantic label/position. " +
+                            "If ambiguous, ask one short clarification. Never claim success before Android verification."
+                    )
+                    voiceLog("agent_observation package=${current.packageName} screenshotUsed=true semanticFallback=true")
+                }
             }
         }
-        if (query == null) finishYouTubeSemantic(false, "Fresh screen frame nahi mila.", command, startedAt, "frame_request_failed")
-    }
-
-    private fun resumePendingVisualAction(attempt: Int) {
-        val pending = PendingVisualActionStore.snapshot() ?: return
-        val accessibility = AccessibilityHelperService.instance ?: return
-        val foreground = accessibility.currentForegroundContext()
-        if (foreground == null || foreground.packageName.equals("com.myra.assistant", true)) {
-            if (attempt < 8) mainHandler.postDelayed({ resumePendingVisualAction(attempt + 1) }, 250L)
-            return
-        }
-        if (!foreground.packageName.equals(pending.expectedPackage, true)) {
-            PendingVisualActionStore.clear()
-            voiceLog("pending_visual_action_cancelled reason=incompatible_app_switch package=${foreground.packageName}")
-            return
-        }
-        val owned = PendingVisualActionStore.takeForResume(foreground.packageName) ?: return
-        voiceLog("pending_visual_action_resume turnId=${owned.turnId} role=${owned.command.javaClass.simpleName} package=${foreground.packageName}")
-        requestFreshVisualRetry(owned.command, foreground, owned.turnId, owned.createdAt)
     }
 
     private fun executeAccessibilityFirstScreenAction(
@@ -4032,7 +4096,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; PendingVisualActionStore.clear(); readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() {
         ScreenCaptureService.listeners -= screenCaptureListener
         instance = null
@@ -4048,7 +4112,7 @@ class MyraVoiceService : Service() {
         const val EXTRA_MUTED = "muted"
         fun notifyScreenProjectionPermissionResult(granted: Boolean) {
             if (!granted) instance?.mainHandler?.post {
-                instance?.voiceLog("pending_visual_action_cancelled reason=permission_denied")
+                instance?.voiceLog("continuous_screen_permission_denied")
                 instance?.queueLocalSpeech("Screen sharing permission allow nahi hui.", allowUntranscribedAudio = false)
             }
         }
