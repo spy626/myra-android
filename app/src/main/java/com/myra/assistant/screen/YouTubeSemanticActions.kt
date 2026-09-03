@@ -60,7 +60,9 @@ object YouTubeSemanticResolver {
     }
 
     private fun normalize(value: String) = value.lowercase(Locale.ROOT)
-        .replace(Regex("[^\\p{L}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
+        // Devanagari vowel signs are Unicode marks, not letters. Keeping them is
+        // essential: otherwise "कमेंट" becomes a different token before matching.
+        .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
 }
 
 sealed interface YouTubeSemanticCommand {
