@@ -48,6 +48,7 @@ import com.myra.assistant.databinding.SheetSettingsBinding
 import com.myra.assistant.ui.settings.SettingsActivity
 import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenShareState
+import com.myra.assistant.screen.PendingVisualActionStore
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -87,13 +88,19 @@ class MainActivity : AppCompatActivity() {
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { if (!it) showStatus("Microphone permission required") }
     private val screenProjectionPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != RESULT_OK || result.data == null) {
-            ScreenCaptureService.markPermissionDenied(); updateScreenVisionButton(ScreenShareState.ERROR)
+            ScreenCaptureService.markPermissionDenied()
+            PendingVisualActionStore.clear()
+            MyraVoiceService.notifyScreenProjectionPermissionResult(false)
+            updateScreenVisionButton(ScreenShareState.ERROR)
+            finishVoicePermissionTransition()
         } else {
+            PendingVisualActionStore.markPermissionApproved()
             val service = Intent(this, ScreenCaptureService::class.java)
                 .setAction(ScreenCaptureService.ACTION_START)
                 .putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
                 .putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, result.data)
             ContextCompat.startForegroundService(this, service)
+            finishVoicePermissionTransition()
         }
     }
     private val screenStateListener: (ScreenShareState, ByteArray?) -> Unit = { state, _ -> runOnUiThread { updateScreenVisionButton(state) } }
@@ -173,6 +180,13 @@ class MainActivity : AppCompatActivity() {
         }
         b.stopButton.setOnClickListener { MyraVoiceService.interrupt(); assistantController.stop(); showStatus("Stopped") }
         b.muteButton.setOnClickListener { muted = !muted; startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_MUTE).putExtra(MyraVoiceService.EXTRA_MUTED, muted)); b.muteButton.alpha = if (muted) 1f else .6f; showStatus(if (muted) "Microphone muted" else "Sun rahi hoon…") }
+        handleVoiceScreenPermissionIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleVoiceScreenPermissionIntent(intent)
     }
 
     override fun onStart() {
@@ -195,11 +209,38 @@ class MainActivity : AppCompatActivity() {
             ScreenShareState.PAUSED -> startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_RESUME))
             ScreenShareState.REQUESTING_PERMISSION, ScreenShareState.RESUMING, ScreenShareState.STOPPING -> Unit
             else -> {
-                ScreenCaptureService.markPermissionRequesting()
-                val manager = getSystemService(MediaProjectionManager::class.java)
-                screenProjectionPermission.launch(manager.createScreenCaptureIntent())
+                requestScreenProjectionPermission()
             }
         }
+    }
+
+    private fun handleVoiceScreenPermissionIntent(request: Intent?) {
+        if (request?.action != ACTION_REQUEST_SCREEN_PROJECTION) return
+        voicePermissionTransition = true
+        request.action = null
+        if (ScreenCaptureService.currentState == ScreenShareState.ACTIVE) {
+            MyraVoiceService.notifyScreenProjectionPermissionResult(true)
+            finishVoicePermissionTransition()
+        } else if (ScreenCaptureService.currentState !in setOf(
+                ScreenShareState.REQUESTING_PERMISSION, ScreenShareState.RESUMING, ScreenShareState.STOPPING
+            )) {
+            requestScreenProjectionPermission()
+        }
+    }
+
+    private fun requestScreenProjectionPermission() {
+        ScreenCaptureService.markPermissionRequesting()
+        PendingVisualActionStore.markPermissionRequesting()
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        screenProjectionPermission.launch(manager.createScreenCaptureIntent())
+    }
+
+    private fun finishVoicePermissionTransition() {
+        if (!voicePermissionTransition) return
+        voicePermissionTransition = false
+        // Reveal the app that initiated the voice action. Pending state is still
+        // revalidated against fresh Accessibility context before anything runs.
+        moveTaskToBack(true)
     }
 
     private fun updateScreenVisionButton(state: ScreenShareState) {
@@ -211,6 +252,12 @@ class MainActivity : AppCompatActivity() {
             else -> "OFF"
         }
         b.screenVisionButton.alpha = if (state == ScreenShareState.ACTIVE) 1f else .75f
+    }
+
+    private var voicePermissionTransition = false
+
+    companion object {
+        const val ACTION_REQUEST_SCREEN_PROJECTION = "com.myra.assistant.REQUEST_SCREEN_PROJECTION"
     }
     private fun speakCharacterTouchReaction() {
         val reactions = listOf(
