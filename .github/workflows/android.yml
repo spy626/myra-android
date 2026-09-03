@@ -27,6 +27,7 @@ jobs:
           fi
       - name: Android lint (legacy findings are reported separately)
         continue-on-error: true
+        timeout-minutes: 8
         run: gradle :app:lintDebug --stacktrace --no-daemon
       - run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
         env:
