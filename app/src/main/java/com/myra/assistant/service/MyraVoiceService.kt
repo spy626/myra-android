@@ -1060,7 +1060,11 @@ class MyraVoiceService : Service() {
                     brain.observeForegroundApp(it.packageName)
                     voiceLog("foreground_context_propagated turnId=$activeTurnId package=${it.packageName} windowId=${it.windowId} generation=${it.generation}")
                 }
-                val youtubeSemantic = YouTubeSemanticCommandParser.parse(normalizedFinalUserText)
+                // Keep the original transcript for local semantic commands. The display/brain
+                // normalization can transliterate Devanagari (for example, "कमेंट" into an
+                // unrecognisable spelling), but accessibility actions must be decided first.
+                val youtubeSemantic = YouTubeSemanticCommandParser.parse(userText)
+                    ?: YouTubeSemanticCommandParser.parse(normalizedFinalUserText)
                 if (youtubeSemantic != null && executeYouTubeSemanticAction(youtubeSemantic)) {
                     resetTurnBuffers("youtube_semantic_action")
                     waitingForFreshInputAfterCommand = true
@@ -3070,7 +3074,6 @@ class MyraVoiceService : Service() {
         mediaGuard.finishInteraction()
 
         val resolvedDirection = command.direction ?: lastScrollDirection
-        val shouldAcknowledge = command.direction != null || !hasAcknowledgedScrollDirection
         val service = AccessibilityHelperService.instance
         if (service == null || !AccessibilityHelperService.isEnabled(this)) {
             val error = "Scroll ke liye LYRA Accessibility enable karo."
@@ -3095,19 +3098,11 @@ class MyraVoiceService : Service() {
                 if (success) {
                     lastScrollDirection = resolvedDirection
                     hasAcknowledgedScrollDirection = true
-                    if (shouldAcknowledge) {
-                        val message = if (resolvedDirection == AppCommand.ScrollDirection.DOWN) {
-                            "Neeche scroll kar diya."
-                        } else {
-                            "Upar scroll kar diya."
-                        }
-                        listener?.onMyraText(message)
-                        emitState(message)
-                        queueLocalSpeech(message, allowUntranscribedAudio = true)
-                    } else {
-                        audio?.setMuted(false)
-                        emitState("Sun rahi hoon…")
-                    }
+                    // A completed deterministic scroll is deliberately silent. It must not
+                    // wait behind CONTROLLED_LOCAL audio or invoke the ordinary model.
+                    audio?.setMuted(false)
+                    emitState("Sun rahi hoon…")
+                    voiceLog("screen_action_feedback_suppressed turnId=$activeTurnId action=scroll success=true")
                 } else {
                     val error = if (actionScope?.expectedPackage.equals("com.google.android.youtube", true)) {
                         "YouTube ka current feed move nahi hua."
