@@ -68,6 +68,12 @@ import com.myra.assistant.screen.ScreenPrivacyResult
 import com.myra.assistant.screen.ScreenQueryDispatchPolicy
 import com.myra.assistant.screen.ScreenQueryTimingPolicy
 import com.myra.assistant.screen.ScreenShareState
+import com.myra.assistant.screen.ScreenModeCommand
+import com.myra.assistant.screen.ScreenModeCommandParser
+import com.myra.assistant.screen.PendingVisualAction
+import com.myra.assistant.screen.PendingVisualActionStore
+import com.myra.assistant.screen.AccessibilityFirstVisualPolicy
+import com.myra.assistant.screen.VisualFallbackDecision
 import com.myra.assistant.screen.ScreenVisionIntentParser
 import com.myra.assistant.screen.InstantScreenQuery
 import com.myra.assistant.screen.ScreenCacheUse
@@ -292,6 +298,9 @@ class MyraVoiceService : Service() {
     private val assistantController by lazy { (application as MyApplication).assistantController }
     private val screenVisionPreferences by lazy { ScreenVisionPreferences(this) }
     private val screenCaptureListener: (ScreenShareState, ByteArray?) -> Unit = { state, frame ->
+        if (state == ScreenShareState.ACTIVE && PendingVisualActionStore.snapshot() != null) {
+            mainHandler.postDelayed({ resumePendingVisualAction(0) }, 350L)
+        }
         if (state == ScreenShareState.ACTIVE && readingTracker.snapshot() != null) {
             val packageName = AccessibilityHelperService.instance?.currentPackageName().orEmpty()
             if (packageName.isNotBlank() && readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, packageName)) {
@@ -1059,6 +1068,18 @@ class MyraVoiceService : Service() {
                 AccessibilityHelperService.instance?.currentForegroundContext()?.let {
                     brain.observeForegroundApp(it.packageName)
                     voiceLog("foreground_context_propagated turnId=$activeTurnId package=${it.packageName} windowId=${it.windowId} generation=${it.generation}")
+                }
+                PendingVisualActionStore.snapshot()?.takeIf { it.turnId != activeTurnId }?.let {
+                    PendingVisualActionStore.clear()
+                    voiceLog("pending_visual_action_cancelled reason=replaced_by_turn oldTurnId=${it.turnId} newTurnId=$activeTurnId")
+                }
+                val screenMode = ScreenModeCommandParser.parse(userText)
+                    ?: ScreenModeCommandParser.parse(normalizedFinalUserText)
+                if (screenMode != null) {
+                    executeScreenModeCommand(screenMode)
+                    resetTurnBuffers("screen_mode_command")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
                 }
                 // Keep the original transcript for local semantic commands. The display/brain
                 // normalization can transliterate Devanagari (for example, "कमेंट" into an
@@ -2775,6 +2796,27 @@ class MyraVoiceService : Service() {
                 "dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
         )
         if (!result.accepted) {
+            if (canUseVisualFallback(command)) {
+                when (AccessibilityFirstVisualPolicy.decide(false, ScreenCaptureService.currentState == ScreenShareState.ACTIVE)) {
+                    VisualFallbackDecision.USE_ACTIVE_VISION -> {
+                        requestFreshVisualRetry(command, foreground, activeTurnId, startedAt)
+                        return true
+                    }
+                    VisualFallbackDecision.REQUEST_PERMISSION -> {
+                        val pending = PendingVisualAction(
+                            command, foreground.packageName, activeTurnId, foreground.windowId,
+                            foreground.generation, android.os.SystemClock.elapsedRealtime()
+                        )
+                        PendingVisualActionStore.replace(pending)?.let {
+                            voiceLog("pending_visual_action_cancelled reason=replaced oldTurnId=${it.turnId}")
+                        }
+                        voiceLog("pending_visual_action_created turnId=$activeTurnId role=${command.javaClass.simpleName} package=${foreground.packageName} windowId=${foreground.windowId} generation=${foreground.generation} route=SCREEN_VISION_PERMISSION_REQUIRED")
+                        requestProjectionPermissionFromOwner()
+                        return true
+                    }
+                    VisualFallbackDecision.COMPLETE -> Unit
+                }
+            }
             val message = when (result.resolution) {
                 "ambiguous" -> "Kaunsa wala?"
                 "stale_foreground", "stale_candidate" -> "Screen badal gayi. Dobara target batao."
@@ -2836,13 +2878,100 @@ class MyraVoiceService : Service() {
         startedAt: Long,
         resolution: String
     ) {
-        listener?.onMyraText(message, !success)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = success)
+        if (!success) {
+            listener?.onMyraText(message, true)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = false)
+        }
         voiceLog(
             "youtube_semantic_finished command=${command.javaClass.simpleName} success=$success " +
-                "resolution=$resolution totalMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
+                "resolution=$resolution spokenFeedbackSuppressed=$success totalMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
         )
+    }
+
+    private fun canUseVisualFallback(command: YouTubeSemanticCommand): Boolean = command in setOf(
+        YouTubeSemanticCommand.Like, YouTubeSemanticCommand.OpenComments,
+        YouTubeSemanticCommand.Subscribe, YouTubeSemanticCommand.Share, YouTubeSemanticCommand.More
+    ) || command is YouTubeSemanticCommand.OpenChannel
+
+    private fun executeScreenModeCommand(command: ScreenModeCommand) {
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        cancelSpeechForNewAction()
+        when (command) {
+            ScreenModeCommand.ON -> {
+                if (ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
+                    requestProjectionPermissionFromOwner()
+                } else voiceLog("screen_mode_command mode=ON result=already_active spokenFeedbackSuppressed=true")
+            }
+            ScreenModeCommand.OFF -> {
+                PendingVisualActionStore.clear()?.let {
+                    voiceLog("pending_visual_action_cancelled reason=screen_mode_off turnId=${it.turnId}")
+                }
+                startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_STOP))
+                voiceLog("screen_mode_command mode=OFF result=stop_requested spokenFeedbackSuppressed=true")
+            }
+        }
+    }
+
+    private fun requestProjectionPermissionFromOwner() {
+        if (ScreenCaptureService.currentState == ScreenShareState.ACTIVE) return
+        val request = Intent(this, MainActivity::class.java)
+            .setAction(MainActivity.ACTION_REQUEST_SCREEN_PROJECTION)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        runCatching { startActivity(request) }
+            .onSuccess { voiceLog("screen_projection_permission_owner_requested owner=MainActivity") }
+            .onFailure {
+                PendingVisualActionStore.clear()
+                voiceLog("pending_visual_action_cancelled reason=permission_activity_start_failed error=${it.javaClass.simpleName}")
+                listener?.onMyraText("Screen sharing permission open nahi hui.", true)
+                queueLocalSpeech("Screen sharing permission open nahi hui.", allowUntranscribedAudio = false)
+            }
+    }
+
+    private fun requestFreshVisualRetry(
+        command: YouTubeSemanticCommand,
+        expected: com.myra.assistant.screen.ForegroundAppContext,
+        turnId: Long,
+        startedAt: Long
+    ) {
+        voiceLog("youtube_semantic_fallback route=SCREEN_VISION_ACTIVE turnId=$turnId role=${command.javaClass.simpleName}")
+        val query = ScreenCaptureService.requestFreshFrame(turnId) { fresh ->
+            mainHandler.post {
+                val frame = (fresh as? FreshFrameResult.Ready)?.frame
+                val accessibility = AccessibilityHelperService.instance
+                val current = accessibility?.currentForegroundContext()
+                if (frame == null || current == null ||
+                    !current.packageName.equals(expected.packageName, true)
+                ) {
+                    finishYouTubeSemantic(false, "Current YouTube screen verify nahi hui.", command, startedAt, "fresh_context_failed")
+                    return@post
+                }
+                val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(current)
+                val result = scope?.let { accessibility.performYouTubeSemanticAction(command, it) }
+                if (result?.accepted == true) finishYouTubeSemantic(true, "", command, startedAt, "fresh_visual_context")
+                else finishYouTubeSemantic(false, "Ye control current screen par clear nahi mila.", command, startedAt, "visual_not_resolved")
+            }
+        }
+        if (query == null) finishYouTubeSemantic(false, "Fresh screen frame nahi mila.", command, startedAt, "frame_request_failed")
+    }
+
+    private fun resumePendingVisualAction(attempt: Int) {
+        val pending = PendingVisualActionStore.snapshot() ?: return
+        val accessibility = AccessibilityHelperService.instance ?: return
+        val foreground = accessibility.currentForegroundContext()
+        if (foreground == null || foreground.packageName.equals("com.myra.assistant", true)) {
+            if (attempt < 8) mainHandler.postDelayed({ resumePendingVisualAction(attempt + 1) }, 250L)
+            return
+        }
+        if (!foreground.packageName.equals(pending.expectedPackage, true)) {
+            PendingVisualActionStore.clear()
+            voiceLog("pending_visual_action_cancelled reason=incompatible_app_switch package=${foreground.packageName}")
+            return
+        }
+        val owned = PendingVisualActionStore.takeForResume(foreground.packageName) ?: return
+        voiceLog("pending_visual_action_resume turnId=${owned.turnId} role=${owned.command.javaClass.simpleName} package=${foreground.packageName}")
+        requestFreshVisualRetry(owned.command, foreground, owned.turnId, owned.createdAt)
     }
 
     private fun executeAccessibilityFirstScreenAction(
@@ -3903,7 +4032,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; PendingVisualActionStore.clear(); readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() {
         ScreenCaptureService.listeners -= screenCaptureListener
         instance = null
@@ -3917,6 +4046,12 @@ class MyraVoiceService : Service() {
         const val ACTION_STOP = "com.myra.STOP_VOICE"
         const val ACTION_MUTE = "com.myra.MUTE_VOICE"
         const val EXTRA_MUTED = "muted"
+        fun notifyScreenProjectionPermissionResult(granted: Boolean) {
+            if (!granted) instance?.mainHandler?.post {
+                instance?.voiceLog("pending_visual_action_cancelled reason=permission_denied")
+                instance?.queueLocalSpeech("Screen sharing permission allow nahi hui.", allowUntranscribedAudio = false)
+            }
+        }
         private const val CHANNEL_ID = "myra_voice"
         private const val NOTIFICATION_ID = 1001
         private const val MEMORY_COMMAND_PAUSE_MS = 450L
