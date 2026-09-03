@@ -108,9 +108,12 @@ object YouTubeSemanticCommandParser {
     )
     private val SEND = Regex("^(?:send|post)(?: karo)?$|^comment kar do$")
     private val CANCEL = Regex("^(?:cancel karo|rehne do|chhodo)$")
-    private val COMMENTS = Regex("^(?:comments?|comment section)(?: ko)? (?:kholo|open karo|open)$|^(?:comments?|comment section) kholo$")
-    private val LIKE = Regex("^(?:video ko )?like(?: karo)?(?: video ko)?$")
-    private val SUBSCRIBE = Regex("^subscribe(?: karo)?$")
+    // These are evaluated against the raw ASR transcript before brain/display
+    // transliteration. Keep Devanagari forms here so they cannot fall through
+    // as ordinary conversation.
+    private val COMMENTS = Regex("^(?:(?:comments?|comment section|कमेंट्स?|टिप्पणियाँ)(?: ko)? (?:kholo|open karo|open|dikhao)|(?:comments?|comment section|कमेंट्स?|टिप्पणियाँ) kholo|कमेंट(?:्स)? (?:ओपन करो|खोलो|दिखाओ))$")
+    private val LIKE = Regex("^(?:(?:video ko |isko )?like(?: karo)?(?: video ko)?|वीडियो लाइक करो|लाइक करो)$")
+    private val SUBSCRIBE = Regex("^(?:subscribe(?: karo)?|चैनल सब्सक्राइब करो|सब्सक्राइब करो)$")
     private val SHARE = Regex("^share(?: kholo| open karo| karo)?$")
     private val MORE = Regex("^(?:more|more options|action menu)(?: kholo| open karo)?$")
     private val PROFILE = Regex("\\b(?:profile|avatar|profile pic|channel)\\b")
