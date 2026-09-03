@@ -80,6 +80,9 @@ sealed interface YouTubeSemanticCommand {
 object YouTubeSemanticCommandParser {
     fun parse(raw: String): YouTubeSemanticCommand? {
         val trimmed = raw.trim()
+        // Match these direct ASR forms before any Unicode cleanup. Some keyboards and
+        // recognizers emit combining marks in different canonical forms.
+        if (DIRECT_DEVANAGARI_COMMENTS.matches(trimmed)) return YouTubeSemanticCommand.OpenComments
         val text = normalize(trimmed)
         TYPE_PREFIXES.forEach { regex ->
             regex.find(trimmed)?.let { match ->
@@ -108,6 +111,7 @@ object YouTubeSemanticCommandParser {
     private val TYPE_PREFIXES = listOf(
         Regex("^(?:type\\s+karo|comment\\s+mein\\s+likho|isme\\s+type\\s+karo|likho|type\\s+this|nahi\\s+change\\s+karo|replace\\s+karo)\\b\\s*:?[ ]*", RegexOption.IGNORE_CASE)
     )
+    private val DIRECT_DEVANAGARI_COMMENTS = Regex("^कमेंट(?:्स)?\\s+(?:ओपन\\s+करो|खोलो|दिखाओ)$")
     private val SEND = Regex("^(?:send|post)(?: karo)?$|^comment kar do$")
     private val CANCEL = Regex("^(?:cancel karo|rehne do|chhodo)$")
     // These are evaluated against the raw ASR transcript before brain/display
