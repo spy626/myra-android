@@ -1,6 +1,7 @@
 package com.myra.assistant.screen
 
 import java.util.Locale
+import java.text.Normalizer
 
 enum class YouTubeSemanticRole {
     VIDEO_PLAY_SURFACE, VIDEO_TITLE, CHANNEL_PROFILE, CHANNEL_NAME,
@@ -80,10 +81,12 @@ sealed interface YouTubeSemanticCommand {
 object YouTubeSemanticCommandParser {
     fun parse(raw: String): YouTubeSemanticCommand? {
         val trimmed = raw.trim()
-        // Match these direct ASR forms before any Unicode cleanup. Some keyboards and
-        // recognizers emit combining marks in different canonical forms.
-        if (DIRECT_DEVANAGARI_COMMENTS.matches(trimmed)) return YouTubeSemanticCommand.OpenComments
         val text = normalize(trimmed)
+        when (text) {
+            in COMMENT_COMMANDS -> return YouTubeSemanticCommand.OpenComments
+            in LIKE_COMMANDS -> return YouTubeSemanticCommand.Like
+            in SUBSCRIBE_COMMANDS -> return YouTubeSemanticCommand.Subscribe
+        }
         TYPE_PREFIXES.forEach { regex ->
             regex.find(trimmed)?.let { match ->
                 val payload = trimmed.substring(match.range.last + 1).trim().trimStart(':', '-', ' ')
@@ -105,13 +108,25 @@ object YouTubeSemanticCommandParser {
         return null
     }
 
-    private fun normalize(value: String) = value.lowercase(Locale.ROOT)
-        .replace(Regex("[^\\p{L}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
+    private fun normalize(value: String) = Normalizer.normalize(value, Normalizer.Form.NFC)
+        .lowercase(Locale.ROOT)
+        .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
 
     private val TYPE_PREFIXES = listOf(
         Regex("^(?:type\\s+karo|comment\\s+mein\\s+likho|isme\\s+type\\s+karo|likho|type\\s+this|nahi\\s+change\\s+karo|replace\\s+karo)\\b\\s*:?[ ]*", RegexOption.IGNORE_CASE)
     )
-    private val DIRECT_DEVANAGARI_COMMENTS = Regex("^कमेंट(?:्स)?\\s+(?:ओपन\\s+करो|खोलो|दिखाओ)$")
+    private val COMMENT_COMMANDS = setOf(
+        "कमेंट ओपन करो", "कमेंट खोलो", "कमेंट दिखाओ",
+        "comments kholo", "comment kholo", "comment open karo", "comments open karo",
+        "comments dikhao", "comment section kholo"
+    )
+    private val LIKE_COMMANDS = setOf(
+        "video like karo", "video ko like karo", "like karo", "isko like karo",
+        "वीडियो लाइक करो", "लाइक करो"
+    )
+    private val SUBSCRIBE_COMMANDS = setOf(
+        "subscribe karo", "channel subscribe karo", "सब्सक्राइब करो", "चैनल सब्सक्राइब करो"
+    )
     private val SEND = Regex("^(?:send|post)(?: karo)?$|^comment kar do$")
     private val CANCEL = Regex("^(?:cancel karo|rehne do|chhodo)$")
     // These are evaluated against the raw ASR transcript before brain/display
