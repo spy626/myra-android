@@ -1,5 +1,6 @@
 package com.myra.assistant.screen
 
+import java.text.Normalizer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -22,11 +23,18 @@ class YouTubeSemanticActionsTest {
 
     @Test fun recognises_hinglish_and_devanagari_current_video_controls_before_transliteration() {
         assertTrue(YouTubeSemanticCommandParser.parse("comments kholo") is YouTubeSemanticCommand.OpenComments)
+        assertTrue(YouTubeSemanticCommandParser.parse("comment open karo") is YouTubeSemanticCommand.OpenComments)
         assertTrue(YouTubeSemanticCommandParser.parse("कमेंट ओपन करो") is YouTubeSemanticCommand.OpenComments)
         assertTrue(YouTubeSemanticCommandParser.parse("कमेंट खोलो") is YouTubeSemanticCommand.OpenComments)
+        assertTrue(YouTubeSemanticCommandParser.parse("कमेंट दिखाओ") is YouTubeSemanticCommand.OpenComments)
         assertTrue(YouTubeSemanticCommandParser.parse("video like karo") is YouTubeSemanticCommand.Like)
         assertTrue(YouTubeSemanticCommandParser.parse("वीडियो लाइक करो") is YouTubeSemanticCommand.Like)
         assertTrue(YouTubeSemanticCommandParser.parse("subscribe karo") is YouTubeSemanticCommand.Subscribe)
+    }
+
+    @Test fun devanagari_combining_marks_match_in_decomposed_input() {
+        val decomposed = Normalizer.normalize("कमेंट ओपन करो", Normalizer.Form.NFD)
+        assertTrue(YouTubeSemanticCommandParser.parse(decomposed) is YouTubeSemanticCommand.OpenComments)
     }
 
     @Test fun profile_name_stays_bound_to_its_card() {
