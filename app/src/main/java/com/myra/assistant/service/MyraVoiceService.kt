@@ -1840,7 +1840,7 @@ class MyraVoiceService : Service() {
         val beforeAccessibility = accessibility.visibleScreenSignature()
         fastVisualTurns.current()?.let {
             it.actionResolvedAt = android.os.SystemClock.elapsedRealtime()
-            voiceLog("visual_action_resolved visualTurnId=${it.id} target=${target.take(80)} position=${position.orEmpty()} ordinal=${ordinal ?: 0}")
+            voiceLog("visual_action_resolved visualTurnId=${it.id} target=${target.orEmpty().take(80)} position=${position.orEmpty()} ordinal=${ordinal ?: 0}")
         }
         val semanticHint = fastVisualTurns.current()?.semanticHint.orEmpty().lowercase(Locale.ROOT)
         val direct = accessibility.resolveAndTapVisibleTarget(target, position, ordinal, actionScope) { candidate, _ ->
