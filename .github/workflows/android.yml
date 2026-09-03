@@ -27,8 +27,8 @@ jobs:
           fi
       - name: Android lint (legacy findings are reported separately)
         continue-on-error: true
-        run: gradle :app:lintDebug --stacktrace
-      - run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
+        run: gradle :app:lintDebug --stacktrace --no-daemon
+      - run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
         env:
           LYRA_KEYSTORE_PATH: ${{ runner.temp }}/lyra-ci.jks
           LYRA_KEYSTORE_PASSWORD: ${{ secrets.LYRA_KEYSTORE_PASSWORD }}
