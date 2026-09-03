@@ -48,6 +48,7 @@ import com.myra.assistant.screen.YouTubeSemanticRole
 import com.myra.assistant.screen.VisualAwarenessPreferences
 import com.myra.assistant.screen.VisualObservationPolicy
 import com.myra.assistant.screen.AccessibilityScreenshot
+import com.myra.assistant.screen.AccessibilityVisualCache
 import com.myra.assistant.agent.ActivityContextStore
 import com.myra.assistant.agent.CurrentActivityContext
 import com.myra.assistant.agent.SemanticElement
@@ -132,6 +133,7 @@ class AccessibilityHelperService : AccessibilityService() {
     override fun onInterrupt() = Unit
     override fun onDestroy() {
         screenWatcherHandler.removeCallbacks(screenWatcher)
+        AccessibilityVisualCache.invalidate()
         hideScreenVisionOverlay()
         if (instance === this) instance = null
         super.onDestroy()
@@ -170,6 +172,7 @@ class AccessibilityHelperService : AccessibilityService() {
                 MotionEvent.ACTION_UP -> {
                     if (!moved) {
                         visualAwareness.enabled = !visualAwareness.enabled
+                        if (!visualAwareness.enabled) AccessibilityVisualCache.invalidate()
                         bubble.text = if (visualAwareness.enabled) "◉" else "○"
                         com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
                             "visual_awareness_changed enabled=${visualAwareness.enabled} mediaProjectionState=$overlayState"
@@ -273,6 +276,7 @@ class AccessibilityHelperService : AccessibilityService() {
                 val screenshot = AccessibilityScreenshot(bytes, bitmap.width, bitmap.height, capturedAt,
                     current.packageName, current.windowId, current.generation)
                 bitmap.recycle()
+                AccessibilityVisualCache.put(screenshot, visibleScreenSignature())
                 ActivityContextStore.attachScreenshot(
                     ScreenshotReference(UUID.randomUUID().toString(), capturedAt, screenshot.width, screenshot.height),
                     current.packageName, current.windowId
@@ -285,6 +289,19 @@ class AccessibilityHelperService : AccessibilityService() {
             }
         })
         return true
+    }
+
+    /** Select exactly one context-bound screenshot for a visual turn. */
+    fun requestFreshVisualScreenshot(maxAgeMs: Long, callback: (Result<AccessibilityScreenshot>) -> Unit): Boolean {
+        val current = currentForegroundContext() ?: return false
+        AccessibilityVisualCache.fresh(
+            current.packageName, current.windowId, current.generation, visibleScreenSignature(),
+            android.os.SystemClock.elapsedRealtime(), maxAgeMs
+        )?.let {
+            callback(Result.success(it))
+            return true
+        }
+        return requestVisualScreenshot(callback)
     }
 
     fun openYouTubeShorts(): Boolean = clickNavigationTarget(
@@ -1278,7 +1295,14 @@ class AccessibilityHelperService : AccessibilityService() {
                             looksLikeVideoCard(contextLabel, afterPlayer = false) &&
                             !AD_SIGNAL.containsMatchIn(contextLabel) &&
                             !NON_VIDEO_CONTROLS.containsMatchIn(contextLabel)
+                        val youtubeRole = if (root.packageName?.toString() == YOUTUBE_PACKAGE) {
+                            youtubeSemanticRole(label, contextLabel, node)
+                        } else null
                         val role = when {
+                            youtubeRole == YouTubeSemanticRole.LIKE_BUTTON -> "like_control"
+                            youtubeRole == YouTubeSemanticRole.SUBSCRIBE_BUTTON -> "subscribe_control"
+                            youtubeRole == YouTubeSemanticRole.COMMENTS_SECTION -> "comments_control"
+                            youtubeRole == YouTubeSemanticRole.CHANNEL_PROFILE -> "channel_profile"
                             youtubeVideo -> "video"
                             className.contains("button", true) -> "button"
                             else -> "interactive"

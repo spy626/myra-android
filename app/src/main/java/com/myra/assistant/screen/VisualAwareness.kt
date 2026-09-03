@@ -33,3 +33,36 @@ data class AccessibilityScreenshot(
     val windowId: Int,
     val generation: Long
 )
+
+/** In-memory only. Raw screenshots never enter Room or long-term memory. */
+object AccessibilityVisualCache {
+    private data class Entry(
+        val screenshot: AccessibilityScreenshot,
+        val semanticSignature: String
+    )
+
+    @Volatile private var entry: Entry? = null
+
+    @Synchronized fun put(screenshot: AccessibilityScreenshot, semanticSignature: String) {
+        entry = Entry(screenshot, semanticSignature)
+    }
+
+    fun fresh(
+        packageName: String,
+        windowId: Int,
+        generation: Long,
+        semanticSignature: String,
+        now: Long,
+        maxAgeMs: Long
+    ): AccessibilityScreenshot? {
+        val current = entry ?: return null
+        val frame = current.screenshot
+        return frame.takeIf {
+            it.packageName == packageName && it.windowId == windowId &&
+                it.generation == generation && current.semanticSignature == semanticSignature &&
+                (now - it.capturedAt).coerceAtLeast(0L) <= maxAgeMs
+        }
+    }
+
+    @Synchronized fun invalidate() { entry = null }
+}
