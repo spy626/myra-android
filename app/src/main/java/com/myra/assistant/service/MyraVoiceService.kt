@@ -3020,6 +3020,18 @@ class MyraVoiceService : Service() {
                 if (result?.accepted == true) {
                     finishYouTubeSemantic(true, "", command, startedAt, "accessibility_screenshot_refreshed")
                 } else {
+                    val privacy = ScreenFramePrivacyFilter.apply(
+                        screenshot.bytes,
+                        accessibility.visibleElements(100),
+                        screenshot.width,
+                        screenshot.height,
+                        screenVisionPreferences.sensitiveContentProtection
+                    )
+                    if (privacy is ScreenPrivacyResult.Blocked) {
+                        finishYouTubeSemantic(false, "Sensitive information visible hai, isliye visual action nahi karungi.", command, startedAt, "privacy_blocked")
+                        return@post
+                    }
+                    val safeScreenshot = (privacy as ScreenPrivacyResult.Allowed).bytes
                     // Supply the fresh visual observation to the existing Gemini Live
                     // brain. It may describe/clarify, but Android will still validate
                     // any resulting action against the current Accessibility window.
@@ -3027,7 +3039,7 @@ class MyraVoiceService : Service() {
                     localCommandExecutedThisTurn = false
                     screenCommandTurnGuard.clear()
                     live?.sendImage(
-                        screenshot.bytes, "image/jpeg",
+                        safeScreenshot, "image/jpeg",
                         "The user requested ${command.javaClass.simpleName}. Inspect this fresh current-screen image. " +
                             "If exactly one target is clear, call perform_screen_action with its semantic label/position. " +
                             "If ambiguous, ask one short clarification. Never claim success before Android verification."
