@@ -141,37 +141,3 @@ object YouTubeSemanticCommandParser {
     private val CHANNEL = Regex("^(?:(.+?) (?:ka |wala )?)?(?:profile pic|profile|channel)(?: click karo| kholo| open karo| open)?$")
     private val GENERIC_CHANNEL = setOf("is video", "video", "current video", "channel")
 }
-
-enum class YouTubeCommentState { NONE, COMMENTS_OPEN, EDITING, READY_TO_SEND }
-
-data class YouTubeCommentComposeSnapshot(
-    val packageName: String,
-    val windowId: Int?,
-    val generation: Long,
-    val fieldIdentity: String? = null,
-    val draft: String = "",
-    val state: YouTubeCommentState = YouTubeCommentState.NONE
-)
-
-class YouTubeCommentComposeTracker {
-    private var value: YouTubeCommentComposeSnapshot? = null
-    fun snapshot(): YouTubeCommentComposeSnapshot? = value
-    fun commentsOpened(packageName: String, windowId: Int?, generation: Long) {
-        value = YouTubeCommentComposeSnapshot(packageName, windowId, generation, state = YouTubeCommentState.COMMENTS_OPEN)
-    }
-    fun draftSet(packageName: String, windowId: Int?, generation: Long, fieldIdentity: String, draft: String): Boolean {
-        if (!owns(packageName, windowId, generation) || draft.isBlank()) return false
-        value = value!!.copy(fieldIdentity = fieldIdentity, draft = draft, state = YouTubeCommentState.READY_TO_SEND)
-        return true
-    }
-    fun canSend(packageName: String, windowId: Int?, generation: Long): Boolean =
-        owns(packageName, windowId, generation) && value?.state == YouTubeCommentState.READY_TO_SEND && value?.draft?.isNotBlank() == true
-    fun cancel() { value = null }
-    fun invalidateUnless(packageName: String, windowId: Int?, generation: Long) {
-        if (!owns(packageName, windowId, generation)) value = null
-    }
-    private fun owns(packageName: String, windowId: Int?, generation: Long): Boolean {
-        val current = value ?: return false
-        return current.packageName == packageName && current.windowId == windowId && current.generation == generation
-    }
-}

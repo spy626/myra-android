@@ -4,6 +4,8 @@ import java.util.Locale
 
 enum class ApiAuthType { NONE, API_KEY, OAUTH, OTHER, UNKNOWN }
 enum class ApiPrivacyLevel { PUBLIC, USER_DATA, SENSITIVE }
+enum class ApiValidationState { UNTESTED, VALIDATED, REJECTED }
+enum class ApiHealthState { UNTESTED, HEALTHY, DEGRADED, BROKEN, DISABLED }
 
 data class ApiToolDefinition(
     val id: String,
@@ -25,7 +27,12 @@ data class ApiToolDefinition(
     val reliabilityScore: Double = 0.5,
     val enabled: Boolean = false,
     val providerPriority: Int = 100,
-    val lastValidatedAt: Long = 0L
+    val lastValidatedAt: Long = 0L,
+    val validationState: ApiValidationState = ApiValidationState.UNTESTED,
+    val healthState: ApiHealthState = ApiHealthState.UNTESTED,
+    val recentFailureCount: Int = 0,
+    val adapterId: String? = null,
+    val requiresUserConfiguration: Boolean = requiresUserKey || requiresOAuth
 )
 
 class ApiToolRegistry(initial: List<ApiToolDefinition> = emptyList()) {
@@ -38,9 +45,44 @@ class ApiToolRegistry(initial: List<ApiToolDefinition> = emptyList()) {
     @Synchronized fun relevant(capability: String, usableOnly: Boolean = true): List<ApiToolDefinition> {
         val tag = capability.lowercase(Locale.ROOT)
         return definitions.values.filter { item ->
-            (!usableOnly || item.enabled) && item.httpsSupported && item.capabilityTags.any { it == tag }
+            (!usableOnly || isUsable(item)) && item.httpsSupported && item.capabilityTags.any { it == tag }
         }.sortedWith(compareBy<ApiToolDefinition> { it.providerPriority }
+            .thenBy { healthRank(it.healthState) }
             .thenByDescending { it.noAuthAvailable }.thenByDescending { it.reliabilityScore })
+    }
+
+    @Synchronized fun recordSuccess(id: String, checkedAt: Long): ApiToolDefinition? = mutate(id) {
+        it.copy(healthState = ApiHealthState.HEALTHY, recentFailureCount = 0, lastValidatedAt = checkedAt)
+    }
+
+    @Synchronized fun recordFailure(id: String, checkedAt: Long): ApiToolDefinition? = mutate(id) {
+        val failures = it.recentFailureCount + 1
+        it.copy(
+            healthState = if (failures >= 3) ApiHealthState.BROKEN else ApiHealthState.DEGRADED,
+            recentFailureCount = failures, lastValidatedAt = checkedAt
+        )
+    }
+
+    @Synchronized fun enableValidatedAdapter(id: String, adapterId: String, validatedAt: Long): ApiToolDefinition? = mutate(id) {
+        it.copy(enabled = true, adapterId = adapterId, validationState = ApiValidationState.VALIDATED,
+            healthState = ApiHealthState.UNTESTED, lastValidatedAt = validatedAt)
+    }
+
+    private fun mutate(id: String, block: (ApiToolDefinition) -> ApiToolDefinition): ApiToolDefinition? {
+        val current = definitions[id] ?: return null
+        return block(current).also { definitions[id] = it }
+    }
+
+    private fun isUsable(item: ApiToolDefinition): Boolean = item.enabled &&
+        item.validationState == ApiValidationState.VALIDATED && item.adapterId != null &&
+        item.healthState !in setOf(ApiHealthState.BROKEN, ApiHealthState.DISABLED)
+
+    private fun healthRank(state: ApiHealthState) = when (state) {
+        ApiHealthState.HEALTHY -> 0
+        ApiHealthState.UNTESTED -> 1
+        ApiHealthState.DEGRADED -> 2
+        ApiHealthState.BROKEN -> 3
+        ApiHealthState.DISABLED -> 4
     }
 }
 

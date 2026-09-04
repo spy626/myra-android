@@ -1,5 +1,6 @@
 package com.myra.assistant.screen
 
+import com.myra.assistant.agent.TextComposeSession
 import java.text.Normalizer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -70,9 +71,9 @@ class YouTubeSemanticActionsTest {
     }
 
     @Test fun comment_draft_requires_owned_context_and_explicit_send() {
-        val tracker = YouTubeCommentComposeTracker()
-        tracker.commentsOpened("com.google.android.youtube", 4, 8)
-        assertTrue(tracker.draftSet("com.google.android.youtube", 4, 8, "field", "I like your video"))
+        val tracker = TextComposeSession()
+        tracker.open("com.google.android.youtube", 4, 8)
+        assertTrue(tracker.setDraft("com.google.android.youtube", 4, 8, "field", "I like your video"))
         assertEquals("I like your video", tracker.snapshot()?.draft)
         assertTrue(tracker.canSend("com.google.android.youtube", 4, 8))
         assertFalse(tracker.canSend("com.android.chrome", 4, 8))

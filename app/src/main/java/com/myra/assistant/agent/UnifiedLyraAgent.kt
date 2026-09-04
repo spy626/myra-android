@@ -9,10 +9,27 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
 
     fun currentTask(): AgentTask? = active
 
-    @Synchronized fun createTask(request: String, context: CurrentActivityContext?, visualAllowed: Boolean): AgentTask {
+    /** First and authoritative owner of every completed user turn. */
+    @Synchronized fun acceptTurn(request: String, context: CurrentActivityContext?, visualAllowed: Boolean): AgentTurnDecision {
+        val working = WorkingTaskRuntime.store.snapshot()
+        val decision = UnifiedTurnInterpreter.interpret(request, working)
+        val scene = context?.let { ScreenSceneFactory.from(it, working.activeExternalApp) }
+        val task = if (decision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
+            createTask(request, context, visualAllowed, decision)
+        } else active
+        WorkingTaskRuntime.store.onTurn(decision, task, scene)
+        return decision
+    }
+
+    @Synchronized fun createTask(
+        request: String,
+        context: CurrentActivityContext?,
+        visualAllowed: Boolean,
+        turnDecision: AgentTurnDecision? = null
+    ): AgentTask {
         active = active?.copy(state = AgentTaskState.CANCELLED)
         rejectedElementIds.clear()
-        val goal = understandGoal(request)
+        val goal = understandGoal(request, turnDecision)
         val task = AgentTask(
             originalUserRequest = request.trim(), interpretedGoal = goal,
             expectedApp = context?.packageName, state = AgentTaskState.PLANNING,
@@ -69,6 +86,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
     }
 
     @Synchronized fun invalidateForContext(context: CurrentActivityContext) {
+        if (context.packageName in setOf("com.myra.assistant", "com.android.systemui")) return
         if (active?.expectedApp != null && active?.expectedApp != context.packageName) {
             active = active?.copy(state = AgentTaskState.CANCELLED)
             lastReferencedElement = null
@@ -83,9 +101,11 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
         else -> AgentDecision.Clarify(message)
     }
 
-    private fun understandGoal(raw: String): AgentGoalType {
+    private fun understandGoal(raw: String, decision: AgentTurnDecision? = null): AgentGoalType {
         val text = normalize(raw)
         return when {
+            decision?.intent == TurnIntent.MULTI_STEP_GOAL && Regex("\\b(?:google|browser|chrome)\\b").containsMatchIn(text) -> AgentGoalType.BROWSER_SEARCH
+            decision?.intent == TurnIntent.MULTI_STEP_GOAL -> AgentGoalType.WEB_SEARCH
             Regex("\\b(?:scroll|niche|neeche|upar)\\b").containsMatchIn(text) -> AgentGoalType.SCROLL
             Regex("\\b(?:type|likho|write)\\b").containsMatchIn(text) -> AgentGoalType.TYPE
             Regex("^(?:send|post)(?: karo)?$").matches(text) -> AgentGoalType.SEND

@@ -1243,6 +1243,9 @@ class AccessibilityHelperService : AccessibilityService() {
                 confidence = if (semantic.isEmpty()) 0.25 else 0.9, timestamp = observedAt
             ))
             UnifiedLyraAgentRuntime.agent.invalidateForContext(updated)
+            com.myra.assistant.agent.WorkingTaskRuntime.store.invalidateIfExternalAppChanged(
+                updated.packageName, updated.generation
+            )
             com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
                 "agent_observation package=${updated.packageName} windowGeneration=${updated.generation} semanticElements=${semantic.size} screenshotUsed=false"
             )
