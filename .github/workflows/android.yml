@@ -29,7 +29,17 @@ jobs:
         continue-on-error: true
         timeout-minutes: 8
         run: gradle :app:lintDebug --stacktrace --no-daemon
-      - run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Unit tests and debug APK
+        shell: bash
+        run: |
+          set +e
+          gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon > "$RUNNER_TEMP/gradle-build.log" 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            tail -n 500 "$RUNNER_TEMP/gradle-build.log"
+            exit "$status"
+          fi
+          tail -n 80 "$RUNNER_TEMP/gradle-build.log"
         env:
           LYRA_KEYSTORE_PATH: ${{ runner.temp }}/lyra-ci.jks
           LYRA_KEYSTORE_PASSWORD: ${{ secrets.LYRA_KEYSTORE_PASSWORD }}
