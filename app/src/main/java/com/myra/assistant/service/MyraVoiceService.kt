@@ -84,6 +84,7 @@ import com.myra.assistant.screen.FastVisualTurnCoordinator
 import com.myra.assistant.screen.VisualAcquisitionGate
 import com.myra.assistant.screen.VisualScreenshotTimeoutPolicy
 import com.myra.assistant.screen.SemanticScreenFallbackPolicy
+import com.myra.assistant.screen.VisibleScreenElement
 import com.myra.assistant.agent.ActivityContextStore
 import com.myra.assistant.agent.UnifiedLyraAgentRuntime
 import com.myra.assistant.agent.TurnIntent
