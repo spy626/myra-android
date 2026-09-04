@@ -104,4 +104,28 @@ class SearchDestinationResolverTest {
         assertEquals(TaskCompletionState.SUCCESS, store.snapshot().completionState)
         assertEquals(SearchDestination.BROWSER, store.snapshot().resolvedDestination)
     }
+
+    @Test fun verifiedSuccessCannotProduceFailureOrOrdinaryModelResult() {
+        assertFalse(SearchTaskResultPolicy.maySpeakFailure(SearchVerification.SUCCESS))
+        assertFalse(SearchTaskResultPolicy.maySpeakFailure(SearchVerification.UNKNOWN))
+        assertEquals(true, SearchTaskResultPolicy.maySpeakFailure(SearchVerification.FAILURE))
+        assertFalse(SearchTaskResultPolicy.ordinaryModelMayReportResult(TaskCompletionState.EXECUTING))
+        assertFalse(SearchTaskResultPolicy.ordinaryModelMayReportResult(TaskCompletionState.SUCCESS))
+        assertFalse(SearchTaskResultPolicy.ordinaryModelMayReportResult(TaskCompletionState.UNKNOWN))
+    }
+
+    @Test fun youtubeSearchUsesSameVerificationContract() {
+        assertEquals(
+            SearchVerification.SUCCESS,
+            YouTubeSearchVerificationPolicy.verify(
+                "new AI", "com.google.android.youtube", listOf("new AI", "Search results")
+            )
+        )
+        assertEquals(
+            SearchVerification.UNKNOWN,
+            YouTubeSearchVerificationPolicy.verify(
+                "new AI", "com.android.chrome", listOf("new AI")
+            )
+        )
+    }
 }

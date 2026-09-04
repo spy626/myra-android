@@ -51,7 +51,41 @@ class VisualCaptureCompletionGate {
 
 object VisualScreenshotTimeoutPolicy {
     const val TIMEOUT_MS = 1_200L
+    const val OUTER_ACQUISITION_TIMEOUT_MS = 1_200L
     const val SAFE_FALLBACK_MAX_AGE_MS = 2_500L
+}
+
+/** One acquisition owner from visualFrameRequested through frame/fallback/failure. */
+class VisualAcquisitionGate(
+    val visualTurnId: String,
+    val requestedAt: Long,
+    val deadlineAt: Long = requestedAt + VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS
+) {
+    private val completed = AtomicBoolean(false)
+
+    fun mayDispatch(currentVisualTurnId: String?, now: Long): Boolean =
+        !completed.get() && currentVisualTurnId == visualTurnId && now <= deadlineAt
+
+    fun tryComplete(currentVisualTurnId: String?, now: Long): Boolean =
+        currentVisualTurnId == visualTurnId && now <= deadlineAt && completed.compareAndSet(false, true)
+
+    fun tryTimeout(now: Long): Boolean = now >= deadlineAt && completed.compareAndSet(false, true)
+    fun isComplete(): Boolean = completed.get()
+}
+
+object SemanticScreenFallbackPolicy {
+    const val MAX_AGE_MS = 2_500L
+    fun mayAnswer(
+        expectedPackage: String,
+        expectedWindowId: Int,
+        expectedGeneration: Long,
+        actualPackage: String?,
+        actualWindowId: Int?,
+        actualGeneration: Long?,
+        semanticElementCount: Int,
+        ageMs: Long
+    ): Boolean = actualPackage == expectedPackage && actualWindowId == expectedWindowId &&
+        actualGeneration == expectedGeneration && semanticElementCount > 0 && ageMs in 0..MAX_AGE_MS
 }
 
 /** In-memory only. Raw screenshots never enter Room or long-term memory. */

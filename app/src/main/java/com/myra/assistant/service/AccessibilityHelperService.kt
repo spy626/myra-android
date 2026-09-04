@@ -107,6 +107,9 @@ class AccessibilityHelperService : AccessibilityService() {
     private val visualTimeoutExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "lyra-visual-timeout").apply { isDaemon = true }
     }
+    private val visualProcessingExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "lyra-visual-processing").apply { isDaemon = true }
+    }
     private val screenWatcher = object : Runnable {
         override fun run() {
             // Accessibility context is the normal always-lightweight observation path.
@@ -146,6 +149,7 @@ class AccessibilityHelperService : AccessibilityService() {
     override fun onDestroy() {
         screenWatcherHandler.removeCallbacks(screenWatcher)
         visualTimeoutExecutor.shutdownNow()
+        visualProcessingExecutor.shutdownNow()
         AccessibilityVisualCache.invalidate()
         hideScreenVisionOverlay()
         if (instance === this) instance = null
@@ -259,12 +263,33 @@ class AccessibilityHelperService : AccessibilityService() {
      * Captures an in-memory Accessibility screenshot on Android 11+. This is LYRA's
      * normal visual observation path and never starts MediaProjection.
      */
-    fun requestVisualScreenshot(callback: (Result<AccessibilityScreenshot>) -> Unit): Boolean {
+    fun requestVisualScreenshot(
+        expected: ForegroundAppContext,
+        semanticSignature: String,
+        requestToken: String,
+        isCurrentRequest: () -> Boolean,
+        callback: (Result<AccessibilityScreenshot>) -> Unit
+    ): Boolean {
         if (!VisualObservationPolicy.mayRequestScreenshot(visualAwareness.enabled, Build.VERSION.SDK_INT)) return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
-        val expected = currentForegroundContext() ?: return false
-        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+        val dispatchAt = android.os.SystemClock.elapsedRealtime()
+        if (!isCurrentRequest()) {
+            VoicePipelineLogger.debug("capture_dispatch_dropped requestToken=$requestToken reason=stale_before_api_call")
+            return false
+        }
+        VoicePipelineLogger.debug(
+            "captureDispatchAcknowledged requestToken=$requestToken mainLooperCaptureDispatchDelayMs=0 " +
+                "captureTaskAgeMs=0 captureQueueDepth=0 captureThread=${Thread.currentThread().name}"
+        )
+        VoicePipelineLogger.debug("screenshotApiCalled requestToken=$requestToken at=$dispatchAt")
+        takeScreenshot(Display.DEFAULT_DISPLAY, visualProcessingExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
+                if (!isCurrentRequest()) {
+                    result.hardwareBuffer.close()
+                    VoicePipelineLogger.debug("screenshot_callback_received requestToken=$requestToken accepted=false reason=stale_request")
+                    callback(Result.failure(IllegalStateException("stale_visual_turn")))
+                    return
+                }
                 val current = currentForegroundContext()
                 if (current == null || current.packageName != expected.packageName ||
                     current.windowId != expected.windowId || current.generation != expected.generation
@@ -289,7 +314,7 @@ class AccessibilityHelperService : AccessibilityService() {
                 val screenshot = AccessibilityScreenshot(bytes, bitmap.width, bitmap.height, capturedAt,
                     current.packageName, current.windowId, current.generation)
                 bitmap.recycle()
-                AccessibilityVisualCache.put(screenshot, visibleScreenSignature())
+                AccessibilityVisualCache.put(screenshot, semanticSignature)
                 ActivityContextStore.attachScreenshot(
                     ScreenshotReference(UUID.randomUUID().toString(), capturedAt, screenshot.width, screenshot.height),
                     current.packageName, current.windowId
@@ -304,15 +329,37 @@ class AccessibilityHelperService : AccessibilityService() {
         return true
     }
 
+    /** Compatibility entry point for non-fast visual helpers. It still dispatches the
+     * platform screenshot immediately and performs image work off the service thread. */
+    fun requestVisualScreenshot(callback: (Result<AccessibilityScreenshot>) -> Unit): Boolean {
+        val expected = currentForegroundContext() ?: return false
+        val snapshot = ActivityContextStore.snapshot()
+        val signature = snapshot?.takeIf {
+            it.packageName == expected.packageName && it.windowId == expected.windowId && it.generation == expected.generation
+        }?.visibleElements?.joinToString("|") {
+            "${it.role}:${it.label.lowercase(Locale.ROOT)}:${it.centerX}:${it.centerY}:${it.actionable}"
+        }.orEmpty()
+        return requestVisualScreenshot(expected, signature, "compat-${android.os.SystemClock.elapsedRealtime()}", { true }, callback)
+    }
+
     /** Select exactly one context-bound screenshot for a visual turn. */
     fun requestFreshVisualScreenshot(
         maxAgeMs: Long,
         timeoutMs: Long = VisualScreenshotTimeoutPolicy.TIMEOUT_MS,
         fallbackMaxAgeMs: Long = VisualScreenshotTimeoutPolicy.SAFE_FALLBACK_MAX_AGE_MS,
+        requestToken: String = "visual-${android.os.SystemClock.elapsedRealtime()}",
+        isCurrentRequest: () -> Boolean = { true },
         callback: (Result<VisualScreenshotSelection>) -> Unit
     ): Boolean {
         val current = currentForegroundContext() ?: return false
-        val signature = visibleScreenSignature()
+        // Never traverse the Accessibility tree before calling takeScreenshot(). On real
+        // devices that synchronous traversal blocked the service/main path for 13-16s.
+        val snapshot = ActivityContextStore.snapshot()
+        val signature = snapshot?.takeIf {
+            it.packageName == current.packageName && it.windowId == current.windowId && it.generation == current.generation
+        }?.visibleElements?.joinToString("|") {
+            "${it.role}:${it.label.lowercase(Locale.ROOT)}:${it.centerX}:${it.centerY}:${it.actionable}"
+        }.orEmpty()
         val requestedAt = android.os.SystemClock.elapsedRealtime()
         AccessibilityVisualCache.selectFresh(
             current.packageName, current.windowId, current.generation, signature,
@@ -345,7 +392,14 @@ class AccessibilityHelperService : AccessibilityService() {
             }
         }
         val timeoutFuture = visualTimeoutExecutor.schedule(timeout, timeoutMs, TimeUnit.MILLISECONDS)
-        val started = requestVisualScreenshot { result ->
+        if (!isCurrentRequest()) {
+            timeoutFuture.cancel(false)
+            completionGate.tryComplete()
+            VoicePipelineLogger.debug("capture_dispatch_dropped requestToken=$requestToken reason=stale_before_dispatch")
+            return false
+        }
+        VoicePipelineLogger.debug("captureDispatchAttempted requestToken=$requestToken at=$requestedAt")
+        val started = requestVisualScreenshot(current, signature, requestToken, isCurrentRequest) { result ->
             val callbackAt = android.os.SystemClock.elapsedRealtime()
             if (!completionGate.tryComplete()) {
                 VoicePipelineLogger.debug("screenshot_callback_received elapsedMs=${callbackAt - requestedAt} accepted=false reason=late_after_timeout")

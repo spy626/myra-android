@@ -4,6 +4,7 @@ import android.app.SearchManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import com.myra.assistant.diagnostics.VoicePipelineLogger
 import java.net.URLEncoder
 import java.util.Locale
 
@@ -105,6 +106,11 @@ data class BrowserSearchDispatch(val accepted: Boolean, val expectedPackage: Str
 
 enum class SearchVerification { SUCCESS, UNKNOWN, FAILURE }
 
+object SearchTaskResultPolicy {
+    fun maySpeakFailure(verification: SearchVerification): Boolean = verification == SearchVerification.FAILURE
+    fun ordinaryModelMayReportResult(completionState: TaskCompletionState?): Boolean = completionState == null
+}
+
 object BrowserSearchVerificationPolicy {
     fun verify(
         request: BrowserSearchRequest,
@@ -127,6 +133,17 @@ object BrowserSearchVerificationPolicy {
     }
 }
 
+object YouTubeSearchVerificationPolicy {
+    fun verify(query: String, foregroundPackage: String?, visibleLabels: List<String>): SearchVerification {
+        if (foregroundPackage != "com.google.android.youtube") return SearchVerification.UNKNOWN
+        val visible = visibleLabels.joinToString(" ").lowercase(Locale.ROOT)
+        val tokens = query.lowercase(Locale.ROOT).split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
+            .filter { it.length >= 2 }
+        return if (tokens.isNotEmpty() && tokens.any(visible::contains)) SearchVerification.SUCCESS
+        else SearchVerification.UNKNOWN
+    }
+}
+
 /** General browser capability. It opens a standards-based search URL; observation and result
  * interpretation remain separate plan steps owned by UnifiedLyraAgent. */
 class BrowserSearchTool(private val context: Context) {
@@ -144,9 +161,20 @@ class BrowserSearchTool(private val context: Context) {
         }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         if (expected != null) intent.setPackage(expected)
         return try {
+            VoicePipelineLogger.debug(
+                "SEARCH_ACTION_STARTED executorClass=BrowserSearchTool intentAction=${intent.action} " +
+                    "selectedExecutor=${resolution.selectedExecutor} destination=${resolution.destination} expectedPackage=$expected"
+            )
             context.startActivity(intent)
+            VoicePipelineLogger.debug(
+                "SEARCH_ACTION_RETURNED executorClass=BrowserSearchTool accepted=true expectedPackage=$expected"
+            )
             BrowserSearchDispatch(true, expected, "dispatched")
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            VoicePipelineLogger.debug(
+                "SEARCH_ACTION_RETURNED executorClass=BrowserSearchTool accepted=false " +
+                    "failure=${error.javaClass.simpleName} expectedPackage=$expected"
+            )
             BrowserSearchDispatch(false, expected, "browser_unavailable")
         }
     }

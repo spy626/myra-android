@@ -55,6 +55,27 @@ class FastVisualTurnTest {
         assertFalse(gate.tryComplete())
     }
 
+    @Test fun outerDeadlineStartsAtVisualFrameRequestedAndRejectsDelayedDispatch() {
+        val gate = VisualAcquisitionGate("turn-a", requestedAt = 1_000, deadlineAt = 2_200)
+        assertTrue(gate.mayDispatch("turn-a", 1_100))
+        assertTrue(gate.tryTimeout(2_200))
+        assertFalse(gate.mayDispatch("turn-a", 2_201))
+        assertFalse(gate.tryComplete("turn-a", 2_201))
+    }
+
+    @Test fun replacedVisualTurnCannotInvokeQueuedCapture() {
+        val gate = VisualAcquisitionGate("turn-a", requestedAt = 1_000, deadlineAt = 2_200)
+        assertFalse(gate.mayDispatch("turn-b", 1_100))
+        assertFalse(gate.tryComplete("turn-b", 1_100))
+    }
+
+    @Test fun semanticScreenFallbackRequiresFreshExactlyOwnedScene() {
+        assertTrue(SemanticScreenFallbackPolicy.mayAnswer("pkg", 4, 5, "pkg", 4, 5, 3, 400))
+        assertFalse(SemanticScreenFallbackPolicy.mayAnswer("pkg", 4, 5, "other", 4, 5, 3, 400))
+        assertFalse(SemanticScreenFallbackPolicy.mayAnswer("pkg", 4, 5, "pkg", 4, 5, 0, 400))
+        assertFalse(SemanticScreenFallbackPolicy.mayAnswer("pkg", 4, 5, "pkg", 4, 5, 3, 2_501))
+    }
+
     @Test fun replacedVisualTurnCannotOwnLateScreenshotResult() {
         val coordinator = FastVisualTurnCoordinator()
         val old = coordinator.begin(1, FastVisualRequest(FastVisualKind.QUESTION, "screen"), "pkg", 2, 3, 10, 11)

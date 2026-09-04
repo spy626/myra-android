@@ -81,6 +81,9 @@ import com.myra.assistant.screen.FastVisualKind
 import com.myra.assistant.screen.FastVisualRequest
 import com.myra.assistant.screen.FastVisualRequestClassifier
 import com.myra.assistant.screen.FastVisualTurnCoordinator
+import com.myra.assistant.screen.VisualAcquisitionGate
+import com.myra.assistant.screen.VisualScreenshotTimeoutPolicy
+import com.myra.assistant.screen.SemanticScreenFallbackPolicy
 import com.myra.assistant.agent.ActivityContextStore
 import com.myra.assistant.agent.UnifiedLyraAgentRuntime
 import com.myra.assistant.agent.TurnIntent
@@ -91,6 +94,8 @@ import com.myra.assistant.agent.SearchExecutionPolicy
 import com.myra.assistant.agent.SearchDestination
 import com.myra.assistant.agent.SearchDestinationResolver
 import com.myra.assistant.agent.BrowserSearchVerificationPolicy
+import com.myra.assistant.agent.YouTubeSearchVerificationPolicy
+import com.myra.assistant.agent.SearchTaskResultPolicy
 import com.myra.assistant.agent.SearchVerification
 import com.myra.assistant.agent.TaskCompletionState
 import com.myra.assistant.screen.FreshFrameResult
@@ -103,6 +108,8 @@ import com.myra.assistant.screen.ScreenCommandTurnGuard
 import com.myra.assistant.screen.ScreenContentType
 import com.myra.assistant.screen.ScreenActionIntent
 import com.myra.assistant.screen.ScreenActionIntentRegistry
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import com.myra.assistant.agent.TextComposeSession
 import com.myra.assistant.screen.YouTubeSemanticCommand
 import com.myra.assistant.screen.YouTubeSemanticCommandParser
@@ -190,6 +197,9 @@ class MyraVoiceService : Service() {
     private var localSpeechHasContent = false
     private var allowUntranscribedLocalSpeech = false
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val visualDeadlineExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "lyra-visual-deadline").apply { isDaemon = true }
+    }
     private var pendingMemoryCommand: MemoryCommand? = null
     private var pendingDeleteClarificationUntil = 0L
     private var pendingBestFriendCorrectionOldName: String? = null
@@ -2228,7 +2238,36 @@ class MyraVoiceService : Service() {
         val visualTurnId = fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.id
         fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameRequestedAt = requestedAt
         voiceLog("visualFrameRequested visualTurnId=${visualTurnId.orEmpty()} screenQueryId=$queryId at=$requestedAt")
-        val accepted = accessibility.requestFreshVisualScreenshot(ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS) { result ->
+        if (visualTurnId == null) return false
+        val acquisitionGate = VisualAcquisitionGate(visualTurnId, requestedAt)
+        val outerTimeout = visualDeadlineExecutor.schedule({
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!acquisitionGate.tryTimeout(now)) return@schedule
+            voiceLog(
+                "visual_frame_outer_timeout visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                    "elapsedMs=${now - requestedAt} timeoutMs=${VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS}"
+            )
+            mainHandler.post {
+                if (!fastVisualTurns.owns(visualTurnId)) return@post
+                completeScreenQuestionFromSemanticScene(question, userTurnId, visualTurnId, queryId, foreground)
+            }
+        }, VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        val accepted = accessibility.requestFreshVisualScreenshot(
+            ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS,
+            requestToken = queryId,
+            isCurrentRequest = {
+                acquisitionGate.mayDispatch(fastVisualTurns.current()?.id, android.os.SystemClock.elapsedRealtime())
+            }
+        ) { result ->
+            val completedAt = android.os.SystemClock.elapsedRealtime()
+            if (!acquisitionGate.tryComplete(fastVisualTurns.current()?.id, completedAt)) {
+                voiceLog(
+                    "screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=$visualTurnId " +
+                        "reason=outer_deadline_or_replaced"
+                )
+                return@requestFreshVisualScreenshot
+            }
+            outerTimeout.cancel(false)
             mainHandler.post {
                 if (visualTurnId == null || !fastVisualTurns.owns(visualTurnId)) {
                     voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=${visualTurnId.orEmpty()} reason=visual_turn_replaced")
@@ -2265,7 +2304,19 @@ class MyraVoiceService : Service() {
                     "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId " +
                         "at=$frameReadyAt visualFrameSource=${selection.source}"
                 )
-                val elements = accessibility.visibleElements(100)
+                // Reuse the already-published semantic scene. Rewalking a large
+                // Accessibility tree here previously delayed the visual model request.
+                val elements = ActivityContextStore.snapshot()?.takeIf {
+                    it.packageName == current.packageName && it.windowId == current.windowId &&
+                        it.generation == current.generation
+                }?.visibleElements?.take(60)?.map {
+                    VisibleScreenElement(
+                        it.label,
+                        android.graphics.Rect(it.left, it.top, it.right, it.bottom),
+                        it.actionable,
+                        it.role.name
+                    )
+                }.orEmpty()
                 val privacyResult = ScreenFramePrivacyFilter.apply(
                     screenshot.bytes, elements, screenshot.width, screenshot.height,
                     screenVisionPreferences.sensitiveContentProtection
@@ -2296,7 +2347,7 @@ class MyraVoiceService : Service() {
                 fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.modelRequestAt = screenFrameSentAt
                 val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
                     .joinToString("\n") { "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]" }
-                    .take(12_000)
+                    .take(4_000)
                 voiceLog(
                     "agent_observation package=${current.packageName} windowGeneration=${current.generation} " +
                         "semanticElements=${ActivityContextStore.snapshot()?.visibleElements?.size ?: 0} screenshotUsed=true"
@@ -2324,8 +2375,52 @@ class MyraVoiceService : Service() {
                 )
             }
         }
-        if (accepted) voiceLog("screen_query_created screen_query_id=$queryId source=ACCESSIBILITY_SCREENSHOT userTurnId=$userTurnId")
+        if (accepted) {
+            voiceLog("screen_query_created screen_query_id=$queryId source=ACCESSIBILITY_SCREENSHOT userTurnId=$userTurnId")
+        } else {
+            outerTimeout.cancel(false)
+        }
         return accepted
+    }
+
+    private fun completeScreenQuestionFromSemanticScene(
+        question: String,
+        userTurnId: Long,
+        visualTurnId: String,
+        queryId: String,
+        expected: com.myra.assistant.screen.ForegroundAppContext
+    ) {
+        val scene = ActivityContextStore.snapshot()?.takeIf {
+            SemanticScreenFallbackPolicy.mayAnswer(
+                expected.packageName, expected.windowId, expected.generation,
+                it.packageName, it.windowId, it.generation, it.visibleElements.size,
+                android.os.SystemClock.elapsedRealtime() - it.timestamp
+            )
+        }
+        val labels = scene?.visibleElements.orEmpty().asSequence()
+            .map { it.label.trim() }
+            .filter { it.length >= 3 && ScreenPrivacyPolicy.sensitiveCategory(it) == null }
+            .distinct().take(4).toList()
+        if (scene == null || labels.isEmpty()) {
+            fastVisualTurns.finish(visualTurnId)
+            voiceLog("screen_query_terminal screenQueryId=$queryId state=CAPTURE_FAILED visualSource=NONE")
+            speakScreenUnavailable("Current screen image nahi mili.")
+            return
+        }
+        val app = scene.appLabel ?: scene.packageName.substringAfterLast('.')
+        val answer = "$app open hai. Screen par ${labels.joinToString(", ")} dikh raha hai."
+        val now = android.os.SystemClock.elapsedRealtime()
+        voiceLog(
+            "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId at=$now " +
+                "visualFrameSource=SEMANTIC_SCREEN semanticElements=${scene.visibleElements.size}"
+        )
+        voiceLog(
+            "TOTAL_VISUAL_TURN visualTurnId=$visualTurnId route=SEMANTIC_SCREEN " +
+                "visualFrameAcquisitionMs=${now - (fastVisualTurns.current()?.frameRequestedAt ?: now)}"
+        )
+        fastVisualTurns.finish(visualTurnId)
+        emitState(answer)
+        queueLocalSpeech(answer, allowUntranscribedAudio = true)
     }
 
     private fun isScreenResponseContextCurrent(): Boolean {
@@ -3258,6 +3353,14 @@ class MyraVoiceService : Service() {
         )
         responseArbiter.claimControlled(taskTurnId)
         voiceLog(
+            "SEARCH_TASK_CREATED turnId=$taskTurnId taskId=${WorkingTaskRuntime.store.snapshot().taskId} " +
+                "queryLength=${request.query.length} destination=${resolution.destination}"
+        )
+        voiceLog(
+            "SEARCH_EXECUTOR_SELECTED turnId=$taskTurnId executor=$executorName " +
+                "reason=${resolution.reason} targetPackage=${resolution.targetPackage}"
+        )
+        voiceLog(
             "task_result_owner turnId=$taskTurnId owner=CONTROLLED_AGENT taskId=${WorkingTaskRuntime.store.snapshot().taskId} " +
                 "destination=${resolution.destination}"
         )
@@ -3265,6 +3368,7 @@ class MyraVoiceService : Service() {
             "search_execution_started turnId=$taskTurnId destination=${resolution.destination} " +
                 "reason=${resolution.reason} executor=$executorName"
         )
+        voiceLog("SEARCH_ACTION_STARTED turnId=$taskTurnId executor=$executorName destination=${resolution.destination}")
         if (resolution.destination == SearchDestination.YOUTUBE) {
             val result = assistantController.processCommand(
                 StructuredCommandParser.fromLegacy(
@@ -3274,17 +3378,27 @@ class MyraVoiceService : Service() {
                 speak = false,
                 notifyListeners = false
             )
+            voiceLog("SEARCH_ACTION_RETURNED turnId=$taskTurnId executor=YOUTUBE accepted=${result.success}")
             if (!result.success) {
                 finishSearchTaskResult(taskTurnId, SearchVerification.FAILURE, "youtube_search_dispatch_failed")
                 return true
             }
             mainHandler.postDelayed({
                 val service = AccessibilityHelperService.instance
-                service?.refreshScreenContext(force = true)
                 val foreground = service?.currentForegroundContext()
-                val verification = if (foreground?.packageName == "com.google.android.youtube") {
-                    SearchVerification.SUCCESS
-                } else SearchVerification.UNKNOWN
+                val observedScene = ActivityContextStore.snapshot()?.takeIf {
+                    it.packageName == foreground?.packageName &&
+                        android.os.SystemClock.elapsedRealtime() - it.timestamp <= 2_500L
+                }
+                val labels = observedScene?.visibleElements?.map { it.label }.orEmpty()
+                voiceLog(
+                    "SEARCH_OBSERVATION_RECEIVED turnId=$taskTurnId destination=YOUTUBE " +
+                        "package=${foreground?.packageName} visibleElements=${labels.size}"
+                )
+                voiceLog("SEARCH_VERIFICATION_STARTED turnId=$taskTurnId destination=YOUTUBE")
+                val verification = YouTubeSearchVerificationPolicy.verify(
+                    request.query, foreground?.packageName, labels
+                )
                 finishSearchTaskResult(taskTurnId, verification, "youtube_search_foreground=${foreground?.packageName}")
             }, 900L)
             return true
@@ -3294,6 +3408,7 @@ class MyraVoiceService : Service() {
                 "tool=browser_search phase=starting queryLength=${request.query.length}"
         )
         val dispatch = BrowserSearchTool(this).execute(request, resolution)
+        voiceLog("SEARCH_ACTION_RETURNED turnId=$taskTurnId executor=$executorName accepted=${dispatch.accepted}")
         voiceLog(
             "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
                 "tool=browser_search accepted=${dispatch.accepted} expectedPackage=${dispatch.expectedPackage} " +
@@ -3307,12 +3422,21 @@ class MyraVoiceService : Service() {
         }
         mainHandler.postDelayed({
             val accessibility = AccessibilityHelperService.instance
-            accessibility?.refreshScreenContext(force = true)
             val foreground = accessibility?.currentForegroundContext()
+            val observedScene = ActivityContextStore.snapshot()?.takeIf {
+                it.packageName == foreground?.packageName &&
+                    android.os.SystemClock.elapsedRealtime() - it.timestamp <= 2_500L
+            }
+            val labels = observedScene?.visibleElements?.map { it.label }.orEmpty()
+            voiceLog(
+                "SEARCH_OBSERVATION_RECEIVED turnId=$taskTurnId destination=BROWSER " +
+                    "package=${foreground?.packageName} visibleElements=${labels.size}"
+            )
             voiceLog("task_verification_started turnId=$taskTurnId taskId=${WorkingTaskRuntime.store.snapshot().taskId} tool=browser_search")
+            voiceLog("SEARCH_VERIFICATION_STARTED turnId=$taskTurnId destination=BROWSER")
             val verification = BrowserSearchVerificationPolicy.verify(
                 request, resolution, foreground?.packageName,
-                accessibility?.visibleElements(100)?.map { it.label }.orEmpty()
+                labels
             )
             voiceLog(
                 "search_execution_completed turnId=$taskTurnId destination=BROWSER " +
@@ -3336,26 +3460,40 @@ class MyraVoiceService : Service() {
             "task_verification_completed turnId=$turnId taskId=${task.taskId} verification=$verification " +
                 "destination=${task.resolvedDestination} observed=$observed"
         )
+        voiceLog(
+            "SEARCH_VERIFICATION_RESULT turnId=$turnId taskId=${task.taskId} verification=$verification " +
+                "destination=${task.resolvedDestination}"
+        )
+        voiceLog(
+            "SEARCH_TASK_TERMINAL turnId=$turnId taskId=${task.taskId} completionState=$completion " +
+                "ordinaryModelMayReport=${SearchTaskResultPolicy.ordinaryModelMayReportResult(task.completionState)}"
+        )
         responseArbiter.controlledGenerationComplete()
         responseArbiter.controlledPlaybackComplete()
-        responseArbiter.releaseIfComplete()
+        // Keep CONTROLLED_LOCAL ownership latched until the next real user turn begins.
+        // Late packets from the interrupted ordinary model must never report this task.
+        voiceLog("SEARCH_RESULT_OWNER turnId=$turnId owner=CONTROLLED_AGENT release=NEXT_USER_TURN")
         when (verification) {
             SearchVerification.SUCCESS -> {
                 emitState("Sun rahi hoon…")
                 voiceLog("task_result_spoken turnId=$turnId spoken=false result=SUCCESS")
+                voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=false result=SUCCESS")
             }
             SearchVerification.UNKNOWN -> {
                 val message = "Search open hui, lekin results verify nahi hue."
                 listener?.onMyraText(message, true)
                 queueLocalSpeech(message, allowUntranscribedAudio = false)
                 voiceLog("task_result_spoken turnId=$turnId spoken=true result=UNKNOWN destination=${task.resolvedDestination}")
+                voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=true result=UNKNOWN")
             }
             SearchVerification.FAILURE -> {
+                check(SearchTaskResultPolicy.maySpeakFailure(verification))
                 val destination = if (task.resolvedDestination == SearchDestination.YOUTUBE) "YouTube" else "Browser"
                 val message = "$destination search start nahi ho paayi."
                 listener?.onMyraText(message, true)
                 queueLocalSpeech(message, allowUntranscribedAudio = false)
                 voiceLog("task_result_spoken turnId=$turnId spoken=true result=FAILURE destination=${task.resolvedDestination}")
+                voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=true result=FAILURE")
             }
         }
     }
@@ -4588,6 +4726,7 @@ class MyraVoiceService : Service() {
     override fun onDestroy() {
         ScreenCaptureService.listeners -= screenCaptureListener
         fastVisualTurns.cancel()
+        visualDeadlineExecutor.shutdownNow()
         instance = null
         if (isRunning) stopSession()
         super.onDestroy()
