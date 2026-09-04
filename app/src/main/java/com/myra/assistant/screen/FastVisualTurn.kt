@@ -25,8 +25,8 @@ object FastVisualRequestClassifier {
         val hasQuestion = tokens.any { token -> questionConcepts.any { similar(token, it) } } &&
             (tokens.any { it in setOf("what", "kya", "abhi", "isme", "screen", "क्या", "अभी", "इसमें") } || text.trim().endsWith("?"))
         if (hasQuestion || hasDeicticQuestion) return FastVisualRequest(FastVisualKind.QUESTION, "screen_question")
-        val action = tokens.firstOrNull { token -> actionConcepts.any { similar(token, it) } }
-        val visual = tokens.firstOrNull { token -> visualObjects.any { similar(token, it) } }
+        val action = tokens.firstOrNull { token -> actionConcepts.any { exactOrSafePrefix(token, it) } }
+        val visual = tokens.firstOrNull { token -> visualObjects.any { exactOrSafePrefix(token, it) } }
         return if (action != null && visual != null) FastVisualRequest(FastVisualKind.ACTION, "$action:$visual") else null
     }
 
@@ -47,6 +47,9 @@ object FastVisualRequestClassifier {
         }
         return previous.last() <= 2
     }
+
+    private fun exactOrSafePrefix(value: String, concept: String): Boolean =
+        value == concept || (concept.length >= 4 && value.startsWith(concept))
 }
 
 data class FastVisualTurn(
