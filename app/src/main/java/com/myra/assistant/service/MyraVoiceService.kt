@@ -90,6 +90,9 @@ import com.myra.assistant.agent.BrowserSearchTool
 import com.myra.assistant.agent.SearchExecutionPolicy
 import com.myra.assistant.agent.SearchDestination
 import com.myra.assistant.agent.SearchDestinationResolver
+import com.myra.assistant.agent.BrowserSearchVerificationPolicy
+import com.myra.assistant.agent.SearchVerification
+import com.myra.assistant.agent.TaskCompletionState
 import com.myra.assistant.screen.FreshFrameResult
 import com.myra.assistant.screen.ScreenResponseBinding
 import com.myra.assistant.screen.ReadingCommand
@@ -287,6 +290,7 @@ class MyraVoiceService : Service() {
     private var armedScreenQuestionTurnId = 0L
     private var armedScreenQuestionDetectedAt = 0L
     private var armedScreenQuestionFinalCommitted = false
+    private var earlyScreenQuestionText = ""
     private var earlyScreenQueryAwaitingFinalTranscript = false
     private var earlyScreenQueryDispatchedTurnId = 0L
     private var pendingCanonicalRename: kotlinx.coroutines.Job? = null
@@ -924,6 +928,18 @@ class MyraVoiceService : Service() {
                 if (screenResponseActive) {
                     if (earlyScreenQueryAwaitingFinalTranscript && input.isNotBlank()) {
                         val rawFinal = input.toString().trim()
+                        if (com.myra.assistant.screen.EarlyScreenQuestionPolicy.reconcile(
+                                earlyScreenQuestionText, rawFinal
+                            ) == com.myra.assistant.screen.ScreenQuestionReconciliation.MATERIAL_CHANGE
+                        ) {
+                            voiceLog(
+                                "screen_query_reconciled screenQueryId=$screenResponseQueryId " +
+                                    "result=cancelled_material_change userTurnId=$screenResponseUserTurnId"
+                            )
+                            audio?.interrupt(); live?.interrupt()
+                            finishScreenResponse("final_transcript_materially_changed")
+                            return@turnComplete
+                        }
                         val finalDisplay = finalTranscriptDisplay(rawFinal)
                         val semantic = FinalSemanticUserUtterance.from(
                             transcriptSessionId, screenResponseUserTurnId, rawFinal, finalDisplay
@@ -932,6 +948,7 @@ class MyraVoiceService : Service() {
                         earlyScreenQueryAwaitingFinalTranscript = false
                         input.clear(); commandProbe.clear()
                         voiceLog("screen_query_final_transcript_committed screen_query_id=$screenResponseQueryId userTurnId=$screenResponseUserTurnId")
+                        voiceLog("screen_query_reconciled screenQueryId=$screenResponseQueryId result=matched_same_turn userTurnId=$screenResponseUserTurnId")
                         if (!screenResponseHasContent) return@turnComplete
                     }
                     if (!screenResponseHasContent) {
@@ -1103,6 +1120,24 @@ class MyraVoiceService : Service() {
                         "clarificationResolverInput=${finalUtterance.clarificationResolverInput.take(160)} " +
                         "semanticConsistency=${finalUtterance.semanticConsistency}"
                 )
+                if (earlyScreenQueryDispatchedTurnId == activeTurnId && earlyScreenQuestionText.isNotBlank()) {
+                    val reconciliation = com.myra.assistant.screen.EarlyScreenQuestionPolicy.reconcile(
+                        earlyScreenQuestionText, userText
+                    )
+                    voiceLog(
+                        "screen_query_reconciled userTurnId=$activeTurnId result=$reconciliation " +
+                            "visualTurnId=${fastVisualTurns.current()?.id.orEmpty()}"
+                    )
+                    if (reconciliation == com.myra.assistant.screen.ScreenQuestionReconciliation.MATERIAL_CHANGE) {
+                        fastVisualTurns.cancel()
+                        live?.interrupt()
+                        suppressModelForTurn = true
+                        output.clear()
+                        resetTurnBuffers("early_screen_query_material_change")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
+                }
                 if (incompleteActionFragmentTurn &&
                     CommandParser.isLikelyIncompleteActionFragment(userText)
                 ) {
@@ -1172,7 +1207,9 @@ class MyraVoiceService : Service() {
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
-                if (turnDecision.intent == TurnIntent.MULTI_STEP_GOAL && executeUnifiedBrowserSearch(userText)) {
+                if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
+                    executeUnifiedBrowserSearch(userText)
+                ) {
                     resetTurnBuffers("unified_browser_search")
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
@@ -2360,10 +2397,17 @@ class MyraVoiceService : Service() {
             "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt userTurnId=$userTurnId source=$source " +
                 "speechEndAt=$speechActivityEndedAt finalTranscriptAt=0 stableFinalBubbleCommitted=false"
         )
-        // ASR chunks and local VAD are independent streams. If the decisive words land
-        // just after VAD ended, dispatch now instead of waiting for a second VAD edge.
-        if (speechActivityEndedAt >= inputTurnStartedAt && speechActivityEndedAt > 0L) {
-            mainHandler.post { dispatchArmedScreenQuestionAtSpeechEnd() }
+        // ASR chunks and local VAD are independent streams. The stable read-only screen
+        // question often arrives after VAD has already ended, so it must not wait for a
+        // second speech edge or Gemini's delayed final transcript.
+        if (com.myra.assistant.screen.EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd(
+                question, ordinaryModelAudioGate.isSpeechActive()
+            ) && speechActivityEndedAt > 0L
+        ) {
+            mainHandler.postDelayed(
+                { dispatchArmedScreenQuestionAtSpeechEnd() },
+                com.myra.assistant.screen.EarlyScreenQuestionPolicy.STABILIZATION_MS
+            )
         }
     }
 
@@ -2383,12 +2427,19 @@ class MyraVoiceService : Service() {
             armedScreenQuestionFinalCommitted = false
             return
         }
+        val stabilizationRemaining = com.myra.assistant.screen.EarlyScreenQuestionPolicy.STABILIZATION_MS -
+            (now - armedScreenQuestionDetectedAt)
+        if (stabilizationRemaining > 0L) {
+            mainHandler.postDelayed({ dispatchArmedScreenQuestionAtSpeechEnd() }, stabilizationRemaining)
+            return
+        }
         voiceLog(
             "screen_query_early_dispatch userTurnId=$turnId speech_end_at=$speechActivityEndedAt " +
                 "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt speechEndToIntentMs=${(armedScreenQuestionDetectedAt - speechActivityEndedAt).coerceAtLeast(0L)} " +
                 "intentToDispatchMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
         )
         earlyScreenQueryAwaitingFinalTranscript = !armedScreenQuestionFinalCommitted
+        earlyScreenQuestionText = question
         earlyScreenQueryDispatchedTurnId = turnId
         beginFreshScreenQuery(question, turnId)
         armedScreenQuestion = ""
@@ -3192,15 +3243,6 @@ class MyraVoiceService : Service() {
                 "foregroundPackage=${freshForeground?.packageName} resolvedDestination=${resolution.destination} " +
                 "resolutionReason=${resolution.reason} selectedExecutor=${resolution.selectedExecutor}"
         )
-        if (resolution.destination == SearchDestination.YOUTUBE) {
-            voiceLog(
-                "search_execution_started turnId=$activeTurnId destination=YOUTUBE " +
-                    "reason=${resolution.reason} executor=YOUTUBE"
-            )
-            executeCommand(AppCommand.SearchYouTube(request.query))
-            voiceLog("search_execution_completed turnId=$activeTurnId destination=YOUTUBE dispatched=$localCommandExecutedThisTurn")
-            return true
-        }
         if (!screenCommandTurnGuard.tryCommit(activeTurnId)) return true
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
@@ -3208,11 +3250,50 @@ class MyraVoiceService : Service() {
         val startedAt = android.os.SystemClock.elapsedRealtime()
         latestActionDispatchedAt = startedAt
         val taskTurnId = activeTurnId
-        val dispatch = BrowserSearchTool(this).execute(request, resolution)
-        voiceLog(
-            "search_execution_started turnId=$activeTurnId destination=BROWSER " +
-                "reason=${resolution.reason} executor=${resolution.selectedExecutor}"
+        val executorName = if (resolution.destination == SearchDestination.YOUTUBE) {
+            "YOUTUBE"
+        } else resolution.selectedExecutor?.name ?: "GENERIC_WEB"
+        WorkingTaskRuntime.store.beginSearch(
+            request.query, resolution.destination, executorName, "search_results_visible"
         )
+        responseArbiter.claimControlled(taskTurnId)
+        voiceLog(
+            "task_result_owner turnId=$taskTurnId owner=CONTROLLED_AGENT taskId=${WorkingTaskRuntime.store.snapshot().taskId} " +
+                "destination=${resolution.destination}"
+        )
+        voiceLog(
+            "search_execution_started turnId=$taskTurnId destination=${resolution.destination} " +
+                "reason=${resolution.reason} executor=$executorName"
+        )
+        if (resolution.destination == SearchDestination.YOUTUBE) {
+            val result = assistantController.processCommand(
+                StructuredCommandParser.fromLegacy(
+                    AppCommand.SearchYouTube(request.query),
+                    AppCommand.SearchYouTube(request.query).toString()
+                ),
+                speak = false,
+                notifyListeners = false
+            )
+            if (!result.success) {
+                finishSearchTaskResult(taskTurnId, SearchVerification.FAILURE, "youtube_search_dispatch_failed")
+                return true
+            }
+            mainHandler.postDelayed({
+                val service = AccessibilityHelperService.instance
+                service?.refreshScreenContext(force = true)
+                val foreground = service?.currentForegroundContext()
+                val verification = if (foreground?.packageName == "com.google.android.youtube") {
+                    SearchVerification.SUCCESS
+                } else SearchVerification.UNKNOWN
+                finishSearchTaskResult(taskTurnId, verification, "youtube_search_foreground=${foreground?.packageName}")
+            }, 900L)
+            return true
+        }
+        voiceLog(
+            "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
+                "tool=browser_search phase=starting queryLength=${request.query.length}"
+        )
+        val dispatch = BrowserSearchTool(this).execute(request, resolution)
         voiceLog(
             "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
                 "tool=browser_search accepted=${dispatch.accepted} expectedPackage=${dispatch.expectedPackage} " +
@@ -3221,44 +3302,62 @@ class MyraVoiceService : Service() {
         )
         if (!dispatch.accepted) {
             voiceLog("search_execution_failed turnId=$activeTurnId destination=BROWSER reason=${dispatch.reason}")
-            WorkingTaskRuntime.store.recordOutcome(dispatch.reason, false)
-            val message = "Browser search start nahi ho paayi."
-            listener?.onMyraText(message, true)
-            queueLocalSpeech(message, allowUntranscribedAudio = false)
+            finishSearchTaskResult(taskTurnId, SearchVerification.FAILURE, dispatch.reason)
             return true
         }
         mainHandler.postDelayed({
             val accessibility = AccessibilityHelperService.instance
             accessibility?.refreshScreenContext(force = true)
             val foreground = accessibility?.currentForegroundContext()
-            val packageMatches = dispatch.expectedPackage == null || foreground?.packageName == dispatch.expectedPackage
-            val verified = foreground != null && packageMatches
+            voiceLog("task_verification_started turnId=$taskTurnId taskId=${WorkingTaskRuntime.store.snapshot().taskId} tool=browser_search")
+            val verification = BrowserSearchVerificationPolicy.verify(
+                request, resolution, foreground?.packageName,
+                accessibility?.visibleElements(100)?.map { it.label }.orEmpty()
+            )
             voiceLog(
                 "search_execution_completed turnId=$taskTurnId destination=BROWSER " +
-                    "accepted=true verified=$verified package=${foreground?.packageName}"
+                    "accepted=true verification=$verification package=${foreground?.packageName}"
             )
-            WorkingTaskRuntime.store.recordOutcome(
-                if (verified) "browser_results_visible" else "browser_results_not_verified", verified
-            )
-            voiceLog(
-                "agent_verification taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
-                    "tool=browser_search verified=$verified package=${foreground?.packageName}"
-            )
-            if (!verified) {
+            finishSearchTaskResult(taskTurnId, verification, "browser_search_package=${foreground?.packageName}")
+        }, 900L)
+        return true
+    }
+
+    private fun finishSearchTaskResult(turnId: Long, verification: SearchVerification, observed: String) {
+        val completion = when (verification) {
+            SearchVerification.SUCCESS -> TaskCompletionState.SUCCESS
+            SearchVerification.FAILURE -> TaskCompletionState.FAILURE
+            SearchVerification.UNKNOWN -> TaskCompletionState.UNKNOWN
+        }
+        WorkingTaskRuntime.store.completeSearch(observed, completion)
+        val task = WorkingTaskRuntime.store.snapshot()
+        brain.recordPhoneAction(task.activeExternalApp, "search:${task.resolvedDestination}:${task.searchQuery}", verification == SearchVerification.SUCCESS)
+        voiceLog(
+            "task_verification_completed turnId=$turnId taskId=${task.taskId} verification=$verification " +
+                "destination=${task.resolvedDestination} observed=$observed"
+        )
+        responseArbiter.controlledGenerationComplete()
+        responseArbiter.controlledPlaybackComplete()
+        responseArbiter.releaseIfComplete()
+        when (verification) {
+            SearchVerification.SUCCESS -> {
+                emitState("Sun rahi hoon…")
+                voiceLog("task_result_spoken turnId=$turnId spoken=false result=SUCCESS")
+            }
+            SearchVerification.UNKNOWN -> {
                 val message = "Search open hui, lekin results verify nahi hue."
                 listener?.onMyraText(message, true)
                 queueLocalSpeech(message, allowUntranscribedAudio = false)
-            } else if (visualAwarenessPreferences.enabled) {
-                // Continue the same goal: inspect the newly visible results through the
-                // existing one-owner fresh visual path rather than a second legacy brain.
-                beginFreshScreenQuery(
-                    "Current search results ko inspect karke recent aur relevant answer do: ${request.query}",
-                    taskTurnId,
-                    FastVisualRequest(FastVisualKind.QUESTION, "browser_search_results")
-                )
+                voiceLog("task_result_spoken turnId=$turnId spoken=true result=UNKNOWN destination=${task.resolvedDestination}")
             }
-        }, 900L)
-        return true
+            SearchVerification.FAILURE -> {
+                val destination = if (task.resolvedDestination == SearchDestination.YOUTUBE) "YouTube" else "Browser"
+                val message = "$destination search start nahi ho paayi."
+                listener?.onMyraText(message, true)
+                queueLocalSpeech(message, allowUntranscribedAudio = false)
+                voiceLog("task_result_spoken turnId=$turnId spoken=true result=FAILURE destination=${task.resolvedDestination}")
+            }
+        }
     }
 
     private fun executeUnifiedReferenceIfApplicable(raw: String): Boolean {
@@ -4208,6 +4307,7 @@ class MyraVoiceService : Service() {
             armedScreenQuestionTurnId = 0L
             armedScreenQuestionDetectedAt = 0L
             armedScreenQuestionFinalCommitted = false
+            earlyScreenQuestionText = ""
             earlyScreenQueryAwaitingFinalTranscript = false
             earlyScreenQueryDispatchedTurnId = 0L
         }

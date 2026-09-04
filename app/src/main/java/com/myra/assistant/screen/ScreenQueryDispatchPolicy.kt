@@ -12,3 +12,20 @@ object ArmedScreenQuestionPolicy {
     fun isFresh(detectedAt: Long, now: Long, maxAgeMs: Long = MAX_AGE_MS): Boolean =
         detectedAt > 0L && now >= detectedAt && now - detectedAt <= maxAgeMs
 }
+
+enum class ScreenQuestionReconciliation { MATCH, MATERIAL_CHANGE }
+
+object EarlyScreenQuestionPolicy {
+    const val STABILIZATION_MS = 180L
+
+    fun mayAuthorizeAtSpeechEnd(text: String, speechActive: Boolean): Boolean =
+        !speechActive && FastVisualRequestClassifier.classify(text)?.kind == FastVisualKind.QUESTION
+
+    fun reconcile(partial: String, finalText: String): ScreenQuestionReconciliation {
+        val partialKind = FastVisualRequestClassifier.classify(partial)?.kind
+        val finalKind = FastVisualRequestClassifier.classify(finalText)?.kind
+        return if (partialKind == FastVisualKind.QUESTION && finalKind == FastVisualKind.QUESTION) {
+            ScreenQuestionReconciliation.MATCH
+        } else ScreenQuestionReconciliation.MATERIAL_CHANGE
+    }
+}

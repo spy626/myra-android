@@ -90,7 +90,8 @@ object BrowserSearchRequestParser {
             return cleanQuery(value)?.let { BrowserSearchRequest(it, destination) }
         }
         val generic = listOf(
-            Regex("^(?:please )?(?:search|find|dhundo|dhoondo|khojo|सर्च|ढूंढो|खोजो)(?: karo| kar do| करो| कर दो)? (.+)$", RegexOption.IGNORE_CASE),
+            Regex("^(?:please )?(?:search|find)(?: for)? (.+)$", RegexOption.IGNORE_CASE),
+            Regex("^(?:please )?(?:dhundo|dhoondo|khojo|सर्च|ढूंढो|खोजो)(?: karo| kar do| करो| कर दो)? (.+)$", RegexOption.IGNORE_CASE),
             Regex("^(.+?) (?:search|find|dhundo|dhoondo|khojo|सर्च|ढूंढो|खोजो)(?: karo| kar do| करो| कर दो)$", RegexOption.IGNORE_CASE)
         ).firstNotNullOfOrNull { it.matchEntire(normalized)?.groupValues?.get(1) }
         return cleanQuery(generic)?.let(::BrowserSearchRequest)
@@ -101,6 +102,30 @@ object BrowserSearchRequestParser {
 }
 
 data class BrowserSearchDispatch(val accepted: Boolean, val expectedPackage: String?, val reason: String)
+
+enum class SearchVerification { SUCCESS, UNKNOWN, FAILURE }
+
+object BrowserSearchVerificationPolicy {
+    fun verify(
+        request: BrowserSearchRequest,
+        resolution: SearchResolution,
+        foregroundPackage: String?,
+        visibleLabels: List<String>
+    ): SearchVerification {
+        if (foregroundPackage == null) return SearchVerification.UNKNOWN
+        if (resolution.targetPackage != null && foregroundPackage != resolution.targetPackage) {
+            return SearchVerification.UNKNOWN
+        }
+        if (!SearchDestinationResolver.isCompatibleBrowser(foregroundPackage)) return SearchVerification.UNKNOWN
+        val visible = visibleLabels.joinToString(" ").lowercase(Locale.ROOT)
+        val meaningfulQueryTokens = request.query.lowercase(Locale.ROOT)
+            .split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
+            .filter { it.length >= 2 }
+        return if (meaningfulQueryTokens.isNotEmpty() && meaningfulQueryTokens.any(visible::contains)) {
+            SearchVerification.SUCCESS
+        } else SearchVerification.UNKNOWN
+    }
+}
 
 /** General browser capability. It opens a standards-based search URL; observation and result
  * interpretation remain separate plan steps owned by UnifiedLyraAgent. */

@@ -63,6 +63,9 @@ import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.Locale
 import com.myra.assistant.screen.VisualCaptureCompletionGate
+import com.myra.assistant.screen.VisualScreenshotTimeoutPolicy
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 data class VisibleTargetTapResult(
     val accepted: Boolean,
@@ -101,6 +104,9 @@ class AccessibilityHelperService : AccessibilityService() {
     private var foregroundWindowId: Int? = null
     private var foregroundGeneration: Long = 0L
     private val screenWatcherHandler = Handler(Looper.getMainLooper())
+    private val visualTimeoutExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "lyra-visual-timeout").apply { isDaemon = true }
+    }
     private val screenWatcher = object : Runnable {
         override fun run() {
             // Accessibility context is the normal always-lightweight observation path.
@@ -139,6 +145,7 @@ class AccessibilityHelperService : AccessibilityService() {
     override fun onInterrupt() = Unit
     override fun onDestroy() {
         screenWatcherHandler.removeCallbacks(screenWatcher)
+        visualTimeoutExecutor.shutdownNow()
         AccessibilityVisualCache.invalidate()
         hideScreenVisionOverlay()
         if (instance === this) instance = null
@@ -300,8 +307,8 @@ class AccessibilityHelperService : AccessibilityService() {
     /** Select exactly one context-bound screenshot for a visual turn. */
     fun requestFreshVisualScreenshot(
         maxAgeMs: Long,
-        timeoutMs: Long = 1_200L,
-        fallbackMaxAgeMs: Long = 2_500L,
+        timeoutMs: Long = VisualScreenshotTimeoutPolicy.TIMEOUT_MS,
+        fallbackMaxAgeMs: Long = VisualScreenshotTimeoutPolicy.SAFE_FALLBACK_MAX_AGE_MS,
         callback: (Result<VisualScreenshotSelection>) -> Unit
     ): Boolean {
         val current = currentForegroundContext() ?: return false
@@ -337,19 +344,19 @@ class AccessibilityHelperService : AccessibilityService() {
                 callback(Result.failure(IllegalStateException("accessibility_screenshot_timeout")))
             }
         }
-        screenWatcherHandler.postDelayed(timeout, timeoutMs)
+        val timeoutFuture = visualTimeoutExecutor.schedule(timeout, timeoutMs, TimeUnit.MILLISECONDS)
         val started = requestVisualScreenshot { result ->
             val callbackAt = android.os.SystemClock.elapsedRealtime()
             if (!completionGate.tryComplete()) {
                 VoicePipelineLogger.debug("screenshot_callback_received elapsedMs=${callbackAt - requestedAt} accepted=false reason=late_after_timeout")
                 return@requestVisualScreenshot
             }
-            screenWatcherHandler.removeCallbacks(timeout)
+            timeoutFuture.cancel(false)
             VoicePipelineLogger.debug("screenshot_callback_received elapsedMs=${callbackAt - requestedAt} accepted=true success=${result.isSuccess}")
             callback(result.map { VisualScreenshotSelection(it, VisualFrameSource.ACCESSIBILITY_FRESH) })
         }
         if (!started && completionGate.tryComplete()) {
-            screenWatcherHandler.removeCallbacks(timeout)
+            timeoutFuture.cancel(false)
             VoicePipelineLogger.debug("screenshot_failure_reason reason=request_not_started")
             callback(Result.failure(IllegalStateException("accessibility_screenshot_not_started")))
         }

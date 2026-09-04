@@ -49,6 +49,7 @@ class FastVisualTurnTest {
     }
 
     @Test fun screenshotRequestCompletesExactlyOnceAndRejectsLateCallback() {
+        assertEquals(1_200L, VisualScreenshotTimeoutPolicy.TIMEOUT_MS)
         val gate = VisualCaptureCompletionGate()
         assertTrue(gate.tryComplete())
         assertFalse(gate.tryComplete())
@@ -65,5 +66,22 @@ class FastVisualTurnTest {
         assertTrue(ArmedScreenQuestionPolicy.isFresh(1_000, 3_500))
         assertFalse(ArmedScreenQuestionPolicy.isFresh(1_000, 3_501))
         assertFalse(ArmedScreenQuestionPolicy.isFresh(0, 1_000))
+    }
+
+    @Test fun stableReadOnlyScreenQuestionCanAuthorizeAtLocalSpeechEnd() {
+        assertTrue(EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd("What do you see?", speechActive = false))
+        assertFalse(EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd("click this button", speechActive = false))
+        assertFalse(EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd("What do you see?", speechActive = true))
+    }
+
+    @Test fun matchingFinalTranscriptReusesEarlyVisualTurnButChangedActionCancels() {
+        assertEquals(
+            ScreenQuestionReconciliation.MATCH,
+            EarlyScreenQuestionPolicy.reconcile("What do you see?", "What do you see on screen?")
+        )
+        assertEquals(
+            ScreenQuestionReconciliation.MATERIAL_CHANGE,
+            EarlyScreenQuestionPolicy.reconcile("What do you see?", "click the second item")
+        )
     }
 }

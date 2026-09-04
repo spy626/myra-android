@@ -49,6 +49,11 @@ class VisualCaptureCompletionGate {
     fun tryComplete(): Boolean = completed.compareAndSet(false, true)
 }
 
+object VisualScreenshotTimeoutPolicy {
+    const val TIMEOUT_MS = 1_200L
+    const val SAFE_FALLBACK_MAX_AGE_MS = 2_500L
+}
+
 /** In-memory only. Raw screenshots never enter Room or long-term memory. */
 object AccessibilityVisualCache {
     private data class Entry(

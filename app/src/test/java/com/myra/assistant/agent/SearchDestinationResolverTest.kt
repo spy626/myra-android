@@ -68,4 +68,40 @@ class SearchDestinationResolverTest {
         assertFalse(SearchExecutionPolicy.mayExecute(authoritativeFinalTranscript = false))
         assertEquals(true, SearchExecutionPolicy.mayExecute(authoritativeFinalTranscript = true))
     }
+
+    @Test fun search_for_query_is_owned_by_contextual_search_not_legacy_youtube() {
+        val request = BrowserSearchRequestParser.parse("Search for new AI")!!
+        assertEquals("new AI", request.query)
+        val decision = UnifiedTurnInterpreter.interpret("Search for new AI", null)
+        assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)
+        val resolution = SearchDestinationResolver.resolveDetailed(request, "com.android.chrome", null)
+        assertEquals(SearchDestination.BROWSER, resolution.destination)
+        assertEquals(BrowserSearchExecutor.CURRENT_BROWSER, resolution.selectedExecutor)
+    }
+
+    @Test fun browser_results_with_query_are_verified_success_not_model_opinion() {
+        val request = BrowserSearchRequest("new AI")
+        val resolution = SearchDestinationResolver.resolveDetailed(request, "com.android.chrome", null)
+        assertEquals(
+            SearchVerification.SUCCESS,
+            BrowserSearchVerificationPolicy.verify(
+                request, resolution, "com.android.chrome", listOf("new AI - Google Search", "Results")
+            )
+        )
+        assertEquals(
+            SearchVerification.UNKNOWN,
+            BrowserSearchVerificationPolicy.verify(request, resolution, "com.google.android.youtube", listOf("new AI"))
+        )
+    }
+
+    @Test fun working_search_task_records_authoritative_verified_outcome() {
+        var time = 10L
+        val store = WorkingTaskContextStore { time++ }
+        store.beginSearch("new AI", SearchDestination.BROWSER, "CURRENT_BROWSER", "search_results_visible")
+        assertEquals(TaskCompletionState.EXECUTING, store.snapshot().completionState)
+        store.completeSearch("browser_results_visible", TaskCompletionState.SUCCESS)
+        assertEquals(true, store.snapshot().lastVerifiedSuccess)
+        assertEquals(TaskCompletionState.SUCCESS, store.snapshot().completionState)
+        assertEquals(SearchDestination.BROWSER, store.snapshot().resolvedDestination)
+    }
 }

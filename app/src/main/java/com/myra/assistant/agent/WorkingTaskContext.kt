@@ -14,8 +14,15 @@ data class WorkingTaskContext(
     val unresolvedReference: String? = null,
     val rejectedTargets: Set<String> = emptySet(),
     val recoveryCount: Int = 0,
+    val searchQuery: String? = null,
+    val resolvedDestination: SearchDestination? = null,
+    val selectedExecutor: String? = null,
+    val actionStartedAt: Long = 0,
+    val completionState: TaskCompletionState? = null,
     val updatedAt: Long = 0
 )
+
+enum class TaskCompletionState { EXECUTING, SUCCESS, FAILURE, UNKNOWN }
 
 class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeMillis) {
     @Volatile private var value = WorkingTaskContext()
@@ -40,6 +47,28 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
             lastObservedOutcome = observed, lastVerifiedSuccess = verified,
             rejectedTargets = rejectedTarget?.let { value.rejectedTargets + it } ?: value.rejectedTargets,
             recoveryCount = if (verified) 0 else value.recoveryCount + 1, updatedAt = now()
+        )
+    }
+
+    @Synchronized fun beginSearch(query: String, destination: SearchDestination, executor: String, expected: String) {
+        value = value.copy(
+            searchQuery = query, resolvedDestination = destination, selectedExecutor = executor,
+            actionStartedAt = now(), expectedOutcome = expected, lastObservedOutcome = null,
+            lastVerifiedSuccess = null, completionState = TaskCompletionState.EXECUTING, updatedAt = now()
+        )
+    }
+
+    @Synchronized fun completeSearch(observed: String, state: TaskCompletionState) {
+        value = value.copy(
+            lastObservedOutcome = observed,
+            lastVerifiedSuccess = when (state) {
+                TaskCompletionState.SUCCESS -> true
+                TaskCompletionState.FAILURE -> false
+                else -> null
+            },
+            completionState = state,
+            recoveryCount = if (state == TaskCompletionState.FAILURE) value.recoveryCount + 1 else 0,
+            updatedAt = now()
         )
     }
 
