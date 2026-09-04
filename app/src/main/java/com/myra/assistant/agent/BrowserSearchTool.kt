@@ -23,6 +23,12 @@ data class BrowserSearchRequest(
     val explicitDestination: SearchDestination? = null
 )
 
+/** Search is destination-sensitive, so streamed/partial transcripts may only
+ * nominate it as a candidate. Execution is authorized at the final turn. */
+object SearchExecutionPolicy {
+    fun mayExecute(authoritativeFinalTranscript: Boolean): Boolean = authoritativeFinalTranscript
+}
+
 object SearchDestinationResolver {
     private val browserPackages = setOf(
         "com.android.chrome",

@@ -87,6 +87,7 @@ import com.myra.assistant.agent.TurnIntent
 import com.myra.assistant.agent.WorkingTaskRuntime
 import com.myra.assistant.agent.BrowserSearchRequestParser
 import com.myra.assistant.agent.BrowserSearchTool
+import com.myra.assistant.agent.SearchExecutionPolicy
 import com.myra.assistant.agent.SearchDestination
 import com.myra.assistant.agent.SearchDestinationResolver
 import com.myra.assistant.screen.FreshFrameResult
@@ -285,6 +286,7 @@ class MyraVoiceService : Service() {
     private var armedScreenQuestion = ""
     private var armedScreenQuestionTurnId = 0L
     private var armedScreenQuestionDetectedAt = 0L
+    private var armedScreenQuestionFinalCommitted = false
     private var earlyScreenQueryAwaitingFinalTranscript = false
     private var earlyScreenQueryDispatchedTurnId = 0L
     private var pendingCanonicalRename: kotlinx.coroutines.Job? = null
@@ -1203,6 +1205,12 @@ class MyraVoiceService : Service() {
                     }
                 if (fastVisualRequest != null &&
                     (turnDecision.intent == TurnIntent.SCREEN_QUESTION || turnDecision.authorizesPhoneActions)) {
+                    if (turnDecision.intent == TurnIntent.SCREEN_QUESTION && ordinaryModelAudioGate.isSpeechActive()) {
+                        armScreenQuestion(userText, activeTurnId, "FINAL_SCREEN_QUERY_WAITING_FOR_SPEECH_END", true)
+                        suppressModelForTurn = true
+                        output.clear()
+                        return@turnComplete
+                    }
                     if (ScreenQueryDispatchPolicy.shouldDispatch(
                             screenResponseActive, earlyScreenQueryDispatchedTurnId, activeTurnId
                         )) {
@@ -1821,10 +1829,23 @@ class MyraVoiceService : Service() {
         }
         val target = args.optString("target").trim()
         val query = args.optString("query").trim()
+        if (action == "YOUTUBE_SEARCH" && !SearchExecutionPolicy.mayExecute(authoritativeFinalTranscript = false)) {
+            // Search destination is authorized only from the complete final transcript.
+            // A speculative Live tool call may arrive while ASR is still partial and must
+            // never choose YouTube before SearchDestinationResolver sees current context.
+            voiceLog(
+                "search_execution_failed turnId=$activeTurnId reason=model_tool_before_final_authorization " +
+                    "candidate=YOUTUBE_SEARCH queryLength=${query.length}"
+            )
+            live?.sendToolResponse(
+                id, functionName, false,
+                "Search waits for the final authoritative transcript and contextual destination resolution"
+            )
+            return
+        }
         val command: AppCommand? = when (action) {
             "OPEN_APP" -> target.takeIf { it.length in 2..40 }?.let(AppCommand::OpenApp)
             "CLOSE_APP" -> AppCommand.CloseCurrentApp(target.ifBlank { null })
-            "YOUTUBE_SEARCH" -> query.takeIf { it.length in 2..80 }?.let(AppCommand::SearchYouTube)
             "PLAY_YOUTUBE" -> AppCommand.PlayYouTube(query.ifBlank { null })
             "OPEN_YOUTUBE_SHORTS" -> AppCommand.OpenYouTubeShorts
             "REQUEST_INSTAGRAM_REELS" -> AppCommand.RequestInstagramReels
@@ -2167,13 +2188,21 @@ class MyraVoiceService : Service() {
         val foreground = accessibility.currentForegroundContext() ?: return false
         val requestedAt = android.os.SystemClock.elapsedRealtime()
         val queryId = "a11y-$userTurnId-${requestedAt.toString(16)}"
-        fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.frameRequestedAt = requestedAt
-        voiceLog("visualFrameRequested visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId at=$requestedAt")
+        val visualTurnId = fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.id
+        fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameRequestedAt = requestedAt
+        voiceLog("visualFrameRequested visualTurnId=${visualTurnId.orEmpty()} screenQueryId=$queryId at=$requestedAt")
         val accepted = accessibility.requestFreshVisualScreenshot(ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS) { result ->
             mainHandler.post {
+                if (visualTurnId == null || !fastVisualTurns.owns(visualTurnId)) {
+                    voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=${visualTurnId.orEmpty()} reason=visual_turn_replaced")
+                    return@post
+                }
                 val selection = result.getOrNull()
                 if (selection == null) {
-                    voiceLog("agent_observation package=${foreground.packageName} screenshotUsed=false reason=accessibility_screenshot_failed")
+                    val reason = result.exceptionOrNull()?.message ?: "accessibility_screenshot_failed"
+                    voiceLog("screenshot_failure_reason screenQueryId=$queryId reason=$reason")
+                    voiceLog("agent_observation package=${foreground.packageName} screenshotUsed=false reason=$reason")
+                    fastVisualTurns.finish(visualTurnId)
                     speakScreenUnavailable("Current screen image nahi mili.")
                     return@post
                 }
@@ -2183,19 +2212,20 @@ class MyraVoiceService : Service() {
                     current.windowId != screenshot.windowId || current.generation != screenshot.generation
                 ) {
                     voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId reason=accessibility_context_changed")
+                    fastVisualTurns.finish(visualTurnId)
                     return@post
                 }
                 val frameReadyAt = android.os.SystemClock.elapsedRealtime()
-                fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.frameReadyAt = frameReadyAt
+                fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameReadyAt = frameReadyAt
                 voiceLog(
-                    "visual_frame_ready visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId " +
+                    "visual_frame_ready visualTurnId=$visualTurnId screenQueryId=$queryId " +
                         "visualFrameSource=${selection.source} selectionReason=${if (selection.source == com.myra.assistant.screen.VisualFrameSource.ACCESSIBILITY_CACHE) "fresh_matching_cache" else "cache_stale_or_changed"} " +
                         "frameAgeMs=${(frameReadyAt - screenshot.capturedAt).coerceAtLeast(0L)} " +
                         "visualFrameAcquisitionMs=${(frameReadyAt - requestedAt).coerceAtLeast(0L)} " +
                         "speechEndToFrameReadyMs=${if (screenResponseSpeechEndedAt > 0L) frameReadyAt - screenResponseSpeechEndedAt else -1L}"
                 )
                 voiceLog(
-                    "visualFrameAvailable visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId " +
+                    "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId " +
                         "at=$frameReadyAt visualFrameSource=${selection.source}"
                 )
                 val elements = accessibility.visibleElements(100)
@@ -2205,6 +2235,7 @@ class MyraVoiceService : Service() {
                 )
                 if (privacyResult is ScreenPrivacyResult.Blocked) {
                     voiceLog("screen_query_terminal screenQueryId=$queryId state=REJECTED_PRIVACY source=ACCESSIBILITY_SCREENSHOT")
+                    fastVisualTurns.finish(visualTurnId)
                     speakScreenPrivacyBlocked()
                     return@post
                 }
@@ -2225,7 +2256,7 @@ class MyraVoiceService : Service() {
                 screenResponseAccessibilityGeneration = current.generation
                 screenFreshFrameCapturedAt = screenshot.capturedAt
                 screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
-                fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.modelRequestAt = screenFrameSentAt
+                fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.modelRequestAt = screenFrameSentAt
                 val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
                     .joinToString("\n") { "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]" }
                     .take(12_000)
@@ -2238,11 +2269,11 @@ class MyraVoiceService : Service() {
                         "captureMs=${screenFrameSentAt - requestedAt} bytes=${allowed.bytes.size}"
                 )
                 voiceLog(
-                    "visual_model_request_sent visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId " +
+                    "visual_model_request_sent visualTurnId=$visualTurnId screenQueryId=$queryId " +
                         "frameReadyToModelRequestMs=${(screenFrameSentAt - frameReadyAt).coerceAtLeast(0L)}"
                 )
-                voiceLog("visualModelRequestSent visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId at=$screenFrameSentAt")
-                voiceLog("ttsRequestSent visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId at=$screenFrameSentAt owner=CONTROLLED_SCREEN")
+                voiceLog("visualModelRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt")
+                voiceLog("ttsRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt owner=CONTROLLED_SCREEN")
                 val visualInstruction = if (visualRequest.kind == FastVisualKind.ACTION) {
                     "This is a visual action. Identify exactly one safe current-screen target. " +
                         "Call perform_screen_action with its semantic label or position. Do not answer conversationally or claim success."
@@ -2314,12 +2345,17 @@ class MyraVoiceService : Service() {
         return true
     }
 
-    private fun armScreenQuestion(question: String, userTurnId: Long, source: String) {
+    private fun armScreenQuestion(
+        question: String,
+        userTurnId: Long,
+        source: String,
+        finalTranscriptCommitted: Boolean = false
+    ) {
         if (question.isBlank() || userTurnId == 0L) return
-        if (armedScreenQuestionTurnId == userTurnId && armedScreenQuestion.isNotBlank()) return
         armedScreenQuestion = question
         armedScreenQuestionTurnId = userTurnId
         armedScreenQuestionDetectedAt = android.os.SystemClock.elapsedRealtime()
+        armedScreenQuestionFinalCommitted = finalTranscriptCommitted
         voiceLog(
             "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt userTurnId=$userTurnId source=$source " +
                 "speechEndAt=$speechActivityEndedAt finalTranscriptAt=0 stableFinalBubbleCommitted=false"
@@ -2336,15 +2372,29 @@ class MyraVoiceService : Service() {
         val turnId = armedScreenQuestionTurnId.takeIf { it != 0L } ?: return
         if (screenResponseActive) return
         val now = android.os.SystemClock.elapsedRealtime()
+        if (!com.myra.assistant.screen.ArmedScreenQuestionPolicy.isFresh(armedScreenQuestionDetectedAt, now)) {
+            voiceLog(
+                "screen_query_armed_cancelled userTurnId=$turnId reason=stale_arm " +
+                    "ageMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
+            )
+            armedScreenQuestion = ""
+            armedScreenQuestionTurnId = 0L
+            armedScreenQuestionDetectedAt = 0L
+            armedScreenQuestionFinalCommitted = false
+            return
+        }
         voiceLog(
             "screen_query_early_dispatch userTurnId=$turnId speech_end_at=$speechActivityEndedAt " +
                 "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt speechEndToIntentMs=${(armedScreenQuestionDetectedAt - speechActivityEndedAt).coerceAtLeast(0L)} " +
                 "intentToDispatchMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
         )
-        earlyScreenQueryAwaitingFinalTranscript = true
+        earlyScreenQueryAwaitingFinalTranscript = !armedScreenQuestionFinalCommitted
         earlyScreenQueryDispatchedTurnId = turnId
         beginFreshScreenQuery(question, turnId)
         armedScreenQuestion = ""
+        armedScreenQuestionTurnId = 0L
+        armedScreenQuestionDetectedAt = 0L
+        armedScreenQuestionFinalCommitted = false
     }
 
     private fun speakScreenUnavailable(message: String) {
@@ -2546,7 +2596,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun isSafeDirectMediaCommand(command: AppCommand): Boolean = when (command) {
-        is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
+        is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
         AppCommand.OpenInstagramReels, AppCommand.TakeScreenshot, AppCommand.RepeatYouTubeSearch,
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
@@ -3137,13 +3187,18 @@ class MyraVoiceService : Service() {
             working.activeExternalApp
         )
         voiceLog(
-            "search_intent_resolved turnId=$activeTurnId queryLength=${request.query.length} " +
+            "search_intent_resolved turnId=$activeTurnId finalTranscript=${raw.take(160)} query=${request.query.take(120)} " +
                 "explicitDestination=${request.explicitDestination} workingContextDestination=${working.activeExternalApp} " +
                 "foregroundPackage=${freshForeground?.packageName} resolvedDestination=${resolution.destination} " +
                 "resolutionReason=${resolution.reason} selectedExecutor=${resolution.selectedExecutor}"
         )
         if (resolution.destination == SearchDestination.YOUTUBE) {
+            voiceLog(
+                "search_execution_started turnId=$activeTurnId destination=YOUTUBE " +
+                    "reason=${resolution.reason} executor=YOUTUBE"
+            )
             executeCommand(AppCommand.SearchYouTube(request.query))
+            voiceLog("search_execution_completed turnId=$activeTurnId destination=YOUTUBE dispatched=$localCommandExecutedThisTurn")
             return true
         }
         if (!screenCommandTurnGuard.tryCommit(activeTurnId)) return true
@@ -3155,12 +3210,17 @@ class MyraVoiceService : Service() {
         val taskTurnId = activeTurnId
         val dispatch = BrowserSearchTool(this).execute(request, resolution)
         voiceLog(
+            "search_execution_started turnId=$activeTurnId destination=BROWSER " +
+                "reason=${resolution.reason} executor=${resolution.selectedExecutor}"
+        )
+        voiceLog(
             "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
                 "tool=browser_search accepted=${dispatch.accepted} expectedPackage=${dispatch.expectedPackage} " +
                 "queryLength=${request.query.length} dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt} " +
                 "intentToActionMs=${if (latestIntentDecidedAt > 0L) startedAt - latestIntentDecidedAt else -1L}"
         )
         if (!dispatch.accepted) {
+            voiceLog("search_execution_failed turnId=$activeTurnId destination=BROWSER reason=${dispatch.reason}")
             WorkingTaskRuntime.store.recordOutcome(dispatch.reason, false)
             val message = "Browser search start nahi ho paayi."
             listener?.onMyraText(message, true)
@@ -3173,6 +3233,10 @@ class MyraVoiceService : Service() {
             val foreground = accessibility?.currentForegroundContext()
             val packageMatches = dispatch.expectedPackage == null || foreground?.packageName == dispatch.expectedPackage
             val verified = foreground != null && packageMatches
+            voiceLog(
+                "search_execution_completed turnId=$taskTurnId destination=BROWSER " +
+                    "accepted=true verified=$verified package=${foreground?.packageName}"
+            )
             WorkingTaskRuntime.store.recordOutcome(
                 if (verified) "browser_results_visible" else "browser_results_not_verified", verified
             )
@@ -4143,6 +4207,7 @@ class MyraVoiceService : Service() {
             armedScreenQuestion = ""
             armedScreenQuestionTurnId = 0L
             armedScreenQuestionDetectedAt = 0L
+            armedScreenQuestionFinalCommitted = false
             earlyScreenQueryAwaitingFinalTranscript = false
             earlyScreenQueryDispatchedTurnId = 0L
         }

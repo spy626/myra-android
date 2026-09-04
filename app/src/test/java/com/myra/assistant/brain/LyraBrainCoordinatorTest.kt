@@ -120,6 +120,17 @@ class LyraBrainCoordinatorTest {
     }
 
     @Test
+    fun `stale youtube search state is cleared when current app is chrome`() {
+        val brain = LyraBrainCoordinator()
+        brain.recordPhoneAction("com.google.android.youtube", "SearchYouTube(query=new AI)", false)
+        brain.observeForegroundApp("com.android.chrome")
+
+        assertEquals("com.android.chrome", brain.snapshot().currentApp)
+        assertEquals(null, brain.snapshot().lastAction)
+        assertEquals(null, brain.snapshot().lastActionSucceeded)
+    }
+
+    @Test
     fun `second video is a deterministic accessibility screen action`() {
         val brain = LyraBrainCoordinator()
         brain.observeForegroundApp("com.google.android.youtube")

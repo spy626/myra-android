@@ -158,7 +158,15 @@ class LyraBrainCoordinator {
 
     @Synchronized fun observeForegroundApp(packageName: String?) {
         val livePackage = packageName?.trim()?.takeIf(String::isNotBlank) ?: return
-        state = state.copy(currentApp = livePackage)
+        val staleYouTubeSearch = state.lastAction?.startsWith("SearchYouTube(") == true &&
+            livePackage != "com.google.android.youtube"
+        state = state.copy(
+            currentApp = livePackage,
+            lastAction = state.lastAction.takeUnless { staleYouTubeSearch },
+            lastActionSucceeded = state.lastActionSucceeded.takeUnless { staleYouTubeSearch },
+            lastScreenTarget = state.lastScreenTarget?.takeIf { it.appPackage == null || it.appPackage == livePackage },
+            unresolvedReference = state.unresolvedReference.takeUnless { staleYouTubeSearch }
+        )
     }
 
     @Synchronized fun recordPhoneAction(app: String?, action: String, success: Boolean) {

@@ -1,6 +1,7 @@
 package com.myra.assistant.screen
 
 import android.content.Context
+import java.util.concurrent.atomic.AtomicBoolean
 
 enum class VisualAwarenessState { ON, OFF }
 
@@ -40,6 +41,13 @@ data class VisualScreenshotSelection(
     val screenshot: AccessibilityScreenshot,
     val source: VisualFrameSource
 )
+
+/** Allows exactly one terminal result for a screenshot request. A late Android
+ * callback may warm the cache, but it cannot answer a timed-out/replaced turn. */
+class VisualCaptureCompletionGate {
+    private val completed = AtomicBoolean(false)
+    fun tryComplete(): Boolean = completed.compareAndSet(false, true)
+}
 
 /** In-memory only. Raw screenshots never enter Room or long-term memory. */
 object AccessibilityVisualCache {

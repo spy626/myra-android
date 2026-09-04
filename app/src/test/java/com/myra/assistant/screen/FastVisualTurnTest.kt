@@ -47,4 +47,23 @@ class FastVisualTurnTest {
         assertNull(AccessibilityVisualCache.fresh("pkg", 4, 5, "same", 2_000, 900))
         AccessibilityVisualCache.invalidate()
     }
+
+    @Test fun screenshotRequestCompletesExactlyOnceAndRejectsLateCallback() {
+        val gate = VisualCaptureCompletionGate()
+        assertTrue(gate.tryComplete())
+        assertFalse(gate.tryComplete())
+    }
+
+    @Test fun replacedVisualTurnCannotOwnLateScreenshotResult() {
+        val coordinator = FastVisualTurnCoordinator()
+        val old = coordinator.begin(1, FastVisualRequest(FastVisualKind.QUESTION, "screen"), "pkg", 2, 3, 10, 11)
+        coordinator.begin(2, FastVisualRequest(FastVisualKind.QUESTION, "screen"), "pkg", 2, 3, 20, 21)
+        assertFalse(coordinator.owns(old.id))
+    }
+
+    @Test fun armedScreenQuestionExpiresInsteadOfDispatchingOnLaterSpeechEdge() {
+        assertTrue(ArmedScreenQuestionPolicy.isFresh(1_000, 3_500))
+        assertFalse(ArmedScreenQuestionPolicy.isFresh(1_000, 3_501))
+        assertFalse(ArmedScreenQuestionPolicy.isFresh(0, 1_000))
+    }
 }

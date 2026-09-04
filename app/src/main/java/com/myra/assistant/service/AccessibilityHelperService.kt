@@ -58,9 +58,11 @@ import com.myra.assistant.agent.SemanticElement
 import com.myra.assistant.agent.SemanticRoleClassifier
 import com.myra.assistant.agent.ScreenshotReference
 import com.myra.assistant.agent.UnifiedLyraAgentRuntime
+import com.myra.assistant.diagnostics.VoicePipelineLogger
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.Locale
+import com.myra.assistant.screen.VisualCaptureCompletionGate
 
 data class VisibleTargetTapResult(
     val accepted: Boolean,
@@ -296,18 +298,62 @@ class AccessibilityHelperService : AccessibilityService() {
     }
 
     /** Select exactly one context-bound screenshot for a visual turn. */
-    fun requestFreshVisualScreenshot(maxAgeMs: Long, callback: (Result<VisualScreenshotSelection>) -> Unit): Boolean {
+    fun requestFreshVisualScreenshot(
+        maxAgeMs: Long,
+        timeoutMs: Long = 1_200L,
+        fallbackMaxAgeMs: Long = 2_500L,
+        callback: (Result<VisualScreenshotSelection>) -> Unit
+    ): Boolean {
         val current = currentForegroundContext() ?: return false
+        val signature = visibleScreenSignature()
+        val requestedAt = android.os.SystemClock.elapsedRealtime()
         AccessibilityVisualCache.selectFresh(
-            current.packageName, current.windowId, current.generation, visibleScreenSignature(),
-            android.os.SystemClock.elapsedRealtime(), maxAgeMs
+            current.packageName, current.windowId, current.generation, signature,
+            requestedAt, maxAgeMs
         )?.let {
+            VoicePipelineLogger.debug("screenshot_cache_fallback source=FRESH_CACHE ageMs=${requestedAt - it.screenshot.capturedAt}")
             callback(Result.success(it))
             return true
         }
-        return requestVisualScreenshot { result ->
+        VoicePipelineLogger.debug(
+            "screenshot_request_started package=${current.packageName} windowId=${current.windowId} " +
+                "generation=${current.generation} timeoutMs=$timeoutMs"
+        )
+        val completionGate = VisualCaptureCompletionGate()
+        val timeout = Runnable {
+            if (!completionGate.tryComplete()) return@Runnable
+            val now = android.os.SystemClock.elapsedRealtime()
+            val fallback = AccessibilityVisualCache.selectFresh(
+                current.packageName, current.windowId, current.generation, signature,
+                now, fallbackMaxAgeMs
+            )
+            VoicePipelineLogger.debug(
+                "screenshot_timeout elapsedMs=${now - requestedAt} cacheFallback=${fallback != null}"
+            )
+            if (fallback != null) {
+                VoicePipelineLogger.debug("screenshot_cache_fallback source=STALE_SAFE_CACHE ageMs=${now - fallback.screenshot.capturedAt}")
+                callback(Result.success(fallback))
+            } else {
+                callback(Result.failure(IllegalStateException("accessibility_screenshot_timeout")))
+            }
+        }
+        screenWatcherHandler.postDelayed(timeout, timeoutMs)
+        val started = requestVisualScreenshot { result ->
+            val callbackAt = android.os.SystemClock.elapsedRealtime()
+            if (!completionGate.tryComplete()) {
+                VoicePipelineLogger.debug("screenshot_callback_received elapsedMs=${callbackAt - requestedAt} accepted=false reason=late_after_timeout")
+                return@requestVisualScreenshot
+            }
+            screenWatcherHandler.removeCallbacks(timeout)
+            VoicePipelineLogger.debug("screenshot_callback_received elapsedMs=${callbackAt - requestedAt} accepted=true success=${result.isSuccess}")
             callback(result.map { VisualScreenshotSelection(it, VisualFrameSource.ACCESSIBILITY_FRESH) })
         }
+        if (!started && completionGate.tryComplete()) {
+            screenWatcherHandler.removeCallbacks(timeout)
+            VoicePipelineLogger.debug("screenshot_failure_reason reason=request_not_started")
+            callback(Result.failure(IllegalStateException("accessibility_screenshot_not_started")))
+        }
+        return started
     }
 
     fun openYouTubeShorts(): Boolean = clickNavigationTarget(

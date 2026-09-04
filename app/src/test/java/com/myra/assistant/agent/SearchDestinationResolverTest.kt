@@ -63,4 +63,9 @@ class SearchDestinationResolverTest {
         assertEquals(TurnIntent.CONVERSATION, decision.intent)
         assertFalse(decision.authorizesPhoneActions)
     }
+
+    @Test fun partial_search_is_candidate_only_and_cannot_execute() {
+        assertFalse(SearchExecutionPolicy.mayExecute(authoritativeFinalTranscript = false))
+        assertEquals(true, SearchExecutionPolicy.mayExecute(authoritativeFinalTranscript = true))
+    }
 }
