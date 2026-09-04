@@ -91,6 +91,8 @@ class FastVisualTurnTest {
 
     @Test fun stableReadOnlyScreenQuestionCanAuthorizeAtLocalSpeechEnd() {
         assertTrue(EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd("What do you see?", speechActive = false))
+        assertTrue(EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd("What can you see now?", speechActive = false))
+        assertTrue(EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd("Ab kya dikh raha hai?", speechActive = false))
         assertFalse(EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd("click this button", speechActive = false))
         assertFalse(EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd("What do you see?", speechActive = true))
     }

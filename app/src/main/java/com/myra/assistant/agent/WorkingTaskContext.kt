@@ -19,7 +19,20 @@ data class WorkingTaskContext(
     val selectedExecutor: String? = null,
     val actionStartedAt: Long = 0,
     val completionState: TaskCompletionState? = null,
+    val lastCompletedTask: CompletedTaskContext? = null,
     val updatedAt: Long = 0
+)
+
+data class CompletedTaskContext(
+    val taskId: String?,
+    val goal: String?,
+    val action: String?,
+    val query: String?,
+    val destination: SearchDestination?,
+    val executor: String?,
+    val observedOutcome: String,
+    val completionState: TaskCompletionState,
+    val completedAt: Long
 )
 
 enum class TaskCompletionState { EXECUTING, SUCCESS, FAILURE, UNKNOWN }
@@ -36,6 +49,7 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
                 screenGeneration = scene?.generation ?: 0,
                 lastRequestedAction = decision.goal,
                 expectedOutcome = task?.expectedResult,
+                lastCompletedTask = value.lastCompletedTask,
                 updatedAt = now()
             )
         } else value.copy(conversationTopic = decision.goal.takeIf { decision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION) }, updatedAt = now())
@@ -58,18 +72,22 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
         )
     }
 
-    @Synchronized fun completeSearch(observed: String, state: TaskCompletionState) {
-        value = value.copy(
-            lastObservedOutcome = observed,
-            lastVerifiedSuccess = when (state) {
-                TaskCompletionState.SUCCESS -> true
-                TaskCompletionState.FAILURE -> false
-                else -> null
-            },
-            completionState = state,
-            recoveryCount = if (state == TaskCompletionState.FAILURE) value.recoveryCount + 1 else 0,
-            updatedAt = now()
+    @Synchronized fun completeSearch(observed: String, state: TaskCompletionState): CompletedTaskContext {
+        val completedAt = now()
+        val completed = CompletedTaskContext(
+            value.taskId, value.currentGoal, value.lastRequestedAction, value.searchQuery,
+            value.resolvedDestination, value.selectedExecutor, observed, state, completedAt
         )
+        // Terminal task details are history, not active routing context. In particular,
+        // a completed YouTube destination must never bias a later generic search.
+        value = WorkingTaskContext(
+            conversationTopic = value.conversationTopic,
+            activeExternalApp = value.activeExternalApp,
+            screenGeneration = value.screenGeneration,
+            lastCompletedTask = completed,
+            updatedAt = completedAt
+        )
+        return completed
     }
 
     @Synchronized fun invalidateIfExternalAppChanged(packageName: String, generation: Long) {
@@ -78,11 +96,25 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
             return
         }
         if (value.activeExternalApp != null && value.activeExternalApp != packageName) {
-            value = WorkingTaskContext(conversationTopic = value.conversationTopic, activeExternalApp = packageName, screenGeneration = generation, updatedAt = now())
+            value = WorkingTaskContext(
+                conversationTopic = value.conversationTopic,
+                activeExternalApp = packageName,
+                screenGeneration = generation,
+                lastCompletedTask = value.lastCompletedTask,
+                updatedAt = now()
+            )
         }
     }
 
-    @Synchronized fun clearTask() { value = WorkingTaskContext(conversationTopic = value.conversationTopic, updatedAt = now()) }
+    @Synchronized fun clearTask() {
+        value = WorkingTaskContext(
+            conversationTopic = value.conversationTopic,
+            activeExternalApp = value.activeExternalApp,
+            screenGeneration = value.screenGeneration,
+            lastCompletedTask = value.lastCompletedTask,
+            updatedAt = now()
+        )
+    }
 }
 
 object WorkingTaskRuntime { val store = WorkingTaskContextStore() }

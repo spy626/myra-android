@@ -19,6 +19,7 @@ import android.os.Looper
 import android.hardware.camera2.CameraManager
 import com.myra.assistant.commands.Command
 import com.myra.assistant.core.AssistantResult
+import com.myra.assistant.diagnostics.VoicePipelineLogger
 import java.text.SimpleDateFormat
 import java.util.Date
 
@@ -43,7 +44,14 @@ class AppActionExecutor(private val context: Context) {
     fun execute(command: AppCommand): Result = when (command) {
         is AppCommand.OpenApp -> openApp(command.appName)
         is AppCommand.CloseCurrentApp -> closeCurrentApp()
-        is AppCommand.SearchYouTube -> searchYouTube(command.query)
+        is AppCommand.SearchYouTube -> {
+            VoicePipelineLogger.debug(
+                "SEARCH_EXECUTOR_ENTRY class=AppActionExecutor method=searchYouTube turnId=caller_owned " +
+                    "finalTranscript=caller_authorized query=${command.query.take(120)} destination=YOUTUBE " +
+                    "foregroundPackage=${AccessibilityHelperService.instance?.currentForegroundContext()?.packageName}"
+            )
+            searchYouTube(command.query)
+        }
         is AppCommand.PlayYouTube -> playYouTube(command.query)
         AppCommand.OpenYouTubeShorts -> openYouTubeShorts()
         AppCommand.RequestInstagramReels -> Result("Instagram open kar dun tumhare liye?", true)

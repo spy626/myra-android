@@ -91,7 +91,7 @@ object BrowserSearchRequestParser {
             return cleanQuery(value)?.let { BrowserSearchRequest(it, destination) }
         }
         val generic = listOf(
-            Regex("^(?:please )?(?:search|find)(?: for)? (.+)$", RegexOption.IGNORE_CASE),
+            Regex("^(?:please )?(?:search|find)(?: karo| kar do)?(?: for)? (.+)$", RegexOption.IGNORE_CASE),
             Regex("^(?:please )?(?:dhundo|dhoondo|khojo|सर्च|ढूंढो|खोजो)(?: karo| kar do| करो| कर दो)? (.+)$", RegexOption.IGNORE_CASE),
             Regex("^(.+?) (?:search|find|dhundo|dhoondo|khojo|सर्च|ढूंढो|खोजो)(?: karo| kar do| करो| कर दो)$", RegexOption.IGNORE_CASE)
         ).firstNotNullOfOrNull { it.matchEntire(normalized)?.groupValues?.get(1) }
@@ -161,6 +161,11 @@ class BrowserSearchTool(private val context: Context) {
         }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         if (expected != null) intent.setPackage(expected)
         return try {
+            VoicePipelineLogger.debug(
+                "SEARCH_EXECUTOR_ENTRY class=BrowserSearchTool method=execute turnId=service_owned " +
+                    "finalTranscript=authorized query=${request.query.take(120)} destination=${resolution.destination} " +
+                    "foregroundPackage=${resolution.targetPackage}"
+            )
             VoicePipelineLogger.debug(
                 "SEARCH_ACTION_STARTED executorClass=BrowserSearchTool intentAction=${intent.action} " +
                     "selectedExecutor=${resolution.selectedExecutor} destination=${resolution.destination} expectedPackage=$expected"

@@ -99,10 +99,27 @@ class SearchDestinationResolverTest {
         val store = WorkingTaskContextStore { time++ }
         store.beginSearch("new AI", SearchDestination.BROWSER, "CURRENT_BROWSER", "search_results_visible")
         assertEquals(TaskCompletionState.EXECUTING, store.snapshot().completionState)
-        store.completeSearch("browser_results_visible", TaskCompletionState.SUCCESS)
-        assertEquals(true, store.snapshot().lastVerifiedSuccess)
-        assertEquals(TaskCompletionState.SUCCESS, store.snapshot().completionState)
-        assertEquals(SearchDestination.BROWSER, store.snapshot().resolvedDestination)
+        val completed = store.completeSearch("browser_results_visible", TaskCompletionState.SUCCESS)
+        assertNull(store.snapshot().lastVerifiedSuccess)
+        assertNull(store.snapshot().completionState)
+        assertNull(store.snapshot().resolvedDestination)
+        assertEquals(TaskCompletionState.SUCCESS, completed.completionState)
+        assertEquals(SearchDestination.BROWSER, store.snapshot().lastCompletedTask?.destination)
+    }
+
+    @Test fun completed_youtube_search_cannot_bias_new_chrome_search() {
+        var time = 10L
+        val store = WorkingTaskContextStore { time++ }
+        store.beginSearch("old query", SearchDestination.YOUTUBE, "YOUTUBE", "results")
+        store.completeSearch("youtube_results_visible", TaskCompletionState.SUCCESS)
+        val resolution = SearchDestinationResolver.resolveDetailed(
+            BrowserSearchRequestParser.parse("Search karo new AI")!!,
+            "com.android.chrome",
+            store.snapshot().activeExternalApp
+        )
+        assertEquals("new AI", BrowserSearchRequestParser.parse("Search karo new AI")!!.query)
+        assertEquals(SearchDestination.BROWSER, resolution.destination)
+        assertEquals(BrowserSearchExecutor.CURRENT_BROWSER, resolution.selectedExecutor)
     }
 
     @Test fun verifiedSuccessCannotProduceFailureOrOrdinaryModelResult() {
