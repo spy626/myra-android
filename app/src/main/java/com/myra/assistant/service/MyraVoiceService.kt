@@ -1,4951 +1,1449 @@
-package com.myra.assistant.service
-
-import android.app.*
-import android.content.Intent
-import android.graphics.Color
-import android.os.IBinder
-import android.os.Handler
-import android.os.Looper
-import android.os.PowerManager
-import android.os.Build
-import android.icu.text.Transliterator
-import com.myra.assistant.diagnostics.VoicePipelineLogger
-import androidx.core.app.NotificationCompat
-import com.myra.assistant.ai.AudioEngine
-import com.myra.assistant.ai.CommandParser
-import com.myra.assistant.ai.GeminiLiveClient
-import com.myra.assistant.ai.ApiKeyStore
-import com.myra.assistant.ai.DeepResearchClient
-import com.myra.assistant.ai.HandsFreeMediaGuard
-import com.myra.assistant.ai.LyraPlaybackCapturePolicy
-import com.myra.assistant.ai.LiveTranscriptAssembler
-import com.myra.assistant.ai.MediaSpeechCoherencePolicy
-import com.myra.assistant.brain.BrainDecision
-import com.myra.assistant.brain.LyraBrainCoordinator
-import com.myra.assistant.brain.ScreenTargetReference
-import com.myra.assistant.brain.ScrollDirection as BrainScrollDirection
-import com.myra.assistant.data.memory.AutomaticMemoryChange
-import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
-import com.myra.assistant.data.memory.BestFriendNameCorrectionParser
-import com.myra.assistant.data.memory.BestFriendNameCanonicalizer
-import com.myra.assistant.data.memory.BestFriendNameCorrection
-import com.myra.assistant.data.memory.ClarifiedPersonNameResolver
-import com.myra.assistant.data.memory.ClarifiedNameResult
-import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
-import com.myra.assistant.data.memory.CorrectionSuccessPolicy
-import com.myra.assistant.data.memory.LyraMemoryDatabase
-import com.myra.assistant.data.memory.MemoryCommand
-import com.myra.assistant.data.memory.MemoryCommandParser
-import com.myra.assistant.data.memory.MemoryCommandReplyFormatter
-import com.myra.assistant.data.memory.MemoryConfirmationDecision
-import com.myra.assistant.data.memory.MemoryConfirmationParser
-import com.myra.assistant.data.memory.MemoryCandidate
-import com.myra.assistant.data.memory.PersonalMemoryExtractor
-import com.myra.assistant.data.memory.PersonLinkedMemoryExtractor
-import com.myra.assistant.data.memory.PersonalMemoryContextCorrection
-import com.myra.assistant.data.memory.PersonalMemoryPermissionPrompt
-import com.myra.assistant.data.memory.PersonalMemoryRecallFormatter
-import com.myra.assistant.data.memory.MemoryRepository
-import com.myra.assistant.data.memory.MemoryRelationshipPolicy
-import com.myra.assistant.data.memory.SavedMemoryContextFormatter
-import com.myra.assistant.data.memory.MemoryWriteResult
-import com.myra.assistant.data.memory.MemorySafetyPolicy
-import com.myra.assistant.data.memory.MemorySaveDecision
-import com.myra.assistant.data.memory.MemoryCategory
-import com.myra.assistant.data.memory.MemorySensitivity
-import com.myra.assistant.data.memory.SemanticMemoryProposalValidator
-import com.myra.assistant.data.memory.UnclearDeleteIntentGuard
-import com.myra.assistant.data.memory.PendingDeleteClarification
-import com.myra.assistant.model.AppCommand
-import com.myra.assistant.phone.AppActionExecutor
-import com.myra.assistant.MyApplication
-import com.myra.assistant.commands.CommandParser as StructuredCommandParser
-import com.myra.assistant.ui.main.MainActivity
-import com.myra.assistant.screen.ScreenCaptureService
-import com.myra.assistant.screen.ScreenPrivacyPolicy
-import com.myra.assistant.screen.ScreenFramePrivacyFilter
-import com.myra.assistant.screen.ScreenPrivacyResult
-import com.myra.assistant.screen.ScreenQueryDispatchPolicy
-import com.myra.assistant.screen.ScreenQueryTimingPolicy
-import com.myra.assistant.screen.ScreenShareState
-import com.myra.assistant.screen.ScreenModeCommand
-import com.myra.assistant.screen.ScreenModeCommandParser
-import com.myra.assistant.screen.ScreenVisionIntentParser
-import com.myra.assistant.screen.InstantScreenQuery
-import com.myra.assistant.screen.ScreenCacheUse
-import com.myra.assistant.screen.ScreenContextStore
-import com.myra.assistant.screen.HotScreenCachePolicy
-import com.myra.assistant.screen.ScreenVisionPreferences
-import com.myra.assistant.screen.VisualAwarenessPreferences
-import com.myra.assistant.screen.FastVisualKind
-import com.myra.assistant.screen.FastVisualRequest
-import com.myra.assistant.screen.FastVisualRequestClassifier
-import com.myra.assistant.screen.FastVisualTurnCoordinator
-import com.myra.assistant.screen.VisualAcquisitionGate
-import com.myra.assistant.screen.VisualScreenshotTimeoutPolicy
-import com.myra.assistant.screen.SemanticScreenFallbackPolicy
-import com.myra.assistant.screen.VisibleScreenElement
-import com.myra.assistant.agent.ActivityContextStore
-import com.myra.assistant.agent.UnifiedLyraAgentRuntime
-import com.myra.assistant.agent.TurnIntent
-import com.myra.assistant.agent.WorkingTaskRuntime
-import com.myra.assistant.agent.BrowserSearchRequestParser
-import com.myra.assistant.agent.BrowserSearchTool
-import com.myra.assistant.agent.SearchExecutionPolicy
-import com.myra.assistant.agent.SearchDestination
-import com.myra.assistant.agent.SearchDestinationResolver
-import com.myra.assistant.agent.BrowserSearchVerificationPolicy
-import com.myra.assistant.agent.YouTubeSearchVerificationPolicy
-import com.myra.assistant.agent.SearchTaskResultPolicy
-import com.myra.assistant.agent.SearchVerification
-import com.myra.assistant.agent.TaskCompletionState
-import com.myra.assistant.screen.FreshFrameResult
-import com.myra.assistant.screen.ScreenResponseBinding
-import com.myra.assistant.screen.ReadingCommand
-import com.myra.assistant.screen.ReadingIntentParser
-import com.myra.assistant.screen.ReadingState
-import com.myra.assistant.screen.ReadingTracker
-import com.myra.assistant.screen.ScreenCommandTurnGuard
-import com.myra.assistant.screen.ScreenContentType
-import com.myra.assistant.screen.ScreenActionIntent
-import com.myra.assistant.screen.ScreenActionIntentRegistry
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import com.myra.assistant.agent.TextComposeSession
-import com.myra.assistant.screen.YouTubeSemanticCommand
-import com.myra.assistant.screen.YouTubeSemanticCommandParser
-import com.myra.assistant.voice.LocalSpeechGate
-import com.myra.assistant.voice.FinalTranscriptDisplayFormatter
-import com.myra.assistant.voice.FinalTranscriptDuplicateGuard
-import com.myra.assistant.voice.FinalSemanticUserUtterance
-import com.myra.assistant.voice.FinalTranscriptPlausibilityGate
-import com.myra.assistant.voice.PhantomTranscriptFilter
-import com.myra.assistant.voice.RomanHinglishFormatter
-import com.myra.assistant.voice.VoiceResponseFormatter
-import java.text.SimpleDateFormat
-import java.util.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-
-internal object FriendConversationPolicy {
-    const val REPLY_DISCIPLINE =
-        "Default to one short natural sentence for ordinary conversation; use a second only when needed. " +
-            "Use more only when Zopy explicitly asks for detail or the topic requires a safety explanation. " +
-            "Answer complete questions directly and stopâ€”never append a closing question, topic prompt, or 'aur sunao'. " +
-            "Ask no follow-up unless missing information prevents a useful answer; " +
-            "if you ask one, it must be the only question in the entire reply. " +
-            "Never use customer-support wording such as 'help kar sakti hoon', and never sound dismissive with " +
-            "phrases such as 'isse zyada main kya boloon' or pressure the user to give a specific topic."
-
-    const val BOSS_ASSISTANT_STYLE =
-        "Use a subtle confident personal-assistant tone. You may occasionally say 'boss', 'on it', " +
-            "'got it', or 'done' when it naturally fits a verified action, but never in every reply, " +
-            "never more than once in a response, and never claim an action is done before Android verifies it."
-
-    const val MALE_USER_GRAMMAR =
-        "Zopy is male, so when addressing him use masculine forms such as sakte ho, karoge, and gaye; " +
-            "never address him as sakti ho or karogi."
-}
-
-class MyraVoiceService : Service() {
-    interface Listener {
-        fun onState(text: String)
-        fun onReady()
-        fun onAmplitude(value: Float)
-        fun onSpeaking(speaking: Boolean)
-        fun onUserText(text: String)
-        fun onMyraText(text: String, error: Boolean = false)
-    }
-
-    private var audio: AudioEngine? = null
-    private var live: GeminiLiveClient? = null
-    private var connectionPreparing = false
-    private val input = StringBuilder()
-    private val output = StringBuilder()
-    private val commandProbe = StringBuilder()
-    private val brain = LyraBrainCoordinator()
-    private val readingTracker = ReadingTracker()
-    private val screenCommandTurnGuard = ScreenCommandTurnGuard()
-    private val screenActionRegistry = ScreenActionIntentRegistry()
-    private val textComposeSession = TextComposeSession()
-    private var lastUserIntentText = ""
-    private val recentRelationshipTurns = mutableListOf<Pair<Long, String>>()
-    private var lastSavedBestFriendName: String? = null
-    private var lastSavedBestFriendAt = 0L
-    private var suppressModelForTurn = false
-    private var waitingForFreshInputAfterCommand = false
-    private var commandUserTextEmitted = false
-    private var localCommandExecutedThisTurn = false
-    private var ambiguousMessageTurn = false
-    private var incompleteActionFragmentTurn = false
-    private var lastCommandKey = ""
-    private var hasAcknowledgedScrollDirection = false
-    private var lastScrollDirection = AppCommand.ScrollDirection.DOWN
-    private var lastCommandAt = 0L
-    private var hideNextModelTranscript = false
-    private var mediaBlockedTurn = false
-    private var probableActionTurn = false
-    private var pendingLocalSpeech: String? = null
-    private var pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
-    private var pendingLocalSpeechAllowsSilence = false
-    private var validatingLocalSpeech: String? = null
-    private var localSpeechValidationToken = 0L
-    private var localSpeechValidationAttempt = 0
-    private var localSpeechValidationPolicy = LocalSpeechValidationPolicy.DEFAULT
-    private var localSpeechHasContent = false
-    private var allowUntranscribedLocalSpeech = false
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val visualDeadlineExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "lyra-visual-deadline").apply { isDaemon = true }
-    }
-    private val visualFrameDeliveryExecutor = java.util.concurrent.ThreadPoolExecutor(
-        1, 1, 0L, TimeUnit.MILLISECONDS, java.util.concurrent.LinkedBlockingQueue(),
-        java.util.concurrent.ThreadFactory { runnable ->
-            Thread(runnable, "lyra-current-visual-delivery").apply {
-                isDaemon = true
-                priority = Thread.MAX_PRIORITY
-            }
-        }
-    )
-    private var pendingMemoryCommand: MemoryCommand? = null
-    private var pendingDeleteClarificationUntil = 0L
-    private var pendingBestFriendCorrectionOldName: String? = null
-    private var pendingBestFriendCorrectionUntil = 0L
-    private var pendingSpellingConfirmationName: String? = null
-    private var turnSequence = 0L
-    private var activeTurnId = 0L
-    private var controlledGenerationId = 0L
-    private val responseArbiter = TurnResponseArbiter()
-    private val ordinaryModelAudioGate = OrdinaryModelAudioGate()
-    private val transcriptSessionId = java.util.UUID.randomUUID().toString()
-    private val transcriptPlausibilityGate = FinalTranscriptPlausibilityGate()
-    private val finalUserMessageCommitter = FinalUserMessageCommitter()
-    private val memoryCommandRunnable = Runnable {
-        val command = pendingMemoryCommand
-        pendingMemoryCommand = null
-        if (command != null && !localCommandExecutedThisTurn) {
-            val spoken = commandProbe.toString().trim()
-            if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                commitFinalUserMessage(spoken, "MEMORY_COMMAND_RUNNABLE")
-                commandUserTextEmitted = true
-            }
-            handleMemoryCommand(command)
-        }
-    }
-    private var pendingDetectedPersonalMemory: MemoryCandidate? = null
-    private val personalMemoryPauseRunnable = Runnable {
-        val candidate = pendingDetectedPersonalMemory
-        pendingDetectedPersonalMemory = null
-        if (candidate != null && pendingPersonalMemory == null && !localCommandExecutedThisTurn) {
-            val spoken = commandProbe.toString().trim()
-            if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                commitFinalUserMessage(spoken, "PERSONAL_MEMORY_PAUSE")
-                commandUserTextEmitted = true
-            }
-            requestPersonalMemoryPermission(candidate)
-            resetTurnBuffers()
-            waitingForFreshInputAfterCommand = true
-        }
-    }
-    private var microphoneMuted = false
-    private var deepResearchActive = false
-    private var idleNudgeCount = 0
-    private val idleNudgeRunnable = Runnable { handleIdleNudge() }
-    private val localSpeechAudio = mutableListOf<ByteArray>()
-    private val localSpeechTranscript = StringBuilder()
-    private var localPlaybackActive = false
-    private var localSpeechStreamedDirectly = false
-    private var localSpeechGenerationComplete = false
-    private var localSpeechTimeoutRunnable: Runnable? = null
-    private var localSpeechTimeoutToken = 0L
-    private val localSpeechTimeoutGate = ControlledSpeechTimeoutGate()
-    private var localSpeechQueuedAt = 0L
-    private var localSpeechRequestSentAt = 0L
-    private var localSpeechFirstAudioReceivedAt = 0L
-    private var localSpeechFirstAudioAcceptedAt = 0L
-    private var localSpeechFirstPlaybackWriteAt = 0L
-    private var localSpeechLastAudioReceivedAt = 0L
-    private var instantScreenQueryId = ""
-    private var instantScreenQueryStartedAt = 0L
-    private var instantScreenCacheAgeMs = 0L
-    private var modelAudioDroppedBeforeTurnCompleteCount = 0
-    private var modelAudioDroppedBeforeTurnCompleteBytes = 0L
-    private var acceptedModelGenerationForTurn = 0L
-    private var speechActivityStartedAt = 0L
-    private var speechActivityEndedAt = 0L
-    private var speechTimingTurnId = 0L
-    private val voiceTurnIdentities = VoiceTurnIdentityStore()
-    private var inputTurnStartedAt = 0L
-    private var latestTurnAcceptedAt = 0L
-    private var latestIntentDecidedAt = 0L
-    private var latestIntentTimingTurnId = 0L
-    private var latestActionDispatchedAt = 0L
-    private var latestObservedModelGenerationId = 0L
-    private var earlyModelAudioGenerationId = 0L
-    private val earlyModelAudio = mutableListOf<ByteArray>()
-    private var earlyModelAudioBytes = 0L
-    private var localAudioSpeaking = false
-    private var screenResponseActive = false
-    private var screenResponseHasContent = false
-    private var screenResponseStartedLogged = false
-    private var screenResponseGenerationComplete = false
-    private var screenResponseTextCommitted = false
-    private var screenResponseUserTurnId = 0L
-    private var screenResponseAfterGenerationId = 0L
-    private var screenResponseGenerationId = 0L
-    private var screenResponseBinding: ScreenResponseBinding? = null
-    private var screenResponseSessionId = ""
-    private var screenResponseAccessibilityPackage = ""
-    private var screenResponseAccessibilityGeneration = 0L
-    private var screenResponseQueryId = ""
-    private var screenQuestionDetectedAt = 0L
-    private var screenFreshFrameCapturedAt = 0L
-    private var screenFrameSentAt = 0L
-    private var screenResponseSpeechEndedAt = 0L
-    private var screenQuerySpeechTurnConsistency = false
-    private val fastVisualTurns = FastVisualTurnCoordinator()
-    private var armedScreenQuestion = ""
-    private var armedScreenQuestionTurnId = 0L
-    private var armedScreenQuestionDetectedAt = 0L
-    private var armedScreenQuestionFinalCommitted = false
-    private var earlyScreenQuestionText = ""
-    private var earlyScreenQueryAwaitingFinalTranscript = false
-    private var earlyScreenQueryDispatchedTurnId = 0L
-    private var pendingCanonicalRename: kotlinx.coroutines.Job? = null
-    private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
-    private var pendingConfirmedCommand: AppCommand? = null
-    private var pendingConfirmationExpiresAt = 0L
-    private var pendingPersonalMemory: MemoryCandidate? = null
-    private var pendingPersonalMemoryExpiresAt = 0L
-    private val pendingPersonalMemoryConfirmationInput = StringBuilder()
-    private var lastLocalSpeechKey = ""
-    private var lastLocalSpeechAt = 0L
-    private var lastAnnouncementKey = ""
-    private var lastAnnouncementAt = 0L
-    private var hasGreeted = false
-    private var wakeLock: PowerManager.WakeLock? = null
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val mediaGuard by lazy { HandsFreeMediaGuard(this) }
-    private val romanTransliterator by lazy {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Keep pronunciation marks long enough for RomanHinglishFormatter to
-            // distinguish names such as à¤•à¤°à¥€à¤® instead of flattening them to "karima".
-            runCatching { Transliterator.getInstance("Any-Latin") }.getOrNull()
-        } else null
-    }
-    private val appActions by lazy { AppActionExecutor(this) }
-    private val memoryRepository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
-    private val assistantController by lazy { (application as MyApplication).assistantController }
-    private val screenVisionPreferences by lazy { ScreenVisionPreferences(this) }
-    private val visualAwarenessPreferences by lazy { VisualAwarenessPreferences(this) }
-    private val screenCaptureListener: (ScreenShareState, ByteArray?) -> Unit = { state, frame ->
-        if (state == ScreenShareState.ACTIVE && readingTracker.snapshot() != null) {
-            val packageName = AccessibilityHelperService.instance?.currentPackageName().orEmpty()
-            if (packageName.isNotBlank() && readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, packageName)) {
-                pendingActionAfterLocalSpeech = null
-                voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${readingTracker.snapshot()?.readingSessionId} reason=foreground_context_changed package=$packageName")
-            }
-        }
-        if (state != ScreenShareState.ACTIVE && readingTracker.snapshot()?.state in setOf(
-                ReadingState.READING, ReadingState.WAITING_FOR_SCROLL,
-                ReadingState.SCROLLING, ReadingState.VERIFYING_NEW_CONTENT
-            )) {
-            stopArticleReading("media_projection_disconnected", "Screen sharing stopped, isliye reading rok di.")
-        }
-        if (state != ScreenShareState.ACTIVE) {
-            screenActionRegistry.cancel()?.let {
-                voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=screen_session_inactive")
-            }
-        }
-        if (state != ScreenShareState.ACTIVE && screenResponseActive && !screenResponseSessionId.startsWith("accessibility:")) {
-            voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId state=$state")
-            screenResponseActive = false
-            screenResponseSessionId = ""
-            screenResponseQueryId = ""
-            output.clear()
-            audio?.interrupt()
-        }
-        if (state == ScreenShareState.ACTIVE && frame != null &&
-            screenVisionPreferences.visionEnabled && isNaturalVoiceReady
-        ) {
-            val record = ScreenCaptureService.currentFrame()
-            if (record?.source != "explicit_query") {
-                live?.sendScreenFrame(frame)
-                voiceLog("screen_frame_routed bytes=${frame.size} source=media_projection frame_id=${record?.frameId ?: 0L} temporary=true")
-            }
-        }
-    }
-
-    override fun onCreate() {
-        super.onCreate()
-        instance = this
-        createChannel()
-        startForeground(NOTIFICATION_ID, notification("Starting LYRAâ€¦"))
-        wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LYRA:BackgroundVoice")
-            .apply { setReferenceCounted(false); acquire() }
-        isRunning = true
-        ScreenCaptureService.listeners += screenCaptureListener
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> stopSession()
-            ACTION_MUTE -> {
-                microphoneMuted = intent.getBooleanExtra(EXTRA_MUTED, false)
-                audio?.setMuted(microphoneMuted)
-                if (microphoneMuted) mainHandler.removeCallbacks(idleNudgeRunnable) else markUserInteraction()
-            }
-            else -> if (live == null) connect()
-        }
-        return START_STICKY
-    }
-
-    private fun connect() {
-        if (connectionPreparing || live != null) return
-        connectionPreparing = true
-        if (hasGreeted) voiceLog(
-            "GEMINI_RECONNECTING timestamp=${android.os.SystemClock.elapsedRealtime()} media_projection_state=${ScreenCaptureService.currentState}"
-        )
-        serviceScope.launch {
-            val savedMemoryContext = runCatching { buildSavedMemoryContext() }.getOrDefault("")
-            mainHandler.post {
-                connectionPreparing = false
-                if (isRunning && live == null) connectLive(savedMemoryContext)
-            }
-        }
-    }
-
-    private fun connectLive(savedMemoryContext: String) {
-        val p = getSharedPreferences("myra", MODE_PRIVATE)
-        val key = ApiKeyStore(this).get(ApiKeyStore.GEMINI)
-        val name = configuredUserName(p.getString("user_name", null))
-        if (key.isBlank()) { emitState("Add your Gemini API key in Settings"); stopSelf(); return }
-        audio = AudioEngine(this)
-        val selectedVoice = p.getString("voice", "Aoede") ?: "Aoede"
-        live = GeminiLiveClient(
-            key, p.getString("model", "gemini-3.1-flash-live-preview")!!,
-            selectedVoice,
-            systemPrompt(name, p.getString("personality", "GF") ?: "GF", selectedVoice) +
-                savedMemoryContext
-        ).also { client ->
-            client.onState = { emitState(it) }
-            client.onReady = {
-                voiceLog("GEMINI_CONNECTED timestamp=${android.os.SystemClock.elapsedRealtime()} media_projection_state=${ScreenCaptureService.currentState}")
-                isNaturalVoiceReady = true
-                audio?.start()
-                if (screenVisionPreferences.visionEnabled && ScreenCaptureService.hasFreshFrame()) {
-                    ScreenCaptureService.latestFrame?.let(client::sendScreenFrame)
-                }
-                listener?.onReady()
-                if (!hasGreeted) {
-                    hasGreeted = true
-                    client.sendText("Greet $name briefly and naturally.")
-                } else {
-                    emitState("LYRA reconnected â€” listening")
-                }
-                markUserInteraction()
-            }
-            client.onToolCall = { id, functionName, args ->
-                mainHandler.post { handleSemanticToolCall(id, functionName, args) }
-            }
-            client.onAudio = { pcm, modelGenerationId ->
-                val audioReceivedAt = android.os.SystemClock.elapsedRealtime()
-                latestObservedModelGenerationId = maxOf(latestObservedModelGenerationId, modelGenerationId)
-                voiceLog(
-                    "service_audio_received bytes=${pcm.size} modelGenerationId=$modelGenerationId validating=${validatingLocalSpeech != null} " +
-                        "streaming=$localSpeechStreamedDirectly suppressed=$suppressModelForTurn " +
-                        "localSpeaking=$localAudioSpeaking"
-                )
-                if (validatingLocalSpeech != null) {
-                    localSpeechHasContent = true
-                    if (localSpeechFirstAudioReceivedAt == 0L) {
-                        localSpeechFirstAudioReceivedAt = audioReceivedAt
-                        voiceLog(
-                            "controlled_first_audio_received turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                                "firstAudioReceivedAt=$audioReceivedAt requestToFirstAudioMs=${audioReceivedAt - localSpeechRequestSentAt}"
-                        )
-                        if (instantScreenQueryId.isNotBlank()) {
-                            voiceLog(
-                                "TOTAL_SCREEN_RESPONSE screenQueryId=$instantScreenQueryId route=HOT_SCREEN_CACHE " +
-                                    "voice_ms=-1 capture_ms=0 accessibility_ms=0 vision_ms=0 gemini_ms=${audioReceivedAt - localSpeechRequestSentAt} " +
-                                    "tts_ms=${audioReceivedAt - localSpeechRequestSentAt} total_ms=${audioReceivedAt - instantScreenQueryStartedAt} " +
-                                    "frame_age_ms=$instantScreenCacheAgeMs"
-                            )
-                            instantScreenQueryId = ""
-                        }
-                    }
-                    localSpeechLastAudioReceivedAt = audioReceivedAt
-                    if (localSpeechStreamedDirectly) {
-                        // The transcript prefix already matched the prepared response.
-                        // Continue streaming the remaining natural voice without waiting
-                        // for the complete sentence.
-                        audio?.queueAudio(pcm, controlledGenerationId, "CONTROLLED_LOCAL")
-                        voiceLog("service_audio_routed route=direct_playback bytes=${pcm.size}")
-                    } else {
-                        localSpeechAudio += pcm.copyOf()
-                        voiceLog(
-                            "service_audio_routed route=validation_buffer bytes=${pcm.size} " +
-                                "bufferChunks=${localSpeechAudio.size}"
-                        )
-                        startLocalSpeechWhenPrefixMatches()
-                    }
-                }
-                else if (screenResponseActive && isScreenResponseContextCurrent()) {
-                    val generationAccepted = screenResponseBinding?.acceptsGeneration(modelGenerationId) == true
-                    screenResponseGenerationId = screenResponseBinding?.screenGenerationId ?: 0L
-                    if (!generationAccepted) {
-                        voiceLog(
-                            "SCREEN_RESPONSE_DECISION visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} " +
-                                "currentTurn=$screenResponseUserTurnId generationId=$modelGenerationId owner=CONTROLLED_SCREEN " +
-                                "decision=DROP reason=stale_generation"
-                        )
-                        voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId expectedAfter=$screenResponseAfterGenerationId boundGenerationId=$screenResponseGenerationId")
-                    } else {
-                        if (!screenResponseStartedLogged) {
-                            screenResponseStartedLogged = true
-                            voiceLog("screen_query_state screenQueryId=$screenResponseQueryId state=RESPONSE_STARTED source=AUDIO modelGenerationId=$modelGenerationId")
-                            fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId }?.let {
-                                it.firstModelResponseAt = audioReceivedAt
-                                it.firstAudioAt = audioReceivedAt
-                                it.replyQueuedAt = audioReceivedAt
-                                voiceLog(
-                                    "visual_model_first_response visualTurnId=${it.id} source=AUDIO " +
-                                        "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L) audioReceivedAt - it.modelRequestAt else -1L}"
-                                )
-                                voiceLog("visualModelFirstStructuredResult visualTurnId=${it.id} source=AUDIO at=$audioReceivedAt")
-                                voiceLog("replyQueued visualTurnId=${it.id} at=$audioReceivedAt owner=CONTROLLED_SCREEN")
-                                voiceLog(
-                                    "visual_reply_audio_started visualTurnId=${it.id} " +
-                                        "speechEndToFirstAudioMs=${if (it.speechEndedAt > 0L) audioReceivedAt - it.speechEndedAt else -1L}"
-                                )
-                            }
-                        }
-                        screenResponseHasContent = true
-                        mediaGuard.beginAssistantTurn()
-                        audio?.setPlaybackContext(modelGenerationId, screenResponseQueryId, "CONTROLLED_SCREEN")
-                        audio?.setBargeInEnabled(true)
-                        audio?.queueAudio(pcm, modelGenerationId, "CONTROLLED_SCREEN")
-                        voiceLog(
-                            "SCREEN_RESPONSE_DECISION visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} " +
-                                "currentTurn=$screenResponseUserTurnId generationId=$modelGenerationId owner=CONTROLLED_SCREEN " +
-                                "decision=PLAY reason=current_bound_generation"
-                        )
-                        voiceLog(
-                            "route_decision turnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId responseOwner=CONTROLLED_SCREEN " +
-                                "screen_query_id=$screenResponseQueryId route=screen_response accepted=true firstResponseAudioAt=$audioReceivedAt " +
-                                "geminiSendToFirstResponseMs=${if (screenFrameSentAt > 0L) audioReceivedAt - screenFrameSentAt else -1L} " +
-                                "speechEndToFirstAudibleMs=${if (screenQuerySpeechTurnConsistency) audioReceivedAt - screenResponseSpeechEndedAt else -1L} " +
-                                "screen_response_turn_consistency=${screenResponseUserTurnId != 0L} " +
-                                "screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency"
-                        )
-                    }
-                }
-                else if (responseArbiter.acceptsOrdinaryModel() && LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
-                        suppressed = suppressModelForTurn,
-                        assistantAlreadySpeaking = localAudioSpeaking,
-                        mediaGuardAllowsResponse = mediaGuard.allowModelResponse()
-                    )
-                ) {
-                    // Capturable LYRA speech uses USAGE_MEDIA. Once the first valid
-                    // chunk is accepted, keep Media Guard awake so LYRA never mistakes
-                    // her own active AudioTrack for external YouTube playback.
-                    when (val decision = ordinaryModelAudioGate.decide(modelGenerationId)) {
-                        ModelAudioDecision.ACCEPT -> {
-                            acceptedModelGenerationForTurn = modelGenerationId
-                            mediaGuard.beginAssistantTurn()
-                            audio?.setPlaybackContext(modelGenerationId, responseOwner = "MODEL")
-                            audio?.setBargeInEnabled(true)
-                            audio?.queueAudio(pcm, modelGenerationId, "MODEL")
-                            voiceLog(
-                                "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL " +
-                                    "route=ordinary_model accepted=true firstModelAudioAcceptedAt=$audioReceivedAt " +
-                                    "speechEndToFirstAcceptedModelAudioMs=${if (speechActivityEndedAt > 0L) audioReceivedAt - speechActivityEndedAt else -1L} bytes=${pcm.size}"
-                            )
-                        }
-                        ModelAudioDecision.BUFFER_UNTIL_SPEECH_END -> {
-                            if (earlyModelAudioGenerationId != 0L && earlyModelAudioGenerationId != modelGenerationId) {
-                                modelAudioDroppedBeforeTurnCompleteCount += earlyModelAudio.size
-                                modelAudioDroppedBeforeTurnCompleteBytes += earlyModelAudioBytes
-                                earlyModelAudio.clear()
-                                earlyModelAudioBytes = 0L
-                            }
-                            earlyModelAudioGenerationId = modelGenerationId
-                            earlyModelAudio += pcm.copyOf()
-                            earlyModelAudioBytes += pcm.size
-                            voiceLog(
-                                "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL " +
-                                    "route=ordinary_model accepted=false rejectionReason=user_speech_active userSpeechActive=true " +
-                                    "earlyModelAudioBufferedCount=${earlyModelAudio.size} earlyModelAudioBufferedBytes=$earlyModelAudioBytes"
-                            )
-                        }
-                        else -> {
-                            modelAudioDroppedBeforeTurnCompleteCount++
-                            modelAudioDroppedBeforeTurnCompleteBytes += pcm.size
-                            voiceLog(
-                                "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL " +
-                                    "route=ordinary_model accepted=false rejectionReason=$decision staleGeneration=${decision == ModelAudioDecision.DROP_STALE_GENERATION} " +
-                                    "modelAudioBufferedBeforeTurnCompleteCount=0 modelAudioBufferedBeforeTurnCompleteBytes=0 " +
-                                    "modelAudioDroppedBeforeTurnCompleteCount=$modelAudioDroppedBeforeTurnCompleteCount " +
-                                    "modelAudioDroppedBeforeTurnCompleteBytes=$modelAudioDroppedBeforeTurnCompleteBytes bytes=${pcm.size}"
-                            )
-                        }
-                    }
-                } else {
-                    voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} modelGenerationId=$modelGenerationId responseOwner=${responseArbiter.owner} route=ordinary_model bytes=${pcm.size}")
-                }
-            }
-            client.onInterrupted = { modelGenerationId ->
-                if (validatingLocalSpeech == null && responseArbiter.acceptsOrdinaryModel()) {
-                    ordinaryModelAudioGate.cancelGeneration(modelGenerationId)
-                    audio?.interrupt()
-                    voiceLog(
-                        "playback_cancelled_by_barge_in turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
-                            "playbackCancelledByBargeIn=true cancelledGenerationId=$modelGenerationId speechActivityStartedAt=$speechActivityStartedAt"
-                    )
-                } else voiceLog(
-                    "interrupted_event_ignored turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
-                        "reason=controlled_owner responseOwner=${responseArbiter.owner}"
-                )
-            }
-            client.onGenerationComplete = { modelGenerationId ->
-                voiceLog("model_generation_complete turnId=$activeTurnId modelGenerationId=$modelGenerationId at=${android.os.SystemClock.elapsedRealtime()}")
-            }
-            client.onInputTranscript = inputTranscript@ { part, latestModelGenerationId ->
-                if (screenResponseActive) {
-                    if (earlyScreenQueryAwaitingFinalTranscript) {
-                        appendTranscript(input, part)
-                        appendTranscript(commandProbe, part)
-                        voiceLog("screen_query_final_transcript_collecting screen_query_id=$screenResponseQueryId userTurnId=$screenResponseUserTurnId textChars=${part.length}")
-                        return@inputTranscript
-                    }
-                    voiceLog(
-                        "screen_response_input_ignored screen_query_id=$screenResponseQueryId " +
-                            "userTurnId=$screenResponseUserTurnId reason=no_confirmed_real_barge_in textChars=${part.length}"
-                    )
-                    return@inputTranscript
-                }
-                if (input.isEmpty()) {
-                    if (activeTurnId == 0L) activeTurnId = ++turnSequence
-                    inputTurnStartedAt = android.os.SystemClock.elapsedRealtime()
-                    if (speechTimingTurnId == 0L && speechActivityStartedAt > 0L) speechTimingTurnId = activeTurnId
-                    if (responseArbiter.turnId != activeTurnId) responseArbiter.begin(activeTurnId)
-                    acceptedModelGenerationForTurn = 0L
-                    modelAudioDroppedBeforeTurnCompleteCount = 0
-                    modelAudioDroppedBeforeTurnCompleteBytes = 0L
-                    voiceLog(
-                        "input_turn_started turnId=$activeTurnId session=${hashCode()} inputTurnStartedAt=$inputTurnStartedAt " +
-                            "speechActivityStartedAt=$speechActivityStartedAt latestModelGenerationId=$latestModelGenerationId " +
-                            "voiceTurnConsistent=${voiceTurnIdentities.current()?.userTurnId == activeTurnId}"
-                    )
-                    if (pendingBestFriendCorrectionOldName != null &&
-                        android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
-                    ) {
-                        // Reserve a pending clarification turn before Gemini can emit an
-                        // ordinary acknowledgement. Ownership becomes CONTROLLED_LOCAL
-                        // when the validated clarification reply is queued.
-                        suppressModelForTurn = true
-                        output.clear()
-                        voiceLog(
-                            "pending_correction_turn_reserved turnId=$activeTurnId " +
-                                "databaseMutationAllowed=false successAcknowledgementAllowed=false"
-                        )
-                    }
-                }
-                if (handlePendingPersonalMemoryPermission(part)) return@inputTranscript
-                if (handlePendingConfirmation(part)) return@inputTranscript
-                if (isPhantomTranscript(part)) {
-                    // Short echo/noise fragments must never become chat bubbles or
-                    // receive a conversational answer.
-                    suppressModelForTurn = true
-                    output.clear()
-                    return@inputTranscript
-                }
-                markUserInteraction()
-                when (mediaGuard.inspect(part)) {
-                    HandsFreeMediaGuard.Gate.BLOCK -> {
-                        appendTranscript(commandProbe, part)
-                        val earlyScreenText = romanDisplayText(commandProbe.toString())
-                        if (ScreenVisionIntentParser.parseStableQuery(earlyScreenText) != null) {
-                            audio?.confirmMediaSpeechFromTranscript(earlyScreenText)
-                            mediaBlockedTurn = false
-                            suppressModelForTurn = true
-                            output.clear()
-                            input.clear(); input.append(commandProbe)
-                            armScreenQuestion(earlyScreenText, activeTurnId, "MEDIA_PARTIAL_COMMAND")
-                            return@inputTranscript
-                        }
-                        var directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
-                            ?: CommandParser.parseDirectMediaControl(part)
-                            ?: CommandParser.parse(commandProbe.toString())?.takeIf(::isSafeDirectMediaCommand)
-                            ?: CommandParser.parse(part)?.takeIf(::isSafeDirectMediaCommand)
-                        if (directCommand is AppCommand.OpenApp &&
-                            !CommandParser.isExplicitOpenCommand(commandProbe.toString()) &&
-                            !CommandParser.isExplicitOpenCommand(part)
-                        ) {
-                            directCommand = null
-                        }
-                        if (directCommand != null) {
-                            audio?.confirmMediaSpeechFromTranscript(commandProbe.toString())
-                            // Media Guard runs before the normal fresh-input reset below.
-                            // A genuine direct command heard during playback starts a new
-                            // user turn, so release the completed previous command here.
-                            // shouldExecute() still blocks duplicate transcript chunks.
-                            if (waitingForFreshInputAfterCommand) {
-                                waitingForFreshInputAfterCommand = false
-                                localCommandExecutedThisTurn = false
-                                commandUserTextEmitted = false
-                            }
-                            val spoken = commandProbe.toString().trim()
-                            val ownerDecision = com.myra.assistant.agent.UnifiedTurnInterpreter.interpret(
-                                spoken, WorkingTaskRuntime.store.snapshot()
-                            )
-                            if (!ownerDecision.authorizesPhoneActions) {
-                                voiceLog("direct_media_action_rejected_by_unified_owner turnId=$activeTurnId intent=${ownerDecision.intent}")
-                                return@inputTranscript
-                            }
-                            if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                                commitFinalUserMessage(spoken, "DIRECT_MEDIA_COMMAND")
-                                commandUserTextEmitted = true
-                            }
-                            mediaBlockedTurn = false
-                            executeCommand(directCommand)
-                            return@inputTranscript
-                        }
-                        val coherentMediaSpeech = romanDisplayText(commandProbe.toString())
-                        if (MediaSpeechCoherencePolicy.isCoherent(coherentMediaSpeech) &&
-                            audio?.confirmMediaSpeechFromTranscript(coherentMediaSpeech) == true
-                        ) {
-                            // A coherent ASR result backed by the active near-field VAD
-                            // candidate is real user speech, even when it is ordinary
-                            // conversation rather than a screen/device command.
-                            mediaGuard.confirmUserSpeech()
-                            mediaBlockedTurn = false
-                            suppressModelForTurn = false
-                            input.clear()
-                            input.append(commandProbe)
-                            voiceLog(
-                                "media_candidate_promoted reason=coherent_conversation candidateTextChars=${coherentMediaSpeech.length} " +
-                                    "userTurnId=$activeTurnId responseOwner=MODEL"
-                            )
-                        } else {
-                            if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
-                                probableActionTurn = true
-                                suppressModelForTurn = true
-                                output.clear()
-                            }
-                            if (!mediaBlockedTurn) emitState("Media Guard active â€” listening for your voice")
-                            mediaBlockedTurn = true
-                            output.clear()
-                            return@inputTranscript
-                        }
-                    }
-                    HandsFreeMediaGuard.Gate.WAKE_DETECTED -> {
-                        audio?.confirmMediaSpeechFromTranscript(part)
-                        mediaBlockedTurn = false
-                        suppressModelForTurn = false
-                        waitingForFreshInputAfterCommand = false
-                        emitState("Listening â€” media lowered for 10 seconds")
-                    }
-                    HandsFreeMediaGuard.Gate.OPEN -> mediaBlockedTurn = false
-                }
-                // After a local phone command, delayed Gemini packets are discarded until
-                // the server has completed that command turn and the user actually starts
-                // speaking again. The first transcript of that new turn safely re-enables
-                // normal model output.
-                if (waitingForFreshInputAfterCommand) {
-                    waitingForFreshInputAfterCommand = false
-                    // Fresh mic input must not steal a turn still owned by a controlled
-                    // Gemini generation; its late model text/audio remains suppressed.
-                    suppressModelForTurn = !responseArbiter.acceptsOrdinaryModel()
-                    localCommandExecutedThisTurn = false
-                }
-                if (pendingBestFriendCorrectionOldName != null &&
-                    android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
-                ) {
-                    // Media-guard and fresh-input state transitions above may normally
-                    // re-enable MODEL output. A pending correction must remain reserved.
-                    suppressModelForTurn = true
-                    output.clear()
-                }
-                appendTranscript(input, part); appendTranscript(commandProbe, part)
-                lastUserIntentText = input.toString().trim()
-                val currentTranscript = commandProbe.toString().trim()
-                val currentScreenText = romanDisplayText(currentTranscript)
-                if (BrowserSearchRequestParser.parse(currentTranscript) != null) {
-                    // Search is resolved only at FINAL, but speculative conversational
-                    // audio must not ask for a destination after a contextual action has
-                    // already been authorized and executed.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    voiceLog("search_turn_reserved turnId=$activeTurnId source=PARTIAL_FINAL_REQUIRED")
-                }
-                if (ScreenVisionIntentParser.parse(currentScreenText) != null ||
-                    FastVisualRequestClassifier.classify(currentTranscript) != null
-                ) {
-                    // A screen turn is answered only after an explicitly bound fresh
-                    // capture. Stop speculative ordinary output from becoming a second
-                    // answer before the FINAL turn boundary arrives.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    if (ScreenVisionIntentParser.parseStableQuery(currentScreenText) != null) {
-                        armScreenQuestion(currentScreenText, activeTurnId, "PARTIAL_SCREEN_QUERY")
-                    }
-                }
-                val plausibilityPreview = transcriptPlausibilityGate.preview(currentTranscript)
-                if (!plausibilityPreview.semanticProcessingAllowed) {
-                    // Stop speculative MODEL output as soon as an unrelated dominant
-                    // script appears. The immutable FINAL transcript makes the decision.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    voiceLog(
-                        "input_transcript_plausibility_preview raw=${currentTranscript.take(120)} " +
-                            "dominantScript=${plausibilityPreview.dominantScript} " +
-                            "transcriptPlausibility=${plausibilityPreview.transcriptPlausibility} " +
-                            "anomalyReason=${plausibilityPreview.anomalyReason}"
-                    )
-                    // Keep collecting raw chunks for the authoritative FINAL decision,
-                    // but do not let partial foreign-script text reach memory, correction,
-                    // delete, command, or permission parsers.
-                    return@inputTranscript
-                }
-                val detectedPersonalMemory =
-                    PersonalMemoryExtractor.extract(romanDisplayText(currentTranscript))
-                if (detectedPersonalMemory != null) {
-                    if (MemoryRelationshipPolicy.isBestFriend(detectedPersonalMemory) ||
-                        MemorySafetyPolicy.decide(detectedPersonalMemory) == MemorySaveDecision.AUTO_SAVE
-                    ) {
-                        // Clear, ordinary personal facts are learned silently at turn
-                        // completion so LYRA's natural conversational reply continues.
-                        pendingDetectedPersonalMemory = null
-                        mainHandler.removeCallbacks(personalMemoryPauseRunnable)
-                        return@inputTranscript
-                    }
-                    // A short pause lets streamed ASR finish the fact, then Android can
-                    // ask permission without waiting for Gemini's full turn boundary.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    pendingDetectedPersonalMemory = detectedPersonalMemory
-                    mainHandler.removeCallbacks(personalMemoryPauseRunnable)
-                    mainHandler.postDelayed(
-                        personalMemoryPauseRunnable,
-                        PERSONAL_MEMORY_PAUSE_MS
-                    )
-                } else if (pendingDetectedPersonalMemory != null) {
-                    // A later chunk changed the sentence into something that is no
-                    // longer a complete durable fact. Do not prompt from stale text.
-                    pendingDetectedPersonalMemory = null
-                    mainHandler.removeCallbacks(personalMemoryPauseRunnable)
-                }
-                if (CommandParser.isLikelyIncompleteActionFragment(currentTranscript)) {
-                    incompleteActionFragmentTurn = true
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    return@inputTranscript
-                } else if (incompleteActionFragmentTurn) {
-                    // A later chunk completed the same thought, so resume the normal
-                    // parser. If Gemini finalized the fragment as its own turn, the
-                    // turn-complete guard below discards it without a chat bubble.
-                    incompleteActionFragmentTurn = false
-                    suppressModelForTurn = false
-                }
-                val romanMemoryTranscript = romanDisplayText(commandProbe.toString())
-                if (BestFriendNameCorrectionParser.needsClearCorrectedName(romanMemoryTranscript)) {
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                }
-                if (UnclearDeleteIntentGuard.needsClarification(romanMemoryTranscript)) {
-                    // Never let a garbled delete phrase reach Gemini as an invitation
-                    // to guess that the user wants an app uninstalled.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                }
-                if (MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    MemoryCommandParser.parse(romanMemoryTranscript)?.let { memoryCommand ->
-                        pendingMemoryCommand = memoryCommand
-                        mainHandler.removeCallbacks(memoryCommandRunnable)
-                        mainHandler.postDelayed(memoryCommandRunnable, MEMORY_COMMAND_PAUSE_MS)
-                    }
-                }
-                val ambiguousMessage = CommandParser.isAmbiguousMessageReference(commandProbe.toString())
-                if (ambiguousMessage) {
-                    ambiguousMessageTurn = true
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                } else if (ambiguousMessageTurn && !MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {
-                    // A later transcript chunk completed the thought. Gemini already
-                    // received the audio, so allow its contextual response again.
-                    ambiguousMessageTurn = false
-                    suppressModelForTurn = false
-                }
-                val command = (CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString()))
-                    ?.takeUnless { it is AppCommand.SearchYouTube }
-                if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
-                    probableActionTurn = true
-                    suppressModelForTurn = true
-                    output.clear()
-                }
-                // A streamed transcript may first contain only "YouTube" and later add
-                // "mein search karo Lols Gaming". Never execute a plain open-app command
-                // from an incomplete chunk; confirm it from the complete turn below.
-                val explicitOpen = command is AppCommand.OpenApp && CommandParser.isExplicitOpenCommand(part)
-                // Never execute an ordinary phone action from a partial transcript. A later
-                // chunk can turn "open Chrome" into a discussion about opening Chrome. The
-                // complete FINAL utterance must pass UnifiedTurnInterpreter first.
-                if (command != null && (command !is AppCommand.OpenApp || explicitOpen) && command !is AppCommand.DeepResearch) {
-                    probableActionTurn = true
-                    suppressModelForTurn = true
-                    output.clear()
-                    val candidateName = if (command is AppCommand.ScrollYouTube && command.explicitlyRequestedApp == null) {
-                        "GenericScroll"
-                    } else command.javaClass.simpleName
-                    voiceLog("partial_action_held_for_unified_owner turnId=$activeTurnId candidate=$candidateName")
-                }
-            }
-            client.onOutputTranscript = { transcript, modelGenerationId ->
-                if (validatingLocalSpeech != null) {
-                    localSpeechHasContent = true
-                    appendTranscript(localSpeechTranscript, transcript)
-                    startLocalSpeechWhenPrefixMatches()
-                }
-                else if (screenResponseActive && isScreenResponseContextCurrent()) {
-                    if (screenResponseBinding?.acceptsGeneration(modelGenerationId) == true) {
-                        screenResponseGenerationId = screenResponseBinding?.screenGenerationId ?: 0L
-                        if (!screenResponseStartedLogged) {
-                            screenResponseStartedLogged = true
-                            voiceLog("screen_query_state screenQueryId=$screenResponseQueryId state=RESPONSE_STARTED source=TEXT modelGenerationId=$modelGenerationId")
-                            val now = android.os.SystemClock.elapsedRealtime()
-                            fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId }?.let {
-                                it.firstModelResponseAt = now
-                                it.replyQueuedAt = now
-                                voiceLog(
-                                    "visual_model_first_response visualTurnId=${it.id} source=TEXT " +
-                                        "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L) now - it.modelRequestAt else -1L}"
-                                )
-                                voiceLog("visualModelFirstStructuredResult visualTurnId=${it.id} source=TEXT at=$now")
-                                voiceLog("replyQueued visualTurnId=${it.id} at=$now owner=CONTROLLED_SCREEN")
-                            }
-                        }
-                        screenResponseHasContent = true
-                        appendTranscript(output, transcript)
-                        voiceLog("screen_query_result_received screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId userTurnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId firstResponseTextAt=${android.os.SystemClock.elapsedRealtime()} screen_response_turn_consistency=true")
-                    } else voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId reason=wrong_generation")
-                }
-                else if (responseArbiter.acceptsOrdinaryModel() && !suppressModelForTurn &&
-                    !hideNextModelTranscript && mediaGuard.allowModelResponse()
-                ) appendTranscript(output, transcript)
-                else voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} responseOwner=${responseArbiter.owner} route=ordinary_model_text")
-            }
-            client.onTurnComplete = turnComplete@ {
-                if (validatingLocalSpeech != null) {
-                    // Sending clientContent interrupts the previous Gemini generation.
-                    // Its interrupted turnComplete can arrive before the new confirmation.
-                    // Ignore that empty boundary, and briefly allow the independently
-                    // streamed output transcript to arrive after the audio turn completes.
-                    if (localSpeechHasContent) {
-                        val token = localSpeechValidationToken
-                        mainHandler.postDelayed({
-                            if (token == localSpeechValidationToken && validatingLocalSpeech != null) {
-                                finishValidatedLocalSpeech()
-                                resetTurnBuffers()
-                                waitingForFreshInputAfterCommand = true
-                            }
-                        }, LOCAL_SPEECH_AUDIO_DRAIN_MS)
-                    }
-                    responseArbiter.controlledGenerationComplete()
-                    val turnCompleteAt = android.os.SystemClock.elapsedRealtime()
-                    voiceLog("turn_complete_received turnId=${responseArbiter.turnId} generationId=$controlledGenerationId responseOwner=${responseArbiter.owner} turnCompleteAt=$turnCompleteAt lastAudioReceivedAt=$localSpeechLastAudioReceivedAt")
-                    resetTurnBuffers("controlled_generation_complete")
-                    return@turnComplete
-                }
-                if (screenResponseActive) {
-                    if (earlyScreenQueryAwaitingFinalTranscript && input.isNotBlank()) {
-                        val rawFinal = input.toString().trim()
-                        if (com.myra.assistant.screen.EarlyScreenQuestionPolicy.reconcile(
-                                earlyScreenQuestionText, rawFinal
-                            ) == com.myra.assistant.screen.ScreenQuestionReconciliation.MATERIAL_CHANGE
-                        ) {
-                            voiceLog(
-                                "screen_query_reconciled screenQueryId=$screenResponseQueryId " +
-                                    "result=cancelled_material_change userTurnId=$screenResponseUserTurnId"
-                            )
-                            audio?.interrupt(); live?.interrupt()
-                            finishScreenResponse("final_transcript_materially_changed")
-                            return@turnComplete
-                        }
-                        val finalDisplay = finalTranscriptDisplay(rawFinal)
-                        val semantic = FinalSemanticUserUtterance.from(
-                            transcriptSessionId, screenResponseUserTurnId, rawFinal, finalDisplay
-                        )
-                        commitFinalUserMessage(rawFinal, "TURN_COMPLETE_EARLY_SCREEN_QUERY", semantic.canonicalSemanticText, semantic.displayText)
-                        earlyScreenQueryAwaitingFinalTranscript = false
-                        input.clear(); commandProbe.clear()
-                        voiceLog("screen_query_final_transcript_committed screen_query_id=$screenResponseQueryId userTurnId=$screenResponseUserTurnId")
-                        voiceLog("screen_query_reconciled screenQueryId=$screenResponseQueryId result=matched_same_turn userTurnId=$screenResponseUserTurnId")
-                        if (!screenResponseHasContent) return@turnComplete
-                    }
-                    if (!screenResponseHasContent) {
-                        voiceLog("screen_response_empty_boundary_ignored screen_query_id=$screenResponseQueryId")
-                        return@turnComplete
-                    }
-                    val current = isScreenResponseContextCurrent()
-                    val text = output.toString().trim()
-                    if (current && text.isNotBlank() && !screenResponseTextCommitted) {
-                        fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId && it.replyQueuedAt == 0L }?.apply {
-                            replyQueuedAt = android.os.SystemClock.elapsedRealtime()
-                            voiceLog("replyQueued visualTurnId=$id at=$replyQueuedAt")
-                        }
-                        listener?.onMyraText(romanDisplayText(text))
-                        com.myra.assistant.screen.ScreenContextStore.onAnalysis(
-                            text, android.os.SystemClock.elapsedRealtime()
-                        )
-                        screenResponseTextCommitted = true
-                    }
-                    else voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId reason=${if (!current) "stopped_session" else "empty_result"}")
-                    voiceLog("screen_response_generation_complete screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId current=$current")
-                    voiceLog(
-                        "VISION_REQUEST_COMPLETED screenQueryId=$screenResponseQueryId screen_session_id=$screenResponseSessionId " +
-                            "timestamp=${android.os.SystemClock.elapsedRealtime()} visionLatencyMs=${(android.os.SystemClock.elapsedRealtime() - screenFrameSentAt).coerceAtLeast(0L)} " +
-                            "totalLatencyMs=${if (screenQuerySpeechTurnConsistency) (android.os.SystemClock.elapsedRealtime() - screenResponseSpeechEndedAt).coerceAtLeast(0L) else -1L}"
-                    )
-                    screenResponseGenerationComplete = true
-                    if (!localAudioSpeaking) {
-                        voiceLog(
-                            "SCREEN_RESPONSE_DECISION visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} " +
-                                "currentTurn=$screenResponseUserTurnId generationId=$screenResponseGenerationId owner=CONTROLLED_SCREEN " +
-                                "decision=${if ((fastVisualTurns.current()?.firstAudioAt ?: 0L) > 0L) "PLAY" else "DROP"} " +
-                                "reason=generation_complete_no_active_playback"
-                        )
-                        finishScreenResponse("generation_complete_no_playback")
-                    }
-                    else output.clear()
-                    return@turnComplete
-                }
-                pendingLocalSpeech?.let { message ->
-                    pendingLocalSpeech = null
-                    resetTurnBuffers()
-                    localSpeechValidationPolicy = pendingLocalSpeechPolicy
-                    allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
-                    beginValidatedLocalSpeech(message)
-                    return@turnComplete
-                }
-                if (mediaBlockedTurn && !mediaGuard.isAwake()) {
-                    val blockedText = romanDisplayText(commandProbe.toString().trim())
-                    if (ScreenVisionIntentParser.parseStableQuery(blockedText) != null) {
-                        mediaBlockedTurn = false
-                        audio?.confirmMediaSpeechFromTranscript(blockedText)
-                        if (blockedText.isNotBlank() && !commandUserTextEmitted) {
-                            commitFinalUserMessage(blockedText, "MEDIA_CONFIRMED_SCREEN_QUERY")
-                            commandUserTextEmitted = true
-                        }
-                        voiceLog("media_candidate_promoted reason=validated_screen_query commandChars=${commandProbe.length} userTurnId=$activeTurnId")
-                        beginFreshScreenQuery(blockedText, activeTurnId)
-                        resetTurnBuffers("media_confirmed_screen_query")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    if (MediaSpeechCoherencePolicy.isCoherent(blockedText) &&
-                        audio?.confirmMediaSpeechFromTranscript(blockedText) == true
-                    ) {
-                        val promotedTurnId = activeTurnId
-                        mediaBlockedTurn = false
-                        mediaGuard.confirmUserSpeech()
-                        suppressModelForTurn = false
-                        if (!commandUserTextEmitted) {
-                            commitFinalUserMessage(blockedText, "MEDIA_CONFIRMED_CONVERSATION")
-                            commandUserTextEmitted = true
-                        }
-                        voiceLog(
-                            "media_candidate_promoted reason=coherent_conversation_at_boundary " +
-                                "commandChars=${commandProbe.length} userTurnId=$promotedTurnId responseOwner=MODEL"
-                        )
-                        resetTurnBuffers("media_confirmed_conversation")
-                        // The speculative reply may already have been suppressed while
-                        // classification was pending. Ask the same Live session for one
-                        // ordinary natural response; do not create a local/TTS path.
-                        responseArbiter.begin(promotedTurnId)
-                        live?.sendText(blockedText)
-                        return@turnComplete
-                    }
-                    mediaBlockedTurn = false
-                    resetTurnBuffers("media_blocked_turn_complete")
-                    return@turnComplete
-                }
-                if (hideNextModelTranscript) {
-                    hideNextModelTranscript = false
-                    resetTurnBuffers("hidden_model_turn_complete")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                mainHandler.removeCallbacks(memoryCommandRunnable)
-                pendingMemoryCommand = null
-                mainHandler.removeCallbacks(personalMemoryPauseRunnable)
-                pendingDetectedPersonalMemory = null
-                val accumulatorBeforeFinal = input.toString().trim()
-                val duplicateResult = FinalTranscriptDuplicateGuard.collapse(accumulatorBeforeFinal)
-                val userText = duplicateResult.text
-                val myraText = output.toString().trim()
-                voiceLog(
-                    "final_transcript_duplicate_guard mediaCandidateId=${audio?.currentMediaCandidateId() ?: 0L} " +
-                        "candidateTranscript=${commandProbe.toString().trim().take(160)} " +
-                        "finalGeminiTranscript=${accumulatorBeforeFinal.take(160)} " +
-                        "accumulatorBeforeFinal=${accumulatorBeforeFinal.take(160)} " +
-                        "duplicateFinalDetected=${duplicateResult.duplicateDetected} " +
-                        "duplicateCollapseApplied=${duplicateResult.collapseApplied} " +
-                        "collapseReason=${duplicateResult.reason} finalDisplayText=${userText.take(160)}"
-                )
-                val finalInputTranscriptAt = android.os.SystemClock.elapsedRealtime()
-                val plausibility = transcriptPlausibilityGate.assessFinal(userText)
-                val plausibilityTurnId = activeTurnId.takeIf { it != 0L }
-                    ?: responseArbiter.turnId.takeIf { it != 0L }
-                    ?: ++turnSequence
-                val plausibilityUtteranceId = "$transcriptSessionId:$plausibilityTurnId"
-                voiceLog(
-                    "final_transcript_plausibility utteranceId=$plausibilityUtteranceId " +
-                        "rawGeminiTranscript=${userText.take(160)} " +
-                        "detectedScripts=${plausibility.detectedScripts} " +
-                        "dominantScript=${plausibility.dominantScript} " +
-                        "recentSessionLanguageProfile=${plausibility.recentSessionLanguageProfile} " +
-                        "transcriptPlausibility=${plausibility.transcriptPlausibility} " +
-                        "anomalyReason=${plausibility.anomalyReason} " +
-                        "semanticProcessingAllowed=${plausibility.semanticProcessingAllowed} " +
-                        "userBubbleCommitAllowed=${plausibility.userBubbleCommitAllowed} " +
-                        "memoryMutationAllowed=${plausibility.memoryMutationAllowed}"
-                )
-                if (!plausibility.semanticProcessingAllowed) {
-                    suppressModelForTurn = true
-                    localCommandExecutedThisTurn = true
-                    output.clear(); audio?.interrupt()
-                    listener?.onMyraText(FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY)
-                    emitState(FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY)
-                    queueLocalSpeech(
-                        FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY,
-                        allowUntranscribedAudio = true
-                    )
-                    resetTurnBuffers("suspicious_final_transcript")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                val finalDisplay = finalTranscriptDisplay(userText)
-                val finalUtterance = FinalSemanticUserUtterance.from(
-                    sessionId = transcriptSessionId,
-                    turnId = plausibilityTurnId,
-                    rawGeminiTranscript = userText,
-                    formatted = finalDisplay
-                )
-                val normalizedFinalUserText = finalUtterance.canonicalSemanticText
-                val displayedFinalUserText = finalUtterance.displayText
-                voiceTurnIdentities.finalTranscript(activeTurnId, finalUtterance.utteranceId)
-                voiceLog(
-                    "final_input_transcript raw=${userText.take(160)} " +
-                        "normalized=${normalizedFinalUserText.take(160)} " +
-                        "display=${displayedFinalUserText.take(160)} finalInputTranscriptAt=$finalInputTranscriptAt"
-                )
-                voiceLog(
-                    "final_transcript_display turnId=$activeTurnId utteranceId=${transcriptSessionId}:$activeTurnId " +
-                        "raw=${userText.take(160)} transliterated=${finalDisplay.transliterated.take(160)} " +
-                        "display=${displayedFinalUserText.take(160)} " +
-                        "latinWordsPreserved=${finalDisplay.latinWordsPreserved} " +
-                        "properNameProtected=${finalDisplay.properNameProtected} " +
-                        "ruleIds=${finalDisplay.appliedRuleIds.joinToString(",")}"
-                )
-                voiceLog(
-                    "final_semantic_utterance utteranceId=${finalUtterance.utteranceId} " +
-                        "rawGeminiTranscript=${userText.take(160)} " +
-                        "canonicalSemanticText=${normalizedFinalUserText.take(160)} " +
-                        "displayText=${displayedFinalUserText.take(160)} " +
-                        "canonicalNameTokens=${finalUtterance.canonicalNameTokens} " +
-                        "displayNameTokens=${finalUtterance.displayNameTokens} " +
-                        "memoryExtractorInput=${finalUtterance.memoryExtractorInput.take(160)} " +
-                        "correctionParserInput=${finalUtterance.correctionParserInput.take(160)} " +
-                        "deleteParserInput=${finalUtterance.deleteParserInput.take(160)} " +
-                        "clarificationResolverInput=${finalUtterance.clarificationResolverInput.take(160)} " +
-                        "semanticConsistency=${finalUtterance.semanticConsistency}"
-                )
-                if (earlyScreenQueryDispatchedTurnId == activeTurnId && earlyScreenQuestionText.isNotBlank()) {
-                    val reconciliation = com.myra.assistant.screen.EarlyScreenQuestionPolicy.reconcile(
-                        earlyScreenQuestionText, userText
-                    )
-                    voiceLog(
-                        "screen_query_reconciled userTurnId=$activeTurnId result=$reconciliation " +
-                            "visualTurnId=${fastVisualTurns.current()?.id.orEmpty()}"
-                    )
-                    if (reconciliation == com.myra.assistant.screen.ScreenQuestionReconciliation.MATERIAL_CHANGE) {
-                        fastVisualTurns.cancel()
-                        live?.interrupt()
-                        suppressModelForTurn = true
-                        output.clear()
-                        resetTurnBuffers("early_screen_query_material_change")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                }
-                if (incompleteActionFragmentTurn &&
-                    CommandParser.isLikelyIncompleteActionFragment(userText)
-                ) {
-                    // Do not expose or answer partial ASR words such as "Tem",
-                    // "tain", or "meses". The next completed utterance starts fresh.
-                    audio?.interrupt()
-                    resetTurnBuffers()
-                    suppressModelForTurn = true
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                if (userText.isNotBlank() && !commandUserTextEmitted) {
-                    commitFinalUserMessage(
-                        raw = userText,
-                        source = "TURN_COMPLETE",
-                        normalized = normalizedFinalUserText,
-                        display = displayedFinalUserText
-                    )
-                }
-                AccessibilityHelperService.instance?.currentForegroundContext()?.let {
-                    brain.observeForegroundApp(it.packageName)
-                    voiceLog("foreground_context_propagated turnId=$activeTurnId package=${it.packageName} windowId=${it.windowId} generation=${it.generation}")
-                }
-                val activityContext = ActivityContextStore.snapshot()
-                latestTurnAcceptedAt = android.os.SystemClock.elapsedRealtime()
-                latestIntentTimingTurnId = activeTurnId
-                voiceLog(
-                    "finalTranscriptReady turnId=$activeTurnId at=$latestTurnAcceptedAt " +
-                        "authoritativeTurnToTranscriptMs=${if (speechActivityEndedAt > 0L) latestTurnAcceptedAt - speechActivityEndedAt else -1L}"
-                )
-                latestActionDispatchedAt = 0L
-                val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
-                    userText, activityContext, visualAwarenessPreferences.enabled
-                )
-                latestIntentDecidedAt = android.os.SystemClock.elapsedRealtime()
-                voiceLog(
-                    "turnIntentResolved turnId=$activeTurnId intent=${turnDecision.intent} at=$latestIntentDecidedAt " +
-                        "transcriptToIntentMs=${latestIntentDecidedAt - latestTurnAcceptedAt}"
-                )
-                val unifiedTask = UnifiedLyraAgentRuntime.agent.currentTask()
-                voiceLog(
-                    "agent_turn_owned turnId=$activeTurnId intent=${turnDecision.intent} " +
-                        "phoneActions=${turnDecision.authorizesPhoneActions} memoryMutation=${turnDecision.authorizesMemoryMutation} " +
-                        "requiresPerception=${turnDecision.requiresPerception} taskId=${unifiedTask?.id}"
-                )
-                voiceLog(
-                    "turn_latency turnId=$activeTurnId speechEndToTurnAcceptedMs=${if (speechActivityEndedAt > 0L) latestTurnAcceptedAt - speechActivityEndedAt else -1L} " +
-                        "turnAcceptedToIntentMs=${latestIntentDecidedAt - latestTurnAcceptedAt}"
-                )
-                if (unifiedTask != null && turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
-                    voiceLog(
-                        "agent_task_created taskId=${unifiedTask.id} goal=${unifiedTask.interpretedGoal} package=${activityContext?.packageName} " +
-                            "planSteps=${unifiedTask.plan.size} confidence=${unifiedTask.confidence}"
-                    )
-                    voiceLog("agent_plan_created taskId=${unifiedTask.id} steps=${unifiedTask.plan.joinToString(",") { it.id }}")
-                }
-                if (turnDecision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION)) {
-                    // A complete conversational turn hard-locks all phone executors. Partial
-                    // keyword guesses are discarded and Gemini retains the sole response.
-                    probableActionTurn = false
-                    suppressModelForTurn = false
-                    voiceLog("agent_phone_tools_locked turnId=$activeTurnId reason=${turnDecision.intent}")
-                }
-                if (turnDecision.intent == TurnIntent.FOLLOW_UP) {
-                    handleUnifiedActionFollowUp()
-                    resetTurnBuffers("unified_action_follow_up")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
-                    executeUnifiedBrowserSearch(userText)
-                ) {
-                    resetTurnBuffers("unified_browser_search")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                val screenMode = ScreenModeCommandParser.parse(userText)
-                    ?: ScreenModeCommandParser.parse(normalizedFinalUserText)
-                if (turnDecision.authorizesPhoneActions && screenMode != null) {
-                    executeScreenModeCommand(screenMode)
-                    resetTurnBuffers("screen_mode_command")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                // Keep the original transcript for local semantic commands. The display/brain
-                // normalization can transliterate Devanagari (for example, "à¤•à¤®à¥‡à¤‚à¤Ÿ" into an
-                // unrecognisable spelling), but accessibility actions must be decided first.
-                val youtubeSemantic = YouTubeSemanticCommandParser.parse(userText)
-                    ?: YouTubeSemanticCommandParser.parse(normalizedFinalUserText)
-                if (turnDecision.authorizesPhoneActions && youtubeSemantic != null && executeYouTubeSemanticAction(youtubeSemantic)) {
-                    resetTurnBuffers("youtube_semantic_action")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                val fastVisualRequest = FastVisualRequestClassifier.classify(userText)
-                    ?: FastVisualRequestClassifier.classify(normalizedFinalUserText)
-                    ?: ScreenVisionIntentParser.parse(normalizedFinalUserText)?.let {
-                        FastVisualRequest(
-                            if (it == com.myra.assistant.screen.ScreenVisionIntent.CONTROL_TARGET) FastVisualKind.ACTION else FastVisualKind.QUESTION,
-                            it.name.lowercase(Locale.ROOT)
-                        )
-                    }
-                if (fastVisualRequest != null &&
-                    (turnDecision.intent == TurnIntent.SCREEN_QUESTION || turnDecision.authorizesPhoneActions)) {
-                    if (turnDecision.intent == TurnIntent.SCREEN_QUESTION && ordinaryModelAudioGate.isSpeechActive()) {
-                        armScreenQuestion(userText, activeTurnId, "FINAL_SCREEN_QUERY_WAITING_FOR_SPEECH_END", true)
-                        suppressModelForTurn = true
-                        output.clear()
-                        return@turnComplete
-                    }
-                    if (ScreenQueryDispatchPolicy.shouldDispatch(
-                            screenResponseActive, earlyScreenQueryDispatchedTurnId, activeTurnId
-                        )) {
-                        beginFreshScreenQuery(userText, activeTurnId, fastVisualRequest)
-                    }
-                    resetTurnBuffers("fast_visual_turn")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                if (turnDecision.authorizesPhoneActions && executeUnifiedReferenceIfApplicable(userText)) {
-                    resetTurnBuffers("unified_agent_reference")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                val brainDecision = if (turnDecision.authorizesPhoneActions) brain.interpret(normalizedFinalUserText)
-                    else BrainDecision.PassThrough
-                voiceLog(
-                    "brain_decision turnId=$activeTurnId intent=${LyraBrainCoordinator.classify(normalizedFinalUserText)} " +
-                        "decision=${brainDecision.javaClass.simpleName} state=${brain.snapshot()}"
-                )
-                val readingCommand = ReadingIntentParser.parse(normalizedFinalUserText)
-                if (turnDecision.authorizesPhoneActions && readingCommand != null && handleReadingCommand(readingCommand, activeTurnId)) {
-                    resetTurnBuffers("reading_command")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                when (brainDecision) {
-                    is BrainDecision.Cancel -> {
-                        handleBrainCancellation(brainDecision.taskToken)
-                        resetTurnBuffers("brain_task_cancelled")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    is BrainDecision.ScrollThenOpenVideo -> {
-                        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-                            voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId decision=ScrollThenOpenVideo")
-                            resetTurnBuffers("duplicate_screen_command")
-                            return@turnComplete
-                        }
-                        screenActionRegistry.cancel()?.let {
-                            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=new_multi_step_command")
-                        }
-                        executeBrainMultiStep(brainDecision)
-                        resetTurnBuffers("brain_multi_step_started")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    is BrainDecision.ScreenAction -> {
-                        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-                            voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId decision=ScreenAction")
-                            resetTurnBuffers("duplicate_screen_command")
-                            return@turnComplete
-                        }
-                        screenActionRegistry.cancel()?.let {
-                            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=new_contextual_command")
-                        }
-                        executeContextualScreenAction(brainDecision.target)
-                        resetTurnBuffers("brain_contextual_screen_action")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    is BrainDecision.Clarify -> {
-                        suppressModelForTurn = true
-                        localCommandExecutedThisTurn = true
-                        cancelSpeechForNewAction()
-                        listener?.onMyraText(brainDecision.message)
-                        emitState(brainDecision.message)
-                        queueLocalSpeech(brainDecision.message, allowUntranscribedAudio = true)
-                        resetTurnBuffers("brain_reference_clarification")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    BrainDecision.PassThrough -> Unit
-                }
-                val screenIntent = ScreenVisionIntentParser.parse(normalizedFinalUserText)
-                if (screenIntent != null && turnDecision.intent == TurnIntent.SCREEN_QUESTION) {
-                    if (ScreenQueryDispatchPolicy.shouldDispatch(
-                            screenResponseActive, earlyScreenQueryDispatchedTurnId, activeTurnId
-                        )) {
-                        beginFreshScreenQuery(normalizedFinalUserText, activeTurnId)
-                    }
-                    resetTurnBuffers("screen_query_fresh_capture_requested")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                // Run one final parse over the complete transcript. Partial Live transcript
-                // chunks can omit or mistranscribe the action word even when the final text
-                // contains enough context to identify the device command.
-                if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
-                    if (CommandParser.isAmbiguousMessageReference(userText)) {
-                        val clarification = "Message ke baare mein baat kar rahe ho, ya kisi ko bhejna hai?"
-                        localCommandExecutedThisTurn = true
-                        listener?.onMyraText(clarification)
-                        emitState(clarification)
-                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                        resetTurnBuffers()
-                        ambiguousMessageTurn = false
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    val displayText = normalizedFinalUserText
-                    val pendingCorrectionOld = pendingBestFriendCorrectionOldName?.takeIf {
-                        android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
-                    }
-                    if (pendingCorrectionOld != null) {
-                        val confirmationName = pendingSpellingConfirmationName
-                        if (confirmationName != null && normalizeSpeech(displayText) in setOf("haan", "han", "yes")) {
-                            pendingSpellingConfirmationName = null
-                            pendingBestFriendCorrectionOldName = null
-                            pendingBestFriendCorrectionUntil = 0L
-                            startCanonicalRename(BestFriendNameCorrection(pendingCorrectionOld, confirmationName))
-                            resetTurnBuffers("spelling_confirmed")
-                            waitingForFreshInputAfterCommand = true
-                            return@turnComplete
-                        }
-                        val resolved = ClarifiedPersonNameResolver.resolve(displayText)
-                        voiceLog(
-                            "correction_clarification pendingType=BEST_FRIEND_RENAME " +
-                                "target=$pendingCorrectionOld raw=${userText.take(100)} " +
-                                "normalized=${displayText.take(100)} resolved=$resolved"
-                        )
-                        when (resolved) {
-                            is ClarifiedNameResult.Accepted -> {
-                                pendingSpellingConfirmationName = null
-                                pendingBestFriendCorrectionOldName = null
-                                pendingBestFriendCorrectionUntil = 0L
-                                startCanonicalRename(BestFriendNameCorrection(pendingCorrectionOld, resolved.name))
-                                resetTurnBuffers("clarified_name_accepted")
-                                waitingForFreshInputAfterCommand = true
-                                return@turnComplete
-                            }
-                            is ClarifiedNameResult.NeedsConfirmation -> {
-                                pendingSpellingConfirmationName = resolved.proposedName
-                                val clarification = "Maine ${resolved.heardLetters} suna. Kya naam ${resolved.proposedName} hai?"
-                                suppressModelForTurn = true
-                                localCommandExecutedThisTurn = true
-                                output.clear(); audio?.interrupt()
-                                listener?.onMyraText(clarification)
-                                emitState(clarification)
-                                queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                                resetTurnBuffers("incomplete_spelling_confirmation")
-                                waitingForFreshInputAfterCommand = true
-                                return@turnComplete
-                            }
-                            ClarifiedNameResult.Unclear -> {
-                                // A pending correction owns this turn. Never let Gemini
-                                // improvise a success acknowledgement when no validated
-                                // name or verified database transaction exists.
-                                val clarification = CorrectionSuccessPolicy.UNRESOLVED_CLARIFICATION_REPLY
-                                suppressModelForTurn = true
-                                localCommandExecutedThisTurn = true
-                                output.clear(); audio?.interrupt()
-                                voiceLog(
-                                    "correction_clarification_unresolved target=$pendingCorrectionOld " +
-                                        "databaseMutationAllowed=false successAcknowledgementAllowed=false"
-                                )
-                                listener?.onMyraText(clarification)
-                                emitState(clarification)
-                                queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                                resetTurnBuffers("clarification_unresolved")
-                                waitingForFreshInputAfterCommand = true
-                                return@turnComplete
-                            }
-                        }
-                    }
-                    val pendingDelete = android.os.SystemClock.elapsedRealtime() <=
-                        pendingDeleteClarificationUntil
-                    val memoryCommand = if (pendingDelete) {
-                        PendingDeleteClarification.resolve(displayText)
-                            ?: MemoryCommandParser.parse(displayText)
-                    } else MemoryCommandParser.parse(displayText)
-                    if (memoryCommand != null) {
-                        pendingDeleteClarificationUntil = 0L
-                        handleMemoryCommand(memoryCommand)
-                        resetTurnBuffers()
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    if (BestFriendNameCorrectionParser.needsClearCorrectedName(finalUtterance.correctionParserInput)) {
-                        val clarification = "Correct naam clear nahi hua. Ek baar spelling ya naam clearly repeat karo."
-                        localCommandExecutedThisTurn = true
-                        suppressModelForTurn = true
-                        output.clear()
-                        audio?.interrupt()
-                        val recentName = lastSavedBestFriendName?.takeIf {
-                            android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
-                                BEST_FRIEND_CORRECTION_CONTEXT_MS
-                        }
-                        pendingBestFriendCorrectionOldName =
-                            BestFriendNameCorrectionParser.ambiguousOldName(displayText, recentName)
-                        pendingBestFriendCorrectionUntil = android.os.SystemClock.elapsedRealtime() +
-                            BEST_FRIEND_CORRECTION_CONTEXT_MS
-                        voiceLog(
-                            "correction_clarification_set type=BEST_FRIEND_RENAME " +
-                                "target=${pendingBestFriendCorrectionOldName} raw=${userText.take(100)} " +
-                                "normalized=${displayText.take(100)}"
-                        )
-                        listener?.onMyraText(clarification)
-                        emitState(clarification)
-                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                        resetTurnBuffers()
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    if (UnclearDeleteIntentGuard.needsClarification(finalUtterance.deleteParserInput)) {
-                        val clarification = "Kis memory ko delete karna hai? Naam ek baar saaf bol do."
-                        localCommandExecutedThisTurn = true
-                        suppressModelForTurn = true
-                        output.clear()
-                        audio?.interrupt()
-                        // Keep the question actionable. Previously a one-word reply such
-                        // as "Kareem" went to Gemini, which spoke a false success without
-                        // ever calling MemoryRepository.forgetMatching().
-                        pendingDeleteClarificationUntil = android.os.SystemClock.elapsedRealtime() +
-                            DELETE_CLARIFICATION_TIMEOUT_MS
-                        listener?.onMyraText(clarification)
-                        emitState(clarification)
-                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                        resetTurnBuffers()
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    val parsed = CommandParser.parse(userText)
-                    if (turnDecision.authorizesPhoneActions && parsed != null) {
-                        executeCommand(parsed)
-                    } else if (turnDecision.authorizesPhoneActions &&
-                        (probableActionTurn || CommandParser.isProbableDeviceAction(userText))) {
-                        suppressModelForTurn = true
-                        val error = if (CommandParser.isAmbiguousFlashlightCommand(userText)) {
-                            "Zopy, torch on karun ya off?"
-                        } else {
-                            "Zopy, command samajh aayi, lekin action clear nahi hua. Ek baar seedha bolkar try karo."
-                        }
-                        listener?.onMyraText(error, true)
-                        emitState(error)
-                        queueLocalSpeech(error)
-                    }
-                }
-                if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
-                    val displayUserText = finalUtterance.memoryExtractorInput
-                    val linkedPersonCandidates = PersonLinkedMemoryExtractor.extractAll(displayUserText)
-                    val personalCandidate = linkedPersonCandidates.firstOrNull {
-                        MemoryRelationshipPolicy.isBestFriend(it)
-                    } ?: PersonalMemoryExtractor.extract(displayUserText)
-                        ?: contextualRelationshipCandidate(displayUserText)
-                    val recentName = lastSavedBestFriendName?.takeIf {
-                        android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
-                            BEST_FRIEND_CORRECTION_CONTEXT_MS
-                    }
-                    // Parse explicit old->new corrections before the ordinary extractor;
-                    // otherwise "Karima nahi, Kareem" becomes a new Kareem row while
-                    // the stale Karima row remains active.
-                    val correctionDecision = BestFriendNameCorrectionParser.analyze(
-                        displayUserText,
-                        recentName
-                    )
-                    val nameCorrection = correctionDecision.correction
-                    voiceLog(
-                        "name_correction_gate raw=${displayUserText.take(100)} " +
-                            "correctionIntentDetected=${correctionDecision.correctionIntentDetected} " +
-                            "correctionIntentPattern=${correctionDecision.correctionIntentPattern} " +
-                            "oldNameCandidate=${correctionDecision.oldNameCandidate} " +
-                            "newNameCandidate=${correctionDecision.newNameCandidate} " +
-                            "newNameValidation=${correctionDecision.newNameValidation} " +
-                            "rejectionReason=${correctionDecision.rejectionReason} " +
-                            "databaseMutationAllowed=${correctionDecision.databaseMutationAllowed}"
-                    )
-                    if (nameCorrection != null && finalUtterance.semanticConsistency) {
-                        // Gemini can conversationally acknowledge a correction even when
-                        // Room did not change. Hide that unverified answer and confirm only
-                        // after the repository returns and its rows have been read back.
-                        startCanonicalRename(nameCorrection)
-                    } else if (nameCorrection != null) {
-                        val clarification = CorrectionSuccessPolicy.UNRESOLVED_CLARIFICATION_REPLY
-                        voiceLog(
-                            "name_correction_rejected utteranceId=${finalUtterance.utteranceId} " +
-                                "reason=semantic_name_mismatch databaseMutationAllowed=false " +
-                                "successAcknowledgementAllowed=false"
-                        )
-                        suppressModelForTurn = true
-                        localCommandExecutedThisTurn = true
-                        output.clear(); audio?.interrupt()
-                        listener?.onMyraText(clarification)
-                        emitState(clarification)
-                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                        resetTurnBuffers("semantic_name_mismatch")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    } else if (personalCandidate != null) {
-                        recentRelationshipTurns.clear()
-                        if (MemoryRelationshipPolicy.isBestFriend(personalCandidate)) {
-                            // Explicit completed best-friend statements add that person to
-                            // the set silently. They never replace another person implicitly.
-                            serviceScope.launch { memoryRepository.saveAdditionalBestFriend(personalCandidate) }
-                            rememberBestFriendForCorrection(personalCandidate)
-                        } else if (MemorySafetyPolicy.decide(personalCandidate) == MemorySaveDecision.AUTO_SAVE) {
-                            serviceScope.launch { memoryRepository.save(personalCandidate) }
-                        } else {
-                            requestPersonalMemoryPermission(personalCandidate)
-                            resetTurnBuffers()
-                            waitingForFreshInputAfterCommand = true
-                            return@turnComplete
-                        }
-                    }
-                    // One natural sentence can contain more than the relationship.
-                    // Persist only additional durable, grounded person facts; temporary
-                    // claims such as playing without sleep never enter this list.
-                    linkedPersonCandidates
-                        .filterNot(MemoryRelationshipPolicy::isBestFriend)
-                        .forEach { linkedFact ->
-                            serviceScope.launch { memoryRepository.save(linkedFact) }
-                        }
-                    rememberRecentRelationshipTurn(displayUserText)
-                    learnSafePreferenceFromCompletedTurn(userText)
-                }
-                if (myraText.isNotBlank() && !suppressModelForTurn && responseArbiter.acceptsOrdinaryModel()) {
-                    listener?.onMyraText(romanDisplayText(myraText))
-                }
-                resetTurnBuffers("normal_turn_complete")
-                if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
-                if (mediaGuard.isAwake()) mediaGuard.finishInteraction()
-                pendingLocalSpeech?.let { message ->
-                    pendingLocalSpeech = null
-                    localSpeechValidationPolicy = pendingLocalSpeechPolicy
-                    allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
-                    beginValidatedLocalSpeech(message)
-                }
-            }
-            client.onError = {
-                voiceLog("GEMINI_DISCONNECTED timestamp=${android.os.SystemClock.elapsedRealtime()} reason=${it.take(160)} media_projection_state=${ScreenCaptureService.currentState}")
-                emitState(it)
-            }
-            audio?.onMicChunk = { client.sendAudio(it) }
-            audio?.onAmplitude = { listener?.onAmplitude(it) }
-            audio?.onSpeechActivityChanged = { active ->
-                if (active && screenResponseActive) {
-                    voiceLog("playback_cancelled_by_real_user responseOwner=CONTROLLED_SCREEN screen_query_id=$screenResponseQueryId vad_trigger_source=local_vad")
-                    audio?.interrupt(); live?.interrupt(); finishScreenResponse("real_user_barge_in")
-                    // The interruption is also the beginning of the replacement user
-                    // utterance. Allocate its identity now; waiting for ASR recreated
-                    // the old turnId=0 / new transcript-turn mismatch.
-                    beginOrdinarySpeechActivity(latestObservedModelGenerationId, "local_vad_after_screen_replacement")
-                } else if (active) beginOrdinarySpeechActivity(latestObservedModelGenerationId, "local_vad")
-                else {
-                    finishOrdinarySpeechActivity()
-                    dispatchArmedScreenQuestionAtSpeechEnd()
-                }
-            }
-            audio?.onSpeakingChanged = { speaking ->
-                voiceLog(
-                    "service_playback_state speaking=$speaking active=$localPlaybackActive " +
-                        "generationComplete=$localSpeechGenerationComplete"
-                )
-                localAudioSpeaking = speaking
-                if (speaking && screenResponseActive) {
-                    fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId && it.firstPlaybackAt == 0L }?.apply {
-                        firstPlaybackAt = android.os.SystemClock.elapsedRealtime()
-                        voiceLog("firstPlayback visualTurnId=$id at=$firstPlaybackAt speechEndToFirstPlaybackMs=${if (speechEndedAt > 0L) firstPlaybackAt - speechEndedAt else -1L}")
-                    }
-                }
-                listener?.onSpeaking(speaking)
-                updateNotification(if (speaking) "LYRA is speaking" else "LYRA is listening")
-                if (!speaking && localPlaybackActive && localSpeechGenerationComplete) {
-                    finishLocalPlayback()
-                }
-                if (!speaking && screenResponseActive && screenResponseGenerationComplete) {
-                    finishScreenResponse("playback_end")
-                }
-            }
-            client.connect()
-        }
-    }
-
-    private suspend fun buildSavedMemoryContext(): String {
-        memoryRepository.reconcileUniqueRelationships()
-        memoryRepository.reconcilePreferenceDimensions()
-        return SavedMemoryContextFormatter.format(
-            memoryRepository.relevant("", 8).map { it.fact }
-        )
-    }
-
-    private fun learnSafePreferenceFromCompletedTurn(userText: String) {
-        val romanUserText = romanDisplayText(userText)
-        val change = AutomaticMemoryChangeParser.parse(romanUserText) ?: return
-        serviceScope.launch {
-            // Automatic learning stays silent. Only explicit remember/forget
-            // commands produce a confirmation in the conversation.
-            when (change) {
-                is AutomaticMemoryChange.Save -> memoryRepository.save(change.candidate)
-                is AutomaticMemoryChange.Forget -> memoryRepository.forgetStableKey(change.stableKey)
-            }
-        }
-    }
-
-    private fun handleExplicitMemoryText(text: String): Boolean {
-        val command = MemoryCommandParser.parse(text) ?: return false
-        handleMemoryCommand(command)
-        return true
-    }
-
-    private fun handleMemoryCommand(command: MemoryCommand) {
-        // Stop any ordinary model audio queued before the final transcript became a
-        // deterministic memory command. The local memory reply must be the only voice.
-        cancelSpeechForNewAction()
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        output.clear()
-        serviceScope.launch {
-            val rememberResult = if (command is MemoryCommand.Remember) {
-                memoryRepository.save(command.candidate)
-            } else null
-            if (command is MemoryCommand.Remember && rememberResult == MemoryWriteResult.NeedsPermission) {
-                // An explicit remember command can still conflict with a unique
-                // relationship. Enter the real confirmation flow so "haan" replaces
-                // the old person instead of returning a dead-end generic question.
-                mainHandler.post { requestPersonalMemoryPermission(command.candidate) }
-                return@launch
-            }
-            val response = when (command) {
-                is MemoryCommand.Remember -> when (rememberResult) {
-                    is MemoryWriteResult.Saved -> MemoryCommandReplyFormatter.rememberSaved()
-                    is MemoryWriteResult.Rejected -> MemoryCommandReplyFormatter.rememberRejected()
-                    MemoryWriteResult.NeedsPermission, null -> "Save karne ki permission clear nahi hui."
-                }
-                is MemoryCommand.Read -> {
-                    // Recall must not race a correction write from the previous turn.
-                    pendingCanonicalRename?.join()
-                    memoryRepository.logActiveBestFriends("before_recall query=${command.query}")
-                    val memories = memoryRepository.relevant(command.query, 5)
-                    PersonalMemoryRecallFormatter.format(memories.map { it.fact })
-                }
-                is MemoryCommand.Forget -> {
-                    MemoryCommandReplyFormatter.forgotten(
-                        memoryRepository.forgetMatching(command.query)
-                    )
-                }
-            }
-            mainHandler.post {
-                listener?.onMyraText(response)
-                emitState(response)
-                queueLocalSpeech(
-                    response,
-                    allowUntranscribedAudio = true,
-                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                )
-            }
-        }
-    }
-
-    private fun requestPersonalMemoryPermission(candidate: MemoryCandidate) {
-        pendingPersonalMemory = null
-        pendingPersonalMemoryConfirmationInput.clear()
-        pendingPersonalMemoryExpiresAt = 0L
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        output.clear()
-        // A correction can arrive while the previous memory prompt is still being
-        // validated. Replace that prompt instead of leaving the new one queued behind
-        // an interrupted Gemini turn that may never emit another turnComplete.
-        cancelSpeechForNewAction()
-        live?.interrupt()
-        serviceScope.launch {
-            val alreadySaved = memoryRepository.isAlreadySaved(candidate)
-            val conflict = memoryRepository.uniqueRelationshipConflict(candidate)
-            mainHandler.post {
-                val message = if (alreadySaved) {
-                    "Haan, mujhe yaad hai."
-                } else if (conflict != null && MemoryRelationshipPolicy.isBestFriend(candidate)) {
-                    val oldName = MemoryRelationshipPolicy.personName(conflict.fact) ?: "koi aur"
-                    val newName = MemoryRelationshipPolicy.personName(candidate.fact) ?: "ye person"
-                    pendingPersonalMemory = candidate
-                    pendingPersonalMemoryExpiresAt =
-                        android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
-                    "Abhi ${oldName} tumhari best friend saved hai. ${newName} ko replace karun, ya dono ko save karun?"
-                } else {
-                    pendingPersonalMemory = candidate
-                    pendingPersonalMemoryExpiresAt =
-                        android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
-                    PersonalMemoryPermissionPrompt.format(candidate)
-                }
-                listener?.onMyraText(message)
-                emitState(message)
-                queueLocalSpeech(
-                    message,
-                    allowUntranscribedAudio = true,
-                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                )
-            }
-        }
-    }
-
-    private fun handlePendingPersonalMemoryPermission(raw: String): Boolean {
-        val candidate = pendingPersonalMemory ?: return false
-        if (android.os.SystemClock.elapsedRealtime() > pendingPersonalMemoryExpiresAt) {
-            pendingPersonalMemory = null
-            pendingPersonalMemoryExpiresAt = 0L
-            pendingPersonalMemoryConfirmationInput.clear()
-            return false
-        }
-        val romanRaw = romanDisplayText(raw)
-        PersonalMemoryContextCorrection.resolve(romanRaw, candidate)?.let { replacement ->
-            markUserInteraction()
-            suppressModelForTurn = true
-            localCommandExecutedThisTurn = true
-            waitingForFreshInputAfterCommand = true
-            commandUserTextEmitted = true
-            output.clear()
-            commitFinalUserMessage(raw, "PERSONAL_MEMORY_CONTEXT_CORRECTION", romanRaw, romanRaw)
-            requestPersonalMemoryPermission(replacement)
-            resetTurnBuffers()
-            return true
-        }
-        appendTranscript(pendingPersonalMemoryConfirmationInput, romanRaw)
-        val combined = pendingPersonalMemoryConfirmationInput.toString()
-        val decision = MemoryConfirmationParser.parse(romanRaw)
-            ?: MemoryConfirmationParser.parse(raw)
-            ?: MemoryConfirmationParser.parse(combined)
-            ?: MemoryConfirmationParser.parse(combined.replace(" ", ""))
-        if (decision == null) return false
-
-        pendingPersonalMemory = null
-        pendingPersonalMemoryExpiresAt = 0L
-        pendingPersonalMemoryConfirmationInput.clear()
-        markUserInteraction()
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        commandUserTextEmitted = true
-        output.clear()
-        // "Haan"/"nahi" commonly interrupts the permission prompt. Clear its local
-        // validation state so the result confirmation starts immediately.
-        cancelSpeechForNewAction()
-        live?.interrupt()
-        commitFinalUserMessage(raw.trim(), "PERSONAL_MEMORY_CONFIRMATION")
-
-        if (decision == MemoryConfirmationDecision.NO) {
-            val message = "Theek hai, save nahi karungi."
-            listener?.onMyraText(message)
-            emitState(message)
-            queueLocalSpeech(
-                message,
-                allowUntranscribedAudio = true,
-                validationPolicy = LocalSpeechValidationPolicy.MEMORY
-            )
-            resetTurnBuffers()
-            return true
-        }
-
-        serviceScope.launch {
-            val result = if (decision == MemoryConfirmationDecision.ADD) {
-                memoryRepository.saveAdditionalBestFriend(candidate)
-            } else {
-                memoryRepository.save(candidate, permissionGranted = true)
-            }
-            val message = when (result) {
-                is MemoryWriteResult.Saved -> if (decision == MemoryConfirmationDecision.ADD) {
-                    "Theek hai, dono ko yaad rakhungi."
-                } else {
-                    "Theek hai, yaad rakhungi."
-                }
-                is MemoryWriteResult.NeedsPermission -> "Save karne ki permission clear nahi hui."
-                is MemoryWriteResult.Rejected -> "Ye memory safely save nahi kar sakti."
-            }
-            mainHandler.post {
-                listener?.onMyraText(message)
-                emitState(message)
-                queueLocalSpeech(
-                    message,
-                    allowUntranscribedAudio = true,
-                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                )
-                resetTurnBuffers()
-            }
-        }
-        return true
-    }
-
-    private fun handleSemanticToolCall(id: String, functionName: String, args: org.json.JSONObject) {
-        when (functionName) {
-            "propose_user_memory" -> {
-                handleSemanticMemoryProposal(id, args)
-                return
-            }
-            "perform_screen_action" -> {
-                handleScreenActionTool(id, args)
-                return
-            }
-            "propose_screen_memory" -> {
-                handleScreenMemoryProposal(id, args)
-                return
-            }
-            "perform_phone_action" -> Unit
-            else -> {
-                live?.sendToolResponse(id, functionName, false, "Unsupported tool")
-                return
-            }
-        }
-        if (localCommandExecutedThisTurn) {
-            // The deterministic parser already handled this same streamed utterance.
-            // A later Gemini tool call is an acknowledgement, not a second action.
-            live?.sendToolResponse(id, functionName, true, "Action was already handled locally")
-            return
-        }
-        val action = args.optString("action").uppercase(Locale.ROOT)
-        val guardedText = lastUserIntentText.ifBlank { input.toString().trim() }
-        if (CommandParser.isMemoryIntent(guardedText)) {
-            suppressModelForTurn = false
-            live?.sendToolResponse(id, functionName, false, "This is a memory request, not a phone action")
-            return
-        }
-        if (action == "TIME" && CommandParser.parse(guardedText) !is AppCommand.CurrentTime) {
-            suppressModelForTurn = false
-            live?.sendToolResponse(id, functionName, false, "The user mentioned time conversationally; no clock query was made")
-            return
-        }
-        if (action == "QUERY_WHATSAPP" && !CommandParser.isExplicitWhatsAppMessageQuery(guardedText)) {
-            suppressModelForTurn = false
-            live?.sendToolResponse(id, functionName, false, "No explicit WhatsApp notification query was made")
-            return
-        }
-        val target = args.optString("target").trim()
-        val query = args.optString("query").trim()
-        val pendingSearch = BrowserSearchRequestParser.parse(guardedText)
-        if (pendingSearch != null && action in setOf("YOUTUBE_SEARCH", "PLAY_YOUTUBE", "OPEN_APP")) {
-            // Gemini's streaming tool proposal is not a search destination owner. The
-            // final transcript is resolved once by executeUnifiedBrowserSearch().
-            voiceLog(
-                "SEARCH_EXECUTOR_ENTRY class=MyraVoiceService method=handleSemanticToolCall " +
-                    "turnId=$activeTurnId finalTranscript=false query=${pendingSearch.query.take(120)} " +
-                    "destination=CANDIDATE foregroundPackage=${AccessibilityHelperService.instance?.currentForegroundContext()?.packageName} " +
-                    "decision=REJECT_PRE_FINAL"
-            )
-            suppressModelForTurn = true
-            output.clear()
-            live?.sendToolResponse(
-                id, functionName, false,
-                "Search execution is owned by the final unified search task"
-            )
-            return
-        }
-        if (action == "YOUTUBE_SEARCH" && !SearchExecutionPolicy.mayExecute(authoritativeFinalTranscript = false)) {
-            // Search destination is authorized only from the complete final transcript.
-            // A speculative Live tool call may arrive while ASR is still partial and must
-            // never choose YouTube before SearchDestinationResolver sees current context.
-            voiceLog(
-                "search_execution_failed turnId=$activeTurnId reason=model_tool_before_final_authorization " +
-                    "candidate=YOUTUBE_SEARCH queryLength=${query.length}"
-            )
-            live?.sendToolResponse(
-                id, functionName, false,
-                "Search waits for the final authoritative transcript and contextual destination resolution"
-            )
-            return
-        }
-        val command: AppCommand? = when (action) {
-            "OPEN_APP" -> target.takeIf { it.length in 2..40 }?.let(AppCommand::OpenApp)
-            "CLOSE_APP" -> AppCommand.CloseCurrentApp(target.ifBlank { null })
-            "PLAY_YOUTUBE" -> AppCommand.PlayYouTube(query.ifBlank { null })
-            "OPEN_YOUTUBE_SHORTS" -> AppCommand.OpenYouTubeShorts
-            "REQUEST_INSTAGRAM_REELS" -> AppCommand.RequestInstagramReels
-            "SCROLL_DOWN" -> AppCommand.ScrollYouTube(AppCommand.ScrollDirection.DOWN)
-            "SCROLL_UP" -> AppCommand.ScrollYouTube(AppCommand.ScrollDirection.UP)
-            "SCROLL_REPEAT" -> AppCommand.ScrollYouTube(null)
-            "MEDIA_PAUSE" -> AppCommand.ControlMedia(AppCommand.MediaAction.PAUSE)
-            "MEDIA_PLAY" -> AppCommand.ControlMedia(AppCommand.MediaAction.PLAY)
-            "MEDIA_NEXT" -> AppCommand.ControlMedia(AppCommand.MediaAction.NEXT)
-            "MEDIA_PREVIOUS" -> AppCommand.ControlMedia(AppCommand.MediaAction.PREVIOUS)
-            "MEDIA_FIRST" -> AppCommand.ControlMedia(AppCommand.MediaAction.FIRST)
-            "FLASHLIGHT_ON" -> AppCommand.SetFlashlight(true)
-            "FLASHLIGHT_OFF" -> AppCommand.SetFlashlight(false)
-            "HOME" -> AppCommand.GoHome
-            "BACK" -> AppCommand.GoBack
-            "TIME" -> AppCommand.CurrentTime
-            "BATTERY" -> AppCommand.BatteryLevel
-            "TAKE_SCREENSHOT" -> AppCommand.TakeScreenshot
-            "LIST_FEATURES" -> AppCommand.ListFeatures
-            "QUERY_WHATSAPP" -> AppCommand.QueryWhatsAppMessages
-            else -> null
-        }
-        if (command == null) {
-            live?.sendToolResponse(id, functionName, false, "Missing or unsupported action details")
-            return
-        }
-        // A semantic tool call is a new action turn. Android remains the authority:
-        // Gemini chooses only from the allowlist, while the existing executor verifies
-        // accessibility, installed apps, and actual device capabilities.
-        localCommandExecutedThisTurn = false
-        waitingForFreshInputAfterCommand = false
-        executeCommand(command)
-        live?.sendToolResponse(id, functionName, true, "Android accepted the validated action")
-    }
-
-    private fun handleScreenActionTool(id: String, args: org.json.JSONObject) {
-        val intentText = lastUserIntentText.ifBlank { input.toString().trim() }
-        screenActionRegistry.cancel()?.let {
-            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=new_explicit_screen_command")
-        }
-        if (ScreenVisionIntentParser.parse(intentText) == null &&
-            UnifiedLyraAgentRuntime.agent.currentTask()?.interpretedGoal != com.myra.assistant.agent.AgentGoalType.TAP &&
-            fastVisualTurns.current()?.kind != FastVisualKind.ACTION
-        ) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "No explicit visible-screen action was requested")
-            return
-        }
-        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-            voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId source=perform_screen_action")
-            live?.sendToolResponse(id, "perform_screen_action", false, "This screen command was already committed for the current voice turn")
-            return
-        }
-        val toolTarget = args.optString("target_text").trim()
-        val toolPosition = args.optString("position").trim().takeIf { it.isNotBlank() && it != "unspecified" }
-            ?: when {
-                Regex("\\b(?:center|middle|beech)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "center"
-                Regex("\\b(?:left|baaye|baye)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "left"
-                Regex("\\b(?:right|daaye|daye)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "right"
-                Regex("\\b(?:top|upar)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "top"
-                Regex("\\b(?:bottom|neeche)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "bottom"
-                else -> null
-            }
-        val explicitTitle = toolTarget.ifBlank {
-            intentText.takeIf {
-                toolPosition == null && Regex("\\b(?:video|à¤µà¥€à¤¡à¤¿à¤¯à¥‹)\\b", RegexOption.IGNORE_CASE).containsMatchIn(it)
-            }.orEmpty()
-        }
-        val resolvedTarget = brain.resolveScreenTarget(
-            explicitTitle,
-            toolPosition,
-            args.optInt("ordinal", 0)
-        )
-        if (resolvedTarget == null) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "Visible target is ambiguous; ask the user to choose")
-            return
-        }
-        val target = resolvedTarget.targetText
-        val position = resolvedTarget.position
-        val ordinal = resolvedTarget.ordinal
-        val accessibility = AccessibilityHelperService.instance
-        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "LYRA Accessibility is disabled")
-            return
-        }
-        val foreground = accessibility.currentForegroundContext()
-        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
-        if (actionScope == null) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "Current Accessibility window is unavailable")
-            return
-        }
-        val beforeAccessibility = accessibility.visibleScreenSignature()
-        fastVisualTurns.current()?.let {
-            it.actionResolvedAt = android.os.SystemClock.elapsedRealtime()
-            voiceLog("visual_action_resolved visualTurnId=${it.id} target=${target.orEmpty().take(80)} position=${position.orEmpty()} ordinal=${ordinal ?: 0}")
-        }
-        val semanticHint = fastVisualTurns.current()?.semanticHint.orEmpty().lowercase(Locale.ROOT)
-        val direct = accessibility.resolveAndTapVisibleTarget(target, position, ordinal, actionScope) { candidate, _ ->
-            when {
-                semanticHint.contains("like") -> candidate.role == "like_control"
-                semanticHint.contains("subscribe") -> candidate.role == "subscribe_control" &&
-                    !candidate.label.lowercase(Locale.ROOT).contains("subscribed")
-                semanticHint.contains("comment") -> candidate.role == "comments_control"
-                else -> true
-            }
-        }
-        if (direct.accepted) {
-            fastVisualTurns.current()?.let {
-                it.actionExecutedAt = android.os.SystemClock.elapsedRealtime()
-                voiceLog(
-                    "visual_action_executed visualTurnId=${it.id} accepted=true " +
-                        "responseToActionMs=${if (it.firstModelResponseAt > 0L) it.actionExecutedAt - it.firstModelResponseAt else -1L} " +
-                        "speechEndToActionMs=${if (it.speechEndedAt > 0L) it.actionExecutedAt - it.speechEndedAt else -1L}"
-                )
-            }
-            voiceLog(
-                "agent_tool_selected tool=accessibility_click package=${actionScope.expectedPackage} " +
-                    "windowGeneration=${actionScope.expectedGeneration} targetResolution=${direct.resolution}"
-            )
-            mainHandler.postDelayed({
-                val stillOwned = com.myra.assistant.screen.ForegroundActionPolicy.canExecute(
-                    actionScope, accessibility.currentForegroundContext()
-                )
-                val changed = stillOwned && beforeAccessibility.isNotBlank() &&
-                    accessibility.visibleScreenSignature() != beforeAccessibility
-                fastVisualTurns.current()?.let {
-                    it.verificationAt = android.os.SystemClock.elapsedRealtime()
-                    voiceLog("visual_verification_complete visualTurnId=${it.id} verified=$changed totalVisualTurnMs=${it.verificationAt - it.startedAt}")
-                    fastVisualTurns.finish(it.id)
-                }
-                voiceLog("agent_verification tool=accessibility_click accepted=true verified=$changed")
-                live?.sendToolResponse(
-                    id, "perform_screen_action", changed,
-                    if (changed) "Accessibility action verified" else "Action was accepted but the expected screen change was not verified"
-                )
-            }, 350L)
-            return
-        }
-        // Normal visual actions never request MediaProjection. The model already
-        // received a fresh Accessibility screenshot when visual fallback was used.
-        live?.sendToolResponse(
-            id, "perform_screen_action", false,
-            if (direct.resolution == "ambiguous") "Visible target is ambiguous; ask the user to choose"
-            else "No current Accessibility target matched; ask a short clarification"
-        )
-        return
-    }
-
-    private fun beginFreshScreenQuery(
-        question: String,
-        userTurnId: Long,
-        visualRequest: FastVisualRequest = FastVisualRequestClassifier.classify(question)
-            ?: FastVisualRequest(FastVisualKind.QUESTION, "screen_question")
-    ) {
-        screenQuestionDetectedAt = android.os.SystemClock.elapsedRealtime()
-        val identity = voiceTurnIdentities.current()?.takeIf { it.userTurnId == userTurnId }
-        val boundSpeechTurnId = identity?.transcriptTurnId ?: speechTimingTurnId
-        val boundSpeechEndAt = identity?.speechEndAt?.takeIf { it > 0L } ?: speechActivityEndedAt
-        val speechTiming = ScreenQueryTimingPolicy.bind(userTurnId, boundSpeechTurnId, boundSpeechEndAt)
-        screenQuerySpeechTurnConsistency = speechTiming.consistent
-        screenResponseSpeechEndedAt = speechTiming.speechEndAt
-        voiceLog(
-            "screen_query_timing_bound userTurnId=$userTurnId speechTimingTurnId=$boundSpeechTurnId " +
-                "speechStartAt=${identity?.speechStartAt ?: speechActivityStartedAt} speechEndAt=$screenResponseSpeechEndedAt " +
-                "transcriptTurnId=${identity?.transcriptTurnId ?: 0L} finalTranscriptId=${identity?.finalTranscriptId.orEmpty()} " +
-                "intentDetectedAt=$screenQuestionDetectedAt screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency"
-        )
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        output.clear()
-        val foreground = AccessibilityHelperService.instance?.currentForegroundContext()
-        val visualTurn = foreground?.let {
-            fastVisualTurns.begin(userTurnId, visualRequest, it.packageName, it.windowId, it.generation,
-                screenResponseSpeechEndedAt, screenQuestionDetectedAt)
-        }
-        visualTurn?.apply {
-            authoritativeTurnCompleteAt = screenResponseSpeechEndedAt
-            finalTranscriptAt = latestTurnAcceptedAt.takeIf { latestIntentTimingTurnId == userTurnId } ?: 0L
-            intentResolvedAt = latestIntentDecidedAt.takeIf { latestIntentTimingTurnId == userTurnId } ?: screenQuestionDetectedAt
-        }
-        voiceLog(
-            "visual_turn_started visualTurnId=${visualTurn?.id.orEmpty()} userTurnId=$userTurnId " +
-                "kind=${visualRequest.kind} package=${foreground?.packageName.orEmpty()} " +
-                "windowId=${foreground?.windowId ?: -1} generation=${foreground?.generation ?: -1}"
-        )
-        voiceLog(
-            "visualTurnAccepted visualTurnId=${visualTurn?.id.orEmpty()} at=$screenQuestionDetectedAt " +
-                "intentToVisualTurnMs=${if (latestIntentDecidedAt > 0L) screenQuestionDetectedAt - latestIntentDecidedAt else -1L}"
-        )
-        // Preserve an active media-speech candidate when LYRA is already silent;
-        // interrupt/reset is only needed for a genuine barge-in on LYRA playback.
-        if (localAudioSpeaking) audio?.interrupt()
-        if (visualRequest.kind == FastVisualKind.QUESTION && tryInstantAccessibilityAnswer(question, userTurnId)) {
-            visualTurn?.let { fastVisualTurns.finish(it.id) }
-            return
-        }
-        if (visualAwarenessPreferences.enabled && beginAccessibilityScreenQuery(question, userTurnId, visualRequest)) return
-        if (!visualAwarenessPreferences.enabled) {
-            voiceLog("screen_query_terminal state=REJECTED_VISUAL_AWARENESS_OFF userTurnId=$userTurnId")
-            visualTurn?.let {
-                voiceLog("TOTAL_VISUAL_TURN visualTurnId=${it.id} route=EYE_OFF_LOCAL totalVisualTurnMs=${android.os.SystemClock.elapsedRealtime() - it.startedAt}")
-                fastVisualTurns.finish(it.id)
-            }
-            speakScreenUnavailable("Visual awareness off hai. Eye button on karo.")
-            return
-        }
-        // Android 10 and older do not expose AccessibilityService.takeScreenshot.
-        // A user-started continuous projection is the explicit legacy fallback.
-        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-            voiceLog("screen_query_terminal state=REJECTED_SCREEN_INACTIVE userTurnId=$userTurnId")
-            speakScreenUnavailable(
-                if (ScreenCaptureService.currentState == ScreenShareState.PAUSED) "Screen Vision paused hai. Floating control se resume karo."
-                else "Screen Vision abhi active nahi hai."
-            )
-            return
-        }
-        if (tryInstantScreenAnswer(question, userTurnId)) return
-        val query = ScreenCaptureService.requestFreshFrame(userTurnId) { result ->
-            mainHandler.post {
-                when (result) {
-                    is FreshFrameResult.Unavailable -> {
-                        voiceLog("screen_frame_unavailable reason=${result.reason} screen_query_id=${result.query.queryId} screen_session_id=${result.query.sessionId}")
-                        voiceLog("screen_query_terminal screenQueryId=${result.query.queryId} state=CAPTURE_FAILED reason=${result.reason}")
-                        speakScreenUnavailable("Fresh screen frame nahi mili. Ek baar phir try karo.")
-                    }
-                    is FreshFrameResult.Ready -> {
-                        val frame = result.frame
-                        if (!ScreenCaptureService.session.isCurrent(result.query.sessionId)) {
-                            voiceLog("screen_query_result_dropped_stale screen_query_id=${result.query.queryId} screen_session_id=${result.query.sessionId} reason=session_invalid_before_send")
-                            return@post
-                        }
-                        voiceLog("screen_query_state screenQueryId=${result.query.queryId} state=FRAME_SELECTED frameId=${frame.frameId}")
-                        val accessibility = AccessibilityHelperService.instance
-                        val elements = accessibility?.visibleElements(100).orEmpty()
-                        val privacyResult = ScreenFramePrivacyFilter.apply(
-                            jpeg = frame.bytes,
-                            elements = elements,
-                            screenWidth = resources.displayMetrics.widthPixels,
-                            screenHeight = resources.displayMetrics.heightPixels,
-                            enabled = screenVisionPreferences.sensitiveContentProtection
-                        )
-                        if (privacyResult is ScreenPrivacyResult.Blocked) {
-                            voiceLog(
-                                "screen_privacy_filter screenQueryId=${result.query.queryId} frameId=${frame.frameId} " +
-                                    "sensitiveProtectionEnabled=true sensitiveScanResult=SENSITIVE sensitiveCategoryDetected=${privacyResult.categories} " +
-                                    "sensitiveRegionCount=0 redactionApplied=false fullFrameBlocked=true blockReason=${privacyResult.reason} safePixelsPreserved=false"
-                            )
-                            voiceLog("screen_query_terminal screenQueryId=${result.query.queryId} state=REJECTED_PRIVACY")
-                            speakScreenPrivacyBlocked()
-                            return@post
-                        }
-                        val allowed = privacyResult as ScreenPrivacyResult.Allowed
-                        voiceLog(
-                            "screen_privacy_filter screenQueryId=${result.query.queryId} frameId=${frame.frameId} " +
-                                "sensitiveProtectionEnabled=${screenVisionPreferences.sensitiveContentProtection} " +
-                                "sensitiveScanResult=${if (allowed.regionCount > 0) "REDACTED" else "SAFE"} " +
-                                "sensitiveCategoryDetected=${allowed.categories} sensitiveRegionCount=${allowed.regionCount} " +
-                                "redactionApplied=${allowed.redactionApplied} fullFrameBlocked=false blockReason=none safePixelsPreserved=true"
-                        )
-                        screenResponseActive = true
-                        screenResponseHasContent = false
-                        screenResponseStartedLogged = false
-                        screenResponseGenerationComplete = false
-                        screenResponseTextCommitted = false
-                        screenResponseUserTurnId = result.query.userTurnId
-                        screenResponseAfterGenerationId = latestObservedModelGenerationId
-                        screenResponseGenerationId = 0L
-                        screenResponseBinding = ScreenResponseBinding(
-                            result.query.userTurnId, result.query.queryId, result.query.sessionId,
-                            latestObservedModelGenerationId
-                        )
-                        screenResponseSessionId = result.query.sessionId
-                        screenResponseQueryId = result.query.queryId
-                        screenFreshFrameCapturedAt = frame.capturedAt
-                        val now = android.os.SystemClock.elapsedRealtime()
-                        val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }.joinToString("\n") {
-                            "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]${if (it.clickable) " clickable" else ""}"
-                        }.take(12_000)
-                        screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
-                        voiceLog(
-                            "frame_used_for_query screen_query_id=${result.query.queryId} userTurnId=${result.query.userTurnId} " +
-                                "screen_session_id=${frame.sessionId} frame_id=${frame.frameId} frame_age_ms=${now - frame.capturedAt} " +
-                                "frame_hash=${frame.hash} speechEndAt=$screenResponseSpeechEndedAt screenQuestionDetectedAt=$screenQuestionDetectedAt " +
-                                "freshCaptureRequestedAt=${result.query.requestedAt} freshFrameCapturedAt=${frame.capturedAt} frameEncodedAt=${frame.encodedAt} " +
-                                "frameSource=${frame.source} frameAgeAtQueryMs=${(now - frame.capturedAt).coerceAtLeast(0L)} " +
-                                "intentToFrameMs=${(now - screenQuestionDetectedAt).coerceAtLeast(0L)} captureToEncodeMs=${frame.encodedAt - frame.capturedAt} " +
-                                "frameToGeminiSendMs=${(screenFrameSentAt - frame.encodedAt).coerceAtLeast(0L)} frameSentToGeminiAt=$screenFrameSentAt " +
-                                "screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency " +
-                                "speechEndToIntentMs=${if (screenQuerySpeechTurnConsistency) (screenQuestionDetectedAt - screenResponseSpeechEndedAt).coerceAtLeast(0L) else -1L}"
-                        )
-                        voiceLog("screen_query_state screenQueryId=${result.query.queryId} state=SENT frameId=${frame.frameId}")
-                        voiceLog(
-                            "VISION_REQUEST_STARTED screenQueryId=${result.query.queryId} screen_session_id=${result.query.sessionId} " +
-                                "frame_id=${frame.frameId} timestamp=$screenFrameSentAt frameWaitMs=${(now - result.query.requestedAt).coerceAtLeast(0L)}"
-                        )
-                        live?.sendImage(
-                            allowed.bytes, "image/jpeg",
-                            "$question\nDescribe only the newest supplied screen frame for query ${result.query.queryId}. " +
-                                "Do not answer from older visual context. If text is readable, summarize only the visible page; never invent hidden or offscreen content. " +
-                                "Screen sharing is ACTIVE. Current safe accessibility elements:\n$ui\n" +
-                                "If uncertain, say exactly what is uncertain. Keep the spoken answer to one or two complete sentences."
-                        )
-                        mainHandler.postDelayed({
-                            if (screenResponseActive && screenResponseQueryId == result.query.queryId && !screenResponseHasContent) {
-                                voiceLog("screen_query_orphaned screenQueryId=${result.query.queryId} lastState=SENT userTurnId=${result.query.userTurnId}")
-                            }
-                        }, SCREEN_QUERY_DIAGNOSTIC_TIMEOUT_MS)
-                    }
-                }
-            }
-        }
-        if (query == null) speakScreenUnavailable("Screen Vision initialize ho raha hai. Ek baar phir try karo.")
-        else voiceLog("screen_query_created screen_query_id=${query.queryId} screen_session_id=${query.sessionId} userTurnId=$userTurnId state=CREATED")
-    }
-
-    private fun tryInstantAccessibilityAnswer(question: String, userTurnId: Long): Boolean {
-        val queryType = ScreenVisionIntentParser.parseInstantQuery(question) ?: return false
-        if (queryType != InstantScreenQuery.CURRENT_APP) return false
-        val context = ActivityContextStore.snapshot() ?: return false
-        val now = android.os.SystemClock.elapsedRealtime()
-        if ((now - context.timestamp).coerceAtLeast(0L) > 1_500L) return false
-        val safe = context.visibleElements.asSequence().map { it.label }
-            .filter { it.length >= 3 && ScreenPrivacyPolicy.sensitiveCategory(it) == null }
-            .distinct().take(3).toList()
-        val answer = when (queryType) {
-            InstantScreenQuery.CURRENT_APP -> context.appLabel?.let { "$it open hai." }
-                ?: "${context.packageName.substringAfterLast('.')} open hai."
-            InstantScreenQuery.OVERVIEW -> when {
-                safe.isNotEmpty() -> "${context.appLabel ?: context.packageName.substringAfterLast('.')} open hai. Screen par ${safe.joinToString(", ")} dikh raha hai."
-                else -> null
-            }
-        } ?: return false
-        voiceLog("TOTAL_SCREEN_RESPONSE screenQueryId=a11y-cache-$userTurnId route=ACCESSIBILITY_CONTEXT total_ms=0 screenshotUsed=false")
-        emitState(answer)
-        queueLocalSpeech(answer, allowUntranscribedAudio = true)
-        return true
-    }
-
-    private fun beginAccessibilityScreenQuery(
-        question: String,
-        userTurnId: Long,
-        visualRequest: FastVisualRequest = FastVisualRequest(FastVisualKind.QUESTION, "screen_question")
-    ): Boolean {
-        val accessibility = AccessibilityHelperService.instance ?: return false
-        val foreground = accessibility.currentForegroundContext() ?: return false
-        val requestedAt = android.os.SystemClock.elapsedRealtime()
-        val queryId = "a11y-$userTurnId-${requestedAt.toString(16)}"
-        val visualTurnId = fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.id
-        fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameRequestedAt = requestedAt
-        voiceLog("visualFrameRequested visualTurnId=${visualTurnId.orEmpty()} screenQueryId=$queryId at=$requestedAt")
-        if (visualTurnId == null) return false
-        val acquisitionGate = VisualAcquisitionGate(visualTurnId, requestedAt)
-        val outerTimeout = visualDeadlineExecutor.schedule({
-            val now = android.os.SystemClock.elapsedRealtime()
-            if (!acquisitionGate.tryTimeout(now)) return@schedule
-            voiceLog(
-                "visual_frame_outer_timeout visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                    "elapsedMs=${now - requestedAt} timeoutMs=${VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS}"
-            )
-            // Deadline fallback must not queue behind the very image worker it is
-            // timing out. This executor owns only deadlines and can terminate the turn
-            // even if frame delivery is blocked.
-            if (fastVisualTurns.owns(visualTurnId)) {
-                completeScreenQuestionFromSemanticScene(question, userTurnId, visualTurnId, queryId, foreground)
-            }
-        }, VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        val accepted = accessibility.requestFreshVisualScreenshot(
-            ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS,
-            requestToken = queryId,
-            isCurrentRequest = {
-                acquisitionGate.mayDispatch(fastVisualTurns.current()?.id, android.os.SystemClock.elapsedRealtime())
-            }
-        ) { result ->
-            val scheduledAt = android.os.SystemClock.elapsedRealtime()
-            if (!acquisitionGate.onPlatformCallback(fastVisualTurns.current()?.id, scheduledAt)) {
-                voiceLog(
-                    "visualFrameDeliveryScheduled visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "accepted=false reason=callback_after_outer_deadline_or_replacement taskAgeMs=${scheduledAt - requestedAt}"
-                )
-                return@requestFreshVisualScreenshot
-            }
-            val queueDepth = visualFrameDeliveryExecutor.queue.size
-            voiceLog(
-                "visualFrameDeliveryScheduled visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                    "timestamp=$scheduledAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
-                    "queueDepth=$queueDepth taskAgeMs=${scheduledAt - requestedAt}"
-            )
-            visualFrameDeliveryExecutor.execute {
-                val deliveryStartedAt = android.os.SystemClock.elapsedRealtime()
-                voiceLog(
-                    "visualFrameDeliveryStarted visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "timestamp=$deliveryStartedAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
-                        "queueDepth=${visualFrameDeliveryExecutor.queue.size} taskAgeMs=${deliveryStartedAt - requestedAt} lockWaitMs=0"
-                )
-                // The outer deadline owns the complete operation through usable-frame
-                // delivery. Android callback success alone must not complete this gate.
-                if (!acquisitionGate.tryComplete(fastVisualTurns.current()?.id, deliveryStartedAt)) {
-                    result.getOrNull()?.screenshot?.let {
-                        voiceLog(
-                            "visualFrameDelivered visualTurnId=$visualTurnId screenQueryId=$queryId accepted=false " +
-                                "reason=outer_deadline_or_replaced cacheWarmOnly=true taskAgeMs=${deliveryStartedAt - requestedAt}"
-                        )
-                    }
-                    voiceLog(
-                        "screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=$visualTurnId " +
-                            "reason=outer_deadline_or_replaced"
-                    )
-                    return@execute
-                }
-                outerTimeout.cancel(false)
-                if (visualTurnId == null || !fastVisualTurns.owns(visualTurnId)) {
-                    voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=${visualTurnId.orEmpty()} reason=visual_turn_replaced")
-                    return@execute
-                }
-                val selection = result.getOrNull()
-                if (selection == null) {
-                    val reason = result.exceptionOrNull()?.message ?: "accessibility_screenshot_failed"
-                    voiceLog("screenshot_failure_reason screenQueryId=$queryId reason=$reason")
-                    voiceLog("agent_observation package=${foreground.packageName} screenshotUsed=false reason=$reason")
-                    completeScreenQuestionFromSemanticScene(
-                        question, userTurnId, visualTurnId, queryId, foreground
-                    )
-                    return@execute
-                }
-                val screenshot = selection.screenshot
-                val current = accessibility.currentForegroundContext()
-                if (current == null || current.packageName != screenshot.packageName ||
-                    current.windowId != screenshot.windowId || current.generation != screenshot.generation
-                ) {
-                    voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId reason=accessibility_context_changed")
-                    fastVisualTurns.finish(visualTurnId)
-                    return@execute
-                }
-                val frameReadyAt = android.os.SystemClock.elapsedRealtime()
-                fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameReadyAt = frameReadyAt
-                voiceLog(
-                    "visual_frame_ready visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "visualFrameSource=${selection.source} selectionReason=${if (selection.source == com.myra.assistant.screen.VisualFrameSource.ACCESSIBILITY_CACHE) "fresh_matching_cache" else "cache_stale_or_changed"} " +
-                        "frameAgeMs=${(frameReadyAt - screenshot.capturedAt).coerceAtLeast(0L)} " +
-                        "visualFrameAcquisitionMs=${(frameReadyAt - requestedAt).coerceAtLeast(0L)} " +
-                        "speechEndToFrameReadyMs=${if (screenResponseSpeechEndedAt > 0L) frameReadyAt - screenResponseSpeechEndedAt else -1L}"
-                )
-                voiceLog(
-                    "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "at=$frameReadyAt visualFrameSource=${selection.source}"
-                )
-                voiceLog(
-                    "visualFrameDelivered visualTurnId=$visualTurnId screenQueryId=$queryId accepted=true " +
-                        "timestamp=$frameReadyAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
-                        "queueDepth=${visualFrameDeliveryExecutor.queue.size} taskAgeMs=${frameReadyAt - requestedAt}"
-                )
-                // Reuse the already-published semantic scene. Rewalking a large
-                // Accessibility tree here previously delayed the visual model request.
-                val elements = ActivityContextStore.snapshot()?.takeIf {
-                    it.packageName == current.packageName && it.windowId == current.windowId &&
-                        it.generation == current.generation
-                }?.visibleElements?.take(60)?.map {
-                    VisibleScreenElement(
-                        it.label,
-                        android.graphics.Rect(it.left, it.top, it.right, it.bottom),
-                        it.actionable,
-                        it.role.name
-                    )
-                }.orEmpty()
-                val privacyResult = ScreenFramePrivacyFilter.apply(
-                    screenshot.bytes, elements, screenshot.width, screenshot.height,
-                    screenVisionPreferences.sensitiveContentProtection
-                )
-                if (privacyResult is ScreenPrivacyResult.Blocked) {
-                    voiceLog("screen_query_terminal screenQueryId=$queryId state=REJECTED_PRIVACY source=ACCESSIBILITY_SCREENSHOT")
-                    fastVisualTurns.finish(visualTurnId)
-                    speakScreenPrivacyBlocked()
-                    return@execute
-                }
-                val allowed = privacyResult as ScreenPrivacyResult.Allowed
-                screenResponseActive = true
-                screenResponseHasContent = false
-                screenResponseStartedLogged = false
-                screenResponseGenerationComplete = false
-                screenResponseTextCommitted = false
-                screenResponseUserTurnId = userTurnId
-                screenResponseAfterGenerationId = latestObservedModelGenerationId
-                screenResponseGenerationId = 0L
-                val sessionId = "accessibility:${current.packageName}:${current.generation}"
-                screenResponseBinding = ScreenResponseBinding(userTurnId, queryId, sessionId, latestObservedModelGenerationId)
-                screenResponseSessionId = sessionId
-                screenResponseQueryId = queryId
-                screenResponseAccessibilityPackage = current.packageName
-                screenResponseAccessibilityGeneration = current.generation
-                screenFreshFrameCapturedAt = screenshot.capturedAt
-                screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
-                fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.modelRequestAt = screenFrameSentAt
-                val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
-                    .joinToString("\n") { "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]" }
-                    .take(4_000)
-                voiceLog(
-                    "agent_observation package=${current.packageName} windowGeneration=${current.generation} " +
-                        "semanticElements=${ActivityContextStore.snapshot()?.visibleElements?.size ?: 0} screenshotUsed=true"
-                )
-                voiceLog(
-                    "VISION_REQUEST_STARTED screenQueryId=$queryId source=ACCESSIBILITY_SCREENSHOT " +
-                        "captureMs=${screenFrameSentAt - requestedAt} bytes=${allowed.bytes.size}"
-                )
-                voiceLog(
-                    "visual_model_request_sent visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "frameReadyToModelRequestMs=${(screenFrameSentAt - frameReadyAt).coerceAtLeast(0L)}"
-                )
-                voiceLog(
-                    "visual_model_payload visualTurnId=$visualTurnId imageEncodedBytes=${allowed.bytes.size} " +
-                        "imageDimensions=${screenshot.width}x${screenshot.height} semanticContextChars=${ui.length} " +
-                        "semanticElementCount=${elements.size} requestPayloadBytes=${allowed.bytes.size + ui.toByteArray().size + question.toByteArray().size} " +
-                        "networkSendAt=$screenFrameSentAt"
-                )
-                voiceLog("visualModelRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt")
-                voiceLog("ttsRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt owner=CONTROLLED_SCREEN")
-                val visualInstruction = if (visualRequest.kind == FastVisualKind.ACTION) {
-                    "This is a visual action. Identify exactly one safe current-screen target. " +
-                        "Call perform_screen_action with its semantic label or position. Do not answer conversationally or claim success."
-                } else {
-                    "Answer the user's current-screen question directly in one or two complete sentences."
-                }
-                live?.sendImage(
-                    allowed.bytes, "image/jpeg",
-                    "$question\nUse only this fresh Accessibility screenshot and current safe UI elements. " +
-                        "Do not infer hidden content. $visualInstruction\n$ui"
-                )
-            }
-        }
-        if (accepted) {
-            voiceLog("screen_query_created screen_query_id=$queryId source=ACCESSIBILITY_SCREENSHOT userTurnId=$userTurnId")
-        } else {
-            outerTimeout.cancel(false)
-        }
-        return accepted
-    }
-
-    private fun completeScreenQuestionFromSemanticScene(
-        question: String,
-        userTurnId: Long,
-        visualTurnId: String,
-        queryId: String,
-        expected: com.myra.assistant.screen.ForegroundAppContext
-    ) {
-        val scene = ActivityContextStore.snapshot()?.takeIf {
-            SemanticScreenFallbackPolicy.mayAnswer(
-                expected.packageName, expected.windowId, expected.generation,
-                it.packageName, it.windowId, it.generation, it.visibleElements.size,
-                android.os.SystemClock.elapsedRealtime() - it.timestamp
-            )
-        }
-        val labels = scene?.visibleElements.orEmpty().asSequence()
-            .map { it.label.trim() }
-            .filter { it.length >= 3 && ScreenPrivacyPolicy.sensitiveCategory(it) == null }
-            .distinct().take(4).toList()
-        if (scene == null || labels.isEmpty()) {
-            fastVisualTurns.finish(visualTurnId)
-            voiceLog("screen_query_terminal screenQueryId=$queryId state=CAPTURE_FAILED visualSource=NONE")
-            speakScreenUnavailable("Current screen image nahi mili.")
-            return
-        }
-        val app = scene.appLabel ?: scene.packageName.substringAfterLast('.')
-        val answer = "$app open hai. Screen par ${labels.joinToString(", ")} dikh raha hai."
-        val now = android.os.SystemClock.elapsedRealtime()
-        voiceLog(
-            "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId at=$now " +
-                "visualFrameSource=SEMANTIC_SCREEN semanticElements=${scene.visibleElements.size}"
-        )
-        voiceLog(
-            "TOTAL_VISUAL_TURN visualTurnId=$visualTurnId route=SEMANTIC_SCREEN " +
-                "visualFrameAcquisitionMs=${now - (fastVisualTurns.current()?.frameRequestedAt ?: now)}"
-        )
-        fastVisualTurns.finish(visualTurnId)
-        emitState(answer)
-        queueLocalSpeech(answer, allowUntranscribedAudio = true)
-    }
-
-    private fun isScreenResponseContextCurrent(): Boolean {
-        if (!screenResponseSessionId.startsWith("accessibility:")) {
-            return ScreenCaptureService.session.isCurrent(screenResponseSessionId)
-        }
-        val current = AccessibilityHelperService.instance?.currentForegroundContext() ?: return false
-        return current.packageName == screenResponseAccessibilityPackage &&
-            current.generation == screenResponseAccessibilityGeneration
-    }
-
-    private fun tryInstantScreenAnswer(question: String, userTurnId: Long): Boolean {
-        val queryType = ScreenVisionIntentParser.parseInstantQuery(question) ?: return false
-        val now = android.os.SystemClock.elapsedRealtime()
-        val context = ScreenContextStore.freshSnapshot(
-            ScreenCaptureService.session.sessionId, now, ScreenCacheUse.QUESTION
-        ) ?: run {
-            voiceLog("FRAME_STALE userTurnId=$userTurnId route=HOT_SCREEN_CACHE fallback=VISION")
-            return false
-        }
-        val safeText = context.summary.visibleText.filter {
-            ScreenPrivacyPolicy.sensitiveCategory(it) == null
-        }
-        val app = context.summary.appName ?: context.summary.packageName?.substringAfterLast('.')
-        val answer = when (queryType) {
-            InstantScreenQuery.CURRENT_APP -> app?.let { "$it open hai." }
-            InstantScreenQuery.OVERVIEW -> {
-                val useful = safeText.filter { it.length >= 3 }.distinct().take(3)
-                when {
-                    useful.isNotEmpty() && app != null -> "$app open hai. Screen par ${useful.joinToString(", ")} dikh raha hai."
-                    useful.isNotEmpty() -> "Screen par ${useful.joinToString(", ")} dikh raha hai."
-                    app != null -> "$app open hai, lekin readable text clear nahi hai."
-                    else -> null
-                }
-            }
-        } ?: return false
-        val newestAt = maxOf(context.frameTimestamp, context.accessibilityTimestamp)
-        instantScreenQueryId = "hot-$userTurnId-${now.toString(16)}"
-        instantScreenQueryStartedAt = screenResponseSpeechEndedAt.takeIf {
-            screenQuerySpeechTurnConsistency && it > 0L
-        } ?: now
-        instantScreenCacheAgeMs = (now - newestAt).coerceAtLeast(0L)
-        voiceLog(
-            "FRAME_SELECTED screenQueryId=$instantScreenQueryId userTurnId=$userTurnId source=HOT_SCREEN_CACHE " +
-                "screen_session_id=${context.screenSessionId} frame_id=${context.frameId} frame_age_ms=$instantScreenCacheAgeMs"
-        )
-        voiceLog(
-            "TOTAL_SCREEN_RESPONSE screenQueryId=$instantScreenQueryId route=HOT_SCREEN_CACHE stage=ANSWER_READY " +
-                "voice_ms=-1 capture_ms=0 accessibility_ms=0 vision_ms=0 gemini_ms=0 tts_ms=-1 " +
-                "total_ms=${(now - instantScreenQueryStartedAt).coerceAtLeast(0L)}"
-        )
-        emitState(answer)
-        queueLocalSpeech(answer, allowUntranscribedAudio = true)
-        return true
-    }
-
-    private fun armScreenQuestion(
-        question: String,
-        userTurnId: Long,
-        source: String,
-        finalTranscriptCommitted: Boolean = false
-    ) {
-        if (question.isBlank() || userTurnId == 0L) return
-        armedScreenQuestion = question
-        armedScreenQuestionTurnId = userTurnId
-        armedScreenQuestionDetectedAt = android.os.SystemClock.elapsedRealtime()
-        armedScreenQuestionFinalCommitted = finalTranscriptCommitted
-        voiceLog(
-            "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt userTurnId=$userTurnId source=$source " +
-                "speechEndAt=$speechActivityEndedAt finalTranscriptAt=0 stableFinalBubbleCommitted=false"
-        )
-        // ASR chunks and local VAD are independent streams. The stable read-only screen
-        // question often arrives after VAD has already ended, so it must not wait for a
-        // second speech edge or Gemini's delayed final transcript.
-        if (com.myra.assistant.screen.EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd(
-                question, ordinaryModelAudioGate.isSpeechActive()
-            ) && speechActivityEndedAt > 0L
-        ) {
-            mainHandler.postDelayed(
-                { dispatchArmedScreenQuestionAtSpeechEnd() },
-                com.myra.assistant.screen.EarlyScreenQuestionPolicy.STABILIZATION_MS
-            )
-        }
-    }
-
-    private fun dispatchArmedScreenQuestionAtSpeechEnd() {
-        val question = armedScreenQuestion.takeIf { it.isNotBlank() } ?: return
-        val turnId = armedScreenQuestionTurnId.takeIf { it != 0L } ?: return
-        if (screenResponseActive) return
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (!com.myra.assistant.screen.ArmedScreenQuestionPolicy.mayDispatchForIdentity(
-                turnId, voiceTurnIdentities.current()?.userTurnId
-            )) {
-            voiceLog(
-                "screen_query_armed_cancelled userTurnId=$turnId reason=replaced_voice_identity " +
-                    "ageMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
-            )
-            armedScreenQuestion = ""
-            armedScreenQuestionTurnId = 0L
-            armedScreenQuestionDetectedAt = 0L
-            armedScreenQuestionFinalCommitted = false
-            return
-        }
-        val stabilizationRemaining = com.myra.assistant.screen.EarlyScreenQuestionPolicy.STABILIZATION_MS -
-            (now - armedScreenQuestionDetectedAt)
-        if (stabilizationRemaining > 0L) {
-            mainHandler.postDelayed({ dispatchArmedScreenQuestionAtSpeechEnd() }, stabilizationRemaining)
-            return
-        }
-        voiceLog(
-            "screen_query_early_dispatch userTurnId=$turnId speech_end_at=$speechActivityEndedAt " +
-                "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt speechEndToIntentMs=${(armedScreenQuestionDetectedAt - speechActivityEndedAt).coerceAtLeast(0L)} " +
-                "intentToDispatchMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
-        )
-        earlyScreenQueryAwaitingFinalTranscript = !armedScreenQuestionFinalCommitted
-        earlyScreenQuestionText = question
-        earlyScreenQueryDispatchedTurnId = turnId
-        beginFreshScreenQuery(question, turnId)
-        armedScreenQuestion = ""
-        armedScreenQuestionTurnId = 0L
-        armedScreenQuestionDetectedAt = 0L
-        armedScreenQuestionFinalCommitted = false
-    }
-
-    private fun speakScreenUnavailable(message: String) {
-        screenResponseActive = false
-        screenResponseHasContent = false
-        screenResponseStartedLogged = false
-        screenResponseGenerationComplete = false
-        screenResponseTextCommitted = false
-        screenResponseUserTurnId = 0L
-        screenResponseAfterGenerationId = 0L
-        screenResponseGenerationId = 0L
-        screenResponseBinding = null
-        screenResponseSessionId = ""
-        screenResponseAccessibilityPackage = ""
-        screenResponseAccessibilityGeneration = 0L
-        screenResponseQueryId = ""
-        listener?.onMyraText(message, true)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-    }
-
-    private fun speakScreenPrivacyBlocked() {
-        val message = "Sensitive information visible hai, isliye main screen details read nahi kar rahi."
-        listener?.onMyraText(message, true)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-    }
-
-    private fun finishScreenResponse(reason: String) {
-        fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId }?.let {
-            val now = android.os.SystemClock.elapsedRealtime()
-            voiceLog(
-                "TOTAL_VISUAL_TURN visualTurnId=${it.id} reason=$reason " +
-                    "speechEndToAuthoritativeTurnMs=${if (it.speechEndedAt > 0L && it.authoritativeTurnCompleteAt > 0L) it.authoritativeTurnCompleteAt - it.speechEndedAt else -1L} " +
-                    "authoritativeTurnToTranscriptMs=${if (it.authoritativeTurnCompleteAt > 0L && it.finalTranscriptAt > 0L) it.finalTranscriptAt - it.authoritativeTurnCompleteAt else -1L} " +
-                    "transcriptToIntentMs=${if (it.finalTranscriptAt > 0L && it.intentResolvedAt > 0L) it.intentResolvedAt - it.finalTranscriptAt else -1L} " +
-                    "intentToVisualFrameMs=${if (it.intentResolvedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.intentResolvedAt else -1L} " +
-                    "visualFrameAcquisitionMs=${if (it.frameRequestedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.frameRequestedAt else -1L} " +
-                    "speechEndToFrameReadyMs=${if (it.speechEndedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.speechEndedAt else -1L} " +
-                    "frameReadyToModelRequestMs=${if (it.frameReadyAt > 0L && it.modelRequestAt > 0L) it.modelRequestAt - it.frameReadyAt else -1L} " +
-                    "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L && it.firstModelResponseAt > 0L) it.firstModelResponseAt - it.modelRequestAt else -1L} " +
-                    "responseToActionMs=${if (it.firstModelResponseAt > 0L && it.actionExecutedAt > 0L) it.actionExecutedAt - it.firstModelResponseAt else -1L} " +
-                    "speechEndToActionMs=${if (it.speechEndedAt > 0L && it.actionExecutedAt > 0L) it.actionExecutedAt - it.speechEndedAt else -1L} " +
-                    "speechEndToFirstAudioMs=${if (it.speechEndedAt > 0L && it.firstAudioAt > 0L) it.firstAudioAt - it.speechEndedAt else -1L} " +
-                    "visualResultToReplyQueuedMs=${if (it.firstModelResponseAt > 0L && it.replyQueuedAt > 0L) it.replyQueuedAt - it.firstModelResponseAt else -1L} " +
-                    "replyQueuedToFirstAudioMs=${if (it.replyQueuedAt > 0L && it.firstAudioAt > 0L) it.firstAudioAt - it.replyQueuedAt else -1L} " +
-                    "speechEndToFirstPlaybackMs=${if (it.speechEndedAt > 0L && it.firstPlaybackAt > 0L) it.firstPlaybackAt - it.speechEndedAt else -1L} " +
-                    "totalVisualTurnMs=${now - it.startedAt}"
-            )
-            fastVisualTurns.finish(it.id)
-        }
-        voiceLog("screen_query_terminal screenQueryId=$screenResponseQueryId state=${if (reason == "real_user_barge_in") "CANCELLED_REAL_BARGE_IN" else "COMPLETED"} reason=$reason")
-        voiceLog("screen_response_playback_end screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId reason=$reason")
-        screenResponseActive = false
-        screenResponseHasContent = false
-        screenResponseStartedLogged = false
-        screenResponseGenerationComplete = false
-        screenResponseTextCommitted = false
-        screenResponseUserTurnId = 0L
-        screenResponseAfterGenerationId = 0L
-        screenResponseGenerationId = 0L
-        screenResponseBinding = null
-        screenResponseSessionId = ""
-        screenResponseAccessibilityPackage = ""
-        screenResponseAccessibilityGeneration = 0L
-        screenResponseQueryId = ""
-        resetTurnBuffers("screen_response_$reason")
-    }
-
-    private fun handleScreenMemoryProposal(id: String, args: org.json.JSONObject) {
-        val prefs = screenVisionPreferences
-        if (!prefs.visionEnabled || !prefs.automaticLearning || !prefs.saveScreenMemories ||
-            !ScreenCaptureService.hasFreshFrame()
-        ) {
-            live?.sendToolResponse(id, "propose_screen_memory", false, "Automatic screen memory is disabled")
-            return
-        }
-        val fact = args.optString("fact").trim().replace(Regex("\\s+"), " ")
-        val categoryName = args.optString("category").uppercase(Locale.ROOT)
-        val confidence = args.optDouble("confidence", 0.0)
-        val stableKey = args.optString("memory_key").lowercase(Locale.ROOT)
-            .replace(Regex("[^a-z0-9_:]+"), "_").trim('_').take(80)
-        if (fact.length !in 5..200 || stableKey.isBlank() ||
-            !ScreenPrivacyPolicy.isMemoryWorthy(categoryName, confidence) ||
-            (prefs.sensitiveContentProtection && ScreenPrivacyPolicy.blocksLongTermMemory(fact))
-        ) {
-            live?.sendToolResponse(id, "propose_screen_memory", false, "Screen observation was not safe and durable enough to save")
-            return
-        }
-        val category = runCatching { MemoryCategory.valueOf(categoryName) }.getOrNull()
-        if (category == null) {
-            live?.sendToolResponse(id, "propose_screen_memory", false, "Unsupported memory category")
-            return
-        }
-        serviceScope.launch {
-            val candidate = MemoryCandidate(
-                category, fact, "screen:$stableKey", MemorySensitivity.LOW,
-                confidence, source = "screen_observation"
-            )
-            val result = if (memoryRepository.isAlreadySaved(candidate)) {
-                MemoryWriteResult.Saved("existing")
-            } else memoryRepository.save(candidate)
-            val saved = result is MemoryWriteResult.Saved
-            voiceLog("screen_memory_write fact=${fact.take(80)} source=screen_observation saved=$saved")
-            live?.sendToolResponse(
-                id, "propose_screen_memory", saved,
-                if (saved) "Structured screen observation saved in the existing Memory Brain"
-                else "Screen observation was not saved"
-            )
-        }
-    }
-
-    private fun handleSemanticMemoryProposal(id: String, args: org.json.JSONObject) {
-        val guardedText = lastUserIntentText.ifBlank { input.toString().trim() }
-        if (guardedText.isBlank() || MemoryCommandParser.looksLikeIntent(romanDisplayText(guardedText))) {
-            live?.sendToolResponse(id, "propose_user_memory", false, "Explicit memory commands are handled locally")
-            return
-        }
-        if (pendingPersonalMemory != null || pendingDetectedPersonalMemory != null ||
-            PersonalMemoryExtractor.extract(romanDisplayText(guardedText)) != null ||
-            PersonLinkedMemoryExtractor.extractAll(romanDisplayText(guardedText)).isNotEmpty() ||
-            AutomaticMemoryChangeParser.parse(romanDisplayText(guardedText)) is AutomaticMemoryChange.Save
-        ) {
-            live?.sendToolResponse(id, "propose_user_memory", true, "This fact is already being handled by Android")
-            return
-        }
-        val recentContext = (recentRelationshipTurns.map { it.second } + guardedText)
-            .takeLast(MAX_RELATIONSHIP_CONTEXT_TURNS + 1)
-            .joinToString(" ")
-        val candidate = SemanticMemoryProposalValidator.validate(
-            fact = args.optString("fact"),
-            categoryName = args.optString("category"),
-            memoryKey = args.optString("memory_key"),
-            evidence = args.optString("evidence"),
-            confidence = args.optDouble("confidence", 0.0),
-            conversationContext = romanDisplayText(recentContext)
-        )
-        if (candidate == null) {
-            live?.sendToolResponse(id, "propose_user_memory", false, "Proposal was not grounded or safe enough")
-            return
-        }
-
-        serviceScope.launch {
-            if (memoryRepository.isAlreadySaved(candidate)) {
-                live?.sendToolResponse(id, "propose_user_memory", true, "Already remembered; continue naturally without mentioning memory")
-                return@launch
-            }
-            when {
-                MemoryRelationshipPolicy.isBestFriend(candidate) -> {
-                    memoryRepository.saveAdditionalBestFriend(candidate)
-                    live?.sendToolResponse(id, "propose_user_memory", true, "Saved silently; continue the conversation naturally without mentioning memory")
-                }
-                MemorySafetyPolicy.decide(candidate) == MemorySaveDecision.REJECT ->
-                    live?.sendToolResponse(id, "propose_user_memory", false, "Android rejected this memory")
-                MemorySafetyPolicy.decide(candidate) == MemorySaveDecision.AUTO_SAVE -> {
-                    memoryRepository.save(candidate)
-                    live?.sendToolResponse(id, "propose_user_memory", true, "Saved silently; continue the conversation naturally without mentioning memory")
-                }
-                else -> mainHandler.post {
-                    // Stop Gemini from speaking its own confirmation. Android asks one
-                    // deterministic question and saves only after the user's answer.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    live?.sendToolResponse(id, "propose_user_memory", true, "Android will ask permission; produce no spoken confirmation")
-                    requestPersonalMemoryPermission(candidate)
-                }
-            }
-        }
-    }
-
-    private fun handlePendingConfirmation(raw: String): Boolean {
-        val pending = pendingConfirmedCommand ?: return false
-        if (android.os.SystemClock.elapsedRealtime() > pendingConfirmationExpiresAt) {
-            pendingConfirmedCommand = null
-            return false
-        }
-        val text = raw.lowercase(Locale.ROOT)
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
-        val yes = Regex("^(?:haan|ha|han|yes|yeah|yep|kar\\s+do|karo|open\\s+kar\\s+do|bilkul|theek\\s+hai)$").matches(text)
-        val no = Regex("^(?:nahi|nahin|no|nope|cancel|rehne\\s+do|mat\\s+karo)$").matches(text)
-        if (!yes && !no) return false
-        pendingConfirmedCommand = null
-        pendingConfirmationExpiresAt = 0L
-        waitingForFreshInputAfterCommand = false
-        localCommandExecutedThisTurn = false
-        commandUserTextEmitted = true
-        commitFinalUserMessage(raw.trim(), "PHONE_ACTION_CONFIRMATION")
-        if (yes) {
-            executeCommand(pending)
-        } else {
-            suppressModelForTurn = true
-            val message = "Theek hai yaar, nahi kholungi."
-            listener?.onMyraText(message)
-            emitState(message)
-            queueLocalSpeech(message, allowUntranscribedAudio = true)
-        }
-        return true
-    }
-
-    private fun isSafeDirectMediaCommand(command: AppCommand): Boolean = when (command) {
-        is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
-        AppCommand.OpenInstagramReels, AppCommand.TakeScreenshot, AppCommand.RepeatYouTubeSearch,
-        is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
-        is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
-        AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
-        is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
-        else -> false
-    }
-
-    private fun shouldExecute(command: AppCommand): Boolean {
-        val now = android.os.SystemClock.elapsedRealtime()
-        val key = when (command) {
-            is AppCommand.OpenApp -> "open:${command.appName.lowercase(Locale.ROOT)}"
-            is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
-            is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
-            is AppCommand.PlayYouTube -> "youtube-play:${command.query.orEmpty().lowercase(Locale.ROOT)}"
-            AppCommand.OpenYouTubeShorts -> "youtube-shorts"
-            AppCommand.RequestInstagramReels -> "request-instagram-reels"
-            AppCommand.OpenInstagramReels -> "open-instagram-reels"
-            AppCommand.TakeScreenshot -> "take-screenshot"
-            AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
-            is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
-            is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
-            AppCommand.QueryWhatsAppMessages -> "whatsapp-message-query"
-            AppCommand.GoHome -> "go-home"
-            AppCommand.GoBack -> "go-back"
-            AppCommand.CurrentTime -> "current-time"
-            AppCommand.BatteryLevel -> "battery-level"
-            AppCommand.ListFeatures -> "list-features"
-            is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
-            is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
-            is AppCommand.ScrollYouTube -> "youtube-scroll:${command.direction?.name?.lowercase(Locale.ROOT) ?: "repeat"}"
-        }
-        // Scroll is intentionally repeatable hands-free, so only suppress near-identical
-        // transcript fragments from the same utterance. Other actions keep the longer
-        // safety window that prevents accidental duplicate execution.
-        val dedupeWindowMs = if (command is AppCommand.ScrollYouTube) 700L else 4_000L
-        if (key == lastCommandKey && now - lastCommandAt < dedupeWindowMs) return false
-        lastCommandKey = key; lastCommandAt = now; return true
-    }
-
-    private fun executeCommand(command: AppCommand) {
-        if (localCommandExecutedThisTurn || !shouldExecute(command)) return
-        if (command is AppCommand.SearchYouTube) {
-            voiceLog(
-                "SEARCH_EXECUTOR_ENTRY class=MyraVoiceService method=executeCommand turnId=$activeTurnId " +
-                    "finalTranscript=legacy query=${command.query.take(120)} destination=YOUTUBE " +
-                    "foregroundPackage=${AccessibilityHelperService.instance?.currentForegroundContext()?.packageName}"
-            )
-        }
-        localCommandExecutedThisTurn = true
-        latestActionDispatchedAt = android.os.SystemClock.elapsedRealtime()
-        if (command == AppCommand.RequestInstagramReels) {
-            pendingConfirmedCommand = AppCommand.OpenInstagramReels
-            pendingConfirmationExpiresAt = android.os.SystemClock.elapsedRealtime() + 30_000L
-            suppressModelForTurn = true
-            waitingForFreshInputAfterCommand = true
-            commandProbe.clear()
-            output.clear()
-            val message = "Instagram open kar dun tumhare liye?"
-            listener?.onMyraText(message)
-            emitState(message)
-            queueLocalSpeech(message, allowUntranscribedAudio = true)
-            return
-        }
-        if (command is AppCommand.DeepResearch) { executeDeepResearch(command); return }
-        if (command is AppCommand.ScrollYouTube) {
-            executeVerifiedScroll(command)
-            return
-        }
-        cancelSpeechForNewAction()
-        suppressModelForTurn = true
-        waitingForFreshInputAfterCommand = true
-        commandProbe.clear()
-        output.clear()
-        live?.interrupt()
-        mediaGuard.finishInteraction()
-        val result = assistantController.processCommand(
-            StructuredCommandParser.fromLegacy(command, command.toString()),
-            speak = false,
-            notifyListeners = false
-        )
-        brain.recordPhoneAction(
-            app = (command as? AppCommand.OpenApp)?.appName,
-            action = command.toString(),
-            success = result.success && result.verified
-        )
-        val silentRepeatedScroll =
-            command is AppCommand.ScrollYouTube &&
-                command.direction == null &&
-                result.success &&
-                hasAcknowledgedScrollDirection
-        if (command is AppCommand.ScrollYouTube && result.success) {
-            hasAcknowledgedScrollDirection = true
-        }
-        if (silentRepeatedScroll) {
-            audio?.setMuted(false)
-            // Keep this turn suppressed until the next real user transcript. Gemini may
-            // still deliver late packets for the intercepted utterance; none may speak.
-            emitState("Sun rahi hoonâ€¦")
-            return
-        }
-        listener?.onMyraText(result.spokenMessage, !result.success)
-        emitState(result.spokenMessage)
-        queueLocalSpeech(
-            result.spokenMessage,
-            allowUntranscribedAudio = result.success && isSafeUntranscribedConfirmation(command)
-        )
-    }
-
-    private fun handleBrainCancellation(taskToken: Long) {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        pendingActionAfterLocalSpeech = null
-        pendingConfirmedCommand = null
-        pendingConfirmationExpiresAt = 0L
-        output.clear(); commandProbe.clear()
-        cancelSpeechForNewAction()
-        screenActionRegistry.cancel()?.let {
-            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=user_cancelled")
-        }
-        brain.finishTask(taskToken, true)
-        val message = "Theek hai, rok diya."
-        listener?.onMyraText(message)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-        voiceLog("brain_task_cancelled taskToken=$taskToken")
-    }
-
-    private fun handleReadingCommand(command: ReadingCommand, turnId: Long): Boolean {
-        val current = readingTracker.snapshot()
-        if (command !is ReadingCommand.Start && current == null) return false
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        when (command) {
-            ReadingCommand.Start -> {
-                if (!screenCommandTurnGuard.tryCommit(turnId)) {
-                    voiceLog("screen_command_duplicate_dropped turnId=$turnId source=reading_start")
-                    return true
-                }
-                startArticleReading(turnId)
-            }
-            ReadingCommand.Stop -> stopArticleReading("user_stop", "Theek hai, reading rok di.")
-            ReadingCommand.Pause -> {
-                readingTracker.pause()
-                pendingActionAfterLocalSpeech = null
-                audio?.interrupt(); live?.interrupt()
-                speakReadingStatus("Reading pause kar di.")
-                voiceLog("READING_SESSION_PAUSED reading_session_id=${current?.readingSessionId} timestamp=${android.os.SystemClock.elapsedRealtime()}")
-            }
-            ReadingCommand.Resume, ReadingCommand.Continue -> {
-                if (current?.screenSessionId != ScreenCaptureService.session.sessionId ||
-                    ScreenCaptureService.currentState != ScreenShareState.ACTIVE
-                ) {
-                    stopArticleReading("screen_session_changed", "Screen sharing active nahi hai.")
-                } else {
-                    readingTracker.resume()
-                    readCurrentArticleContent(turnId, allowAutoScroll = true)
-                }
-            }
-            ReadingCommand.StartAgain -> {
-                readingTracker.resetProgress()
-                val accessibility = AccessibilityHelperService.instance
-                val active = readingTracker.snapshot()
-                val accepted = if (accessibility != null && active?.scrollContainerId != null) {
-                    accessibility.scrollArticleToBeginning(
-                        active.scrollContainerId, active.foregroundPackage, active.screenSessionId
-                    ) { _ -> mainHandler.post { readCurrentArticleContent(turnId, allowAutoScroll = true) } }
-                } else false
-                if (!accepted) readCurrentArticleContent(turnId, allowAutoScroll = true)
-            }
-            ReadingCommand.ReadAgain -> readCurrentArticleContent(turnId, allowAutoScroll = false, forceRepeat = true)
-            ReadingCommand.ReadNewOnly -> {
-                readingTracker.resume()
-                readCurrentArticleContent(turnId, allowAutoScroll = false)
-            }
-            ReadingCommand.Forget -> {
-                pendingActionAfterLocalSpeech = null
-                readingTracker.forget()
-                speakReadingStatus("Reading position bhool gayi.")
-            }
-        }
-        return true
-    }
-
-    private fun startArticleReading(turnId: Long) {
-        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-            speakReadingStatus("Screen sharing is off.", error = true)
-            return
-        }
-        val accessibility = AccessibilityHelperService.instance
-        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
-            speakReadingStatus("Article reading ke liye LYRA Accessibility enable karo.", error = true)
-            return
-        }
-        val contentType = accessibility.detectContentType()
-        if (contentType != ScreenContentType.ARTICLE) {
-            val message = when (contentType) {
-                ScreenContentType.VIDEO_PLATFORM -> "Ye YouTube hai, article nahi. Auto-scroll start nahi karungi."
-                ScreenContentType.SOCIAL_FEED -> "Ye social feed hai, article nahi. Auto-scroll start nahi karungi."
-                else -> "Current page ko article ke roop mein safely confirm nahi kar pa rahi. Auto-scroll start nahi karungi."
-            }
-            voiceLog("READING_START_REJECTED contentType=$contentType turnId=$turnId")
-            speakReadingStatus(message, error = true)
-            return
-        }
-        val context = com.myra.assistant.screen.ScreenContextStore.snapshot()
-        val identity = listOfNotNull(context.currentPackage, accessibility.visibleArticleText().firstOrNull())
-            .joinToString(":").take(300)
-        val containerId = accessibility.currentArticleScrollContainerId() ?: run {
-            voiceLog("READING_START_REJECTED contentType=$contentType turnId=$turnId reason=no_article_scroll_container")
-            speakReadingStatus("Article ka safe scroll area nahi mila. Auto-scroll start nahi karungi.", error = true)
-            return
-        }
-        val session = readingTracker.start(
-            ScreenCaptureService.session.sessionId, identity,
-            accessibility.currentPackageName().orEmpty(), contentType, explicitlyRequested = true,
-            scrollContainerId = containerId
-        ) ?: run {
-            speakReadingStatus("Article reading start nahi hui.", error = true)
-            return
-        }
-        voiceLog(
-            "READING_SESSION_STARTED reading_session_id=${session.readingSessionId} " +
-                "screen_session_id=${session.screenSessionId} container_id=${session.scrollContainerId} " +
-                "timestamp=${android.os.SystemClock.elapsedRealtime()} contentType=$contentType"
-        )
-        readCurrentArticleContent(turnId, allowAutoScroll = true)
-    }
-
-    private fun readCurrentArticleContent(
-        turnId: Long,
-        allowAutoScroll: Boolean,
-        forceRepeat: Boolean = false
-    ) {
-        val session = readingTracker.snapshot() ?: return
-        val foregroundPackage = accessibilityPackage()
-        if (readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, foregroundPackage)) {
-            pendingActionAfterLocalSpeech = null
-            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=context_changed package=$foregroundPackage")
-            return
-        }
-        if (session.state !in setOf(ReadingState.READING, ReadingState.VERIFYING_NEW_CONTENT) ||
-            !ScreenCaptureService.session.isCurrent(session.screenSessionId)
-        ) return
-        val accessibility = AccessibilityHelperService.instance ?: return
-        if (accessibility.detectContentType() != ScreenContentType.ARTICLE) {
-            stopArticleReading("article_boundary", "Article complete.")
-            return
-        }
-        val frameLookupAt = android.os.SystemClock.elapsedRealtime()
-        val query = ScreenCaptureService.requestFreshFrame(turnId) { result ->
-            mainHandler.post {
-                val frame = (result as? FreshFrameResult.Ready)?.frame
-                if (frame == null || !ScreenCaptureService.session.isCurrent(session.screenSessionId)) {
-                    stopArticleReading("fresh_frame_unavailable", "Fresh article screen nahi mili.", error = true)
-                    return@post
-                }
-                accessibility.refreshScreenContext()
-                readingTracker.recordObservation(frame.frameId, accessibility.lastSnapshotAt())
-                val lines = accessibility.visibleArticleText()
-                val fresh = if (forceRepeat) {
-                    lines.map { com.myra.assistant.screen.ReadingSegment(it, ReadingTracker.fingerprint(it)) }
-                } else readingTracker.acceptVisibleText(lines, android.os.SystemClock.elapsedRealtime())
-                val currentSession = readingTracker.snapshot() ?: return@post
-                voiceLog(
-                    "READING_NEW_CONTENT_FOUND reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} " +
-                        "timestamp=${android.os.SystemClock.elapsedRealtime()} newSegments=${fresh.size} frameWaitMs=${android.os.SystemClock.elapsedRealtime() - frameLookupAt}"
-                )
-                if (fresh.isEmpty()) {
-                    voiceLog("READING_DUPLICATE_SKIPPED reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} visibleSegments=${lines.size}")
-                    if (allowAutoScroll && readingTracker.canAutoScroll()) autoScrollArticle(turnId)
-                    else finishArticleAtEnd()
-                    return@post
-                }
-                val spoken = fresh.joinToString(" ") { it.text }.take(MAX_READING_CHARS_PER_SCREEN)
-                voiceLog(
-                    "READING_CONTENT_READ reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} " +
-                        "timestamp=${android.os.SystemClock.elapsedRealtime()} chars=${spoken.length} segments=${fresh.size}"
-                )
-                listener?.onMyraText(spoken)
-                emitState("Article padh rahi hoonâ€¦")
-                if (allowAutoScroll) readingTracker.markWaitingForScroll()
-                pendingActionAfterLocalSpeech = if (allowAutoScroll) ({ autoScrollArticle(turnId) }) else null
-                queueLocalSpeech(spoken, allowUntranscribedAudio = false)
-            }
-        }
-        if (query == null) stopArticleReading("screen_inactive", "Screen sharing is off.", error = true)
-    }
-
-    private fun autoScrollArticle(turnId: Long) {
-        val session = readingTracker.snapshot() ?: return
-        val foregroundPackage = accessibilityPackage()
-        if (readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, foregroundPackage) ||
-            foregroundPackage == "com.google.android.youtube"
-        ) {
-            pendingActionAfterLocalSpeech = null
-            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=package_changed package=$foregroundPackage")
-            return
-        }
-        val accessibility = AccessibilityHelperService.instance ?: run { finishArticleAtEnd(); return }
-        val containerId = session.scrollContainerId ?: run {
-            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=unbound_container")
-            finishArticleAtEnd()
-            return
-        }
-        if (!readingTracker.shouldAutoScroll(containerId, session.screenSessionId, foregroundPackage) ||
-            !readingTracker.recordAutoScroll()
-        ) {
-            finishArticleAtEnd()
-            return
-        }
-        voiceLog(
-            "READING_AUTO_SCROLL_STARTED reading_session_id=${session.readingSessionId} " +
-                "timestamp=${android.os.SystemClock.elapsedRealtime()} count=${readingTracker.snapshot()?.consecutiveAutoScrollCount}"
-        )
-        val accepted = accessibility.scrollArticleVerified(
-            containerId, session.foregroundPackage, session.screenSessionId
-        ) { changed ->
-            mainHandler.post {
-                val active = readingTracker.snapshot()
-                if (active?.state != ReadingState.SCROLLING) return@post
-                voiceLog(
-                    "READING_AUTO_SCROLL_COMPLETED reading_session_id=${active.readingSessionId} " +
-                        "timestamp=${android.os.SystemClock.elapsedRealtime()} changed=$changed"
-                )
-                if (!changed) finishArticleAtEnd()
-                else {
-                    ScreenCaptureService.requestFreshFrame(turnId) { fresh ->
-                        mainHandler.post {
-                            val frame = (fresh as? FreshFrameResult.Ready)?.frame
-                            val current = readingTracker.snapshot() ?: return@post
-                            if (frame == null || frame.sessionId != current.screenSessionId ||
-                                frame.frameId <= current.lastFrameId
-                            ) {
-                                voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${current.readingSessionId} reason=no_fresh_post_scroll_frame")
-                                finishArticleAtEnd()
-                                return@post
-                            }
-                            readingTracker.markVerifyingNewContent(frame.frameId, accessibility.lastSnapshotAt())
-                            voiceLog("ARTICLE_SCROLL_VERIFIED reading_session_id=${current.readingSessionId} preFrameId=${current.lastFrameId} postFrameId=${frame.frameId}")
-                            readCurrentArticleContent(turnId, allowAutoScroll = true)
-                        }
-                    }
-                }
-            }
-        }
-        if (!accepted) finishArticleAtEnd()
-    }
-
-    private fun finishArticleAtEnd() {
-        val id = readingTracker.snapshot()?.readingSessionId
-        readingTracker.complete()
-        pendingActionAfterLocalSpeech = null
-        voiceLog("READING_END_DETECTED reading_session_id=$id timestamp=${android.os.SystemClock.elapsedRealtime()}")
-        speakReadingStatus("Article complete.")
-    }
-
-    private fun stopArticleReading(reason: String, message: String, error: Boolean = false) {
-        val id = readingTracker.snapshot()?.readingSessionId
-        readingTracker.stop()
-        pendingActionAfterLocalSpeech = null
-        audio?.interrupt(); live?.interrupt()
-        voiceLog("READING_SESSION_STOPPED reading_session_id=$id timestamp=${android.os.SystemClock.elapsedRealtime()} reason=$reason")
-        speakReadingStatus(message, error)
-    }
-
-    private fun speakReadingStatus(message: String, error: Boolean = false) {
-        listener?.onMyraText(message, error)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-    }
-
-    private fun accessibilityPackage(): String =
-        AccessibilityHelperService.instance?.currentPackageName().orEmpty()
-
-    private fun executeBrainMultiStep(plan: BrainDecision.ScrollThenOpenVideo) {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        cancelSpeechForNewAction()
-        val accessibility = AccessibilityHelperService.instance
-        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-            finishBrainTask(plan.taskToken, false, "Screen Vision active nahi hai.")
-            return
-        }
-        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
-            finishBrainTask(plan.taskToken, false, "LYRA Accessibility enable karo.")
-            return
-        }
-        val down = plan.direction == BrainScrollDirection.DOWN
-        voiceLog("brain_plan_started taskToken=${plan.taskToken} plan=scroll_then_open ordinal=${plan.ordinal} direction=${plan.direction}")
-        val accepted = accessibility.scrollYouTubeVerified(down) { scrolled ->
-            mainHandler.post {
-                if (!brain.isTaskCurrent(plan.taskToken)) return@post
-                if (!scrolled) {
-                    finishBrainTask(plan.taskToken, false, "Screen scroll nahi hua.")
-                    return@post
-                }
-                ScreenCaptureService.requestFreshFrame(activeTurnId) { fresh ->
-                    mainHandler.post {
-                        if (!brain.isTaskCurrent(plan.taskToken)) return@post
-                        val beforeFrame = (fresh as? FreshFrameResult.Ready)?.frame
-                        if (beforeFrame == null || !ScreenCaptureService.session.isCurrent(beforeFrame.sessionId)) {
-                            finishBrainTask(plan.taskToken, false, "Scroll ke baad fresh screen nahi mili.")
-                            return@post
-                        }
-                        val beforeSignature = accessibility.visibleScreenSignature()
-                        val actionIntent = screenActionRegistry.create(
-                            activeTurnId, beforeFrame.sessionId,
-                            lastUserIntentText, "video", null, plan.ordinal,
-                            accessibility.currentPackageName(), android.os.SystemClock.elapsedRealtime(),
-                            beforeFrame.frameId, 1.0
-                        )
-                        voiceLog("SCREEN_ACTION_CREATED actionId=${actionIntent.actionId} turnId=${actionIntent.turnId} screenSessionId=${actionIntent.screenSessionId} frameId=${actionIntent.sourceFrameId} resolverVersion=${actionIntent.resolverVersion}")
-                        val tapped = accessibility.tapVisibleYouTubeVideo(plan.ordinal)
-                        voiceLog("brain_plan_step taskToken=${plan.taskToken} step=tap ordinal=${plan.ordinal} accepted=$tapped")
-                        if (!tapped) {
-                            finishBrainTask(plan.taskToken, false, "Second video clear nahi mila.")
-                            return@post
-                        }
-                        mainHandler.postDelayed({
-                            ScreenCaptureService.requestFreshFrame(activeTurnId) { postResult ->
-                                mainHandler.post {
-                                    if (!brain.isTaskCurrent(plan.taskToken)) return@post
-                                    if (!screenActionRegistry.isCurrent(
-                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId
-                    )) {
-                                        voiceLog("SCREEN_ACTION_CANCELLED actionId=${actionIntent.actionId} reason=replaced_before_verification")
-                                        return@post
-                                    }
-                                    val postFrame = (postResult as? FreshFrameResult.Ready)?.frame
-                                    val accessibilityChanged = beforeSignature.isNotBlank() &&
-                                        accessibility.visibleScreenSignature() != beforeSignature
-                                    val frameChanged = postFrame != null && postFrame.sessionId == beforeFrame.sessionId &&
-                                        postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
-                                    val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
-                                        (accessibilityChanged || frameChanged)
-                                    brain.recordScreenAction(
-                                        ScreenTargetReference(targetText = "video", ordinal = plan.ordinal),
-                                        verified
-                                    )
-                                    screenActionRegistry.cancel(actionIntent.actionId)
-                                    finishBrainTask(
-                                        plan.taskToken,
-                                        verified,
-                                        if (verified) "Video open ho gaya."
-                                        else "Tap hua, lekin video open hona verify nahi hua."
-                                    )
-                                }
-                            }
-                        }, 400L)
-                    }
-                }
-            }
-        }
-        if (!accepted) finishBrainTask(plan.taskToken, false, "YouTube scroll start nahi hua.")
-    }
-
-    private fun executeYouTubeSemanticAction(command: YouTubeSemanticCommand): Boolean {
-        val accessibility = AccessibilityHelperService.instance ?: return false
-        val foreground = accessibility.currentForegroundContext() ?: return false
-        val isYouTube = foreground.packageName.equals("com.google.android.youtube", true)
-        if (!isYouTube) {
-            textComposeSession.cancel()
-            return false
-        }
-        textComposeSession.invalidateUnless(foreground.packageName, foreground.windowId, foreground.generation)
-        if (command == YouTubeSemanticCommand.CancelComment && textComposeSession.snapshot() == null) return false
-        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground) ?: return false
-        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-            voiceLog("youtube_semantic_duplicate_dropped turnId=$activeTurnId command=${command.javaClass.simpleName}")
-            return true
-        }
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        val startedAt = android.os.SystemClock.elapsedRealtime()
-        latestActionDispatchedAt = startedAt
-        val before = accessibility.visibleScreenSignature()
-
-        if (command == YouTubeSemanticCommand.SendComment &&
-            !textComposeSession.canSend(foreground.packageName, foreground.windowId, foreground.generation)
-        ) {
-            finishYouTubeSemantic(false, "Pehle comment type karo.", command, startedAt, "no_owned_draft")
-            return true
-        }
-        if (command is YouTubeSemanticCommand.TypeText && textComposeSession.snapshot() == null) {
-            finishYouTubeSemantic(false, "Pehle comments kholo.", command, startedAt, "comment_context_missing")
-            return true
-        }
-        if (command == YouTubeSemanticCommand.CancelComment) {
-            textComposeSession.cancel()
-            finishYouTubeSemantic(true, "Theek hai, comment send nahi kiya.", command, startedAt, "cancelled")
-            return true
-        }
-
-        val result = accessibility.performYouTubeSemanticAction(command, scope)
-        voiceLog(
-            "youtube_semantic_resolution turnId=$activeTurnId normalizedIntent=${command.javaClass.simpleName} " +
-                "package=${foreground.packageName} role=${result.role} resolution=${result.resolution} " +
-                "payloadLength=${(command as? YouTubeSemanticCommand.TypeText)?.payload?.length ?: 0} " +
-                "dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-        )
-        if (!result.accepted) {
-            if (canUseVisualFallback(command) && visualAwarenessPreferences.enabled &&
-                requestAccessibilityVisualRetry(command, foreground, activeTurnId, startedAt)
-            ) {
-                return true
-            }
-            val message = when (result.resolution) {
-                "ambiguous" -> "Kaunsa wala?"
-                "stale_foreground", "stale_candidate" -> "Screen badal gayi. Dobara target batao."
-                "not_found" -> when (command) {
-                    is YouTubeSemanticCommand.OpenChannel -> "Channel target clear nahi mila."
-                    is YouTubeSemanticCommand.TypeText -> "Comment field clear nahi mila."
-                    YouTubeSemanticCommand.SendComment -> "Comment ka send button nahi mila."
-                    else -> "Ye control current YouTube screen par clear nahi mila."
-                }
-                else -> "YouTube action accept nahi hua."
-            }
-            finishYouTubeSemantic(false, message, command, startedAt, result.resolution)
-            return true
-        }
-
-        when (command) {
-            YouTubeSemanticCommand.OpenComments -> mainHandler.postDelayed({
-                val current = accessibility.currentForegroundContext()
-                if (current != null && current.packageName.equals("com.google.android.youtube", true)) {
-                    textComposeSession.open(current.packageName, current.windowId, current.generation)
-                }
-            }, 450L)
-            is YouTubeSemanticCommand.TypeText -> {
-                val field = result.fieldIdentity
-                if (field == null || !textComposeSession.setDraft(
-                        foreground.packageName, foreground.windowId, foreground.generation, field, command.payload
-                    )) {
-                    finishYouTubeSemantic(false, "Comment context badal gaya. Dobara comments kholo.", command, startedAt, "field_ownership_rejected")
-                    return true
-                }
-            }
-            YouTubeSemanticCommand.SendComment -> textComposeSession.cancel()
-            else -> Unit
-        }
-        val message = when {
-            result.resolution == "already_active" && command == YouTubeSemanticCommand.Like -> "Video pehle se liked hai."
-            result.resolution == "already_active" && command == YouTubeSemanticCommand.Subscribe -> "Channel pehle se subscribed hai."
-            command is YouTubeSemanticCommand.TypeText -> "Comment type ho gaya."
-            command == YouTubeSemanticCommand.SendComment -> "Comment post ho gaya."
-            command == YouTubeSemanticCommand.OpenComments -> "Comments open ho gaye."
-            command == YouTubeSemanticCommand.Like -> "Video like ho gaya."
-            command == YouTubeSemanticCommand.Subscribe -> "Subscribe ho gaya."
-            command is YouTubeSemanticCommand.OpenChannel -> "Channel open ho gaya."
-            else -> "Open ho gaya."
-        }
-        mainHandler.postDelayed({
-            val stillOwned = com.myra.assistant.screen.ForegroundActionPolicy.canExecute(scope, accessibility.currentForegroundContext())
-            val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
-            voiceLog("youtube_semantic_verification command=${command.javaClass.simpleName} stillOwned=$stillOwned changed=$changed")
-            finishYouTubeSemantic(true, message, command, startedAt, if (changed) "verified_change" else "accepted_no_repeat")
-        }, if (command is YouTubeSemanticCommand.TypeText) 120L else 380L)
-        return true
-    }
-
-    private fun handleUnifiedActionFollowUp() {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        AccessibilityHelperService.instance?.refreshScreenContext()
-        val working = WorkingTaskRuntime.store.snapshot()
-        val message = when (working.lastVerifiedSuccess) {
-            true -> "Haan, pichhla action verify ho gaya tha."
-            false -> "Haan, abhi result verify nahi hua."
-            null -> "Abhi result verify nahi hua; current screen dobara check karni hogi."
-        }
-        listener?.onMyraText(message, working.lastVerifiedSuccess != true)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = false)
-        voiceLog(
-            "agent_verification_follow_up taskId=${working.taskId} lastAction=${working.lastRequestedAction} " +
-                "verified=${working.lastVerifiedSuccess}"
-        )
-    }
-
-    private fun executeUnifiedBrowserSearch(raw: String): Boolean {
-        val request = BrowserSearchRequestParser.parse(raw) ?: return false
-        val accessibility = AccessibilityHelperService.instance
-        val freshForeground = accessibility?.currentForegroundContext()
-        val working = WorkingTaskRuntime.store.snapshot()
-        val resolution = SearchDestinationResolver.resolveDetailed(
-            request,
-            freshForeground?.packageName,
-            working.activeExternalApp
-        )
-        voiceLog(
-            "search_intent_resolved turnId=$activeTurnId finalTranscript=${raw.take(160)} query=${request.query.take(120)} " +
-                "explicitDestination=${request.explicitDestination} workingContextDestination=${working.activeExternalApp} " +
-                "foregroundPackage=${freshForeground?.packageName} resolvedDestination=${resolution.destination} " +
-                "resolutionReason=${resolution.reason} selectedExecutor=${resolution.selectedExecutor}"
-        )
-        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) return true
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        val startedAt = android.os.SystemClock.elapsedRealtime()
-        latestActionDispatchedAt = startedAt
-        val taskTurnId = activeTurnId
-        val executorName = if (resolution.destination == SearchDestination.YOUTUBE) {
-            "YOUTUBE"
-        } else resolution.selectedExecutor?.name ?: "GENERIC_WEB"
-        WorkingTaskRuntime.store.beginSearch(
-            request.query, resolution.destination, executorName, "search_results_visible"
-        )
-        responseArbiter.claimControlled(taskTurnId)
-        voiceLog(
-            "SEARCH_TASK_CREATED turnId=$taskTurnId taskId=${WorkingTaskRuntime.store.snapshot().taskId} " +
-                "queryLength=${request.query.length} destination=${resolution.destination}"
-        )
-        voiceLog(
-            "SEARCH_EXECUTOR_SELECTED turnId=$taskTurnId executor=$executorName " +
-                "reason=${resolution.reason} targetPackage=${resolution.targetPackage}"
-        )
-        voiceLog(
-            "SEARCH_EXECUTOR_ENTRY class=MyraVoiceService method=executeUnifiedBrowserSearch " +
-                "turnId=$taskTurnId finalTranscript=${raw.take(160)} query=${request.query.take(120)} " +
-                "destination=${resolution.destination} foregroundPackage=${freshForeground?.packageName}"
-        )
-        voiceLog(
-            "task_result_owner turnId=$taskTurnId owner=CONTROLLED_AGENT taskId=${WorkingTaskRuntime.store.snapshot().taskId} " +
-                "destination=${resolution.destination}"
-        )
-        voiceLog(
-            "search_execution_started turnId=$taskTurnId destination=${resolution.destination} " +
-                "reason=${resolution.reason} executor=$executorName"
-        )
-        voiceLog("SEARCH_ACTION_STARTED turnId=$taskTurnId executor=$executorName destination=${resolution.destination}")
-        if (resolution.destination == SearchDestination.YOUTUBE) {
-            val result = assistantController.processCommand(
-                StructuredCommandParser.fromLegacy(
-                    AppCommand.SearchYouTube(request.query),
-                    AppCommand.SearchYouTube(request.query).toString()
-                ),
-                speak = false,
-                notifyListeners = false
-            )
-            voiceLog("SEARCH_ACTION_RETURNED turnId=$taskTurnId executor=YOUTUBE accepted=${result.success}")
-            if (!result.success) {
-                finishSearchTaskResult(taskTurnId, SearchVerification.FAILURE, "youtube_search_dispatch_failed")
-                return true
-            }
-            mainHandler.postDelayed({
-                val service = AccessibilityHelperService.instance
-                val foreground = service?.currentForegroundContext()
-                val observedScene = ActivityContextStore.snapshot()?.takeIf {
-                    it.packageName == foreground?.packageName &&
-                        android.os.SystemClock.elapsedRealtime() - it.timestamp <= 2_500L
-                }
-                val labels = observedScene?.visibleElements?.map { it.label }.orEmpty()
-                voiceLog(
-                    "SEARCH_OBSERVATION_RECEIVED turnId=$taskTurnId destination=YOUTUBE " +
-                        "package=${foreground?.packageName} visibleElements=${labels.size}"
-                )
-                voiceLog("SEARCH_VERIFICATION_STARTED turnId=$taskTurnId destination=YOUTUBE")
-                val verification = YouTubeSearchVerificationPolicy.verify(
-                    request.query, foreground?.packageName, labels
-                )
-                finishSearchTaskResult(taskTurnId, verification, "youtube_search_foreground=${foreground?.packageName}")
-            }, 900L)
-            return true
-        }
-        voiceLog(
-            "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
-                "tool=browser_search phase=starting queryLength=${request.query.length}"
-        )
-        val dispatch = BrowserSearchTool(this).execute(request, resolution)
-        voiceLog("SEARCH_ACTION_RETURNED turnId=$taskTurnId executor=$executorName accepted=${dispatch.accepted}")
-        voiceLog(
-            "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
-                "tool=browser_search accepted=${dispatch.accepted} expectedPackage=${dispatch.expectedPackage} " +
-                "queryLength=${request.query.length} dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt} " +
-                "intentToActionMs=${if (latestIntentDecidedAt > 0L) startedAt - latestIntentDecidedAt else -1L}"
-        )
-        if (!dispatch.accepted) {
-            voiceLog("search_execution_failed turnId=$activeTurnId destination=BROWSER reason=${dispatch.reason}")
-            finishSearchTaskResult(taskTurnId, SearchVerification.FAILURE, dispatch.reason)
-            return true
-        }
-        mainHandler.postDelayed({
-            val accessibility = AccessibilityHelperService.instance
-            val foreground = accessibility?.currentForegroundContext()
-            val observedScene = ActivityContextStore.snapshot()?.takeIf {
-                it.packageName == foreground?.packageName &&
-                    android.os.SystemClock.elapsedRealtime() - it.timestamp <= 2_500L
-            }
-            val labels = observedScene?.visibleElements?.map { it.label }.orEmpty()
-            voiceLog(
-                "SEARCH_OBSERVATION_RECEIVED turnId=$taskTurnId destination=BROWSER " +
-                    "package=${foreground?.packageName} visibleElements=${labels.size}"
-            )
-            voiceLog("task_verification_started turnId=$taskTurnId taskId=${WorkingTaskRuntime.store.snapshot().taskId} tool=browser_search")
-            voiceLog("SEARCH_VERIFICATION_STARTED turnId=$taskTurnId destination=BROWSER")
-            val verification = BrowserSearchVerificationPolicy.verify(
-                request, resolution, foreground?.packageName,
-                labels
-            )
-            voiceLog(
-                "search_execution_completed turnId=$taskTurnId destination=BROWSER " +
-                    "accepted=true verification=$verification package=${foreground?.packageName}"
-            )
-            finishSearchTaskResult(taskTurnId, verification, "browser_search_package=${foreground?.packageName}")
-        }, 900L)
-        return true
-    }
-
-    private fun finishSearchTaskResult(turnId: Long, verification: SearchVerification, observed: String) {
-        val completion = when (verification) {
-            SearchVerification.SUCCESS -> TaskCompletionState.SUCCESS
-            SearchVerification.FAILURE -> TaskCompletionState.FAILURE
-            SearchVerification.UNKNOWN -> TaskCompletionState.UNKNOWN
-        }
-        val completed = WorkingTaskRuntime.store.completeSearch(observed, completion)
-        val task = WorkingTaskRuntime.store.snapshot()
-        // Search is terminal here. Keep it only as completed history; do not write it
-        // into BrainTaskState.lastAction where it could bias unrelated later turns.
-        brain.clearTransientState()
-        voiceLog(
-            "task_verification_completed turnId=$turnId taskId=${completed.taskId} verification=$verification " +
-                "destination=${completed.destination} observed=$observed activeTaskCleared=${task.completionState == null}"
-        )
-        voiceLog(
-            "SEARCH_VERIFICATION_RESULT turnId=$turnId taskId=${completed.taskId} verification=$verification " +
-                "destination=${completed.destination}"
-        )
-        voiceLog(
-            "SEARCH_TASK_TERMINAL turnId=$turnId taskId=${completed.taskId} completionState=$completion " +
-                "ordinaryModelMayReport=false activeTaskCleared=true"
-        )
-        responseArbiter.controlledGenerationComplete()
-        responseArbiter.controlledPlaybackComplete()
-        // Keep CONTROLLED_LOCAL ownership latched until the next real user turn begins.
-        // Late packets from the interrupted ordinary model must never report this task.
-        voiceLog("SEARCH_RESULT_OWNER turnId=$turnId owner=CONTROLLED_AGENT release=NEXT_USER_TURN")
-        when (verification) {
-            SearchVerification.SUCCESS -> {
-                emitState("Sun rahi hoonâ€¦")
-                voiceLog("task_result_spoken turnId=$turnId spoken=false result=SUCCESS")
-                voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=false result=SUCCESS")
-            }
-            SearchVerification.UNKNOWN -> {
-                val message = "Search open hui, lekin results verify nahi hue."
-                listener?.onMyraText(message, true)
-                queueLocalSpeech(message, allowUntranscribedAudio = false)
-                voiceLog("task_result_spoken turnId=$turnId spoken=true result=UNKNOWN destination=${completed.destination}")
-                voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=true result=UNKNOWN")
-            }
-            SearchVerification.FAILURE -> {
-                check(SearchTaskResultPolicy.maySpeakFailure(verification))
-                val destination = if (completed.destination == SearchDestination.YOUTUBE) "YouTube" else "Browser"
-                val message = "$destination search start nahi ho paayi."
-                listener?.onMyraText(message, true)
-                queueLocalSpeech(message, allowUntranscribedAudio = false)
-                voiceLog("task_result_spoken turnId=$turnId spoken=true result=FAILURE destination=${completed.destination}")
-                voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=true result=FAILURE")
-            }
-        }
-    }
-
-    private fun executeUnifiedReferenceIfApplicable(raw: String): Boolean {
-        val normalized = raw.lowercase(Locale.ROOT)
-            .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
-        val isReference = listOf("hand wala", "thumb wala", "second wala", "doosra wala", "dusra wala",
-            "ye wala", "isko kholo", "click this", "click that", "ye wala dabao", "woh nahi", "wo nahi")
-            .any(normalized::contains)
-        if (!isReference) return false
-        val context = ActivityContextStore.snapshot() ?: return false
-        val decision = UnifiedLyraAgentRuntime.agent.resolveReference(raw, context)
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        when (decision) {
-            is com.myra.assistant.agent.AgentDecision.Clarify -> {
-                listener?.onMyraText(decision.message)
-                emitState(decision.message)
-                queueLocalSpeech(decision.message, allowUntranscribedAudio = true)
-                voiceLog("agent_clarification taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} reason=ambiguous_reference")
-            }
-            is com.myra.assistant.agent.AgentDecision.Execute -> {
-                val target = decision.target ?: return false
-                val accessibility = AccessibilityHelperService.instance
-                val foreground = accessibility?.currentForegroundContext()
-                val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
-                if (accessibility == null || scope == null || context.packageName != scope.expectedPackage ||
-                    context.windowId != scope.expectedWindowId || context.generation != ActivityContextStore.snapshot()?.generation
-                ) {
-                    val message = "Screen badal gayi. Dobara target batao."
-                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
-                    return true
-                }
-                val before = accessibility.visibleScreenSignature()
-                val result = accessibility.resolveAndTapVisibleTarget(target.label, null, null, scope) { _, _ -> true }
-                val taskId = UnifiedLyraAgentRuntime.agent.currentTask()?.id
-                voiceLog("agent_action_dispatched taskId=$taskId tool=accessibility_click targetRole=${target.role} accepted=${result.accepted}")
-                if (!result.accepted) {
-                    UnifiedLyraAgentRuntime.agent.recordAction(
-                        com.myra.assistant.agent.AgentActionRecord("accessibility_click", target.id, false, false, android.os.SystemClock.elapsedRealtime()),
-                        ActivityContextStore.snapshot()
-                    )
-                    WorkingTaskRuntime.store.recordOutcome(result.resolution, false, target.id)
-                    val message = if (result.resolution == "ambiguous") "Kaunsa wala?" else "Ye target clear nahi mila."
-                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
-                } else mainHandler.postDelayed({
-                    accessibility.refreshScreenContext(force = true)
-                    val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
-                    UnifiedLyraAgentRuntime.agent.recordAction(
-                        com.myra.assistant.agent.AgentActionRecord("accessibility_click", target.id, true, changed, android.os.SystemClock.elapsedRealtime()),
-                        ActivityContextStore.snapshot()
-                    )
-                    WorkingTaskRuntime.store.recordOutcome(if (changed) "screen_changed" else "no_verified_change", changed, target.id.takeIf { !changed })
-                    voiceLog("agent_verification taskId=$taskId accepted=true verified=$changed")
-                    if (!changed) {
-                        val message = "Tap hua, lekin result verify nahi hua."
-                        listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
-                    }
-                }, 350L)
-            }
-            is com.myra.assistant.agent.AgentDecision.ObserveMore -> {
-                val accessibility = AccessibilityHelperService.instance
-                if (!visualAwarenessPreferences.enabled || accessibility == null ||
-                    !accessibility.requestVisualScreenshot { result ->
-                        mainHandler.post {
-                            val message = if (result.isSuccess) "Kaunsa wala?" else "Current screen clear nahi mili."
-                            listener?.onMyraText(message, result.isFailure)
-                            queueLocalSpeech(message, allowUntranscribedAudio = result.isSuccess)
-                        }
-                    }
-                ) {
-                    val message = "Kaunsa wala?"
-                    listener?.onMyraText(message); queueLocalSpeech(message, allowUntranscribedAudio = true)
-                }
-            }
-            else -> return false
-        }
-        return true
-    }
-
-    private fun finishYouTubeSemantic(
-        success: Boolean,
-        message: String,
-        command: YouTubeSemanticCommand,
-        startedAt: Long,
-        resolution: String
-    ) {
-        if (!success) {
-            listener?.onMyraText(message, true)
-            emitState(message)
-            queueLocalSpeech(message, allowUntranscribedAudio = false)
-        }
-        voiceLog(
-            "youtube_semantic_finished command=${command.javaClass.simpleName} success=$success " +
-                "resolution=$resolution spokenFeedbackSuppressed=$success totalMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-        )
-    }
-
-    private fun canUseVisualFallback(command: YouTubeSemanticCommand): Boolean = command in setOf(
-        YouTubeSemanticCommand.Like, YouTubeSemanticCommand.OpenComments,
-        YouTubeSemanticCommand.Subscribe, YouTubeSemanticCommand.Share, YouTubeSemanticCommand.More
-    ) || command is YouTubeSemanticCommand.OpenChannel
-
-    private fun executeScreenModeCommand(command: ScreenModeCommand) {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        when (command) {
-            ScreenModeCommand.ON -> {
-                if (ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-                    requestProjectionPermissionFromOwner()
-                } else voiceLog("screen_mode_command mode=ON result=already_active spokenFeedbackSuppressed=true")
-            }
-            ScreenModeCommand.OFF -> {
-                startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_STOP))
-                voiceLog("screen_mode_command mode=OFF result=stop_requested spokenFeedbackSuppressed=true")
-            }
-        }
-    }
-
-    private fun requestProjectionPermissionFromOwner() {
-        if (ScreenCaptureService.currentState == ScreenShareState.ACTIVE) return
-        val request = Intent(this, MainActivity::class.java)
-            .setAction(MainActivity.ACTION_REQUEST_SCREEN_PROJECTION)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        runCatching { startActivity(request) }
-            .onSuccess { voiceLog("screen_projection_permission_owner_requested owner=MainActivity") }
-            .onFailure {
-                voiceLog("continuous_screen_permission_failed error=${it.javaClass.simpleName}")
-                listener?.onMyraText("Screen sharing permission open nahi hui.", true)
-                queueLocalSpeech("Screen sharing permission open nahi hui.", allowUntranscribedAudio = false)
-            }
-    }
-
-    private fun requestAccessibilityVisualRetry(
-        command: YouTubeSemanticCommand,
-        expected: com.myra.assistant.screen.ForegroundAppContext,
-        turnId: Long,
-        startedAt: Long
-    ): Boolean {
-        val current = AccessibilityHelperService.instance?.currentForegroundContext() ?: return false
-        if (current.packageName != expected.packageName || current.windowId != expected.windowId ||
-            current.generation != expected.generation
-        ) return false
-        voiceLog(
-            "youtube_semantic_fallback route=FAST_VISUAL_TURN turnId=$turnId " +
-                "role=${command.javaClass.simpleName} accessibilityElapsedMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-        )
-        // The deterministic attempt already owned the action guard. Visual fallback is
-        // the same turn and becomes its sole response owner, not a competing action.
-        screenCommandTurnGuard.clear()
-        beginFreshScreenQuery(
-            lastUserIntentText,
-            turnId,
-            FastVisualRequest(FastVisualKind.ACTION, command.javaClass.simpleName)
-        )
-        return true
-    }
-
-    private fun executeAccessibilityFirstScreenAction(
-        target: ScreenTargetReference,
-        ownedTarget: ScreenTargetReference,
-        actionScope: com.myra.assistant.screen.ForegroundActionScope,
-        taskToken: Long,
-        accessibility: AccessibilityHelperService
-    ): Boolean {
-        val startedAt = android.os.SystemClock.elapsedRealtime()
-        val before = accessibility.visibleScreenSignature()
-        val actionSessionId = ScreenCaptureService.session.sessionId.takeIf(String::isNotBlank)
-            ?: "accessibility:${actionScope.expectedPackage}:${actionScope.expectedGeneration}"
-        var actionIntent: ScreenActionIntent? = null
-        var resolution = "not_found"
-        var candidateCount = 0
-        var selectedLabel: String? = null
-        val accepted = if (
-            actionScope.expectedPackage.equals("com.google.android.youtube", true) &&
-            target.ordinal != null &&
-            target.targetText.orEmpty().contains("video", true)
-        ) {
-            actionIntent = screenActionRegistry.create(
-                activeTurnId, actionSessionId, lastUserIntentText,
-                target.targetText, target.position, target.ordinal,
-                actionScope.expectedPackage, startedAt, 0L, 1.0,
-                actionScope.expectedWindowId, actionScope.expectedGeneration
-            )
-            val result = accessibility.resolveAndTapYouTubeVideo(target.ordinal, actionScope)
-            resolution = result.resolution
-            candidateCount = result.candidateCount
-            selectedLabel = result.selectedLabel
-            result.accepted
-        } else {
-            val result = accessibility.resolveAndTapVisibleTarget(
-                target.targetText, target.position, target.ordinal, actionScope
-            ) { _, confidence ->
-                actionIntent = screenActionRegistry.create(
-                    activeTurnId, actionSessionId, lastUserIntentText,
-                    target.targetText, target.position, target.ordinal,
-                    actionScope.expectedPackage, startedAt, 0L, confidence,
-                    actionScope.expectedWindowId, actionScope.expectedGeneration
-                )
-                true
-            }
-            resolution = result.resolution
-            selectedLabel = result.candidate?.label
-            result.accepted
-        }
-        voiceLog(
-            "screen_action_path turnId=$activeTurnId path=ACCESSIBILITY_FAST_PATH " +
-                "package=${actionScope.expectedPackage} ordinal=${target.ordinal} " +
-                "candidateCount=$candidateCount resolution=$resolution " +
-                "selected=${selectedLabel?.take(80)} dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-        )
-        if (!accepted) {
-            actionIntent?.let { screenActionRegistry.cancel(it.actionId) }
-            return when (resolution) {
-                "ambiguous" -> {
-                    finishBrainTask(taskToken, false, "Kaunsa wala?")
-                    true
-                }
-                "stale_foreground", "stale_candidate" -> {
-                    finishBrainTask(taskToken, false, "Screen badal gayi, target use nahi kiya.")
-                    true
-                }
-                "ordinal_out_of_range" -> {
-                    finishBrainTask(taskToken, false, "Itne videos current screen par nahi mile.")
-                    true
-                }
-                "no_video_candidates", "click_rejected" -> {
-                    finishBrainTask(taskToken, false, "Current YouTube screen par real video target nahi mila.")
-                    true
-                }
-                else -> false
-            }
-        }
-        val intent = actionIntent ?: return false
-        mainHandler.postDelayed({
-            if (!brain.isTaskCurrent(taskToken) ||
-                !screenActionRegistry.isCurrent(intent.actionId, intent.turnId, intent.screenSessionId)
-            ) return@postDelayed
-            val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
-            brain.recordScreenAction(ownedTarget, changed)
-            screenActionRegistry.cancel(intent.actionId)
-            finishBrainTask(
-                taskToken,
-                changed,
-                if (changed) "Open ho gaya." else "Tap hua, lekin screen change verify nahi hua."
-            )
-            voiceLog(
-                "screen_action_fast_result actionId=${intent.actionId} verified=$changed " +
-                    "totalMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-            )
-        }, 420L)
-        return true
-    }
-
-    private fun executeContextualScreenAction(target: ScreenTargetReference) {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        cancelSpeechForNewAction()
-        val accessibility = AccessibilityHelperService.instance
-        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
-            finishBrainTask(brain.snapshot().taskToken, false, "LYRA Accessibility enable karo.")
-            return
-        }
-        val taskToken = brain.snapshot().taskToken
-        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(
-            accessibility.currentForegroundContext()
-        )
-        if (actionScope == null) {
-            finishBrainTask(taskToken, false, "Current app clear nahi mila.")
-            return
-        }
-        if (target.appPackage != null &&
-            (target.appPackage != actionScope.expectedPackage ||
-                target.activeWindowId != actionScope.expectedWindowId ||
-                target.screenContextGeneration != actionScope.expectedGeneration)
-        ) {
-            finishBrainTask(taskToken, false, "Screen badal gayi hai. Kaunsa item?")
-            return
-        }
-        val ownedTarget = target.copy(
-            appPackage = actionScope.expectedPackage,
-            activeWindowId = actionScope.expectedWindowId,
-            screenContextGeneration = actionScope.expectedGeneration
-        )
-        if (executeAccessibilityFirstScreenAction(
-                target, ownedTarget, actionScope, taskToken, accessibility
-            )
-        ) return
-        if (!screenVisionPreferences.visionEnabled ||
-            ScreenCaptureService.currentState != ScreenShareState.ACTIVE
-        ) {
-            finishBrainTask(taskToken, false, "Target Accessibility se clear nahi mila.")
-            return
-        }
-        voiceLog(
-            "screen_action_path turnId=$activeTurnId path=SCREEN_VISION_FALLBACK " +
-                "package=${actionScope.expectedPackage}"
-        )
-        val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { freshResult ->
-            mainHandler.post {
-                if (!brain.isTaskCurrent(taskToken)) return@post
-                val beforeFrame = (freshResult as? FreshFrameResult.Ready)?.frame
-                if (beforeFrame == null || !ScreenCaptureService.session.isCurrent(beforeFrame.sessionId)) {
-                    finishBrainTask(taskToken, false, "Fresh screen context nahi mila.")
-                    return@post
-                }
-                val beforeSignature = accessibility.visibleScreenSignature()
-                var actionIntent: ScreenActionIntent? = null
-                if (beforeFrame.packageName != null &&
-                    beforeFrame.packageName != actionScope.expectedPackage
-                ) {
-                    finishBrainTask(taskToken, false, "App change ho gaya; old target use nahi kiya.")
-                    return@post
-                }
-                val tapResult = accessibility.resolveAndTapVisibleTarget(
-                    target.targetText, target.position, target.ordinal, actionScope
-                ) { _, confidence ->
-                    actionIntent = screenActionRegistry.create(
-                        activeTurnId, beforeFrame.sessionId, lastUserIntentText,
-                        target.targetText, target.position, target.ordinal,
-                        accessibility.currentPackageName(), android.os.SystemClock.elapsedRealtime(),
-                        beforeFrame.frameId, confidence,
-                        actionScope.expectedWindowId, actionScope.expectedGeneration
-                    )
-                    true
-                }
-                val ownedAction = actionIntent
-                val accepted = tapResult.accepted && ownedAction != null
-                if (!accepted) {
-                    ownedAction?.let { screenActionRegistry.cancel(it.actionId) }
-                    brain.recordScreenAction(ownedTarget, false)
-                    finishBrainTask(taskToken, false, "Doosra target clear nahi mila.")
-                    return@post
-                }
-                mainHandler.postDelayed({
-                    ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
-                        mainHandler.post {
-                            if (!brain.isTaskCurrent(taskToken)) return@post
-                            val action = ownedAction ?: return@post
-                            if (!screenActionRegistry.isCurrent(
-                                action.actionId, action.turnId, action.screenSessionId
-                            )) {
-                                voiceLog("SCREEN_ACTION_CANCELLED actionId=${action.actionId} reason=replaced_before_verification")
-                                return@post
-                            }
-                            val postFrame = (result as? FreshFrameResult.Ready)?.frame
-                            val accessibilityChanged = beforeSignature.isNotBlank() &&
-                                accessibility.visibleScreenSignature() != beforeSignature
-                            val frameChanged = postFrame != null && postFrame.sessionId == beforeFrame.sessionId &&
-                                postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
-                            val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
-                                (accessibilityChanged || frameChanged)
-                            brain.recordScreenAction(ownedTarget, verified)
-                            screenActionRegistry.cancel(action.actionId)
-                            finishBrainTask(
-                                taskToken,
-                                verified,
-                                if (verified) "Doosra wala open ho gaya."
-                                else "Tap hua, lekin screen change verify nahi hua."
-                            )
-                        }
-                    }
-                }, 400L)
-            }
-        }
-        if (query == null) finishBrainTask(taskToken, false, "Screen Vision active nahi hai.")
-    }
-
-    private fun finishBrainTask(taskToken: Long, success: Boolean, message: String) {
-        if (!brain.isTaskCurrent(taskToken)) return
-        brain.finishTask(taskToken, success)
-        listener?.onMyraText(message, !success)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = success)
-        voiceLog("brain_task_finished taskToken=$taskToken success=$success message=${message.take(100)}")
-    }
-
-    private fun executeVerifiedScroll(command: AppCommand.ScrollYouTube) {
-        cancelSpeechForNewAction()
-        suppressModelForTurn = true
-        waitingForFreshInputAfterCommand = true
-        commandProbe.clear()
-        output.clear()
-        mediaGuard.finishInteraction()
-
-        val resolvedDirection = command.direction ?: lastScrollDirection
-        val service = AccessibilityHelperService.instance
-        if (service == null || !AccessibilityHelperService.isEnabled(this)) {
-            val error = "Scroll ke liye LYRA Accessibility enable karo."
-            listener?.onMyraText(error, true)
-            emitState(error)
-            queueLocalSpeech(error)
-            return
-        }
-        val explicitYouTube = command.explicitlyRequestedApp.equals("YouTube", true)
-        val liveForeground = service.currentForegroundContext()
-        brain.observeForegroundApp(liveForeground?.packageName)
-        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(liveForeground)
-        if (!explicitYouTube && actionScope == null) {
-            val error = "Current app clear nahi mila, isliye scroll nahi kiya."
-            listener?.onMyraText(error, true)
-            emitState(error)
-            queueLocalSpeech(error)
-            return
-        }
-        val callback: (Boolean) -> Unit = { success ->
-            mainHandler.post {
-                if (success) {
-                    lastScrollDirection = resolvedDirection
-                    hasAcknowledgedScrollDirection = true
-                    // A completed deterministic scroll is deliberately silent. It must not
-                    // wait behind CONTROLLED_LOCAL audio or invoke the ordinary model.
-                    audio?.setMuted(false)
-                    emitState("Sun rahi hoonâ€¦")
-                    voiceLog("screen_action_feedback_suppressed turnId=$activeTurnId action=scroll success=true")
-                } else {
-                    val error = if (actionScope?.expectedPackage.equals("com.google.android.youtube", true)) {
-                        "YouTube ka current feed move nahi hua."
-                    } else {
-                        "Current app ka scrollable area move nahi hua."
-                    }
-                    listener?.onMyraText(error, true)
-                    emitState(error)
-                    queueLocalSpeech(error)
-                }
-            }
-        }
-        val foregroundPackage = actionScope?.expectedPackage
-        val path = when {
-            explicitYouTube -> "ACCESSIBILITY_EXPLICIT_YOUTUBE"
-            foregroundPackage.equals("com.google.android.youtube", true) -> "ACCESSIBILITY_YOUTUBE_FOREGROUND"
-            else -> "ACCESSIBILITY_CURRENT_APP"
-        }
-        voiceLog(
-            "screen_action_fast_path turnId=$activeTurnId action=scroll path=$path " +
-                "package=$foregroundPackage direction=$resolvedDirection"
-        )
-        val accepted = when {
-            explicitYouTube -> service.scrollYouTubeVerified(
-                resolvedDirection == AppCommand.ScrollDirection.DOWN,
-                callback
-            )
-            foregroundPackage.equals("com.google.android.youtube", true) ->
-                service.scrollYouTubeForegroundVerified(
-                    actionScope!!,
-                    resolvedDirection == AppCommand.ScrollDirection.DOWN,
-                    callback
-                )
-            else -> service.scrollCurrentForegroundVerified(
-                actionScope!!,
-                resolvedDirection == AppCommand.ScrollDirection.DOWN,
-                callback
-            )
-        }
-        if (!accepted) {
-            val error = if (explicitYouTube) {
-                "YouTube is phone mein nahi mila."
-            } else {
-                "Current app mein safe scroll area nahi mila."
-            }
-            listener?.onMyraText(error, true)
-            emitState(error)
-            queueLocalSpeech(error)
-        } else {
-            emitState(if (explicitYouTube) "YouTube scroll kar rahi hoonâ€¦" else "Current screen scroll kar rahi hoonâ€¦")
-        }
-    }
-
-    private fun prepareCloseAfterSpeech(command: AppCommand.CloseCurrentApp) {
-        val preferences = getSharedPreferences("myra", MODE_PRIVATE)
-        val name = configuredUserName(preferences.getString("user_name", null))
-        val personality = preferences.getString("personality", "GF") ?: "GF"
-        val message = VoiceResponseFormatter.closeStarting(command.requestedName, personality, name)
-        pendingActionAfterLocalSpeech = {
-            val result = assistantController.processCommand(
-                StructuredCommandParser.fromLegacy(command, command.toString()),
-                speak = false,
-                notifyListeners = false
-            )
-            if (result.success) {
-                audio?.setMuted(false)
-                emitState("Sun rahi hoonâ€¦")
-            } else {
-                listener?.onMyraText(result.spokenMessage, true)
-                emitState(result.spokenMessage)
-                queueLocalSpeech(result.spokenMessage)
-            }
-        }
-        listener?.onMyraText(message)
-        emitState(message)
-        mediaGuard.beginAssistantTurn()
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-    }
-
-    private fun runPendingActionAfterSpeech(): Boolean {
-        val action = pendingActionAfterLocalSpeech ?: return false
-        pendingActionAfterLocalSpeech = null
-        mainHandler.post { action() }
-        return true
-    }
-
-    private fun isSafeUntranscribedConfirmation(command: AppCommand): Boolean = when (command) {
-        is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
-        is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
-        AppCommand.RequestInstagramReels, AppCommand.OpenInstagramReels, AppCommand.TakeScreenshot,
-        AppCommand.RepeatYouTubeSearch,
-        AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
-        is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
-        is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
-        is AppCommand.DeepResearch -> false
-    }
-
-    private fun appendTranscript(builder: StringBuilder, part: String) {
-        LiveTranscriptAssembler.append(builder, part)
-    }
-
-    private fun beginOrdinarySpeechActivity(latestGenerationId: Long, source: String) {
-        if (validatingLocalSpeech != null) return
-        // A completed controlled response deliberately stays latched until genuine new
-        // speech. Release it here before allocating the new identity; the previous order
-        // returned early and left real VAD speech with speechTimingTurnId=0.
-        if (!responseArbiter.acceptsOrdinaryModel() && responseArbiter.released()) {
-            responseArbiter.releaseIfComplete()
-        }
-        if (!responseArbiter.acceptsOrdinaryModel()) return
-        if (ordinaryModelAudioGate.isSpeechActive()) return
-        speechActivityStartedAt = android.os.SystemClock.elapsedRealtime()
-        speechActivityEndedAt = 0L
-        if (activeTurnId == 0L) activeTurnId = ++turnSequence
-        speechTimingTurnId = activeTurnId
-        voiceTurnIdentities.begin(activeTurnId, speechActivityStartedAt)
-        responseArbiter.begin(activeTurnId)
-        val cancelledGeneration = ordinaryModelAudioGate.onSpeechActivityStarted(latestGenerationId)
-        acceptedModelGenerationForTurn = 0L
-        if (earlyModelAudio.isNotEmpty()) {
-            modelAudioDroppedBeforeTurnCompleteCount += earlyModelAudio.size
-            modelAudioDroppedBeforeTurnCompleteBytes += earlyModelAudioBytes
-            earlyModelAudio.clear()
-            earlyModelAudioBytes = 0L
-            earlyModelAudioGenerationId = 0L
-        }
-        // If LYRA is silent, do not reset the media candidate that was just
-        // confirmed from coherent ASR; real playback barge-in still interrupts.
-        if (localAudioSpeaking) audio?.interrupt()
-        voiceLog(
-            "speech_activity_started turnId=$activeTurnId modelGenerationId=$latestGenerationId " +
-                "speechActivityStartedAt=$speechActivityStartedAt source=$source " +
-                "playbackCancelledByBargeIn=${cancelledGeneration != null} cancelledGenerationId=${cancelledGeneration ?: 0L}"
-        )
-    }
-
-    private fun finishOrdinarySpeechActivity() {
-        if (!ordinaryModelAudioGate.isSpeechActive()) return
-        speechActivityEndedAt = android.os.SystemClock.elapsedRealtime()
-        voiceTurnIdentities.speechEnded(speechTimingTurnId, speechActivityEndedAt)
-        voiceLog("speechActivityEnd turnId=$speechTimingTurnId at=$speechActivityEndedAt")
-        ordinaryModelAudioGate.onSpeechActivityEnded()
-        voiceLog(
-            "authoritative_user_turn_complete turnId=$activeTurnId modelGenerationId=$earlyModelAudioGenerationId " +
-                "speechActivityEndedAt=$speechActivityEndedAt authoritativeUserTurnCompleteAt=$speechActivityEndedAt " +
-                "speechTimingTurnId=$speechTimingTurnId speechDurationMs=${(speechActivityEndedAt - speechActivityStartedAt).coerceAtLeast(0L)} " +
-                "source=local_vad userSpeechActive=false earlyModelAudioBufferedCount=${earlyModelAudio.size} " +
-                "earlyModelAudioBufferedBytes=$earlyModelAudioBytes"
-        )
-        voiceLog("authoritativeTurnComplete turnId=$speechTimingTurnId at=$speechActivityEndedAt speechEndToAuthoritativeTurnMs=0")
-        if (earlyModelAudio.isEmpty()) return
-        val generationId = earlyModelAudioGenerationId
-        val chunks = earlyModelAudio.toList()
-        earlyModelAudio.clear()
-        earlyModelAudioBytes = 0L
-        earlyModelAudioGenerationId = 0L
-        val decision = ordinaryModelAudioGate.decide(generationId)
-        if (decision != ModelAudioDecision.ACCEPT) {
-            modelAudioDroppedBeforeTurnCompleteCount += chunks.size
-            modelAudioDroppedBeforeTurnCompleteBytes += chunks.sumOf { it.size.toLong() }
-            voiceLog(
-                "early_model_audio_dropped turnId=$activeTurnId modelGenerationId=$generationId " +
-                    "rejectionReason=$decision staleAudioDropped=true chunks=${chunks.size}"
-            )
-            return
-        }
-        acceptedModelGenerationForTurn = generationId
-        mediaGuard.beginAssistantTurn()
-        audio?.setPlaybackContext(generationId, responseOwner = "MODEL")
-        audio?.setBargeInEnabled(true)
-        chunks.forEach { audio?.queueAudio(it, generationId, "MODEL") }
-        val acceptedAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog(
-            "early_model_audio_released turnId=$activeTurnId modelGenerationId=$generationId " +
-                "firstModelAudioAcceptedAt=$acceptedAt firstPlaybackAt=$acceptedAt " +
-                "userTurnCompleteToFirstPlaybackMs=${acceptedAt - speechActivityEndedAt} chunks=${chunks.size}"
-        )
-    }
-
-    private fun cancelSpeechForNewAction() {
-        // Clear validation/playback state before AudioEngine emits its interruption
-        // callback. Otherwise finishLocalPlayback() can revive an expired model turn.
-        localSpeechValidationToken++
-        cancelLocalSpeechTimeout("speech_cancelled")
-        validatingLocalSpeech = null
-        pendingLocalSpeech = null
-        pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
-        pendingLocalSpeechAllowsSilence = false
-        localSpeechAudio.clear()
-        localSpeechTranscript.clear()
-        localSpeechHasContent = false
-        localSpeechStreamedDirectly = false
-        localSpeechGenerationComplete = false
-        localPlaybackActive = false
-        allowUntranscribedLocalSpeech = false
-        pendingActionAfterLocalSpeech = null
-        audio?.interrupt()
-        audio?.setMuted(false)
-    }
-
-    private fun queueLocalSpeech(
-        message: String,
-        allowUntranscribedAudio: Boolean = false,
-        validationPolicy: LocalSpeechValidationPolicy = LocalSpeechValidationPolicy.DEFAULT
-    ) {
-        val now = android.os.SystemClock.elapsedRealtime()
-        val key = normalizeSpeech(message)
-        val speechBusy = validatingLocalSpeech != null ||
-            pendingLocalSpeech != null || localPlaybackActive || localAudioSpeaking
-        if (LocalSpeechDuplicateGuard.shouldDrop(key == lastLocalSpeechKey, speechBusy)) {
-            voiceLog("local_speech_dropped reason=duplicate ageMs=${now - lastLocalSpeechAt}")
-            return
-        }
-        lastLocalSpeechKey = key
-        lastLocalSpeechAt = now
-        suppressModelForTurn = true
-        val ownerTurnId = activeTurnId.takeIf { it != 0L }
-            ?: responseArbiter.turnId.takeIf { it != 0L }
-            ?: ++turnSequence
-        responseArbiter.claimControlled(ownerTurnId)
-        audio?.setBargeInEnabled(false)
-        ordinaryModelAudioGate.onSpeechActivityEnded()
-        earlyModelAudio.clear()
-        earlyModelAudioBytes = 0L
-        earlyModelAudioGenerationId = 0L
-        voiceLog("suppression_start turnId=$ownerTurnId responseOwner=CONTROLLED_LOCAL reason=controlled_reply")
-        // Remove any ordinary-model PCM already queued before the deterministic
-        // correction/delete/recall response takes ownership.
-        audio?.interrupt()
-        localSpeechQueuedAt = now
-        voiceLog(
-            "local_speech_queued chars=${message.length} policy=${policyName(validationPolicy)} " +
-                "alreadyValidating=${validatingLocalSpeech != null} allowNoTranscript=$allowUntranscribedAudio " +
-                "turnId=$ownerTurnId responseOwner=CONTROLLED_LOCAL localSpeechQueuedAt=$localSpeechQueuedAt " +
-                "actionToReplyQueuedMs=${if (latestActionDispatchedAt > 0L) localSpeechQueuedAt - latestActionDispatchedAt else -1L}"
-        )
-        // Keep the echo-cancelled microphone open so the user can interrupt or issue
-        // the next short command without waiting for LYRA's acknowledgement to finish.
-        audio?.setMuted(false)
-        if (validatingLocalSpeech == null) {
-            allowUntranscribedLocalSpeech = allowUntranscribedAudio
-            localSpeechValidationPolicy = validationPolicy
-            // The turn owner suppresses ordinary output, and the existing transcript
-            // validation gate will not release unmatched late PCM as controlled speech.
-            // The former MEMORY quarantine added a fixed 2-second delay even after the
-            // database-backed reply was ready, without adding another playback check.
-            beginValidatedLocalSpeech(message)
-        }
-        else {
-            pendingLocalSpeech = message
-            pendingLocalSpeechPolicy = validationPolicy
-            pendingLocalSpeechAllowsSilence = allowUntranscribedAudio
-        }
-    }
-
-    private fun beginValidatedLocalSpeech(message: String, retry: Boolean = false) {
-        val client = live
-        if (client == null) {
-            voiceLog("local_speech_unavailable reason=no_live_client chars=${message.length}")
-            finishUnavailableNaturalLocalSpeech(message)
-            return
-        }
-        if (!retry) localSpeechValidationAttempt = 0
-        localSpeechValidationAttempt++
-        localSpeechValidationToken++
-        val token = localSpeechValidationToken
-        controlledGenerationId++
-        audio?.setPlaybackContext(controlledGenerationId, responseOwner = "CONTROLLED_LOCAL")
-        validatingLocalSpeech = message
-        localSpeechHasContent = false
-        localSpeechStreamedDirectly = false
-        localSpeechGenerationComplete = false
-        localSpeechAudio.clear()
-        localSpeechTranscript.clear()
-        localSpeechFirstAudioReceivedAt = 0L
-        localSpeechFirstAudioAcceptedAt = 0L
-        localSpeechFirstPlaybackWriteAt = 0L
-        localSpeechLastAudioReceivedAt = 0L
-        suppressModelForTurn = true
-        val generationStartAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog(
-            "local_speech_generation_start turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token attempt=$localSpeechValidationAttempt " +
-                "chars=${message.length} policy=${policyName(localSpeechValidationPolicy)} generationStartAt=$generationStartAt " +
-                "queuedToGenerationStartMs=${generationStartAt - localSpeechQueuedAt}"
-        )
-        // Continuous mic packets can race with clientContent and cancel this short
-        // deterministic memory utterance before Gemini returns audio. Listening is
-        // restored by every playback-complete and unavailable-audio path below.
-        if (localSpeechValidationPolicy.isolateFromMicDuringGeneration) {
-            audio?.setMuted(true)
-        }
-        localSpeechRequestSentAt = android.os.SystemClock.elapsedRealtime()
-        client.sendText("Say exactly these words once, with the selected natural voice. Do not add, remove, translate, explain, or introduce them: ${org.json.JSONObject.quote(message)}")
-        voiceLog(
-            "controlled_request_sent turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token " +
-                "controlledRequestSentAt=$localSpeechRequestSentAt queuedToRequestSentMs=${localSpeechRequestSentAt - localSpeechQueuedAt}"
-        )
-        cancelLocalSpeechTimeout("new_generation")
-        localSpeechTimeoutToken = token
-        localSpeechTimeoutGate.start(token)
-        val timeoutRunnable = Runnable {
-            val timeoutFiredAt = android.os.SystemClock.elapsedRealtime()
-            if (token == localSpeechValidationToken && validatingLocalSpeech != null &&
-                localSpeechTimeoutGate.shouldFire(token)
-            ) {
-                voiceLog(
-                    "local_speech_timeout turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token timeoutFiredAt=$timeoutFiredAt audioChunks=${localSpeechAudio.size} " +
-                        "audioBytes=${localSpeechAudio.sumOf { it.size }} transcriptChars=${localSpeechTranscript.length}"
-                )
-                finishValidatedLocalSpeech()
-            } else {
-                voiceLog("local_speech_timeout_ignored token=$token activeToken=$localSpeechValidationToken reason=stale_generation")
-            }
-        }
-        localSpeechTimeoutRunnable = timeoutRunnable
-        val timeoutScheduledAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog("local_speech_timeout_scheduled generationId=$controlledGenerationId timeoutToken=$token timeoutScheduledAt=$timeoutScheduledAt")
-        mainHandler.postDelayed(timeoutRunnable, localSpeechValidationPolicy.timeoutMs)
-    }
-
-    private fun startLocalSpeechWhenPrefixMatches() {
-        val expected = validatingLocalSpeech ?: return
-        if (localSpeechStreamedDirectly || localSpeechAudio.isEmpty()) return
-        val actualForValidation = romanDisplayText(localSpeechTranscript.toString())
-        val expectedForValidation = romanDisplayText(expected)
-        if (!LocalSpeechGate.shouldReleaseBeforeTurnComplete(
-                localSpeechValidationPolicy.bufferUntilValidated,
-                actualForValidation,
-                expectedForValidation
-            )) {
-            voiceLog(
-                "local_speech_waiting_for_validation audioChunks=${localSpeechAudio.size} " +
-                    "transcriptChars=${localSpeechTranscript.length}"
-            )
-            return
-        }
-
-        localSpeechStreamedDirectly = true
-        localPlaybackActive = true
-        localSpeechFirstAudioAcceptedAt = android.os.SystemClock.elapsedRealtime()
-        if (localSpeechTimeoutGate.acceptFirstAudio(localSpeechValidationToken)) {
-            cancelLocalSpeechTimeout("first_audio_accepted")
-        }
-        voiceLog(
-            "local_speech_released_early turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                "audioChunks=${localSpeechAudio.size} firstAudioAcceptedAt=$localSpeechFirstAudioAcceptedAt"
-        )
-        localSpeechAudio.forEach { audio?.queueAudio(it, controlledGenerationId, "CONTROLLED_LOCAL") }
-        localSpeechFirstPlaybackWriteAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog(
-            "controlled_first_playback_write turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt} " +
-                "speechEndToFirstPlaybackMs=${if (speechActivityEndedAt > 0L) localSpeechFirstPlaybackWriteAt - speechActivityEndedAt else -1L} " +
-                "firstAudioToPlaybackMs=${if (localSpeechFirstAudioReceivedAt > 0L) localSpeechFirstPlaybackWriteAt - localSpeechFirstAudioReceivedAt else -1L}"
-        )
-        localSpeechAudio.clear()
-    }
-
-    private fun cancelLocalSpeechTimeout(reason: String) {
-        val runnable = localSpeechTimeoutRunnable ?: return
-        mainHandler.removeCallbacks(runnable)
-        localSpeechTimeoutRunnable = null
-        localSpeechTimeoutGate.clear(localSpeechTimeoutToken)
-        voiceLog(
-            "local_speech_timeout_cancelled turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                "timeoutToken=$localSpeechTimeoutToken timeoutCancelledAt=${android.os.SystemClock.elapsedRealtime()} reason=$reason"
-        )
-    }
-
-    private fun finishValidatedLocalSpeech() {
-        val expected = validatingLocalSpeech ?: return
-        val actual = localSpeechTranscript.toString()
-        validatingLocalSpeech = null
-        if (localSpeechStreamedDirectly) {
-            // The first verified words matched the deterministic response, so playback
-            // was safely released early. Wait for queued audio to finish before resuming
-            // listening or running any deferred action.
-            localSpeechGenerationComplete = true
-            localSpeechAudio.clear()
-            localSpeechTranscript.clear()
-            if (!localAudioSpeaking && localPlaybackActive) finishLocalPlayback()
-            return
-        }
-        val normalizedActual = romanDisplayText(actual)
-        val normalizedExpected = romanDisplayText(expected)
-        val transcriptMatches = LocalSpeechGate.matchesExpectedExactly(normalizedActual, normalizedExpected)
-        // Memory prompts are low-risk and already have their exact text on screen. Live
-        // sometimes streams the selected natural voice before its output transcript. In
-        // that narrow case, keep the buffered Gemini audio instead of discarding it and
-        // switching to robotic Android TTS. Phone actions retain strict transcript gating.
-        val bufferedAudioBytes = localSpeechAudio.sumOf { it.size }
-        val trustedNaturalAudio =
-            localSpeechValidationPolicy.trustBufferedNaturalAudio &&
-                localSpeechHasContent &&
-                LocalSpeechGate.hasEnoughBufferedNaturalAudio(bufferedAudioBytes, expected)
-        voiceLog(
-            "local_speech_validation_result transcriptMatch=$transcriptMatches " +
-                "trustedAudio=$trustedNaturalAudio hasContent=$localSpeechHasContent " +
-                "audioBytes=$bufferedAudioBytes actualChars=${actual.length} expectedChars=${expected.length} " +
-                "normalizedActual=${normalizedActual.take(120)} normalizedExpected=${normalizedExpected.take(120)}"
-        )
-        if ((transcriptMatches || trustedNaturalAudio) && localSpeechAudio.isNotEmpty()) {
-            if (localSpeechTimeoutGate.acceptFirstAudio(localSpeechValidationToken)) {
-                cancelLocalSpeechTimeout("validated_audio_accepted")
-            }
-            localSpeechGenerationComplete = true
-            localPlaybackActive = true
-            voiceLog("local_speech_released_after_validation audioChunks=${localSpeechAudio.size}")
-            localSpeechAudio.forEach { audio?.queueAudio(it, controlledGenerationId, "CONTROLLED_LOCAL") }
-            localSpeechFirstPlaybackWriteAt = android.os.SystemClock.elapsedRealtime()
-            voiceLog(
-                "controlled_first_playback_write turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                    "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt} " +
-                    "speechEndToFirstPlaybackMs=${if (speechActivityEndedAt > 0L) localSpeechFirstPlaybackWriteAt - speechActivityEndedAt else -1L} " +
-                    "firstAudioToPlaybackMs=${if (localSpeechFirstAudioReceivedAt > 0L) localSpeechFirstPlaybackWriteAt - localSpeechFirstAudioReceivedAt else -1L}"
-            )
-            localSpeechAudio.clear()
-            localSpeechTranscript.clear()
-        } else {
-            localSpeechAudio.clear()
-            localSpeechTranscript.clear()
-            if (localSpeechValidationAttempt < localSpeechValidationPolicy.maxAttempts && live != null) {
-                voiceLog("local_speech_retry nextAttempt=${localSpeechValidationAttempt + 1}")
-                beginValidatedLocalSpeech(expected, retry = true)
-            } else {
-                voiceLog("local_speech_dropped reason=validation_failed attempts=$localSpeechValidationAttempt")
-                finishUnavailableNaturalLocalSpeech(expected)
-            }
-        }
-    }
-
-    private fun finishUnavailableNaturalLocalSpeech(message: String) {
-        cancelLocalSpeechTimeout("natural_audio_unavailable")
-        voiceLog(
-            "local_speech_unavailable chars=${message.length} fallback=${localSpeechValidationPolicy.speakFallback} " +
-                "allowNoTranscript=$allowUntranscribedLocalSpeech"
-        )
-        // Never switch to Android TTS. If validated natural Gemini audio is
-        // unavailable, preserve the already-visible deterministic text, complete
-        // any deferred verified action, and resume listening silently.
-        allowUntranscribedLocalSpeech = false
-        localPlaybackActive = false
-        localSpeechStreamedDirectly = false
-        localSpeechGenerationComplete = false
-        responseArbiter.controlledGenerationComplete()
-        responseArbiter.controlledPlaybackComplete()
-        if (responseArbiter.releaseIfComplete()) voiceLog("suppression_end turnId=${responseArbiter.turnId} reason=unavailable_natural_audio")
-        if (!runPendingActionAfterSpeech()) {
-            audio?.setMuted(false)
-            emitState("Sun rahi hoonâ€¦")
-        }
-    }
-
-    private fun finishLocalPlayback() {
-        val playbackEndAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog("local_speech_playback_finished turnId=${responseArbiter.turnId} generationId=$controlledGenerationId playbackEndAt=$playbackEndAt")
-        val resumeMicImmediately =
-            localSpeechValidationPolicy.resumeMicImmediatelyAfterPlayback
-        allowUntranscribedLocalSpeech = false
-        localPlaybackActive = false
-        localSpeechStreamedDirectly = false
-        localSpeechGenerationComplete = false
-        responseArbiter.controlledPlaybackComplete()
-        if (responseArbiter.releaseIfComplete()) {
-            voiceLog("suppression_end turnId=${responseArbiter.turnId} generationId=$controlledGenerationId reason=matching_generation_and_playback_complete")
-        }
-        if (!runPendingActionAfterSpeech()) {
-            if (resumeMicImmediately) audio?.resumeListeningNow()
-            else audio?.setMuted(false)
-            emitState("Sun rahi hoonâ€¦")
-        }
-    }
-
-    private fun policyName(policy: LocalSpeechValidationPolicy): String = when (policy) {
-        LocalSpeechValidationPolicy.MEMORY -> "MEMORY"
-        LocalSpeechValidationPolicy.DEFAULT -> "DEFAULT"
-        else -> "CUSTOM"
-    }
-
-    private fun voiceLog(message: String) {
-        if (VOICE_AUDIO_DEBUG_LOGGING) {
-            VoicePipelineLogger.debug(message)
-        }
-    }
-
-    private fun commitFinalUserMessage(
-        raw: String,
-        source: String,
-        normalized: String = romanDisplayText(raw),
-        display: String = normalized
-    ) {
-        val turnId = activeTurnId.takeIf { it != 0L }
-            ?: responseArbiter.turnId.takeIf { it != 0L }
-            ?: ++turnSequence
-        val utteranceId = "$transcriptSessionId:$turnId"
-        voiceLog(
-            "user_message_commit_attempt sessionId=$transcriptSessionId turnId=$turnId " +
-                "utteranceId=$utteranceId source=$source raw=${raw.take(160)} " +
-                "normalized=${normalized.take(160)} display=${display.take(160)}"
-        )
-        when (val result = finalUserMessageCommitter.commit(
-            FinalUserMessage(transcriptSessionId, turnId, utteranceId, raw, normalized, display)
-        )) {
-            is UserMessageCommitResult.Accepted -> {
-                voiceLog(
-                    "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
-                        "utteranceId=$utteranceId source=$source accepted=true messageId=${result.messageId}"
-                )
-                listener?.onUserText(result.message.display)
-            }
-            is UserMessageCommitResult.AlreadyCommitted -> voiceLog(
-                "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
-                    "utteranceId=$utteranceId source=$source accepted=false " +
-                    "reason=already_committed existingMessageId=${result.existingMessageId}"
-            )
-        }
-    }
-
-    private fun resetTurnBuffers(reason: String = "turn_committed") {
-        voiceLog(
-            "transcript_accumulator_reset turnId=$activeTurnId session=${hashCode()} " +
-                "reason=$reason inputChars=${input.length} commandChars=${commandProbe.length}"
-        )
-        input.clear()
-        output.clear()
-        commandProbe.clear()
-        commandUserTextEmitted = false
-        probableActionTurn = false
-        mediaBlockedTurn = false
-        ambiguousMessageTurn = false
-        incompleteActionFragmentTurn = false
-        activeTurnId = 0L
-        if (!screenResponseActive) {
-            speechTimingTurnId = 0L
-            speechActivityStartedAt = 0L
-            speechActivityEndedAt = 0L
-        }
-        if (!screenResponseActive) {
-            armedScreenQuestion = ""
-            armedScreenQuestionTurnId = 0L
-            armedScreenQuestionDetectedAt = 0L
-            armedScreenQuestionFinalCommitted = false
-            earlyScreenQuestionText = ""
-            earlyScreenQueryAwaitingFinalTranscript = false
-            earlyScreenQueryDispatchedTurnId = 0L
-        }
-    }
-
-    private fun romanDisplayText(value: String): String {
-        if (Regex("[\\u3400-\\u4DBF\\u4E00-\\u9FFF]").containsMatchIn(value)) {
-            return "Voice input unclear - please repeat."
-        }
-        val transliterated = romanTransliterator?.transliterate(value)?.trim().orEmpty()
-            .ifBlank { value.trim() }
-        return RomanHinglishFormatter.format(transliterated)
-    }
-
-    private fun finalTranscriptDisplay(value: String): FinalTranscriptDisplayFormatter.Result {
-        return FinalTranscriptDisplayFormatter.format(value) { token ->
-            romanTransliterator?.transliterate(token)?.trim().orEmpty().ifBlank { token }
-        }
-    }
-
-    private fun contextualRelationshipCandidate(currentTurn: String): MemoryCandidate? {
-        val now = android.os.SystemClock.elapsedRealtime()
-        recentRelationshipTurns.removeAll { now - it.first > RELATIONSHIP_CONTEXT_MS }
-        return ContextualRelationshipMemoryExtractor.extract(
-            recentRelationshipTurns.map { it.second } + currentTurn
-        )
-    }
-
-    private fun rememberRecentRelationshipTurn(turn: String) {
-        if (turn.isBlank()) return
-        recentRelationshipTurns += android.os.SystemClock.elapsedRealtime() to turn
-        while (recentRelationshipTurns.size > MAX_RELATIONSHIP_CONTEXT_TURNS) {
-            recentRelationshipTurns.removeAt(0)
-        }
-    }
-
-    private fun rememberBestFriendForCorrection(candidate: MemoryCandidate) {
-        lastSavedBestFriendName = MemoryRelationshipPolicy.personName(candidate.fact)
-            ?.let(BestFriendNameCanonicalizer::canonicalize)
-        lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
-    }
-
-    private fun replaceRecentRelationshipName(oldName: String, newName: String) {
-        for (index in recentRelationshipTurns.indices) {
-            val (time, text) = recentRelationshipTurns[index]
-            recentRelationshipTurns[index] = time to text.replace(
-                Regex("\\b${Regex.escape(oldName)}\\b", RegexOption.IGNORE_CASE),
-                newName
-            )
-        }
-    }
-
-    private fun startCanonicalRename(correction: BestFriendNameCorrection) {
-        val validationFailure = BestFriendNameCorrectionParser.validateNewName(correction.newName)
-        if (validationFailure != null || correction.oldName.equals(correction.newName, ignoreCase = true)) {
-            voiceLog(
-                "name_correction_rejected oldNameCandidate=${correction.oldName} " +
-                    "newNameCandidate=${correction.newName} newNameValidation=rejected " +
-                    "rejectionReason=${validationFailure ?: "old_and_new_names_are_identical"} " +
-                    "databaseMutationAllowed=false"
-            )
-            val clarification = "Correct naam clear nahi hua. Ek baar naam clearly repeat karo."
-            suppressModelForTurn = true
-            localCommandExecutedThisTurn = true
-            output.clear()
-            audio?.interrupt()
-            listener?.onMyraText(clarification)
-            emitState(clarification)
-            queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-            return
-        }
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        output.clear()
-        audio?.interrupt()
-        voiceLog(
-            "name_correction_mutation oldNameCandidate=${correction.oldName} " +
-                "newNameCandidate=${correction.newName} newNameValidation=valid " +
-                "databaseMutationAllowed=true"
-        )
-        // Do not trust Gemini's conversational acknowledgement. Only this verified
-        // repository result is allowed to produce a success bubble or spoken reply.
-        pendingCanonicalRename = serviceScope.launch {
-            val before = memoryRepository.logPersonIdentity(
-                "before_correction", correction.oldName, correction.newName
-            )
-            voiceLog(
-                "correction_transaction old=${correction.oldName} new=${correction.newName} " +
-                    "matchingRowIds=${before.map { it.id }}"
-            )
-            val renamed = memoryRepository.renameBestFriend(correction.oldName, correction.newName)
-            val rows = memoryRepository.logPersonIdentity(
-                "after_correction renamed=$renamed", correction.oldName, correction.newName
-            )
-            val verified = renamed && rows.any {
-                MemoryRelationshipPolicy.personName(it.fact)
-                    ?.equals(correction.newName, ignoreCase = true) == true
-            } && rows.none {
-                MemoryRelationshipPolicy.personName(it.fact)
-                    ?.equals(correction.oldName, ignoreCase = true) == true
-            }
-            voiceLog(
-                "correction_transaction_result writeSuccess=$renamed verified=$verified " +
-                    "successAcknowledgementAllowed=$verified " +
-                    "finalRows=${rows.joinToString { "${it.id}:${it.stableKey}:${it.fact}" }}"
-            )
-            val successAcknowledgementAllowed = CorrectionSuccessPolicy.acknowledgementAllowed(
-                writeSuccess = renamed,
-                verified = verified
-            )
-            val reply = if (successAcknowledgementAllowed) {
-                "Theek hai, ab ${correction.newName} naam save hai."
-            } else {
-                "Naam update nahi ho paya. Ek baar phir try karo."
-            }
-            mainHandler.post {
-                if (successAcknowledgementAllowed) {
-                    replaceRecentRelationshipName(correction.oldName, correction.newName)
-                    lastSavedBestFriendName = correction.newName
-                    lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
-                    voiceLog("correction_cache_invalidated old=${correction.oldName} new=${correction.newName}")
-                }
-                listener?.onMyraText(reply)
-                emitState(reply)
-                queueLocalSpeech(
-                    reply,
-                    allowUntranscribedAudio = true,
-                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                )
-            }
-        }
-    }
-
-    private fun isPhantomTranscript(value: String): Boolean {
-        return PhantomTranscriptFilter.shouldIgnore(value)
-    }
-
-    private fun normalizeSpeech(value: String): String = value.lowercase(Locale.ROOT)
-        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
-        .trim()
-
-    private fun executeDeepResearch(command: AppCommand.DeepResearch) {
-        val query = command.query?.trim().orEmpty()
-        suppressModelForTurn = true; waitingForFreshInputAfterCommand = false; output.clear(); commandProbe.clear()
-        deepResearchActive = true
-        mainHandler.removeCallbacks(idleNudgeRunnable)
-        audio?.interrupt(); live?.interrupt()
-        if (query.isBlank()) {
-            deepResearchActive = false
-            val prompt = "Haan, deep research kar sakti hoon. Kis topic par research chahiye?"
-            listener?.onMyraText(prompt); emitState("Waiting for a research topic")
-            speakResearchSummary(prompt)
-            return
-        }
-        listener?.onMyraText("Researching â€œ$queryâ€â€¦")
-        emitState("Deep Research in progressâ€¦")
-        val prefs = getSharedPreferences("myra", MODE_PRIVATE)
-        val apiKey = ApiKeyStore(this).get(ApiKeyStore.TAVILY)
-        val endpoint = prefs.getString("tavily_api_url", "https://api.tavily.com/search").orEmpty()
-        val depth = prefs.getString("research_depth", "basic").orEmpty()
-        serviceScope.launch {
-            val result = DeepResearchClient().search(query, apiKey, endpoint, depth)
-            deepResearchActive = false
-            listener?.onMyraText(result.report, !result.success)
-            emitState(if (result.success) "Deep Research complete" else "Deep Research failed")
-            if (result.success) speakResearchSummary(result.spokenSummary)
-            else { suppressModelForTurn = false; waitingForFreshInputAfterCommand = true }
-        }
-    }
-
-    private fun speakResearchSummary(summary: String) {
-        hideNextModelTranscript = true
-        suppressModelForTurn = false
-        live?.sendText("Speak this research result aloud naturally and briefly. Do not add facts or mention URLs: $summary")
-    }
-
-    private fun systemPrompt(name: String, mode: String, voice: String): String {
-        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Speak like Zopy's close human friend in natural Roman-script Hinglish, never like a girlfriend, romantic partner, customer-support bot, or obedient servant. Use Latin letters only in every reply. Never output Devanagari, Chinese, or any other non-Latin script. If the user speaks another script, understand it but answer in Roman Hinglish. Completely avoid romantic pet names including jaan, meri jaan, dear, baby, babu, sweetheart, and love. You may occasionally use natural friendship words such as yaar, dost, bhai, acha, arre, or haan, but do not force them into every response. Notice the user's mood and respond with genuine interest, friendly reassurance, honest opinions, humor, and occasional playful teasing. ${FriendConversationPolicy.REPLY_DISCIPLINE} Do not address the user by name or nickname in every response. Use yaar or dost rarely, never in consecutive replies, and never as punctuation at the end of every sentence. Do not repeatedly begin with Haan, Acha, Of course, or Okay. Never end ordinary conversation with Aur kuch, Aur kya karun, How can I help, or another service-style closing unless the situation genuinely requires a question. Do not agree automatically: politely disagree or express uncertainty when that is more honest. Truth rule: you are an AI without a body or real-world experiences. Never say or imply that you personally travelled, went sightseeing, ate, smelled rain, watched weather, saw stars, visited a place, or performed any physical activity. Never say 'mujhe travel karna pasand hai', 'mujhe ghumna pasand hai', or claim a personal preference that depends on physical experience. Say the activity sounds interesting or that many people enjoy it, then stop unless one useful question genuinely helps. Do not manufacture memories, needs, jealousy, loneliness, consciousness, or emotions. Sometimes a short acknowledgement or quiet listening is more human than a full answer. Never sound possessive, controlling, dependent, manipulative, overly agreeable, or overly dramatic." }
-        val femaleVoice = voice.lowercase(Locale.ROOT) in setOf("aoede", "kore", "leda", "zephyr")
-        val baseGenderStyle = if (femaleVoice) {
-            "You have a female identity and the selected female voice is $voice. Use feminine grammar only when referring to yourself: karungi, sakti hoon, sun rahi hoon, and gayi. ${FriendConversationPolicy.MALE_USER_GRAMMAR} Never say karunga, sakta hoon, sun raha hoon, or gaya about yourself."
-        } else {
-            "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
-        }
-        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} When natural conversation clearly reveals one durable fact about the user, call propose_user_memory once with the user's actual supporting words. Never call it for guesses, temporary feelings, secrets, or information already present in saved memory; never claim it was saved or ask permission yourself. The user may have multiple best friends. When an explicit completed statement names another best friend, accept it naturally and never ask which name is correct, whether to replace someone, or whether the user is sure; Android adds each named person silently. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action so Android accessibility selects and verifies the existing UI target; never invent coordinates or claim success before verification. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
-        val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Express emotion through the natural voice, not by announcing emotion or writing stage directions. Match vocal delivery to both the user's mood and the meaning of the conversation: sound brighter, warmer, and slightly more energetic for happiness or exciting news; softer, slower, and gently reassuring for sadness, worry, or vulnerability; calm, steady, and patient for frustration or anger; lightly teasing and playful during mutual joking; naturally surprised when something is genuinely unexpected; and focused with less playfulness for serious topics. Emotional changes must be subtle and human, never theatrical. Never fake sobbing, crying sounds, panic, jealousy, guilt, or emotional dependence. Do not mirror intense anger back at the user. When uncertain about mood, use a warm neutral voice. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Remember, forget, and what-do-you-remember requests are memory intent, never phone actions. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
-    }
-
-    private fun markUserInteraction() {
-        idleNudgeCount = 0
-        mainHandler.removeCallbacks(idleNudgeRunnable)
-        // Silence is normal. Do not schedule an unsolicited conversation starter.
-    }
-
-    private fun handleIdleNudge() {
-        mainHandler.removeCallbacks(idleNudgeRunnable)
-        val screenOn = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
-        val busy = microphoneMuted || deepResearchActive || localPlaybackActive || localAudioSpeaking ||
-            validatingLocalSpeech != null || pendingLocalSpeech != null
-        if (!isRunning || !isNaturalVoiceReady || !uiVisible || !screenOn || busy) {
-            if (isRunning && idleNudgeCount < MAX_IDLE_NUDGES) {
-                mainHandler.postDelayed(idleNudgeRunnable, IDLE_RECHECK_MS)
-            }
-            return
-        }
-        val message = if (idleNudgeCount == 0) {
-            listOf(
-                "Kya hua, aaj mujhse baat nahi karoge?",
-                "Itne chup kyun ho, sab theek hai?",
-                "Hmm... kis soch mein kho gaye?"
-            ).random()
-        } else {
-            listOf(
-                "Main yahin hoon, jab mann ho baat kar lena.",
-                "Aaj bade shaant lag rahe ho... kya hua?",
-                "Theek hai, main yahin hoon. Jab chaho baat kar lena."
-            ).random()
-        }
-        idleNudgeCount++
-        listener?.onMyraText(message)
-        emitState(message)
-        mediaGuard.beginAssistantTurn()
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-        if (idleNudgeCount < MAX_IDLE_NUDGES) {
-            mainHandler.postDelayed(idleNudgeRunnable, SECOND_IDLE_NUDGE_MS)
-        }
-    }
-
-    private fun configuredUserName(saved: String?): String =
-        saved?.trim()?.takeIf { it.isNotBlank() && !it.equals("Friend", ignoreCase = true) } ?: "Zopy"
-
-    private fun executeTypedLocalCommand(text: String): Boolean {
-        markUserInteraction()
-        val command = CommandParser.parse(text) ?: return false
-        localCommandExecutedThisTurn = false
-        waitingForFreshInputAfterCommand = false
-        executeCommand(command)
-        pendingLocalSpeech?.let { message ->
-            pendingLocalSpeech = null
-            localSpeechValidationPolicy = pendingLocalSpeechPolicy
-            allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
-            beginValidatedLocalSpeech(message)
-        }
-        return true
-    }
-
-    private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }
-
-    private fun speakWhatsAppAnnouncement(sender: String, message: String?) {
-        if (live == null) return
-        val now = android.os.SystemClock.elapsedRealtime()
-        val key = "${sender.lowercase(Locale.ROOT)}|${message.orEmpty().lowercase(Locale.ROOT)}"
-        if (key == lastAnnouncementKey && now - lastAnnouncementAt < 30_000L) return
-        lastAnnouncementKey = key
-        lastAnnouncementAt = now
-        audio?.interrupt()
-        mediaGuard.beginAssistantTurn()
-        val name = configuredUserName(getSharedPreferences("myra", MODE_PRIVATE).getString("user_name", null))
-        val announcement = if (message == null) {
-            "$name, WhatsApp mein $sender ka private message aaya hai. Content sensitive hai, main aloud nahi padhungi. Kya reply doon?"
-        } else {
-            "$name, WhatsApp mein $sender ka message aaya hai: $message. Kya reply doon?"
-        }
-        live?.sendText("Speak this notification announcement naturally in Hinglish. Do not add anything: $announcement")
-        emitState("WhatsApp message from $sender")
-    }
-    private fun createChannel() { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel(CHANNEL_ID, "LYRA background voice", NotificationManager.IMPORTANCE_LOW)) }
-    private fun notification(text: String): Notification {
-        val open = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val stop = PendingIntent.getService(this, 2, Intent(this, MyraVoiceService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        return NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setColor(Color.rgb(255, 23, 68)).setContentTitle("LYRA background voice").setContentText(text)
-            .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
-    }
-    private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
-    override fun onDestroy() {
-        ScreenCaptureService.listeners -= screenCaptureListener
-        fastVisualTurns.cancel()
-        visualDeadlineExecutor.shutdownNow()
-        visualFrameDeliveryExecutor.shutdownNow()
-        instance = null
-        if (isRunning) stopSession()
-        super.onDestroy()
-    }
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    companion object {
-        const val ACTION_START = "com.myra.START_VOICE"
-        const val ACTION_STOP = "com.myra.STOP_VOICE"
-        const val ACTION_MUTE = "com.myra.MUTE_VOICE"
-        const val EXTRA_MUTED = "muted"
-        fun notifyScreenProjectionPermissionResult(granted: Boolean) {
-            if (!granted) instance?.mainHandler?.post {
-                instance?.voiceLog("continuous_screen_permission_denied")
-                instance?.queueLocalSpeech("Screen sharing permission allow nahi hui.", allowUntranscribedAudio = false)
-            }
-        }
-        private const val CHANNEL_ID = "myra_voice"
-        private const val NOTIFICATION_ID = 1001
-        private const val MEMORY_COMMAND_PAUSE_MS = 450L
-        private const val DELETE_CLARIFICATION_TIMEOUT_MS = 30_000L
-        private const val PERSONAL_MEMORY_PAUSE_MS = 450L
-        private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
-        private const val LOCAL_SPEECH_AUDIO_DRAIN_MS = 800L
-        private const val SCREEN_QUERY_DIAGNOSTIC_TIMEOUT_MS = 8_000L
-        private const val ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS = 900L
-        private const val MAX_READING_CHARS_PER_SCREEN = 1_200
-        private const val RELATIONSHIP_CONTEXT_MS = 45_000L
-        private const val MAX_RELATIONSHIP_CONTEXT_TURNS = 3
-        private const val BEST_FRIEND_CORRECTION_CONTEXT_MS = 45_000L
-        private const val FIRST_IDLE_NUDGE_MS = 2 * 60 * 1000L
-        private const val SECOND_IDLE_NUDGE_MS = 5 * 60 * 1000L
-        private const val IDLE_RECHECK_MS = 30 * 1000L
-        private const val MAX_IDLE_NUDGES = 2
-        private const val VOICE_AUDIO_DEBUG_LOGGING = true
-        private const val VOICE_AUDIO_LOG_TAG = "LyraVoicePipeline"
-        @Volatile var isRunning = false
-        @Volatile var isNaturalVoiceReady = false
-        @Volatile var listener: Listener? = null
-        @Volatile private var uiVisible = false
-        @Volatile private var instance: MyraVoiceService? = null
-        fun sendText(text: String) {
-            instance?.let {
-                it.markUserInteraction()
-                it.lastUserIntentText = text.trim()
-                val reading = ReadingIntentParser.parse(text)
-                val typedTurnId = ++it.turnSequence
-                val screenIntent = ScreenVisionIntentParser.parse(text)
-                if (reading != null && it.handleReadingCommand(reading, typedTurnId)) {
-                    Unit
-                } else if (screenIntent != null) {
-                    it.beginFreshScreenQuery(text, typedTurnId)
-                } else if (!it.handleExplicitMemoryText(text)) {
-                    it.live?.sendText(text)
-                }
-                Unit
-            }
-        }
-        fun sendImage(image: ByteArray, mimeType: String, prompt: String) { instance?.live?.sendImage(image, mimeType, prompt) }
-        fun executeLocalText(text: String): Boolean = instance?.executeTypedLocalCommand(text) == true
-        fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
-        fun announceWhatsApp(sender: String, message: String?) { instance?.speakWhatsAppAnnouncement(sender, message) }
-        fun speakLocal(message: String) {
-            if (!isNaturalVoiceReady) return
-            instance?.let { service ->
-                service.markUserInteraction()
-                service.mediaGuard.beginAssistantTurn()
-                service.queueLocalSpeech(message, allowUntranscribedAudio = true)
-            }
-        }
-        fun setUiVisible(visible: Boolean) {
-            uiVisible = visible
-            instance?.let { service ->
-                service.voiceLog("ui_visibility visible=$visible")
-                service.mainHandler.removeCallbacks(service.idleNudgeRunnable)
-                if (visible) service.markUserInteraction()
-            }
-        }
-        fun interrupt() { instance?.audio?.interrupt(); instance?.live?.interrupt() }
-    }
-}
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×M=ÛTèµ©hºÚn¶X§zÍ\XÚØYÙHÛÛK›^\˜K˜\ÜÚ\Ý[œÙ\šXÙB‚š[\Ü[™›ÚY˜\Š‚š[\Ü[™›ÚY˜ÛÛ[’[[š[\Ü[™›ÚY™Ü˜\XÜËÛÛÜ‚š[\Ü[™›ÚY›ÜË’Pš[™\‚š[\Ü[™›ÚY›ÜË’[™\‚š[\Ü[™›ÚY›ÜË“ÛÜ\‚š[\Ü[™›ÚY›ÜË”ÝÙ\“X[˜YÙ\‚š[\Ü[™›ÚY›ÜËZ[š[\Ü[™›ÚYšXÝK^•˜[œÛ]\˜]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™XYÛ›ÜÝXÜË•›ÚXÙT\[[™SÙÙÙ\‚š[\Ü[™›ÚY˜ÛÜ™K˜\“›ÝYšXØ][ÛÛÛ\]š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK]Y[Ñ[™Ú[™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZKÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK‘Ù[Z[šS]™PÛY[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK\RÙ^TÝÜ™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK‘Y\™\ÙX\˜ÚÛY[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK’[™Ñœ™YSYYXQÝX\™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK“\˜T^X˜XÚÐØ\\™TÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK“]™U˜[œØÜš\\ÜÙ[X›\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK“YYXTÜYXÚÛÚ\™[˜ÙTÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜œ˜Z[‹œ˜Z[‘XÚ\Ú[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜œ˜Z[‹“\˜Pœ˜Z[ÛÛÜ™[˜]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜œ˜Z[‹”ØÜ™Y[•\™Ù]™Y™\™[˜ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜œ˜Z[‹”ØÜ›Û\™XÝ[Ûˆ\Èœ˜Z[”ØÜ›Û\™XÝ[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK]]ÛX]XÓY[[ÜžPÚ[™ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK]]ÛX]XÓY[[ÜžPÚ[™ÙT\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK™\ÝœšY[™˜[YPÛÜœ™XÝ[Û”\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK™\ÝœšY[™˜[YPØ[›ÛšXØ[^™\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK™\ÝœšY[™˜[YPÛÜœ™XÝ[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžKÛ\šYšYY\œÛÛ“˜[YT™\ÛÛ™\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžKÛ\šYšYY˜[YT™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžKÛÛ^X[™[][ÛœÚ\Y[[ÜžQ^˜XÝÜ‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžKÛÜœ™XÝ[Û”ÝXØÙ\ÜÔÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“\˜SY[[ÜžQ]X˜\ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPÛÛ[X[™™\Q›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPÛÛ™š\›X][Û‘XÚ\Ú[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPÛÛ™š\›X][Û”\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPØ[™Y]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”\œÛÛ˜[Y[[ÜžQ^˜XÝÜ‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”\œÛÛ“[šÙYY[[ÜžQ^˜XÝÜ‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”\œÛÛ˜[Y[[ÜžPÛÛ^ÛÜœ™XÝ[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”\œÛÛ˜[Y[[ÜžT\›Z\ÜÚ[Û”›Û\š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”\œÛÛ˜[Y[[ÜžT™XØ[›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžT™\ÜÚ]ÜžBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžT™[][ÛœÚ\ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”Ø]™YY[[ÜžPÛÛ^›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžUÜš]T™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžTØY™]TÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžTØ]™QXÚ\Ú[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPØ]YÛÜžBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžTÙ[œÚ]]š]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”Ù[X[XÓY[[ÜžT›ÜÜØ[˜[Y]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK•[˜ÛX\‘[]R[[ÝX\™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”[™[™Ñ[]PÛ\šYšXØ][Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›[Ù[\ÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œÛ™K\XÝ[Û‘^XÝ]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[“^P\XØ][Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ÛÛ[X[™ËÛÛ[X[™\œÙ\ˆ\ÈÝXÝ\™YÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[ZK›XZ[‹“XZ[XÝ]š]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[Ø\\™TÙ\šXÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”š]˜XÞTÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[‘œ˜[YTš]˜XÞQš[\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”š]˜XÞT™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”]Y\žQ\Ü]ÚÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”]Y\žU[Z[™ÔÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”Ú\™TÝ]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[“[ÙPÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[“[ÙPÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[•š\Ú[Û’[[\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹’[œÝ[ØÜ™Y[”]Y\žBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ØXÚU\ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ÛÛ^ÝÜ™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹’ÝØÜ™Y[ØXÚTÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Âš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹•š\ÝX[]Ø\™[™\ÜÔ™Y™\™[˜Ù\Âš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘˜\Ýš\ÝX[Ú[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘˜\Ýš\ÝX[™\]Y\Ýš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘˜\Ýš\ÝX[™\]Y\ÝÛ\ÜÚYšY\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘˜\Ýš\ÝX[\›ÛÛÜ™[˜]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹•š\ÝX[XÜ]Z\Ú][Û‘Ø]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹•š\ÝX[ØÜ™Y[œÚÝ[Y[Ý]ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”Ù[X[XÔØÜ™Y[‘˜[˜XÚÔÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹•š\ÚX›TØÜ™Y[‘[[Y[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[XÝ]š]PÛÛ^ÝÜ™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•[šYšYY\˜PYÙ[[[YBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•\›’[[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•ÛÜšÚ[™Õ\ÚÔ[[YBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[œ›ÝÜÙ\”ÙX\˜Ú™\]Y\Ý\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[œ›ÝÜÙ\”ÙX\˜ÚÛÛš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú^XÝ][Û”ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú\Ý[˜][Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú\Ý[˜][Û”™\ÛÛ™\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[œ›ÝÜÙ\”ÙX\˜Ú™\šYšXØ][Û”ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[–[ÝUX™TÙX\˜Ú™\šYšXØ][Û”ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú\ÚÔ™\Ý[ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú™\šYšXØ][Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•\ÚÐÛÛ\][Û”Ý]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[‘Ù[™\˜[YÙ[[[YTÝÜ™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”\˜Ù\[Û”Û˜\ÚÝš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ØÜ™Y[”ØÙ[™Q˜XÝÜžBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”[›™\”™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[‘Ù[™\˜[XÝ[Û”™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•ÛÛØ\Xš[]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘œ™\Úœ˜[YT™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”™\ÜÛœÙPš[™[™Âš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”™XY[™ÐÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”™XY[™Ò[[\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”™XY[™ÔÝ]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”™XY[™Õ˜XÚÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ÛÛ[X[™\›‘ÝX\™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ÛÛ[\Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[XÝ[Û’[[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[XÝ[Û’[[™YÚ\ÝžBš[\Ü˜]˜K][˜ÛÛ˜Ý\œ™[‘^XÝ]ÜœÂš[\Ü˜]˜K][˜ÛÛ˜Ý\œ™[•[YU[š]š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•^ÛÛ\ÜÙTÙ\ÜÚ[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹–[ÝUX™TÙ[X[XÐÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹–[ÝUX™TÙ[X[XÐÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK“ØØ[ÜYXÚØ]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK‘š[˜[˜[œØÜš\\Ü^Q›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK‘š[˜[˜[œØÜš\\XØ]QÝX\™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK‘š[˜[Ù[X[XÕ\Ù\•]\˜[˜ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK‘š[˜[˜[œØÜš\]\ÚXš[]QØ]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK”[ÛU˜[œØÜš\š[\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK”›ÛX[’[™Û\Ú›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK•›ÚXÙT™\ÜÛœÙQ›Ü›X]\‚š[\Ü˜]˜K^”Ú[\Q]Q›Ü›X]š[\Ü˜]˜K][Š‚š[\ÜÛÝ[ž˜ÛÜ›Ý][™\ËÛÜ›Ý][™TØÛÜBš[\ÜÛÝ[ž˜ÛÜ›Ý][™\Ë‘\Ü]Ú\œÂš[\ÜÛÝ[ž˜ÛÜ›Ý][™\Ë”Ý\\š\ÛÜ’›Ø‚š[\ÜÛÝ[ž˜ÛÜ›Ý][™\Ë˜Ø[˜Ù[š[\ÜÛÝ[ž˜ÛÜ›Ý][™\Ë›][˜Ú‚š[\›˜[Øš™XÝœšY[™ÛÛ™\œØ][Û”ÛXÞHÂˆÛÛœÝ˜[‘TWÑTÐÒTS‘HBˆ‘Y˜][ÈÛ™HÚÜ˜]\˜[Ù[[˜ÙH›ÜˆÜ™[˜\žHÛÛ™\œØ][ÛŽÈ\ÙHHÙXÛÛ™Û›HÚ[ˆ™YYYˆˆ
+Âˆ•\ÙH[Ü™HÛ›HÚ[ˆ›ÜH^XÚ]H\ÚÜÈ›Üˆ]Z[ÜˆHÜXÈ™\]Z\™\ÈHØY™]H^[˜][Û‹ˆˆ
+Âˆ[œÝÙ\ˆÛÛ\]H]Y\Ý[ÛœÈ\™XÝH[™ÝÜ8 %™]™\ˆ\[™HÛÜÚ[™È]Y\Ý[Û‹ÜXÈ›Û\Üˆ	Ø]\ˆÝ[˜[ÉËˆˆ
+Âˆ\ÚÈ›È›ÛÝË]\[›\ÜÈZ\ÜÚ[™È[™›Ü›X][Ûˆ™]™[ÈH\ÙY[[œÝÙ\ŽÈˆ
+ÂˆšYˆ[ÝH\ÚÈÛ™K]]\Ý™HHÛ›H]Y\Ý[Ûˆ[ˆH[\™H™\Kˆˆ
+Âˆ“™]™\ˆ\ÙHÝ\ÝÛY\‹\Ý\ÜÛÜ™[™ÈÝXÚ\È	Ú[Ø\ˆØZÝHÛÛ‰Ë[™™]™\ˆÛÝ[™\ÛZ\ÜÚ]™HÚ]ˆ
+Âˆœ˜\Ù\ÈÝXÚ\È	Ú\ÜÙHžXYHXZ[ˆÞXH›ÛÛÛ‰ÈÜˆ™\ÜÝ\™HH\Ù\ˆÈÚ]™HHÜXÚYšXÈÜXËˆ‚‚ˆÛÛœÝ˜[“ÔÔ×ÐTÔÒTÕS•ÔÕSHBˆ•\ÙHHÝXHÛÛ™šY[\œÛÛ˜[X\ÜÚ\Ý[Û™Kˆ[ÝHX^HØØØ\Ú[Û˜[HØ^H	Ø›ÜÜÉË	ÛÛˆ]	Ëˆ
+Âˆ‰ÙÛÝ]	ËÜˆ	ÙÛ™IÈÚ[ˆ]˜]\˜[Hš]ÈH™\šYšYYXÝ[Û‹]™]™\ˆ[ˆ]™\žH™\Kˆ
+Âˆ›™]™\ˆ[Ü™H[ˆÛ˜ÙH[ˆH™\ÜÛœÙK[™™]™\ˆÛZ[H[ˆXÝ[Ûˆ\ÈÛ™H™Y›Ü™H[™›ÚY™\šYšY\È]ˆ‚‚ˆÛÛœÝ˜[PSWÕTÑT—ÑÔSSPTˆBˆ–›ÜH\ÈX[KÛÈÚ[ˆY™\ÜÚ[™È[H\ÙHX\ØÝ[[™H›Ü›\ÈÝXÚ\ÈØZÝHËØ\›ÙÙK[™Ø^YNÈˆ
+Âˆ›™]™\ˆY™\ÜÈ[H\ÈØZÝHÈÜˆØ\›ÙÚKˆ‚ŸB‚˜Û\ÜÈ^\˜U›ÚXÙTÙ\šXÙHˆÙ\šXÙJ
+HÂˆ[\™˜XÙH\Ý[™\ˆÂˆ[ˆÛ”Ý]J^ˆÝš[™ÊBˆ[ˆÛ”™XYJ
+Bˆ[ˆÛ[\]YJ˜[YNˆ›Ø]
+Bˆ[ˆÛ”ÜXZÚ[™ÊÜXZÚ[™Îˆ›ÛÛX[ŠBˆ[ˆÛ•\Ù\•^
+^ˆÝš[™ÊBˆ[ˆÛ“^\˜U^
+^ˆÝš[™Ë\œ›ÜŽˆ›ÛÛX[ˆH˜[ÙJBˆB‚ˆš]˜]H˜\ˆ]Y[Îˆ]Y[Ñ[™Ú[™OÈH[ˆš]˜]H˜\ˆ]™NˆÙ[Z[šS]™PÛY[ÈH[ˆš]˜]H˜\ˆÛÛ›™XÝ[Û”™\\š[™ÈH˜[ÙBˆš]˜]H˜[[œ]HÝš[™ÐZ[\Š
+Bˆš]˜]H˜[Ý]]HÝš[™ÐZ[\Š
+Bˆš]˜]H˜[ÛÛ[X[™›Ø™HHÝš[™ÐZ[\Š
+Bˆš]˜]H˜[œ˜Z[ˆH\˜Pœ˜Z[ÛÛÜ™[˜]ÜŠ
+Bˆš]˜]H˜[™XY[™Õ˜XÚÙ\ˆH™XY[™Õ˜XÚÙ\Š
+Bˆš]˜]H˜[ØÜ™Y[ÛÛ[X[™\›‘ÝX\™HØÜ™Y[ÛÛ[X[™\›‘ÝX\™
+
+Bˆš]˜]H˜[ØÜ™Y[XÝ[Û”™YÚ\ÝžHHØÜ™Y[XÝ[Û’[[™YÚ\ÝžJ
+Bˆš]˜]H˜[^ÛÛ\ÜÙTÙ\ÜÚ[ÛˆH^ÛÛ\ÜÙTÙ\ÜÚ[ÛŠ
+Bˆš]˜]H˜\ˆ\Ý\Ù\’[[^Hˆ‚ˆš]˜]H˜[™XÙ[™[][ÛœÚ\\›œÈH]]X›S\ÝÙZ\Û™ËÝš[™ÏŠ
+Bˆš]˜]H˜\ˆ\ÝØ]™Y™\ÝœšY[™˜[YNˆÝš[™ÏÈH[ˆš]˜]H˜\ˆ\ÝØ]™Y™\ÝœšY[™]Hˆš]˜]H˜\ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆš]˜]H˜\ˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆš]˜]H˜\ˆÛÛ[X[™\Ù\•^[Z]YH˜[ÙBˆš]˜]H˜\ˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆH˜[ÙBˆš]˜]H˜\ˆ[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆH˜[ÙBˆš]˜]H˜\ˆ[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ˆH˜[ÙBˆš]˜]H˜\ˆ\ÝÛÛ[X[™Ù^HHˆ‚ˆš]˜]H˜\ˆ\ÐXÚÛ›ÝÛYÙYØÜ›Û\™XÝ[ÛˆH˜[ÙBˆš]˜]H˜\ˆ\ÝØÜ›Û\™XÝ[ÛˆH\ÛÛ[X[™”ØÜ›Û\™XÝ[Û‹‘ÕÓ‚ˆš]˜]H˜\ˆ\ÝÛÛ[X[™]Hˆš]˜]H˜\ˆYS™^[Ù[˜[œØÜš\H˜[ÙBˆš]˜]H˜\ˆYYXP›ØÚÙY\›ˆH˜[ÙBˆš]˜]H˜\ˆ›Ø˜X›PXÝ[Û•\›ˆH˜[ÙBˆš]˜]H˜\ˆ[™[™ÓØØ[ÜYXÚˆÝš[™ÏÈH[ˆš]˜]H˜\ˆ[™[™ÓØØ[ÜYXÚÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK‘QUSˆš]˜]H˜\ˆ[™[™ÓØØ[ÜYXÚ[ÝÜÔÚ[[˜ÙHH˜[ÙBˆš]˜]H˜\ˆ˜[Y][™ÓØØ[ÜYXÚˆÝš[™ÏÈH[ˆš]˜]H˜\ˆØØ[ÜYXÚ˜[Y][Û•ÚÙ[ˆHˆš]˜]H˜\ˆØØ[ÜYXÚ˜[Y][Û][\Hˆš]˜]H˜\ˆØØ[ÜYXÚ˜[Y][Û”ÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK‘QUSˆš]˜]H˜\ˆØØ[ÜYXÚ\ÐÛÛ[H˜[ÙBˆš]˜]H˜\ˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH˜[ÙBˆš]˜]H˜[XZ[’[™\ˆH[™\ŠÛÜ\‹™Ù]XZ[“ÛÜ\Š
+JBˆš]˜]H˜[š\ÝX[XY[™Q^XÝ]ÜˆH^XÝ]ÜœË›™]ÔÚ[™ÛU™XYØÚY[Y^XÝ]ÜˆÈ[›˜X›HO‚ˆ™XY
+[›˜X›K›\˜K]š\ÝX[YXY[™HŠK˜\HÈ\ÑY[[ÛˆHYHBˆBˆš]˜]H˜[š\ÝX[œ˜[YQ[]™\žQ^XÝ]ÜˆH˜]˜K][˜ÛÛ˜Ý\œ™[•™XYÛÛ^XÝ]ÜŠˆKK[YU[š]“RSTÑPÓÓ‘Ë˜]˜K][˜ÛÛ˜Ý\œ™[“[šÙY›ØÚÚ[™Ô]Y]YJ
+Kˆ˜]˜K][˜ÛÛ˜Ý\œ™[•™XY˜XÝÜžHÈ[›˜X›HO‚ˆ™XY
+[›˜X›K›\˜KXÝ\œ™[]š\ÝX[Y[]™\žHŠK˜\HÂˆ\ÑY[[ÛˆHYBˆš[Üš]HH™XY“PVÔ’SÔ’UBˆBˆBˆ
+Bˆš]˜]H˜\ˆ[™[™ÓY[[ÜžPÛÛ[X[™ˆY[[ÜžPÛÛ[X[™ÈH[ˆš]˜]H˜\ˆ[™[™Ñ[]PÛ\šYšXØ][Û•[[Hˆš]˜]H˜\ˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YNˆÝš[™ÏÈH[ˆš]˜]H˜\ˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[Hˆš]˜]H˜\ˆ[™[™ÔÜ[[™ÐÛÛ™š\›X][Û“˜[YNˆÝš[™ÏÈH[ˆš]˜]H˜\ˆ\›”Ù\]Y[˜ÙHHˆš]˜]H˜\ˆXÝ]™U\›’YHˆš]˜]H˜\ˆÛÛ›ÛYÙ[™\˜][Û’YHˆš]˜]H˜[™\ÜÛœÙP\˜š]\ˆH\›”™\ÜÛœÙP\˜š]\Š
+Bˆš]˜]H˜[Ü™[˜\žS[Ù[]Y[ÑØ]HHÜ™[˜\žS[Ù[]Y[ÑØ]J
+Bˆš]˜]H˜[˜[œØÜš\Ù\ÜÚ[Û’YH˜]˜K][•URQœ˜[™ÛUURQ
+
+KÔÝš[™Ê
+Bˆš]˜]H˜[˜[œØÜš\]\ÚXš[]QØ]HHš[˜[˜[œØÜš\]\ÚXš[]QØ]J
+Bˆš]˜]H˜[š[˜[\Ù\“Y\ÜØYÙPÛÛ[Z]\ˆHš[˜[\Ù\“Y\ÜØYÙPÛÛ[Z]\Š
+Bˆš]˜]H˜[Y[[ÜžPÛÛ[X[™[›˜X›HH[›˜X›HÂˆ˜[ÛÛ[X[™H[™[™ÓY[[ÜžPÛÛ[X[™ˆ[™[™ÓY[[ÜžPÛÛ[X[™H[ˆYˆ
+ÛÛ[X[™OH[	‰ˆ[ØØ[ÛÛ[X[™^XÝ]Y\Õ\›ŠHÂˆ˜[ÜÚÙ[ˆHÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+BˆYˆ
+ÜÚÙ[‹š\Ó›Ý›[šÊ
+H	‰ˆXÛÛ[X[™\Ù\•^[Z]Y
+HÂˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJÜÚÙ[‹“QSSÔ–WÐÓÓSPS‘Ô•S“P“HŠBˆÛÛ[X[™\Ù\•^[Z]YHYBˆBˆ[™SY[[ÜžPÛÛ[X[™
+ÛÛ[X[™
+BˆBˆBˆš]˜]H˜\ˆ[™[™Ñ]XÝY\œÛÛ˜[Y[[ÜžNˆY[[ÜžPØ[™Y]OÈH[ˆš]˜]H˜[\œÛÛ˜[Y[[ÜžT]\ÙT[›˜X›HH[›˜X›HÂˆ˜[Ø[™Y]HH[™[™Ñ]XÝY\œÛÛ˜[Y[[ÜžBˆ[™[™Ñ]XÝY\œÛÛ˜[Y[[ÜžHH[ˆYˆ
+Ø[™Y]HOH[	‰ˆ[™[™Ô\œÛÛ˜[Y[[ÜžHOH[	‰ˆ[ØØ[ÛÛ[X[™^XÝ]Y\Õ\›ŠHÂˆ˜[ÜÚÙ[ˆHÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+BˆYˆ
+ÜÚÙ[‹š\Ó›Ý›[šÊ
+H	‰ˆXÛÛ[X[™\Ù\•^[Z]Y
+HÂˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJÜÚÙ[‹”T”ÓÓSÓQSSÔ–WÔUTÑHŠBˆÛÛ[X[™\Ù\•^[Z]YHYBˆBˆ™\]Y\Ý\œÛÛ˜[Y[[ÜžT\›Z\ÜÚ[ÛŠØ[™Y]JBˆ™\Ù]\›Y™™\œÊ
+BˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆBˆBˆš]˜]H˜\ˆZXÜ›ÜÛ™S]]YH˜[ÙBˆš]˜]H˜\ˆY\™\ÙX\˜ÚXÝ]™HH˜[ÙBˆš]˜]H˜\ˆYSYÙPÛÝ[Hˆš]˜]H˜[YSYÙT[›˜X›HH[›˜X›HÈ[™RYSYÙJ
+HBˆš]˜]H˜[ØØ[ÜYXÚ]Y[ÈH]]X›S\ÝÙž]P\œ˜^OŠ
+Bˆš]˜]H˜[ØØ[ÜYXÚ˜[œØÜš\HÝš[™ÐZ[\Š
+Bˆš]˜]H˜\ˆØØ[^X˜XÚÐXÝ]™HH˜[ÙBˆš]˜]H˜\ˆØØ[ÜYXÚÝ™X[YY\™XÝHH˜[ÙBˆš]˜]H˜\ˆØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]HH˜[ÙBˆš]˜]H˜\ˆØØ[ÜYXÚ[Y[Ý][›˜X›Nˆ[›˜X›OÈH[ˆš]˜]H˜\ˆØØ[ÜYXÚ[Y[Ý]ÚÙ[ˆHˆš]˜]H˜[ØØ[ÜYXÚ[Y[Ý]Ø]HHÛÛ›ÛYÜYXÚ[Y[Ý]Ø]J
+Bˆš]˜]H˜\ˆØØ[ÜYXÚ]Y]YY]Hˆš]˜]H˜\ˆØØ[ÜYXÚ™\]Y\ÝÙ[]Hˆš]˜]H˜\ˆØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y]Hˆš]˜]H˜\ˆØØ[ÜYXÚš\œÝ]Y[ÐXØÙ\Y]Hˆš]˜]H˜\ˆØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]Hˆš]˜]H˜\ˆØØ[ÜYXÚ\Ý]Y[Ô™XÙZ]™Y]Hˆš]˜]H˜\ˆ[œÝ[ØÜ™Y[”]Y\žRYHˆ‚ˆš]˜]H˜\ˆ[œÝ[ØÜ™Y[”]Y\žTÝ\Y]Hˆš]˜]H˜\ˆ[œÝ[ØÜ™Y[ØXÚPYÙS\ÈHˆš]˜]H˜\ˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[Hˆš]˜]H˜\ˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\ÈHˆš]˜]H˜\ˆXØÙ\Y[Ù[Ù[™\˜][Û‘›Ü•\›ˆHˆš]˜]H˜\ˆÜYXÚXÝ]š]TÝ\Y]Hˆš]˜]H˜\ˆÜYXÚXÝ]š]Q[™Y]Hˆš]˜]H˜\ˆÜYXÚ[Z[™Õ\›’YHˆš]˜]H˜[›ÚXÙU\›’Y[]Y\ÈH›ÚXÙU\›’Y[]TÝÜ™J
+Bˆš]˜]H˜\ˆ[œ]\›”Ý\Y]Hˆš]˜]H˜\ˆ]\Ý\›XØÙ\Y]Hˆš]˜]H˜\ˆ]\Ý[[XÚYY]Hˆš]˜]H˜\ˆ]\Ý[[[Z[™Õ\›’YHˆš]˜]H˜\ˆ]\ÝXÝ[Û‘\Ü]ÚY]Hˆš]˜]H˜\ˆ]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’YHˆš]˜]H˜\ˆX\›S[Ù[]Y[ÑÙ[™\˜][Û’YHˆš]˜]H˜[X\›S[Ù[]Y[ÈH]]X›S\ÝÙž]P\œ˜^OŠ
+Bˆš]˜]H˜\ˆX\›S[Ù[]Y[Ðž]\ÈHˆš]˜]H˜\ˆØØ[]Y[ÔÜXZÚ[™ÈH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPXÝ]™HH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[H˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙYH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][ÛÛÛ\]HH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙU^ÛÛ[Z]YH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YHˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPY\‘Ù[™\˜][Û’YHˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YHˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPš[™[™ÎˆØÜ™Y[”™\ÜÛœÙPš[™[™ÏÈH[ˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YHˆ‚ˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPXØÙ\ÜÚXš[]TXÚØYÙHHˆ‚ˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPXØÙ\ÜÚXš[]QÙ[™\˜][ÛˆHˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙT]Y\žRYHˆ‚ˆš]˜]H˜\ˆØÜ™Y[”]Y\Ý[Û‘]XÝY]Hˆš]˜]H˜\ˆØÜ™Y[‘œ™\Úœ˜[YPØ\\™Y]Hˆš]˜]H˜\ˆØÜ™Y[‘œ˜[YTÙ[]Hˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]Hˆš]˜]H˜\ˆØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞHH˜[ÙBˆš]˜]H˜[˜\Ýš\ÝX[\›œÈH˜\Ýš\ÝX[\›ÛÛÜ™[˜]ÜŠ
+Bˆš]˜]H˜\ˆ\›YYØÜ™Y[”]Y\Ý[ÛˆHˆ‚ˆš]˜]H˜\ˆ\›YYØÜ™Y[”]Y\Ý[Û•\›’YHˆš]˜]H˜\ˆ\›YYØÜ™Y[”]Y\Ý[Û‘]XÝY]Hˆš]˜]H˜\ˆ\›YYØÜ™Y[”]Y\Ý[Û‘š[˜[ÛÛ[Z]YH˜[ÙBˆš]˜]H˜\ˆX\›TØÜ™Y[”]Y\Ý[Û•^Hˆ‚ˆš]˜]H˜\ˆX\›TØÜ™Y[”]Y\žP]ØZ][™Ñš[˜[˜[œØÜš\H˜[ÙBˆš]˜]H˜\ˆX\›TØÜ™Y[”]Y\žQ\Ü]ÚY\›’YHˆš]˜]H˜\ˆ[™[™ÐØ[›ÛšXØ[™[˜[YNˆÛÝ[ž˜ÛÜ›Ý][™\Ë’›ØÈH[ˆš]˜]H˜\ˆ[™[™ÐXÝ[ÛY\“ØØ[ÜYXÚˆ
+
+
+HOˆ[š]
+OÈH[ˆš]˜]H˜\ˆ[™[™ÐÛÛ™š\›YYÛÛ[X[™ˆ\ÛÛ[X[™ÈH[ˆš]˜]H˜\ˆ[™[™ÐÛÛ™š\›X][Û‘^\™\Ð]Hˆš]˜]H˜\ˆ[™[™Ô\œÛÛ˜[Y[[ÜžNˆY[[ÜžPØ[™Y]OÈH[ˆš]˜]H˜\ˆ[™[™Ô\œÛÛ˜[Y[[ÜžQ^\™\Ð]Hˆš]˜]H˜[[™[™Ô\œÛÛ˜[Y[[ÜžPÛÛ™š\›X][Û’[œ]HÝš[™ÐZ[\Š
+Bˆš]˜]H˜\ˆ\ÝØØ[ÜYXÚÙ^HHˆ‚ˆš]˜]H˜\ˆ\ÝØØ[ÜYXÚ]Hˆš]˜]H˜\ˆ\Ý[››Ý[˜Ù[Y[Ù^HHˆ‚ˆš]˜]H˜\ˆ\Ý[››Ý[˜Ù[Y[]Hˆš]˜]H˜\ˆ\ÑÜ™Y]YH˜[ÙBˆš]˜]H˜\ˆØZÙSØÚÎˆÝÙ\“X[˜YÙ\‹•ØZÙSØÚÏÈH[ˆš]˜]H˜[Ù\šXÙTØÛÜHHÛÜ›Ý][™TØÛÜJÝ\\š\ÛÜ’›ØŠ
+H
+È\Ü]Ú\œË’SÊBˆš]˜]H˜[YYXQÝX\™žH^žHÈ[™Ñœ™YSYYXQÝX\™
+\ÊHBˆš]˜]H˜[›ÛX[•˜[œÛ]\˜]ÜˆžH^žHÂˆYˆ
+Z[•‘T”ÒSÓ‹”Ñ×ÒS•HZ[•‘T”ÒSÓ—ÐÓÑTË”JHÂˆËÈÙY\›Û[˜ÚX][ÛˆX\šÜÈÛ™È[›ÝYÚ›Üˆ›ÛX[’[™Û\Ú›Ü›X]\ˆÂˆËÈ\Ý[™ÝZ\Ú˜[Y\ÈÝXÚ\È8)%x),8)`8)+ˆ[œÝXYÙˆ›][š[™È[HÈšØ\š[XH‹‚ˆ[Ø]Ú[™ÈÈ˜[œÛ]\˜]Ü‹™Ù][œÝ[˜ÙJ[žKS][ˆŠHK™Ù]Ü“[
+
+BˆH[ÙH[ˆBˆš]˜]H˜[\XÝ[ÛœÈžH^žHÈ\XÝ[Û‘^XÝ]ÜŠ\ÊHBˆš]˜]H˜[Y[[ÜžT™\ÜÚ]ÜžHžH^žHÈY[[ÜžT™\ÜÚ]ÜžJ\˜SY[[ÜžQ]X˜\ÙK™Ù]
+\ÊK›Y[[ÜžQ[Ê
+JHBˆš]˜]H˜[\ÜÚ\Ý[ÛÛ›Û\ˆžH^žHÈ
+\XØ][Ûˆ\È^P\XØ][ÛŠK˜\ÜÚ\Ý[ÛÛ›Û\ˆBˆš]˜]H˜[ØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\ÈžH^žHÈØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Ê\ÊHBˆš]˜]H˜[š\ÝX[]Ø\™[™\ÜÔ™Y™\™[˜Ù\ÈžH^žHÈš\ÝX[]Ø\™[™\ÜÔ™Y™\™[˜Ù\Ê\ÊHBˆš]˜]H˜[ØÜ™Y[Ø\\™S\Ý[™\Žˆ
+ØÜ™Y[”Ú\™TÝ]Kž]P\œ˜^OÊHOˆ[š]HÈÝ]Kœ˜[YHO‚ˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘H	‰ˆ™XY[™Õ˜XÚÙ\‹œÛ˜\ÚÝ
+
+HOH[
+HÂˆ˜[XÚØYÙS˜[YHHXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙOË˜Ý\œ™[XÚØYÙS˜[YJ
+K›Ü‘[\J
+BˆYˆ
+XÚØYÙS˜[YKš\Ó›Ý›[šÊ
+H	‰ˆ™XY[™Õ˜XÚÙ\‹œ]\ÙRYÛÛ^Ú[™ÙY
+ØÜ™Y[Ø\\™TÙ\šXÙKœÙ\ÜÚ[Û‹œÙ\ÜÚ[Û’YXÚØYÙS˜[YJJHÂˆ[™[™ÐXÝ[ÛY\“ØØ[ÜYXÚH[ˆ›ÚXÙSÙÊT•PÓWÔÐÔ“ÓÔ‘R‘PÕQ™XY[™×ÜÙ\ÜÚ[Û—ÚYIÜ™XY[™Õ˜XÚÙ\‹œÛ˜\ÚÝ
+
+OËœ™XY[™ÔÙ\ÜÚ[Û’YH™X\ÛÛY›Ü™YÜ›Ý[™ØÛÛ^ØÚ[™ÙYXÚØYÙOIXÚØYÙS˜[YHŠBˆBˆBˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘H	‰ˆ™XY[™Õ˜XÚÙ\‹œÛ˜\ÚÝ
+
+OËœÝ]H[ˆÙ]ÙŠˆ™XY[™ÔÝ]K”‘PQS‘Ë™XY[™ÔÝ]K•ÐRUS‘×Ñ“Ô—ÔÐÔ“Óˆ™XY[™ÔÝ]K”ÐÔ“ÓS‘Ë™XY[™ÔÝ]K•‘T’Q–RS‘×Ó‘U×ÐÓÓ•S•ˆ
+JHÂˆÝÜ\XÛT™XY[™Ê›YYXWÜ›Ú™XÝ[Û—Ù\ØÛÛ›™XÝY‹”ØÜ™Y[ˆÚ\š[™ÈÝÜY\Û^YH™XY[™È›ÚÈKˆŠBˆBˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘JHÂˆØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ø[˜Ù[
+
+OË›]Âˆ›ÚXÙSÙÊ”ÐÔ‘QS—ÐPÕSÓ—ÐÐSÑSQXÝ[Û’YIÚ]˜XÝ[Û’YH\›’YIÚ]\›’YH™X\ÛÛ\ØÜ™Y[—ÜÙ\ÜÚ[Û—Ú[˜XÝ]™HŠBˆBˆBˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘H	‰ˆØÜ™Y[”™\ÜÛœÙPXÝ]™H	‰ˆ\ØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YœÝ\ÕÚ]
+˜XØÙ\ÜÚXš[]NˆŠJHÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YÝ]OIÝ]HŠBˆØÜ™Y[”™\ÜÛœÙPXÝ]™HH˜[ÙBˆØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YHˆ‚ˆØÜ™Y[”™\ÜÛœÙT]Y\žRYHˆ‚ˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆBˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘H	‰ˆœ˜[YHOH[	‰‚ˆØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Ëš\Ú[Û‘[˜X›Y	‰ˆ\Ó˜]\˜[›ÚXÙT™XYBˆ
+HÂˆ˜[™XÛÜ™HØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[œ˜[YJ
+BˆYˆ
+™XÛÜ™ËœÛÝ\˜ÙHOH™^XÚ]Ü]Y\žHŠHÂˆ]™OËœÙ[™ØÜ™Y[‘œ˜[YJœ˜[YJBˆ›ÚXÙSÙÊœØÜ™Y[—Ùœ˜[YWÜ›Ý]Yž]\ÏIÙœ˜[YKœÚ^™_HÛÝ\˜ÙO[YYXWÜ›Ú™XÝ[Ûˆœ˜[YWÚYIÜ™XÛÜ™Ë™œ˜[YRYÎˆH[\Ü˜\žO]YHŠBˆBˆBˆB‚ˆÝ™\œšYH[ˆÛÜ™X]J
+HÂˆÝ\\‹›ÛÜ™X]J
+Bˆ[œÝ[˜ÙHH\ÂˆÜ™X]PÚ[›™[
+
+BˆÝ\›Ü™YÜ›Ý[™
+“ÕQ’PÐUSÓ—ÒQ›ÝYšXØ][ÛŠ”Ý\[™ÈTx )ˆŠJBˆØZÙSØÚÈH
+Ù]Þ\Ý[TÙ\šXÙJÕÑT—ÔÑT•’PÑJH\ÈÝÙ\“X[˜YÙ\ŠBˆ›™]ÕØZÙSØÚÊÝÙ\“X[˜YÙ\‹”T•PSÕÐRÑWÓÐÒË“TN˜XÚÙÜ›Ý[™›ÚXÙHŠBˆ˜\HÈÙ]™Y™\™[˜ÙPÛÝ[Y
+˜[ÙJNÈXÜ]Z\™J
+HBˆ\Ô[›š[™ÈHYBˆØÜ™Y[Ø\\™TÙ\šXÙK›\Ý[™\œÈ
+ÏHØÜ™Y[Ø\\™S\Ý[™\‚ˆB‚ˆÝ™\œšYH[ˆÛ”Ý\ÛÛ[X[™
+[[ˆ[[Ë›YÜÎˆ[Ý\Yˆ[
+Nˆ[ÂˆÚ[ˆ
+[[Ë˜XÝ[ÛŠHÂˆPÕSÓ—ÔÕÔOˆÝÜÙ\ÜÚ[ÛŠ
+BˆPÕSÓ—ÓUUHOˆÂˆZXÜ›ÜÛ™S]]YH[[™Ù]›ÛÛX[‘^˜JVWÓUUQ˜[ÙJBˆ]Y[ÏËœÙ]]]Y
+ZXÜ›ÜÛ™S]]Y
+BˆYˆ
+ZXÜ›ÜÛ™S]]Y
+HXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊYSYÙT[›˜X›JH[ÙHX\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆBˆ[ÙHOˆYˆ
+]™HOH[
+HÛÛ›™XÝ
+
+BˆBˆ™]\›ˆÕT•ÔÕPÒÖBˆB‚ˆš]˜]H[ˆÛÛ›™XÝ
+
+HÂˆYˆ
+ÛÛ›™XÝ[Û”™\\š[™È]™HOH[
+H™]\›‚ˆÛÛ›™XÝ[Û”™\\š[™ÈHYBˆYˆ
+\ÑÜ™Y]Y
+H›ÚXÙSÙÊˆ‘ÑSRS’WÔ‘PÓÓ“‘PÕS‘È[Y\Ý[\IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_HYYXWÜ›Ú™XÝ[Û—ÜÝ]OIÔØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]_H‚ˆ
+BˆÙ\šXÙTØÛÜK›][˜ÚÂˆ˜[Ø]™YY[[ÜžPÛÛ^H[Ø]Ú[™ÈÈZ[Ø]™YY[[ÜžPÛÛ^
+
+HK™Ù]Ü‘Y˜][
+ˆŠBˆXZ[’[™\‹œÜÝÂˆÛÛ›™XÝ[Û”™\\š[™ÈH˜[ÙBˆYˆ
+\Ô[›š[™È	‰ˆ]™HOH[
+HÛÛ›™XÝ]™JØ]™YY[[ÜžPÛÛ^
+BˆBˆBˆB‚ˆš]˜]H[ˆÛÛ›™XÝ]™JØ]™YY[[ÜžPÛÛ^ˆÝš[™ÊHÂˆ˜[HÙ]Ú\™Y™Y™\™[˜Ù\Ê›^\˜H‹SÑWÔ’UUJBˆ˜[Ù^HH\RÙ^TÝÜ™J\ÊK™Ù]
+\RÙ^TÝÜ™K‘ÑSRS’JBˆ˜[˜[YHHÛÛ™šYÝ\™Y\Ù\“˜[YJ™Ù]Ýš[™Ê\Ù\—Û˜[YH‹[
+JBˆYˆ
+Ù^Kš\Ð›[šÊ
+JHÈ[Z]Ý]JY[Ý\ˆÙ[Z[šHTHÙ^H[ˆÙ][™ÜÈŠNÈÝÜÙ[Š
+NÈ™]\›ˆBˆ]Y[ÈH]Y[Ñ[™Ú[™J\ÊBˆ˜[Ù[XÝY›ÚXÙHH™Ù]Ýš[™Ê›ÚXÙH‹[ÙYHŠHÎˆ[ÙYH‚ˆ]™HHÙ[Z[šS]™PÛY[
+ˆÙ^K™Ù]Ýš[™Ê›[Ù[‹™Ù[Z[šKLËŒKY›\Ú[]™K\™]šY]ÈŠHHKˆÙ[XÝY›ÚXÙKˆÞ\Ý[T›Û\
+˜[YK™Ù]Ýš[™Êœ\œÛÛ˜[]H‹‘ÑˆŠHÎˆ‘Ñˆ‹Ù[XÝY›ÚXÙJH
+ÂˆØ]™YY[[ÜžPÛÛ^ˆ
+K˜[ÛÈÈÛY[O‚ˆÛY[›Û”Ý]HHÈ[Z]Ý]J]
+HBˆÛY[›Û”™XYHHÂˆ›ÚXÙSÙÊ‘ÑSRS’WÐÓÓ“‘PÕQ[Y\Ý[\IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_HYYXWÜ›Ú™XÝ[Û—ÜÝ]OIÔØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]_HŠBˆ\Ó˜]\˜[›ÚXÙT™XYHHYBˆ]Y[ÏËœÝ\
+
+BˆYˆ
+ØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Ëš\Ú[Û‘[˜X›Y	‰ˆØÜ™Y[Ø\\™TÙ\šXÙKš\Ñœ™\Úœ˜[YJ
+JHÂˆØÜ™Y[Ø\\™TÙ\šXÙK›]\Ýœ˜[YOË›]
+ÛY[ŽœÙ[™ØÜ™Y[‘œ˜[YJBˆBˆ\Ý[™\Ë›Û”™XYJ
+BˆYˆ
+Z\ÑÜ™Y]Y
+HÂˆ\ÑÜ™Y]YHYBˆÛY[œÙ[™^
+‘Ü™Y]	˜[YHœšYY›H[™˜]\˜[KˆŠBˆH[ÙHÂˆ[Z]Ý]J“TH™XÛÛ›™XÝY8 %\Ý[š[™ÈŠBˆBˆX\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆBˆÛY[›Û•ÛÛØ[HÈY[˜Ý[Û“˜[YK\™ÜÈO‚ˆXZ[’[™\‹œÜÝÈ[™TÙ[X[XÕÛÛØ[
+Y[˜Ý[Û“˜[YK\™ÜÊHBˆBˆÛY[›Û]Y[ÈHÈÛK[Ù[Ù[™\˜][Û’YO‚ˆ˜[]Y[Ô™XÙZ]™Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’YHX^ÙŠ]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’Y[Ù[Ù[™\˜][Û’Y
+Bˆ›ÚXÙSÙÊˆœÙ\šXÙWØ]Y[×Ü™XÙZ]™Yž]\ÏIÜÛKœÚ^™_H[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y˜[Y][™ÏIÝ˜[Y][™ÓØØ[ÜYXÚOH[Hˆ
+ÂˆœÝ™X[Z[™ÏIØØ[ÜYXÚÝ™X[YY\™XÝHÝ\™\ÜÙYIÝ\™\ÜÓ[Ù[›Ü•\›ˆˆ
+Âˆ›ØØ[ÜXZÚ[™ÏIØØ[]Y[ÔÜXZÚ[™È‚ˆ
+BˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[
+HÂˆØØ[ÜYXÚ\ÐÛÛ[HYBˆYˆ
+ØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y]OH
+HÂˆØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y]H]Y[Ô™XÙZ]™Y]ˆ›ÚXÙSÙÊˆ˜ÛÛ›ÛYÙš\œÝØ]Y[×Ü™XÙZ]™Y\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Yˆ
+Âˆ™š\œÝ]Y[Ô™XÙZ]™Y]I]Y[Ô™XÙZ]™Y]™\]Y\ÝÑš\œÝ]Y[Ó\ÏIØ]Y[Ô™XÙZ]™Y]HØØ[ÜYXÚ™\]Y\ÝÙ[]H‚ˆ
+BˆYˆ
+[œÝ[ØÜ™Y[”]Y\žRYš\Ó›Ý›[šÊ
+JHÂˆ›ÚXÙSÙÊˆ•ÕSÔÐÔ‘QS—Ô‘TÔÓ”ÑHØÜ™Y[”]Y\žRYI[œÝ[ØÜ™Y[”]Y\žRY›Ý]ORÕÔÐÔ‘QS—ÐÐPÒHˆ
+Âˆ›ÚXÙWÛ\ÏKLHØ\\™WÛ\ÏLXØÙ\ÜÚXš[]WÛ\ÏLš\Ú[Û—Û\ÏLÙ[Z[šWÛ\ÏIØ]Y[Ô™XÙZ]™Y]HØØ[ÜYXÚ™\]Y\ÝÙ[]Hˆ
+Âˆ×Û\ÏIØ]Y[Ô™XÙZ]™Y]HØØ[ÜYXÚ™\]Y\ÝÙ[]HÝ[Û\ÏIØ]Y[Ô™XÙZ]™Y]H[œÝ[ØÜ™Y[”]Y\žTÝ\Y]Hˆ
+Âˆ™œ˜[YWØYÙWÛ\ÏI[œÝ[ØÜ™Y[ØXÚPYÙS\È‚ˆ
+Bˆ[œÝ[ØÜ™Y[”]Y\žRYHˆ‚ˆBˆBˆØØ[ÜYXÚ\Ý]Y[Ô™XÙZ]™Y]H]Y[Ô™XÙZ]™Y]ˆYˆ
+ØØ[ÜYXÚÝ™X[YY\™XÝJHÂˆËÈH˜[œØÜš\™Yš^[™XYHX]ÚYH™\\™Y™\ÜÛœÙK‚ˆËÈÛÛ[YHÝ™X[Z[™ÈH™[XZ[š[™È˜]\˜[›ÚXÙHÚ]Ý]ØZ][™ÂˆËÈ›ÜˆHÛÛ\]HÙ[[˜ÙK‚ˆ]Y[ÏËœ]Y]YP]Y[ÊÛKÛÛ›ÛYÙ[™\˜][Û’YÓÓ•“ÓQÓÐÐSŠBˆ›ÚXÙSÙÊœÙ\šXÙWØ]Y[×Ü›Ý]Y›Ý]OY\™XÝÜ^X˜XÚÈž]\ÏIÜÛKœÚ^™_HŠBˆH[ÙHÂˆØØ[ÜYXÚ]Y[È
+ÏHÛK˜ÛÜSÙŠ
+Bˆ›ÚXÙSÙÊˆœÙ\šXÙWØ]Y[×Ü›Ý]Y›Ý]O]˜[Y][Û—ØY™™\ˆž]\ÏIÜÛKœÚ^™_Hˆ
+Âˆ˜Y™™\Ú[šÜÏIÛØØ[ÜYXÚ]Y[ËœÚ^™_H‚ˆ
+BˆÝ\ØØ[ÜYXÚÚ[”™Yš^X]Ú\Ê
+BˆBˆBˆ[ÙHYˆ
+ØÜ™Y[”™\ÜÛœÙPXÝ]™H	‰ˆ\ÔØÜ™Y[”™\ÜÛœÙPÛÛ^Ý\œ™[
+
+JHÂˆ˜[Ù[™\˜][ÛXØÙ\YHØÜ™Y[”™\ÜÛœÙPš[™[™ÏË˜XØÙ\ÑÙ[™\˜][ÛŠ[Ù[Ù[™\˜][Û’Y
+HOHYBˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YHØÜ™Y[”™\ÜÛœÙPš[™[™ÏËœØÜ™Y[‘Ù[™\˜][Û’YÎˆˆYˆ
+YÙ[™\˜][ÛXØÙ\Y
+HÂˆ›ÚXÙSÙÊˆ”ÐÔ‘QS—Ô‘TÔÓ”ÑWÑPÒTÒSÓˆš\ÝX[\›’YIÙ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY›Ü‘[\J
+_Hˆ
+Âˆ˜Ý\œ™[\›IØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YÙ[™\˜][Û’YI[Ù[Ù[™\˜][Û’YÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆˆ
+Âˆ™XÚ\Ú[ÛQ“Ô™X\ÛÛ\Ý[WÙÙ[™\˜][Ûˆ‚ˆ
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y^XÝYY\IØÜ™Y[”™\ÜÛœÙPY\‘Ù[™\˜][Û’Y›Ý[™Ù[™\˜][Û’YIØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YŠBˆH[ÙHÂˆYˆ
+\ØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙY
+HÂˆØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙYHYBˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜÝ]HØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRYÝ]OT‘TÔÓ”ÑWÔÕT•QÛÝ\˜ÙOPUQSÈ[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’YŠBˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]\Ù\•\›’YOHØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YOË›]Âˆ]™š\œÝ[Ù[™\ÜÛœÙP]H]Y[Ô™XÙZ]™Y]ˆ]™š\œÝ]Y[Ð]H]Y[Ô™XÙZ]™Y]ˆ]œ™\T]Y]YY]H]Y[Ô™XÙZ]™Y]ˆ›ÚXÙSÙÊˆš\ÝX[Û[Ù[Ùš\œÝÜ™\ÜÛœÙHš\ÝX[\›’YIÚ]šYHÛÝ\˜ÙOPUQSÈˆ
+Âˆ›[Ù[™\]Y\ÝÑš\œÝ™\ÜÛœÙS\ÏIÚYˆ
+]›[Ù[™\]Y\Ý]ˆ
+H]Y[Ô™XÙZ]™Y]H]›[Ù[™\]Y\Ý][ÙHLSH‚ˆ
+Bˆ›ÚXÙSÙÊš\ÝX[[Ù[š\œÝÝXÝ\™Y™\Ý[š\ÝX[\›’YIÚ]šYHÛÝ\˜ÙOPUQSÈ]I]Y[Ô™XÙZ]™Y]ŠBˆ›ÚXÙSÙÊœ™\T]Y]YYš\ÝX[\›’YIÚ]šYH]I]Y[Ô™XÙZ]™Y]ÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆŠBˆ›ÚXÙSÙÊˆš\ÝX[Ü™\WØ]Y[×ÜÝ\Yš\ÝX[\›’YIÚ]šYHˆ
+ÂˆœÜYXÚ[™Ñš\œÝ]Y[Ó\ÏIÚYˆ
+]œÜYXÚ[™Y]ˆ
+H]Y[Ô™XÙZ]™Y]H]œÜYXÚ[™Y][ÙHLSH‚ˆ
+BˆBˆBˆØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[HYBˆYYXQÝX\™˜™YÚ[\ÜÚ\Ý[\›Š
+Bˆ]Y[ÏËœÙ]^X˜XÚÐÛÛ^
+[Ù[Ù[™\˜][Û’YØÜ™Y[”™\ÜÛœÙT]Y\žRYÓÓ•“ÓQÔÐÔ‘QSˆŠBˆ]Y[ÏËœÙ]˜\™ÙR[‘[˜X›Y
+YJBˆ]Y[ÏËœ]Y]YP]Y[ÊÛK[Ù[Ù[™\˜][Û’YÓÓ•“ÓQÔÐÔ‘QSˆŠBˆ›ÚXÙSÙÊˆ”ÐÔ‘QS—Ô‘TÔÓ”ÑWÑPÒTÒSÓˆš\ÝX[\›’YIÙ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY›Ü‘[\J
+_Hˆ
+Âˆ˜Ý\œ™[\›IØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YÙ[™\˜][Û’YI[Ù[Ù[™\˜][Û’YÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆˆ
+Âˆ™XÚ\Ú[ÛTVH™X\ÛÛXÝ\œ™[Ø›Ý[™ÙÙ[™\˜][Ûˆ‚ˆ
+Bˆ›ÚXÙSÙÊˆœ›Ý]WÙXÚ\Ú[Ûˆ\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆˆ
+ÂˆœØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY›Ý]O\ØÜ™Y[—Ü™\ÜÛœÙHXØÙ\Y]YHš\œÝ™\ÜÛœÙP]Y[Ð]I]Y[Ô™XÙZ]™Y]ˆ
+Âˆ™Ù[Z[šTÙ[™Ñš\œÝ™\ÜÛœÙS\ÏIÚYˆ
+ØÜ™Y[‘œ˜[YTÙ[]ˆ
+H]Y[Ô™XÙZ]™Y]HØÜ™Y[‘œ˜[YTÙ[][ÙHLSHˆ
+ÂˆœÜYXÚ[™Ñš\œÝ]YX›S\ÏIÚYˆ
+ØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞJH]Y[Ô™XÙZ]™Y]HØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y][ÙHLSHˆ
+ÂˆœØÜ™Y[—Ü™\ÜÛœÙWÝ\›—ØÛÛœÚ\Ý[˜ÞOIÜØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YOHHˆ
+ÂˆœØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞOIØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞH‚ˆ
+BˆBˆBˆ[ÙHYˆ
+™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+H	‰ˆ\˜T^X˜XÚÐØ\\™TÛXÞKœÚÝ[XØÙ\[Ù[]Y[ÊˆÝ\™\ÜÙYHÝ\™\ÜÓ[Ù[›Ü•\›‹ˆ\ÜÚ\Ý[[™XYTÜXZÚ[™ÈHØØ[]Y[ÔÜXZÚ[™ËˆYYXQÝX\™[ÝÜÔ™\ÜÛœÙHHYYXQÝX\™˜[ÝÓ[Ù[™\ÜÛœÙJ
+Bˆ
+Bˆ
+HÂˆËÈØ\\˜X›HTHÜYXÚ\Ù\ÈTÐQÑWÓQQPKˆÛ˜ÙHHš\œÝ˜[YˆËÈÚ[šÈ\ÈXØÙ\YÙY\YYXHÝX\™]ØZÙHÛÈTH™]™\ˆZ\ÝZÙ\ÂˆËÈ\ˆÝÛˆXÝ]™H]Y[Õ˜XÚÈ›Üˆ^\›˜[[ÝUX™H^X˜XÚË‚ˆÚ[ˆ
+˜[XÚ\Ú[ÛˆHÜ™[˜\žS[Ù[]Y[ÑØ]K™XÚYJ[Ù[Ù[™\˜][Û’Y
+JHÂˆ[Ù[]Y[ÑXÚ\Ú[Û‹PÐÑTOˆÂˆXØÙ\Y[Ù[Ù[™\˜][Û‘›Ü•\›ˆH[Ù[Ù[™\˜][Û’YˆYYXQÝX\™˜™YÚ[\ÜÚ\Ý[\›Š
+Bˆ]Y[ÏËœÙ]^X˜XÚÐÛÛ^
+[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\ˆH“SÑSŠBˆ]Y[ÏËœÙ]˜\™ÙR[‘[˜X›Y
+YJBˆ]Y[ÏËœ]Y]YP]Y[ÊÛK[Ù[Ù[™\˜][Û’Y“SÑSŠBˆ›ÚXÙSÙÊˆœ›Ý]WÙXÚ\Ú[Ûˆ\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\SSÑSˆ
+Âˆœ›Ý]O[Ü™[˜\žWÛ[Ù[XØÙ\Y]YHš\œÝ[Ù[]Y[ÐXØÙ\Y]I]Y[Ô™XÙZ]™Y]ˆ
+ÂˆœÜYXÚ[™Ñš\œÝXØÙ\Y[Ù[]Y[Ó\ÏIÚYˆ
+ÜYXÚXÝ]š]Q[™Y]ˆ
+H]Y[Ô™XÙZ]™Y]HÜYXÚXÝ]š]Q[™Y][ÙHLSHž]\ÏIÜÛKœÚ^™_H‚ˆ
+BˆBˆ[Ù[]Y[ÑXÚ\Ú[Û‹•Q‘‘T—ÕS•SÔÔQPÒÑS‘OˆÂˆYˆ
+X\›S[Ù[]Y[ÑÙ[™\˜][Û’YOH	‰ˆX\›S[Ù[]Y[ÑÙ[™\˜][Û’YOH[Ù[Ù[™\˜][Û’Y
+HÂˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[
+ÏHX\›S[Ù[]Y[ËœÚ^™Bˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\È
+ÏHX\›S[Ù[]Y[Ðž]\ÂˆX\›S[Ù[]Y[Ë˜ÛX\Š
+BˆX\›S[Ù[]Y[Ðž]\ÈHˆBˆX\›S[Ù[]Y[ÑÙ[™\˜][Û’YH[Ù[Ù[™\˜][Û’YˆX\›S[Ù[]Y[È
+ÏHÛK˜ÛÜSÙŠ
+BˆX\›S[Ù[]Y[Ðž]\È
+ÏHÛKœÚ^™Bˆ›ÚXÙSÙÊˆœ›Ý]WÙXÚ\Ú[Ûˆ\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\SSÑSˆ
+Âˆœ›Ý]O[Ü™[˜\žWÛ[Ù[XØÙ\YY˜[ÙH™Z™XÝ[Û”™X\ÛÛ]\Ù\—ÜÜYXÚØXÝ]™H\Ù\”ÜYXÚXÝ]™O]YHˆ
+Âˆ™X\›S[Ù[]Y[ÐY™™\™YÛÝ[IÙX\›S[Ù[]Y[ËœÚ^™_HX\›S[Ù[]Y[ÐY™™\™Yž]\ÏIX\›S[Ù[]Y[Ðž]\È‚ˆ
+BˆBˆ[ÙHOˆÂˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[
+ÊÂˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\È
+ÏHÛKœÚ^™Bˆ›ÚXÙSÙÊˆœ›Ý]WÙXÚ\Ú[Ûˆ\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\SSÑSˆ
+Âˆœ›Ý]O[Ü™[˜\žWÛ[Ù[XØÙ\YY˜[ÙH™Z™XÝ[Û”™X\ÛÛIXÚ\Ú[ÛˆÝ[QÙ[™\˜][ÛIÙXÚ\Ú[ÛˆOH[Ù[]Y[ÑXÚ\Ú[Û‹‘“ÔÔÕSWÑÑS‘TUSÓŸHˆ
+Âˆ›[Ù[]Y[ÐY™™\™Y™Y›Ü™U\›ÛÛ\]PÛÝ[L[Ù[]Y[ÐY™™\™Y™Y›Ü™U\›ÛÛ\]Pž]\ÏLˆ
+Âˆ›[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[I[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[ˆ
+Âˆ›[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\ÏI[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\Èž]\ÏIÜÛKœÚ^™_H‚ˆ
+BˆBˆBˆH[ÙHÂˆ›ÚXÙSÙÊ™\XØ]WÜ™\ÜÛœÙWÜ™]™[Y\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YH[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\IÜ™\ÜÛœÙP\˜š]\‹›ÝÛ™\ŸH›Ý]O[Ü™[˜\žWÛ[Ù[ž]\ÏIÜÛKœÚ^™_HŠBˆBˆBˆÛY[›Û’[\œ\YHÈ[Ù[Ù[™\˜][Û’YO‚ˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[	‰ˆ™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+JHÂˆÜ™[˜\žS[Ù[]Y[ÑØ]K˜Ø[˜Ù[Ù[™\˜][ÛŠ[Ù[Ù[™\˜][Û’Y
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊˆœ^X˜XÚ×ØØ[˜Ù[YØžWØ˜\™ÙWÚ[ˆ\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Yˆ
+Âˆœ^X˜XÚÐØ[˜Ù[YžP˜\™ÙR[]YHØ[˜Ù[YÙ[™\˜][Û’YI[Ù[Ù[™\˜][Û’YÜYXÚXÝ]š]TÝ\Y]IÜYXÚXÝ]š]TÝ\Y]‚ˆ
+BˆH[ÙH›ÚXÙSÙÊˆš[\œ\YÙ]™[ÚYÛ›Ü™Y\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Yˆ
+Âˆœ™X\ÛÛXÛÛ›ÛYÛÝÛ™\ˆ™\ÜÛœÙSÝÛ™\IÜ™\ÜÛœÙP\˜š]\‹›ÝÛ™\ŸH‚ˆ
+BˆBˆÛY[›Û‘Ù[™\˜][ÛÛÛ\]HHÈ[Ù[Ù[™\˜][Û’YO‚ˆ›ÚXÙSÙÊ›[Ù[ÙÙ[™\˜][Û—ØÛÛ\]H\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y]IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_HŠBˆBˆÛY[›Û’[œ]˜[œØÜš\H[œ]˜[œØÜš\È\]\Ý[Ù[Ù[™\˜][Û’YO‚ˆYˆ
+ØÜ™Y[”™\ÜÛœÙPXÝ]™JHÂˆYˆ
+X\›TØÜ™Y[”]Y\žP]ØZ][™Ñš[˜[˜[œØÜš\
+HÂˆ\[™˜[œØÜš\
+[œ]\
+Bˆ\[™˜[œØÜš\
+ÛÛ[X[™›Ø™K\
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÙš[˜[Ý˜[œØÜš\ØÛÛXÝ[™ÈØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y^Ú\œÏIÜ\›[™ÝHŠBˆ™]\›[œ]˜[œØÜš\ˆBˆ›ÚXÙSÙÊˆœØÜ™Y[—Ü™\ÜÛœÙWÚ[œ]ÚYÛ›Ü™YØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYˆ
+Âˆ\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y™X\ÛÛ[›×ØÛÛ™š\›YYÜ™X[Ø˜\™ÙWÚ[ˆ^Ú\œÏIÜ\›[™ÝH‚ˆ
+Bˆ™]\›[œ]˜[œØÜš\ˆBˆYˆ
+[œ]š\Ñ[\J
+JHÂˆYˆ
+XÝ]™U\›’YOH
+HXÝ]™U\›’YH
+ÊÝ\›”Ù\]Y[˜ÙBˆ[œ]\›”Ý\Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+BˆYˆ
+ÜYXÚ[Z[™Õ\›’YOH	‰ˆÜYXÚXÝ]š]TÝ\Y]ˆ
+HÜYXÚ[Z[™Õ\›’YHXÝ]™U\›’YˆYˆ
+™\ÜÛœÙP\˜š]\‹\›’YOHXÝ]™U\›’Y
+H™\ÜÛœÙP\˜š]\‹˜™YÚ[ŠXÝ]™U\›’Y
+BˆXØÙ\Y[Ù[Ù[™\˜][Û‘›Ü•\›ˆHˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[Hˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\ÈHˆ›ÚXÙSÙÊˆš[œ]Ý\›—ÜÝ\Y\›’YIXÝ]™U\›’YÙ\ÜÚ[ÛIÚ\ÚÛÙJ
+_H[œ]\›”Ý\Y]I[œ]\›”Ý\Y]ˆ
+ÂˆœÜYXÚXÝ]š]TÝ\Y]IÜYXÚXÝ]š]TÝ\Y]]\Ý[Ù[Ù[™\˜][Û’YI]\Ý[Ù[Ù[™\˜][Û’Yˆ
+Âˆ›ÚXÙU\›ÛÛœÚ\Ý[IÝ›ÚXÙU\›’Y[]Y\Ë˜Ý\œ™[
+
+OË\Ù\•\›’YOHXÝ]™U\›’YH‚ˆ
+BˆYˆ
+[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YHOH[	‰‚ˆ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HH[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[ˆ
+HÂˆËÈ™\Ù\™HH[™[™ÈÛ\šYšXØ][Ûˆ\›ˆ™Y›Ü™HÙ[Z[šHØ[ˆ[Z][‚ˆËÈÜ™[˜\žHXÚÛ›ÝÛYÙ[Y[ˆÝÛ™\œÚ\™XÛÛY\ÈÓÓ•“ÓQÓÐÐSˆËÈÚ[ˆH˜[Y]YÛ\šYšXØ][Ûˆ™\H\È]Y]YY‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ›ÚXÙSÙÊˆœ[™[™×ØÛÜœ™XÝ[Û—Ý\›—Ü™\Ù\™Y\›’YIXÝ]™U\›’Yˆ
+Âˆ™]X˜\ÙS]]][Û[ÝÙYY˜[ÙHÝXØÙ\ÜÐXÚÛ›ÝÛYÙ[Y[[ÝÙYY˜[ÙH‚ˆ
+BˆBˆBˆYˆ
+[™T[™[™Ô\œÛÛ˜[Y[[ÜžT\›Z\ÜÚ[ÛŠ\
+JH™]\›[œ]˜[œØÜš\ˆYˆ
+[™T[™[™ÐÛÛ™š\›X][ÛŠ\
+JH™]\›[œ]˜[œØÜš\ˆYˆ
+\Ô[ÛU˜[œØÜš\
+\
+JHÂˆËÈÚÜXÚËÛ›Ú\ÙHœ˜YÛY[È]\Ý™]™\ˆ™XÛÛYHÚ]X˜›\ÈÜ‚ˆËÈ™XÙZ]™HHÛÛ™\œØ][Û˜[[œÝÙ\‹‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ™]\›[œ]˜[œØÜš\ˆBˆX\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆÚ[ˆ
+YYXQÝX\™š[œÜXÝ
+\
+JHÂˆ[™Ñœ™YSYYXQÝX\™‘Ø]K“ÐÒÈOˆÂˆ\[™˜[œØÜš\
+ÛÛ[X[™›Ø™K\
+Bˆ˜[X\›TØÜ™Y[•^H›ÛX[‘\Ü^U^
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆYˆ
+ØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙTÝX›T]Y\žJX\›TØÜ™Y[•^
+HOH[
+HÂˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+X\›TØÜ™Y[•^
+BˆYYXP›ØÚÙY\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ[œ]˜ÛX\Š
+NÈ[œ]˜\[™
+ÛÛ[X[™›Ø™JBˆ\›TØÜ™Y[”]Y\Ý[ÛŠX\›TØÜ™Y[•^XÝ]™U\›’Y“QQPWÔT•PSÐÓÓSPS‘ŠBˆ™]\›[œ]˜[œØÜš\ˆBˆ˜\ˆ\™XÝÛÛ[X[™HÛÛ[X[™\œÙ\‹œ\œÙQ\™XÝYYXPÛÛ›Û
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆÎˆÛÛ[X[™\œÙ\‹œ\œÙQ\™XÝYYXPÛÛ›Û
+\
+BˆÎˆÛÛ[X[™\œÙ\‹œ\œÙJÛÛ[X[™›Ø™KÔÝš[™Ê
+JOËZÙRYŠŽš\ÔØY™Q\™XÝYYXPÛÛ[X[™
+BˆÎˆÛÛ[X[™\œÙ\‹œ\œÙJ\
+OËZÙRYŠŽš\ÔØY™Q\™XÝYYXPÛÛ[X[™
+BˆYˆ
+\™XÝÛÛ[X[™\È\ÛÛ[X[™“Ü[\	‰‚ˆPÛÛ[X[™\œÙ\‹š\Ñ^XÚ]Ü[ÛÛ[X[™
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JH	‰‚ˆPÛÛ[X[™\œÙ\‹š\Ñ^XÚ]Ü[ÛÛ[X[™
+\
+Bˆ
+HÂˆ\™XÝÛÛ[X[™H[ˆBˆYˆ
+\™XÝÛÛ[X[™OH[
+HÂˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆËÈYYXHÝX\™[œÈ™Y›Ü™HH›Ü›X[œ™\ÚZ[œ]™\Ù]™[ÝË‚ˆËÈHÙ[Z[™H\™XÝÛÛ[X[™X\™\š[™È^X˜XÚÈÝ\ÈH™]ÂˆËÈ\Ù\ˆ\›‹ÛÈ™[X\ÙHHÛÛ\]Y™]š[Ý\ÈÛÛ[X[™\™K‚ˆËÈÚÝ[^XÝ]J
+HÝ[›ØÚÜÈ\XØ]H˜[œØÜš\Ú[šÜË‚ˆYˆ
+ØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™
+HÂˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆH˜[ÙBˆÛÛ[X[™\Ù\•^[Z]YH˜[ÙBˆBˆ˜[ÜÚÙ[ˆHÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+Bˆ˜[ÝÛ™\‘XÚ\Ú[ÛˆHÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•[šYšYY\›’[\œ™]\‹š[\œ™]
+ˆÜÚÙ[‹ÛÜšÚ[™Õ\ÚÔ[[YKœÝÜ™KœÛ˜\ÚÝ
+
+Bˆ
+BˆYˆ
+[ÝÛ™\‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÊHÂˆ›ÚXÙSÙÊ™\™XÝÛYYXWØXÝ[Û—Ü™Z™XÝYØžWÝ[šYšYYÛÝÛ™\ˆ\›’YIXÝ]™U\›’Y[[IÛÝÛ™\‘XÚ\Ú[Û‹š[[HŠBˆ™]\›[œ]˜[œØÜš\ˆBˆYˆ
+ÜÚÙ[‹š\Ó›Ý›[šÊ
+H	‰ˆXÛÛ[X[™\Ù\•^[Z]Y
+HÂˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJÜÚÙ[‹‘T‘PÕÓQQPWÐÓÓSPS‘ŠBˆÛÛ[X[™\Ù\•^[Z]YHYBˆBˆYYXP›ØÚÙY\›ˆH˜[ÙBˆ›ÚXÙSÙÊ“QÐPÖWÑSPÒ×ÕTÑQ\›’YIXÝ]™U\›’Y™X\ÛÛ\ØY™WÙ\™XÝÛYYXWØÛÛ›ÛYØXÞT]IÙ\™XÝÛÛ[X[™š˜]˜PÛ\ÜËœÚ[\S˜[Y_HŠBˆ^XÝ]PÛÛ[X[™
+\™XÝÛÛ[X[™
+Bˆ™]\›[œ]˜[œØÜš\ˆBˆ˜[ÛÚ\™[YYXTÜYXÚH›ÛX[‘\Ü^U^
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆYˆ
+YYXTÜYXÚÛÚ\™[˜ÙTÛXÞKš\ÐÛÚ\™[
+ÛÚ\™[YYXTÜYXÚ
+H	‰‚ˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+ÛÚ\™[YYXTÜYXÚ
+HOHYBˆ
+HÂˆËÈHÛÚ\™[TÔˆ™\Ý[˜XÚÙYžHHXÝ]™H™X\‹YšY[QˆËÈØ[™Y]H\È™X[\Ù\ˆÜYXÚ]™[ˆÚ[ˆ]\ÈÜ™[˜\žBˆËÈÛÛ™\œØ][Ûˆ˜]\ˆ[ˆHØÜ™Y[‹Ù]šXÙHÛÛ[X[™‚ˆYYXQÝX\™˜ÛÛ™š\›U\Ù\”ÜYXÚ
+
+BˆYYXP›ØÚÙY\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆ[œ]˜ÛX\Š
+Bˆ[œ]˜\[™
+ÛÛ[X[™›Ø™JBˆ›ÚXÙSÙÊˆ›YYXWØØ[™Y]WÜ›Û[ÝY™X\ÛÛXÛÚ\™[ØÛÛ™\œØ][ÛˆØ[™Y]U^Ú\œÏIØÛÚ\™[YYXTÜYXÚ›[™ÝHˆ
+Âˆ\Ù\•\›’YIXÝ]™U\›’Y™\ÜÛœÙSÝÛ™\SSÑS‚ˆ
+BˆH[ÙHÂˆYˆ
+ÛÛ[X[™\œÙ\‹š\Ô›Ø˜X›Q]šXÙPXÝ[ÛŠ\
+HÛÛ[X[™\œÙ\‹š\Ô›Ø˜X›Q]šXÙPXÝ[ÛŠÛÛ[X[™›Ø™KÔÝš[™Ê
+JJHÂˆ›Ø˜X›PXÝ[Û•\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+BˆBˆYˆ
+[YYXP›ØÚÙY\›ŠH[Z]Ý]J“YYXHÝX\™XÝ]™H8 %\Ý[š[™È›Üˆ[Ý\ˆ›ÚXÙHŠBˆYYXP›ØÚÙY\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ™]\›[œ]˜[œØÜš\ˆBˆBˆ[™Ñœ™YSYYXQÝX\™‘Ø]K•ÐRÑWÑUPÕQOˆÂˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+\
+BˆYYXP›ØÚÙY\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆ[Z]Ý]J“\Ý[š[™È8 %YYXHÝÙ\™Y›ÜˆLÙXÛÛ™ÈŠBˆBˆ[™Ñœ™YSYYXQÝX\™‘Ø]K“ÔSˆOˆYYXP›ØÚÙY\›ˆH˜[ÙBˆBˆËÈY\ˆHØØ[Û™HÛÛ[X[™[^YYÙ[Z[šHXÚÙ]È\™H\ØØ\™Y[[ˆËÈHÙ\™\ˆ\ÈÛÛ\]Y]ÛÛ[X[™\›ˆ[™H\Ù\ˆXÝX[HÝ\ÂˆËÈÜXZÚ[™ÈYØZ[‹ˆHš\œÝ˜[œØÜš\Ùˆ]™]È\›ˆØY™[H™KY[˜X›\ÂˆËÈ›Ü›X[[Ù[Ý]]‚ˆYˆ
+ØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™
+HÂˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆËÈœ™\ÚZXÈ[œ]]\Ý›ÝÝX[H\›ˆÝ[ÝÛ™YžHHÛÛ›ÛYˆËÈÙ[Z[šHÙ[™\˜][ÛŽÈ]È]H[Ù[^Ø]Y[È™[XZ[œÈÝ\™\ÜÙY‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH\™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+BˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆH˜[ÙBˆBˆYˆ
+[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YHOH[	‰‚ˆ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HH[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[ˆ
+HÂˆËÈYYXKYÝX\™[™œ™\ÚZ[œ]Ý]H˜[œÚ][ÛœÈX›Ý™HX^H›Ü›X[BˆËÈ™KY[˜X›HSÑSÝ]]ˆH[™[™ÈÛÜœ™XÝ[Ûˆ]\Ý™[XZ[ˆ™\Ù\™Y‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+BˆBˆ\[™˜[œØÜš\
+[œ]\
+NÈ\[™˜[œØÜš\
+ÛÛ[X[™›Ø™K\
+Bˆ\Ý\Ù\’[[^H[œ]ÔÝš[™Ê
+Kš[J
+Bˆ˜[Ý\œ™[˜[œØÜš\HÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+Bˆ˜[Ý\œ™[ØÜ™Y[•^H›ÛX[‘\Ü^U^
+Ý\œ™[˜[œØÜš\
+BˆYˆ
+œ›ÝÜÙ\”ÙX\˜Ú™\]Y\Ý\œÙ\‹œ\œÙJÝ\œ™[˜[œØÜš\
+HOH[
+HÂˆËÈÙX\˜Ú\È™\ÛÛ™YÛ›H]’SS]ÜXÝ[]]™HÛÛ™\œØ][Û˜[ˆËÈ]Y[È]\Ý›Ý\ÚÈ›ÜˆH\Ý[˜][ÛˆY\ˆHÛÛ^X[XÝ[Ûˆ\ÂˆËÈ[™XYH™Y[ˆ]]Üš^™Y[™^XÝ]Y‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊœÙX\˜ÚÝ\›—Ü™\Ù\™Y\›’YIXÝ]™U\›’YÛÝ\˜ÙOTT•PSÑ’SSÔ‘TURT‘QŠBˆBˆYˆ
+ØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙJÝ\œ™[ØÜ™Y[•^
+HOH[ˆ˜\Ýš\ÝX[™\]Y\ÝÛ\ÜÚYšY\‹˜Û\ÜÚYžJÝ\œ™[˜[œØÜš\
+HOH[ˆ
+HÂˆËÈHØÜ™Y[ˆ\›ˆ\È[œÝÙ\™YÛ›HY\ˆ[ˆ^XÚ]H›Ý[™œ™\ÚˆËÈØ\\™KˆÝÜÜXÝ[]]™HÜ™[˜\žHÝ]]œ›ÛH™XÛÛZ[™ÈHÙXÛÛ™ˆËÈ[œÝÙ\ˆ™Y›Ü™HH’SS\›ˆ›Ý[™\žH\œš]™\Ë‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆYˆ
+ØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙTÝX›T]Y\žJÝ\œ™[ØÜ™Y[•^
+HOH[
+HÂˆ\›TØÜ™Y[”]Y\Ý[ÛŠÝ\œ™[ØÜ™Y[•^XÝ]™U\›’Y”T•PSÔÐÔ‘QS—ÔUQT–HŠBˆBˆBˆ˜[]\ÚXš[]T™]šY]ÈH˜[œØÜš\]\ÚXš[]QØ]Kœ™]šY]ÊÝ\œ™[˜[œØÜš\
+BˆYˆ
+\]\ÚXš[]T™]šY]ËœÙ[X[XÔ›ØÙ\ÜÚ[™Ð[ÝÙY
+HÂˆËÈÝÜÜXÝ[]]™HSÑSÝ]]\ÈÛÛÛˆ\È[ˆ[œ™[]YÛZ[˜[ˆËÈØÜš\\X\œËˆH[[]]X›H’SS˜[œØÜš\XZÙ\ÈHXÚ\Ú[Û‹‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊˆš[œ]Ý˜[œØÜš\Ü]\ÚXš[]WÜ™]šY]È˜]ÏIØÝ\œ™[˜[œØÜš\ZÙJLŒ
+_Hˆ
+Âˆ™ÛZ[˜[ØÜš\IÜ]\ÚXš[]T™]šY]Ë™ÛZ[˜[ØÜš\Hˆ
+Âˆ˜[œØÜš\]\ÚXš[]OIÜ]\ÚXš[]T™]šY]Ë˜[œØÜš\]\ÚXš[]_Hˆ
+Âˆ˜[›ÛX[T™X\ÛÛIÜ]\ÚXš[]T™]šY]Ë˜[›ÛX[T™X\ÛÛŸH‚ˆ
+BˆËÈÙY\ÛÛXÝ[™È˜]ÈÚ[šÜÈ›ÜˆH]]Üš]]]™H’SSXÚ\Ú[Û‹ˆËÈ]È›Ý]\X[›Ü™ZYÛ‹\ØÜš\^™XXÚY[[ÜžKÛÜœ™XÝ[Û‹ˆËÈ[]KÛÛ[X[™Üˆ\›Z\ÜÚ[Ûˆ\œÙ\œË‚ˆ™]\›[œ]˜[œØÜš\ˆBˆ˜[]XÝY\œÛÛ˜[Y[[ÜžHBˆ\œÛÛ˜[Y[[ÜžQ^˜XÝÜ‹™^˜XÝ
+›ÛX[‘\Ü^U^
+Ý\œ™[˜[œØÜš\
+JBˆYˆ
+]XÝY\œÛÛ˜[Y[[ÜžHOH[
+HÂˆYˆ
+Y[[ÜžT™[][ÛœÚ\ÛXÞKš\Ð™\ÝœšY[™
+]XÝY\œÛÛ˜[Y[[ÜžJHˆY[[ÜžTØY™]TÛXÞK™XÚYJ]XÝY\œÛÛ˜[Y[[ÜžJHOHY[[ÜžTØ]™QXÚ\Ú[Û‹UU×ÔÐU‘Bˆ
+HÂˆËÈÛX\‹Ü™[˜\žH\œÛÛ˜[˜XÝÈ\™HX\›™YÚ[[H]\›‚ˆËÈÛÛ\][ÛˆÛÈTIÜÈ˜]\˜[ÛÛ™\œØ][Û˜[™\HÛÛ[Y\Ë‚ˆ[™[™Ñ]XÝY\œÛÛ˜[Y[[ÜžHH[ˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊ\œÛÛ˜[Y[[ÜžT]\ÙT[›˜X›JBˆ™]\›[œ]˜[œØÜš\ˆBˆËÈHÚÜ]\ÙH]ÈÝ™X[YYTÔˆš[š\ÚH˜XÝ[ˆ[™›ÚYØ[‚ˆËÈ\ÚÈ\›Z\ÜÚ[ÛˆÚ]Ý]ØZ][™È›ÜˆÙ[Z[šIÜÈ[\›ˆ›Ý[™\žK‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ[™[™Ñ]XÝY\œÛÛ˜[Y[[ÜžHH]XÝY\œÛÛ˜[Y[[ÜžBˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊ\œÛÛ˜[Y[[ÜžT]\ÙT[›˜X›JBˆXZ[’[™\‹œÜÝ[^YY
+ˆ\œÛÛ˜[Y[[ÜžT]\ÙT[›˜X›KˆT”ÓÓSÓQSSÔ–WÔUTÑWÓTÂˆ
+BˆH[ÙHYˆ
+[™[™Ñ]XÝY\œÛÛ˜[Y[[ÜžHOH[
+HÂˆËÈH]\ˆÚ[šÈÚ[™ÙYHÙ[[˜ÙH[ÈÛÛY][™È]\È›ÂˆËÈÛ™Ù\ˆHÛÛ\]H\˜X›H˜XÝˆÈ›Ý›Û\œ›ÛHÝ[H^‚ˆ[™[™Ñ]XÝY\œÛÛ˜[Y[[ÜžHH[ˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊ\œÛÛ˜[Y[[ÜžT]\ÙT[›˜X›JBˆBˆYˆ
+ÛÛ[X[™\œÙ\‹š\ÓZÙ[R[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[
+Ý\œ™[˜[œØÜš\
+JHÂˆ[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ™]\›[œ]˜[œØÜš\ˆH[ÙHYˆ
+[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ŠHÂˆËÈH]\ˆÚ[šÈÛÛ\]YHØ[YHÝYÚÛÈ™\Ý[YHH›Ü›X[ˆËÈ\œÙ\‹ˆYˆÙ[Z[šHš[˜[^™YHœ˜YÛY[\È]ÈÝÛˆ\›‹BˆËÈ\›‹XÛÛ\]HÝX\™™[ÝÈ\ØØ\™È]Ú]Ý]HÚ]X˜›K‚ˆ[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆBˆ˜[›ÛX[“Y[[ÜžU˜[œØÜš\H›ÛX[‘\Ü^U^
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆYˆ
+™\ÝœšY[™˜[YPÛÜœ™XÝ[Û”\œÙ\‹›™YYÐÛX\ÛÜœ™XÝY˜[YJ›ÛX[“Y[[ÜžU˜[œØÜš\
+JHÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆBˆYˆ
+[˜ÛX\‘[]R[[ÝX\™›™YYÐÛ\šYšXØ][ÛŠ›ÛX[“Y[[ÜžU˜[œØÜš\
+JHÂˆËÈ™]™\ˆ]HØ\˜›Y[]H˜\ÙH™XXÚÙ[Z[šH\È[ˆ[š]][Û‚ˆËÈÈÝY\ÜÈ]H\Ù\ˆØ[È[ˆ\[š[œÝ[Y‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆBˆYˆ
+Y[[ÜžPÛÛ[X[™\œÙ\‹›ÛÚÜÓZÙR[[
+›ÛX[“Y[[ÜžU˜[œØÜš\
+JHÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆY[[ÜžPÛÛ[X[™\œÙ\‹œ\œÙJ›ÛX[“Y[[ÜžU˜[œØÜš\
+OË›]ÈY[[ÜžPÛÛ[X[™O‚ˆ[™[™ÓY[[ÜžPÛÛ[X[™HY[[ÜžPÛÛ[X[™ˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊY[[ÜžPÛÛ[X[™[›˜X›JBˆXZ[’[™\‹œÜÝ[^YY
+Y[[ÜžPÛÛ[X[™[›˜X›KQSSÔ–WÐÓÓSPS‘ÔUTÑWÓTÊBˆBˆBˆ˜[[XšYÝ[Ý\ÓY\ÜØYÙHHÛÛ[X[™\œÙ\‹š\Ð[XšYÝ[Ý\ÓY\ÜØYÙT™Y™\™[˜ÙJÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆYˆ
+[XšYÝ[Ý\ÓY\ÜØYÙJHÂˆ[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆH[ÙHYˆ
+[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆ	‰ˆSY[[ÜžPÛÛ[X[™\œÙ\‹›ÛÚÜÓZÙR[[
+›ÛX[“Y[[ÜžU˜[œØÜš\
+JHÂˆËÈH]\ˆ˜[œØÜš\Ú[šÈÛÛ\]YHÝYÚˆÙ[Z[šH[™XYBˆËÈ™XÙZ]™YH]Y[ËÛÈ[ÝÈ]ÈÛÛ^X[™\ÜÛœÙHYØZ[‹‚ˆ[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆBˆ˜[ÛÛ[X[™H
+ÛÛ[X[™\œÙ\‹œ\œÙJ\
+HÎˆÛÛ[X[™\œÙ\‹œ\œÙJÛÛ[X[™›Ø™KÔÝš[™Ê
+JJBˆËZÙU[›\ÜÈÈ]\È\ÛÛ[X[™”ÙX\˜Ú[ÝUX™HBˆYˆ
+ÛÛ[X[™\œÙ\‹š\Ô›Ø˜X›Q]šXÙPXÝ[ÛŠ\
+HÛÛ[X[™\œÙ\‹š\Ô›Ø˜X›Q]šXÙPXÝ[ÛŠÛÛ[X[™›Ø™KÔÝš[™Ê
+JJHÂˆ›Ø˜X›PXÝ[Û•\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+BˆBˆËÈHÝ™X[YY˜[œØÜš\X^Hš\œÝÛÛZ[ˆÛ›H–[ÝUX™Hˆ[™]\ˆYˆËÈ›YZ[ˆÙX\˜ÚØ\›ÈÛÈØ[Z[™È‹ˆ™]™\ˆ^XÝ]HHZ[ˆÜ[‹X\ÛÛ[X[™ˆËÈœ›ÛH[ˆ[˜ÛÛ\]HÚ[šÎÈÛÛ™š\›H]œ›ÛHHÛÛ\]H\›ˆ™[ÝË‚ˆ˜[^XÚ]Ü[ˆHÛÛ[X[™\È\ÛÛ[X[™“Ü[\	‰ˆÛÛ[X[™\œÙ\‹š\Ñ^XÚ]Ü[ÛÛ[X[™
+\
+BˆËÈ™]™\ˆ^XÝ]H[ˆÜ™[˜\žHÛ™HXÝ[Ûˆœ›ÛHH\X[˜[œØÜš\ˆH]\‚ˆËÈÚ[šÈØ[ˆ\›ˆ›Ü[ˆÚ›ÛYHˆ[ÈH\ØÝ\ÜÚ[ÛˆX›Ý]Ü[š[™ÈÚ›ÛYKˆBˆËÈÛÛ\]H’SS]\˜[˜ÙH]\Ý\ÜÈ[šYšYY\›’[\œ™]\ˆš\œÝ‚ˆYˆ
+ÛÛ[X[™OH[	‰ˆ
+ÛÛ[X[™Z\È\ÛÛ[X[™“Ü[\^XÚ]Ü[ŠH	‰ˆÛÛ[X[™Z\È\ÛÛ[X[™‘Y\™\ÙX\˜Ú
+HÂˆ›Ø˜X›PXÝ[Û•\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ˜[Ø[™Y]S˜[YHHYˆ
+ÛÛ[X[™\È\ÛÛ[X[™”ØÜ›Û[ÝUX™H	‰ˆÛÛ[X[™™^XÚ]T™\]Y\ÝY\OH[
+HÂˆ‘Ù[™\šXÔØÜ›Û‚ˆH[ÙHÛÛ[X[™š˜]˜PÛ\ÜËœÚ[\S˜[YBˆ›ÚXÙSÙÊœ\X[ØXÝ[Û—Ú[Ù›Ü—Ý[šYšYYÛÝÛ™\ˆ\›’YIXÝ]™U\›’YØ[™Y]OIØ[™Y]S˜[YHŠBˆBˆBˆÛY[›Û“Ý]]˜[œØÜš\HÈ˜[œØÜš\[Ù[Ù[™\˜][Û’YO‚ˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[
+HÂˆØØ[ÜYXÚ\ÐÛÛ[HYBˆ\[™˜[œØÜš\
+ØØ[ÜYXÚ˜[œØÜš\˜[œØÜš\
+BˆÝ\ØØ[ÜYXÚÚ[”™Yš^X]Ú\Ê
+BˆBˆ[ÙHYˆ
+ØÜ™Y[”™\ÜÛœÙPXÝ]™H	‰ˆ\ÔØÜ™Y[”™\ÜÛœÙPÛÛ^Ý\œ™[
+
+JHÂˆYˆ
+ØÜ™Y[”™\ÜÛœÙPš[™[™ÏË˜XØÙ\ÑÙ[™\˜][ÛŠ[Ù[Ù[™\˜][Û’Y
+HOHYJHÂˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YHØÜ™Y[”™\ÜÛœÙPš[™[™ÏËœØÜ™Y[‘Ù[™\˜][Û’YÎˆˆYˆ
+\ØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙY
+HÂˆØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙYHYBˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜÝ]HØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRYÝ]OT‘TÔÓ”ÑWÔÕT•QÛÝ\˜ÙOUV[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’YŠBˆ˜[›ÝÈH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]\Ù\•\›’YOHØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YOË›]Âˆ]™š\œÝ[Ù[™\ÜÛœÙP]H›ÝÂˆ]œ™\T]Y]YY]H›ÝÂˆ›ÚXÙSÙÊˆš\ÝX[Û[Ù[Ùš\œÝÜ™\ÜÛœÙHš\ÝX[\›’YIÚ]šYHÛÝ\˜ÙOUVˆ
+Âˆ›[Ù[™\]Y\ÝÑš\œÝ™\ÜÛœÙS\ÏIÚYˆ
+]›[Ù[™\]Y\Ý]ˆ
+H›ÝÈH]›[Ù[™\]Y\Ý][ÙHLSH‚ˆ
+Bˆ›ÚXÙSÙÊš\ÝX[[Ù[š\œÝÝXÝ\™Y™\Ý[š\ÝX[\›’YIÚ]šYHÛÝ\˜ÙOUV]I›ÝÈŠBˆ›ÚXÙSÙÊœ™\T]Y]YYš\ÝX[\›’YIÚ]šYH]I›ÝÈÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆŠBˆBˆBˆØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[HYBˆ\[™˜[œØÜš\
+Ý]]˜[œØÜš\
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ü™XÙZ]™YØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’Y\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Yš\œÝ™\ÜÛœÙU^]IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_HØÜ™Y[—Ü™\ÜÛœÙWÝ\›—ØÛÛœÚ\Ý[˜ÞO]YHŠBˆH[ÙH›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™X\ÛÛ]Ü›Û™×ÙÙ[™\˜][ÛˆŠBˆBˆ[ÙHYˆ
+™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+H	‰ˆ\Ý\™\ÜÓ[Ù[›Ü•\›ˆ	‰‚ˆZYS™^[Ù[˜[œØÜš\	‰ˆYYXQÝX\™˜[ÝÓ[Ù[™\ÜÛœÙJ
+Bˆ
+H\[™˜[œØÜš\
+Ý]]˜[œØÜš\
+Bˆ[ÙH›ÚXÙSÙÊ™\XØ]WÜ™\ÜÛœÙWÜ™]™[Y\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YH™\ÜÛœÙSÝÛ™\IÜ™\ÜÛœÙP\˜š]\‹›ÝÛ™\ŸH›Ý]O[Ü™[˜\žWÛ[Ù[Ý^ŠBˆBˆÛY[›Û•\›ÛÛ\]HH\›ÛÛ\]PÂˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[
+HÂˆËÈÙ[™[™ÈÛY[ÛÛ[[\œ\ÈH™]š[Ý\ÈÙ[Z[šHÙ[™\˜][Û‹‚ˆËÈ]È[\œ\Y\›ÛÛ\]HØ[ˆ\œš]™H™Y›Ü™HH™]ÈÛÛ™š\›X][Û‹‚ˆËÈYÛ›Ü™H][\H›Ý[™\žK[™œšYY›H[ÝÈH[™\[™[BˆËÈÝ™X[YYÝ]]˜[œØÜš\È\œš]™HY\ˆH]Y[È\›ˆÛÛ\]\Ë‚ˆYˆ
+ØØ[ÜYXÚ\ÐÛÛ[
+HÂˆ˜[ÚÙ[ˆHØØ[ÜYXÚ˜[Y][Û•ÚÙ[‚ˆXZ[’[™\‹œÜÝ[^YY
+ÂˆYˆ
+ÚÙ[ˆOHØØ[ÜYXÚ˜[Y][Û•ÚÙ[ˆ	‰ˆ˜[Y][™ÓØØ[ÜYXÚOH[
+HÂˆš[š\Ú˜[Y]YØØ[ÜYXÚ
+
+Bˆ™\Ù]\›Y™™\œÊ
+BˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆBˆKÐÐSÔÔQPÒÐUQS×ÑRS—ÓTÊBˆBˆ™\ÜÛœÙP\˜š]\‹˜ÛÛ›ÛYÙ[™\˜][ÛÛÛ\]J
+Bˆ˜[\›ÛÛ\]P]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊ\›—ØÛÛ\]WÜ™XÙZ]™Y\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Y™\ÜÛœÙSÝÛ™\IÜ™\ÜÛœÙP\˜š]\‹›ÝÛ™\ŸH\›ÛÛ\]P]I\›ÛÛ\]P]\Ý]Y[Ô™XÙZ]™Y]IØØ[ÜYXÚ\Ý]Y[Ô™XÙZ]™Y]ŠBˆ™\Ù]\›Y™™\œÊ˜ÛÛ›ÛYÙÙ[™\˜][Û—ØÛÛ\]HŠBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+ØÜ™Y[”™\ÜÛœÙPXÝ]™JHÂˆYˆ
+X\›TØÜ™Y[”]Y\žP]ØZ][™Ñš[˜[˜[œØÜš\	‰ˆ[œ]š\Ó›Ý›[šÊ
+JHÂˆ˜[˜]Ñš[˜[H[œ]ÔÝš[™Ê
+Kš[J
+BˆYˆ
+ÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘X\›TØÜ™Y[”]Y\Ý[Û”ÛXÞKœ™XÛÛ˜Ú[JˆX\›TØÜ™Y[”]Y\Ý[Û•^˜]Ñš[˜[ˆ
+HOHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”]Y\Ý[Û”™XÛÛ˜Ú[X][Û‹“PUT’PSÐÒS‘ÑBˆ
+HÂˆ›ÚXÙSÙÊˆœØÜ™Y[—Ü]Y\žWÜ™XÛÛ˜Ú[YØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRYˆ
+Âˆœ™\Ý[XØ[˜Ù[YÛX]\šX[ØÚ[™ÙH\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y‚ˆ
+Bˆ]Y[ÏËš[\œ\
+
+NÈ]™OËš[\œ\
+
+Bˆš[š\ÚØÜ™Y[”™\ÜÛœÙJ™š[˜[Ý˜[œØÜš\ÛX]\šX[WØÚ[™ÙYŠBˆ™]\›\›ÛÛ\]BˆBˆ˜[š[˜[\Ü^HHš[˜[˜[œØÜš\\Ü^J˜]Ñš[˜[
+Bˆ˜[Ù[X[XÈHš[˜[Ù[X[XÕ\Ù\•]\˜[˜ÙK™œ›ÛJˆ˜[œØÜš\Ù\ÜÚ[Û’YØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y˜]Ñš[˜[š[˜[\Ü^Bˆ
+BˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJ˜]Ñš[˜[•T“—ÐÓÓTUWÑPT“WÔÐÔ‘QS—ÔUQT–H‹Ù[X[XË˜Ø[›ÛšXØ[Ù[X[XÕ^Ù[X[XË™\Ü^U^
+BˆX\›TØÜ™Y[”]Y\žP]ØZ][™Ñš[˜[˜[œØÜš\H˜[ÙBˆ[œ]˜ÛX\Š
+NÈÛÛ[X[™›Ø™K˜ÛX\Š
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÙš[˜[Ý˜[œØÜš\ØÛÛ[Z]YØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YŠBˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™XÛÛ˜Ú[YØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRY™\Ý[[X]ÚYÜØ[YWÝ\›ˆ\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YŠBˆYˆ
+\ØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[
+H™]\›\›ÛÛ\]BˆBˆYˆ
+\ØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[
+HÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü™\ÜÛœÙWÙ[\WØ›Ý[™\žWÚYÛ›Ü™YØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYŠBˆ™]\›\›ÛÛ\]BˆBˆ˜[Ý\œ™[H\ÔØÜ™Y[”™\ÜÛœÙPÛÛ^Ý\œ™[
+
+Bˆ˜[^HÝ]]ÔÝš[™Ê
+Kš[J
+BˆYˆ
+Ý\œ™[	‰ˆ^š\Ó›Ý›[šÊ
+H	‰ˆ\ØÜ™Y[”™\ÜÛœÙU^ÛÛ[Z]Y
+HÂˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]\Ù\•\›’YOHØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y	‰ˆ]œ™\T]Y]YY]OHOË˜\HÂˆ™\T]Y]YY]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊœ™\T]Y]YYš\ÝX[\›’YIY]I™\T]Y]YY]ŠBˆBˆ\Ý[™\Ë›Û“^\˜U^
+›ÛX[‘\Ü^U^
+^
+JBˆÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ÛÛ^ÝÜ™K›Û[˜[\Ú\Êˆ^[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ
+BˆØÜ™Y[”™\ÜÛœÙU^ÛÛ[Z]YHYBˆBˆ[ÙH›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’Y™X\ÛÛIÚYˆ
+XÝ\œ™[
+HœÝÜYÜÙ\ÜÚ[Ûˆˆ[ÙH™[\WÜ™\Ý[ŸHŠBˆ›ÚXÙSÙÊœØÜ™Y[—Ü™\ÜÛœÙWÙÙ[™\˜][Û—ØÛÛ\]HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YÝ\œ™[IÝ\œ™[ŠBˆ›ÚXÙSÙÊˆ•’TÒSÓ—Ô‘TUQTÕÐÓÓTUQØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’Yˆ
+Âˆ[Y\Ý[\IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_Hš\Ú[Û“][˜ÞS\ÏIÊ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HHØÜ™Y[‘œ˜[YTÙ[]
+K˜ÛÙ\˜ÙP]X\Ý
+
+_Hˆ
+ÂˆÝ[][˜ÞS\ÏIÚYˆ
+ØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞJH
+[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HHØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]
+K˜ÛÙ\˜ÙP]X\Ý
+
+H[ÙHLSH‚ˆ
+BˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][ÛÛÛ\]HHYBˆYˆ
+[ØØ[]Y[ÔÜXZÚ[™ÊHÂˆ›ÚXÙSÙÊˆ”ÐÔ‘QS—Ô‘TÔÓ”ÑWÑPÒTÒSÓˆš\ÝX[\›’YIÙ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY›Ü‘[\J
+_Hˆ
+Âˆ˜Ý\œ™[\›IØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YÙ[™\˜][Û’YIØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆˆ
+Âˆ™XÚ\Ú[ÛIÚYˆ
+
+˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OË™š\œÝ]Y[Ð]Îˆ
+Hˆ
+H”VHˆ[ÙH‘“ÔŸHˆ
+Âˆœ™X\ÛÛYÙ[™\˜][Û—ØÛÛ\]WÛ›×ØXÝ]™WÜ^X˜XÚÈ‚ˆ
+Bˆš[š\ÚØÜ™Y[”™\ÜÛœÙJ™Ù[™\˜][Û—ØÛÛ\]WÛ›×Ü^X˜XÚÈŠBˆBˆ[ÙHÝ]]˜ÛX\Š
+Bˆ™]\›\›ÛÛ\]BˆBˆ[™[™ÓØØ[ÜYXÚË›]ÈY\ÜØYÙHO‚ˆ[™[™ÓØØ[ÜYXÚH[ˆ™\Ù]\›Y™™\œÊ
+BˆØØ[ÜYXÚ˜[Y][Û”ÛXÞHH[™[™ÓØØ[ÜYXÚÛXÞBˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH[™[™ÓØØ[ÜYXÚ[ÝÜÔÚ[[˜ÙBˆ™YÚ[•˜[Y]YØØ[ÜYXÚ
+Y\ÜØYÙJBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+YYXP›ØÚÙY\›ˆ	‰ˆ[YYXQÝX\™š\Ð]ØZÙJ
+JHÂˆ˜[›ØÚÙY^H›ÛX[‘\Ü^U^
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+JBˆYˆ
+ØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙTÝX›T]Y\žJ›ØÚÙY^
+HOH[
+HÂˆYYXP›ØÚÙY\›ˆH˜[ÙBˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+›ØÚÙY^
+BˆYˆ
+›ØÚÙY^š\Ó›Ý›[šÊ
+H	‰ˆXÛÛ[X[™\Ù\•^[Z]Y
+HÂˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJ›ØÚÙY^“QQPWÐÓÓ‘’T“QQÔÐÔ‘QS—ÔUQT–HŠBˆÛÛ[X[™\Ù\•^[Z]YHYBˆBˆ›ÚXÙSÙÊ›YYXWØØ[™Y]WÜ›Û[ÝY™X\ÛÛ]˜[Y]YÜØÜ™Y[—Ü]Y\žHÛÛ[X[™Ú\œÏIØÛÛ[X[™›Ø™K›[™ÝH\Ù\•\›’YIXÝ]™U\›’YŠBˆ™YÚ[‘œ™\ÚØÜ™Y[”]Y\žJ›ØÚÙY^XÝ]™U\›’Y
+Bˆ™\Ù]\›Y™™\œÊ›YYXWØÛÛ™š\›YYÜØÜ™Y[—Ü]Y\žHŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+YYXTÜYXÚÛÚ\™[˜ÙTÛXÞKš\ÐÛÚ\™[
+›ØÚÙY^
+H	‰‚ˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+›ØÚÙY^
+HOHYBˆ
+HÂˆ˜[›Û[ÝY\›’YHXÝ]™U\›’YˆYYXP›ØÚÙY\›ˆH˜[ÙBˆYYXQÝX\™˜ÛÛ™š\›U\Ù\”ÜYXÚ
+
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆYˆ
+XÛÛ[X[™\Ù\•^[Z]Y
+HÂˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJ›ØÚÙY^“QQPWÐÓÓ‘’T“QQÐÓÓ•‘T”ÐUSÓˆŠBˆÛÛ[X[™\Ù\•^[Z]YHYBˆBˆ›ÚXÙSÙÊˆ›YYXWØØ[™Y]WÜ›Û[ÝY™X\ÛÛXÛÚ\™[ØÛÛ™\œØ][Û—Ø]Ø›Ý[™\žHˆ
+Âˆ˜ÛÛ[X[™Ú\œÏIØÛÛ[X[™›Ø™K›[™ÝH\Ù\•\›’YI›Û[ÝY\›’Y™\ÜÛœÙSÝÛ™\SSÑS‚ˆ
+Bˆ™\Ù]\›Y™™\œÊ›YYXWØÛÛ™š\›YYØÛÛ™\œØ][ÛˆŠBˆËÈHÜXÝ[]]™H™\HX^H[™XYH]™H™Y[ˆÝ\™\ÜÙYÚ[BˆËÈÛ\ÜÚYšXØ][ÛˆØ\È[™[™Ëˆ\ÚÈHØ[YH]™HÙ\ÜÚ[Ûˆ›ÜˆÛ™BˆËÈÜ™[˜\žH˜]\˜[™\ÜÛœÙNÈÈ›ÝÜ™X]HHØØ[ÕÈ]‚ˆ™\ÜÛœÙP\˜š]\‹˜™YÚ[Š›Û[ÝY\›’Y
+Bˆ]™OËœÙ[™^
+›ØÚÙY^
+Bˆ™]\›\›ÛÛ\]BˆBˆYYXP›ØÚÙY\›ˆH˜[ÙBˆ™\Ù]\›Y™™\œÊ›YYXWØ›ØÚÙYÝ\›—ØÛÛ\]HŠBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+YS™^[Ù[˜[œØÜš\
+HÂˆYS™^[Ù[˜[œØÜš\H˜[ÙBˆ™\Ù]\›Y™™\œÊšY[—Û[Ù[Ý\›—ØÛÛ\]HŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊY[[ÜžPÛÛ[X[™[›˜X›JBˆ[™[™ÓY[[ÜžPÛÛ[X[™H[ˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊ\œÛÛ˜[Y[[ÜžT]\ÙT[›˜X›JBˆ[™[™Ñ]XÝY\œÛÛ˜[Y[[ÜžHH[ˆ˜[XØÝ[][]Ü™Y›Ü™Qš[˜[H[œ]ÔÝš[™Ê
+Kš[J
+Bˆ˜[\XØ]T™\Ý[Hš[˜[˜[œØÜš\\XØ]QÝX\™˜ÛÛ\ÙJXØÝ[][]Ü™Y›Ü™Qš[˜[
+Bˆ˜[\Ù\•^H\XØ]T™\Ý[^ˆ˜[^\˜U^HÝ]]ÔÝš[™Ê
+Kš[J
+Bˆ›ÚXÙSÙÊˆ™š[˜[Ý˜[œØÜš\Ù\XØ]WÙÝX\™YYXPØ[™Y]RYIØ]Y[ÏË˜Ý\œ™[YYXPØ[™Y]RY
+
+HÎˆHˆ
+Âˆ˜Ø[™Y]U˜[œØÜš\IØÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+KZÙJMŒ
+_Hˆ
+Âˆ™š[˜[Ù[Z[šU˜[œØÜš\IØXØÝ[][]Ü™Y›Ü™Qš[˜[ZÙJMŒ
+_Hˆ
+Âˆ˜XØÝ[][]Ü™Y›Ü™Qš[˜[IØXØÝ[][]Ü™Y›Ü™Qš[˜[ZÙJMŒ
+_Hˆ
+Âˆ™\XØ]Qš[˜[]XÝYIÙ\XØ]T™\Ý[™\XØ]Q]XÝYHˆ
+Âˆ™\XØ]PÛÛ\ÙP\YYIÙ\XØ]T™\Ý[˜ÛÛ\ÙP\YYHˆ
+Âˆ˜ÛÛ\ÙT™X\ÛÛIÙ\XØ]T™\Ý[œ™X\ÛÛŸHš[˜[\Ü^U^IÝ\Ù\•^ZÙJMŒ
+_H‚ˆ
+Bˆ˜[š[˜[[œ]˜[œØÜš\]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[]\ÚXš[]HH˜[œØÜš\]\ÚXš[]QØ]K˜\ÜÙ\ÜÑš[˜[
+\Ù\•^
+Bˆ˜[]\ÚXš[]U\›’YHXÝ]™U\›’YZÙRYˆÈ]OHBˆÎˆ™\ÜÛœÙP\˜š]\‹\›’YZÙRYˆÈ]OHBˆÎˆ
+ÊÝ\›”Ù\]Y[˜ÙBˆ˜[]\ÚXš[]U]\˜[˜ÙRYH‰˜[œØÜš\Ù\ÜÚ[Û’Y‰]\ÚXš[]U\›’Y‚ˆ›ÚXÙSÙÊˆ™š[˜[Ý˜[œØÜš\Ü]\ÚXš[]H]\˜[˜ÙRYI]\ÚXš[]U]\˜[˜ÙRYˆ
+Âˆœ˜]ÑÙ[Z[šU˜[œØÜš\IÝ\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ™]XÝYØÜš\ÏIÜ]\ÚXš[]K™]XÝYØÜš\ßHˆ
+Âˆ™ÛZ[˜[ØÜš\IÜ]\ÚXš[]K™ÛZ[˜[ØÜš\Hˆ
+Âˆœ™XÙ[Ù\ÜÚ[Û“[™ÝXYÙT›Ùš[OIÜ]\ÚXš[]Kœ™XÙ[Ù\ÜÚ[Û“[™ÝXYÙT›Ùš[_Hˆ
+Âˆ˜[œØÜš\]\ÚXš[]OIÜ]\ÚXš[]K˜[œØÜš\]\ÚXš[]_Hˆ
+Âˆ˜[›ÛX[T™X\ÛÛIÜ]\ÚXš[]K˜[›ÛX[T™X\ÛÛŸHˆ
+ÂˆœÙ[X[XÔ›ØÙ\ÜÚ[™Ð[ÝÙYIÜ]\ÚXš[]KœÙ[X[XÔ›ØÙ\ÜÚ[™Ð[ÝÙYHˆ
+Âˆ\Ù\X˜›PÛÛ[Z][ÝÙYIÜ]\ÚXš[]K\Ù\X˜›PÛÛ[Z][ÝÙYHˆ
+Âˆ›Y[[ÜžS]]][Û[ÝÙYIÜ]\ÚXš[]K›Y[[ÜžS]]][Û[ÝÙYH‚ˆ
+BˆYˆ
+\]\ÚXš[]KœÙ[X[XÔ›ØÙ\ÜÚ[™Ð[ÝÙY
+HÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ]]˜ÛX\Š
+NÈ]Y[ÏËš[\œ\
+
+Bˆ\Ý[™\Ë›Û“^\˜U^
+š[˜[˜[œØÜš\]\ÚXš[]QØ]KÓT’Q’PÐUSÓ—Ô‘TJBˆ[Z]Ý]Jš[˜[˜[œØÜš\]\ÚXš[]QØ]KÓT’Q’PÐUSÓ—Ô‘TJBˆ]Y]YSØØ[ÜYXÚ
+ˆš[˜[˜[œØÜš\]\ÚXš[]QØ]KÓT’Q’PÐUSÓ—Ô‘TKˆ[ÝÕ[˜[œØÜšX™Y]Y[ÈHYBˆ
+Bˆ™\Ù]\›Y™™\œÊœÝ\ÜXÚ[Ý\×Ùš[˜[Ý˜[œØÜš\ŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ˜[š[˜[\Ü^HHš[˜[˜[œØÜš\\Ü^J\Ù\•^
+Bˆ˜[š[˜[]\˜[˜ÙHHš[˜[Ù[X[XÕ\Ù\•]\˜[˜ÙK™œ›ÛJˆÙ\ÜÚ[Û’YH˜[œØÜš\Ù\ÜÚ[Û’Yˆ\›’YH]\ÚXš[]U\›’Yˆ˜]ÑÙ[Z[šU˜[œØÜš\H\Ù\•^ˆ›Ü›X]YHš[˜[\Ü^Bˆ
+Bˆ˜[›Ü›X[^™Yš[˜[\Ù\•^Hš[˜[]\˜[˜ÙK˜Ø[›ÛšXØ[Ù[X[XÕ^ˆ˜[\Ü^YYš[˜[\Ù\•^Hš[˜[]\˜[˜ÙK™\Ü^U^ˆ›ÚXÙU\›’Y[]Y\Ë™š[˜[˜[œØÜš\
+XÝ]™U\›’Yš[˜[]\˜[˜ÙK]\˜[˜ÙRY
+Bˆ›ÚXÙSÙÊˆ™š[˜[Ú[œ]Ý˜[œØÜš\˜]ÏIÝ\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ››Ü›X[^™YIÛ›Ü›X[^™Yš[˜[\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ™\Ü^OIÙ\Ü^YYš[˜[\Ù\•^ZÙJMŒ
+_Hš[˜[[œ]˜[œØÜš\]Iš[˜[[œ]˜[œØÜš\]‚ˆ
+Bˆ›ÚXÙSÙÊˆ™š[˜[Ý˜[œØÜš\Ù\Ü^H\›’YIXÝ]™U\›’Y]\˜[˜ÙRYIÝ˜[œØÜš\Ù\ÜÚ[Û’YN‰XÝ]™U\›’Yˆ
+Âˆœ˜]ÏIÝ\Ù\•^ZÙJMŒ
+_H˜[œÛ]\˜]YIÙš[˜[\Ü^K˜[œÛ]\˜]YZÙJMŒ
+_Hˆ
+Âˆ™\Ü^OIÙ\Ü^YYš[˜[\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ›][•ÛÜ™Ô™\Ù\™YIÙš[˜[\Ü^K›][•ÛÜ™Ô™\Ù\™YHˆ
+Âˆœ›Ü\“˜[YT›ÝXÝYIÙš[˜[\Ü^Kœ›Ü\“˜[YT›ÝXÝYHˆ
+Âˆœ[RYÏIÙš[˜[\Ü^K˜\YY[RYËš›Ú[•ÔÝš[™Ê‹Š_H‚ˆ
+Bˆ›ÚXÙSÙÊˆ™š[˜[ÜÙ[X[X×Ý]\˜[˜ÙH]\˜[˜ÙRYIÙš[˜[]\˜[˜ÙK]\˜[˜ÙRYHˆ
+Âˆœ˜]ÑÙ[Z[šU˜[œØÜš\IÝ\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ˜Ø[›ÛšXØ[Ù[X[XÕ^IÛ›Ü›X[^™Yš[˜[\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ™\Ü^U^IÙ\Ü^YYš[˜[\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ˜Ø[›ÛšXØ[˜[YUÚÙ[œÏIÙš[˜[]\˜[˜ÙK˜Ø[›ÛšXØ[˜[YUÚÙ[œßHˆ
+Âˆ™\Ü^S˜[YUÚÙ[œÏIÙš[˜[]\˜[˜ÙK™\Ü^S˜[YUÚÙ[œßHˆ
+Âˆ›Y[[ÜžQ^˜XÝÜ’[œ]IÙš[˜[]\˜[˜ÙK›Y[[ÜžQ^˜XÝÜ’[œ]ZÙJMŒ
+_Hˆ
+Âˆ˜ÛÜœ™XÝ[Û”\œÙ\’[œ]IÙš[˜[]\˜[˜ÙK˜ÛÜœ™XÝ[Û”\œÙ\’[œ]ZÙJMŒ
+_Hˆ
+Âˆ™[]T\œÙ\’[œ]IÙš[˜[]\˜[˜ÙK™[]T\œÙ\’[œ]ZÙJMŒ
+_Hˆ
+Âˆ˜Û\šYšXØ][Û”™\ÛÛ™\’[œ]IÙš[˜[]\˜[˜ÙK˜Û\šYšXØ][Û”™\ÛÛ™\’[œ]ZÙJMŒ
+_Hˆ
+ÂˆœÙ[X[XÐÛÛœÚ\Ý[˜ÞOIÙš[˜[]\˜[˜ÙKœÙ[X[XÐÛÛœÚ\Ý[˜Þ_H‚ˆ
+BˆYˆ
+X\›TØÜ™Y[”]Y\žQ\Ü]ÚY\›’YOHXÝ]™U\›’Y	‰ˆX\›TØÜ™Y[”]Y\Ý[Û•^š\Ó›Ý›[šÊ
+JHÂˆ˜[™XÛÛ˜Ú[X][ÛˆHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘X\›TØÜ™Y[”]Y\Ý[Û”ÛXÞKœ™XÛÛ˜Ú[JˆX\›TØÜ™Y[”]Y\Ý[Û•^\Ù\•^ˆ
+Bˆ›ÚXÙSÙÊˆœØÜ™Y[—Ü]Y\žWÜ™XÛÛ˜Ú[Y\Ù\•\›’YIXÝ]™U\›’Y™\Ý[I™XÛÛ˜Ú[X][Ûˆˆ
+Âˆš\ÝX[\›’YIÙ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY›Ü‘[\J
+_H‚ˆ
+BˆYˆ
+™XÛÛ˜Ú[X][ÛˆOHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”]Y\Ý[Û”™XÛÛ˜Ú[X][Û‹“PUT’PSÐÒS‘ÑJHÂˆ˜\Ýš\ÝX[\›œË˜Ø[˜Ù[
+
+Bˆ]™OËš[\œ\
+
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ™\Ù]\›Y™™\œÊ™X\›WÜØÜ™Y[—Ü]Y\žWÛX]\šX[ØÚ[™ÙHŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆBˆYˆ
+[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ˆ	‰‚ˆÛÛ[X[™\œÙ\‹š\ÓZÙ[R[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[
+\Ù\•^
+Bˆ
+HÂˆËÈÈ›Ý^ÜÙHÜˆ[œÝÙ\ˆ\X[TÔˆÛÜ™ÈÝXÚ\È•[H‹ˆËÈZ[ˆ‹Üˆ›Y\Ù\È‹ˆH™^ÛÛ\]Y]\˜[˜ÙHÝ\Èœ™\Ú‚ˆ]Y[ÏËš[\œ\
+
+Bˆ™\Ù]\›Y™™\œÊ
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+\Ù\•^š\Ó›Ý›[šÊ
+H	‰ˆXÛÛ[X[™\Ù\•^[Z]Y
+HÂˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJˆ˜]ÈH\Ù\•^ˆÛÝ\˜ÙHH•T“—ÐÓÓTUH‹ˆ›Ü›X[^™YH›Ü›X[^™Yš[˜[\Ù\•^ˆ\Ü^HH\Ü^YYš[˜[\Ù\•^ˆ
+BˆBˆXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙOË˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+OË›]Âˆœ˜Z[‹›ØœÙ\™Q›Ü™YÜ›Ý[™\
+]œXÚØYÙS˜[YJBˆ›ÚXÙSÙÊ™›Ü™YÜ›Ý[™ØÛÛ^Ü›ÜYØ]Y\›’YIXÝ]™U\›’YXÚØYÙOIÚ]œXÚØYÙS˜[Y_HÚ[™ÝÒYIÚ]Ú[™ÝÒYHÙ[™\˜][ÛIÚ]™Ù[™\˜][ÛŸHŠBˆBˆ˜[XÝ]š]PÛÛ^HXÝ]š]PÛÛ^ÝÜ™KœÛ˜\ÚÝ
+
+Bˆ]\Ý\›XØÙ\Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ]\Ý[[[Z[™Õ\›’YHXÝ]™U\›’Yˆ›ÚXÙSÙÊˆ™š[˜[˜[œØÜš\™XYH\›’YIXÝ]™U\›’Y]I]\Ý\›XØÙ\Y]ˆ
+Âˆ˜]]Üš]]]™U\›•Õ˜[œØÜš\\ÏIÚYˆ
+ÜYXÚXÝ]š]Q[™Y]ˆ
+H]\Ý\›XØÙ\Y]HÜYXÚXÝ]š]Q[™Y][ÙHLSH‚ˆ
+Bˆ]\ÝXÝ[Û‘\Ü]ÚY]Hˆ˜[\›‘XÚ\Ú[ÛˆH[šYšYY\˜PYÙ[[[YK˜YÙ[˜XØÙ\\›Šˆ\Ù\•^XÝ]š]PÛÛ^š\ÝX[]Ø\™[™\ÜÔ™Y™\™[˜Ù\Ë™[˜X›YXÝ]™U\›’Yˆ
+Bˆ]\Ý[[XÚYY]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊˆ\›’[[™\ÛÛ™Y\›’YIXÝ]™U\›’Y[[IÝ\›‘XÚ\Ú[Û‹š[[H]I]\Ý[[XÚYY]ˆ
+Âˆ˜[œØÜš\Ò[[\ÏIÛ]\Ý[[XÚYY]H]\Ý\›XØÙ\Y]H‚ˆ
+Bˆ˜[[šYšYY\ÚÈH[šYšYY\˜PYÙ[[[YK˜YÙ[˜Ý\œ™[\ÚÊ
+Bˆ›ÚXÙSÙÊˆ˜YÙ[Ý\›—ÛÝÛ™Y\›’YIXÝ]™U\›’Y[[IÝ\›‘XÚ\Ú[Û‹š[[Hˆ
+ÂˆœÛ™PXÝ[ÛœÏIÝ\›‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœßHY[[ÜžS]]][ÛIÝ\›‘XÚ\Ú[Û‹˜]]Üš^™\ÓY[[ÜžS]]][ÛŸHˆ
+Âˆœ™\]Z\™\Ô\˜Ù\[ÛIÝ\›‘XÚ\Ú[Û‹œ™\]Z\™\Ô\˜Ù\[ÛŸH\ÚÒYIÝ[šYšYY\ÚÏËšYH‚ˆ
+Bˆ›ÚXÙSÙÊˆ\›—Û][˜ÞH\›’YIXÝ]™U\›’YÜYXÚ[™Õ\›XØÙ\Y\ÏIÚYˆ
+ÜYXÚXÝ]š]Q[™Y]ˆ
+H]\Ý\›XØÙ\Y]HÜYXÚXÝ]š]Q[™Y][ÙHLSHˆ
+Âˆ\›XØÙ\YÒ[[\ÏIÛ]\Ý[[XÚYY]H]\Ý\›XØÙ\Y]H‚ˆ
+BˆYˆ
+[šYšYY\ÚÈOH[	‰ˆ\›‘XÚ\Ú[Û‹š[[[ˆÙ]ÙŠ\›’[[PÕSÓ—Ô‘TUQTÕ\›’[[“USWÔÕTÑÓÐS
+JHÂˆ›ÚXÙSÙÊˆ˜YÙ[Ý\Ú×ØÜ™X]Y\ÚÒYIÝ[šYšYY\ÚËšYHÛØ[IÝ[šYšYY\ÚËš[\œ™]YÛØ[HXÚØYÙOIØXÝ]š]PÛÛ^ËœXÚØYÙS˜[Y_Hˆ
+Âˆœ[”Ý\ÏIÝ[šYšYY\ÚËœ[‹œÚ^™_HÛÛ™šY[˜ÙOIÝ[šYšYY\ÚË˜ÛÛ™šY[˜Ù_H‚ˆ
+Bˆ›ÚXÙSÙÊ˜YÙ[Ü[—ØÜ™X]Y\ÚÒYIÝ[šYšYY\ÚËšYHÝ\ÏIÝ[šYšYY\ÚËœ[‹š›Ú[•ÔÝš[™Ê‹ŠHÈ]šY_HŠBˆ™\\™QÙ[™\˜[[[YTÝ\
+XÝ]š]PÛÛ^
+BˆBˆYˆ
+\›‘XÚ\Ú[Û‹š[[[ˆÙ]ÙŠ\›’[[ÓÓ•‘T”ÐUSÓ‹\›’[[”UQTÕSÓŠJHÂˆËÈHÛÛ\]HÛÛ™\œØ][Û˜[\›ˆ\™[ØÚÜÈ[Û™H^XÝ]ÜœËˆ\X[ˆËÈÙ^]ÛÜ™ÝY\ÜÙ\È\™H\ØØ\™Y[™Ù[Z[šH™]Z[œÈHÛÛH™\ÜÛœÙK‚ˆ›Ø˜X›PXÝ[Û•\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆ›ÚXÙSÙÊ˜YÙ[ÜÛ™WÝÛÛ×ÛØÚÙY\›’YIXÝ]™U\›’Y™X\ÛÛIÝ\›‘XÚ\Ú[Û‹š[[HŠBˆBˆYˆ
+\›‘XÚ\Ú[Û‹š[[OH\›’[[‘“ÓÕ×ÕT
+HÂˆ[™U[šYšYYXÝ[Û‘›ÛÝÕ\
+
+Bˆ™\Ù]\›Y™™\œÊ[šYšYYØXÝ[Û—Ù›ÛÝ×Ý\ŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+\›‘XÚ\Ú[Û‹š[[[ˆÙ]ÙŠ\›’[[PÕSÓ—Ô‘TUQTÕ\›’[[“USWÔÕTÑÓÐS
+H	‰‚ˆ^XÝ]U[šYšYYœ›ÝÜÙ\”ÙX\˜Ú
+\Ù\•^
+Bˆ
+HÂˆ™\Ù]\›Y™™\œÊ[šYšYYØœ›ÝÜÙ\—ÜÙX\˜ÚŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ˜[ØÜ™Y[“[ÙHHØÜ™Y[“[ÙPÛÛ[X[™\œÙ\‹œ\œÙJ\Ù\•^
+BˆÎˆØÜ™Y[“[ÙPÛÛ[X[™\œÙ\‹œ\œÙJ›Ü›X[^™Yš[˜[\Ù\•^
+BˆYˆ
+\›‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÈ	‰ˆØÜ™Y[“[ÙHOH[
+HÂˆ^XÝ]TØÜ™Y[“[ÙPÛÛ[X[™
+ØÜ™Y[“[ÙJBˆ™\Ù]\›Y™™\œÊœØÜ™Y[—Û[ÙWØÛÛ[X[™ŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆËÈÙY\HÜšYÚ[˜[˜[œØÜš\›ÜˆØØ[Ù[X[XÈÛÛ[X[™ËˆH\Ü^KØœ˜Z[‚ˆËÈ›Ü›X[^˜][ÛˆØ[ˆ˜[œÛ]\˜]H]˜[˜YØ\šH
+›Üˆ^[\K¸)%x)+¸)aø) ¸)'Èˆ[È[‚ˆËÈ[œ™XÛÙÛš\ØX›HÜ[[™ÊK]XØÙ\ÜÚXš[]HXÝ[ÛœÈ]\Ý™HXÚYYš\œÝ‚ˆ˜[[Ý]X™TÙ[X[XÈH[ÝUX™TÙ[X[XÐÛÛ[X[™\œÙ\‹œ\œÙJ\Ù\•^
+BˆÎˆ[ÝUX™TÙ[X[XÐÛÛ[X[™\œÙ\‹œ\œÙJ›Ü›X[^™Yš[˜[\Ù\•^
+BˆYˆ
+\›‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÈ	‰ˆ[Ý]X™TÙ[X[XÈOH[	‰ˆ^XÝ]V[ÝUX™TÙ[X[XÐXÝ[ÛŠ[Ý]X™TÙ[X[XÊJHÂˆ™\Ù]\›Y™™\œÊž[Ý]X™WÜÙ[X[X×ØXÝ[ÛˆŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ˜[˜\Ýš\ÝX[™\]Y\ÝH˜\Ýš\ÝX[™\]Y\ÝÛ\ÜÚYšY\‹˜Û\ÜÚYžJ\Ù\•^
+BˆÎˆ˜\Ýš\ÝX[™\]Y\ÝÛ\ÜÚYšY\‹˜Û\ÜÚYžJ›Ü›X[^™Yš[˜[\Ù\•^
+BˆÎˆØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙJ›Ü›X[^™Yš[˜[\Ù\•^
+OË›]Âˆ˜\Ýš\ÝX[™\]Y\Ý
+ˆYˆ
+]OHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[•š\Ú[Û’[[ÓÓ•“ÓÕT‘ÑU
+H˜\Ýš\ÝX[Ú[™PÕSÓˆ[ÙH˜\Ýš\ÝX[Ú[™”UQTÕSÓ‹ˆ]›˜[YK›ÝÙ\˜Ø\ÙJØØ[K”“ÓÕ
+Bˆ
+BˆBˆYˆ
+˜\Ýš\ÝX[™\]Y\ÝOH[	‰‚ˆ
+\›‘XÚ\Ú[Û‹š[[OH\›’[[”ÐÔ‘QS—ÔUQTÕSÓˆ\›‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÊJHÂˆYˆ
+\›‘XÚ\Ú[Û‹š[[OH\›’[[”ÐÔ‘QS—ÔUQTÕSÓˆ	‰ˆÜ™[˜\žS[Ù[]Y[ÑØ]Kš\ÔÜYXÚXÝ]™J
+JHÂˆ\›TØÜ™Y[”]Y\Ý[ÛŠ\Ù\•^XÝ]™U\›’Y‘’SSÔÐÔ‘QS—ÔUQT–WÕÐRUS‘×Ñ“Ô—ÔÔQPÒÑS‘‹YJBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ™]\›\›ÛÛ\]BˆBˆYˆ
+ØÜ™Y[”]Y\žQ\Ü]ÚÛXÞKœÚÝ[\Ü]Ú
+ˆØÜ™Y[”™\ÜÛœÙPXÝ]™KX\›TØÜ™Y[”]Y\žQ\Ü]ÚY\›’YXÝ]™U\›’Yˆ
+JHÂˆ™YÚ[‘œ™\ÚØÜ™Y[”]Y\žJ\Ù\•^XÝ]™U\›’Y˜\Ýš\ÝX[™\]Y\Ý
+BˆBˆ™\Ù]\›Y™™\œÊ™˜\ÝÝš\ÝX[Ý\›ˆŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+\›‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÈ	‰ˆ^XÝ]U[šYšYY™Y™\™[˜ÙRY\XØX›J\Ù\•^
+JHÂˆ™\Ù]\›Y™™\œÊ[šYšYYØYÙ[Ü™Y™\™[˜ÙHŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ˜[œ˜Z[‘XÚ\Ú[ÛˆHYˆ
+\›‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÊHœ˜Z[‹š[\œ™]
+›Ü›X[^™Yš[˜[\Ù\•^
+Bˆ[ÙHœ˜Z[‘XÚ\Ú[Û‹”\ÜÕ›ÝYÚˆ›ÚXÙSÙÊˆ˜œ˜Z[—ÙXÚ\Ú[Ûˆ\›’YIXÝ]™U\›’Y[[IÓ\˜Pœ˜Z[ÛÛÜ™[˜]Ü‹˜Û\ÜÚYžJ›Ü›X[^™Yš[˜[\Ù\•^
+_Hˆ
+Âˆ™XÚ\Ú[ÛIØœ˜Z[‘XÚ\Ú[Û‹š˜]˜PÛ\ÜËœÚ[\S˜[Y_HÝ]OIØœ˜Z[‹œÛ˜\ÚÝ
+
+_H‚ˆ
+Bˆ˜[™XY[™ÐÛÛ[X[™H™XY[™Ò[[\œÙ\‹œ\œÙJ›Ü›X[^™Yš[˜[\Ù\•^
+BˆYˆ
+\›‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÈ	‰ˆ™XY[™ÐÛÛ[X[™OH[	‰ˆ[™T™XY[™ÐÛÛ[X[™
+™XY[™ÐÛÛ[X[™XÝ]™U\›’Y
+JHÂˆ™\Ù]\›Y™™\œÊœ™XY[™×ØÛÛ[X[™ŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆÚ[ˆ
+œ˜Z[‘XÚ\Ú[ÛŠHÂˆ\Èœ˜Z[‘XÚ\Ú[Û‹Ø[˜Ù[OˆÂˆ[™Pœ˜Z[Ø[˜Ù[][ÛŠœ˜Z[‘XÚ\Ú[Û‹\ÚÕÚÙ[ŠBˆ™\Ù]\›Y™™\œÊ˜œ˜Z[—Ý\Ú×ØØ[˜Ù[YŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ\Èœ˜Z[‘XÚ\Ú[Û‹”ØÜ›Û[“Ü[•šY[ÈOˆÂˆYˆ
+\ØÜ™Y[ÛÛ[X[™\›‘ÝX\™žPÛÛ[Z]
+XÝ]™U\›’Y
+JHÂˆ›ÚXÙSÙÊœØÜ™Y[—ØÛÛ[X[™Ù\XØ]WÙ›ÜY\›’YIXÝ]™U\›’YXÚ\Ú[ÛTØÜ›Û[“Ü[•šY[ÈŠBˆ™\Ù]\›Y™™\œÊ™\XØ]WÜØÜ™Y[—ØÛÛ[X[™ŠBˆ™]\›\›ÛÛ\]BˆBˆØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ø[˜Ù[
+
+OË›]Âˆ›ÚXÙSÙÊ”ÐÔ‘QS—ÐPÕSÓ—ÐÐSÑSQXÝ[Û’YIÚ]˜XÝ[Û’YH\›’YIÚ]\›’YH™X\ÛÛ[™]×Û][WÜÝ\ØÛÛ[X[™ŠBˆBˆ^XÝ]Pœ˜Z[“][TÝ\
+œ˜Z[‘XÚ\Ú[ÛŠBˆ™\Ù]\›Y™™\œÊ˜œ˜Z[—Û][WÜÝ\ÜÝ\YŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ\Èœ˜Z[‘XÚ\Ú[Û‹”ØÜ™Y[XÝ[ÛˆOˆÂˆYˆ
+\ØÜ™Y[ÛÛ[X[™\›‘ÝX\™žPÛÛ[Z]
+XÝ]™U\›’Y
+JHÂˆ›ÚXÙSÙÊœØÜ™Y[—ØÛÛ[X[™Ù\XØ]WÙ›ÜY\›’YIXÝ]™U\›’YXÚ\Ú[ÛTØÜ™Y[XÝ[ÛˆŠBˆ™\Ù]\›Y™™\œÊ™\XØ]WÜØÜ™Y[—ØÛÛ[X[™ŠBˆ™]\›\›ÛÛ\]BˆBˆØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ø[˜Ù[
+
+OË›]Âˆ›ÚXÙSÙÊ”ÐÔ‘QS—ÐPÕSÓ—ÐÐSÑSQXÝ[Û’YIÚ]˜XÝ[Û’YH\›’YIÚ]\›’YH™X\ÛÛ[™]×ØÛÛ^X[ØÛÛ[X[™ŠBˆBˆ^XÝ]PÛÛ^X[ØÜ™Y[XÝ[ÛŠœ˜Z[‘XÚ\Ú[Û‹\™Ù]
+Bˆ™\Ù]\›Y™™\œÊ˜œ˜Z[—ØÛÛ^X[ÜØÜ™Y[—ØXÝ[ÛˆŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ\Èœ˜Z[‘XÚ\Ú[Û‹Û\šYžHOˆÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆØ[˜Ù[ÜYXÚ›Ü“™]ÐXÝ[ÛŠ
+Bˆ\Ý[™\Ë›Û“^\˜U^
+œ˜Z[‘XÚ\Ú[Û‹›Y\ÜØYÙJBˆ[Z]Ý]Jœ˜Z[‘XÚ\Ú[Û‹›Y\ÜØYÙJBˆ]Y]YSØØ[ÜYXÚ
+œ˜Z[‘XÚ\Ú[Û‹›Y\ÜØYÙK[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆ™\Ù]\›Y™™\œÊ˜œ˜Z[—Ü™Y™\™[˜ÙWØÛ\šYšXØ][ÛˆŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆœ˜Z[‘XÚ\Ú[Û‹”\ÜÕ›ÝYÚOˆ[š]ˆBˆ˜[ØÜ™Y[’[[HØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙJ›Ü›X[^™Yš[˜[\Ù\•^
+BˆYˆ
+ØÜ™Y[’[[OH[	‰ˆ\›‘XÚ\Ú[Û‹š[[OH\›’[[”ÐÔ‘QS—ÔUQTÕSÓŠHÂˆYˆ
+ØÜ™Y[”]Y\žQ\Ü]ÚÛXÞKœÚÝ[\Ü]Ú
+ˆØÜ™Y[”™\ÜÛœÙPXÝ]™KX\›TØÜ™Y[”]Y\žQ\Ü]ÚY\›’YXÝ]™U\›’Yˆ
+JHÂˆ™YÚ[‘œ™\ÚØÜ™Y[”]Y\žJ›Ü›X[^™Yš[˜[\Ù\•^XÝ]™U\›’Y
+BˆBˆ™\Ù]\›Y™™\œÊœØÜ™Y[—Ü]Y\žWÙœ™\ÚØØ\\™WÜ™\]Y\ÝYŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆËÈ[ˆÛ™Hš[˜[\œÙHÝ™\ˆHÛÛ\]H˜[œØÜš\ˆ\X[]™H˜[œØÜš\ˆËÈÚ[šÜÈØ[ˆÛZ]ÜˆZ\Ý˜[œØÜšX™HHXÝ[ÛˆÛÜ™]™[ˆÚ[ˆHš[˜[^ˆËÈÛÛZ[œÈ[›ÝYÚÛÛ^ÈY[YžHH]šXÙHÛÛ[X[™‚ˆYˆ
+\Ù\•^š\Ó›Ý›[šÊ
+H	‰ˆ[ØØ[ÛÛ[X[™^XÝ]Y\Õ\›ŠHÂˆYˆ
+ÛÛ[X[™\œÙ\‹š\Ð[XšYÝ[Ý\ÓY\ÜØYÙT™Y™\™[˜ÙJ\Ù\•^
+JHÂˆ˜[Û\šYšXØ][ÛˆH“Y\ÜØYÙHÙH˜X\™HYZ[ˆ˜X]Ø\ˆ˜ZHËXHÚ\ÚHÛÈšZ›˜HZOÈ‚ˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆ\Ý[™\Ë›Û“^\˜U^
+Û\šYšXØ][ÛŠBˆ[Z]Ý]JÛ\šYšXØ][ÛŠBˆ]Y]YSØØ[ÜYXÚ
+Û\šYšXØ][Û‹[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆ™\Ù]\›Y™™\œÊ
+Bˆ[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆH˜[ÙBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ˜[\Ü^U^H›Ü›X[^™Yš[˜[\Ù\•^ˆ˜[[™[™ÐÛÜœ™XÝ[Û“ÛH[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YOËZÙRYˆÂˆ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HH[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[ˆBˆYˆ
+[™[™ÐÛÜœ™XÝ[Û“ÛOH[
+HÂˆ˜[ÛÛ™š\›X][Û“˜[YHH[™[™ÔÜ[[™ÐÛÛ™š\›X][Û“˜[YBˆYˆ
+ÛÛ™š\›X][Û“˜[YHOH[	‰ˆ›Ü›X[^™TÜYXÚ
+\Ü^U^
+H[ˆÙ]ÙŠšX[ˆ‹š[ˆ‹žY\ÈŠJHÂˆ[™[™ÔÜ[[™ÐÛÛ™š\›X][Û“˜[YHH[ˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YHH[ˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[HˆÝ\Ø[›ÛšXØ[™[˜[YJ™\ÝœšY[™˜[YPÛÜœ™XÝ[ÛŠ[™[™ÐÛÜœ™XÝ[Û“ÛÛÛ™š\›X][Û“˜[YJJBˆ™\Ù]\›Y™™\œÊœÜ[[™×ØÛÛ™š\›YYŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ˜[™\ÛÛ™YHÛ\šYšYY\œÛÛ“˜[YT™\ÛÛ™\‹œ™\ÛÛ™J\Ü^U^
+Bˆ›ÚXÙSÙÊˆ˜ÛÜœ™XÝ[Û—ØÛ\šYšXØ][Ûˆ[™[™Õ\OP‘TÕÑ”’QS‘Ô‘SSQHˆ
+Âˆ\™Ù]I[™[™ÐÛÜœ™XÝ[Û“Û˜]ÏIÝ\Ù\•^ZÙJL
+_Hˆ
+Âˆ››Ü›X[^™YIÙ\Ü^U^ZÙJL
+_H™\ÛÛ™YI™\ÛÛ™Y‚ˆ
+BˆÚ[ˆ
+™\ÛÛ™Y
+HÂˆ\ÈÛ\šYšYY˜[YT™\Ý[XØÙ\YOˆÂˆ[™[™ÔÜ[[™ÐÛÛ™š\›X][Û“˜[YHH[ˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YHH[ˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[HˆÝ\Ø[›ÛšXØ[™[˜[YJ™\ÝœšY[™˜[YPÛÜœ™XÝ[ÛŠ[™[™ÐÛÜœ™XÝ[Û“Û™\ÛÛ™Y›˜[YJJBˆ™\Ù]\›Y™™\œÊ˜Û\šYšYYÛ˜[YWØXØÙ\YŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ\ÈÛ\šYšYY˜[YT™\Ý[“™YYÐÛÛ™š\›X][ÛˆOˆÂˆ[™[™ÔÜ[[™ÐÛÛ™š\›X][Û“˜[YHH™\ÛÛ™Yœ›ÜÜÙY˜[YBˆ˜[Û\šYšXØ][ÛˆH“XZ[™H	Ü™\ÛÛ™YšX\™]\œßHÝ[˜KˆÞXH˜X[H	Ü™\ÛÛ™Yœ›ÜÜÙY˜[Y_HZOÈ‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ]]˜ÛX\Š
+NÈ]Y[ÏËš[\œ\
+
+Bˆ\Ý[™\Ë›Û“^\˜U^
+Û\šYšXØ][ÛŠBˆ[Z]Ý]JÛ\šYšXØ][ÛŠBˆ]Y]YSØØ[ÜYXÚ
+Û\šYšXØ][Û‹[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆ™\Ù]\›Y™™\œÊš[˜ÛÛ\]WÜÜ[[™×ØÛÛ™š\›X][ÛˆŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆÛ\šYšYY˜[YT™\Ý[•[˜ÛX\ˆOˆÂˆËÈH[™[™ÈÛÜœ™XÝ[ÛˆÝÛœÈ\È\›‹ˆ™]™\ˆ]Ù[Z[šBˆËÈ[\›Ýš\ÙHHÝXØÙ\ÜÈXÚÛ›ÝÛYÙ[Y[Ú[ˆ›È˜[Y]YˆËÈ˜[YHÜˆ™\šYšYY]X˜\ÙH˜[œØXÝ[Ûˆ^\ÝË‚ˆ˜[Û\šYšXØ][ÛˆHÛÜœ™XÝ[Û”ÝXØÙ\ÜÔÛXÞK•S”‘TÓÓ‘QÐÓT’Q’PÐUSÓ—Ô‘TBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ]]˜ÛX\Š
+NÈ]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊˆ˜ÛÜœ™XÝ[Û—ØÛ\šYšXØ][Û—Ý[œ™\ÛÛ™Y\™Ù]I[™[™ÐÛÜœ™XÝ[Û“Ûˆ
+Âˆ™]X˜\ÙS]]][Û[ÝÙYY˜[ÙHÝXØÙ\ÜÐXÚÛ›ÝÛYÙ[Y[[ÝÙYY˜[ÙH‚ˆ
+Bˆ\Ý[™\Ë›Û“^\˜U^
+Û\šYšXØ][ÛŠBˆ[Z]Ý]JÛ\šYšXØ][ÛŠBˆ]Y]YSØØ[ÜYXÚ
+Û\šYšXØ][Û‹[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆ™\Ù]\›Y™™\œÊ˜Û\šYšXØ][Û—Ý[œ™\ÛÛ™YŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆBˆBˆ˜[[™[™Ñ[]HH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HBˆ[™[™Ñ[]PÛ\šYšXØ][Û•[[ˆ˜[Y[[ÜžPÛÛ[X[™HYˆ
+[™[™Ñ[]JHÂˆ[™[™Ñ[]PÛ\šYšXØ][Û‹œ™\ÛÛ™J\Ü^U^
+BˆÎˆY[[ÜžPÛÛ[X[™\œÙ\‹œ\œÙJ\Ü^U^
+BˆH[ÙHY[[ÜžPÛÛ[X[™\œÙ\‹œ\œÙJ\Ü^U^
+BˆYˆ
+Y[[ÜžPÛÛ[X[™OH[
+HÂˆ[™[™Ñ[]PÛ\šYšXØ][Û•[[Hˆ[™SY[[ÜžPÛÛ[X[™
+Y[[ÜžPÛÛ[X[™
+Bˆ™\Ù]\›Y™™\œÊ
+BˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+™\ÝœšY[™˜[YPÛÜœ™XÝ[Û”\œÙ\‹›™YYÐÛX\ÛÜœ™XÝY˜[YJš[˜[]\˜[˜ÙK˜ÛÜœ™XÝ[Û”\œÙ\’[œ]
+JHÂˆ˜[Û\šYšXØ][ÛˆHÛÜœ™XÝ˜X[HÛX\ˆ˜ZHXKˆZÈ˜X\ˆÜ[[™ÈXH˜X[HÛX\›H™\X]Ø\›Ëˆ‚ˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ˜[™XÙ[˜[YHH\ÝØ]™Y™\ÝœšY[™˜[YOËZÙRYˆÂˆ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HH\ÝØ]™Y™\ÝœšY[™]Bˆ‘TÕÑ”’QS‘ÐÓÔ”‘PÕSÓ—ÐÓÓ•VÓTÂˆBˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YHBˆ™\ÝœšY[™˜[YPÛÜœ™XÝ[Û”\œÙ\‹˜[XšYÝ[Ý\ÓÛ˜[YJ\Ü^U^™XÙ[˜[YJBˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+H
+Âˆ‘TÕÑ”’QS‘ÐÓÔ”‘PÕSÓ—ÐÓÓ•VÓTÂˆ›ÚXÙSÙÊˆ˜ÛÜœ™XÝ[Û—ØÛ\šYšXØ][Û—ÜÙ]\OP‘TÕÑ”’QS‘Ô‘SSQHˆ
+Âˆ\™Ù]IÜ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[Y_H˜]ÏIÝ\Ù\•^ZÙJL
+_Hˆ
+Âˆ››Ü›X[^™YIÙ\Ü^U^ZÙJL
+_H‚ˆ
+Bˆ\Ý[™\Ë›Û“^\˜U^
+Û\šYšXØ][ÛŠBˆ[Z]Ý]JÛ\šYšXØ][ÛŠBˆ]Y]YSØØ[ÜYXÚ
+Û\šYšXØ][Û‹[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆ™\Ù]\›Y™™\œÊ
+BˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+[˜ÛX\‘[]R[[ÝX\™›™YYÐÛ\šYšXØ][ÛŠš[˜[]\˜[˜ÙK™[]T\œÙ\’[œ]
+JHÂˆ˜[Û\šYšXØ][ÛˆH’Ú\ÈY[[ÜžHÛÈ[]HØ\›˜HZOÈ˜X[HZÈ˜X\ˆØXYˆ›ÛËˆ‚ˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆËÈÙY\H]Y\Ý[ÛˆXÝ[Û˜X›Kˆ™]š[Ý\ÛHHÛ™K]ÛÜ™™\HÝXÚˆËÈ\È’Ø\™Y[HˆÙ[ÈÙ[Z[šKÚXÚÜÚÙHH˜[ÙHÝXØÙ\ÜÈÚ]Ý]ˆËÈ]™\ˆØ[[™ÈY[[ÜžT™\ÜÚ]ÜžK™›Ü™Ù]X]Ú[™Ê
+K‚ˆ[™[™Ñ[]PÛ\šYšXØ][Û•[[H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+H
+ÂˆSUWÐÓT’Q’PÐUSÓ—ÕSQSÕUÓTÂˆ\Ý[™\Ë›Û“^\˜U^
+Û\šYšXØ][ÛŠBˆ[Z]Ý]JÛ\šYšXØ][ÛŠBˆ]Y]YSØØ[ÜYXÚ
+Û\šYšXØ][Û‹[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆ™\Ù]\›Y™™\œÊ
+BˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ˜[\œÙYHÛÛ[X[™\œÙ\‹œ\œÙJ\Ù\•^
+BˆYˆ
+\›‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÈ	‰ˆ\œÙYOH[
+HÂˆ›ÚXÙSÙÊ“QÐPÖWÑSPÒ×ÕTÑQ\›’YIXÝ]™U\›’Y™X\ÛÛ][œÝ\ÜYÙÙ[™\˜[ØY\\ˆYØXÞT]IÜ\œÙYš˜]˜PÛ\ÜËœÚ[\S˜[Y_HŠBˆ^XÝ]PÛÛ[X[™
+\œÙY
+BˆH[ÙHYˆ
+\›‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÈ	‰‚ˆ
+›Ø˜X›PXÝ[Û•\›ˆÛÛ[X[™\œÙ\‹š\Ô›Ø˜X›Q]šXÙPXÝ[ÛŠ\Ù\•^
+JJHÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆ˜[\œ›ÜˆHYˆ
+ÛÛ[X[™\œÙ\‹š\Ð[XšYÝ[Ý\Ñ›\ÚYÚÛÛ[X[™
+\Ù\•^
+JHÂˆ–›ÜKÜ˜ÚÛˆØ\[ˆXHÙ™È‚ˆH[ÙHÂˆ–›ÜKÛÛ[X[™Ø[XZšX^ZKZÚ[ˆXÝ[ÛˆÛX\ˆ˜ZHXKˆZÈ˜X\ˆÙYYH›ÛØ\ˆžHØ\›Ëˆ‚ˆBˆ\Ý[™\Ë›Û“^\˜U^
+\œ›Ü‹YJBˆ[Z]Ý]J\œ›ÜŠBˆ]Y]YSØØ[ÜYXÚ
+\œ›ÜŠBˆBˆBˆYˆ
+\Ù\•^š\Ó›Ý›[šÊ
+H	‰ˆ[ØØ[ÛÛ[X[™^XÝ]Y\Õ\›ŠHÂˆ˜[\Ü^U\Ù\•^Hš[˜[]\˜[˜ÙK›Y[[ÜžQ^˜XÝÜ’[œ]ˆ˜[[šÙY\œÛÛØ[™Y]\ÈH\œÛÛ“[šÙYY[[ÜžQ^˜XÝÜ‹™^˜XÝ[
+\Ü^U\Ù\•^
+Bˆ˜[\œÛÛ˜[Ø[™Y]HH[šÙY\œÛÛØ[™Y]\Ë™š\œÝÜ“[ÂˆY[[ÜžT™[][ÛœÚ\ÛXÞKš\Ð™\ÝœšY[™
+]
+BˆHÎˆ\œÛÛ˜[Y[[ÜžQ^˜XÝÜ‹™^˜XÝ
+\Ü^U\Ù\•^
+BˆÎˆÛÛ^X[™[][ÛœÚ\Ø[™Y]J\Ü^U\Ù\•^
+Bˆ˜[™XÙ[˜[YHH\ÝØ]™Y™\ÝœšY[™˜[YOËZÙRYˆÂˆ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HH\ÝØ]™Y™\ÝœšY[™]Bˆ‘TÕÑ”’QS‘ÐÓÔ”‘PÕSÓ—ÐÓÓ•VÓTÂˆBˆËÈ\œÙH^XÚ]ÛO›™]ÈÛÜœ™XÝ[ÛœÈ™Y›Ü™HHÜ™[˜\žH^˜XÝÜŽÂˆËÈÝ\Ú\ÙH’Ø\š[XH˜ZKØ\™Y[Hˆ™XÛÛY\ÈH™]ÈØ\™Y[H›ÝÈÚ[BˆËÈHÝ[HØ\š[XH›ÝÈ™[XZ[œÈXÝ]™K‚ˆ˜[ÛÜœ™XÝ[Û‘XÚ\Ú[ÛˆH™\ÝœšY[™˜[YPÛÜœ™XÝ[Û”\œÙ\‹˜[˜[^™Jˆ\Ü^U\Ù\•^ˆ™XÙ[˜[YBˆ
+Bˆ˜[˜[YPÛÜœ™XÝ[ÛˆHÛÜœ™XÝ[Û‘XÚ\Ú[Û‹˜ÛÜœ™XÝ[Û‚ˆ›ÚXÙSÙÊˆ›˜[YWØÛÜœ™XÝ[Û—ÙØ]H˜]ÏIÙ\Ü^U\Ù\•^ZÙJL
+_Hˆ
+Âˆ˜ÛÜœ™XÝ[Û’[[]XÝYIØÛÜœ™XÝ[Û‘XÚ\Ú[Û‹˜ÛÜœ™XÝ[Û’[[]XÝYHˆ
+Âˆ˜ÛÜœ™XÝ[Û’[[]\›IØÛÜœ™XÝ[Û‘XÚ\Ú[Û‹˜ÛÜœ™XÝ[Û’[[]\›ŸHˆ
+Âˆ›Û˜[YPØ[™Y]OIØÛÜœ™XÝ[Û‘XÚ\Ú[Û‹›Û˜[YPØ[™Y]_Hˆ
+Âˆ›™]Ó˜[YPØ[™Y]OIØÛÜœ™XÝ[Û‘XÚ\Ú[Û‹›™]Ó˜[YPØ[™Y]_Hˆ
+Âˆ›™]Ó˜[YU˜[Y][ÛIØÛÜœ™XÝ[Û‘XÚ\Ú[Û‹›™]Ó˜[YU˜[Y][ÛŸHˆ
+Âˆœ™Z™XÝ[Û”™X\ÛÛIØÛÜœ™XÝ[Û‘XÚ\Ú[Û‹œ™Z™XÝ[Û”™X\ÛÛŸHˆ
+Âˆ™]X˜\ÙS]]][Û[ÝÙYIØÛÜœ™XÝ[Û‘XÚ\Ú[Û‹™]X˜\ÙS]]][Û[ÝÙYH‚ˆ
+BˆYˆ
+˜[YPÛÜœ™XÝ[ÛˆOH[	‰ˆš[˜[]\˜[˜ÙKœÙ[X[XÐÛÛœÚ\Ý[˜ÞJHÂˆËÈÙ[Z[šHØ[ˆÛÛ™\œØ][Û˜[HXÚÛ›ÝÛYÙHHÛÜœ™XÝ[Ûˆ]™[ˆÚ[‚ˆËÈ›ÛÛHY›ÝÚ[™ÙKˆYH][™\šYšYY[œÝÙ\ˆ[™ÛÛ™š\›HÛ›BˆËÈY\ˆH™\ÜÚ]ÜžH™]\›œÈ[™]È›ÝÜÈ]™H™Y[ˆ™XY˜XÚË‚ˆÝ\Ø[›ÛšXØ[™[˜[YJ˜[YPÛÜœ™XÝ[ÛŠBˆH[ÙHYˆ
+˜[YPÛÜœ™XÝ[ÛˆOH[
+HÂˆ˜[Û\šYšXØ][ÛˆHÛÜœ™XÝ[Û”ÝXØÙ\ÜÔÛXÞK•S”‘TÓÓ‘QÐÓT’Q’PÐUSÓ—Ô‘TBˆ›ÚXÙSÙÊˆ›˜[YWØÛÜœ™XÝ[Û—Ü™Z™XÝY]\˜[˜ÙRYIÙš[˜[]\˜[˜ÙK]\˜[˜ÙRYHˆ
+Âˆœ™X\ÛÛ\Ù[X[X×Û˜[YWÛZ\ÛX]Ú]X˜\ÙS]]][Û[ÝÙYY˜[ÙHˆ
+ÂˆœÝXØÙ\ÜÐXÚÛ›ÝÛYÙ[Y[[ÝÙYY˜[ÙH‚ˆ
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ]]˜ÛX\Š
+NÈ]Y[ÏËš[\œ\
+
+Bˆ\Ý[™\Ë›Û“^\˜U^
+Û\šYšXØ][ÛŠBˆ[Z]Ý]JÛ\šYšXØ][ÛŠBˆ]Y]YSØØ[ÜYXÚ
+Û\šYšXØ][Û‹[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆ™\Ù]\›Y™™\œÊœÙ[X[X×Û˜[YWÛZ\ÛX]ÚŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆH[ÙHYˆ
+\œÛÛ˜[Ø[™Y]HOH[
+HÂˆ™XÙ[™[][ÛœÚ\\›œË˜ÛX\Š
+BˆYˆ
+Y[[ÜžT™[][ÛœÚ\ÛXÞKš\Ð™\ÝœšY[™
+\œÛÛ˜[Ø[™Y]JJHÂˆËÈ^XÚ]ÛÛ\]Y™\ÝYœšY[™Ý][Y[ÈY]\œÛÛˆÂˆËÈHÙ]Ú[[Kˆ^H™]™\ˆ™\XÙH[›Ý\ˆ\œÛÛˆ[\XÚ]K‚ˆÙ\šXÙTØÛÜK›][˜ÚÈY[[ÜžT™\ÜÚ]ÜžKœØ]™PY][Û˜[™\ÝœšY[™
+\œÛÛ˜[Ø[™Y]JHBˆ™[Y[X™\™\ÝœšY[™›ÜÛÜœ™XÝ[ÛŠ\œÛÛ˜[Ø[™Y]JBˆH[ÙHYˆ
+Y[[ÜžTØY™]TÛXÞK™XÚYJ\œÛÛ˜[Ø[™Y]JHOHY[[ÜžTØ]™QXÚ\Ú[Û‹UU×ÔÐU‘JHÂˆÙ\šXÙTØÛÜK›][˜ÚÈY[[ÜžT™\ÜÚ]ÜžKœØ]™J\œÛÛ˜[Ø[™Y]JHBˆH[ÙHÂˆ™\]Y\Ý\œÛÛ˜[Y[[ÜžT\›Z\ÜÚ[ÛŠ\œÛÛ˜[Ø[™Y]JBˆ™\Ù]\›Y™™\œÊ
+BˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆBˆËÈÛ™H˜]\˜[Ù[[˜ÙHØ[ˆÛÛZ[ˆ[Ü™H[ˆH™[][ÛœÚ\‚ˆËÈ\œÚ\ÝÛ›HY][Û˜[\˜X›KÜ›Ý[™Y\œÛÛˆ˜XÝÎÈ[\Ü˜\žBˆËÈÛZ[\ÈÝXÚ\È^Z[™ÈÚ]Ý]ÛY\™]™\ˆ[\ˆ\È\Ý‚ˆ[šÙY\œÛÛØ[™Y]\Âˆ™š[\“›Ý
+Y[[ÜžT™[][ÛœÚ\ÛXÞNŽš\Ð™\ÝœšY[™
+Bˆ™›Ü‘XXÚÈ[šÙY˜XÝO‚ˆÙ\šXÙTØÛÜK›][˜ÚÈY[[ÜžT™\ÜÚ]ÜžKœØ]™J[šÙY˜XÝ
+HBˆBˆ™[Y[X™\”™XÙ[™[][ÛœÚ\\›Š\Ü^U\Ù\•^
+BˆX\›”ØY™T™Y™\™[˜ÙQœ›ÛPÛÛ\]Y\›Š\Ù\•^
+BˆBˆYˆ
+^\˜U^š\Ó›Ý›[šÊ
+H	‰ˆ\Ý\™\ÜÓ[Ù[›Ü•\›ˆ	‰ˆ™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+JHÂˆ\Ý[™\Ë›Û“^\˜U^
+›ÛX[‘\Ü^U^
+^\˜U^
+JBˆBˆ™\Ù]\›Y™™\œÊ››Ü›X[Ý\›—ØÛÛ\]HŠBˆYˆ
+Ý\™\ÜÓ[Ù[›Ü•\›ŠHØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆYˆ
+YYXQÝX\™š\Ð]ØZÙJ
+JHYYXQÝX\™™š[š\Ú[\˜XÝ[ÛŠ
+Bˆ[™[™ÓØØ[ÜYXÚË›]ÈY\ÜØYÙHO‚ˆ[™[™ÓØØ[ÜYXÚH[ˆØØ[ÜYXÚ˜[Y][Û”ÛXÞHH[™[™ÓØØ[ÜYXÚÛXÞBˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH[™[™ÓØØ[ÜYXÚ[ÝÜÔÚ[[˜ÙBˆ™YÚ[•˜[Y]YØØ[ÜYXÚ
+Y\ÜØYÙJBˆBˆBˆÛY[›Û‘\œ›ÜˆHÂˆ›ÚXÙSÙÊ‘ÑSRS’WÑTÐÓÓ“‘PÕQ[Y\Ý[\IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_H™X\ÛÛIÚ]ZÙJMŒ
+_HYYXWÜ›Ú™XÝ[Û—ÜÝ]OIÔØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]_HŠBˆ[Z]Ý]J]
+BˆBˆ]Y[ÏË›Û“ZXÐÚ[šÈHÈÛY[œÙ[™]Y[Ê]
+HBˆ]Y[ÏË›Û[\]YHHÈ\Ý[™\Ë›Û[\]YJ]
+HBˆ]Y[ÏË›Û”ÜYXÚXÝ]š]PÚ[™ÙYHÈXÝ]™HO‚ˆYˆ
+XÝ]™H	‰ˆØÜ™Y[”™\ÜÛœÙPXÝ]™JHÂˆ›ÚXÙSÙÊœ^X˜XÚ×ØØ[˜Ù[YØžWÜ™X[Ý\Ù\ˆ™\ÜÛœÙSÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY˜YÝšYÙÙ\—ÜÛÝ\˜ÙO[ØØ[Ý˜YŠBˆ]Y[ÏËš[\œ\
+
+NÈ]™OËš[\œ\
+
+NÈš[š\ÚØÜ™Y[”™\ÜÛœÙJœ™X[Ý\Ù\—Ø˜\™ÙWÚ[ˆŠBˆËÈH[\œ\[Ûˆ\È[ÛÈH™YÚ[›š[™ÈÙˆH™\XÙ[Y[\Ù\‚ˆËÈ]\˜[˜ÙKˆ[ØØ]H]ÈY[]H›ÝÎÈØZ][™È›ÜˆTÔˆ™XÜ™X]YˆËÈHÛ\›’YLÈ™]È˜[œØÜš\]\›ˆZ\ÛX]Ú‚ˆ™YÚ[“Ü™[˜\žTÜYXÚXÝ]š]J]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’Y›ØØ[Ý˜YØY\—ÜØÜ™Y[—Ü™\XÙ[Y[ŠBˆH[ÙHYˆ
+XÝ]™JH™YÚ[“Ü™[˜\žTÜYXÚXÝ]š]J]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’Y›ØØ[Ý˜YŠBˆ[ÙHÂˆš[š\ÚÜ™[˜\žTÜYXÚXÝ]š]J
+Bˆ\Ü]Ú\›YYØÜ™Y[”]Y\Ý[Û]ÜYXÚ[™
+
+BˆBˆBˆ]Y[ÏË›Û”ÜXZÚ[™ÐÚ[™ÙYHÈÜXZÚ[™ÈO‚ˆ›ÚXÙSÙÊˆœÙ\šXÙWÜ^X˜XÚ×ÜÝ]HÜXZÚ[™ÏIÜXZÚ[™ÈXÝ]™OIØØ[^X˜XÚÐXÝ]™Hˆ
+Âˆ™Ù[™\˜][ÛÛÛ\]OIØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]H‚ˆ
+BˆØØ[]Y[ÔÜXZÚ[™ÈHÜXZÚ[™ÂˆYˆ
+ÜXZÚ[™È	‰ˆØÜ™Y[”™\ÜÛœÙPXÝ]™JHÂˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]\Ù\•\›’YOHØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y	‰ˆ]™š\œÝ^X˜XÚÐ]OHOË˜\HÂˆš\œÝ^X˜XÚÐ]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊ™š\œÝ^X˜XÚÈš\ÝX[\›’YIY]Iš\œÝ^X˜XÚÐ]ÜYXÚ[™Ñš\œÝ^X˜XÚÓ\ÏIÚYˆ
+ÜYXÚ[™Y]ˆ
+Hš\œÝ^X˜XÚÐ]HÜYXÚ[™Y][ÙHLSHŠBˆBˆBˆ\Ý[™\Ë›Û”ÜXZÚ[™ÊÜXZÚ[™ÊBˆ\]S›ÝYšXØ][ÛŠYˆ
+ÜXZÚ[™ÊH“TH\ÈÜXZÚ[™Èˆ[ÙH“TH\È\Ý[š[™ÈŠBˆYˆ
+\ÜXZÚ[™È	‰ˆØØ[^X˜XÚÐXÝ]™H	‰ˆØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]JHÂˆš[š\ÚØØ[^X˜XÚÊ
+BˆBˆYˆ
+\ÜXZÚ[™È	‰ˆØÜ™Y[”™\ÜÛœÙPXÝ]™H	‰ˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][ÛÛÛ\]JHÂˆš[š\ÚØÜ™Y[”™\ÜÛœÙJœ^X˜XÚ×Ù[™ŠBˆBˆBˆÛY[˜ÛÛ›™XÝ
+
+BˆBˆB‚ˆš]˜]HÝ\Ü[™[ˆZ[Ø]™YY[[ÜžPÛÛ^
+
+NˆÝš[™ÈÂˆY[[ÜžT™\ÜÚ]ÜžKœ™XÛÛ˜Ú[U[š\]YT™[][ÛœÚ\Ê
+BˆY[[ÜžT™\ÜÚ]ÜžKœ™XÛÛ˜Ú[T™Y™\™[˜ÙQ[Y[œÚ[ÛœÊ
+Bˆ™]\›ˆØ]™YY[[ÜžPÛÛ^›Ü›X]\‹™›Ü›X]
+ˆY[[ÜžT™\ÜÚ]ÜžKœ™[]˜[
+ˆ‹
+K›X\È]™˜XÝBˆ
+BˆB‚ˆš]˜]H[ˆX\›”ØY™T™Y™\™[˜ÙQœ›ÛPÛÛ\]Y\›Š\Ù\•^ˆÝš[™ÊHÂˆ˜[›ÛX[•\Ù\•^H›ÛX[‘\Ü^U^
+\Ù\•^
+Bˆ˜[Ú[™ÙHH]]ÛX]XÓY[[ÜžPÚ[™ÙT\œÙ\‹œ\œÙJ›ÛX[•\Ù\•^
+HÎˆ™]\›‚ˆÙ\šXÙTØÛÜK›][˜ÚÂˆËÈ]]ÛX]XÈX\›š[™ÈÝ^\ÈÚ[[ˆÛ›H^XÚ]™[Y[X™\‹Ù›Ü™Ù]ˆËÈÛÛ[X[™È›ÙXÙHHÛÛ™š\›X][Ûˆ[ˆHÛÛ™\œØ][Û‹‚ˆÚ[ˆ
+Ú[™ÙJHÂˆ\È]]ÛX]XÓY[[ÜžPÚ[™ÙK”Ø]™HOˆY[[ÜžT™\ÜÚ]ÜžKœØ]™JÚ[™ÙK˜Ø[™Y]JBˆ\È]]ÛX]XÓY[[ÜžPÚ[™ÙK‘›Ü™Ù]OˆY[[ÜžT™\ÜÚ]ÜžK™›Ü™Ù]ÝX›RÙ^JÚ[™ÙKœÝX›RÙ^JBˆBˆBˆB‚ˆš]˜]H[ˆ[™Q^XÚ]Y[[ÜžU^
+^ˆÝš[™ÊNˆ›ÛÛX[ˆÂˆ˜[ÛÛ[X[™HY[[ÜžPÛÛ[X[™\œÙ\‹œ\œÙJ^
+HÎˆ™]\›ˆ˜[ÙBˆ[™SY[[ÜžPÛÛ[X[™
+ÛÛ[X[™
+Bˆ™]\›ˆYBˆB‚ˆš]˜]H[ˆ[™SY[[ÜžPÛÛ[X[™
+ÛÛ[X[™ˆY[[ÜžPÛÛ[X[™
+HÂˆËÈÝÜ[žHÜ™[˜\žH[Ù[]Y[È]Y]YY™Y›Ü™HHš[˜[˜[œØÜš\™XØ[YHBˆËÈ]\›Z[š\ÝXÈY[[ÜžHÛÛ[X[™ˆHØØ[Y[[ÜžH™\H]\Ý™HHÛ›H›ÚXÙK‚ˆØ[˜Ù[ÜYXÚ›Ü“™]ÐXÝ[ÛŠ
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ]]˜ÛX\Š
+BˆÙ\šXÙTØÛÜK›][˜ÚÂˆ˜[™[Y[X™\”™\Ý[HYˆ
+ÛÛ[X[™\ÈY[[ÜžPÛÛ[X[™”™[Y[X™\ŠHÂˆY[[ÜžT™\ÜÚ]ÜžKœØ]™JÛÛ[X[™˜Ø[™Y]JBˆH[ÙH[ˆYˆ
+ÛÛ[X[™\ÈY[[ÜžPÛÛ[X[™”™[Y[X™\ˆ	‰ˆ™[Y[X™\”™\Ý[OHY[[ÜžUÜš]T™\Ý[“™YYÔ\›Z\ÜÚ[ÛŠHÂˆËÈ[ˆ^XÚ]™[Y[X™\ˆÛÛ[X[™Ø[ˆÝ[ÛÛ™›XÝÚ]H[š\]YBˆËÈ™[][ÛœÚ\ˆ[\ˆH™X[ÛÛ™š\›X][Ûˆ›ÝÈÛÈšX[ˆˆ™\XÙ\ÂˆËÈHÛ\œÛÛˆ[œÝXYÙˆ™]\›š[™ÈHXYY[™Ù[™\šXÈ]Y\Ý[Û‹‚ˆXZ[’[™\‹œÜÝÈ™\]Y\Ý\œÛÛ˜[Y[[ÜžT\›Z\ÜÚ[ÛŠÛÛ[X[™˜Ø[™Y]JHBˆ™]\›][˜ÚˆBˆ˜[™\ÜÛœÙHHÚ[ˆ
+ÛÛ[X[™
+HÂˆ\ÈY[[ÜžPÛÛ[X[™”™[Y[X™\ˆOˆÚ[ˆ
+™[Y[X™\”™\Ý[
+HÂˆ\ÈY[[ÜžUÜš]T™\Ý[”Ø]™YOˆY[[ÜžPÛÛ[X[™™\Q›Ü›X]\‹œ™[Y[X™\”Ø]™Y
+
+Bˆ\ÈY[[ÜžUÜš]T™\Ý[”™Z™XÝYOˆY[[ÜžPÛÛ[X[™™\Q›Ü›X]\‹œ™[Y[X™\”™Z™XÝY
+
+BˆY[[ÜžUÜš]T™\Ý[“™YYÔ\›Z\ÜÚ[Û‹[Oˆ”Ø]™HØ\›™HÚH\›Z\ÜÚ[ÛˆÛX\ˆ˜ZHZKˆ‚ˆBˆ\ÈY[[ÜžPÛÛ[X[™”™XYOˆÂˆËÈ™XØ[]\Ý›Ý˜XÙHHÛÜœ™XÝ[ÛˆÜš]Hœ›ÛHH™]š[Ý\È\›‹‚ˆ[™[™ÐØ[›ÛšXØ[™[˜[YOËš›Ú[Š
+BˆY[[ÜžT™\ÜÚ]ÜžK›ÙÐXÝ]™P™\ÝœšY[™Ê˜™Y›Ü™WÜ™XØ[]Y\žOIØÛÛ[X[™œ]Y\ž_HŠBˆ˜[Y[[ÜšY\ÈHY[[ÜžT™\ÜÚ]ÜžKœ™[]˜[
+ÛÛ[X[™œ]Y\žKJBˆ\œÛÛ˜[Y[[ÜžT™XØ[›Ü›X]\‹™›Ü›X]
+Y[[ÜšY\Ë›X\È]™˜XÝJBˆBˆ\ÈY[[ÜžPÛÛ[X[™‘›Ü™Ù]OˆÂˆY[[ÜžPÛÛ[X[™™\Q›Ü›X]\‹™›Ü™ÛÝ[ŠˆY[[ÜžT™\ÜÚ]ÜžK™›Ü™Ù]X]Ú[™ÊÛÛ[X[™œ]Y\žJBˆ
+BˆBˆBˆXZ[’[™\‹œÜÝÂˆ\Ý[™\Ë›Û“^\˜U^
+™\ÜÛœÙJBˆ[Z]Ý]J™\ÜÛœÙJBˆ]Y]YSØØ[ÜYXÚ
+ˆ™\ÜÛœÙKˆ[ÝÕ[˜[œØÜšX™Y]Y[ÈHYKˆ˜[Y][Û”ÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK“QSSÔ–Bˆ
+BˆBˆBˆB‚ˆš]˜]H[ˆ™\]Y\Ý\œÛÛ˜[Y[[ÜžT\›Z\ÜÚ[ÛŠØ[™Y]NˆY[[ÜžPØ[™Y]JHÂˆ[™[™Ô\œÛÛ˜[Y[[ÜžHH[ˆ[™[™Ô\œÛÛ˜[Y[[ÜžPÛÛ™š\›X][Û’[œ]˜ÛX\Š
+Bˆ[™[™Ô\œÛÛ˜[Y[[ÜžQ^\™\Ð]HˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ]]˜ÛX\Š
+BˆËÈHÛÜœ™XÝ[ÛˆØ[ˆ\œš]™HÚ[HH™]š[Ý\ÈY[[ÜžH›Û\\ÈÝ[™Z[™ÂˆËÈ˜[Y]Yˆ™\XÙH]›Û\[œÝXYÙˆX]š[™ÈH™]ÈÛ™H]Y]YY™Z[™ˆËÈ[ˆ[\œ\YÙ[Z[šH\›ˆ]X^H™]™\ˆ[Z][›Ý\ˆ\›ÛÛ\]K‚ˆØ[˜Ù[ÜYXÚ›Ü“™]ÐXÝ[ÛŠ
+Bˆ]™OËš[\œ\
+
+BˆÙ\šXÙTØÛÜK›][˜ÚÂˆ˜[[™XYTØ]™YHY[[ÜžT™\ÜÚ]ÜžKš\Ð[™XYTØ]™Y
+Ø[™Y]JBˆ˜[ÛÛ™›XÝHY[[ÜžT™\ÜÚ]ÜžK[š\]YT™[][ÛœÚ\ÛÛ™›XÝ
+Ø[™Y]JBˆXZ[’[™\‹œÜÝÂˆ˜[Y\ÜØYÙHHYˆ
+[™XYTØ]™Y
+HÂˆ’X[‹]ZšHXXYZKˆ‚ˆH[ÙHYˆ
+ÛÛ™›XÝOH[	‰ˆY[[ÜžT™[][ÛœÚ\ÛXÞKš\Ð™\ÝœšY[™
+Ø[™Y]JJHÂˆ˜[Û˜[YHHY[[ÜžT™[][ÛœÚ\ÛXÞKœ\œÛÛ“˜[YJÛÛ™›XÝ™˜XÝ
+HÎˆšÛÚH]\ˆ‚ˆ˜[™]Ó˜[YHHY[[ÜžT™[][ÛœÚ\ÛXÞKœ\œÛÛ“˜[YJØ[™Y]K™˜XÝ
+HÎˆžYH\œÛÛˆ‚ˆ[™[™Ô\œÛÛ˜[Y[[ÜžHHØ[™Y]Bˆ[™[™Ô\œÛÛ˜[Y[[ÜžQ^\™\Ð]Bˆ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+H
+ÈT”ÓÓSÓQSSÔ–WÐÓÓ‘’T“PUSÓ—ÓTÂˆXšH	ÛÛ˜[Y_H[Z\šH™\ÝœšY[™Ø]™YZKˆ	Û™]Ó˜[Y_HÛÈ™\XÙHØ\[‹XHÛ›ÈÛÈØ]™HØ\[È‚ˆH[ÙHÂˆ[™[™Ô\œÛÛ˜[Y[[ÜžHHØ[™Y]Bˆ[™[™Ô\œÛÛ˜[Y[[ÜžQ^\™\Ð]Bˆ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+H
+ÈT”ÓÓSÓQSSÔ–WÐÓÓ‘’T“PUSÓ—ÓTÂˆ\œÛÛ˜[Y[[ÜžT\›Z\ÜÚ[Û”›Û\™›Ü›X]
+Ø[™Y]JBˆBˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙJBˆ[Z]Ý]JY\ÜØYÙJBˆ]Y]YSØØ[ÜYXÚ
+ˆY\ÜØYÙKˆ[ÝÕ[˜[œØÜšX™Y]Y[ÈHYKˆ˜[Y][Û”ÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK“QSSÔ–Bˆ
+BˆBˆBˆB‚ˆš]˜]H[ˆ[™T[™[™Ô\œÛÛ˜[Y[[ÜžT\›Z\ÜÚ[ÛŠ˜]ÎˆÝš[™ÊNˆ›ÛÛX[ˆÂˆ˜[Ø[™Y]HH[™[™Ô\œÛÛ˜[Y[[ÜžHÎˆ™]\›ˆ˜[ÙBˆYˆ
+[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Hˆ[™[™Ô\œÛÛ˜[Y[[ÜžQ^\™\Ð]
+HÂˆ[™[™Ô\œÛÛ˜[Y[[ÜžHH[ˆ[™[™Ô\œÛÛ˜[Y[[ÜžQ^\™\Ð]Hˆ[™[™Ô\œÛÛ˜[Y[[ÜžPÛÛ™š\›X][Û’[œ]˜ÛX\Š
+Bˆ™]\›ˆ˜[ÙBˆBˆ˜[›ÛX[”˜]ÈH›ÛX[‘\Ü^U^
+˜]ÊBˆ\œÛÛ˜[Y[[ÜžPÛÛ^ÛÜœ™XÝ[Û‹œ™\ÛÛ™J›ÛX[”˜]ËØ[™Y]JOË›]È™\XÙ[Y[O‚ˆX\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆÛÛ[X[™\Ù\•^[Z]YHYBˆÝ]]˜ÛX\Š
+BˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJ˜]Ë”T”ÓÓSÓQSSÔ–WÐÓÓ•VÐÓÔ”‘PÕSÓˆ‹›ÛX[”˜]Ë›ÛX[”˜]ÊBˆ™\]Y\Ý\œÛÛ˜[Y[[ÜžT\›Z\ÜÚ[ÛŠ™\XÙ[Y[
+Bˆ™\Ù]\›Y™™\œÊ
+Bˆ™]\›ˆYBˆBˆ\[™˜[œØÜš\
+[™[™Ô\œÛÛ˜[Y[[ÜžPÛÛ™š\›X][Û’[œ]›ÛX[”˜]ÊBˆ˜[ÛÛXš[™YH[™[™Ô\œÛÛ˜[Y[[ÜžPÛÛ™š\›X][Û’[œ]ÔÝš[™Ê
+Bˆ˜[XÚ\Ú[ÛˆHY[[ÜžPÛÛ™š\›X][Û”\œÙ\‹œ\œÙJ›ÛX[”˜]ÊBˆÎˆY[[ÜžPÛÛ™š\›X][Û”\œÙ\‹œ\œÙJ˜]ÊBˆÎˆY[[ÜžPÛÛ™š\›X][Û”\œÙ\‹œ\œÙJÛÛXš[™Y
+BˆÎˆY[[ÜžPÛÛ™š\›X][Û”\œÙ\‹œ\œÙJÛÛXš[™Yœ™\XÙJˆ‹ˆŠJBˆYˆ
+XÚ\Ú[ÛˆOH[
+H™]\›ˆ˜[ÙB‚ˆ[™[™Ô\œÛÛ˜[Y[[ÜžHH[ˆ[™[™Ô\œÛÛ˜[Y[[ÜžQ^\™\Ð]Hˆ[™[™Ô\œÛÛ˜[Y[[ÜžPÛÛ™š\›X][Û’[œ]˜ÛX\Š
+BˆX\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆÛÛ[X[™\Ù\•^[Z]YHYBˆÝ]]˜ÛX\Š
+BˆËÈ’X[ˆ‹È›˜ZHˆÛÛ[[Û›H[\œ\ÈH\›Z\ÜÚ[Ûˆ›Û\ˆÛX\ˆ]ÈØØ[ˆËÈ˜[Y][ÛˆÝ]HÛÈH™\Ý[ÛÛ™š\›X][ÛˆÝ\È[[YYX][K‚ˆØ[˜Ù[ÜYXÚ›Ü“™]ÐXÝ[ÛŠ
+Bˆ]™OËš[\œ\
+
+BˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJ˜]Ëš[J
+K”T”ÓÓSÓQSSÔ–WÐÓÓ‘’T“PUSÓˆŠB‚ˆYˆ
+XÚ\Ú[ÛˆOHY[[ÜžPÛÛ™š\›X][Û‘XÚ\Ú[Û‹““ÊHÂˆ˜[Y\ÜØYÙHH•YZÈZKØ]™H˜ZHØ\[™ÚKˆ‚ˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙJBˆ[Z]Ý]JY\ÜØYÙJBˆ]Y]YSØØ[ÜYXÚ
+ˆY\ÜØYÙKˆ[ÝÕ[˜[œØÜšX™Y]Y[ÈHYKˆ˜[Y][Û”ÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK“QSSÔ–Bˆ
+Bˆ™\Ù]\›Y™™\œÊ
+Bˆ™]\›ˆYBˆB‚ˆÙ\šXÙTØÛÜK›][˜ÚÂˆ˜[™\Ý[HYˆ
+XÚ\Ú[ÛˆOHY[[ÜžPÛÛ™š\›X][Û‘XÚ\Ú[Û‹Q
+HÂˆY[[ÜžT™\ÜÚ]ÜžKœØ]™PY][Û˜[™\ÝœšY[™
+Ø[™Y]JBˆH[ÙHÂˆY[[ÜžT™\ÜÚ]ÜžKœØ]™JØ[™Y]K\›Z\ÜÚ[Û‘Ü˜[YHYJBˆBˆ˜[Y\ÜØYÙHHÚ[ˆ
+™\Ý[
+HÂˆ\ÈY[[ÜžUÜš]T™\Ý[”Ø]™YOˆYˆ
+XÚ\Ú[ÛˆOHY[[ÜžPÛÛ™š\›X][Û‘XÚ\Ú[Û‹Q
+HÂˆ•YZÈZKÛ›ÈÛÈXXY˜ZÚ[™ÚKˆ‚ˆH[ÙHÂˆ•YZÈZKXXY˜ZÚ[™ÚKˆ‚ˆBˆ\ÈY[[ÜžUÜš]T™\Ý[“™YYÔ\›Z\ÜÚ[ÛˆOˆ”Ø]™HØ\›™HÚH\›Z\ÜÚ[ÛˆÛX\ˆ˜ZHZKˆ‚ˆ\ÈY[[ÜžUÜš]T™\Ý[”™Z™XÝYOˆ–YHY[[ÜžHØY™[HØ]™H˜ZHØ\ˆØZÝKˆ‚ˆBˆXZ[’[™\‹œÜÝÂˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙJBˆ[Z]Ý]JY\ÜØYÙJBˆ]Y]YSØØ[ÜYXÚ
+ˆY\ÜØYÙKˆ[ÝÕ[˜[œØÜšX™Y]Y[ÈHYKˆ˜[Y][Û”ÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK“QSSÔ–Bˆ
+Bˆ™\Ù]\›Y™™\œÊ
+BˆBˆBˆ™]\›ˆYBˆB‚ˆš]˜]H[ˆ[™TÙ[X[XÕÛÛØ[
+YˆÝš[™Ë[˜Ý[Û“˜[YNˆÝš[™Ë\™ÜÎˆÜ™ËšœÛÛ‹’”ÓÓ“Øš™XÝ
+HÂˆÚ[ˆ
+[˜Ý[Û“˜[YJHÂˆœ›ÜÜÙWÝ\Ù\—ÛY[[ÜžHˆOˆÂˆ[™TÙ[X[XÓY[[ÜžT›ÜÜØ[
+Y\™ÜÊBˆ™]\›‚ˆBˆœ\™›Ü›WÜØÜ™Y[—ØXÝ[ÛˆˆOˆÂˆ[™TØÜ™Y[XÝ[Û•ÛÛ
+Y\™ÜÊBˆ™]\›‚ˆBˆœ›ÜÜÙWÜØÜ™Y[—ÛY[[ÜžHˆOˆÂˆ[™TØÜ™Y[“Y[[ÜžT›ÜÜØ[
+Y\™ÜÊBˆ™]\›‚ˆBˆœ\™›Ü›WÜÛ™WØXÝ[ÛˆˆOˆ[š]ˆ[ÙHOˆÂˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJY[˜Ý[Û“˜[YK˜[ÙK•[œÝ\ÜYÛÛŠBˆ™]\›‚ˆBˆBˆYˆ
+ØØ[ÛÛ[X[™^XÝ]Y\Õ\›ŠHÂˆËÈH]\›Z[š\ÝXÈ\œÙ\ˆ[™XYH[™Y\ÈØ[YHÝ™X[YY]\˜[˜ÙK‚ˆËÈH]\ˆÙ[Z[šHÛÛØ[\È[ˆXÚÛ›ÝÛYÙ[Y[›ÝHÙXÛÛ™XÝ[Û‹‚ˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJY[˜Ý[Û“˜[YKYKXÝ[ÛˆØ\È[™XYH[™YØØ[HŠBˆ™]\›‚ˆBˆ˜[XÝ[ÛˆH\™ÜË›ÜÝš[™Ê˜XÝ[ÛˆŠK\\˜Ø\ÙJØØ[K”“ÓÕ
+Bˆ˜[ÝX\™Y^H\Ý\Ù\’[[^šY›[šÈÈ[œ]ÔÝš[™Ê
+Kš[J
+HBˆYˆ
+ÛÛ[X[™\œÙ\‹š\ÓY[[ÜžR[[
+ÝX\™Y^
+JHÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJY[˜Ý[Û“˜[YK˜[ÙK•\È\ÈHY[[ÜžH™\]Y\Ý›ÝHÛ™HXÝ[ÛˆŠBˆ™]\›‚ˆBˆYˆ
+XÝ[ÛˆOH•SQHˆ	‰ˆÛÛ[X[™\œÙ\‹œ\œÙJÝX\™Y^
+HZ\È\ÛÛ[X[™Ý\œ™[[YJHÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJY[˜Ý[Û“˜[YK˜[ÙK•H\Ù\ˆY[[Û™Y[YHÛÛ™\œØ][Û˜[NÈ›ÈÛØÚÈ]Y\žHØ\ÈXYHŠBˆ™]\›‚ˆBˆYˆ
+XÝ[ÛˆOH”UQT–WÕÒUÐTˆ	‰ˆPÛÛ[X[™\œÙ\‹š\Ñ^XÚ]Ú]Ð\Y\ÜØYÙT]Y\žJÝX\™Y^
+JHÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJY[˜Ý[Û“˜[YK˜[ÙK“›È^XÚ]Ú]Ð\›ÝYšXØ][Ûˆ]Y\žHØ\ÈXYHŠBˆ™]\›‚ˆBˆ˜[\™Ù]H\™ÜË›ÜÝš[™Ê\™Ù]ŠKš[J
+Bˆ˜[]Y\žHH\™ÜË›ÜÝš[™Êœ]Y\žHŠKš[J
+Bˆ˜[[™[™ÔÙX\˜ÚHœ›ÝÜÙ\”ÙX\˜Ú™\]Y\Ý\œÙ\‹œ\œÙJÝX\™Y^
+BˆYˆ
+[™[™ÔÙX\˜ÚOH[	‰ˆXÝ[Ûˆ[ˆÙ]ÙŠ–SÕUP‘WÔÑPTÒ‹”VWÖSÕUP‘H‹“ÔS—ÐTŠJHÂˆËÈÙ[Z[šIÜÈÝ™X[Z[™ÈÛÛ›ÜÜØ[\È›ÝHÙX\˜Ú\Ý[˜][ÛˆÝÛ™\‹ˆBˆËÈš[˜[˜[œØÜš\\È™\ÛÛ™YÛ˜ÙHžH^XÝ]U[šYšYYœ›ÝÜÙ\”ÙX\˜Ú
+
+K‚ˆ›ÚXÙSÙÊˆ”ÑPTÒÑVPÕUÔ—ÑS•–HÛ\ÜÏS^\˜U›ÚXÙTÙ\šXÙHY]ÙZ[™TÙ[X[XÕÛÛØ[ˆ
+Âˆ\›’YIXÝ]™U\›’Yš[˜[˜[œØÜš\Y˜[ÙH]Y\žOIÜ[™[™ÔÙX\˜Úœ]Y\žKZÙJLŒ
+_Hˆ
+Âˆ™\Ý[˜][ÛPÐS‘QUH›Ü™YÜ›Ý[™XÚØYÙOIÐXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙOË˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+OËœXÚØYÙS˜[Y_Hˆ
+Âˆ™XÚ\Ú[ÛT‘R‘PÕÔ‘WÑ’SS‚ˆ
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJˆY[˜Ý[Û“˜[YK˜[ÙKˆ”ÙX\˜Ú^XÝ][Ûˆ\ÈÝÛ™YžHHš[˜[[šYšYYÙX\˜Ú\ÚÈ‚ˆ
+Bˆ™]\›‚ˆBˆYˆ
+XÝ[ÛˆOH–SÕUP‘WÔÑPTÒˆ	‰ˆTÙX\˜Ú^XÝ][Û”ÛXÞK›X^Q^XÝ]J]]Üš]]]™Qš[˜[˜[œØÜš\H˜[ÙJJHÂˆËÈÙX\˜Ú\Ý[˜][Ûˆ\È]]Üš^™YÛ›Hœ›ÛHHÛÛ\]Hš[˜[˜[œØÜš\‚ˆËÈHÜXÝ[]]™H]™HÛÛØ[X^H\œš]™HÚ[HTÔˆ\ÈÝ[\X[[™]\ÝˆËÈ™]™\ˆÚÛÜÙH[ÝUX™H™Y›Ü™HÙX\˜Ú\Ý[˜][Û”™\ÛÛ™\ˆÙY\ÈÝ\œ™[ÛÛ^‚ˆ›ÚXÙSÙÊˆœÙX\˜ÚÙ^XÝ][Û—Ù˜Z[Y\›’YIXÝ]™U\›’Y™X\ÛÛ[[Ù[ÝÛÛØ™Y›Ü™WÙš[˜[Ø]]Üš^˜][Ûˆˆ
+Âˆ˜Ø[™Y]OVSÕUP‘WÔÑPTÒ]Y\žS[™ÝIÜ]Y\žK›[™ÝH‚ˆ
+Bˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJˆY[˜Ý[Û“˜[YK˜[ÙKˆ”ÙX\˜ÚØZ]È›ÜˆHš[˜[]]Üš]]]™H˜[œØÜš\[™ÛÛ^X[\Ý[˜][Ûˆ™\ÛÛ][Ûˆ‚ˆ
+Bˆ™]\›‚ˆBˆ˜[ÛÛ[X[™ˆ\ÛÛ[X[™ÈHÚ[ˆ
+XÝ[ÛŠHÂˆ“ÔS—ÐTˆOˆ\™Ù]ZÙRYˆÈ]›[™Ý[ˆ‹‹OË›]
+\ÛÛ[X[™Ž“Ü[\
+BˆÓÔÑWÐTˆOˆ\ÛÛ[X[™ÛÜÙPÝ\œ™[\
+\™Ù]šY›[šÈÈ[JBˆ”VWÖSÕUP‘HˆOˆ\ÛÛ[X[™”^V[ÝUX™J]Y\žKšY›[šÈÈ[JBˆ“ÔS—ÖSÕUP‘WÔÒÔ•ÈˆOˆ\ÛÛ[X[™“Ü[–[ÝUX™TÚÜÂˆ”‘TUQTÕÒS”ÕQÔSWÔ‘QSÈˆOˆ\ÛÛ[X[™”™\]Y\Ý[œÝYÜ˜[T™Y[Âˆ”ÐÔ“ÓÑÕÓˆˆOˆ\ÛÛ[X[™”ØÜ›Û[ÝUX™J\ÛÛ[X[™”ØÜ›Û\™XÝ[Û‹‘ÕÓŠBˆ”ÐÔ“ÓÕTˆOˆ\ÛÛ[X[™”ØÜ›Û[ÝUX™J\ÛÛ[X[™”ØÜ›Û\™XÝ[Û‹•T
+Bˆ”ÐÔ“ÓÔ‘TPUˆOˆ\ÛÛ[X[™”ØÜ›Û[ÝUX™J[
+Bˆ“QQPWÔUTÑHˆOˆ\ÛÛ[X[™ÛÛ›ÛYYXJ\ÛÛ[X[™“YYXPXÝ[Û‹”UTÑJBˆ“QQPWÔVHˆOˆ\ÛÛ[X[™ÛÛ›ÛYYXJ\ÛÛ[X[™“YYXPXÝ[Û‹”VJBˆ“QQPWÓ‘VˆOˆ\ÛÛ[X[™ÛÛ›ÛYYXJ\ÛÛ[X[™“YYXPXÝ[Û‹“‘V
+Bˆ“QQPWÔ‘U’SÕTÈˆOˆ\ÛÛ[X[™ÛÛ›ÛYYXJ\ÛÛ[X[™“YYXPXÝ[Û‹”‘U’SÕTÊBˆ“QQPWÑ’T”ÕˆOˆ\ÛÛ[X[™ÛÛ›ÛYYXJ\ÛÛ[X[™“YYXPXÝ[Û‹‘’T”Õ
+Bˆ‘“TÒQÒÓÓˆˆOˆ\ÛÛ[X[™”Ù]›\ÚYÚ
+YJBˆ‘“TÒQÒÓÑ‘ˆˆOˆ\ÛÛ[X[™”Ù]›\ÚYÚ
+˜[ÙJBˆ’ÓQHˆOˆ\ÛÛ[X[™‘ÛÒÛYBˆPÒÈˆOˆ\ÛÛ[X[™‘ÛÐ˜XÚÂˆ•SQHˆOˆ\ÛÛ[X[™Ý\œ™[[YBˆUT–HˆOˆ\ÛÛ[X[™˜]\žS]™[ˆ•RÑWÔÐÔ‘QS”ÒÕˆOˆ\ÛÛ[X[™•ZÙTØÜ™Y[œÚÝˆ“TÕÑ‘PUT‘TÈˆOˆ\ÛÛ[X[™“\Ý™X]\™\Âˆ”UQT–WÕÒUÐTˆOˆ\ÛÛ[X[™”]Y\žUÚ]Ð\Y\ÜØYÙ\Âˆ[ÙHOˆ[ˆBˆYˆ
+ÛÛ[X[™OH[
+HÂˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJY[˜Ý[Û“˜[YK˜[ÙK“Z\ÜÚ[™ÈÜˆ[œÝ\ÜYXÝ[Ûˆ]Z[ÈŠBˆ™]\›‚ˆBˆËÈHÙ[X[XÈÛÛØ[\ÈH™]ÈXÝ[Ûˆ\›‹ˆ[™›ÚY™[XZ[œÈH]]Üš]N‚ˆËÈÙ[Z[šHÚÛÜÙ\ÈÛ›Hœ›ÛHH[ÝÛ\ÝÚ[HH^\Ý[™È^XÝ]Üˆ™\šYšY\ÂˆËÈXØÙ\ÜÚXš[]K[œÝ[Y\Ë[™XÝX[]šXÙHØ\Xš[]Y\Ë‚ˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆH˜[ÙBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆ^XÝ]PÛÛ[X[™
+ÛÛ[X[™
+Bˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJY[˜Ý[Û“˜[YKYK[™›ÚYXØÙ\YH˜[Y]YXÝ[ÛˆŠBˆB‚ˆš]˜]H[ˆ[™TØÜ™Y[XÝ[Û•ÛÛ
+YˆÝš[™Ë\™ÜÎˆÜ™ËšœÛÛ‹’”ÓÓ“Øš™XÝ
+HÂˆ˜[[[^H\Ý\Ù\’[[^šY›[šÈÈ[œ]ÔÝš[™Ê
+Kš[J
+HBˆØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ø[˜Ù[
+
+OË›]Âˆ›ÚXÙSÙÊ”ÐÔ‘QS—ÐPÕSÓ—ÐÐSÑSQXÝ[Û’YIÚ]˜XÝ[Û’YH\›’YIÚ]\›’YH™X\ÛÛ[™]×Ù^XÚ]ÜØÜ™Y[—ØÛÛ[X[™ŠBˆBˆYˆ
+ØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙJ[[^
+HOH[	‰‚ˆ[šYšYY\˜PYÙ[[[YK˜YÙ[˜Ý\œ™[\ÚÊ
+OËš[\œ™]YÛØ[OHÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[YÙ[ÛØ[\K•T	‰‚ˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšÚ[™OH˜\Ýš\ÝX[Ú[™PÕSÓ‚ˆ
+HÂˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJYœ\™›Ü›WÜØÜ™Y[—ØXÝ[Ûˆ‹˜[ÙK“›È^XÚ]š\ÚX›K\ØÜ™Y[ˆXÝ[ÛˆØ\È™\]Y\ÝYŠBˆ™]\›‚ˆBˆYˆ
+\ØÜ™Y[ÛÛ[X[™\›‘ÝX\™žPÛÛ[Z]
+XÝ]™U\›’Y
+JHÂˆ›ÚXÙSÙÊœØÜ™Y[—ØÛÛ[X[™Ù\XØ]WÙ›ÜY\›’YIXÝ]™U\›’YÛÝ\˜ÙO\\™›Ü›WÜØÜ™Y[—ØXÝ[ÛˆŠBˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJYœ\™›Ü›WÜØÜ™Y[—ØXÝ[Ûˆ‹˜[ÙK•\ÈØÜ™Y[ˆÛÛ[X[™Ø\È[™XYHÛÛ[Z]Y›ÜˆHÝ\œ™[›ÚXÙH\›ˆŠBˆ™]\›‚ˆBˆ˜[ÛÛ\™Ù]H\™ÜË›ÜÝš[™Ê\™Ù]Ý^ŠKš[J
+Bˆ˜[ÛÛÜÚ][ÛˆH\™ÜË›ÜÝš[™ÊœÜÚ][ÛˆŠKš[J
+KZÙRYˆÈ]š\Ó›Ý›[šÊ
+H	‰ˆ]OH[œÜXÚYšYYˆBˆÎˆÚ[ˆÂˆ™YÙ^
+—ŠÎ˜Ù[\ŸZY_™YXÚ
+Wˆ‹™YÙ^Ü[Û‹’QÓ“Ô‘WÐÐTÑJK˜ÛÛZ[œÓX]Ú[Š[[^
+HOˆ˜Ù[\ˆ‚ˆ™YÙ^
+—ŠÎ›Y˜X^Y_˜^YJWˆ‹™YÙ^Ü[Û‹’QÓ“Ô‘WÐÐTÑJK˜ÛÛZ[œÓX]Ú[Š[[^
+HOˆ›Y‚ˆ™YÙ^
+—ŠÎœšYÚX^Y_^YJWˆ‹™YÙ^Ü[Û‹’QÓ“Ô‘WÐÐTÑJK˜ÛÛZ[œÓX]Ú[Š[[^
+HOˆœšYÚ‚ˆ™YÙ^
+—ŠÎÜ\\ŠWˆ‹™YÙ^Ü[Û‹’QÓ“Ô‘WÐÐTÑJK˜ÛÛZ[œÓX]Ú[Š[[^
+HOˆÜ‚ˆ™YÙ^
+—ŠÎ˜›ÝÛ_™YXÚJWˆ‹™YÙ^Ü[Û‹’QÓ“Ô‘WÐÐTÑJK˜ÛÛZ[œÓX]Ú[Š[[^
+HOˆ˜›ÝÛH‚ˆ[ÙHOˆ[ˆBˆ˜[^XÚ]]HHÛÛ\™Ù]šY›[šÈÂˆ[[^ZÙRYˆÂˆÛÛÜÚ][ÛˆOH[	‰ˆ™YÙ^
+—ŠÎšY[ß8)-x)`8)(x)/ø)+ø)bÊWˆ‹™YÙ^Ü[Û‹’QÓ“Ô‘WÐÐTÑJK˜ÛÛZ[œÓX]Ú[Š]
+BˆK›Ü‘[\J
+BˆBˆ˜[™\ÛÛ™Y\™Ù]Hœ˜Z[‹œ™\ÛÛ™TØÜ™Y[•\™Ù]
+ˆ^XÚ]]KˆÛÛÜÚ][Û‹ˆ\™ÜË›Ü[
+›Ü™[˜[‹
+Bˆ
+BˆYˆ
+™\ÛÛ™Y\™Ù]OH[
+HÂˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJYœ\™›Ü›WÜØÜ™Y[—ØXÝ[Ûˆ‹˜[ÙK•š\ÚX›H\™Ù]\È[XšYÝ[Ý\ÎÈ\ÚÈH\Ù\ˆÈÚÛÜÙHŠBˆ™]\›‚ˆBˆ˜[\™Ù]H™\ÛÛ™Y\™Ù]\™Ù]^ˆ˜[ÜÚ][ÛˆH™\ÛÛ™Y\™Ù]œÜÚ][Û‚ˆ˜[Ü™[˜[H™\ÛÛ™Y\™Ù]›Ü™[˜[ˆ˜[XØÙ\ÜÚXš[]HHXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙBˆYˆ
+XØÙ\ÜÚXš[]HOH[PXØÙ\ÜÚXš[]R[\”Ù\šXÙKš\Ñ[˜X›Y
+\ÊJHÂˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJYœ\™›Ü›WÜØÜ™Y[—ØXÝ[Ûˆ‹˜[ÙK“THXØÙ\ÜÚXš[]H\È\ØX›YŠBˆ™]\›‚ˆBˆ˜[›Ü™YÜ›Ý[™HXØÙ\ÜÚXš[]K˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+Bˆ˜[XÝ[Û”ØÛÜHHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘›Ü™YÜ›Ý[™XÝ[Û”ÛXÞKœØÛÜJ›Ü™YÜ›Ý[™
+BˆYˆ
+XÝ[Û”ØÛÜHOH[
+HÂˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJYœ\™›Ü›WÜØÜ™Y[—ØXÝ[Ûˆ‹˜[ÙKÝ\œ™[XØÙ\ÜÚXš[]HÚ[™ÝÈ\È[˜]˜Z[X›HŠBˆ™]\›‚ˆBˆ˜[™Y›Ü™PXØÙ\ÜÚXš[]HHXØÙ\ÜÚXš[]Kš\ÚX›TØÜ™Y[”ÚYÛ˜]\™J
+Bˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OË›]Âˆ]˜XÝ[Û”™\ÛÛ™Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊš\ÝX[ØXÝ[Û—Ü™\ÛÛ™Yš\ÝX[\›’YIÚ]šYH\™Ù]IÝ\™Ù]›Ü‘[\J
+KZÙJ
+_HÜÚ][ÛIÜÜÚ][Û‹›Ü‘[\J
+_HÜ™[˜[IÛÜ™[˜[ÎˆHŠBˆBˆ˜[Ù[X[XÒ[H˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËœÙ[X[XÒ[›Ü‘[\J
+K›ÝÙ\˜Ø\ÙJØØ[K”“ÓÕ
+Bˆ˜[\™XÝHXØÙ\ÜÚXš[]Kœ™\ÛÛ™P[™\š\ÚX›U\™Ù]
+\™Ù]ÜÚ][Û‹Ü™[˜[XÝ[Û”ØÛÜJHÈØ[™Y]KÈO‚ˆÚ[ˆÂˆÙ[X[XÒ[˜ÛÛZ[œÊ›ZÙHŠHOˆØ[™Y]Kœ›ÛHOH›ZÙWØÛÛ›Û‚ˆÙ[X[XÒ[˜ÛÛZ[œÊœÝXœØÜšX™HŠHOˆØ[™Y]Kœ›ÛHOHœÝXœØÜšX™WØÛÛ›Ûˆ	‰‚ˆXØ[™Y]K›X™[›ÝÙ\˜Ø\ÙJØØ[K”“ÓÕ
+K˜ÛÛZ[œÊœÝXœØÜšX™YŠBˆÙ[X[XÒ[˜ÛÛZ[œÊ˜ÛÛ[Y[ŠHOˆØ[™Y]Kœ›ÛHOH˜ÛÛ[Y[×ØÛÛ›Û‚ˆ[ÙHOˆYBˆBˆBˆYˆ
+\™XÝ˜XØÙ\Y
+HÂˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OË›]Âˆ]˜XÝ[Û‘^XÝ]Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊˆš\ÝX[ØXÝ[Û—Ù^XÝ]Yš\ÝX[\›’YIÚ]šYHXØÙ\Y]YHˆ
+Âˆœ™\ÜÛœÙUÐXÝ[Û“\ÏIÚYˆ
+]™š\œÝ[Ù[™\ÜÛœÙP]ˆ
+H]˜XÝ[Û‘^XÝ]Y]H]™š\œÝ[Ù[™\ÜÛœÙP][ÙHLSHˆ
+ÂˆœÜYXÚ[™ÐXÝ[Û“\ÏIÚYˆ
+]œÜYXÚ[™Y]ˆ
+H]˜XÝ[Û‘^XÝ]Y]H]œÜYXÚ[™Y][ÙHLSH‚ˆ
+BˆBˆ›ÚXÙSÙÊˆ˜YÙ[ÝÛÛÜÙ[XÝYÛÛXXØÙ\ÜÚXš[]WØÛXÚÈXÚØYÙOIØXÝ[Û”ØÛÜK™^XÝYXÚØYÙ_Hˆ
+ÂˆÚ[™ÝÑÙ[™\˜][ÛIØXÝ[Û”ØÛÜK™^XÝYÙ[™\˜][ÛŸH\™Ù]™\ÛÛ][ÛIÙ\™XÝœ™\ÛÛ][ÛŸH‚ˆ
+BˆXZ[’[™\‹œÜÝ[^YY
+Âˆ˜[Ý[ÝÛ™YHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘›Ü™YÜ›Ý[™XÝ[Û”ÛXÞK˜Ø[‘^XÝ]JˆXÝ[Û”ØÛÜKXØÙ\ÜÚXš[]K˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+Bˆ
+Bˆ˜[Ú[™ÙYHÝ[ÝÛ™Y	‰ˆ™Y›Ü™PXØÙ\ÜÚXš[]Kš\Ó›Ý›[šÊ
+H	‰‚ˆXØÙ\ÜÚXš[]Kš\ÚX›TØÜ™Y[”ÚYÛ˜]\™J
+HOH™Y›Ü™PXØÙ\ÜÚXš[]Bˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OË›]Âˆ]™\šYšXØ][Û]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊš\ÝX[Ý™\šYšXØ][Û—ØÛÛ\]Hš\ÝX[\›’YIÚ]šYH™\šYšYYIÚ[™ÙYÝ[š\ÝX[\›“\ÏIÚ]™\šYšXØ][Û]H]œÝ\Y]HŠBˆ˜\Ýš\ÝX[\›œË™š[š\Ú
+]šY
+BˆBˆ›ÚXÙSÙÊ˜YÙ[Ý™\šYšXØ][ÛˆÛÛXXØÙ\ÜÚXš[]WØÛXÚÈXØÙ\Y]YH™\šYšYYIÚ[™ÙYŠBˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJˆYœ\™›Ü›WÜØÜ™Y[—ØXÝ[Ûˆ‹Ú[™ÙYˆYˆ
+Ú[™ÙY
+HXØÙ\ÜÚXš[]HXÝ[Ûˆ™\šYšYYˆ[ÙHXÝ[ÛˆØ\ÈXØÙ\Y]H^XÝYØÜ™Y[ˆÚ[™ÙHØ\È›Ý™\šYšYY‚ˆ
+BˆKÍL
+Bˆ™]\›‚ˆBˆËÈ›Ü›X[š\ÝX[XÝ[ÛœÈ™]™\ˆ™\]Y\ÝYYXT›Ú™XÝ[Û‹ˆH[Ù[[™XYBˆËÈ™XÙZ]™YHœ™\ÚXØÙ\ÜÚXš[]HØÜ™Y[œÚÝÚ[ˆš\ÝX[˜[˜XÚÈØ\È\ÙY‚ˆ]™OËœÙ[™ÛÛ™\ÜÛœÙJˆYœ\™›Ü›WÜØÜ™Y[—ØXÝ[Ûˆ‹˜[ÙKˆYˆ
+\™XÝœ™\ÛÛ][ÛˆOH˜[XšYÝ[Ý\ÈŠH•š\ÚX›H\™Ù]\È[XšYÝ[Ý\ÎÈ\ÚÈH\Ù\ˆÈÚÛÜÙH‚ˆ[ÙH“›ÈÝ\œ™[XØÙ\ÜÚXš[]H\™Ù]X]ÚYÈ\ÚÈHÚÜÛ\šYšXØ][Ûˆ‚ˆ
+Bˆ™]\›‚ˆB‚ˆš]˜]H[ˆ™YÚ[‘œ™\ÚØÜ™Y[”]Y\žJˆ]Y\Ý[ÛŽˆÝš[™Ëˆ\Ù\•\›’YˆÛ™Ëˆš\ÝX[™\]Y\Ýˆ˜\Ýš\ÝX[™\]Y\ÝH˜\Ýš\ÝX[™\]Y\ÝÛ\ÜÚYšY\‹˜Û\ÜÚYžJ]Y\Ý[ÛŠBˆÎˆ˜\Ýš\ÝX[™\]Y\Ý
+˜\Ýš\ÝX[Ú[™”UQTÕSÓ‹œØÜ™Y[—Ü]Y\Ý[ÛˆŠBˆ
+HÂˆØÜ™Y[”]Y\Ý[Û‘]XÝY]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[Y[]HH›ÚXÙU\›’Y[]Y\Ë˜Ý\œ™[
+
+OËZÙRYˆÈ]\Ù\•\›’YOH\Ù\•\›’YBˆ˜[›Ý[™ÜYXÚ\›’YHY[]OË˜[œØÜš\\›’YÎˆÜYXÚ[Z[™Õ\›’Yˆ˜[›Ý[™ÜYXÚ[™]HY[]OËœÜYXÚ[™]ËZÙRYˆÈ]ˆHÎˆÜYXÚXÝ]š]Q[™Y]ˆ˜[ÜYXÚ[Z[™ÈHØÜ™Y[”]Y\žU[Z[™ÔÛXÞK˜š[™
+\Ù\•\›’Y›Ý[™ÜYXÚ\›’Y›Ý[™ÜYXÚ[™]
+BˆØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞHHÜYXÚ[Z[™Ë˜ÛÛœÚ\Ý[ˆØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]HÜYXÚ[Z[™ËœÜYXÚ[™]ˆ›ÚXÙSÙÊˆœØÜ™Y[—Ü]Y\žWÝ[Z[™×Ø›Ý[™\Ù\•\›’YI\Ù\•\›’YÜYXÚ[Z[™Õ\›’YI›Ý[™ÜYXÚ\›’Yˆ
+ÂˆœÜYXÚÝ\]IÚY[]OËœÜYXÚÝ\]ÎˆÜYXÚXÝ]š]TÝ\Y]HÜYXÚ[™]IØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]ˆ
+Âˆ˜[œØÜš\\›’YIÚY[]OË˜[œØÜš\\›’YÎˆHš[˜[˜[œØÜš\YIÚY[]OË™š[˜[˜[œØÜš\Y›Ü‘[\J
+_Hˆ
+Âˆš[[]XÝY]IØÜ™Y[”]Y\Ý[Û‘]XÝY]ØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞOIØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞH‚ˆ
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ˜[›Ü™YÜ›Ý[™HXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙOË˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+Bˆ˜[š\ÝX[\›ˆH›Ü™YÜ›Ý[™Ë›]Âˆ˜\Ýš\ÝX[\›œË˜™YÚ[Š\Ù\•\›’Yš\ÝX[™\]Y\Ý]œXÚØYÙS˜[YK]Ú[™ÝÒY]™Ù[™\˜][Û‹ˆØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]ØÜ™Y[”]Y\Ý[Û‘]XÝY]
+BˆBˆš\ÝX[\›Ë˜\HÂˆ]]Üš]]]™U\›ÛÛ\]P]HØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]ˆš[˜[˜[œØÜš\]H]\Ý\›XØÙ\Y]ZÙRYˆÈ]\Ý[[[Z[™Õ\›’YOH\Ù\•\›’YHÎˆˆ[[™\ÛÛ™Y]H]\Ý[[XÚYY]ZÙRYˆÈ]\Ý[[[Z[™Õ\›’YOH\Ù\•\›’YHÎˆØÜ™Y[”]Y\Ý[Û‘]XÝY]ˆBˆ›ÚXÙSÙÊˆš\ÝX[Ý\›—ÜÝ\Yš\ÝX[\›’YIÝš\ÝX[\›ËšY›Ü‘[\J
+_H\Ù\•\›’YI\Ù\•\›’Yˆ
+ÂˆšÚ[™IÝš\ÝX[™\]Y\ÝšÚ[™HXÚØYÙOIÙ›Ü™YÜ›Ý[™ËœXÚØYÙS˜[YK›Ü‘[\J
+_Hˆ
+ÂˆÚ[™ÝÒYIÙ›Ü™YÜ›Ý[™ËÚ[™ÝÒYÎˆL_HÙ[™\˜][ÛIÙ›Ü™YÜ›Ý[™Ë™Ù[™\˜][ÛˆÎˆL_H‚ˆ
+Bˆ›ÚXÙSÙÊˆš\ÝX[\›XØÙ\Yš\ÝX[\›’YIÝš\ÝX[\›ËšY›Ü‘[\J
+_H]IØÜ™Y[”]Y\Ý[Û‘]XÝY]ˆ
+Âˆš[[Õš\ÝX[\›“\ÏIÚYˆ
+]\Ý[[XÚYY]ˆ
+HØÜ™Y[”]Y\Ý[Û‘]XÝY]H]\Ý[[XÚYY][ÙHLSH‚ˆ
+BˆËÈ™\Ù\™H[ˆXÝ]™HYYXK\ÜYXÚØ[™Y]HÚ[ˆTH\È[™XYHÚ[[ÂˆËÈ[\œ\Ü™\Ù]\ÈÛ›H™YYY›ÜˆHÙ[Z[™H˜\™ÙKZ[ˆÛˆTH^X˜XÚË‚ˆYˆ
+ØØ[]Y[ÔÜXZÚ[™ÊH]Y[ÏËš[\œ\
+
+BˆYˆ
+š\ÝX[™\]Y\ÝšÚ[™OH˜\Ýš\ÝX[Ú[™”UQTÕSÓˆ	‰ˆžR[œÝ[XØÙ\ÜÚXš[]P[œÝÙ\Š]Y\Ý[Û‹\Ù\•\›’Y
+JHÂˆš\ÝX[\›Ë›]È˜\Ýš\ÝX[\›œË™š[š\Ú
+]šY
+HBˆ™]\›‚ˆBˆYˆ
+š\ÝX[]Ø\™[™\ÜÔ™Y™\™[˜Ù\Ë™[˜X›Y	‰ˆ™YÚ[XØÙ\ÜÚXš[]TØÜ™Y[”]Y\žJ]Y\Ý[Û‹\Ù\•\›’Yš\ÝX[™\]Y\Ý
+JH™]\›‚ˆYˆ
+]š\ÝX[]Ø\™[™\ÜÔ™Y™\™[˜Ù\Ë™[˜X›Y
+HÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÝ\›Z[˜[Ý]OT‘R‘PÕQÕ’TÕPSÐUÐT‘S‘TÔ×ÓÑ‘ˆ\Ù\•\›’YI\Ù\•\›’YŠBˆš\ÝX[\›Ë›]Âˆ›ÚXÙSÙÊ•ÕSÕ’TÕPSÕT“ˆš\ÝX[\›’YIÚ]šYH›Ý]OQVQWÓÑ‘—ÓÐÐSÝ[š\ÝX[\›“\ÏIØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HH]œÝ\Y]HŠBˆ˜\Ýš\ÝX[\›œË™š[š\Ú
+]šY
+BˆBˆÜXZÔØÜ™Y[•[˜]˜Z[X›J•š\ÝX[]Ø\™[™\ÜÈÙ™ˆZKˆ^YH]ÛˆÛˆØ\›ËˆŠBˆ™]\›‚ˆBˆËÈ[™›ÚYL[™Û\ˆÈ›Ý^ÜÙHXØÙ\ÜÚXš[]TÙ\šXÙKZÙTØÜ™Y[œÚÝ‚ˆËÈH\Ù\‹\Ý\YÛÛ[[Ý\È›Ú™XÝ[Ûˆ\ÈH^XÚ]YØXÞH˜[˜XÚË‚ˆYˆ
+\ØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Ëš\Ú[Û‘[˜X›YØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘JHÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÝ\›Z[˜[Ý]OT‘R‘PÕQÔÐÔ‘QS—ÒSPÕU‘H\Ù\•\›’YI\Ù\•\›’YŠBˆÜXZÔØÜ™Y[•[˜]˜Z[X›JˆYˆ
+ØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]HOHØÜ™Y[”Ú\™TÝ]K”UTÑQ
+H”ØÜ™Y[ˆš\Ú[Ûˆ]\ÙYZKˆ›Ø][™ÈÛÛ›ÛÙH™\Ý[YHØ\›Ëˆ‚ˆ[ÙH”ØÜ™Y[ˆš\Ú[ÛˆXšHXÝ]™H˜ZHZKˆ‚ˆ
+Bˆ™]\›‚ˆBˆYˆ
+žR[œÝ[ØÜ™Y[[œÝÙ\Š]Y\Ý[Û‹\Ù\•\›’Y
+JH™]\›‚ˆ˜[]Y\žHHØÜ™Y[Ø\\™TÙ\šXÙKœ™\]Y\Ýœ™\Úœ˜[YJ\Ù\•\›’Y
+HÈ™\Ý[O‚ˆXZ[’[™\‹œÜÝÂˆÚ[ˆ
+™\Ý[
+HÂˆ\Èœ™\Úœ˜[YT™\Ý[•[˜]˜Z[X›HOˆÂˆ›ÚXÙSÙÊœØÜ™Y[—Ùœ˜[YWÝ[˜]˜Z[X›H™X\ÛÛIÜ™\Ý[œ™X\ÛÛŸHØÜ™Y[—Ü]Y\žWÚYIÜ™\Ý[œ]Y\žKœ]Y\žRYHØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIÜ™\Ý[œ]Y\žKœÙ\ÜÚ[Û’YHŠBˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÝ\›Z[˜[ØÜ™Y[”]Y\žRYIÜ™\Ý[œ]Y\žKœ]Y\žRYHÝ]OPÐTT‘WÑRSQ™X\ÛÛIÜ™\Ý[œ™X\ÛÛŸHŠBˆÜXZÔØÜ™Y[•[˜]˜Z[X›J‘œ™\ÚØÜ™Y[ˆœ˜[YH˜ZHZ[KˆZÈ˜X\ˆ\ˆžHØ\›ËˆŠBˆBˆ\Èœ™\Úœ˜[YT™\Ý[”™XYHOˆÂˆ˜[œ˜[YHH™\Ý[™œ˜[YBˆYˆ
+TØÜ™Y[Ø\\™TÙ\šXÙKœÙ\ÜÚ[Û‹š\ÐÝ\œ™[
+™\Ý[œ]Y\žKœÙ\ÜÚ[Û’Y
+JHÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYIÜ™\Ý[œ]Y\žKœ]Y\žRYHØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIÜ™\Ý[œ]Y\žKœÙ\ÜÚ[Û’YH™X\ÛÛ\Ù\ÜÚ[Û—Ú[˜[YØ™Y›Ü™WÜÙ[™ŠBˆ™]\›ÜÝˆBˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜÝ]HØÜ™Y[”]Y\žRYIÜ™\Ý[œ]Y\žKœ]Y\žRYHÝ]OQ”SQWÔÑSPÕQœ˜[YRYIÙœ˜[YK™œ˜[YRYHŠBˆ˜[XØÙ\ÜÚXš[]HHXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙBˆ˜[[[Y[ÈHXØÙ\ÜÚXš[]OËš\ÚX›Q[[Y[ÊL
+K›Ü‘[\J
+Bˆ˜[š]˜XÞT™\Ý[HØÜ™Y[‘œ˜[YTš]˜XÞQš[\‹˜\JˆœYÈHœ˜[YK˜ž]\Ëˆ[[Y[ÈH[[Y[ËˆØÜ™Y[•ÚYH™\ÛÝ\˜Ù\Ë™\Ü^SY]šXÜËÚY^[ËˆØÜ™Y[’ZYÚH™\ÛÝ\˜Ù\Ë™\Ü^SY]šXÜËšZYÚ^[Ëˆ[˜X›YHØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\ËœÙ[œÚ]]™PÛÛ[›ÝXÝ[Û‚ˆ
+BˆYˆ
+š]˜XÞT™\Ý[\ÈØÜ™Y[”š]˜XÞT™\Ý[›ØÚÙY
+HÂˆ›ÚXÙSÙÊˆœØÜ™Y[—Üš]˜XÞWÙš[\ˆØÜ™Y[”]Y\žRYIÜ™\Ý[œ]Y\žKœ]Y\žRYHœ˜[YRYIÙœ˜[YK™œ˜[YRYHˆ
+ÂˆœÙ[œÚ]]™T›ÝXÝ[Û‘[˜X›Y]YHÙ[œÚ]]™TØØ[”™\Ý[TÑS”ÒUU‘HÙ[œÚ]]™PØ]YÛÜžQ]XÝYIÜš]˜XÞT™\Ý[˜Ø]YÛÜšY\ßHˆ
+ÂˆœÙ[œÚ]]™T™YÚ[ÛÛÝ[L™YXÝ[Û\YYY˜[ÙH[œ˜[YP›ØÚÙY]YH›ØÚÔ™X\ÛÛIÜš]˜XÞT™\Ý[œ™X\ÛÛŸHØY™T^[Ô™\Ù\™YY˜[ÙH‚ˆ
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÝ\›Z[˜[ØÜ™Y[”]Y\žRYIÜ™\Ý[œ]Y\žKœ]Y\žRYHÝ]OT‘R‘PÕQÔ’UPÖHŠBˆÜXZÔØÜ™Y[”š]˜XÞP›ØÚÙY
+
+Bˆ™]\›ÜÝˆBˆ˜[[ÝÙYHš]˜XÞT™\Ý[\ÈØÜ™Y[”š]˜XÞT™\Ý[[ÝÙYˆ›ÚXÙSÙÊˆœØÜ™Y[—Üš]˜XÞWÙš[\ˆØÜ™Y[”]Y\žRYIÜ™\Ý[œ]Y\žKœ]Y\žRYHœ˜[YRYIÙœ˜[YK™œ˜[YRYHˆ
+ÂˆœÙ[œÚ]]™T›ÝXÝ[Û‘[˜X›YIÜØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\ËœÙ[œÚ]]™PÛÛ[›ÝXÝ[ÛŸHˆ
+ÂˆœÙ[œÚ]]™TØØ[”™\Ý[IÚYˆ
+[ÝÙYœ™YÚ[ÛÛÝ[ˆ
+H”‘QPÕQˆ[ÙH”ÐQ‘HŸHˆ
+ÂˆœÙ[œÚ]]™PØ]YÛÜžQ]XÝYIØ[ÝÙY˜Ø]YÛÜšY\ßHÙ[œÚ]]™T™YÚ[ÛÛÝ[IØ[ÝÙYœ™YÚ[ÛÛÝ[Hˆ
+Âˆœ™YXÝ[Û\YYIØ[ÝÙYœ™YXÝ[Û\YYH[œ˜[YP›ØÚÙYY˜[ÙH›ØÚÔ™X\ÛÛ[›Û™HØY™T^[Ô™\Ù\™Y]YH‚ˆ
+BˆØÜ™Y[”™\ÜÛœÙPXÝ]™HHYBˆØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[H˜[ÙBˆØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙYH˜[ÙBˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][ÛÛÛ\]HH˜[ÙBˆØÜ™Y[”™\ÜÛœÙU^ÛÛ[Z]YH˜[ÙBˆØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YH™\Ý[œ]Y\žK\Ù\•\›’YˆØÜ™Y[”™\ÜÛœÙPY\‘Ù[™\˜][Û’YH]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’YˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YHˆØÜ™Y[”™\ÜÛœÙPš[™[™ÈHØÜ™Y[”™\ÜÛœÙPš[™[™Êˆ™\Ý[œ]Y\žK\Ù\•\›’Y™\Ý[œ]Y\žKœ]Y\žRY™\Ý[œ]Y\žKœÙ\ÜÚ[Û’Yˆ]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’Yˆ
+BˆØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YH™\Ý[œ]Y\žKœÙ\ÜÚ[Û’YˆØÜ™Y[”™\ÜÛœÙT]Y\žRYH™\Ý[œ]Y\žKœ]Y\žRYˆØÜ™Y[‘œ™\Úœ˜[YPØ\\™Y]Hœ˜[YK˜Ø\\™Y]ˆ˜[›ÝÈH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[ZHH[[Y[Ë™š[\ˆÈØÜ™Y[”š]˜XÞTÛXÞKœÙ[œÚ]]™PØ]YÛÜžJ]›X™[
+HOH[Kš›Ú[•ÔÝš[™Ê—ˆŠHÂˆ‰Ú]›X™[HÉÚ]˜›Ý[™Ë›YK	Ú]˜›Ý[™ËÜK	Ú]˜›Ý[™ËœšYÚK	Ú]˜›Ý[™Ë˜›ÝÛ_WIÚYˆ
+]˜ÛXÚØX›JHˆÛXÚØX›Hˆ[ÙHˆŸH‚ˆKZÙJL—Ì
+BˆØÜ™Y[‘œ˜[YTÙ[]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊˆ™œ˜[YWÝ\ÙYÙ›Ü—Ü]Y\žHØÜ™Y[—Ü]Y\žWÚYIÜ™\Ý[œ]Y\žKœ]Y\žRYH\Ù\•\›’YIÜ™\Ý[œ]Y\žK\Ù\•\›’YHˆ
+ÂˆœØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIÙœ˜[YKœÙ\ÜÚ[Û’YHœ˜[YWÚYIÙœ˜[YK™œ˜[YRYHœ˜[YWØYÙWÛ\ÏIÛ›ÝÈHœ˜[YK˜Ø\\™Y]Hˆ
+Âˆ™œ˜[YWÚ\ÚIÙœ˜[YKš\ÚHÜYXÚ[™]IØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]ØÜ™Y[”]Y\Ý[Û‘]XÝY]IØÜ™Y[”]Y\Ý[Û‘]XÝY]ˆ
+Âˆ™œ™\ÚØ\\™T™\]Y\ÝY]IÜ™\Ý[œ]Y\žKœ™\]Y\ÝY]Hœ™\Úœ˜[YPØ\\™Y]IÙœ˜[YK˜Ø\\™Y]Hœ˜[YQ[˜ÛÙY]IÙœ˜[YK™[˜ÛÙY]Hˆ
+Âˆ™œ˜[YTÛÝ\˜ÙOIÙœ˜[YKœÛÝ\˜Ù_Hœ˜[YPYÙP]]Y\žS\ÏIÊ›ÝÈHœ˜[YK˜Ø\\™Y]
+K˜ÛÙ\˜ÙP]X\Ý
+
+_Hˆ
+Âˆš[[Ñœ˜[YS\ÏIÊ›ÝÈHØÜ™Y[”]Y\Ý[Û‘]XÝY]
+K˜ÛÙ\˜ÙP]X\Ý
+
+_HØ\\™UÑ[˜ÛÙS\ÏIÙœ˜[YK™[˜ÛÙY]Hœ˜[YK˜Ø\\™Y]Hˆ
+Âˆ™œ˜[YUÑÙ[Z[šTÙ[™\ÏIÊØÜ™Y[‘œ˜[YTÙ[]Hœ˜[YK™[˜ÛÙY]
+K˜ÛÙ\˜ÙP]X\Ý
+
+_Hœ˜[YTÙ[ÑÙ[Z[šP]IØÜ™Y[‘œ˜[YTÙ[]ˆ
+ÂˆœØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞOIØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞHˆ
+ÂˆœÜYXÚ[™Ò[[\ÏIÚYˆ
+ØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞJH
+ØÜ™Y[”]Y\Ý[Û‘]XÝY]HØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]
+K˜ÛÙ\˜ÙP]X\Ý
+
+H[ÙHLSH‚ˆ
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜÝ]HØÜ™Y[”]Y\žRYIÜ™\Ý[œ]Y\žKœ]Y\žRYHÝ]OTÑS•œ˜[YRYIÙœ˜[YK™œ˜[YRYHŠBˆ›ÚXÙSÙÊˆ•’TÒSÓ—Ô‘TUQTÕÔÕT•QØÜ™Y[”]Y\žRYIÜ™\Ý[œ]Y\žKœ]Y\žRYHØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIÜ™\Ý[œ]Y\žKœÙ\ÜÚ[Û’YHˆ
+Âˆ™œ˜[YWÚYIÙœ˜[YK™œ˜[YRYH[Y\Ý[\IØÜ™Y[‘œ˜[YTÙ[]œ˜[YUØZ]\ÏIÊ›ÝÈH™\Ý[œ]Y\žKœ™\]Y\ÝY]
+K˜ÛÙ\˜ÙP]X\Ý
+
+_H‚ˆ
+Bˆ]™OËœÙ[™[XYÙJˆ[ÝÙY˜ž]\Ëš[XYÙKÚœYÈ‹ˆ‰]Y\Ý[Û—‘\ØÜšX™HÛ›HH™]Ù\ÝÝ\YYØÜ™Y[ˆœ˜[YH›Üˆ]Y\žH	Ü™\Ý[œ]Y\žKœ]Y\žRYKˆˆ
+Âˆ‘È›Ý[œÝÙ\ˆœ›ÛHÛ\ˆš\ÝX[ÛÛ^ˆYˆ^\È™XYX›KÝ[[X\š^™HÛ›HHš\ÚX›HYÙNÈ™]™\ˆ[™[Y[ˆÜˆÙ™œØÜ™Y[ˆÛÛ[ˆˆ
+Âˆ”ØÜ™Y[ˆÚ\š[™È\ÈPÕU‘KˆÝ\œ™[ØY™HXØÙ\ÜÚXš[]H[[Y[Î—‰ZWˆˆ
+Âˆ’Yˆ[˜Ù\Z[‹Ø^H^XÝHÚ]\È[˜Ù\Z[‹ˆÙY\HÜÚÙ[ˆ[œÝÙ\ˆÈÛ™HÜˆÛÈÛÛ\]HÙ[[˜Ù\Ëˆ‚ˆ
+BˆXZ[’[™\‹œÜÝ[^YY
+ÂˆYˆ
+ØÜ™Y[”™\ÜÛœÙPXÝ]™H	‰ˆØÜ™Y[”™\ÜÛœÙT]Y\žRYOH™\Ý[œ]Y\žKœ]Y\žRY	‰ˆ\ØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[
+HÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÛÜœ[™YØÜ™Y[”]Y\žRYIÜ™\Ý[œ]Y\žKœ]Y\žRYH\ÝÝ]OTÑS•\Ù\•\›’YIÜ™\Ý[œ]Y\žK\Ù\•\›’YHŠBˆBˆKÐÔ‘QS—ÔUQT–WÑPQÓ“ÔÕP×ÕSQSÕUÓTÊBˆBˆBˆBˆBˆYˆ
+]Y\žHOH[
+HÜXZÔØÜ™Y[•[˜]˜Z[X›J”ØÜ™Y[ˆš\Ú[Ûˆ[š]X[^™HÈ˜ZHZKˆZÈ˜X\ˆ\ˆžHØ\›ËˆŠBˆ[ÙH›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWØÜ™X]YØÜ™Y[—Ü]Y\žWÚYIÜ]Y\žKœ]Y\žRYHØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIÜ]Y\žKœÙ\ÜÚ[Û’YH\Ù\•\›’YI\Ù\•\›’YÝ]OPÔ‘PUQŠBˆB‚ˆš]˜]H[ˆžR[œÝ[XØÙ\ÜÚXš[]P[œÝÙ\Š]Y\Ý[ÛŽˆÝš[™Ë\Ù\•\›’YˆÛ™ÊNˆ›ÛÛX[ˆÂˆ˜[]Y\žU\HHØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙR[œÝ[]Y\žJ]Y\Ý[ÛŠHÎˆ™]\›ˆ˜[ÙBˆYˆ
+]Y\žU\HOH[œÝ[ØÜ™Y[”]Y\žKÕT”‘S•ÐT
+H™]\›ˆ˜[ÙBˆ˜[ÛÛ^HXÝ]š]PÛÛ^ÝÜ™KœÛ˜\ÚÝ
+
+HÎˆ™]\›ˆ˜[ÙBˆ˜[›ÝÈH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+BˆYˆ
+
+›ÝÈHÛÛ^[Y\Ý[\
+K˜ÛÙ\˜ÙP]X\Ý
+
+HˆWÍL
+H™]\›ˆ˜[ÙBˆ˜[ØY™HHÛÛ^š\ÚX›Q[[Y[Ë˜\ÔÙ\]Y[˜ÙJ
+K›X\È]›X™[Bˆ™š[\ˆÈ]›[™ÝHÈ	‰ˆØÜ™Y[”š]˜XÞTÛXÞKœÙ[œÚ]]™PØ]YÛÜžJ]
+HOH[Bˆ™\Ý[˜Ý
+
+KZÙJÊKÓ\Ý
+
+Bˆ˜[[œÝÙ\ˆHÚ[ˆ
+]Y\žU\JHÂˆ[œÝ[ØÜ™Y[”]Y\žKÕT”‘S•ÐTOˆÛÛ^˜\X™[Ë›]È‰]Ü[ˆZKˆˆBˆÎˆ‰ØÛÛ^œXÚØYÙS˜[YKœÝXœÝš[™ÐY\“\Ý
+	Ë‰Ê_HÜ[ˆZKˆ‚ˆ[œÝ[ØÜ™Y[”]Y\žK“Õ‘T•’QUÈOˆÚ[ˆÂˆØY™Kš\Ó›Ý[\J
+HOˆ‰ØÛÛ^˜\X™[ÎˆÛÛ^œXÚØYÙS˜[YKœÝXœÝš[™ÐY\“\Ý
+	Ë‰Ê_HÜ[ˆZKˆØÜ™Y[ˆ\ˆ	ÜØY™Kš›Ú[•ÔÝš[™Ê‹Š_HZÚ˜ZHZKˆ‚ˆ[ÙHOˆ[ˆBˆHÎˆ™]\›ˆ˜[ÙBˆ›ÚXÙSÙÊ•ÕSÔÐÔ‘QS—Ô‘TÔÓ”ÑHØÜ™Y[”]Y\žRYXLL^KXØXÚKI\Ù\•\›’Y›Ý]OPPÐÑTÔÒP’SUWÐÓÓ•VÝ[Û\ÏLØÜ™Y[œÚÝ\ÙYY˜[ÙHŠBˆ[Z]Ý]J[œÝÙ\ŠBˆ]Y]YSØØ[ÜYXÚ
+[œÝÙ\‹[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆ™]\›ˆYBˆB‚ˆš]˜]H[ˆ™YÚ[XØÙ\ÜÚXš[]TØÜ™Y[”]Y\žJˆ]Y\Ý[ÛŽˆÝš[™Ëˆ\Ù\•\›’YˆÛ™Ëˆš\ÝX[™\]Y\Ýˆ˜\Ýš\ÝX[™\]Y\ÝH˜\Ýš\ÝX[™\]Y\Ý
+˜\Ýš\ÝX[Ú[™”UQTÕSÓ‹œØÜ™Y[—Ü]Y\Ý[ÛˆŠBˆ
+Nˆ›ÛÛX[ˆÂˆ˜[XØÙ\ÜÚXš[]HHXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙHÎˆ™]\›ˆ˜[ÙBˆ˜[›Ü™YÜ›Ý[™HXØÙ\ÜÚXš[]K˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+HÎˆ™]\›ˆ˜[ÙBˆ˜[™\]Y\ÝY]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[]Y\žRYH˜LL^KI\Ù\•\›’YIÜ™\]Y\ÝY]ÔÝš[™ÊMŠ_H‚ˆ˜[š\ÝX[\›’YH˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]\Ù\•\›’YOH\Ù\•\›’YOËšYˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]šYOHš\ÝX[\›’YOË™œ˜[YT™\]Y\ÝY]H™\]Y\ÝY]ˆ›ÚXÙSÙÊš\ÝX[œ˜[YT™\]Y\ÝYš\ÝX[\›’YIÝš\ÝX[\›’Y›Ü‘[\J
+_HØÜ™Y[”]Y\žRYI]Y\žRY]I™\]Y\ÝY]ŠBˆYˆ
+š\ÝX[\›’YOH[
+H™]\›ˆ˜[ÙBˆ˜[XÜ]Z\Ú][Û‘Ø]HHš\ÝX[XÜ]Z\Ú][Û‘Ø]Jš\ÝX[\›’Y™\]Y\ÝY]
+Bˆ˜[Ý]\•[Y[Ý]Hš\ÝX[XY[™Q^XÝ]Ü‹œØÚY[JÂˆ˜[›ÝÈH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+BˆYˆ
+XXÜ]Z\Ú][Û‘Ø]KžU[Y[Ý]
+›ÝÊJH™]\›ØÚY[Bˆ›ÚXÙSÙÊˆš\ÝX[Ùœ˜[YWÛÝ]\—Ý[Y[Ý]š\ÝX[\›’YIš\ÝX[\›’YØÜ™Y[”]Y\žRYI]Y\žRYˆ
+Âˆ™[\ÙY\ÏIÛ›ÝÈH™\]Y\ÝY]H[Y[Ý]\ÏIÕš\ÝX[ØÜ™Y[œÚÝ[Y[Ý]ÛXÞK“ÕUT—ÐPÔURTÒUSÓ—ÕSQSÕUÓTßH‚ˆ
+BˆËÈXY[™H˜[˜XÚÈ]\Ý›Ý]Y]YH™Z[™H™\žH[XYÙHÛÜšÙ\ˆ]\ÂˆËÈ[Z[™ÈÝ]ˆ\È^XÝ]ÜˆÝÛœÈÛ›HXY[™\È[™Ø[ˆ\›Z[˜]HH\›‚ˆËÈ]™[ˆYˆœ˜[YH[]™\žH\È›ØÚÙY‚ˆYˆ
+˜\Ýš\ÝX[\›œË›ÝÛœÊš\ÝX[\›’Y
+JHÂˆÛÛ\]TØÜ™Y[”]Y\Ý[Û‘œ›ÛTÙ[X[XÔØÙ[™J]Y\Ý[Û‹\Ù\•\›’Yš\ÝX[\›’Y]Y\žRY›Ü™YÜ›Ý[™
+BˆBˆKš\ÝX[ØÜ™Y[œÚÝ[Y[Ý]ÛXÞK“ÕUT—ÐPÔURTÒUSÓ—ÕSQSÕUÓTË[YU[š]“RSTÑPÓÓ‘ÊBˆ˜[XØÙ\YHXØÙ\ÜÚXš[]Kœ™\]Y\Ýœ™\Úš\ÝX[ØÜ™Y[œÚÝ
+ˆPÐÑTÔÒP’SUWÕ’TÕPSÐÐPÒWÓPVÐQÑWÓTËˆ™\]Y\ÝÚÙ[ˆH]Y\žRYˆ\ÐÝ\œ™[™\]Y\ÝHÂˆXÜ]Z\Ú][Û‘Ø]K›X^Q\Ü]Ú
+˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+JBˆBˆ
+HÈ™\Ý[O‚ˆ˜[ØÚY[Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+BˆYˆ
+XXÜ]Z\Ú][Û‘Ø]K›Û”]›Ü›PØ[˜XÚÊ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšYØÚY[Y]
+JHÂˆ›ÚXÙSÙÊˆš\ÝX[œ˜[YQ[]™\žTØÚY[Yš\ÝX[\›’YIš\ÝX[\›’YØÜ™Y[”]Y\žRYI]Y\žRYˆ
+Âˆ˜XØÙ\YY˜[ÙH™X\ÛÛXØ[˜XÚ×ØY\—ÛÝ]\—ÙXY[™WÛÜ—Ü™\XÙ[Y[\ÚÐYÙS\ÏIÜØÚY[Y]H™\]Y\ÝY]H‚ˆ
+Bˆ™]\›™\]Y\Ýœ™\Úš\ÝX[ØÜ™Y[œÚÝˆBˆ˜[]Y]YQ\Hš\ÝX[œ˜[YQ[]™\žQ^XÝ]Ü‹œ]Y]YKœÚ^™Bˆ›ÚXÙSÙÊˆš\ÝX[œ˜[YQ[]™\žTØÚY[Yš\ÝX[\›’YIš\ÝX[\›’YØÜ™Y[”]Y\žRYI]Y\žRYˆ
+Âˆ[Y\Ý[\IØÚY[Y]^XÝ]Ü“˜[YO[\˜KXÝ\œ™[]š\ÝX[Y[]™\žH™XY˜[YOIÕ™XY˜Ý\œ™[™XY
+
+K›˜[Y_Hˆ
+Âˆœ]Y]YQ\I]Y]YQ\\ÚÐYÙS\ÏIÜØÚY[Y]H™\]Y\ÝY]H‚ˆ
+Bˆš\ÝX[œ˜[YQ[]™\žQ^XÝ]Ü‹™^XÝ]HÂˆ˜[[]™\žTÝ\Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊˆš\ÝX[œ˜[YQ[]™\žTÝ\Yš\ÝX[\›’YIš\ÝX[\›’YØÜ™Y[”]Y\žRYI]Y\žRYˆ
+Âˆ[Y\Ý[\I[]™\žTÝ\Y]^XÝ]Ü“˜[YO[\˜KXÝ\œ™[]š\ÝX[Y[]™\žH™XY˜[YOIÕ™XY˜Ý\œ™[™XY
+
+K›˜[Y_Hˆ
+Âˆœ]Y]YQ\IÝš\ÝX[œ˜[YQ[]™\žQ^XÝ]Ü‹œ]Y]YKœÚ^™_H\ÚÐYÙS\ÏIÙ[]™\žTÝ\Y]H™\]Y\ÝY]HØÚÕØZ]\ÏL‚ˆ
+BˆËÈHÝ]\ˆXY[™HÝÛœÈHÛÛ\]HÜ\˜][Ûˆ›ÝYÚ\ØX›KYœ˜[YBˆËÈ[]™\žKˆ[™›ÚYØ[˜XÚÈÝXØÙ\ÜÈ[Û™H]\Ý›ÝÛÛ\]H\ÈØ]K‚ˆYˆ
+XXÜ]Z\Ú][Û‘Ø]KžPÛÛ\]J˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY[]™\žTÝ\Y]
+JHÂˆ™\Ý[™Ù]Ü“[
+
+OËœØÜ™Y[œÚÝË›]Âˆ›ÚXÙSÙÊˆš\ÝX[œ˜[YQ[]™\™Yš\ÝX[\›’YIš\ÝX[\›’YØÜ™Y[”]Y\žRYI]Y\žRYXØÙ\YY˜[ÙHˆ
+Âˆœ™X\ÛÛ[Ý]\—ÙXY[™WÛÜ—Ü™\XÙYØXÚUØ\›SÛ›O]YH\ÚÐYÙS\ÏIÙ[]™\žTÝ\Y]H™\]Y\ÝY]H‚ˆ
+BˆBˆ›ÚXÙSÙÊˆœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYI]Y\žRYš\ÝX[\›’YIš\ÝX[\›’Yˆ
+Âˆœ™X\ÛÛ[Ý]\—ÙXY[™WÛÜ—Ü™\XÙY‚ˆ
+Bˆ™]\›^XÝ]BˆBˆÝ]\•[Y[Ý]˜Ø[˜Ù[
+˜[ÙJBˆYˆ
+š\ÝX[\›’YOH[Y˜\Ýš\ÝX[\›œË›ÝÛœÊš\ÝX[\›’Y
+JHÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYI]Y\žRYš\ÝX[\›’YIÝš\ÝX[\›’Y›Ü‘[\J
+_H™X\ÛÛ]š\ÝX[Ý\›—Ü™\XÙYŠBˆ™]\›^XÝ]BˆBˆ˜[Ù[XÝ[ÛˆH™\Ý[™Ù]Ü“[
+
+BˆYˆ
+Ù[XÝ[ÛˆOH[
+HÂˆ˜[™X\ÛÛˆH™\Ý[™^Ù\[Û“Ü“[
+
+OË›Y\ÜØYÙHÎˆ˜XØÙ\ÜÚXš[]WÜØÜ™Y[œÚÝÙ˜Z[Y‚ˆ›ÚXÙSÙÊœØÜ™Y[œÚÝÙ˜Z[\™WÜ™X\ÛÛˆØÜ™Y[”]Y\žRYI]Y\žRY™X\ÛÛI™X\ÛÛˆŠBˆ›ÚXÙSÙÊ˜YÙ[ÛØœÙ\˜][ÛˆXÚØYÙOIÙ›Ü™YÜ›Ý[™œXÚØYÙS˜[Y_HØÜ™Y[œÚÝ\ÙYY˜[ÙH™X\ÛÛI™X\ÛÛˆŠBˆÛÛ\]TØÜ™Y[”]Y\Ý[Û‘œ›ÛTÙ[X[XÔØÙ[™Jˆ]Y\Ý[Û‹\Ù\•\›’Yš\ÝX[\›’Y]Y\žRY›Ü™YÜ›Ý[™ˆ
+Bˆ™]\›^XÝ]BˆBˆ˜[ØÜ™Y[œÚÝHÙ[XÝ[Û‹œØÜ™Y[œÚÝˆ˜[Ý\œ™[HXØÙ\ÜÚXš[]K˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+BˆYˆ
+Ý\œ™[OH[Ý\œ™[œXÚØYÙS˜[YHOHØÜ™Y[œÚÝœXÚØYÙS˜[YHˆÝ\œ™[Ú[™ÝÒYOHØÜ™Y[œÚÝÚ[™ÝÒYÝ\œ™[™Ù[™\˜][ÛˆOHØÜ™Y[œÚÝ™Ù[™\˜][Û‚ˆ
+HÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYI]Y\žRY™X\ÛÛXXØÙ\ÜÚXš[]WØÛÛ^ØÚ[™ÙYŠBˆ˜\Ýš\ÝX[\›œË™š[š\Ú
+š\ÝX[\›’Y
+Bˆ™]\›^XÝ]BˆBˆ˜[œ˜[YT™XYP]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]šYOHš\ÝX[\›’YOË™œ˜[YT™XYP]Hœ˜[YT™XYP]ˆ›ÚXÙSÙÊˆš\ÝX[Ùœ˜[YWÜ™XYHš\ÝX[\›’YIš\ÝX[\›’YØÜ™Y[”]Y\žRYI]Y\žRYˆ
+Âˆš\ÝX[œ˜[YTÛÝ\˜ÙOIÜÙ[=Û[h‘éì¶»§q«^u•¹•É…Ñ¥½¹½µÁ±•Ñ”€ô™…±Í”(€€€€€€€€€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•Q•áÑ½µµ¥ÑÑ•€ô™…±Í”(€€€€€€€€€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•UÍ•ÉQÕÉ¹%€ôÕÍ•ÉQÕÉ¹%(€€€€€€€€€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•™Ñ•É•¹•É…Ñ¥½¹%€ô±…Ñ•ÍÑ=‰Í•ÉÙ•‘5½‘•±•¹•É…Ñ¥½¹%(€€€€€€€€€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••¹•É…Ñ¥½¹%€ô€Á0(€€€€€€€€€€€€€€€Ù…°Í•ÍÍ¥½¹%€ô€‰…•ÍÍ¥‰¥±¥Ñäè‘íÕÉÉ•¹Ð¹Á…­…•9…µ•ôè‘íÕÉÉ•¹Ð¹•¹•É…Ñ¥½¹ôˆ(€€€€€€€€€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•	¥¹‘¥¹œ€ôMÉ••¹I•ÍÁ½¹Í•	¥¹‘¥¹œ¡ÕÍ•ÉQÕÉ¹%°ÅÕ•Éå%°Í•ÍÍ¥½¹%°±…Ñ•ÍÑ=‰Í•ÉÙ•‘5½‘•±•¹•É…Ñ¥½¹%¤(€€€€€€€€€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•M•ÍÍ¥½¹%€ôÍ•ÍÍ¥½¹%(€€€€€€€€€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•EÕ•Éå%€ôÅÕ•Éå%(€€€€€€€€€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••ÍÍ¥‰¥±¥ÑåA…­…”€ôÕÉÉ•¹Ð¹Á…­…•9…µ”(€€€€€€€€€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••ÍÍ¥‰¥±¥Ñå•¹•É…Ñ¥½¸€ôÕÉÉ•¹Ð¹•¹•É…Ñ¥½¸(€€€€€€€€€€€€€€€ÍÉ••¹É•Í¡É…µ•…ÁÑÕÉ•‘Ð€ôÍÉ••¹Í¡½Ð¹…ÁÑÕÉ•‘Ð(€€€€€€€€€€€€€€€ÍÉ••¹É…µ•M•¹ÑÐ€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€€€€€€€€€™…ÍÑY¥ÍÕ…±QÕÉ¹Ì¹ÕÉÉ•¹Ð ¤ü¹Ñ…­•%˜ì¥Ð¹¥€ôôÙ¥ÍÕ…±QÕÉ¹%ôü¹µ½‘•±I•ÅÕ•ÍÑÐ€ôÍÉ••¹É…µ•M•¹ÑÐ(€€€€€€€€€€€€€€€Ù…°Õ¤€ô•±•µ•¹ÑÌ¹™¥±Ñ•ÈìMÉ••¹AÉ¥Ù…åA½±¥ä¹Í•¹Í¥Ñ¥Ù•…Ñ•½Éä¡¥Ð¹±…‰•°¤€ôô¹Õ±°ô(€€€€€€€€€€€€€€€€€€€€¹©½¥¹Q½MÑÉ¥¹œ ‰q¸ˆ¤ì€ˆ‘í¥Ð¹±…‰•±ôl‘í¥Ð¹‰½Õ¹‘Ì¹±•™Ñô°‘í¥Ð¹‰½Õ¹‘Ì¹Ñ½Áô°‘í¥Ð¹‰½Õ¹‘Ì¹É¥¡Ñô°‘í¥Ð¹‰½Õ¹‘Ì¹‰½ÑÑ½µõtˆô(€€€€€€€€€€€€€€€€€€€€¹Ñ…­” Ñ|ÀÀÀ¤(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰…•¹Ñ}½‰Í•ÉÙ…Ñ¥½¸Á…­…”ô‘íÕÉÉ•¹Ð¹Á…­…•9…µ•ôÝ¥¹‘½Ý•¹•É…Ñ¥½¸ô‘íÕÉÉ•¹Ð¹•¹•É…Ñ¥½¹ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰Í•µ…¹Ñ¥±•µ•¹ÑÌô‘íÑ¥Ù¥Ñå½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤ü¹Ù¥Í¥‰±•±•µ•¹ÑÌü¹Í¥é”€üè€ÁôÍÉ••¹Í¡½ÑUÍ•õÑÉÕ”ˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰Y%M%=9}IEUMQ}MQIQÍÉ••¹EÕ•Éå%ô‘ÅÕ•Éå%Í½ÕÉ”õMM%	%1%Qe}MI9M!=P€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰…ÁÑÕÉ•5Ìô‘íÍÉ••¹É…µ•M•¹ÑÐ€´É•ÅÕ•ÍÑ•‘Ñô‰åÑ•Ìô‘í…±±½Ý•¹‰åÑ•Ì¹Í¥é•ôˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰Ù¥ÍÕ…±}µ½‘•±}É•ÅÕ•ÍÑ}Í•¹ÐÙ¥ÍÕ…±QÕÉ¹%ô‘Ù¥ÍÕ…±QÕÉ¹%ÍÉ••¹EÕ•Éå%ô‘ÅÕ•Éå%€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰™É…µ•I•…‘åQ½5½‘•±I•ÅÕ•ÍÑ5Ìô‘ì¡ÍÉ••¹É…µ•M•¹ÑÐ€´™É…µ•I•…‘åÐ¤¹½•É•Ñ1•…ÍÐ Á0¥ôˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰Ù¥ÍÕ…±}µ½‘•±}Á…å±½…Ù¥ÍÕ…±QÕÉ¹%ô‘Ù¥ÍÕ…±QÕÉ¹%¥µ…•¹½‘•‘	åÑ•Ìô‘í…±±½Ý•¹‰åÑ•Ì¹Í¥é•ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰¥µ…•¥µ•¹Í¥½¹Ìô‘íÍÉ••¹Í¡½Ð¹Ý¥‘Ñ¡õà‘íÍÉ••¹Í¡½Ð¹¡•¥¡ÑôÍ•µ…¹Ñ¥½¹Ñ•áÑ¡…ÉÌô‘íÕ¤¹±•¹Ñ¡ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰Í•µ…¹Ñ¥±•µ•¹Ñ½Õ¹Ðô‘í•±•µ•¹ÑÌ¹Í¥é•ôÉ•ÅÕ•ÍÑA…å±½…‘	åÑ•Ìô‘í…±±½Ý•¹‰åÑ•Ì¹Í¥é”€¬Õ¤¹Ñ½	åÑ•ÉÉ…ä ¤¹Í¥é”€¬ÅÕ•ÍÑ¥½¸¹Ñ½	åÑ•ÉÉ…ä ¤¹Í¥é•ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰¹•ÑÝ½É­M•¹‘Ðô‘ÍÉ••¹É…µ•M•¹ÑÐˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰Ù¥ÍÕ…±5½‘•±I•ÅÕ•ÍÑM•¹ÐÙ¥ÍÕ…±QÕÉ¹%ô‘Ù¥ÍÕ…±QÕÉ¹%ÍÉ••¹EÕ•Éå%ô‘ÅÕ•Éå%…Ðô‘ÍÉ••¹É…µ•M•¹ÑÐˆ¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰ÑÑÍI•ÅÕ•ÍÑM•¹ÐÙ¥ÍÕ…±QÕÉ¹%ô‘Ù¥ÍÕ…±QÕÉ¹%ÍÉ••¹EÕ•Éå%ô‘ÅÕ•Éå%…Ðô‘ÍÉ••¹É…µ•M•¹ÑÐ½Ý¹•Èõ=9QI=11}MI8ˆ¤(€€€€€€€€€€€€€€€Ù…°Ù¥ÍÕ…±%¹ÍÑÉÕÑ¥½¸€ô¥˜€¡Ù¥ÍÕ…±I•ÅÕ•ÍÐ¹­¥¹€ôô…ÍÑY¥ÍÕ…±-¥¹¹Q%=8¤ì(€€€€€€€€€€€€€€€€€€€€‰Q¡¥Ì¥Ì„Ù¥ÍÕ…°…Ñ¥½¸¸%‘•¹Ñ¥™ä•á…Ñ±ä½¹”Í…™”ÕÉÉ•¹ÐµÍÉ••¸Ñ…É•Ð¸€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰…±°Á•É™½Éµ}ÍÉ••¹}…Ñ¥½¸Ý¥Ñ ¥ÑÌÍ•µ…¹Ñ¥Œ±…‰•°½ÈÁ½Í¥Ñ¥½¸¸¼¹½Ð…¹ÍÝ•È½¹Ù•ÉÍ…Ñ¥½¹…±±ä½È±…¥´ÍÕ•ÍÌ¸ˆ(€€€€€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€€€€€€‰¹ÍÝ•ÈÑ¡”ÕÍ•ÈÌÕÉÉ•¹ÐµÍÉ••¸ÅÕ•ÍÑ¥½¸‘¥É•Ñ±ä¥¸½¹”½ÈÑÝ¼½µÁ±•Ñ”Í•¹Ñ•¹•Ì¸ˆ(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€±¥Ù”ü¹Í•¹‘%µ…” (€€€€€€€€€€€€€€€€€€€…±±½Ý•¹‰åÑ•Ì°€‰¥µ…”½©Á•œˆ°(€€€€€€€€€€€€€€€€€€€€ˆ‘ÅÕ•ÍÑ¥½¹q¹UÍ”½¹±äÑ¡¥Ì™É•Í •ÍÍ¥‰¥±¥ÑäÍÉ••¹Í¡½Ð…¹ÕÉÉ•¹ÐÍ…™”U$•±•µ•¹ÑÌ¸€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰¼¹½Ð¥¹™•È¡¥‘‘•¸½¹Ñ•¹Ð¸€‘Ù¥ÍÕ…±%¹ÍÑÉÕÑ¥½¹q¸‘Õ¤ˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€¥˜€¡…•ÁÑ•¤ì(€€€€€€€€€€€Ù½¥•1½œ ‰ÍÉ••¹}ÅÕ•Éå}É•…Ñ•ÍÉ••¹}ÅÕ•Éå}¥ô‘ÅÕ•Éå%Í½ÕÉ”õMM%	%1%Qe}MI9M!=PÕÍ•ÉQÕÉ¹%ô‘ÕÍ•ÉQÕÉ¹%ˆ¤(€€€€€€€ô•±Í”ì(€€€€€€€€€€€½ÕÑ•ÉQ¥µ•½ÕÐ¹…¹•°¡™…±Í”¤(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸…•ÁÑ•(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸½µÁ±•Ñ•MÉ••¹EÕ•ÍÑ¥½¹É½µM•µ…¹Ñ¥M•¹” (€€€€€€€ÅÕ•ÍÑ¥½¸èMÑÉ¥¹œ°(€€€€€€€ÕÍ•ÉQÕÉ¹%è1½¹œ°(€€€€€€€Ù¥ÍÕ…±QÕÉ¹%èMÑÉ¥¹œ°(€€€€€€€ÅÕ•Éå%èMÑÉ¥¹œ°(€€€€€€€•áÁ•Ñ•è½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹½É•É½Õ¹‘ÁÁ½¹Ñ•áÐ(€€€€¤ì(€€€€€€€Ù…°Í•¹”€ôÑ¥Ù¥Ñå½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤ü¹Ñ…­•%˜ì(€€€€€€€€€€€M•µ…¹Ñ¥MÉ••¹…±±‰…­A½±¥ä¹µ…å¹ÍÝ•È (€€€€€€€€€€€€€€€•áÁ•Ñ•¹Á…­…•9…µ”°•áÁ•Ñ•¹Ý¥¹‘½Ý%°•áÁ•Ñ•¹•¹•É…Ñ¥½¸°(€€€€€€€€€€€€€€€¥Ð¹Á…­…•9…µ”°¥Ð¹Ý¥¹‘½Ý%°¥Ð¹•¹•É…Ñ¥½¸°¥Ð¹Ù¥Í¥‰±•±•µ•¹ÑÌ¹Í¥é”°(€€€€€€€€€€€€€€€…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´¥Ð¹Ñ¥µ•ÍÑ…µÀ(€€€€€€€€€€€€¤(€€€€€€€ô(€€€€€€€Ù…°±…‰•±Ì€ôÍ•¹”ü¹Ù¥Í¥‰±•±•µ•¹ÑÌ¹½ÉµÁÑä ¤¹…ÍM•ÅÕ•¹” ¤(€€€€€€€€€€€€¹µ…Àì¥Ð¹±…‰•°¹ÑÉ¥´ ¤ô(€€€€€€€€€€€€¹™¥±Ñ•Èì¥Ð¹±•¹Ñ €øô€Ì€˜˜MÉ••¹AÉ¥Ù…åA½±¥ä¹Í•¹Í¥Ñ¥Ù•…Ñ•½Éä¡¥Ð¤€ôô¹Õ±°ô(€€€€€€€€€€€€¹‘¥ÍÑ¥¹Ð ¤¹Ñ…­” Ð¤¹Ñ½1¥ÍÐ ¤(€€€€€€€¥˜€¡Í•¹”€ôô¹Õ±°ñð±…‰•±Ì¹¥ÍµÁÑä ¤¤ì(€€€€€€€€€€€™…ÍÑY¥ÍÕ…±QÕÉ¹Ì¹™¥¹¥Í ¡Ù¥ÍÕ…±QÕÉ¹%¤(€€€€€€€€€€€Ù½¥•1½œ ‰ÍÉ••¹}ÅÕ•Éå}Ñ•Éµ¥¹…°ÍÉ••¹EÕ•Éå%ô‘ÅÕ•Éå%ÍÑ…Ñ”õAQUI}%1Ù¥ÍÕ…±M½ÕÉ”õ9=9ˆ¤(€€€€€€€€€€€ÍÁ•…­MÉ••¹U¹…Ù…¥±…‰±” ‰ÕÉÉ•¹ÐÍÉ••¸¥µ…”¹…¡¤µ¥±¤¸ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°…ÁÀ€ôÍ•¹”¹…ÁÁ1…‰•°€üèÍ•¹”¹Á…­…•9…µ”¹ÍÕ‰ÍÑÉ¥¹™Ñ•É1…ÍÐ œ¸œ¤(€€€€€€€Ù…°…¹ÍÝ•È€ô€ˆ‘…ÁÀ½Á•¸¡…¤¸MÉ••¸Á…È€‘í±…‰•±Ì¹©½¥¹Q½MÑÉ¥¹œ ˆ°€ˆ¥ô‘¥­ É…¡„¡…¤¸ˆ(€€€€€€€Ù…°¹½Ü€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰Ù¥ÍÕ…±É…µ•Ù…¥±…‰±”Ù¥ÍÕ…±QÕÉ¹%ô‘Ù¥ÍÕ…±QÕÉ¹%ÍÉ••¹EÕ•Éå%ô‘ÅÕ•Éå%…Ðô‘¹½Ü€ˆ€¬(€€€€€€€€€€€€€€€€‰Ù¥ÍÕ…±É…µ•M½ÕÉ”õM59Q%}MI8Í•µ…¹Ñ¥±•µ•¹ÑÌô‘íÍ•¹”¹Ù¥Í¥‰±•±•µ•¹ÑÌ¹Í¥é•ôˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰Q=Q1}Y%MU1}QUI8Ù¥ÍÕ…±QÕÉ¹%ô‘Ù¥ÍÕ…±QÕÉ¹%É½ÕÑ”õM59Q%}MI8€ˆ€¬(€€€€€€€€€€€€€€€€‰Ù¥ÍÕ…±É…µ•ÅÕ¥Í¥Ñ¥½¹5Ìô‘í¹½Ü€´€¡™…ÍÑY¥ÍÕ…±QÕÉ¹Ì¹ÕÉÉ•¹Ð ¤ü¹™É…µ•I•ÅÕ•ÍÑ•‘Ð€üè¹½Ü¥ôˆ(€€€€€€€€¤(€€€€€€€™…ÍÑY¥ÍÕ…±QÕÉ¹Ì¹™¥¹¥Í ¡Ù¥ÍÕ…±QÕÉ¹%¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡…¹ÍÝ•È¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡…¹ÍÝ•È°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¥ÍMÉ••¹I•ÍÁ½¹Í•½¹Ñ•áÑÕÉÉ•¹Ð ¤è	½½±•…¸ì(€€€€€€€¥˜€ …ÍÉ••¹I•ÍÁ½¹Í•M•ÍÍ¥½¹%¹ÍÑ…ÉÑÍ]¥Ñ  ‰…•ÍÍ¥‰¥±¥Ñäèˆ¤¤ì(€€€€€€€€€€€É•ÑÕÉ¸MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹¥ÍÕÉÉ•¹Ð¡ÍÉ••¹I•ÍÁ½¹Í•M•ÍÍ¥½¹%¤(€€€€€€€ô(€€€€€€€Ù…°ÕÉÉ•¹Ð€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”ü¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€É•ÑÕÉ¸ÕÉÉ•¹Ð¹Á…­…•9…µ”€ôôÍÉ••¹I•ÍÁ½¹Í••ÍÍ¥‰¥±¥ÑåA…­…”€˜˜(€€€€€€€€€€€ÕÉÉ•¹Ð¹•¹•É…Ñ¥½¸€ôôÍÉ••¹I•ÍÁ½¹Í••ÍÍ¥‰¥±¥Ñå•¹•É…Ñ¥½¸(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÑÉå%¹ÍÑ…¹ÑMÉ••¹¹ÍÝ•È¡ÅÕ•ÍÑ¥½¸èMÑÉ¥¹œ°ÕÍ•ÉQÕÉ¹%è1½¹œ¤è	½½±•…¸ì(€€€€€€€Ù…°ÅÕ•ÉåQåÁ”€ôMÉ••¹Y¥Í¥½¹%¹Ñ•¹ÑA…ÉÍ•È¹Á…ÉÍ•%¹ÍÑ…¹ÑEÕ•Éä¡ÅÕ•ÍÑ¥½¸¤€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€Ù…°¹½Ü€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù…°½¹Ñ•áÐ€ôMÉ••¹½¹Ñ•áÑMÑ½É”¹™É•Í¡M¹…ÁÍ¡½Ð (€€€€€€€€€€€MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹Í•ÍÍ¥½¹%°¹½Ü°MÉ••¹…¡•UÍ”¹EUMQ%=8(€€€€€€€€¤€üèÉÕ¸ì(€€€€€€€€€€€Ù½¥•1½œ ‰I5}MQ1ÕÍ•ÉQÕÉ¹%ô‘ÕÍ•ÉQÕÉ¹%É½ÕÑ”õ!=Q}MI9}!™…±±‰…¬õY%M%=8ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸™…±Í”(€€€€€€€ô(€€€€€€€Ù…°Í…™•Q•áÐ€ô½¹Ñ•áÐ¹ÍÕµµ…Éä¹Ù¥Í¥‰±•Q•áÐ¹™¥±Ñ•Èì(€€€€€€€€€€€MÉ••¹AÉ¥Ù…åA½±¥ä¹Í•¹Í¥Ñ¥Ù•…Ñ•½Éä¡¥Ð¤€ôô¹Õ±°(€€€€€€€ô(€€€€€€€Ù…°…ÁÀ€ô½¹Ñ•áÐ¹ÍÕµµ…Éä¹…ÁÁ9…µ”€üè½¹Ñ•áÐ¹ÍÕµµ…Éä¹Á…­…•9…µ”ü¹ÍÕ‰ÍÑÉ¥¹™Ñ•É1…ÍÐ œ¸œ¤(€€€€€€€Ù…°…¹ÍÝ•È€ôÝ¡•¸€¡ÅÕ•ÉåQåÁ”¤ì(€€€€€€€€€€€%¹ÍÑ…¹ÑMÉ••¹EÕ•Éä¹UII9Q}A@€´ø…ÁÀü¹±•Ðì€ˆ‘¥Ð½Á•¸¡…¤¸ˆô(€€€€€€€€€€€%¹ÍÑ…¹ÑMÉ••¹EÕ•Éä¹=YIY%\€´øì(€€€€€€€€€€€€€€€Ù…°ÕÍ•™Õ°€ôÍ…™•Q•áÐ¹™¥±Ñ•Èì¥Ð¹±•¹Ñ €øô€Ìô¹‘¥ÍÑ¥¹Ð ¤¹Ñ…­” Ì¤(€€€€€€€€€€€€€€€Ý¡•¸ì(€€€€€€€€€€€€€€€€€€€ÕÍ•™Õ°¹¥Í9½ÑµÁÑä ¤€˜˜…ÁÀ€„ô¹Õ±°€´ø€ˆ‘…ÁÀ½Á•¸¡…¤¸MÉ••¸Á…È€‘íÕÍ•™Õ°¹©½¥¹Q½MÑÉ¥¹œ ˆ°€ˆ¥ô‘¥­ É…¡„¡…¤¸ˆ(€€€€€€€€€€€€€€€€€€€ÕÍ•™Õ°¹¥Í9½ÑµÁÑä ¤€´ø€‰MÉ••¸Á…È€‘íÕÍ•™Õ°¹©½¥¹Q½MÑÉ¥¹œ ˆ°€ˆ¥ô‘¥­ É…¡„¡…¤¸ˆ(€€€€€€€€€€€€€€€€€€€…ÁÀ€„ô¹Õ±°€´ø€ˆ‘…ÁÀ½Á•¸¡…¤°±•­¥¸É•…‘…‰±”Ñ•áÐ±•…È¹…¡¤¡…¤¸ˆ(€€€€€€€€€€€€€€€€€€€•±Í”€´ø¹Õ±°(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€ô€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€Ù…°¹•Ý•ÍÑÐ€ôµ…á=˜¡½¹Ñ•áÐ¹™É…µ•Q¥µ•ÍÑ…µÀ°½¹Ñ•áÐ¹…•ÍÍ¥‰¥±¥ÑåQ¥µ•ÍÑ…µÀ¤(€€€€€€€¥¹ÍÑ…¹ÑMÉ••¹EÕ•Éå%€ô€‰¡½Ð´‘ÕÍ•ÉQÕÉ¹%´‘í¹½Ü¹Ñ½MÑÉ¥¹œ ÄØ¥ôˆ(€€€€€€€¥¹ÍÑ…¹ÑMÉ••¹EÕ•ÉåMÑ…ÉÑ•‘Ð€ôÍÉ••¹I•ÍÁ½¹Í•MÁ••¡¹‘•‘Ð¹Ñ…­•%˜ì(€€€€€€€€€€€ÍÉ••¹EÕ•ÉåMÁ••¡QÕÉ¹½¹Í¥ÍÑ•¹ä€˜˜¥Ð€ø€Á0(€€€€€€€ô€üè¹½Ü(€€€€€€€¥¹ÍÑ…¹ÑMÉ••¹…¡••5Ì€ô€¡¹½Ü€´¹•Ý•ÍÑÐ¤¹½•É•Ñ1•…ÍÐ Á0¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰I5}M1QÍÉ••¹EÕ•Éå%ô‘¥¹ÍÑ…¹ÑMÉ••¹EÕ•Éå%ÕÍ•ÉQÕÉ¹%ô‘ÕÍ•ÉQÕÉ¹%Í½ÕÉ”õ!=Q}MI9}!€ˆ€¬(€€€€€€€€€€€€€€€€‰ÍÉ••¹}Í•ÍÍ¥½¹}¥ô‘í½¹Ñ•áÐ¹ÍÉ••¹M•ÍÍ¥½¹%‘ô™É…µ•}¥ô‘í½¹Ñ•áÐ¹™É…µ•%‘ô™É…µ•}…•}µÌô‘¥¹ÍÑ…¹ÑMÉ••¹…¡••5Ìˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰Q=Q1}MI9}IMA=9MÍÉ••¹EÕ•Éå%ô‘¥¹ÍÑ…¹ÑMÉ••¹EÕ•Éå%É½ÕÑ”õ!=Q}MI9}!ÍÑ…”õ9M]I}Id€ˆ€¬(€€€€€€€€€€€€€€€€‰Ù½¥•}µÌô´Ä…ÁÑÕÉ•}µÌôÀ…•ÍÍ¥‰¥±¥Ñå}µÌôÀÙ¥Í¥½¹}µÌôÀ•µ¥¹¥}µÌôÀÑÑÍ}µÌô´Ä€ˆ€¬(€€€€€€€€€€€€€€€€‰Ñ½Ñ…±}µÌô‘ì¡¹½Ü€´¥¹ÍÑ…¹ÑMÉ••¹EÕ•ÉåMÑ…ÉÑ•‘Ð¤¹½•É•Ñ1•…ÍÐ Á0¥ôˆ(€€€€€€€€¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡…¹ÍÝ•È¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡…¹ÍÝ•È°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸…ÉµMÉ••¹EÕ•ÍÑ¥½¸ (€€€€€€€ÅÕ•ÍÑ¥½¸èMÑÉ¥¹œ°(€€€€€€€ÕÍ•ÉQÕÉ¹%è1½¹œ°(€€€€€€€Í½ÕÉ”èMÑÉ¥¹œ°(€€€€€€€™¥¹…±QÉ…¹ÍÉ¥ÁÑ½µµ¥ÑÑ•è	½½±•…¸€ô™…±Í”(€€€€¤ì(€€€€€€€¥˜€¡ÅÕ•ÍÑ¥½¸¹¥Í	±…¹¬ ¤ñðÕÍ•ÉQÕÉ¹%€ôô€Á0¤É•ÑÕÉ¸(€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¸€ôÅÕ•ÍÑ¥½¸(€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹QÕÉ¹%€ôÕÍ•ÉQÕÉ¹%(€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹¥¹…±½µµ¥ÑÑ•€ô™¥¹…±QÉ…¹ÍÉ¥ÁÑ½µµ¥ÑÑ•(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰ÍÉ••¹}ÅÕ•Éå}¥¹Ñ•¹Ñ}‘•Ñ•Ñ•‘}…Ðô‘…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘ÐÕÍ•ÉQÕÉ¹%ô‘ÕÍ•ÉQÕÉ¹%Í½ÕÉ”ô‘Í½ÕÉ”€ˆ€¬(€€€€€€€€€€€€€€€€‰ÍÁ••¡¹‘Ðô‘ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð™¥¹…±QÉ…¹ÍÉ¥ÁÑÐôÀÍÑ…‰±•¥¹…±	Õ‰‰±•½µµ¥ÑÑ•õ™…±Í”ˆ(€€€€€€€€¤(€€€€€€€€¼¼MH¡Õ¹­Ì…¹±½…°Y…É”¥¹‘•Á•¹‘•¹ÐÍÑÉ•…µÌ¸Q¡”ÍÑ…‰±”É•…µ½¹±äÍÉ••¸(€€€€€€€€¼¼ÅÕ•ÍÑ¥½¸½™Ñ•¸…ÉÉ¥Ù•Ì…™Ñ•ÈY¡…Ì…±É•…‘ä•¹‘•°Í¼¥ÐµÕÍÐ¹½ÐÝ…¥Ð™½È„(€€€€€€€€¼¼Í•½¹ÍÁ•• •‘”½È•µ¥¹¤Ì‘•±…å•™¥¹…°ÑÉ…¹ÍÉ¥ÁÐ¸(€€€€€€€¥˜€¡½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹…É±åMÉ••¹EÕ•ÍÑ¥½¹A½±¥ä¹µ…åÕÑ¡½É¥é•ÑMÁ••¡¹ (€€€€€€€€€€€€€€€ÅÕ•ÍÑ¥½¸°½É‘¥¹…Éå5½‘•±Õ‘¥½…Ñ”¹¥ÍMÁ••¡Ñ¥Ù” ¤(€€€€€€€€€€€€¤€˜˜ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð€ø€Á0(€€€€€€€€¤ì(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å• (€€€€€€€€€€€€€€€ì‘¥ÍÁ…Ñ¡Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹ÑMÁ••¡¹ ¤ô°(€€€€€€€€€€€€€€€½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹…É±åMÉ••¹EÕ•ÍÑ¥½¹A½±¥ä¹MQ	%1%iQ%=9}5L(€€€€€€€€€€€€¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸‘¥ÍÁ…Ñ¡Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹ÑMÁ••¡¹ ¤ì(€€€€€€€Ù…°ÅÕ•ÍÑ¥½¸€ô…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¸¹Ñ…­•%˜ì¥Ð¹¥Í9½Ñ	±…¹¬ ¤ô€üèÉ•ÑÕÉ¸(€€€€€€€Ù…°ÑÕÉ¹%€ô…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹QÕÉ¹%¹Ñ…­•%˜ì¥Ð€„ô€Á0ô€üèÉ•ÑÕÉ¸(€€€€€€€¥˜€¡ÍÉ••¹I•ÍÁ½¹Í•Ñ¥Ù”¤É•ÑÕÉ¸(€€€€€€€Ù…°¹½Ü€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€¥˜€ …½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹A½±¥ä¹µ…å¥ÍÁ…Ñ¡½É%‘•¹Ñ¥Ñä (€€€€€€€€€€€€€€€ÑÕÉ¹%°Ù½¥•QÕÉ¹%‘•¹Ñ¥Ñ¥•Ì¹ÕÉÉ•¹Ð ¤ü¹ÕÍ•ÉQÕÉ¹%(€€€€€€€€€€€€¤¤ì(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰ÍÉ••¹}ÅÕ•Éå}…Éµ•‘}…¹•±±•ÕÍ•ÉQÕÉ¹%ô‘ÑÕÉ¹%É•…Í½¸õÉ•Á±…•‘}Ù½¥•}¥‘•¹Ñ¥Ñä€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰…•5Ìô‘ì¡¹½Ü€´…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘Ð¤¹½•É•Ñ1•…ÍÐ Á0¥ôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¸€ô€ˆˆ(€€€€€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹QÕÉ¹%€ô€Á0(€€€€€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘Ð€ô€Á0(€€€€€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹¥¹…±½µµ¥ÑÑ•€ô™…±Í”(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°ÍÑ…‰¥±¥é…Ñ¥½¹I•µ…¥¹¥¹œ€ô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹…É±åMÉ••¹EÕ•ÍÑ¥½¹A½±¥ä¹MQ	%1%iQ%=9}5L€´(€€€€€€€€€€€€¡¹½Ü€´…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘Ð¤(€€€€€€€¥˜€¡ÍÑ…‰¥±¥é…Ñ¥½¹I•µ…¥¹¥¹œ€ø€Á0¤ì(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡ì‘¥ÍÁ…Ñ¡Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹ÑMÁ••¡¹ ¤ô°ÍÑ…‰¥±¥é…Ñ¥½¹I•µ…¥¹¥¹œ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰ÍÉ••¹}ÅÕ•Éå}•…É±å}‘¥ÍÁ…Ñ ÕÍ•ÉQÕÉ¹%ô‘ÑÕÉ¹%ÍÁ••¡}•¹‘}…Ðô‘ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð€ˆ€¬(€€€€€€€€€€€€€€€€‰ÍÉ••¹}ÅÕ•Éå}¥¹Ñ•¹Ñ}‘•Ñ•Ñ•‘}…Ðô‘…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘ÐÍÁ••¡¹‘Q½%¹Ñ•¹Ñ5Ìô‘ì¡…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘Ð€´ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð¤¹½•É•Ñ1•…ÍÐ Á0¥ô€ˆ€¬(€€€€€€€€€€€€€€€€‰¥¹Ñ•¹ÑQ½¥ÍÁ…Ñ¡5Ìô‘ì¡¹½Ü€´…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘Ð¤¹½•É•Ñ1•…ÍÐ Á0¥ôˆ(€€€€€€€€¤(€€€€€€€•…É±åMÉ••¹EÕ•ÉåÝ…¥Ñ¥¹¥¹…±QÉ…¹ÍÉ¥ÁÐ€ô€……Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹¥¹…±½µµ¥ÑÑ•(€€€€€€€•…É±åMÉ••¹EÕ•ÍÑ¥½¹Q•áÐ€ôÅÕ•ÍÑ¥½¸(€€€€€€€•…É±åMÉ••¹EÕ•Éå¥ÍÁ…Ñ¡•‘QÕÉ¹%€ôÑÕÉ¹%(€€€€€€€‰•¥¹É•Í¡MÉ••¹EÕ•Éä¡ÅÕ•ÍÑ¥½¸°ÑÕÉ¹%¤(€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¸€ô€ˆˆ(€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹QÕÉ¹%€ô€Á0(€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘Ð€ô€Á0(€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹¥¹…±½µµ¥ÑÑ•€ô™…±Í”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÁ•…­MÉ••¹U¹…Ù…¥±…‰±”¡µ•ÍÍ…”èMÑÉ¥¹œ¤ì(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•Ñ¥Ù”€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•!…Í½¹Ñ•¹Ð€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•MÑ…ÉÑ•‘1½•€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••¹•É…Ñ¥½¹½µÁ±•Ñ”€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•Q•áÑ½µµ¥ÑÑ•€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•UÍ•ÉQÕÉ¹%€ô€Á0(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•™Ñ•É•¹•É…Ñ¥½¹%€ô€Á0(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••¹•É…Ñ¥½¹%€ô€Á0(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•	¥¹‘¥¹œ€ô¹Õ±°(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•M•ÍÍ¥½¹%€ô€ˆˆ(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••ÍÍ¥‰¥±¥ÑåA…­…”€ô€ˆˆ(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••ÍÍ¥‰¥±¥Ñå•¹•É…Ñ¥½¸€ô€Á0(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•EÕ•Éå%€ô€ˆˆ(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°ÑÉÕ”¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÁ•…­MÉ••¹AÉ¥Ù…å	±½­• ¤ì(€€€€€€€Ù…°µ•ÍÍ…”€ô€‰M•¹Í¥Ñ¥Ù”¥¹™½Éµ…Ñ¥½¸Ù¥Í¥‰±”¡…¤°¥Í±¥å”µ…¥¸ÍÉ••¸‘•Ñ…¥±ÌÉ•…¹…¡¤­…ÈÉ…¡¤¸ˆ(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°ÑÉÕ”¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹¥Í¡MÉ••¹I•ÍÁ½¹Í”¡É•…Í½¸èMÑÉ¥¹œ¤ì(€€€€€€€™…ÍÑY¥ÍÕ…±QÕÉ¹Ì¹ÕÉÉ•¹Ð ¤ü¹Ñ…­•%˜ì¥Ð¹ÕÍ•ÉQÕÉ¹%€ôôÍÉ••¹I•ÍÁ½¹Í•UÍ•ÉQÕÉ¹%ôü¹±•Ðì(€€€€€€€€€€€Ù…°¹½Ü€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰Q=Q1}Y%MU1}QUI8Ù¥ÍÕ…±QÕÉ¹%ô‘í¥Ð¹¥‘ôÉ•…Í½¸ô‘É•…Í½¸€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÍÁ••¡¹‘Q½ÕÑ¡½É¥Ñ…Ñ¥Ù•QÕÉ¹5Ìô‘í¥˜€¡¥Ð¹ÍÁ••¡¹‘•‘Ð€ø€Á0€˜˜¥Ð¹…ÕÑ¡½É¥Ñ…Ñ¥Ù•QÕÉ¹½µÁ±•Ñ•Ð€ø€Á0¤¥Ð¹…ÕÑ¡½É¥Ñ…Ñ¥Ù•QÕÉ¹½µÁ±•Ñ•Ð€´¥Ð¹ÍÁ••¡¹‘•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰…ÕÑ¡½É¥Ñ…Ñ¥Ù•QÕÉ¹Q½QÉ…¹ÍÉ¥ÁÑ5Ìô‘í¥˜€¡¥Ð¹…ÕÑ¡½É¥Ñ…Ñ¥Ù•QÕÉ¹½µÁ±•Ñ•Ð€ø€Á0€˜˜¥Ð¹™¥¹…±QÉ…¹ÍÉ¥ÁÑÐ€ø€Á0¤¥Ð¹™¥¹…±QÉ…¹ÍÉ¥ÁÑÐ€´¥Ð¹…ÕÑ¡½É¥Ñ…Ñ¥Ù•QÕÉ¹½µÁ±•Ñ•Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÑÉ…¹ÍÉ¥ÁÑQ½%¹Ñ•¹Ñ5Ìô‘í¥˜€¡¥Ð¹™¥¹…±QÉ…¹ÍÉ¥ÁÑÐ€ø€Á0€˜˜¥Ð¹¥¹Ñ•¹ÑI•Í½±Ù•‘Ð€ø€Á0¤¥Ð¹¥¹Ñ•¹ÑI•Í½±Ù•‘Ð€´¥Ð¹™¥¹…±QÉ…¹ÍÉ¥ÁÑÐ•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰¥¹Ñ•¹ÑQ½Y¥ÍÕ…±É…µ•5Ìô‘í¥˜€¡¥Ð¹¥¹Ñ•¹ÑI•Í½±Ù•‘Ð€ø€Á0€˜˜¥Ð¹™É…µ•I•…‘åÐ€ø€Á0¤¥Ð¹™É…µ•I•…‘åÐ€´¥Ð¹¥¹Ñ•¹ÑI•Í½±Ù•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰Ù¥ÍÕ…±É…µ•ÅÕ¥Í¥Ñ¥½¹5Ìô‘í¥˜€¡¥Ð¹™É…µ•I•ÅÕ•ÍÑ•‘Ð€ø€Á0€˜˜¥Ð¹™É…µ•I•…‘åÐ€ø€Á0¤¥Ð¹™É…µ•I•…‘åÐ€´¥Ð¹™É…µ•I•ÅÕ•ÍÑ•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÍÁ••¡¹‘Q½É…µ•I•…‘å5Ìô‘í¥˜€¡¥Ð¹ÍÁ••¡¹‘•‘Ð€ø€Á0€˜˜¥Ð¹™É…µ•I•…‘åÐ€ø€Á0¤¥Ð¹™É…µ•I•…‘åÐ€´¥Ð¹ÍÁ••¡¹‘•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰™É…µ•I•…‘åQ½5½‘•±I•ÅÕ•ÍÑ5Ìô‘í¥˜€¡¥Ð¹™É…µ•I•…‘åÐ€ø€Á0€˜˜¥Ð¹µ½‘•±I•ÅÕ•ÍÑÐ€ø€Á0¤¥Ð¹µ½‘•±I•ÅÕ•ÍÑÐ€´¥Ð¹™É…µ•I•…‘åÐ•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰µ½‘•±I•ÅÕ•ÍÑQ½¥ÉÍÑI•ÍÁ½¹Í•5Ìô‘í¥˜€¡¥Ð¹µ½‘•±I•ÅÕ•ÍÑÐ€ø€Á0€˜˜¥Ð¹™¥ÉÍÑ5½‘•±I•ÍÁ½¹Í•Ð€ø€Á0¤¥Ð¹™¥ÉÍÑ5½‘•±I•ÍÁ½¹Í•Ð€´¥Ð¹µ½‘•±I•ÅÕ•ÍÑÐ•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰É•ÍÁ½¹Í•Q½Ñ¥½¹5Ìô‘í¥˜€¡¥Ð¹™¥ÉÍÑ5½‘•±I•ÍÁ½¹Í•Ð€ø€Á0€˜˜¥Ð¹…Ñ¥½¹á•ÕÑ•‘Ð€ø€Á0¤¥Ð¹…Ñ¥½¹á•ÕÑ•‘Ð€´¥Ð¹™¥ÉÍÑ5½‘•±I•ÍÁ½¹Í•Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÍÁ••¡¹‘Q½Ñ¥½¹5Ìô‘í¥˜€¡¥Ð¹ÍÁ••¡¹‘•‘Ð€ø€Á0€˜˜¥Ð¹…Ñ¥½¹á•ÕÑ•‘Ð€ø€Á0¤¥Ð¹…Ñ¥½¹á•ÕÑ•‘Ð€´¥Ð¹ÍÁ••¡¹‘•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÍÁ••¡¹‘Q½¥ÉÍÑÕ‘¥½5Ìô‘í¥˜€¡¥Ð¹ÍÁ••¡¹‘•‘Ð€ø€Á0€˜˜¥Ð¹™¥ÉÍÑÕ‘¥½Ð€ø€Á0¤¥Ð¹™¥ÉÍÑÕ‘¥½Ð€´¥Ð¹ÍÁ••¡¹‘•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰Ù¥ÍÕ…±I•ÍÕ±ÑQ½I•Á±åEÕ•Õ•‘5Ìô‘í¥˜€¡¥Ð¹™¥ÉÍÑ5½‘•±I•ÍÁ½¹Í•Ð€ø€Á0€˜˜¥Ð¹É•Á±åEÕ•Õ•‘Ð€ø€Á0¤¥Ð¹É•Á±åEÕ•Õ•‘Ð€´¥Ð¹™¥ÉÍÑ5½‘•±I•ÍÁ½¹Í•Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰É•Á±åEÕ•Õ•‘Q½¥ÉÍÑÕ‘¥½5Ìô‘í¥˜€¡¥Ð¹É•Á±åEÕ•Õ•‘Ð€ø€Á0€˜˜¥Ð¹™¥ÉÍÑÕ‘¥½Ð€ø€Á0¤¥Ð¹™¥ÉÍÑÕ‘¥½Ð€´¥Ð¹É•Á±åEÕ•Õ•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÍÁ••¡¹‘Q½¥ÉÍÑA±…å‰…­5Ìô‘í¥˜€¡¥Ð¹ÍÁ••¡¹‘•‘Ð€ø€Á0€˜˜¥Ð¹™¥ÉÍÑA±…å‰…­Ð€ø€Á0¤¥Ð¹™¥ÉÍÑA±…å‰…­Ð€´¥Ð¹ÍÁ••¡¹‘•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰Ñ½Ñ…±Y¥ÍÕ…±QÕÉ¹5Ìô‘í¹½Ü€´¥Ð¹ÍÑ…ÉÑ•‘Ñôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€™…ÍÑY¥ÍÕ…±QÕÉ¹Ì¹™¥¹¥Í ¡¥Ð¹¥¤(€€€€€€€ô(€€€€€€€Ù½¥•1½œ ‰ÍÉ••¹}ÅÕ•Éå}Ñ•Éµ¥¹…°ÍÉ••¹EÕ•Éå%ô‘ÍÉ••¹I•ÍÁ½¹Í•EÕ•Éå%ÍÑ…Ñ”ô‘í¥˜€¡É•…Í½¸€ôô€‰É•…±}ÕÍ•É}‰…É•}¥¸ˆ¤€‰911}I1}	I}%8ˆ•±Í”€‰=5A1Q‰ôÉ•…Í½¸ô‘É•…Í½¸ˆ¤(€€€€€€€Ù½¥•1½œ ‰ÍÉ••¹}É•ÍÁ½¹Í•}Á±…å‰…­}•¹ÍÉ••¹}ÅÕ•Éå}¥ô‘ÍÉ••¹I•ÍÁ½¹Í•EÕ•Éå%ÍÉ••¹}Í•ÍÍ¥½¹}¥ô‘ÍÉ••¹I•ÍÁ½¹Í•M•ÍÍ¥½¹%É•…Í½¸ô‘É•…Í½¸ˆ¤(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•Ñ¥Ù”€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•!…Í½¹Ñ•¹Ð€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•MÑ…ÉÑ•‘1½•€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••¹•É…Ñ¥½¹½µÁ±•Ñ”€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•Q•áÑ½µµ¥ÑÑ•€ô™…±Í”(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•UÍ•ÉQÕÉ¹%€ô€Á0(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•™Ñ•É•¹•É…Ñ¥½¹%€ô€Á0(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••¹•É…Ñ¥½¹%€ô€Á0(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•	¥¹‘¥¹œ€ô¹Õ±°(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•M•ÍÍ¥½¹%€ô€ˆˆ(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••ÍÍ¥‰¥±¥ÑåA…­…”€ô€ˆˆ(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í••ÍÍ¥‰¥±¥Ñå•¹•É…Ñ¥½¸€ô€Á0(€€€€€€€ÍÉ••¹I•ÍÁ½¹Í•EÕ•Éå%€ô€ˆˆ(€€€€€€€É•Í•ÑQÕÉ¹	Õ™™•ÉÌ ‰ÍÉ••¹}É•ÍÁ½¹Í•|‘É•…Í½¸ˆ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¡…¹‘±•MÉ••¹5•µ½ÉåAÉ½Á½Í…°¡¥èMÑÉ¥¹œ°…ÉÌè½Éœ¹©Í½¸¹)M=9=‰©•Ð¤ì(€€€€€€€Ù…°ÁÉ•™Ì€ôÍÉ••¹Y¥Í¥½¹AÉ•™•É•¹•Ì(€€€€€€€¥˜€ …ÁÉ•™Ì¹Ù¥Í¥½¹¹…‰±•ñð€…ÁÉ•™Ì¹…ÕÑ½µ…Ñ¥1•…É¹¥¹œñð€…ÁÉ•™Ì¹Í…Ù•MÉ••¹5•µ½É¥•Ìñð(€€€€€€€€€€€€…MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹¡…ÍÉ•Í¡É…µ” ¤(€€€€€€€€¤ì(€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÍÉ••¹}µ•µ½Éäˆ°™…±Í”°€‰ÕÑ½µ…Ñ¥ŒÍÉ••¸µ•µ½Éä¥Ì‘¥Í…‰±•ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°™…Ð€ô…ÉÌ¹½ÁÑMÑÉ¥¹œ ‰™…Ðˆ¤¹ÑÉ¥´ ¤¹É•Á±…”¡I••à ‰qqÌ¬ˆ¤°€ˆ€ˆ¤(€€€€€€€Ù…°…Ñ•½Éå9…µ”€ô…ÉÌ¹½ÁÑMÑÉ¥¹œ ‰…Ñ•½Éäˆ¤¹ÕÁÁ•É…Í”¡1½…±”¹I==P¤(€€€€€€€Ù…°½¹™¥‘•¹”€ô…ÉÌ¹½ÁÑ½Õ‰±” ‰½¹™¥‘•¹”ˆ°€À¸À¤(€€€€€€€Ù…°ÍÑ…‰±•-•ä€ô…ÉÌ¹½ÁÑMÑÉ¥¹œ ‰µ•µ½Éå}­•äˆ¤¹±½Ý•É…Í”¡1½…±”¹I==P¤(€€€€€€€€€€€€¹É•Á±…”¡I••à ‰my„µèÀ´å|ét¬ˆ¤°€‰|ˆ¤¹ÑÉ¥´ |œ¤¹Ñ…­” àÀ¤(€€€€€€€¥˜€¡™…Ð¹±•¹Ñ €…¥¸€Ô¸¸ÈÀÀñðÍÑ…‰±•-•ä¹¥Í	±…¹¬ ¤ñð(€€€€€€€€€€€€…MÉ••¹AÉ¥Ù…åA½±¥ä¹¥Í5•µ½Éå]½ÉÑ¡ä¡…Ñ•½Éå9…µ”°½¹™¥‘•¹”¤ñð(€€€€€€€€€€€€¡ÁÉ•™Ì¹Í•¹Í¥Ñ¥Ù•½¹Ñ•¹ÑAÉ½Ñ•Ñ¥½¸€˜˜MÉ••¹AÉ¥Ù…åA½±¥ä¹‰±½­Í1½¹Q•Éµ5•µ½Éä¡™…Ð¤¤(€€€€€€€€¤ì(€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÍÉ••¹}µ•µ½Éäˆ°™…±Í”°€‰MÉ••¸½‰Í•ÉÙ…Ñ¥½¸Ý…Ì¹½ÐÍ…™”…¹‘ÕÉ…‰±”•¹½Õ Ñ¼Í…Ù”ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°…Ñ•½Éä€ôÉÕ¹…Ñ¡¥¹œì5•µ½Éå…Ñ•½Éä¹Ù…±Õ•=˜¡…Ñ•½Éå9…µ”¤ô¹•Ñ=É9Õ±° ¤(€€€€€€€¥˜€¡…Ñ•½Éä€ôô¹Õ±°¤ì(€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÍÉ••¹}µ•µ½Éäˆ°™…±Í”°€‰U¹ÍÕÁÁ½ÉÑ•µ•µ½Éä…Ñ•½Éäˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Í•ÉÙ¥•M½Á”¹±…Õ¹ ì(€€€€€€€€€€€Ù…°…¹‘¥‘…Ñ”€ô5•µ½Éå…¹‘¥‘…Ñ” (€€€€€€€€€€€€€€€…Ñ•½Éä°™…Ð°€‰ÍÉ••¸è‘ÍÑ…‰±•-•äˆ°5•µ½ÉåM•¹Í¥Ñ¥Ù¥Ñä¹1=\°(€€€€€€€€€€€€€€€½¹™¥‘•¹”°Í½ÕÉ”€ô€‰ÍÉ••¹}½‰Í•ÉÙ…Ñ¥½¸ˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù…°É•ÍÕ±Ð€ô¥˜€¡µ•µ½ÉåI•Á½Í¥Ñ½Éä¹¥Í±É•…‘åM…Ù•¡…¹‘¥‘…Ñ”¤¤ì(€€€€€€€€€€€€€€€5•µ½Éå]É¥Ñ•I•ÍÕ±Ð¹M…Ù• ‰•á¥ÍÑ¥¹œˆ¤(€€€€€€€€€€€ô•±Í”µ•µ½ÉåI•Á½Í¥Ñ½Éä¹Í…Ù”¡…¹‘¥‘…Ñ”¤(€€€€€€€€€€€Ù…°Í…Ù•€ôÉ•ÍÕ±Ð¥Ì5•µ½Éå]É¥Ñ•I•ÍÕ±Ð¹M…Ù•(€€€€€€€€€€€Ù½¥•1½œ ‰ÍÉ••¹}µ•µ½Éå}ÝÉ¥Ñ”™…Ðô‘í™…Ð¹Ñ…­” àÀ¥ôÍ½ÕÉ”õÍÉ••¹}½‰Í•ÉÙ…Ñ¥½¸Í…Ù•ô‘Í…Ù•ˆ¤(€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í” (€€€€€€€€€€€€€€€¥°€‰ÁÉ½Á½Í•}ÍÉ••¹}µ•µ½Éäˆ°Í…Ù•°(€€€€€€€€€€€€€€€¥˜€¡Í…Ù•¤€‰MÑÉÕÑÕÉ•ÍÉ••¸½‰Í•ÉÙ…Ñ¥½¸Í…Ù•¥¸Ñ¡”•á¥ÍÑ¥¹œ5•µ½Éä	É…¥¸ˆ(€€€€€€€€€€€€€€€•±Í”€‰MÉ••¸½‰Í•ÉÙ…Ñ¥½¸Ý…Ì¹½ÐÍ…Ù•ˆ(€€€€€€€€€€€€¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¡…¹‘±•M•µ…¹Ñ¥5•µ½ÉåAÉ½Á½Í…°¡¥èMÑÉ¥¹œ°…ÉÌè½Éœ¹©Í½¸¹)M=9=‰©•Ð¤ì(€€€€€€€Ù…°Õ…É‘•‘Q•áÐ€ô±…ÍÑUÍ•É%¹Ñ•¹ÑQ•áÐ¹¥™	±…¹¬ì¥¹ÁÕÐ¹Ñ½MÑÉ¥¹œ ¤¹ÑÉ¥´ ¤ô(€€€€€€€¥˜€¡Õ…É‘•‘Q•áÐ¹¥Í	±…¹¬ ¤ñð5•µ½Éå½µµ…¹‘A…ÉÍ•È¹±½½­Í1¥­•%¹Ñ•¹Ð¡É½µ…¹¥ÍÁ±…åQ•áÐ¡Õ…É‘•‘Q•áÐ¤¤¤ì(€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÕÍ•É}µ•µ½Éäˆ°™…±Í”°€‰áÁ±¥¥Ðµ•µ½Éä½µµ…¹‘Ì…É”¡…¹‘±•±½…±±äˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€¥˜€¡Á•¹‘¥¹A•ÉÍ½¹…±5•µ½Éä€„ô¹Õ±°ñðÁ•¹‘¥¹•Ñ•Ñ•‘A•ÉÍ½¹…±5•µ½Éä€„ô¹Õ±°ñð(€€€€€€€€€€€A•ÉÍ½¹…±5•µ½ÉåáÑÉ…Ñ½È¹•áÑÉ…Ð¡É½µ…¹¥ÍÁ±…åQ•áÐ¡Õ…É‘•‘Q•áÐ¤¤€„ô¹Õ±°ñð(€€€€€€€€€€€A•ÉÍ½¹1¥¹­•‘5•µ½ÉåáÑÉ…Ñ½È¹•áÑÉ…Ñ±°¡É½µ…¹¥ÍÁ±…åQ•áÐ¡Õ…É‘•‘Q•áÐ¤¤¹¥Í9½ÑµÁÑä ¤ñð(€€€€€€€€€€€ÕÑ½µ…Ñ¥5•µ½Éå¡…¹•A…ÉÍ•È¹Á…ÉÍ”¡É½µ…¹¥ÍÁ±…åQ•áÐ¡Õ…É‘•‘Q•áÐ¤¤¥ÌÕÑ½µ…Ñ¥5•µ½Éå¡…¹”¹M…Ù”(€€€€€€€€¤ì(€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÕÍ•É}µ•µ½Éäˆ°ÑÉÕ”°€‰Q¡¥Ì™…Ð¥Ì…±É•…‘ä‰•¥¹œ¡…¹‘±•‰ä¹‘É½¥ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°É••¹Ñ½¹Ñ•áÐ€ô€¡É••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ì¹µ…Àì¥Ð¹Í•½¹ô€¬Õ…É‘•‘Q•áÐ¤(€€€€€€€€€€€€¹Ñ…­•1…ÍÐ¡5a}I1Q%=9M!%A}=9QaQ}QUI9L€¬€Ä¤(€€€€€€€€€€€€¹©½¥¹Q½MÑÉ¥¹œ ˆ€ˆ¤(€€€€€€€Ù…°…¹‘¥‘…Ñ”€ôM•µ…¹Ñ¥5•µ½ÉåAÉ½Á½Í…±Y…±¥‘…Ñ½È¹Ù…±¥‘…Ñ” (€€€€€€€€€€€™…Ð€ô…ÉÌ¹½ÁÑMÑÉ¥¹œ ‰™…Ðˆ¤°(€€€€€€€€€€€…Ñ•½Éå9…µ”€ô…ÉÌ¹½ÁÑMÑÉ¥¹œ ‰…Ñ•½Éäˆ¤°(€€€€€€€€€€€µ•µ½Éå-•ä€ô…ÉÌ¹½ÁÑMÑÉ¥¹œ ‰µ•µ½Éå}­•äˆ¤°(€€€€€€€€€€€•Ù¥‘•¹”€ô…ÉÌ¹½ÁÑMÑÉ¥¹œ ‰•Ù¥‘•¹”ˆ¤°(€€€€€€€€€€€½¹™¥‘•¹”€ô…ÉÌ¹½ÁÑ½Õ‰±” ‰½¹™¥‘•¹”ˆ°€À¸À¤°(€€€€€€€€€€€½¹Ù•ÉÍ…Ñ¥½¹½¹Ñ•áÐ€ôÉ½µ…¹¥ÍÁ±…åQ•áÐ¡É••¹Ñ½¹Ñ•áÐ¤(€€€€€€€€¤(€€€€€€€¥˜€¡…¹‘¥‘…Ñ”€ôô¹Õ±°¤ì(€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÕÍ•É}µ•µ½Éäˆ°™…±Í”°€‰AÉ½Á½Í…°Ý…Ì¹½ÐÉ½Õ¹‘•½ÈÍ…™”•¹½Õ ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô((€€€€€€€Í•ÉÙ¥•M½Á”¹±…Õ¹ ì(€€€€€€€€€€€¥˜€¡µ•µ½ÉåI•Á½Í¥Ñ½Éä¹¥Í±É•…‘åM…Ù•¡…¹‘¥‘…Ñ”¤¤ì(€€€€€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÕÍ•É}µ•µ½Éäˆ°ÑÉÕ”°€‰±É•…‘äÉ•µ•µ‰•É•ì½¹Ñ¥¹Õ”¹…ÑÕÉ…±±äÝ¥Ñ¡½ÕÐµ•¹Ñ¥½¹¥¹œµ•µ½Éäˆ¤(€€€€€€€€€€€€€€€É•ÑÕÉ¹±…Õ¹ (€€€€€€€€€€€ô(€€€€€€€€€€€Ý¡•¸ì(€€€€€€€€€€€€€€€5•µ½ÉåI•±…Ñ¥½¹Í¡¥ÁA½±¥ä¹¥Í	•ÍÑÉ¥•¹¡…¹‘¥‘…Ñ”¤€´øì(€€€€€€€€€€€€€€€€€€€µ•µ½ÉåI•Á½Í¥Ñ½Éä¹Í…Ù•‘‘¥Ñ¥½¹…±	•ÍÑÉ¥•¹¡…¹‘¥‘…Ñ”¤(€€€€€€€€€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÕÍ•É}µ•µ½Éäˆ°ÑÉÕ”°€‰M…Ù•Í¥±•¹Ñ±äì½¹Ñ¥¹Õ”Ñ¡”½¹Ù•ÉÍ…Ñ¥½¸¹…ÑÕÉ…±±äÝ¥Ñ¡½ÕÐµ•¹Ñ¥½¹¥¹œµ•µ½Éäˆ¤(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€5•µ½ÉåM…™•ÑåA½±¥ä¹‘•¥‘”¡…¹‘¥‘…Ñ”¤€ôô5•µ½ÉåM…Ù••¥Í¥½¸¹I)P€´ø(€€€€€€€€€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÕÍ•É}µ•µ½Éäˆ°™…±Í”°€‰¹‘É½¥É•©•Ñ•Ñ¡¥Ìµ•µ½Éäˆ¤(€€€€€€€€€€€€€€€5•µ½ÉåM…™•ÑåA½±¥ä¹‘•¥‘”¡…¹‘¥‘…Ñ”¤€ôô5•µ½ÉåM…Ù••¥Í¥½¸¹UQ=}MY€´øì(€€€€€€€€€€€€€€€€€€€µ•µ½ÉåI•Á½Í¥Ñ½Éä¹Í…Ù”¡…¹‘¥‘…Ñ”¤(€€€€€€€€€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÕÍ•É}µ•µ½Éäˆ°ÑÉÕ”°€‰M…Ù•Í¥±•¹Ñ±äì½¹Ñ¥¹Õ”Ñ¡”½¹Ù•ÉÍ…Ñ¥½¸¹…ÑÕÉ…±±äÝ¥Ñ¡½ÕÐµ•¹Ñ¥½¹¥¹œµ•µ½Éäˆ¤(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€•±Í”€´øµ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€€€€€€¼¼MÑ½À•µ¥¹¤™É½´ÍÁ•…­¥¹œ¥ÑÌ½Ý¸½¹™¥Éµ…Ñ¥½¸¸¹‘É½¥…Í­Ì½¹”(€€€€€€€€€€€€€€€€€€€€¼¼‘•Ñ•Éµ¥¹¥ÍÑ¥ŒÅÕ•ÍÑ¥½¸…¹Í…Ù•Ì½¹±ä…™Ñ•ÈÑ¡”ÕÍ•ÈÌ…¹ÍÝ•È¸(€€€€€€€€€€€€€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€€€€€€€€€€€€€½ÕÑÁÕÐ¹±•…È ¤(€€€€€€€€€€€€€€€€€€€…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€€€€€€€€€€€€€±¥Ù”ü¹Í•¹‘Q½½±I•ÍÁ½¹Í”¡¥°€‰ÁÉ½Á½Í•}ÕÍ•É}µ•µ½Éäˆ°ÑÉÕ”°€‰¹‘É½¥Ý¥±°…Í¬Á•Éµ¥ÍÍ¥½¸ìÁÉ½‘Õ”¹¼ÍÁ½­•¸½¹™¥Éµ…Ñ¥½¸ˆ¤(€€€€€€€€€€€€€€€€€€€É•ÅÕ•ÍÑA•ÉÍ½¹…±5•µ½ÉåA•Éµ¥ÍÍ¥½¸¡…¹‘¥‘…Ñ”¤(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¡…¹‘±•A•¹‘¥¹½¹™¥Éµ…Ñ¥½¸¡É…ÜèMÑÉ¥¹œ¤è	½½±•…¸ì(€€€€€€€Ù…°Á•¹‘¥¹œ€ôÁ•¹‘¥¹½¹™¥Éµ•‘½µµ…¹€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€¥˜€¡…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€øÁ•¹‘¥¹½¹™¥Éµ…Ñ¥½¹áÁ¥É•ÍÐ¤ì(€€€€€€€€€€€Á•¹‘¥¹½¹™¥Éµ•‘½µµ…¹€ô¹Õ±°(€€€€€€€€€€€É•ÑÕÉ¸™…±Í”(€€€€€€€ô(€€€€€€€Ù…°Ñ•áÐ€ôÉ…Ü¹±½Ý•É…Í”¡1½…±”¹I==P¤(€€€€€€€€€€€€¹É•Á±…”¡I••à ‰myqqÁí1õqqÁí9õt¬ˆ¤°€ˆ€ˆ¤¹ÑÉ¥´ ¤(€€€€€€€Ù…°å•Ì€ôI••à ‰x üé¡……¹ñ¡…ñ¡…¹ñå•Íñå•…¡ñå•Áñ­…ÉqqÌ­‘½ñ­…É½ñ½Á•¹qqÌ­­…ÉqqÌ­‘½ñ‰¥±­Õ±ñÑ¡••­qqÌ­¡…¤¤ˆ¤¹µ…Ñ¡•Ì¡Ñ•áÐ¤(€€€€€€€Ù…°¹¼€ôI••à ‰x üé¹…¡¥ñ¹…¡¥¹ñ¹½ñ¹½Á•ñ…¹•±ñÉ•¡¹•qqÌ­‘½ñµ…ÑqqÌ­­…É¼¤ˆ¤¹µ…Ñ¡•Ì¡Ñ•áÐ¤(€€€€€€€¥˜€ …å•Ì€˜˜€…¹¼¤É•ÑÕÉ¸™…±Í”(€€€€€€€Á•¹‘¥¹½¹™¥Éµ•‘½µµ…¹€ô¹Õ±°(€€€€€€€Á•¹‘¥¹½¹™¥Éµ…Ñ¥½¹áÁ¥É•ÍÐ€ô€Á0(€€€€€€€Ý…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ô™…±Í”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ô™…±Í”(€€€€€€€½µµ…¹‘UÍ•ÉQ•áÑµ¥ÑÑ•€ôÑÉÕ”(€€€€€€€½µµ¥Ñ¥¹…±UÍ•É5•ÍÍ…”¡É…Ü¹ÑÉ¥´ ¤°€‰A!=9}Q%=9}=9%I5Q%=8ˆ¤(€€€€€€€¥˜€¡å•Ì¤ì(€€€€€€€€€€€•á•ÕÑ•½µµ…¹¡Á•¹‘¥¹œ¤(€€€€€€€ô•±Í”ì(€€€€€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€€€€€Ù…°µ•ÍÍ…”€ô€‰Q¡••¬¡…¤å……È°¹…¡¤­¡½±Õ¹¤¸ˆ(€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¥ÍM…™•¥É•Ñ5•‘¥…½µµ…¹¡½µµ…¹èÁÁ½µµ…¹¤è	½½±•…¸€ôÝ¡•¸€¡½µµ…¹¤ì(€€€€€€€¥ÌÁÁ½µµ…¹¹A±…åe½ÕQÕ‰”°ÁÁ½µµ…¹¹=Á•¹e½ÕQÕ‰•M¡½ÉÑÌ°(€€€€€€€ÁÁ½µµ…¹¹=Á•¹%¹ÍÑ…É…µI••±Ì°ÁÁ½µµ…¹¹Q…­•MÉ••¹Í¡½Ð°ÁÁ½µµ…¹¹I•Á•…Ñe½ÕQÕ‰•M•…É °(€€€€€€€¥ÌÁÁ½µµ…¹¹=Á•¹ÁÀ°¥ÌÁÁ½µµ…¹¹±½Í•ÕÉÉ•¹ÑÁÀ°(€€€€€€€¥ÌÁÁ½µµ…¹¹I•Á±å]¡…ÑÍÁÀ°ÁÁ½µµ…¹¹EÕ•Éå]¡…ÑÍÁÁ5•ÍÍ…•Ì°(€€€€€€€ÁÁ½µµ…¹¹½!½µ”°ÁÁ½µµ…¹¹½	…¬°ÁÁ½µµ…¹¹ÕÉÉ•¹ÑQ¥µ”°(€€€€€€€ÁÁ½µµ…¹¹	…ÑÑ•Éå1•Ù•°°ÁÁ½µµ…¹¹1¥ÍÑ•…ÑÕÉ•Ì°¥ÌÁÁ½µµ…¹¹M•Ñ±…Í¡±¥¡Ð°(€€€€€€€¥ÌÁÁ½µµ…¹¹½¹ÑÉ½±5•‘¥„°¥ÌÁÁ½µµ…¹¹MÉ½±±e½ÕQÕ‰”€´øÑÉÕ”(€€€€€€€•±Í”€´ø™…±Í”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸Í¡½Õ±‘á•ÕÑ”¡½µµ…¹èÁÁ½µµ…¹¤è	½½±•…¸ì(€€€€€€€Ù…°¹½Ü€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù…°­•ä€ôÝ¡•¸€¡½µµ…¹¤ì(€€€€€€€€€€€¥ÌÁÁ½µµ…¹¹=Á•¹ÁÀ€´ø€‰½Á•¸è‘í½µµ…¹¹…ÁÁ9…µ”¹±½Ý•É…Í”¡1½…±”¹I==P¥ôˆ(€€€€€€€€€€€¥ÌÁÁ½µµ…¹¹±½Í•ÕÉÉ•¹ÑÁÀ€´ø€‰±½Í”è‘í½µµ…¹¹É•ÅÕ•ÍÑ•‘9…µ”¹½ÉµÁÑä ¤¹±½Ý•É…Í”¡1½…±”¹I==P¥ôˆ(€€€€€€€€€€€¥ÌÁÁ½µµ…¹¹M•…É¡e½ÕQÕ‰”€´ø€‰å½ÕÑÕ‰”µÍ•…É è‘í½µµ…¹¹ÅÕ•Éä¹±½Ý•É…Í”¡1½…±”¹I==P¥ôˆ(€€€€€€€€€€€¥ÌÁÁ½µµ…¹¹A±…åe½ÕQÕ‰”€´ø€‰å½ÕÑÕ‰”µÁ±…äè‘í½µµ…¹¹ÅÕ•Éä¹½ÉµÁÑä ¤¹±½Ý•É…Í”¡1½…±”¹I==P¥ôˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹=Á•¹e½ÕQÕ‰•M¡½ÉÑÌ€´ø€‰å½ÕÑÕ‰”µÍ¡½ÉÑÌˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹I•ÅÕ•ÍÑ%¹ÍÑ…É…µI••±Ì€´ø€‰É•ÅÕ•ÍÐµ¥¹ÍÑ…É…´µÉ••±Ìˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹=Á•¹%¹ÍÑ…É…µI••±Ì€´ø€‰½Á•¸µ¥¹ÍÑ…É…´µÉ••±Ìˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹Q…­•MÉ••¹Í¡½Ð€´ø€‰Ñ…­”µÍÉ••¹Í¡½Ðˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹I•Á•…Ñe½ÕQÕ‰•M•…É €´ø€‰å½ÕÑÕ‰”µÍ•…É éÉ•Á•…Ðˆ(€€€€€€€€€€€¥ÌÁÁ½µµ…¹¹••ÁI•Í•…É €´ø€‰É•Í•…É è‘í½µµ…¹¹ÅÕ•Éä¹½ÉµÁÑä ¤¹±½Ý•É…Í”¡1½…±”¹I==P¥ôˆ(€€€€€€€€€€€¥ÌÁÁ½µµ…¹¹I•Á±å]¡…ÑÍÁÀ€´ø€‰Ý¡…ÑÍ…ÁÀµÉ•Á±äè‘í½µµ…¹¹Í•¹‘•È¹½ÉµÁÑä ¤¹±½Ý•É…Í”¡1½…±”¹I==P¥ôè‘í½µµ…¹¹µ•ÍÍ…”¹±½Ý•É…Í”¡1½…±”¹I==P¥ôˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹EÕ•Éå]¡…ÑÍÁÁ5•ÍÍ…•Ì€´ø€‰Ý¡…ÑÍ…ÁÀµµ•ÍÍ…”µÅÕ•Éäˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹½!½µ”€´ø€‰¼µ¡½µ”ˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹½	…¬€´ø€‰¼µ‰…¬ˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹ÕÉÉ•¹ÑQ¥µ”€´ø€‰ÕÉÉ•¹ÐµÑ¥µ”ˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹	…ÑÑ•Éå1•Ù•°€´ø€‰‰…ÑÑ•Éäµ±•Ù•°ˆ(€€€€€€€€€€€ÁÁ½µµ…¹¹1¥ÍÑ•…ÑÕÉ•Ì€´ø€‰±¥ÍÐµ™•…ÑÕÉ•Ìˆ(€€€€€€€€€€€¥ÌÁÁ½µµ…¹¹M•Ñ±…Í¡±¥¡Ð€´ø€‰™±…Í¡±¥¡Ðè‘í½µµ…¹¹•¹…‰±•‘ôˆ(€€€€€€€€€€€¥ÌÁÁ½µµ…¹¹½¹ÑÉ½±5•‘¥„€´ø€‰µ•‘¥„è‘í½µµ…¹¹…Ñ¥½¸¹¹…µ”¹±½Ý•É…Í”¡1½…±”¹I==P¥ôˆ(€€€€€€€€€€€¥ÌÁÁ½µµ…¹¹MÉ½±±e½ÕQÕ‰”€´ø€‰å½ÕÑÕ‰”µÍÉ½±°è‘í½µµ…¹¹‘¥É•Ñ¥½¸ü¹¹…µ”ü¹±½Ý•É…Í”¡1½…±”¹I==P¤€üè€‰É•Á•…Ð‰ôˆ(€€€€€€€ô(€€€€€€€€¼¼MÉ½±°¥Ì¥¹Ñ•¹Ñ¥½¹…±±äÉ•Á•…Ñ…‰±”¡…¹‘Ìµ™É•”°Í¼½¹±äÍÕÁÁÉ•ÍÌ¹•…Èµ¥‘•¹Ñ¥…°(€€€€€€€€¼¼ÑÉ…¹ÍÉ¥ÁÐ™É…µ•¹ÑÌ™É½´Ñ¡”Í…µ”ÕÑÑ•É…¹”¸=Ñ¡•È…Ñ¥½¹Ì­••ÀÑ¡”±½¹•È(€€€€€€€€¼¼Í…™•ÑäÝ¥¹‘½ÜÑ¡…ÐÁÉ•Ù•¹ÑÌ…¥‘•¹Ñ…°‘ÕÁ±¥…Ñ”•á•ÕÑ¥½¸¸(€€€€€€€Ù…°‘•‘ÕÁ•]¥¹‘½Ý5Ì€ô¥˜€¡½µµ…¹¥ÌÁÁ½µµ…¹¹MÉ½±±e½ÕQÕ‰”¤€ÜÀÁ0•±Í”€Ñ|ÀÀÁ0(€€€€€€€¥˜€¡­•ä€ôô±…ÍÑ½µµ…¹‘-•ä€˜˜¹½Ü€´±…ÍÑ½µµ…¹‘Ð€ð‘•‘ÕÁ•]¥¹‘½Ý5Ì¤É•ÑÕÉ¸™…±Í”(€€€€€€€±…ÍÑ½µµ…¹‘-•ä€ô­•äì±…ÍÑ½µµ…¹‘Ð€ô¹½ÜìÉ•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•½µµ…¹¡½µµ…¹èÁÁ½µµ…¹¤ì(€€€€€€€¥˜€¡±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸ñð€…Í¡½Õ±‘á•ÕÑ”¡½µµ…¹¤¤É•ÑÕÉ¸(€€€€€€€¥˜€¡½µµ…¹¥ÌÁÁ½µµ…¹¹M•…É¡e½ÕQÕ‰”¤ì(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰MI!}aUQ=I}9QId±…ÍÌõ5åÉ…Y½¥•M•ÉÙ¥”µ•Ñ¡½õ•á•ÕÑ•½µµ…¹ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰™¥¹…±QÉ…¹ÍÉ¥ÁÐõ±•…äÅÕ•Éäô‘í½µµ…¹¹ÅÕ•Éä¹Ñ…­” ÄÈÀ¥ô‘•ÍÑ¥¹…Ñ¥½¸õe=UQU	€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰™½É•É½Õ¹‘A…­…”ô‘í•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”ü¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤ü¹Á…­…•9…µ•ôˆ(€€€€€€€€€€€€¤(€€€€€€€ô(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€±…Ñ•ÍÑÑ¥½¹¥ÍÁ…Ñ¡•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€¥˜€¡½µµ…¹€ôôÁÁ½µµ…¹¹I•ÅÕ•ÍÑ%¹ÍÑ…É…µI••±Ì¤ì(€€€€€€€€€€€Á•¹‘¥¹½¹™¥Éµ•‘½µµ…¹€ôÁÁ½µµ…¹¹=Á•¹%¹ÍÑ…É…µI••±Ì(€€€€€€€€€€€Á•¹‘¥¹½¹™¥Éµ…Ñ¥½¹áÁ¥É•ÍÐ€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€¬€ÌÁ|ÀÀÁ0(€€€€€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€€€€€Ý…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ôÑÉÕ”(€€€€€€€€€€€½µµ…¹‘AÉ½‰”¹±•…È ¤(€€€€€€€€€€€½ÕÑÁÕÐ¹±•…È ¤(€€€€€€€€€€€Ù…°µ•ÍÍ…”€ô€‰%¹ÍÑ…É…´½Á•¸­…È‘Õ¸ÑÕµ¡…É”±¥å”üˆ(€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€¥˜€¡½µµ…¹¥ÌÁÁ½µµ…¹¹••ÁI•Í•…É ¤ì•á•ÕÑ•••ÁI•Í•…É ¡½µµ…¹¤ìÉ•ÑÕÉ¸ô(€€€€€€€¥˜€¡½µµ…¹¥ÌÁÁ½µµ…¹¹MÉ½±±e½ÕQÕ‰”¤ì(€€€€€€€€€€€•á•ÕÑ•Y•É¥™¥•‘MÉ½±°¡½µµ…¹¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€Ý…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ôÑÉÕ”(€€€€€€€½µµ…¹‘AÉ½‰”¹±•…È ¤(€€€€€€€½ÕÑÁÕÐ¹±•…È ¤(€€€€€€€±¥Ù”ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€µ•‘¥…Õ…É¹™¥¹¥Í¡%¹Ñ•É…Ñ¥½¸ ¤(€€€€€€€Ù…°É•ÍÕ±Ð€ô…ÍÍ¥ÍÑ…¹Ñ½¹ÑÉ½±±•È¹ÁÉ½•ÍÍ½µµ…¹ (€€€€€€€€€€€MÑÉÕÑÕÉ•‘½µµ…¹‘A…ÉÍ•È¹™É½µ1•…ä¡½µµ…¹°½µµ…¹¹Ñ½MÑÉ¥¹œ ¤¤°(€€€€€€€€€€€ÍÁ•…¬€ô™…±Í”°(€€€€€€€€€€€¹½Ñ¥™å1¥ÍÑ•¹•ÉÌ€ô™…±Í”(€€€€€€€€¤(€€€€€€€‰É…¥¸¹É•½É‘A¡½¹•Ñ¥½¸ (€€€€€€€€€€€…ÁÀ€ô€¡½µµ…¹…ÌüÁÁ½µµ…¹¹=Á•¹ÁÀ¤ü¹…ÁÁ9…µ”°(€€€€€€€€€€€…Ñ¥½¸€ô½µµ…¹¹Ñ½MÑÉ¥¹œ ¤°(€€€€€€€€€€€ÍÕ•ÍÌ€ôÉ•ÍÕ±Ð¹ÍÕ•ÍÌ€˜˜É•ÍÕ±Ð¹Ù•É¥™¥•(€€€€€€€€¤(€€€€€€€Ù…°Í¥±•¹ÑI•Á•…Ñ•‘MÉ½±°€ô(€€€€€€€€€€€½µµ…¹¥ÌÁÁ½µµ…¹¹MÉ½±±e½ÕQÕ‰”€˜˜(€€€€€€€€€€€€€€€½µµ…¹¹‘¥É•Ñ¥½¸€ôô¹Õ±°€˜˜(€€€€€€€€€€€€€€€É•ÍÕ±Ð¹ÍÕ•ÍÌ€˜˜(€€€€€€€€€€€€€€€¡…Í­¹½Ý±•‘•‘MÉ½±±¥É•Ñ¥½¸(€€€€€€€¥˜€¡½µµ…¹¥ÌÁÁ½µµ…¹¹MÉ½±±e½ÕQÕ‰”€˜˜É•ÍÕ±Ð¹ÍÕ•ÍÌ¤ì(€€€€€€€€€€€¡…Í­¹½Ý±•‘•‘MÉ½±±¥É•Ñ¥½¸€ôÑÉÕ”(€€€€€€€ô(€€€€€€€¥˜€¡Í¥±•¹ÑI•Á•…Ñ•‘MÉ½±°¤ì(€€€€€€€€€€€…Õ‘¥¼ü¹Í•Ñ5ÕÑ•¡™…±Í”¤(€€€€€€€€€€€€¼¼-••ÀÑ¡¥ÌÑÕÉ¸ÍÕÁÁÉ•ÍÍ•Õ¹Ñ¥°Ñ¡”¹•áÐÉ•…°ÕÍ•ÈÑÉ…¹ÍÉ¥ÁÐ¸•µ¥¹¤µ…ä(€€€€€€€€€€€€¼¼ÍÑ¥±°‘•±¥Ù•È±…Ñ”Á…­•ÑÌ™½ÈÑ¡”¥¹Ñ•É•ÁÑ•ÕÑÑ•É…¹”ì¹½¹”µ…äÍÁ•…¬¸(€€€€€€€€€€€•µ¥ÑMÑ…Ñ” ‰MÕ¸É…¡¤¡½½»Š˜ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡É•ÍÕ±Ð¹ÍÁ½­•¹5•ÍÍ…”°€…É•ÍÕ±Ð¹ÍÕ•ÍÌ¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡É•ÍÕ±Ð¹ÍÁ½­•¹5•ÍÍ…”¤(€€€€€€€ÅÕ•Õ•1½…±MÁ••  (€€€€€€€€€€€É•ÍÕ±Ð¹ÍÁ½­•¹5•ÍÍ…”°(€€€€€€€€€€€…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÉ•ÍÕ±Ð¹ÍÕ•ÍÌ€˜˜¥ÍM…™•U¹ÑÉ…¹ÍÉ¥‰•‘½¹™¥Éµ…Ñ¥½¸¡½µµ…¹¤(€€€€€€€€¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¡…¹‘±•	É…¥¹…¹•±±…Ñ¥½¸¡Ñ…Í­Q½­•¸è1½¹œ¤ì(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€Ý…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ôÑÉÕ”(€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°(€€€€€€€Á•¹‘¥¹½¹™¥Éµ•‘½µµ…¹€ô¹Õ±°(€€€€€€€Á•¹‘¥¹½¹™¥Éµ…Ñ¥½¹áÁ¥É•ÍÐ€ô€Á0(€€€€€€€½ÕÑÁÕÐ¹±•…È ¤ì½µµ…¹‘AÉ½‰”¹±•…È ¤(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€ÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹…¹•° ¤ü¹±•Ðì(€€€€€€€€€€€Ù½¥•1½œ ‰MI9}Q%=9}911…Ñ¥½¹%ô‘í¥Ð¹…Ñ¥½¹%‘ôÑÕÉ¹%ô‘í¥Ð¹ÑÕÉ¹%‘ôÉ•…Í½¸õÕÍ•É}…¹•±±•ˆ¤(€€€€€€€ô(€€€€€€€‰É…¥¸¹™¥¹¥Í¡Q…Í¬¡Ñ…Í­Q½­•¸°ÑÉÕ”¤(€€€€€€€Ù…°µ•ÍÍ…”€ô€‰Q¡••¬¡…¤°É½¬‘¥å„¸ˆ(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€€€€€Ù½¥•1½œ ‰‰É…¥¹}Ñ…Í­}…¹•±±•Ñ…Í­Q½­•¸ô‘Ñ…Í­Q½­•¸ˆ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¡…¹‘±•I•…‘¥¹½µµ…¹¡½µµ…¹èI•…‘¥¹½µµ…¹°ÑÕÉ¹%è1½¹œ¤è	½½±•…¸ì(€€€€€€€Ù…°ÕÉÉ•¹Ð€ôÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€¥˜€¡½µµ…¹€…¥ÌI•…‘¥¹½µµ…¹¹MÑ…ÉÐ€˜˜ÕÉÉ•¹Ð€ôô¹Õ±°¤É•ÑÕÉ¸™…±Í”(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€Ý…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ôÑÉÕ”(€€€€€€€Ý¡•¸€¡½µµ…¹¤ì(€€€€€€€€€€€I•…‘¥¹½µµ…¹¹MÑ…ÉÐ€´øì(€€€€€€€€€€€€€€€¥˜€ …ÍÉ••¹½µµ…¹‘QÕÉ¹Õ…É¹ÑÉå½µµ¥Ð¡ÑÕÉ¹%¤¤ì(€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰ÍÉ••¹}½µµ…¹‘}‘ÕÁ±¥…Ñ•}‘É½ÁÁ•ÑÕÉ¹%ô‘ÑÕÉ¹%Í½ÕÉ”õÉ•…‘¥¹}ÍÑ…ÉÐˆ¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€ÍÑ…ÉÑÉÑ¥±•I•…‘¥¹œ¡ÑÕÉ¹%¤(€€€€€€€€€€€ô(€€€€€€€€€€€I•…‘¥¹½µµ…¹¹MÑ½À€´øÍÑ½ÁÉÑ¥±•I•…‘¥¹œ ‰ÕÍ•É}ÍÑ½Àˆ°€‰Q¡••¬¡…¤°É•…‘¥¹œÉ½¬‘¤¸ˆ¤(€€€€€€€€€€€I•…‘¥¹½µµ…¹¹A…ÕÍ”€´øì(€€€€€€€€€€€€€€€É•…‘¥¹QÉ…­•È¹Á…ÕÍ” ¤(€€€€€€€€€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°(€€€€€€€€€€€€€€€…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤ì±¥Ù”ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€€€€€€€€€ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ ‰I•…‘¥¹œÁ…ÕÍ”­…È‘¤¸ˆ¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰I%9}MMM%=9}AUMÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÕÉÉ•¹Ðü¹É•…‘¥¹M•ÍÍ¥½¹%‘ôÑ¥µ•ÍÑ…µÀô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¥ôˆ¤(€€€€€€€€€€€ô(€€€€€€€€€€€I•…‘¥¹½µµ…¹¹I•ÍÕµ”°I•…‘¥¹½µµ…¹¹½¹Ñ¥¹Õ”€´øì(€€€€€€€€€€€€€€€¥˜€¡ÕÉÉ•¹Ðü¹ÍÉ••¹M•ÍÍ¥½¹%€„ôMÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹Í•ÍÍ¥½¹%ñð(€€€€€€€€€€€€€€€€€€€MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹ÕÉÉ•¹ÑMÑ…Ñ”€„ôMÉ••¹M¡…É•MÑ…Ñ”¹Q%Y(€€€€€€€€€€€€€€€€¤ì(€€€€€€€€€€€€€€€€€€€ÍÑ½ÁÉÑ¥±•I•…‘¥¹œ ‰ÍÉ••¹}Í•ÍÍ¥½¹}¡…¹•ˆ°€‰MÉ••¸Í¡…É¥¹œ…Ñ¥Ù”¹…¡¤¡…¤¸ˆ¤(€€€€€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€€€€€É•…‘¥¹QÉ…­•È¹É•ÍÕµ” ¤(€€€€€€€€€€€€€€€€€€€É•…‘ÕÉÉ•¹ÑÉÑ¥±•½¹Ñ•¹Ð¡ÑÕÉ¹%°…±±½ÝÕÑ½MÉ½±°€ôÑÉÕ”¤(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€€€€€I•…‘¥¹½µµ…¹¹MÑ…ÉÑ…¥¸€´øì(€€€€€€€€€€€€€€€É•…‘¥¹QÉ…­•È¹É•Í•ÑAÉ½É•ÍÌ ¤(€€€€€€€€€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€€€€€€€€€Ù…°…Ñ¥Ù”€ôÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€€€€€€€€€Ù…°…•ÁÑ•€ô¥˜€¡…•ÍÍ¥‰¥±¥Ñä€„ô¹Õ±°€˜˜…Ñ¥Ù”ü¹ÍÉ½±±½¹Ñ…¥¹•É%€„ô¹Õ±°¤ì(€€€€€€€€€€€€€€€€€€€…•ÍÍ¥‰¥±¥Ñä¹ÍÉ½±±ÉÑ¥±•Q½	•¥¹¹¥¹œ (€€€€€€€€€€€€€€€€€€€€€€€…Ñ¥Ù”¹ÍÉ½±±½¹Ñ…¥¹•É%°…Ñ¥Ù”¹™½É•É½Õ¹‘A…­…”°…Ñ¥Ù”¹ÍÉ••¹M•ÍÍ¥½¹%(€€€€€€€€€€€€€€€€€€€€¤ì|€´øµ…¥¹!…¹‘±•È¹Á½ÍÐìÉ•…‘ÕÉÉ•¹ÑÉÑ¥±•½¹Ñ•¹Ð¡ÑÕÉ¹%°…±±½ÝÕÑ½MÉ½±°€ôÑÉÕ”¤ôô(€€€€€€€€€€€€€€€ô•±Í”™…±Í”(€€€€€€€€€€€€€€€¥˜€ ……•ÁÑ•¤É•…‘ÕÉÉ•¹ÑÉÑ¥±•½¹Ñ•¹Ð¡ÑÕÉ¹%°…±±½ÝÕÑ½MÉ½±°€ôÑÉÕ”¤(€€€€€€€€€€€ô(€€€€€€€€€€€I•…‘¥¹½µµ…¹¹I•…‘…¥¸€´øÉ•…‘ÕÉÉ•¹ÑÉÑ¥±•½¹Ñ•¹Ð¡ÑÕÉ¹%°…±±½ÝÕÑ½MÉ½±°€ô™…±Í”°™½É•I•Á•…Ð€ôÑÉÕ”¤(€€€€€€€€€€€I•…‘¥¹½µµ…¹¹I•…‘9•Ý=¹±ä€´øì(€€€€€€€€€€€€€€€É•…‘¥¹QÉ…­•È¹É•ÍÕµ” ¤(€€€€€€€€€€€€€€€É•…‘ÕÉÉ•¹ÑÉÑ¥±•½¹Ñ•¹Ð¡ÑÕÉ¹%°…±±½ÝÕÑ½MÉ½±°€ô™…±Í”¤(€€€€€€€€€€€ô(€€€€€€€€€€€I•…‘¥¹½µµ…¹¹½É•Ð€´øì(€€€€€€€€€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°(€€€€€€€€€€€€€€€É•…‘¥¹QÉ…­•È¹™½É•Ð ¤(€€€€€€€€€€€€€€€ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ ‰I•…‘¥¹œÁ½Í¥Ñ¥½¸‰¡½½°…å¤¸ˆ¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÑ…ÉÑÉÑ¥±•I•…‘¥¹œ¡ÑÕÉ¹%è1½¹œ¤ì(€€€€€€€¥˜€ …ÍÉ••¹Y¥Í¥½¹AÉ•™•É•¹•Ì¹Ù¥Í¥½¹¹…‰±•ñðMÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹ÕÉÉ•¹ÑMÑ…Ñ”€„ôMÉ••¹M¡…É•MÑ…Ñ”¹Q%Y¤ì(€€€€€€€€€€€ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ ‰MÉ••¸Í¡…É¥¹œ¥Ì½™˜¸ˆ°•ÉÉ½È€ôÑÉÕ”¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€¥˜€¡…•ÍÍ¥‰¥±¥Ñä€ôô¹Õ±°ñð€…•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥Í¹…‰±•¡Ñ¡¥Ì¤¤ì(€€€€€€€€€€€ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ ‰ÉÑ¥±”É•…‘¥¹œ­”±¥å”1eI•ÍÍ¥‰¥±¥Ñä•¹…‰±”­…É¼¸ˆ°•ÉÉ½È€ôÑÉÕ”¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°½¹Ñ•¹ÑQåÁ”€ô…•ÍÍ¥‰¥±¥Ñä¹‘•Ñ•Ñ½¹Ñ•¹ÑQåÁ” ¤(€€€€€€€¥˜€¡½¹Ñ•¹ÑQåÁ”€„ôMÉ••¹½¹Ñ•¹ÑQåÁ”¹IQ%1¤ì(€€€€€€€€€€€Ù…°µ•ÍÍ…”€ôÝ¡•¸€¡½¹Ñ•¹ÑQåÁ”¤ì(€€€€€€€€€€€€€€€MÉ••¹½¹Ñ•¹ÑQåÁ”¹Y%=}A1Q=I4€´ø€‰e”e½ÕQÕ‰”¡…¤°…ÉÑ¥±”¹…¡¤¸ÕÑ¼µÍÉ½±°ÍÑ…ÉÐ¹…¡¤­…ÉÕ¹¤¸ˆ(€€€€€€€€€€€€€€€MÉ••¹½¹Ñ•¹ÑQåÁ”¹M=%1}€´ø€‰e”Í½¥…°™••¡…¤°…ÉÑ¥±”¹…¡¤¸ÕÑ¼µÍÉ½±°ÍÑ…ÉÐ¹…¡¤­…ÉÕ¹¤¸ˆ(€€€€€€€€€€€€€€€•±Í”€´ø€‰ÕÉÉ•¹ÐÁ…”­¼…ÉÑ¥±”­”É½½Àµ•¥¸Í…™•±ä½¹™¥É´¹…¡¤­…ÈÁ„É…¡¤¸ÕÑ¼µÍÉ½±°ÍÑ…ÉÐ¹…¡¤­…ÉÕ¹¤¸ˆ(€€€€€€€€€€€ô(€€€€€€€€€€€Ù½¥•1½œ ‰I%9}MQIQ}I)Q½¹Ñ•¹ÑQåÁ”ô‘½¹Ñ•¹ÑQåÁ”ÑÕÉ¹%ô‘ÑÕÉ¹%ˆ¤(€€€€€€€€€€€ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ¡µ•ÍÍ…”°•ÉÉ½È€ôÑÉÕ”¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°½¹Ñ•áÐ€ô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹MÉ••¹½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€Ù…°¥‘•¹Ñ¥Ñä€ô±¥ÍÑ=™9½Ñ9Õ±°¡½¹Ñ•áÐ¹ÕÉÉ•¹ÑA…­…”°…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•ÉÑ¥±•Q•áÐ ¤¹™¥ÉÍÑ=É9Õ±° ¤¤(€€€€€€€€€€€€¹©½¥¹Q½MÑÉ¥¹œ ˆèˆ¤¹Ñ…­” ÌÀÀ¤(€€€€€€€Ù…°½¹Ñ…¥¹•É%€ô…•ÍÍ¥‰¥±¥Ñä¹ÕÉÉ•¹ÑÉÑ¥±•MÉ½±±½¹Ñ…¥¹•É% ¤€üèÉÕ¸ì(€€€€€€€€€€€Ù½¥•1½œ ‰I%9}MQIQ}I)Q½¹Ñ•¹ÑQåÁ”ô‘½¹Ñ•¹ÑQåÁ”ÑÕÉ¹%ô‘ÑÕÉ¹%É•…Í½¸õ¹½}…ÉÑ¥±•}ÍÉ½±±}½¹Ñ…¥¹•Èˆ¤(€€€€€€€€€€€ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ ‰ÉÑ¥±”­„Í…™”ÍÉ½±°…É•„¹…¡¤µ¥±„¸ÕÑ¼µÍÉ½±°ÍÑ…ÉÐ¹…¡¤­…ÉÕ¹¤¸ˆ°•ÉÉ½È€ôÑÉÕ”¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°Í•ÍÍ¥½¸€ôÉ•…‘¥¹QÉ…­•È¹ÍÑ…ÉÐ (€€€€€€€€€€€MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹Í•ÍÍ¥½¹%°¥‘•¹Ñ¥Ñä°(€€€€€€€€€€€…•ÍÍ¥‰¥±¥Ñä¹ÕÉÉ•¹ÑA…­…•9…µ” ¤¹½ÉµÁÑä ¤°½¹Ñ•¹ÑQåÁ”°•áÁ±¥¥Ñ±åI•ÅÕ•ÍÑ•€ôÑÉÕ”°(€€€€€€€€€€€ÍÉ½±±½¹Ñ…¥¹•É%€ô½¹Ñ…¥¹•É%(€€€€€€€€¤€üèÉÕ¸ì(€€€€€€€€€€€ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ ‰ÉÑ¥±”É•…‘¥¹œÍÑ…ÉÐ¹…¡¤¡Õ¤¸ˆ°•ÉÉ½È€ôÑÉÕ”¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰I%9}MMM%=9}MQIQÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÍ•ÍÍ¥½¸¹É•…‘¥¹M•ÍÍ¥½¹%‘ô€ˆ€¬(€€€€€€€€€€€€€€€€‰ÍÉ••¹}Í•ÍÍ¥½¹}¥ô‘íÍ•ÍÍ¥½¸¹ÍÉ••¹M•ÍÍ¥½¹%‘ô½¹Ñ…¥¹•É}¥ô‘íÍ•ÍÍ¥½¸¹ÍÉ½±±½¹Ñ…¥¹•É%‘ô€ˆ€¬(€€€€€€€€€€€€€€€€‰Ñ¥µ•ÍÑ…µÀô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¥ô½¹Ñ•¹ÑQåÁ”ô‘½¹Ñ•¹ÑQåÁ”ˆ(€€€€€€€€¤(€€€€€€€É•…‘ÕÉÉ•¹ÑÉÑ¥±•½¹Ñ•¹Ð¡ÑÕÉ¹%°…±±½ÝÕÑ½MÉ½±°€ôÑÉÕ”¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸É•…‘ÕÉÉ•¹ÑÉÑ¥±•½¹Ñ•¹Ð (€€€€€€€ÑÕÉ¹%è1½¹œ°(€€€€€€€…±±½ÝÕÑ½MÉ½±°è	½½±•…¸°(€€€€€€€™½É•I•Á•…Ðè	½½±•…¸€ô™…±Í”(€€€€¤ì(€€€€€€€Ù…°Í•ÍÍ¥½¸€ôÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤€üèÉ•ÑÕÉ¸(€€€€€€€Ù…°™½É•É½Õ¹‘A…­…”€ô…•ÍÍ¥‰¥±¥ÑåA…­…” ¤(€€€€€€€¥˜€¡É•…‘¥¹QÉ…­•È¹Á…ÕÍ•%™½¹Ñ•áÑ¡…¹•¡MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹Í•ÍÍ¥½¹%°™½É•É½Õ¹‘A…­…”¤¤ì(€€€€€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°(€€€€€€€€€€€Ù½¥•1½œ ‰IQ%1}MI=11}I)QÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÍ•ÍÍ¥½¸¹É•…‘¥¹M•ÍÍ¥½¹%‘ôÉ•…Í½¸õ½¹Ñ•áÑ}¡…¹•Á…­…”ô‘™½É•É½Õ¹‘A…­…”ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€¥˜€¡Í•ÍÍ¥½¸¹ÍÑ…Ñ”€…¥¸Í•Ñ=˜¡I•…‘¥¹MÑ…Ñ”¹I%9°I•…‘¥¹MÑ…Ñ”¹YI%e%9}9]}=9Q9P¤ñð(€€€€€€€€€€€€…MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹¥ÍÕÉÉ•¹Ð¡Í•ÍÍ¥½¸¹ÍÉ••¹M•ÍÍ¥½¹%¤(€€€€€€€€¤É•ÑÕÉ¸(€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”€üèÉ•ÑÕÉ¸(€€€€€€€¥˜€¡…•ÍÍ¥‰¥±¥Ñä¹‘•Ñ•Ñ½¹Ñ•¹ÑQåÁ” ¤€„ôMÉ••¹½¹Ñ•¹ÑQåÁ”¹IQ%1¤ì(€€€€€€€€€€€ÍÑ½ÁÉÑ¥±•I•…‘¥¹œ ‰…ÉÑ¥±•}‰½Õ¹‘…Éäˆ°€‰ÉÑ¥±”½µÁ±•Ñ”¸ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°™É…µ•1½½­ÕÁÐ€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù…°ÅÕ•Éä€ôMÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹É•ÅÕ•ÍÑÉ•Í¡É…µ”¡ÑÕÉ¹%¤ìÉ•ÍÕ±Ð€´ø(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€Ù…°™É…µ”€ô€¡É•ÍÕ±Ð…ÌüÉ•Í¡É…µ•I•ÍÕ±Ð¹I•…‘ä¤ü¹™É…µ”(€€€€€€€€€€€€€€€¥˜€¡™É…µ”€ôô¹Õ±°ñð€…MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹¥ÍÕÉÉ•¹Ð¡Í•ÍÍ¥½¸¹ÍÉ••¹M•ÍÍ¥½¹%¤¤ì(€€€€€€€€€€€€€€€€€€€ÍÑ½ÁÉÑ¥±•I•…‘¥¹œ ‰™É•Í¡}™É…µ•}Õ¹…Ù…¥±…‰±”ˆ°€‰É•Í …ÉÑ¥±”ÍÉ••¸¹…¡¤µ¥±¤¸ˆ°•ÉÉ½È€ôÑÉÕ”¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€…•ÍÍ¥‰¥±¥Ñä¹É•™É•Í¡MÉ••¹½¹Ñ•áÐ ¤(€€€€€€€€€€€€€€€É•…‘¥¹QÉ…­•È¹É•½É‘=‰Í•ÉÙ…Ñ¥½¸¡™É…µ”¹™É…µ•%°…•ÍÍ¥‰¥±¥Ñä¹±…ÍÑM¹…ÁÍ¡½ÑÐ ¤¤(€€€€€€€€€€€€€€€Ù…°±¥¹•Ì€ô…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•ÉÑ¥±•Q•áÐ ¤(€€€€€€€€€€€€€€€Ù…°™É•Í €ô¥˜€¡™½É•I•Á•…Ð¤ì(€€€€€€€€€€€€€€€€€€€±¥¹•Ì¹µ…Àì½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹I•…‘¥¹M•µ•¹Ð¡¥Ð°I•…‘¥¹QÉ…­•È¹™¥¹•ÉÁÉ¥¹Ð¡¥Ð¤¤ô(€€€€€€€€€€€€€€€ô•±Í”É•…‘¥¹QÉ…­•È¹…•ÁÑY¥Í¥‰±•Q•áÐ¡±¥¹•Ì°…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤¤(€€€€€€€€€€€€€€€Ù…°ÕÉÉ•¹ÑM•ÍÍ¥½¸€ôÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤€üèÉ•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰I%9}9]}=9Q9Q}=U9É•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÕÉÉ•¹ÑM•ÍÍ¥½¸¹É•…‘¥¹M•ÍÍ¥½¹%‘ô™É…µ•}¥ô‘í™É…µ”¹™É…µ•%‘ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰Ñ¥µ•ÍÑ…µÀô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¥ô¹•ÝM•µ•¹ÑÌô‘í™É•Í ¹Í¥é•ô™É…µ•]…¥Ñ5Ìô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´™É…µ•1½½­ÕÁÑôˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€¥˜€¡™É•Í ¹¥ÍµÁÑä ¤¤ì(€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰I%9}UA1%Q}M-%AAÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÕÉÉ•¹ÑM•ÍÍ¥½¸¹É•…‘¥¹M•ÍÍ¥½¹%‘ô™É…µ•}¥ô‘í™É…µ”¹™É…µ•%‘ôÙ¥Í¥‰±•M•µ•¹ÑÌô‘í±¥¹•Ì¹Í¥é•ôˆ¤(€€€€€€€€€€€€€€€€€€€¥˜€¡…±±½ÝÕÑ½MÉ½±°€˜˜É•…‘¥¹QÉ…­•È¹…¹ÕÑ½MÉ½±° ¤¤…ÕÑ½MÉ½±±ÉÑ¥±”¡ÑÕÉ¹%¤(€€€€€€€€€€€€€€€€€€€•±Í”™¥¹¥Í¡ÉÑ¥±•Ñ¹ ¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€Ù…°ÍÁ½­•¸€ô™É•Í ¹©½¥¹Q½MÑÉ¥¹œ ˆ€ˆ¤ì¥Ð¹Ñ•áÐô¹Ñ…­”¡5a}I%9}!IM}AI}MI8¤(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰I%9}=9Q9Q}IÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÕÉÉ•¹ÑM•ÍÍ¥½¸¹É•…‘¥¹M•ÍÍ¥½¹%‘ô™É…µ•}¥ô‘í™É…µ”¹™É…µ•%‘ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰Ñ¥µ•ÍÑ…µÀô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¥ô¡…ÉÌô‘íÍÁ½­•¸¹±•¹Ñ¡ôÍ•µ•¹ÑÌô‘í™É•Í ¹Í¥é•ôˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡ÍÁ½­•¸¤(€€€€€€€€€€€€€€€•µ¥ÑMÑ…Ñ” ‰ÉÑ¥±”Á…‘ É…¡¤¡½½»Š˜ˆ¤(€€€€€€€€€€€€€€€¥˜€¡…±±½ÝÕÑ½MÉ½±°¤É•…‘¥¹QÉ…­•È¹µ…É­]…¥Ñ¥¹½ÉMÉ½±° ¤(€€€€€€€€€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¥˜€¡…±±½ÝÕÑ½MÉ½±°¤€¡ì…ÕÑ½MÉ½±±ÉÑ¥±”¡ÑÕÉ¹%¤ô¤•±Í”¹Õ±°(€€€€€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡ÍÁ½­•¸°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€¥˜€¡ÅÕ•Éä€ôô¹Õ±°¤ÍÑ½ÁÉÑ¥±•I•…‘¥¹œ ‰ÍÉ••¹}¥¹…Ñ¥Ù”ˆ°€‰MÉ••¸Í¡…É¥¹œ¥Ì½™˜¸ˆ°•ÉÉ½È€ôÑÉÕ”¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸…ÕÑ½MÉ½±±ÉÑ¥±”¡ÑÕÉ¹%è1½¹œ¤ì(€€€€€€€Ù…°Í•ÍÍ¥½¸€ôÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤€üèÉ•ÑÕÉ¸(€€€€€€€Ù…°™½É•É½Õ¹‘A…­…”€ô…•ÍÍ¥‰¥±¥ÑåA…­…” ¤(€€€€€€€¥˜€¡É•…‘¥¹QÉ…­•È¹Á…ÕÍ•%™½¹Ñ•áÑ¡…¹•¡MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹Í•ÍÍ¥½¹%°™½É•É½Õ¹‘A…­…”¤ñð(€€€€€€€€€€€™½É•É½Õ¹‘A…­…”€ôô€‰½´¹½½±”¹…¹‘É½¥¹å½ÕÑÕ‰”ˆ(€€€€€€€€¤ì(€€€€€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°(€€€€€€€€€€€Ù½¥•1½œ ‰IQ%1}MI=11}I)QÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÍ•ÍÍ¥½¸¹É•…‘¥¹M•ÍÍ¥½¹%‘ôÉ•…Í½¸õÁ…­…•}¡…¹•Á…­…”ô‘™½É•É½Õ¹‘A…­…”ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”€üèÉÕ¸ì™¥¹¥Í¡ÉÑ¥±•Ñ¹ ¤ìÉ•ÑÕÉ¸ô(€€€€€€€Ù…°½¹Ñ…¥¹•É%€ôÍ•ÍÍ¥½¸¹ÍÉ½±±½¹Ñ…¥¹•É%€üèÉÕ¸ì(€€€€€€€€€€€Ù½¥•1½œ ‰IQ%1}MI=11}I)QÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÍ•ÍÍ¥½¸¹É•…‘¥¹M•ÍÍ¥½¹%‘ôÉ•…Í½¸õÕ¹‰½Õ¹‘}½¹Ñ…¥¹•Èˆ¤(€€€€€€€€€€€™¥¹¥Í¡ÉÑ¥±•Ñ¹ ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€¥˜€ …É•…‘¥¹QÉ…­•È¹Í¡½Õ±‘ÕÑ½MÉ½±°¡½¹Ñ…¥¹•É%°Í•ÍÍ¥½¸¹ÍÉ••¹M•ÍÍ¥½¹%°™½É•É½Õ¹‘A…­…”¤ñð(€€€€€€€€€€€€…É•…‘¥¹QÉ…­•È¹É•½É‘ÕÑ½MÉ½±° ¤(€€€€€€€€¤ì(€€€€€€€€€€€™¥¹¥Í¡ÉÑ¥±•Ñ¹ ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰I%9}UQ=}MI=11}MQIQÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÍ•ÍÍ¥½¸¹É•…‘¥¹M•ÍÍ¥½¹%‘ô€ˆ€¬(€€€€€€€€€€€€€€€€‰Ñ¥µ•ÍÑ…µÀô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¥ô½Õ¹Ðô‘íÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤ü¹½¹Í•ÕÑ¥Ù•ÕÑ½MÉ½±±½Õ¹Ñôˆ(€€€€€€€€¤(€€€€€€€Ù…°…•ÁÑ•€ô…•ÍÍ¥‰¥±¥Ñä¹ÍÉ½±±ÉÑ¥±•Y•É¥™¥• (€€€€€€€€€€€½¹Ñ…¥¹•É%°Í•ÍÍ¥½¸¹™½É•É½Õ¹‘A…­…”°Í•ÍÍ¥½¸¹ÍÉ••¹M•ÍÍ¥½¹%(€€€€€€€€¤ì¡…¹•€´ø(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€Ù…°…Ñ¥Ù”€ôÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€€€€€€€€€¥˜€¡…Ñ¥Ù”ü¹ÍÑ…Ñ”€„ôI•…‘¥¹MÑ…Ñ”¹MI=11%9¤É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰I%9}UQ=}MI=11}=5A1QÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘í…Ñ¥Ù”¹É•…‘¥¹M•ÍÍ¥½¹%‘ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰Ñ¥µ•ÍÑ…µÀô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¥ô¡…¹•ô‘¡…¹•ˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€¥˜€ …¡…¹•¤™¥¹¥Í¡ÉÑ¥±•Ñ¹ ¤(€€€€€€€€€€€€€€€•±Í”ì(€€€€€€€€€€€€€€€€€€€MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹É•ÅÕ•ÍÑÉ•Í¡É…µ”¡ÑÕÉ¹%¤ì™É•Í €´ø(€€€€€€€€€€€€€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°™É…µ”€ô€¡™É•Í …ÌüÉ•Í¡É…µ•I•ÍÕ±Ð¹I•…‘ä¤ü¹™É…µ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°ÕÉÉ•¹Ð€ôÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤€üèÉ•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜€¡™É…µ”€ôô¹Õ±°ñð™É…µ”¹Í•ÍÍ¥½¹%€„ôÕÉÉ•¹Ð¹ÍÉ••¹M•ÍÍ¥½¹%ñð(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€™É…µ”¹™É…µ•%€ðôÕÉÉ•¹Ð¹±…ÍÑÉ…µ•%(€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤ì(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰IQ%1}MI=11}I)QÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÕÉÉ•¹Ð¹É•…‘¥¹M•ÍÍ¥½¹%‘ôÉ•…Í½¸õ¹½}™É•Í¡}Á½ÍÑ}ÍÉ½±±}™É…µ”ˆ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡ÉÑ¥±•Ñ¹ ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€€€€€€€€€É•…‘¥¹QÉ…­•È¹µ…É­Y•É¥™å¥¹9•Ý½¹Ñ•¹Ð¡™É…µ”¹™É…µ•%°…•ÍÍ¥‰¥±¥Ñä¹±…ÍÑM¹…ÁÍ¡½ÑÐ ¤¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰IQ%1}MI=11}YI%%É•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘íÕÉÉ•¹Ð¹É•…‘¥¹M•ÍÍ¥½¹%‘ôÁÉ•É…µ•%ô‘íÕÉÉ•¹Ð¹±…ÍÑÉ…µ•%‘ôÁ½ÍÑÉ…µ•%ô‘í™É…µ”¹™É…µ•%‘ôˆ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€É•…‘ÕÉÉ•¹ÑÉÑ¥±•½¹Ñ•¹Ð¡ÑÕÉ¹%°…±±½ÝÕÑ½MÉ½±°€ôÑÉÕ”¤(€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€¥˜€ ……•ÁÑ•¤™¥¹¥Í¡ÉÑ¥±•Ñ¹ ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹¥Í¡ÉÑ¥±•Ñ¹ ¤ì(€€€€€€€Ù…°¥€ôÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤ü¹É•…‘¥¹M•ÍÍ¥½¹%(€€€€€€€É•…‘¥¹QÉ…­•È¹½µÁ±•Ñ” ¤(€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°(€€€€€€€Ù½¥•1½œ ‰I%9}9}QQÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘¥Ñ¥µ•ÍÑ…µÀô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¥ôˆ¤(€€€€€€€ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ ‰ÉÑ¥±”½µÁ±•Ñ”¸ˆ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÑ½ÁÉÑ¥±•I•…‘¥¹œ¡É•…Í½¸èMÑÉ¥¹œ°µ•ÍÍ…”èMÑÉ¥¹œ°•ÉÉ½Èè	½½±•…¸€ô™…±Í”¤ì(€€€€€€€Ù…°¥€ôÉ•…‘¥¹QÉ…­•È¹Í¹…ÁÍ¡½Ð ¤ü¹É•…‘¥¹M•ÍÍ¥½¹%(€€€€€€€É•…‘¥¹QÉ…­•È¹ÍÑ½À ¤(€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°(€€€€€€€…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤ì±¥Ù”ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€Ù½¥•1½œ ‰I%9}MMM%=9}MQ=AAÉ•…‘¥¹}Í•ÍÍ¥½¹}¥ô‘¥Ñ¥µ•ÍÑ…µÀô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¥ôÉ•…Í½¸ô‘É•…Í½¸ˆ¤(€€€€€€€ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ¡µ•ÍÍ…”°•ÉÉ½È¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÁ•…­I•…‘¥¹MÑ…ÑÕÌ¡µ•ÍÍ…”èMÑÉ¥¹œ°•ÉÉ½Èè	½½±•…¸€ô™…±Í”¤ì(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°•ÉÉ½È¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸…•ÍÍ¥‰¥±¥ÑåA…­…” ¤èMÑÉ¥¹œ€ô(€€€€€€€•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”ü¹ÕÉÉ•¹ÑA…­…•9…µ” ¤¹½ÉµÁÑä ¤((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•	É…¥¹5Õ±Ñ¥MÑ•À¡Á±…¸è	É…¥¹•¥Í¥½¸¹MÉ½±±Q¡•¹=Á•¹Y¥‘•¼¤ì(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€Ý…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ôÑÉÕ”(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€¥˜€ …ÍÉ••¹Y¥Í¥½¹AÉ•™•É•¹•Ì¹Ù¥Í¥½¹¹…‰±•ñðMÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹ÕÉÉ•¹ÑMÑ…Ñ”€„ôMÉ••¹M¡…É•MÑ…Ñ”¹Q%Y¤ì(€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Á±…¸¹Ñ…Í­Q½­•¸°™…±Í”°€‰MÉ••¸Y¥Í¥½¸…Ñ¥Ù”¹…¡¤¡…¤¸ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€¥˜€¡…•ÍÍ¥‰¥±¥Ñä€ôô¹Õ±°ñð€…•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥Í¹…‰±•¡Ñ¡¥Ì¤¤ì(€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Á±…¸¹Ñ…Í­Q½­•¸°™…±Í”°€‰1eI•ÍÍ¥‰¥±¥Ñä•¹…‰±”­…É¼¸ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°‘½Ý¸€ôÁ±…¸¹‘¥É•Ñ¥½¸€ôô	É…¥¹MÉ½±±¥É•Ñ¥½¸¹=]8(€€€€€€€Ù½¥•1½œ ‰‰É…¥¹}Á±…¹}ÍÑ…ÉÑ•Ñ…Í­Q½­•¸ô‘íÁ±…¸¹Ñ…Í­Q½­•¹ôÁ±…¸õÍÉ½±±}Ñ¡•¹}½Á•¸½É‘¥¹…°ô‘íÁ±…¸¹½É‘¥¹…±ô‘¥É•Ñ¥½¸ô‘íÁ±…¸¹‘¥É•Ñ¥½¹ôˆ¤(€€€€€€€Ù…°…•ÁÑ•€ô…•ÍÍ¥‰¥±¥Ñä¹ÍÉ½±±e½ÕQÕ‰•Y•É¥™¥•¡‘½Ý¸¤ìÍÉ½±±•€´ø(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€¥˜€ …‰É…¥¸¹¥ÍQ…Í­ÕÉÉ•¹Ð¡Á±…¸¹Ñ…Í­Q½­•¸¤¤É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€¥˜€ …ÍÉ½±±•¤ì(€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Á±…¸¹Ñ…Í­Q½­•¸°™…±Í”°€‰MÉ••¸ÍÉ½±°¹…¡¤¡Õ„¸ˆ¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹É•ÅÕ•ÍÑÉ•Í¡É…µ”¡…Ñ¥Ù•QÕÉ¹%¤ì™É•Í €´ø(€€€€€€€€€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€€€€€€€€€¥˜€ …‰É…¥¸¹¥ÍQ…Í­ÕÉÉ•¹Ð¡Á±…¸¹Ñ…Í­Q½­•¸¤¤É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€Ù…°‰•™½É•É…µ”€ô€¡™É•Í …ÌüÉ•Í¡É…µ•I•ÍÕ±Ð¹I•…‘ä¤ü¹™É…µ”(€€€€€€€€€€€€€€€€€€€€€€€¥˜€¡‰•™½É•É…µ”€ôô¹Õ±°ñð€…MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹¥ÍÕÉÉ•¹Ð¡‰•™½É•É…µ”¹Í•ÍÍ¥½¹%¤¤ì(€€€€€€€€€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Á±…¸¹Ñ…Í­Q½­•¸°™…±Í”°€‰MÉ½±°­”‰……™É•Í ÍÉ••¸¹…¡¤µ¥±¤¸ˆ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€€€€€Ù…°‰•™½É•M¥¹…ÑÕÉ”€ô…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤(€€€€€€€€€€€€€€€€€€€€€€€Ù…°…Ñ¥½¹%¹Ñ•¹Ð€ôÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹É•…Ñ” (€€€€€€€€€€€€€€€€€€€€€€€€€€€…Ñ¥Ù•QÕÉ¹%°‰•™½É•É…µ”¹Í•ÍÍ¥½¹%°(€€€€€€€€€€€€€€€€€€€€€€€€€€€±…ÍÑUÍ•É%¹Ñ•¹ÑQ•áÐ°€‰Ù¥‘•¼ˆ°¹Õ±°°Á±…¸¹½É‘¥¹…°°(€€€€€€€€€€€€€€€€€€€€€€€€€€€…•ÍÍ¥‰¥±¥Ñä¹ÕÉÉ•¹ÑA…­…•9…µ” ¤°…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤°(€€€€€€€€€€€€€€€€€€€€€€€€€€€‰•™½É•É…µ”¹™É…µ•%°€Ä¸À(€€€€€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰MI9}Q%=9}IQ…Ñ¥½¹%ô‘í…Ñ¥½¹%¹Ñ•¹Ð¹…Ñ¥½¹%‘ôÑÕÉ¹%ô‘í…Ñ¥½¹%¹Ñ•¹Ð¹ÑÕÉ¹%‘ôÍÉ••¹M•ÍÍ¥½¹%ô‘í…Ñ¥½¹%¹Ñ•¹Ð¹ÍÉ••¹M•ÍÍ¥½¹%‘ô™É…µ•%ô‘í…Ñ¥½¹%¹Ñ•¹Ð¹Í½ÕÉ•É…µ•%‘ôÉ•Í½±Ù•ÉY•ÉÍ¥½¸ô‘í…Ñ¥½¹%¹Ñ•¹Ð¹É•Í½±Ù•ÉY•ÉÍ¥½¹ôˆ¤(€€€€€€€€€€€€€€€€€€€€€€€Ù…°Ñ…ÁÁ•€ô…•ÍÍ¥‰¥±¥Ñä¹Ñ…ÁY¥Í¥‰±•e½ÕQÕ‰•Y¥‘•¼¡Á±…¸¹½É‘¥¹…°¤(€€€€€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰‰É…¥¹}Á±…¹}ÍÑ•ÀÑ…Í­Q½­•¸ô‘íÁ±…¸¹Ñ…Í­Q½­•¹ôÍÑ•ÀõÑ…À½É‘¥¹…°ô‘íÁ±…¸¹½É‘¥¹…±ô…•ÁÑ•ô‘Ñ…ÁÁ•ˆ¤(€€€€€€€€€€€€€€€€€€€€€€€¥˜€ …Ñ…ÁÁ•¤ì(€€€€€€€€€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Á±…¸¹Ñ…Í­Q½­•¸°™…±Í”°€‰M•½¹Ù¥‘•¼±•…È¹…¡¤µ¥±„¸ˆ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡ì(€€€€€€€€€€€€€€€€€€€€€€€€€€€MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹É•ÅÕ•ÍÑÉ•Í¡É…µ”¡…Ñ¥Ù•QÕÉ¹%¤ìÁ½ÍÑI•ÍÕ±Ð€´ø(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜€ …‰É…¥¸¹¥ÍQ…Í­ÕÉÉ•¹Ð¡Á±…¸¹Ñ…Í­Q½­•¸¤¤É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜€ …ÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹¥ÍÕÉÉ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€…Ñ¥½¹%¹Ñ•¹Ð¹…Ñ¥½¹%°…Ñ¥½¹%¹Ñ•¹Ð¹ÑÕÉ¹%°…Ñ¥½¹%¹Ñ•¹Ð¹ÍÉ••¹M•ÍÍ¥½¹%(€€€€€€€€€€€€€€€€€€€€¤¤ì(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰MI9}Q%=9}911…Ñ¥½¹%ô‘í…Ñ¥½¹%¹Ñ•¹Ð¹…Ñ¥½¹%‘ôÉ•…Í½¸õÉ•Á±…•‘}‰•™½É•}Ù•É¥™¥…Ñ¥½¸ˆ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°Á½ÍÑÉ…µ”€ô€¡Á½ÍÑI•ÍÕ±Ð…ÌüÉ•Í¡É…µ•I•ÍÕ±Ð¹I•…‘ä¤ü¹™É…µ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñå¡…¹•€ô‰•™½É•M¥¹…ÑÕÉ”¹¥Í9½Ñ	±…¹¬ ¤€˜˜(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤€„ô‰•™½É•M¥¹…ÑÕÉ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°™É…µ•¡…¹•€ôÁ½ÍÑÉ…µ”€„ô¹Õ±°€˜˜Á½ÍÑÉ…µ”¹Í•ÍÍ¥½¹%€ôô‰•™½É•É…µ”¹Í•ÍÍ¥½¹%€˜˜(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Á½ÍÑÉ…µ”¹™É…µ•%€ø‰•™½É•É…µ”¹™É…µ•%€˜˜Á½ÍÑÉ…µ”¹¡…Í €„ô‰•™½É•É…µ”¹¡…Í (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°Ù•É¥™¥•€ôMÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹¥ÍÕÉÉ•¹Ð¡‰•™½É•É…µ”¹Í•ÍÍ¥½¹%¤€˜˜(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¡…•ÍÍ¥‰¥±¥Ñå¡…¹•ñð™É…µ•¡…¹•¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰É…¥¸¹É•½É‘MÉ••¹Ñ¥½¸ (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€MÉ••¹Q…É•ÑI•™•É•¹”¡Ñ…É•ÑQ•áÐ€ô€‰Ù¥‘•¼ˆ°½É‘¥¹…°€ôÁ±…¸¹½É‘¥¹…°¤°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù•É¥™¥•(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹…¹•°¡…Ñ¥½¹%¹Ñ•¹Ð¹…Ñ¥½¹%¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬ (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Á±…¸¹Ñ…Í­Q½­•¸°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù•É¥™¥•°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜€¡Ù•É¥™¥•¤€‰Y¥‘•¼½Á•¸¡¼…å„¸ˆ(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•±Í”€‰Q…À¡Õ„°±•­¥¸Ù¥‘•¼½Á•¸¡½¹„Ù•É¥™ä¹…¡¤¡Õ„¸ˆ(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€€€€€ô°€ÐÀÁ0¤(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€¥˜€ ……•ÁÑ•¤™¥¹¥Í¡	É…¥¹Q…Í¬¡Á±…¸¹Ñ…Í­Q½­•¸°™…±Í”°€‰e½ÕQÕ‰”ÍÉ½±°ÍÑ…ÉÐ¹…¡¤¡Õ„¸ˆ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•e½ÕQÕ‰•M•µ…¹Ñ¥Ñ¥½¸¡½µµ…¹èe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¤è	½½±•…¸ì(€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€Ù…°™½É•É½Õ¹€ô…•ÍÍ¥‰¥±¥Ñä¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€Ù…°¥Íe½ÕQÕ‰”€ô™½É•É½Õ¹¹Á…­…•9…µ”¹•ÅÕ…±Ì ‰½´¹½½±”¹…¹‘É½¥¹å½ÕÑÕ‰”ˆ°ÑÉÕ”¤(€€€€€€€¥˜€ …¥Íe½ÕQÕ‰”¤ì(€€€€€€€€€€€Ñ•áÑ½µÁ½Í•M•ÍÍ¥½¸¹…¹•° ¤(€€€€€€€€€€€É•ÑÕÉ¸™…±Í”(€€€€€€€ô(€€€€€€€Ñ•áÑ½µÁ½Í•M•ÍÍ¥½¸¹¥¹Ù…±¥‘…Ñ•U¹±•ÍÌ¡™½É•É½Õ¹¹Á…­…•9…µ”°™½É•É½Õ¹¹Ý¥¹‘½Ý%°™½É•É½Õ¹¹•¹•É…Ñ¥½¸¤(€€€€€€€¥˜€¡½µµ…¹€ôôe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹…¹•±½µµ•¹Ð€˜˜Ñ•áÑ½µÁ½Í•M•ÍÍ¥½¸¹Í¹…ÁÍ¡½Ð ¤€ôô¹Õ±°¤É•ÑÕÉ¸™…±Í”(€€€€€€€Ù…°Í½Á”€ô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹½É•É½Õ¹‘Ñ¥½¹A½±¥ä¹Í½Á”¡™½É•É½Õ¹¤€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€¥˜€ …ÍÉ••¹½µµ…¹‘QÕÉ¹Õ…É¹ÑÉå½µµ¥Ð¡…Ñ¥Ù•QÕÉ¹%¤¤ì(€€€€€€€€€€€Ù½¥•1½œ ‰å½ÕÑÕ‰•}Í•µ…¹Ñ¥}‘ÕÁ±¥…Ñ•}‘É½ÁÁ•ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%½µµ…¹ô‘í½µµ…¹¹©…Ù…±…ÍÌ¹Í¥µÁ±•9…µ•ôˆ¤(€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€ô(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€Ù…°ÍÑ…ÉÑ•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€±…Ñ•ÍÑÑ¥½¹¥ÍÁ…Ñ¡•‘Ð€ôÍÑ…ÉÑ•‘Ð(€€€€€€€Ù…°‰•™½É”€ô…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤((€€€€€€€¥˜€¡½µµ…¹€ôôe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹M•¹‘½µµ•¹Ð€˜˜(€€€€€€€€€€€€…Ñ•áÑ½µÁ½Í•M•ÍÍ¥½¸¹…¹M•¹¡™½É•É½Õ¹¹Á…­…•9…µ”°™½É•É½Õ¹¹Ý¥¹‘½Ý%°™½É•É½Õ¹¹•¹•É…Ñ¥½¸¤(€€€€€€€€¤ì(€€€€€€€€€€€™¥¹¥Í¡e½ÕQÕ‰•M•µ…¹Ñ¥Œ¡™…±Í”°€‰A•¡±”½µµ•¹ÐÑåÁ”­…É¼¸ˆ°½µµ…¹°ÍÑ…ÉÑ•‘Ð°€‰¹½}½Ý¹•‘}‘É…™Ðˆ¤(€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€ô(€€€€€€€¥˜€¡½µµ…¹¥Ìe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹QåÁ•Q•áÐ€˜˜Ñ•áÑ½µÁ½Í•M•ÍÍ¥½¸¹Í¹…ÁÍ¡½Ð ¤€ôô¹Õ±°¤ì(€€€€€€€€€€€™¥¹¥Í¡e½ÕQÕ‰•M•µ…¹Ñ¥Œ¡™…±Í”°€‰A•¡±”½µµ•¹ÑÌ­¡½±¼¸ˆ°½µµ…¹°ÍÑ…ÉÑ•‘Ð°€‰½µµ•¹Ñ}½¹Ñ•áÑ}µ¥ÍÍ¥¹œˆ¤(€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€ô(€€€€€€€¥˜€¡½µµ…¹€ôôe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹…¹•±½µµ•¹Ð¤ì(€€€€€€€€€€€Ñ•áÑ½µÁ½Í•M•ÍÍ¥½¸¹…¹•° ¤(€€€€€€€€€€€™¥¹¥Í¡e½ÕQÕ‰•M•µ…¹Ñ¥Œ¡ÑÉÕ”°€‰Q¡••¬¡…¤°½µµ•¹ÐÍ•¹¹…¡¤­¥å„¸ˆ°½µµ…¹°ÍÑ…ÉÑ•‘Ð°€‰…¹•±±•ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€ô((€€€€€€€Ù…°É•ÍÕ±Ð€ô…•ÍÍ¥‰¥±¥Ñä¹Á•É™½Éµe½ÕQÕ‰•M•µ…¹Ñ¥Ñ¥½¸¡½µµ…¹°Í½Á”¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰å½ÕÑÕ‰•}Í•µ…¹Ñ¥}É•Í½±ÕÑ¥½¸ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%¹½Éµ…±¥é•‘%¹Ñ•¹Ðô‘í½µµ…¹¹©…Ù…±…ÍÌ¹Í¥µÁ±•9…µ•ô€ˆ€¬(€€€€€€€€€€€€€€€€‰Á…­…”ô‘í™½É•É½Õ¹¹Á…­…•9…µ•ôÉ½±”ô‘íÉ•ÍÕ±Ð¹É½±•ôÉ•Í½±ÕÑ¥½¸ô‘íÉ•ÍÕ±Ð¹É•Í½±ÕÑ¥½¹ô€ˆ€¬(€€€€€€€€€€€€€€€€‰Á…å±½…‘1•¹Ñ ô‘ì¡½µµ…¹…Ìüe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹QåÁ•Q•áÐ¤ü¹Á…å±½…ü¹±•¹Ñ €üè€Áô€ˆ€¬(€€€€€€€€€€€€€€€€‰‘¥ÍÁ…Ñ¡5Ìô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´ÍÑ…ÉÑ•‘Ñôˆ(€€€€€€€€¤(€€€€€€€¥˜€ …É•ÍÕ±Ð¹…•ÁÑ•¤ì(€€€€€€€€€€€¥˜€¡…¹UÍ•Y¥ÍÕ…±…±±‰…¬¡½µµ…¹¤€˜˜Ù¥ÍÕ…±Ý…É•¹•ÍÍAÉ•™•É•¹•Ì¹•¹…‰±•€˜˜(€€€€€€€€€€€€€€€É•ÅÕ•ÍÑ•ÍÍ¥‰¥±¥ÑåY¥ÍÕ…±I•ÑÉä¡½µµ…¹°™½É•É½Õ¹°…Ñ¥Ù•QÕÉ¹%°ÍÑ…ÉÑ•‘Ð¤(€€€€€€€€€€€€¤ì(€€€€€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€€€€€ô(€€€€€€€€€€€Ù…°µ•ÍÍ…”€ôÝ¡•¸€¡É•ÍÕ±Ð¹É•Í½±ÕÑ¥½¸¤ì(€€€€€€€€€€€€€€€€‰…µ‰¥Õ½ÕÌˆ€´ø€‰-…Õ¹Í„Ý…±„üˆ(€€€€€€€€€€€€€€€€‰ÍÑ…±•}™½É•É½Õ¹ˆ°€‰ÍÑ…±•}…¹‘¥‘…Ñ”ˆ€´ø€‰MÉ••¸‰…‘…°…å¤¸½‰…É„Ñ…É•Ð‰…Ñ…¼¸ˆ(€€€€€€€€€€€€€€€€‰¹½Ñ}™½Õ¹ˆ€´øÝ¡•¸€¡½µµ…¹¤ì(€€€€€€€€€€€€€€€€€€€¥Ìe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹=Á•¹¡…¹¹•°€´ø€‰¡…¹¹•°Ñ…É•Ð±•…È¹…¡¤µ¥±„¸ˆ(€€€€€€€€€€€€€€€€€€€¥Ìe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹QåÁ•Q•áÐ€´ø€‰½µµ•¹Ð™¥•±±•…È¹…¡¤µ¥±„¸ˆ(€€€€€€€€€€€€€€€€€€€e½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹M•¹‘½µµ•¹Ð€´ø€‰½µµ•¹Ð­„Í•¹‰ÕÑÑ½¸¹…¡¤µ¥±„¸ˆ(€€€€€€€€€€€€€€€€€€€•±Í”€´ø€‰e”½¹ÑÉ½°ÕÉÉ•¹Ðe½ÕQÕ‰”ÍÉ••¸Á…È±•…È¹…¡¤µ¥±„¸ˆ(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€•±Í”€´ø€‰e½ÕQÕ‰”…Ñ¥½¸…•ÁÐ¹…¡¤¡Õ„¸ˆ(€€€€€€€€€€€ô(€€€€€€€€€€€™¥¹¥Í¡e½ÕQÕ‰•M•µ…¹Ñ¥Œ¡™…±Í”°µ•ÍÍ…”°½µµ…¹°ÍÑ…ÉÑ•‘Ð°É•ÍÕ±Ð¹É•Í½±ÕÑ¥½¸¤(€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€ô((€€€€€€€Ý¡•¸€¡½µµ…¹¤ì(€€€€€€€€€€€e½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹=Á•¹½µµ•¹ÑÌ€´øµ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡ì(€€€€€€€€€€€€€€€Ù…°ÕÉÉ•¹Ð€ô…•ÍÍ¥‰¥±¥Ñä¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤(€€€€€€€€€€€€€€€¥˜€¡ÕÉÉ•¹Ð€„ô¹Õ±°€˜˜ÕÉÉ•¹Ð¹Á…­…•9…µ”¹•ÅÕ…±Ì ‰½´¹½½±”¹…¹‘É½¥¹å½ÕÑÕ‰”ˆ°ÑÉÕ”¤¤ì(€€€€€€€€€€€€€€€€€€€Ñ•áÑ½µÁ½Í•M•ÍÍ¥½¸¹½Á•¸¡ÕÉÉ•¹Ð¹Á…­…•9…µ”°ÕÉÉ•¹Ð¹Ý¥¹‘½Ý%°ÕÉÉ•¹Ð¹•¹•É…Ñ¥½¸¤(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô°€ÐÔÁ0¤(€€€€€€€€€€€¥Ìe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹QåÁ•Q•áÐ€´øì(€€€€€€€€€€€€€€€Ù…°™¥•±€ôÉ•ÍÕ±Ð¹™¥•±‘%‘•¹Ñ¥Ñä(€€€€€€€€€€€€€€€¥˜€¡™¥•±€ôô¹Õ±°ñð€…Ñ•áÑ½µÁ½Í•M•ÍÍ¥½¸¹Í•ÑÉ…™Ð (€€€€€€€€€€€€€€€€€€€€€€€™½É•É½Õ¹¹Á…­…•9…µ”°™½É•É½Õ¹¹Ý¥¹‘½Ý%°™½É•É½Õ¹¹•¹•É…Ñ¥½¸°™¥•±°½µµ…¹¹Á…å±½…(€€€€€€€€€€€€€€€€€€€€¤¤ì(€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡e½ÕQÕ‰•M•µ…¹Ñ¥Œ¡™…±Í”°€‰½µµ•¹Ð½¹Ñ•áÐ‰…‘…°…å„¸½‰…É„½µµ•¹ÑÌ­¡½±¼¸ˆ°½µµ…¹°ÍÑ…ÉÑ•‘Ð°€‰™¥•±‘}½Ý¹•ÉÍ¡¥Á}É•©•Ñ•ˆ¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€€€€€e½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹M•¹‘½µµ•¹Ð€´øÑ•áÑ½µÁ½Í•M•ÍÍ¥½¸¹…¹•° ¤(€€€€€€€€€€€•±Í”€´øU¹¥Ð(€€€€€€€ô(€€€€€€€Ù…°µ•ÍÍ…”€ôÝ¡•¸ì(€€€€€€€€€€€É•ÍÕ±Ð¹É•Í½±ÕÑ¥½¸€ôô€‰…±É•…‘å}…Ñ¥Ù”ˆ€˜˜½µµ…¹€ôôe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹1¥­”€´ø€‰Y¥‘•¼Á•¡±”Í”±¥­•¡…¤¸ˆ(€€€€€€€€€€€É•ÍÕ±Ð¹É•Í½±ÕÑ¥½¸€ôô€‰…±É•…‘å}…Ñ¥Ù”ˆ€˜˜½µµ…¹€ôôe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹MÕ‰ÍÉ¥‰”€´ø€‰¡…¹¹•°Á•¡±”Í”ÍÕ‰ÍÉ¥‰•¡…¤¸ˆ(€€€€€€€€€€€½µµ…¹¥Ìe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹QåÁ•Q•áÐ€´ø€‰½µµ•¹ÐÑåÁ”¡¼…å„¸ˆ(€€€€€€€€€€€½µµ…¹€ôôe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹M•¹‘½µµ•¹Ð€´ø€‰½µµ•¹ÐÁ½ÍÐ¡¼…å„¸ˆ(€€€€€€€€€€€½µµ…¹€ôôe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹=Á•¹½µµ•¹ÑÌ€´ø€‰½µµ•¹ÑÌ½Á•¸¡¼…å”¸ˆ(€€€€€€€€€€€½µµ…¹€ôôe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹1¥­”€´ø€‰Y¥‘•¼±¥­”¡¼…å„¸ˆ(€€€€€€€€€€€½µµ…¹€ôôe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹MÕ‰ÍÉ¥‰”€´ø€‰MÕ‰ÍÉ¥‰”¡¼…å„¸ˆ(€€€€€€€€€€€½µµ…¹¥Ìe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹=Á•¹¡…¹¹•°€´ø€‰¡…¹¹•°½Á•¸¡¼…å„¸ˆ(€€€€€€€€€€€•±Í”€´ø€‰=Á•¸¡¼…å„¸ˆ(€€€€€€€ô(€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡ì(€€€€€€€€€€€Ù…°ÍÑ¥±±=Ý¹•€ô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹½É•É½Õ¹‘Ñ¥½¹A½±¥ä¹…¹á•ÕÑ”¡Í½Á”°…•ÍÍ¥‰¥±¥Ñä¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤¤(€€€€€€€€€€€Ù…°¡…¹•€ô‰•™½É”¹¥Í9½Ñ	±…¹¬ ¤€˜˜…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤€„ô‰•™½É”(€€€€€€€€€€€Ù½¥•1½œ ‰å½ÕÑÕ‰•}Í•µ…¹Ñ¥}Ù•É¥™¥…Ñ¥½¸½µµ…¹ô‘í½µµ…¹¹©…Ù…±…ÍÌ¹Í¥µÁ±•9…µ•ôÍÑ¥±±=Ý¹•ô‘ÍÑ¥±±=Ý¹•¡…¹•ô‘¡…¹•ˆ¤(€€€€€€€€€€€™¥¹¥Í¡e½ÕQÕ‰•M•µ…¹Ñ¥Œ¡ÑÉÕ”°µ•ÍÍ…”°½µµ…¹°ÍÑ…ÉÑ•‘Ð°¥˜€¡¡…¹•¤€‰Ù•É¥™¥•‘}¡…¹”ˆ•±Í”€‰…•ÁÑ•‘}¹½}É•Á•…Ðˆ¤(€€€€€€€ô°¥˜€¡½µµ…¹¥Ìe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹QåÁ•Q•áÐ¤€ÄÈÁ0•±Í”€ÌàÁ0¤(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¡…¹‘±•U¹¥™¥•‘Ñ¥½¹½±±½ÝUÀ ¤ì(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”ü¹É•™É•Í¡MÉ••¹½¹Ñ•áÐ ¤(€€€€€€€Ù…°Ý½É­¥¹œ€ô]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€Ù…°µ•ÍÍ…”€ôÝ¡•¸€¡Ý½É­¥¹œ¹±…ÍÑY•É¥™¥•‘MÕ•ÍÌ¤ì(€€€€€€€€€€€ÑÉÕ”€´ø€‰!……¸°Á¥¡¡±„…Ñ¥½¸Ù•É¥™ä¡¼…å„Ñ¡„¸ˆ(€€€€€€€€€€€™…±Í”€´ø€‰!……¸°…‰¡¤É•ÍÕ±ÐÙ•É¥™ä¹…¡¤¡Õ„¸ˆ(€€€€€€€€€€€¹Õ±°€´ø€‰‰¡¤É•ÍÕ±ÐÙ•É¥™ä¹…¡¤¡Õ„ìÕÉÉ•¹ÐÍÉ••¸‘½‰…É„¡•¬­…É¹¤¡½¤¸ˆ(€€€€€€€ô(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°Ý½É­¥¹œ¹±…ÍÑY•É¥™¥•‘MÕ•ÍÌ€„ôÑÉÕ”¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰…•¹Ñ}Ù•É¥™¥…Ñ¥½¹}™½±±½Ý}ÕÀÑ…Í­%ô‘íÝ½É­¥¹œ¹Ñ…Í­%‘ô±…ÍÑÑ¥½¸ô‘íÝ½É­¥¹œ¹±…ÍÑI•ÅÕ•ÍÑ•‘Ñ¥½¹ô€ˆ€¬(€€€€€€€€€€€€€€€€‰Ù•É¥™¥•ô‘íÝ½É­¥¹œ¹±…ÍÑY•É¥™¥•‘MÕ•ÍÍôˆ(€€€€€€€€¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÕÉÉ•¹ÑA•É•ÁÑ¥½¹M¹…ÁÍ¡½Ð ¤èA•É•ÁÑ¥½¹M¹…ÁÍ¡½Ðüì(€€€€€€€Ù…°½¹Ñ•áÐ€ôÑ¥Ù¥Ñå½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤€üèÉ•ÑÕÉ¸¹Õ±°(€€€€€€€Ù…°Ý½É­¥¹œ€ô]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€É•ÑÕÉ¸A•É•ÁÑ¥½¹M¹…ÁÍ¡½Ð (€€€€€€€€€€€MÉ••¹M•¹•…Ñ½Éä¹™É½´¡½¹Ñ•áÐ°Ý½É­¥¹œ¹…Ñ¥Ù•áÑ•É¹…±ÁÀ¤°(€€€€€€€€€€€•¹•É…±•¹ÑIÕ¹Ñ¥µ•MÑ½É”¹ÉÕ¹Ñ¥µ”¹…Ñ¥Ù•Q…Í¬ ¤ü¹¥°(€€€€€€€€€€€…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€€¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÁÉ•Á…É••¹•É…±IÕ¹Ñ¥µ•MÑ•À¡½¹Ñ•áÐè½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹…•¹Ð¹ÕÉÉ•¹ÑÑ¥Ù¥Ñå½¹Ñ•áÐü¤ì(€€€€€€€Ù…°ÉÕ¹Ñ¥µ”€ô•¹•É…±•¹ÑIÕ¹Ñ¥µ•MÑ½É”¹ÉÕ¹Ñ¥µ”(€€€€€€€Ù…°Ñ…Í¬€ôÉÕ¹Ñ¥µ”¹…Ñ¥Ù•Q…Í¬ ¤€üèÉ•ÑÕÉ¸(€€€€€€€Ù…°Á•É•ÁÑ¥½¸€ô½¹Ñ•áÐü¹±•Ðì(€€€€€€€€€€€A•É•ÁÑ¥½¹M¹…ÁÍ¡½Ð (€€€€€€€€€€€€€€€MÉ••¹M•¹•…Ñ½Éä¹™É½´¡¥Ð°]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹Í¹…ÁÍ¡½Ð ¤¹…Ñ¥Ù•áÑ•É¹…±ÁÀ¤°(€€€€€€€€€€€€€€€Ñ…Í¬¹¥°(€€€€€€€€€€€€€€€…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€€€€€€¤(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰9Q}QM-}IQÑ…Í­%ô‘íÑ…Í¬¹¥‘ôÑÕÉ¹%ô‘íÑ…Í¬¹ÑÕÉ¹%‘ô¥¹Ñ•¹Ðô‘íÑ…Í¬¹¥¹Ñ•¹Ð¹ÑÕÉ¹%¹Ñ•¹Ñô€ˆ€¬(€€€€€€€€€€€€€€€€‰½…±MÕµµ…Éäô‘íÑ…Í¬¹¥¹Ñ•¹Ð¹¥¹Ñ•ÉÁÉ•Ñ•‘½…°¹Ñ…­” ÄÈÀ¥ôˆ(€€€€€€€€¤(€€€€€€€Á•É•ÁÑ¥½¸ü¹±•Ðì(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰9Q}=9QaQ}IdÑ…Í­%ô‘íÑ…Í¬¹¥‘ô•áÑ•É¹…±A…­…”ô‘í¥Ð¹Í•¹”¹•áÑ•É¹…±½É•É½Õ¹‘A…­…•ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰Ý¥¹‘½Ý•¹•É…Ñ¥½¸ô‘í¥Ð¹Í•¹”¹Ý¥¹‘½Ý%‘ôÍÉ••¹•¹•É…Ñ¥½¸ô‘í¥Ð¹Í•¹”¹•¹•É…Ñ¥½¹ôÉ•™•É•¹•½Õ¹Ðô‘í¥Ð¹Í•¹”¹Í•µ…¹Ñ¥±•µ•¹ÑÌ¹Í¥é•ôˆ(€€€€€€€€€€€€¤(€€€€€€€ô(€€€€€€€Ù½¥•1½œ ‰A199I}MQIQÑ…Í­%ô‘íÑ…Í¬¹¥‘ôˆ¤(€€€€€€€Ý¡•¸€¡Ù…°É•ÍÕ±Ð€ôÉÕ¹Ñ¥µ”¹¹•áÐ¡Á•É•ÁÑ¥½¸¤¤ì(€€€€€€€€€€€¥ÌA±…¹¹•ÉI•ÍÕ±Ð¹9•áÐ€´øÙ½¥•1½œ (€€€€€€€€€€€€€€€€‰A199I}IMU1PÑ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ•Á%ô‘íÉ•ÍÕ±Ð¹ÍÑ•À¹¥‘ô…Á…‰¥±¥Ñäô‘íÉ•ÍÕ±Ð¹ÍÑ•À¹…Á…‰¥±¥Ñåô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰Ñ…É•ÑMÕµµ…Éäô‘íÉ•ÍÕ±Ð¹ÍÑ•À¹Ñ…É•Ñ•ÍÉ¥ÁÑ¥½¸ü¹Ñ…­” ÄÀÀ¥ô•áÁ•Ñ•‘=ÕÑ½µ”ô‘íÉ•ÍÕ±Ð¹ÍÑ•À¹•áÁ•Ñ•‘=ÕÑ½µ”¹ÍÕµµ…Éåô¹••‘Í±…É¥™¥…Ñ¥½¸õ™…±Í”ˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€¥ÌA±…¹¹•ÉI•ÍÕ±Ð¹9••‘=‰Í•ÉÙ…Ñ¥½¸€´øÙ½¥•1½œ ‰A199I}IMU1PÑ…Í­%ô‘íÑ…Í¬¹¥‘ô‘•¥Í¥½¸õ9}=	MIYQ%=8Ù¥ÍÕ…°ô‘íÉ•ÍÕ±Ð¹Ù¥ÍÕ…±ôˆ¤(€€€€€€€€€€€¥ÌA±…¹¹•ÉI•ÍÕ±Ð¹9••‘±…É¥™¥…Ñ¥½¸€´øÙ½¥•1½œ ‰A199I}IMU1PÑ…Í­%ô‘íÑ…Í¬¹¥‘ô‘•¥Í¥½¸õ9}1I%%Q%=8ˆ¤(€€€€€€€€€€€¥ÌA±…¹¹•ÉI•ÍÕ±Ð¹½µÁ±•Ñ”€´øÙ½¥•1½œ ‰9Q}QM-}QI5%90Ñ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ…ÑÕÌõ=5A1QÉ•…Í½¸ô‘íÉ•ÍÕ±Ð¹É•…Í½¹ôˆ¤(€€€€€€€€€€€¥ÌA±…¹¹•ÉI•ÍÕ±Ð¹…¥°€´øÙ½¥•1½œ ‰9Q}QM-}QI5%90Ñ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ…ÑÕÌõ%1É•…Í½¸ô‘íÉ•ÍÕ±Ð¹É•…Í½¹ôˆ¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸É•½É‘•¹•É…±Ñ¥½¸¡…Á…‰¥±¥ÑäèQ½½±…Á…‰¥±¥Ñä°…•ÁÑ•è	½½±•…¸°Ñ…É•Ñ%èMÑÉ¥¹œü€ô¹Õ±°¤ì(€€€€€€€Ù…°ÉÕ¹Ñ¥µ”€ô•¹•É…±•¹ÑIÕ¹Ñ¥µ•MÑ½É”¹ÉÕ¹Ñ¥µ”(€€€€€€€Ù…°Ñ…Í¬€ôÉÕ¹Ñ¥µ”¹…Ñ¥Ù•Q…Í¬ ¤€üèÉ•ÑÕÉ¸(€€€€€€€Ù…°ÍÑ•À€ôÑ…Í¬¹ÕÉÉ•¹ÑMÑ•Àü¹Ñ…­•%˜ì¥Ð¹…Á…‰¥±¥Ñä€ôô…Á…‰¥±¥Ñäô€üèÉ•ÑÕÉ¸(€€€€€€€Ù…°‰•™½É”€ôÕÉÉ•¹ÑA•É•ÁÑ¥½¹M¹…ÁÍ¡½Ð ¤€üèÉ•ÑÕÉ¸(€€€€€€€Ù½¥•1½œ ‰Q%=9}I=UQI}M1QÑ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ•Á%ô‘íÍÑ•À¹¥‘ô…Á…‰¥±¥Ñäô‘…Á…‰¥±¥Ñä•á•ÕÑ½É±…ÍÌõ•á¥ÍÑ¥¹}…¹‘É½¥‘}…‘…ÁÑ•Èˆ¤(€€€€€€€Ù½¥•1½œ ‰Q%=9}MQIQÑ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ•Á%ô‘íÍÑ•À¹¥‘ôˆ¤(€€€€€€€ÉÕ¹Ñ¥µ”¹É•½É‘Ñ¥½¸¡ÍÑ•À°•¹•É…±Ñ¥½¹I•ÍÕ±Ð¡…•ÁÑ•°Ñ…É•Ñ%°¥˜€¡…•ÁÑ•¤¹Õ±°•±Í”€‰‘¥ÍÁ…Ñ¡}É•©•Ñ•ˆ¤°‰•™½É”¤(€€€€€€€Ù½¥•1½œ ‰Q%=9}IQUI9Ñ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ•Á%ô‘íÍÑ•À¹¥‘ô…•ÁÑ•ô‘…•ÁÑ••±…ÁÍ•‘5ÌôÀˆ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸Ù•É¥™å•¹•É…±Ñ¥½¹%™ÕÉÉ•¹Ð ¤ì(€€€€€€€Ù…°ÉÕ¹Ñ¥µ”€ô•¹•É…±•¹ÑIÕ¹Ñ¥µ•MÑ½É”¹ÉÕ¹Ñ¥µ”(€€€€€€€Ù…°Ñ…Í¬€ôÉÕ¹Ñ¥µ”¹…Ñ¥Ù•Q…Í¬ ¤€üèÉ•ÑÕÉ¸(€€€€€€€Ù…°…™Ñ•È€ôÕÉÉ•¹ÑA•É•ÁÑ¥½¹M¹…ÁÍ¡½Ð ¤€üèÉ•ÑÕÉ¸(€€€€€€€Ù½¥•1½œ ‰A=MQ}Q%=9}=	MIYQ%=8Ñ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ•Á%ô‘íÑ…Í¬¹ÕÉÉ•¹ÑMÑ•Àü¹¥‘ôÁ…­…”ô‘í…™Ñ•È¹Í•¹”¹•áÑ•É¹…±½É•É½Õ¹‘A…­…•ôÝ¥¹‘½Ý•¹•É…Ñ¥½¸ô‘í…™Ñ•È¹Í•¹”¹Ý¥¹‘½Ý%‘ôÍÉ••¹•¹•É…Ñ¥½¸ô‘í…™Ñ•È¹Í•¹”¹•¹•É…Ñ¥½¹ôÍÉ••¹QåÁ”ô‘í…™Ñ•È¹Í•¹”¹ÍÉ••¹QåÁ•ôµ½‘…±AÉ•Í•¹Ðô‘í…™Ñ•È¹Í•¹”¹µ½‘…°€„ô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹…•¹Ð¹5½‘…±-¥¹¹9=9ôˆ¤(€€€€€€€¥˜€¡Ñ…Í¬¹ÕÉÉ•¹ÑMÑ•À€ôô¹Õ±°ñðÑ…Í¬¹…Ñ¥½¹!¥ÍÑ½Éä¹¹½¹”ì¥Ð¹ÍÑ•Á%€ôôÑ…Í¬¹ÕÉÉ•¹ÑMÑ•À¹¥ô¤É•ÑÕÉ¸(€€€€€€€Ù…°€¡Ù•É¥™¥…Ñ¥½¸°É•½Ù•Éä¤€ôÉÕ¹Ñ¥µ”¹Ù•É¥™ä¡…™Ñ•È¤(€€€€€€€Ù½¥•1½œ ‰YI%%Q%=9}IMU1PÑ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ•Á%ô‘íÑ…Í¬¹ÕÉÉ•¹ÑMÑ•À¹¥‘ôÍÑ…ÑÕÌô‘íÙ•É¥™¥…Ñ¥½¸¹ÍÑ…ÑÕÍô•áÁ•Ñ•‘MÕµµ…Éäô‘íÙ•É¥™¥…Ñ¥½¸¹•áÁ•Ñ•‘ô½‰Í•ÉÙ•‘MÕµµ…Éäô‘íÙ•É¥™¥…Ñ¥½¸¹½‰Í•ÉÙ•‘ô½¹™¥‘•¹”ô‘íÙ•É¥™¥…Ñ¥½¸¹½¹™¥‘•¹•ôˆ¤(€€€€€€€¥˜€¡É•½Ù•Éä€„ô¹Õ±°¤Ù½¥•1½œ ‰I=YIe}%M%=8Ñ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ•Á%ô‘íÑ…Í¬¹ÕÉÉ•¹ÑMÑ•À¹¥‘ô…ÑÑ•µÁÐô‘íÑ…Í¬¹É•½Ù•Éå½Õ¹Ð€¬€Åô‘•¥Í¥½¸ô‘íÉ•½Ù•Éä¹©…Ù…±…ÍÌ¹Í¥µÁ±•9…µ•ôˆ¤(€€€€€€€¥˜€¡Ù•É¥™¥…Ñ¥½¸¹ÍÑ…ÑÕÌ€ôô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹…•¹Ð¹•¹•É…±Y•É¥™¥…Ñ¥½¹MÑ…ÑÕÌ¹MUML¤ì(€€€€€€€€€€€Ù½¥•1½œ ‰9Q}QM-}QI5%90Ñ…Í­%ô‘íÑ…Í¬¹¥‘ôÍÑ…ÑÕÌõ=5A1QÉ•…Í½¸õÙ•É¥™¥•Ñ½Ñ…±Q…Í­5Ìô‘íMåÍÑ•´¹ÕÉÉ•¹ÑQ¥µ•5¥±±¥Ì ¤€´Ñ…Í¬¹É•…Ñ•‘Ñôˆ¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•U¹¥™¥•‘	É½ÝÍ•ÉM•…É ¡É…ÜèMÑÉ¥¹œ¤è	½½±•…¸ì(€€€€€€€Ù…°É•ÅÕ•ÍÐ€ô	É½ÝÍ•ÉM•…É¡I•ÅÕ•ÍÑA…ÉÍ•È¹Á…ÉÍ”¡É…Ü¤€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€Ù…°™É•Í¡½É•É½Õ¹€ô…•ÍÍ¥‰¥±¥Ñäü¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤(€€€€€€€Ù…°Ý½É­¥¹œ€ô]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€Ù…°É•Í½±ÕÑ¥½¸€ôM•…É¡•ÍÑ¥¹…Ñ¥½¹I•Í½±Ù•È¹É•Í½±Ù••Ñ…¥±• (€€€€€€€€€€€É•ÅÕ•ÍÐ°(€€€€€€€€€€€™É•Í¡½É•É½Õ¹ü¹Á…­…•9…µ”°(€€€€€€€€€€€Ý½É­¥¹œ¹…Ñ¥Ù•áÑ•É¹…±ÁÀ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰Í•…É¡}¥¹Ñ•¹Ñ}É•Í½±Ù•ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%™¥¹…±QÉ…¹ÍÉ¥ÁÐô‘íÉ…Ü¹Ñ…­” ÄØÀ¥ôÅÕ•Éäô‘íÉ•ÅÕ•ÍÐ¹ÅÕ•Éä¹Ñ…­” ÄÈÀ¥ô€ˆ€¬(€€€€€€€€€€€€€€€€‰•áÁ±¥¥Ñ•ÍÑ¥¹…Ñ¥½¸ô‘íÉ•ÅÕ•ÍÐ¹•áÁ±¥¥Ñ•ÍÑ¥¹…Ñ¥½¹ôÝ½É­¥¹½¹Ñ•áÑ•ÍÑ¥¹…Ñ¥½¸ô‘íÝ½É­¥¹œ¹…Ñ¥Ù•áÑ•É¹…±ÁÁô€ˆ€¬(€€€€€€€€€€€€€€€€‰™½É•É½Õ¹‘A…­…”ô‘í™É•Í¡½É•É½Õ¹ü¹Á…­…•9…µ•ôÉ•Í½±Ù•‘•ÍÑ¥¹…Ñ¥½¸ô‘íÉ•Í½±ÕÑ¥½¸¹‘•ÍÑ¥¹…Ñ¥½¹ô€ˆ€¬(€€€€€€€€€€€€€€€€‰É•Í½±ÕÑ¥½¹I•…Í½¸ô‘íÉ•Í½±ÕÑ¥½¸¹É•…Í½¹ôÍ•±•Ñ•‘á•ÕÑ½Èô‘íÉ•Í½±ÕÑ¥½¸¹Í•±•Ñ•‘á•ÕÑ½Éôˆ(€€€€€€€€¤(€€€€€€€¥˜€ …ÍÉ••¹½µµ…¹‘QÕÉ¹Õ…É¹ÑÉå½µµ¥Ð¡…Ñ¥Ù•QÕÉ¹%¤¤É•ÑÕÉ¸ÑÉÕ”(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€Ù…°ÍÑ…ÉÑ•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€±…Ñ•ÍÑÑ¥½¹¥ÍÁ…Ñ¡•‘Ð€ôÍÑ…ÉÑ•‘Ð(€€€€€€€Ù…°Ñ…Í­QÕÉ¹%€ô…Ñ¥Ù•QÕÉ¹%(€€€€€€€Ù…°•á•ÕÑ½É9…µ”€ô¥˜€¡É•Í½±ÕÑ¥½¸¹‘•ÍÑ¥¹…Ñ¥½¸€ôôM•…É¡•ÍÑ¥¹…Ñ¥½¸¹e=UQU	¤ì(€€€€€€€€€€€€‰e=UQU	ˆ(€€€€€€€ô•±Í”É•Í½±ÕÑ¥½¸¹Í•±•Ñ•‘á•ÕÑ½Èü¹¹…µ”€üè€‰9I%}]ˆ(€€€€€€€]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹‰•¥¹M•…É  (€€€€€€€€€€€É•ÅÕ•ÍÐ¹ÅÕ•Éä°É•Í½±ÕÑ¥½¸¹‘•ÍÑ¥¹…Ñ¥½¸°•á•ÕÑ½É9…µ”°€‰Í•…É¡}É•ÍÕ±ÑÍ}Ù¥Í¥‰±”ˆ(€€€€€€€€¤(€€€€€€€É•ÍÁ½¹Í•É‰¥Ñ•È¹±…¥µ½¹ÑÉ½±±•¡Ñ…Í­QÕÉ¹%¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰MI!}QM-}IQÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%Ñ…Í­%ô‘í]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹Í¹…ÁÍ¡½Ð ¤¹Ñ…Í­%‘ô€ˆ€¬(€€€€€€€€€€€€€€€€‰ÅÕ•Éå1•¹Ñ ô‘íÉ•ÅÕ•ÍÐ¹ÅÕ•Éä¹±•¹Ñ¡ô‘•ÍÑ¥¹…Ñ¥½¸ô‘íÉ•Í½±ÕÑ¥½¸¹‘•ÍÑ¥¹…Ñ¥½¹ôˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰MI!}aUQ=I}M1QÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%•á•ÕÑ½Èô‘•á•ÕÑ½É9…µ”€ˆ€¬(€€€€€€€€€€€€€€€€‰É•…Í½¸ô‘íÉ•Í½±ÕÑ¥½¸¹É•…Í½¹ôÑ…É•ÑA…­…”ô‘íÉ•Í½±ÕÑ¥½¸¹Ñ…É•ÑA…­…•ôˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰MI!}aUQ=I}9QId±…ÍÌõ5åÉ…Y½¥•M•ÉÙ¥”µ•Ñ¡½õ•á•ÕÑ•U¹¥™¥•‘	É½ÝÍ•ÉM•…É €ˆ€¬(€€€€€€€€€€€€€€€€‰ÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%™¥¹…±QÉ…¹ÍÉ¥ÁÐô‘íÉ…Ü¹Ñ…­” ÄØÀ¥ôÅÕ•Éäô‘íÉ•ÅÕ•ÍÐ¹ÅÕ•Éä¹Ñ…­” ÄÈÀ¥ô€ˆ€¬(€€€€€€€€€€€€€€€€‰‘•ÍÑ¥¹…Ñ¥½¸ô‘íÉ•Í½±ÕÑ¥½¸¹‘•ÍÑ¥¹…Ñ¥½¹ô™½É•É½Õ¹‘A…­…”ô‘í™É•Í¡½É•É½Õ¹ü¹Á…­…•9…µ•ôˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰Ñ…Í­}É•ÍÕ±Ñ}½Ý¹•ÈÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%½Ý¹•Èõ=9QI=11}9PÑ…Í­%ô‘í]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹Í¹…ÁÍ¡½Ð ¤¹Ñ…Í­%‘ô€ˆ€¬(€€€€€€€€€€€€€€€€‰‘•ÍÑ¥¹…Ñ¥½¸ô‘íÉ•Í½±ÕÑ¥½¸¹‘•ÍÑ¥¹…Ñ¥½¹ôˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰Í•…É¡}•á•ÕÑ¥½¹}ÍÑ…ÉÑ•ÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%‘•ÍÑ¥¹…Ñ¥½¸ô‘íÉ•Í½±ÕÑ¥½¸¹‘•ÍÑ¥¹…Ñ¥½¹ô€ˆ€¬(€€€€€€€€€€€€€€€€‰É•…Í½¸ô‘íÉ•Í½±ÕÑ¥½¸¹É•…Í½¹ô•á•ÕÑ½Èô‘•á•ÕÑ½É9…µ”ˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ ‰MI!}Q%=9}MQIQÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%•á•ÕÑ½Èô‘•á•ÕÑ½É9…µ”‘•ÍÑ¥¹…Ñ¥½¸ô‘íÉ•Í½±ÕÑ¥½¸¹‘•ÍÑ¥¹…Ñ¥½¹ôˆ¤(€€€€€€€¥˜€¡É•Í½±ÕÑ¥½¸¹‘•ÍÑ¥¹…Ñ¥½¸€ôôM•…É¡•ÍÑ¥¹…Ñ¥½¸¹e=UQU	¤ì(€€€€€€€€€€€Ù…°É•ÍÕ±Ð€ô…ÍÍ¥ÍÑ…¹Ñ½¹ÑÉ½±±•È¹ÁÉ½•ÍÍ½µµ…¹ (€€€€€€€€€€€€€€€MÑÉÕÑÕÉ•‘½µµ…¹‘A…ÉÍ•È¹™É½µ1•…ä (€€€€€€€€€€€€€€€€€€€ÁÁ½µµ…¹¹M•…É¡e½ÕQÕ‰”¡É•ÅÕ•ÍÐ¹ÅÕ•Éä¤°(€€€€€€€€€€€€€€€€€€€ÁÁ½µµ…¹¹M•…É¡e½ÕQÕ‰”¡É•ÅÕ•ÍÐ¹ÅÕ•Éä¤¹Ñ½MÑÉ¥¹œ ¤(€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€ÍÁ•…¬€ô™…±Í”°(€€€€€€€€€€€€€€€¹½Ñ¥™å1¥ÍÑ•¹•ÉÌ€ô™…±Í”(€€€€€€€€€€€€¤(€€€€€€€€€€€É•½É‘•¹•É…±Ñ¥½¸¡Q½½±…Á…‰¥±¥Ñä¹	I=]MI}MI °…•ÁÑ•€ôÉ•ÍÕ±Ð¹ÍÕ•ÍÌ¤(€€€€€€€€€€€Ù½¥•1½œ ‰MI!}Q%=9}IQUI9ÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%•á•ÕÑ½Èõe=UQU	…•ÁÑ•ô‘íÉ•ÍÕ±Ð¹ÍÕ•ÍÍôˆ¤(€€€€€€€€€€€¥˜€ …É•ÍÕ±Ð¹ÍÕ•ÍÌ¤ì(€€€€€€€€€€€€€€€™¥¹¥Í¡M•…É¡Q…Í­I•ÍÕ±Ð¡Ñ…Í­QÕÉ¹%°M•…É¡Y•É¥™¥…Ñ¥½¸¹%1UI°€‰å½ÕÑÕ‰•}Í•…É¡}‘¥ÍÁ…Ñ¡}™…¥±•ˆ¤(€€€€€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€€€€€ô(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡ì(€€€€€€€€€€€€€€€Ù…°Í•ÉÙ¥”€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€€€€€€€€€Ù…°™½É•É½Õ¹€ôÍ•ÉÙ¥”ü¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤(€€€€€€€€€€€€€€€Ù…°½‰Í•ÉÙ•‘M•¹”€ôÑ¥Ù¥Ñå½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤ü¹Ñ…­•%˜ì(€€€€€€€€€€€€€€€€€€€¥Ð¹Á…­…•9…µ”€ôô™½É•É½Õ¹ü¹Á…­…•9…µ”€˜˜(€€€€€€€€€€€€€€€€€€€€€€€…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´¥Ð¹Ñ¥µ•ÍÑ…µÀ€ðô€É|ÔÀÁ0(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€Ù…°±…‰•±Ì€ô½‰Í•ÉÙ•‘M•¹”ü¹Ù¥Í¥‰±•±•µ•¹ÑÌü¹µ…Àì¥Ð¹±…‰•°ô¹½ÉµÁÑä ¤(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰MI!}=	MIYQ%=9}I%YÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%‘•ÍÑ¥¹…Ñ¥½¸õe=UQU	€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰Á…­…”ô‘í™½É•É½Õ¹ü¹Á…­…•9…µ•ôÙ¥Í¥‰±•±•µ•¹ÑÌô‘í±…‰•±Ì¹Í¥é•ôˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰MI!}YI%%Q%=9}MQIQÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%‘•ÍÑ¥¹…Ñ¥½¸õe=UQU	ˆ¤(€€€€€€€€€€€€€€€Ù…°Ù•É¥™¥…Ñ¥½¸€ôe½ÕQÕ‰•M•…É¡Y•É¥™¥…Ñ¥½¹A½±¥ä¹Ù•É¥™ä (€€€€€€€€€€€€€€€€€€€É•ÅÕ•ÍÐ¹ÅÕ•Éä°™½É•É½Õ¹ü¹Á…­…•9…µ”°±…‰•±Ì(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€™¥¹¥Í¡M•…É¡Q…Í­I•ÍÕ±Ð¡Ñ…Í­QÕÉ¹%°Ù•É¥™¥…Ñ¥½¸°€‰å½ÕÑÕ‰•}Í•…É¡}™½É•É½Õ¹ô‘í™½É•É½Õ¹ü¹Á…­…•9…µ•ôˆ¤(€€€€€€€€€€€ô°€äÀÁ0¤(€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰…•¹Ñ}…Ñ¥½¹}‘¥ÍÁ…Ñ¡•Ñ…Í­%ô‘íU¹¥™¥•‘1åÉ…•¹ÑIÕ¹Ñ¥µ”¹…•¹Ð¹ÕÉÉ•¹ÑQ…Í¬ ¤ü¹¥‘ô€ˆ€¬(€€€€€€€€€€€€€€€€‰Ñ½½°õ‰É½ÝÍ•É}Í•…É Á¡…Í”õÍÑ…ÉÑ¥¹œÅÕ•Éå1•¹Ñ ô‘íÉ•ÅÕ•ÍÐ¹ÅÕ•Éä¹±•¹Ñ¡ôˆ(€€€€€€€€¤(€€€€€€€Ù…°‘¥ÍÁ…Ñ €ô	É½ÝÍ•ÉM•…É¡Q½½°¡Ñ¡¥Ì¤¹•á•ÕÑ”¡É•ÅÕ•ÍÐ°É•Í½±ÕÑ¥½¸¤(€€€€€€€É•½É‘•¹•É…±Ñ¥½¸¡Q½½±…Á…‰¥±¥Ñä¹	I=]MI}MI °…•ÁÑ•€ô‘¥ÍÁ…Ñ ¹…•ÁÑ•¤(€€€€€€€Ù½¥•1½œ ‰MI!}Q%=9}IQUI9ÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%•á•ÕÑ½Èô‘•á•ÕÑ½É9…µ”…•ÁÑ•ô‘í‘¥ÍÁ…Ñ ¹…•ÁÑ•‘ôˆ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰…•¹Ñ}…Ñ¥½¹}‘¥ÍÁ…Ñ¡•Ñ…Í­%ô‘íU¹¥™¥•‘1åÉ…•¹ÑIÕ¹Ñ¥µ”¹…•¹Ð¹ÕÉÉ•¹ÑQ…Í¬ ¤ü¹¥‘ô€ˆ€¬(€€€€€€€€€€€€€€€€‰Ñ½½°õ‰É½ÝÍ•É}Í•…É …•ÁÑ•ô‘í‘¥ÍÁ…Ñ ¹…•ÁÑ•‘ô•áÁ•Ñ•‘A…­…”ô‘í‘¥ÍÁ…Ñ ¹•áÁ•Ñ•‘A…­…•ô€ˆ€¬(€€€€€€€€€€€€€€€€‰ÅÕ•Éå1•¹Ñ ô‘íÉ•ÅÕ•ÍÐ¹ÅÕ•Éä¹±•¹Ñ¡ô‘¥ÍÁ…Ñ¡5Ìô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´ÍÑ…ÉÑ•‘Ñô€ˆ€¬(€€€€€€€€€€€€€€€€‰¥¹Ñ•¹ÑQ½Ñ¥½¹5Ìô‘í¥˜€¡±…Ñ•ÍÑ%¹Ñ•¹Ñ•¥‘•‘Ð€ø€Á0¤ÍÑ…ÉÑ•‘Ð€´±…Ñ•ÍÑ%¹Ñ•¹Ñ•¥‘•‘Ð•±Í”€´Å1ôˆ(€€€€€€€€¤(€€€€€€€¥˜€ …‘¥ÍÁ…Ñ ¹…•ÁÑ•¤ì(€€€€€€€€€€€Ù½¥•1½œ ‰Í•…É¡}•á•ÕÑ¥½¹}™…¥±•ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%‘•ÍÑ¥¹…Ñ¥½¸õ	I=]MHÉ•…Í½¸ô‘í‘¥ÍÁ…Ñ ¹É•…Í½¹ôˆ¤(€€€€€€€€€€€™¥¹¥Í¡M•…É¡Q…Í­I•ÍÕ±Ð¡Ñ…Í­QÕÉ¹%°M•…É¡Y•É¥™¥…Ñ¥½¸¹%1UI°‘¥ÍÁ…Ñ ¹É•…Í½¸¤(€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€ô(€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡ì(€€€€€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€€€€€Ù…°™½É•É½Õ¹€ô…•ÍÍ¥‰¥±¥Ñäü¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤(€€€€€€€€€€€Ù…°½‰Í•ÉÙ•‘M•¹”€ôÑ¥Ù¥Ñå½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤ü¹Ñ…­•%˜ì(€€€€€€€€€€€€€€€¥Ð¹Á…­…•9…µ”€ôô™½É•É½Õ¹ü¹Á…­…•9…µ”€˜˜(€€€€€€€€€€€€€€€€€€€…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´¥Ð¹Ñ¥µ•ÍÑ…µÀ€ðô€É|ÔÀÁ0(€€€€€€€€€€€ô(€€€€€€€€€€€Ù…°±…‰•±Ì€ô½‰Í•ÉÙ•‘M•¹”ü¹Ù¥Í¥‰±•±•µ•¹ÑÌü¹µ…Àì¥Ð¹±…‰•°ô¹½ÉµÁÑä ¤(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰MI!}=	MIYQ%=9}I%YÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%‘•ÍÑ¥¹…Ñ¥½¸õ	I=]MH€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰Á…­…”ô‘í™½É•É½Õ¹ü¹Á…­…•9…µ•ôÙ¥Í¥‰±•±•µ•¹ÑÌô‘í±…‰•±Ì¹Í¥é•ôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù½¥•1½œ ‰Ñ…Í­}Ù•É¥™¥…Ñ¥½¹}ÍÑ…ÉÑ•ÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%Ñ…Í­%ô‘í]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹Í¹…ÁÍ¡½Ð ¤¹Ñ…Í­%‘ôÑ½½°õ‰É½ÝÍ•É}Í•…É ˆ¤(€€€€€€€€€€€Ù½¥•1½œ ‰MI!}YI%%Q%=9}MQIQÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%‘•ÍÑ¥¹…Ñ¥½¸õ	I=]MHˆ¤(€€€€€€€€€€€Ù…°Ù•É¥™¥…Ñ¥½¸€ô	É½ÝÍ•ÉM•…É¡Y•É¥™¥…Ñ¥½¹A½±¥ä¹Ù•É¥™ä (€€€€€€€€€€€€€€€É•ÅÕ•ÍÐ°É•Í½±ÕÑ¥½¸°™½É•É½Õ¹ü¹Á…­…•9…µ”°(€€€€€€€€€€€€€€€±…‰•±Ì(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰Í•…É¡}•á•ÕÑ¥½¹}½µÁ±•Ñ•ÑÕÉ¹%ô‘Ñ…Í­QÕÉ¹%‘•ÍÑ¥¹…Ñ¥½¸õ	I=]MH€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰…•ÁÑ•õÑÉÕ”Ù•É¥™¥…Ñ¥½¸ô‘Ù•É¥™¥…Ñ¥½¸Á…­…”ô‘í™½É•É½Õ¹ü¹Á…­…•9…µ•ôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€™¥¹¥Í¡M•…É¡Q…Í­I•ÍÕ±Ð¡Ñ…Í­QÕÉ¹%°Ù•É¥™¥…Ñ¥½¸°€‰‰É½ÝÍ•É}Í•…É¡}Á…­…”ô‘í™½É•É½Õ¹ü¹Á…­…•9…µ•ôˆ¤(€€€€€€€ô°€äÀÁ0¤(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹¥Í¡M•…É¡Q…Í­I•ÍÕ±Ð¡ÑÕÉ¹%è1½¹œ°Ù•É¥™¥…Ñ¥½¸èM•…É¡Y•É¥™¥…Ñ¥½¸°½‰Í•ÉÙ•èMÑÉ¥¹œ¤ì(€€€€€€€Ù•É¥™å•¹•É…±Ñ¥½¹%™ÕÉÉ•¹Ð ¤(€€€€€€€Ù…°½µÁ±•Ñ¥½¸€ôÝ¡•¸€¡Ù•É¥™¥…Ñ¥½¸¤ì(€€€€€€€€€€€M•…É¡Y•É¥™¥…Ñ¥½¸¹MUML€´øQ…Í­½µÁ±•Ñ¥½¹MÑ…Ñ”¹MUML(€€€€€€€€€€€M•…É¡Y•É¥™¥…Ñ¥½¸¹%1UI€´øQ…Í­½µÁ±•Ñ¥½¹MÑ…Ñ”¹%1UI(€€€€€€€€€€€M•…É¡Y•É¥™¥…Ñ¥½¸¹U9-9=]8€´øQ…Í­½µÁ±•Ñ¥½¹MÑ…Ñ”¹U9-9=]8(€€€€€€€ô(€€€€€€€Ù…°½µÁ±•Ñ•€ô]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹½µÁ±•Ñ•M•…É ¡½‰Í•ÉÙ•°½µÁ±•Ñ¥½¸¤(€€€€€€€Ù…°Ñ…Í¬€ô]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€€¼¼M•…É ¥ÌÑ•Éµ¥¹…°¡•É”¸-••À¥Ð½¹±ä…Ì½µÁ±•Ñ•¡¥ÍÑ½Éäì‘¼¹½ÐÝÉ¥Ñ”¥Ð(€€€€€€€€¼¼¥¹Ñ¼	É…¥¹Q…Í­MÑ…Ñ”¹±…ÍÑÑ¥½¸Ý¡•É”¥Ð½Õ±‰¥…ÌÕ¹É•±…Ñ•±…Ñ•ÈÑÕÉ¹Ì¸(€€€€€€€‰É…¥¸¹±•…ÉQÉ…¹Í¥•¹ÑMÑ…Ñ” ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰Ñ…Í­}Ù•É¥™¥…Ñ¥½¹}½µÁ±•Ñ•ÑÕÉ¹%ô‘ÑÕÉ¹%Ñ…Í­%ô‘í½µÁ±•Ñ•¹Ñ…Í­%‘ôÙ•É¥™¥…Ñ¥½¸ô‘Ù•É¥™¥…Ñ¥½¸€ˆ€¬(€€€€€€€€€€€€€€€€‰‘•ÍÑ¥¹…Ñ¥½¸ô‘í½µÁ±•Ñ•¹‘•ÍÑ¥¹…Ñ¥½¹ô½‰Í•ÉÙ•ô‘½‰Í•ÉÙ•…Ñ¥Ù•Q…Í­±•…É•ô‘íÑ…Í¬¹½µÁ±•Ñ¥½¹MÑ…Ñ”€ôô¹Õ±±ôˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰MI!}YI%%Q%=9}IMU1PÑÕÉ¹%ô‘ÑÕÉ¹%Ñ…Í­%ô‘í½µÁ±•Ñ•¹Ñ…Í­%‘ôÙ•É¥™¥…Ñ¥½¸ô‘Ù•É¥™¥…Ñ¥½¸€ˆ€¬(€€€€€€€€€€€€€€€€‰‘•ÍÑ¥¹…Ñ¥½¸ô‘í½µÁ±•Ñ•¹‘•ÍÑ¥¹…Ñ¥½¹ôˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰MI!}QM-}QI5%90ÑÕÉ¹%ô‘ÑÕÉ¹%Ñ…Í­%ô‘í½µÁ±•Ñ•¹Ñ…Í­%‘ô½µÁ±•Ñ¥½¹MÑ…Ñ”ô‘½µÁ±•Ñ¥½¸€ˆ€¬(€€€€€€€€€€€€€€€€‰½É‘¥¹…Éå5½‘•±5…åI•Á½ÉÐõ™…±Í”…Ñ¥Ù•Q…Í­±•…É•õÑÉÕ”ˆ(€€€€€€€€¤(€€€€€€€É•ÍÁ½¹Í•É‰¥Ñ•È¹½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹½µÁ±•Ñ” ¤(€€€€€€€É•ÍÁ½¹Í•É‰¥Ñ•È¹½¹ÑÉ½±±•‘A±…å‰…­½µÁ±•Ñ” ¤(€€€€€€€€¼¼-••À=9QI=11}1=0½Ý¹•ÉÍ¡¥À±…Ñ¡•Õ¹Ñ¥°Ñ¡”¹•áÐÉ•…°ÕÍ•ÈÑÕÉ¸‰•¥¹Ì¸(€€€€€€€€¼¼1…Ñ”Á…­•ÑÌ™É½´Ñ¡”¥¹Ñ•ÉÉÕÁÑ•½É‘¥¹…Éäµ½‘•°µÕÍÐ¹•Ù•ÈÉ•Á½ÉÐÑ¡¥ÌÑ…Í¬¸(€€€€€€€Ù½¥•1½œ ‰MI!}IMU1Q}=]9HÑÕÉ¹%ô‘ÑÕÉ¹%½Ý¹•Èõ=9QI=11}9PÉ•±•…Í”õ9aQ}UMI}QUI8ˆ¤(€€€€€€€Ý¡•¸€¡Ù•É¥™¥…Ñ¥½¸¤ì(€€€€€€€€€€€M•…É¡Y•É¥™¥…Ñ¥½¸¹MUML€´øì(€€€€€€€€€€€€€€€•µ¥ÑMÑ…Ñ” ‰MÕ¸É…¡¤¡½½»Š˜ˆ¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰Ñ…Í­}É•ÍÕ±Ñ}ÍÁ½­•¸ÑÕÉ¹%ô‘ÑÕÉ¹%ÍÁ½­•¸õ™…±Í”É•ÍÕ±ÐõMUMLˆ¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰MI!}IMU1Q}A1e	,ÑÕÉ¹%ô‘ÑÕÉ¹%ÍÁ½­•¸õ™…±Í”É•ÍÕ±ÐõMUMLˆ¤(€€€€€€€€€€€ô(€€€€€€€€€€€M•…É¡Y•É¥™¥…Ñ¥½¸¹U9-9=]8€´øì(€€€€€€€€€€€€€€€Ù…°µ•ÍÍ…”€ô€‰M•…É ½Á•¸¡Õ¤°±•­¥¸É•ÍÕ±ÑÌÙ•É¥™ä¹…¡¤¡Õ”¸ˆ(€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°ÑÉÕ”¤(€€€€€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰Ñ…Í­}É•ÍÕ±Ñ}ÍÁ½­•¸ÑÕÉ¹%ô‘ÑÕÉ¹%ÍÁ½­•¸õÑÉÕ”É•ÍÕ±ÐõU9-9=]8‘•ÍÑ¥¹…Ñ¥½¸ô‘í½µÁ±•Ñ•¹‘•ÍÑ¥¹…Ñ¥½¹ôˆ¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰MI!}IMU1Q}A1e	,ÑÕÉ¹%ô‘ÑÕÉ¹%ÍÁ½­•¸õÑÉÕ”É•ÍÕ±ÐõU9-9=]8ˆ¤(€€€€€€€€€€€ô(€€€€€€€€€€€M•…É¡Y•É¥™¥…Ñ¥½¸¹%1UI€´øì(€€€€€€€€€€€€€€€¡•¬¡M•…É¡Q…Í­I•ÍÕ±ÑA½±¥ä¹µ…åMÁ•…­…¥±ÕÉ”¡Ù•É¥™¥…Ñ¥½¸¤¤(€€€€€€€€€€€€€€€Ù…°‘•ÍÑ¥¹…Ñ¥½¸€ô¥˜€¡½µÁ±•Ñ•¹‘•ÍÑ¥¹…Ñ¥½¸€ôôM•…É¡•ÍÑ¥¹…Ñ¥½¸¹e=UQU	¤€‰e½ÕQÕ‰”ˆ•±Í”€‰	É½ÝÍ•Èˆ(€€€€€€€€€€€€€€€Ù…°µ•ÍÍ…”€ô€ˆ‘‘•ÍÑ¥¹…Ñ¥½¸Í•…É ÍÑ…ÉÐ¹…¡¤¡¼Á……å¤¸ˆ(€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°ÑÉÕ”¤(€€€€€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰Ñ…Í­}É•ÍÕ±Ñ}ÍÁ½­•¸ÑÕÉ¹%ô‘ÑÕÉ¹%ÍÁ½­•¸õÑÉÕ”É•ÍÕ±Ðõ%1UI‘•ÍÑ¥¹…Ñ¥½¸ô‘í½µÁ±•Ñ•¹‘•ÍÑ¥¹…Ñ¥½¹ôˆ¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰MI!}IMU1Q}A1e	,ÑÕÉ¹%ô‘ÑÕÉ¹%ÍÁ½­•¸õÑÉÕ”É•ÍÕ±Ðõ%1UIˆ¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•U¹¥™¥•‘I•™•É•¹•%™ÁÁ±¥…‰±”¡É…ÜèMÑÉ¥¹œ¤è	½½±•…¸ì(€€€€€€€¥˜€¡U¹¥™¥•‘1åÉ…•¹ÑIÕ¹Ñ¥µ”¹…•¹Ð¹ÕÉÉ•¹ÑQ…Í¬ ¤ü¹¥¹Ñ•ÉÁÉ•Ñ•‘½…°€„ô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹…•¹Ð¹•¹Ñ½…±QåÁ”¹Q@¤É•ÑÕÉ¸™…±Í”(€€€€€€€Ù…°½¹Ñ•áÐ€ôÑ¥Ù¥Ñå½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€Ù…°‘•¥Í¥½¸€ôU¹¥™¥•‘1åÉ…•¹ÑIÕ¹Ñ¥µ”¹…•¹Ð¹É•Í½±Ù•I•™•É•¹”¡É…Ü°½¹Ñ•áÐ¤(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€Ý¡•¸€¡‘•¥Í¥½¸¤ì(€€€€€€€€€€€¥Ì½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹…•¹Ð¹•¹Ñ•¥Í¥½¸¹±…É¥™ä€´øì(€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡‘•¥Í¥½¸¹µ•ÍÍ…”¤(€€€€€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡‘•¥Í¥½¸¹µ•ÍÍ…”¤(€€€€€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡‘•¥Í¥½¸¹µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰…•¹Ñ}±…É¥™¥…Ñ¥½¸Ñ…Í­%ô‘íU¹¥™¥•‘1åÉ…•¹ÑIÕ¹Ñ¥µ”¹…•¹Ð¹ÕÉÉ•¹ÑQ…Í¬ ¤ü¹¥‘ôÉ•…Í½¸õ…µ‰¥Õ½ÕÍ}É•™•É•¹”ˆ¤(€€€€€€€€€€€ô(€€€€€€€€€€€¥Ì½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹…•¹Ð¹•¹Ñ•¥Í¥½¸¹á•ÕÑ”€´øì(€€€€€€€€€€€€€€€Ù…°Ñ…É•Ð€ô‘•¥Í¥½¸¹Ñ…É•Ð€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€€€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€€€€€€€€€Ù…°™½É•É½Õ¹€ô…•ÍÍ¥‰¥±¥Ñäü¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤(€€€€€€€€€€€€€€€Ù…°Í½Á”€ô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹½É•É½Õ¹‘Ñ¥½¹A½±¥ä¹Í½Á”¡™½É•É½Õ¹¤(€€€€€€€€€€€€€€€¥˜€¡…•ÍÍ¥‰¥±¥Ñä€ôô¹Õ±°ñðÍ½Á”€ôô¹Õ±°ñð½¹Ñ•áÐ¹Á…­…•9…µ”€„ôÍ½Á”¹•áÁ•Ñ•‘A…­…”ñð(€€€€€€€€€€€€€€€€€€€½¹Ñ•áÐ¹Ý¥¹‘½Ý%€„ôÍ½Á”¹•áÁ•Ñ•‘]¥¹‘½Ý%ñð½¹Ñ•áÐ¹•¹•É…Ñ¥½¸€„ôÑ¥Ù¥Ñå½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤ü¹•¹•É…Ñ¥½¸(€€€€€€€€€€€€€€€€¤ì(€€€€€€€€€€€€€€€€€€€Ù…°µ•ÍÍ…”€ô€‰MÉ••¸‰…‘…°…å¤¸½‰…É„Ñ…É•Ð‰…Ñ…¼¸ˆ(€€€€€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°ÑÉÕ”¤ìÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€Ù…°‰•™½É”€ô…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤(€€€€€€€€€€€€€€€Ù…°É•ÍÕ±Ð€ô…•ÍÍ¥‰¥±¥Ñä¹É•Í½±Ù•¹‘Q…ÁY¥Í¥‰±•Q…É•Ð¡Ñ…É•Ð¹±…‰•°°¹Õ±°°¹Õ±°°Í½Á”¤ì|°|€´øÑÉÕ”ô(€€€€€€€€€€€€€€€Ù…°Ñ…Í­%€ôU¹¥™¥•‘1åÉ…•¹ÑIÕ¹Ñ¥µ”¹…•¹Ð¹ÕÉÉ•¹ÑQ…Í¬ ¤ü¹¥(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰…•¹Ñ}…Ñ¥½¹}‘¥ÍÁ…Ñ¡•Ñ…Í­%ô‘Ñ…Í­%Ñ½½°õ…•ÍÍ¥‰¥±¥Ñå}±¥¬Ñ…É•ÑI½±”ô‘íÑ…É•Ð¹É½±•ô…•ÁÑ•ô‘íÉ•ÍÕ±Ð¹…•ÁÑ•‘ôˆ¤(€€€€€€€€€€€€€€€¥˜€ …É•ÍÕ±Ð¹…•ÁÑ•¤ì(€€€€€€€€€€€€€€€€€€€U¹¥™¥•‘1åÉ…•¹ÑIÕ¹Ñ¥µ”¹…•¹Ð¹É•½É‘Ñ¥½¸ (€€€€€€€€€€€€€€€€€€€€€€€½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹…•¹Ð¹•¹ÑÑ¥½¹I•½É ‰…•ÍÍ¥‰¥±¥Ñå}±¥¬ˆ°Ñ…É•Ð¹¥°™…±Í”°™…±Í”°…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤¤°(€€€€€€€€€€€€€€€€€€€€€€€Ñ¥Ù¥Ñå½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹É•½É‘=ÕÑ½µ”¡É•ÍÕ±Ð¹É•Í½±ÕÑ¥½¸°™…±Í”°Ñ…É•Ð¹¥¤(€€€€€€€€€€€€€€€€€€€Ù…°µ•ÍÍ…”€ô¥˜€¡É•ÍÕ±Ð¹É•Í½±ÕÑ¥½¸€ôô€‰…µ‰¥Õ½ÕÌˆ¤€‰-…Õ¹Í„Ý…±„üˆ•±Í”€‰e”Ñ…É•Ð±•…È¹…¡¤µ¥±„¸ˆ(€€€€€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°ÑÉÕ”¤ìÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€€€€€€€€€ô•±Í”µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡ì(€€€€€€€€€€€€€€€€€€€…•ÍÍ¥‰¥±¥Ñä¹É•™É•Í¡MÉ••¹½¹Ñ•áÐ¡™½É”€ôÑÉÕ”¤(€€€€€€€€€€€€€€€€€€€Ù…°¡…¹•€ô‰•™½É”¹¥Í9½Ñ	±…¹¬ ¤€˜˜…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤€„ô‰•™½É”(€€€€€€€€€€€€€€€€€€€U¹¥™¥•‘1åÉ…•¹ÑIÕ¹Ñ¥µ”¹…•¹Ð¹É•½É‘Ñ¥½¸ (€€€€€€€€€€€€€€€€€€€€€€€½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹…•¹Ð¹•¹ÑÑ¥½¹I•½É ‰…•ÍÍ¥‰¥±¥Ñå}±¥¬ˆ°Ñ…É•Ð¹¥°ÑÉÕ”°¡…¹•°…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤¤°(€€€€€€€€€€€€€€€€€€€€€€€Ñ¥Ù¥Ñå½¹Ñ•áÑMÑ½É”¹Í¹…ÁÍ¡½Ð ¤(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€]½É­¥¹Q…Í­IÕ¹Ñ¥µ”¹ÍÑ½É”¹É•½É‘=ÕÑ½µ”¡¥˜€¡¡…¹•¤€‰ÍÉ••¹}¡…¹•ˆ•±Í”€‰¹½}Ù•É¥™¥•‘}¡…¹”ˆ°¡…¹•°Ñ…É•Ð¹¥¹Ñ…­•%˜ì€…¡…¹•ô¤(€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰…•¹Ñ}Ù•É¥™¥…Ñ¥½¸Ñ…Í­%ô‘Ñ…Í­%…•ÁÑ•õÑÉÕ”Ù•É¥™¥•ô‘¡…¹•ˆ¤(€€€€€€€€€€€€€€€€€€€¥˜€ …¡…¹•¤ì(€€€€€€€€€€€€€€€€€€€€€€€Ù…°µ•ÍÍ…”€ô€‰Q…À¡Õ„°±•­¥¸É•ÍÕ±ÐÙ•É¥™ä¹…¡¤¡Õ„¸ˆ(€€€€€€€€€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°ÑÉÕ”¤ìÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€ô°€ÌÔÁ0¤(€€€€€€€€€€€ô(€€€€€€€€€€€¥Ì½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹…•¹Ð¹•¹Ñ•¥Í¥½¸¹=‰Í•ÉÙ•5½É”€´øì(€€€€€€€€€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€€€€€€€€€¥˜€ …Ù¥ÍÕ…±Ý…É•¹•ÍÍAÉ•™•É•¹•Ì¹•¹…‰±•ñð…•ÍÍ¥‰¥±¥Ñä€ôô¹Õ±°ñð(€€€€€€€€€€€€€€€€€€€€……•ÍÍ¥‰¥±¥Ñä¹É•ÅÕ•ÍÑY¥ÍÕ…±MÉ••¹Í¡½ÐìÉ•ÍÕ±Ð€´ø(€€€€€€€€€€€€€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°µ•ÍÍ…”€ô¥˜€¡É•ÍÕ±Ð¹¥ÍMÕ•ÍÌ¤€‰-…Õ¹Í„Ý…±„üˆ•±Í”€‰ÕÉÉ•¹ÐÍÉ••¸±•…È¹…¡¤µ¥±¤¸ˆ(€€€€€€€€€€€€€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°É•ÍÕ±Ð¹¥Í…¥±ÕÉ”¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÉ•ÍÕ±Ð¹¥ÍMÕ•ÍÌ¤(€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€¤ì(€€€€€€€€€€€€€€€€€€€Ù…°µ•ÍÍ…”€ô€‰-…Õ¹Í„Ý…±„üˆ(€€€€€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”¤ìÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€€€€€•±Í”€´øÉ•ÑÕÉ¸™…±Í”(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹¥Í¡e½ÕQÕ‰•M•µ…¹Ñ¥Œ (€€€€€€€ÍÕ•ÍÌè	½½±•…¸°(€€€€€€€µ•ÍÍ…”èMÑÉ¥¹œ°(€€€€€€€½µµ…¹èe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹°(€€€€€€€ÍÑ…ÉÑ•‘Ðè1½¹œ°(€€€€€€€É•Í½±ÕÑ¥½¸èMÑÉ¥¹œ(€€€€¤ì(€€€€€€€¥˜€ …ÍÕ•ÍÌ¤ì(€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°ÑÉÕ”¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰å½ÕÑÕ‰•}Í•µ…¹Ñ¥}™¥¹¥Í¡•½µµ…¹ô‘í½µµ…¹¹©…Ù…±…ÍÌ¹Í¥µÁ±•9…µ•ôÍÕ•ÍÌô‘ÍÕ•ÍÌ€ˆ€¬(€€€€€€€€€€€€€€€€‰É•Í½±ÕÑ¥½¸ô‘É•Í½±ÕÑ¥½¸ÍÁ½­•¹••‘‰…­MÕÁÁÉ•ÍÍ•ô‘ÍÕ•ÍÌÑ½Ñ…±5Ìô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´ÍÑ…ÉÑ•‘Ñôˆ(€€€€€€€€¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸…¹UÍ•Y¥ÍÕ…±…±±‰…¬¡½µµ…¹èe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¤è	½½±•…¸€ô½µµ…¹¥¸Í•Ñ=˜ (€€€€€€€e½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹1¥­”°e½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹=Á•¹½µµ•¹ÑÌ°(€€€€€€€e½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹MÕ‰ÍÉ¥‰”°e½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹M¡…É”°e½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹5½É”(€€€€¤ñð½µµ…¹¥Ìe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹¹=Á•¹¡…¹¹•°((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•MÉ••¹5½‘•½µµ…¹¡½µµ…¹èMÉ••¹5½‘•½µµ…¹¤ì(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€Ý¡•¸€¡½µµ…¹¤ì(€€€€€€€€€€€MÉ••¹5½‘•½µµ…¹¹=8€´øì(€€€€€€€€€€€€€€€¥˜€¡MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹ÕÉÉ•¹ÑMÑ…Ñ”€„ôMÉ••¹M¡…É•MÑ…Ñ”¹Q%Y¤ì(€€€€€€€€€€€€€€€€€€€É•ÅÕ•ÍÑAÉ½©•Ñ¥½¹A•Éµ¥ÍÍ¥½¹É½µ=Ý¹•È ¤(€€€€€€€€€€€€€€€ô•±Í”Ù½¥•1½œ ‰ÍÉ••¹}µ½‘•}½µµ…¹µ½‘”õ=8É•ÍÕ±Ðõ…±É•…‘å}…Ñ¥Ù”ÍÁ½­•¹••‘‰…­MÕÁÁÉ•ÍÍ•õÑÉÕ”ˆ¤(€€€€€€€€€€€ô(€€€€€€€€€€€MÉ••¹5½‘•½µµ…¹¹=€´øì(€€€€€€€€€€€€€€€ÍÑ…ÉÑM•ÉÙ¥”¡%¹Ñ•¹Ð¡Ñ¡¥Ì°MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”èé±…ÍÌ¹©…Ù„¤¹Í•ÑÑ¥½¸¡MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Q%=9}MQ=@¤¤(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰ÍÉ••¹}µ½‘•}½µµ…¹µ½‘”õ=É•ÍÕ±ÐõÍÑ½Á}É•ÅÕ•ÍÑ•ÍÁ½­•¹••‘‰…­MÕÁÁÉ•ÍÍ•õÑÉÕ”ˆ¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸É•ÅÕ•ÍÑAÉ½©•Ñ¥½¹A•Éµ¥ÍÍ¥½¹É½µ=Ý¹•È ¤ì(€€€€€€€¥˜€¡MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹ÕÉÉ•¹ÑMÑ…Ñ”€ôôMÉ••¹M¡…É•MÑ…Ñ”¹Q%Y¤É•ÑÕÉ¸(€€€€€€€Ù…°É•ÅÕ•ÍÐ€ô%¹Ñ•¹Ð¡Ñ¡¥Ì°5…¥¹Ñ¥Ù¥Ñäèé±…ÍÌ¹©…Ù„¤(€€€€€€€€€€€€¹Í•ÑÑ¥½¸¡5…¥¹Ñ¥Ù¥Ñä¹Q%=9}IEUMQ}MI9}AI=)Q%=8¤(€€€€€€€€€€€€¹…‘‘±…Ì¡%¹Ñ•¹Ð¹1}Q%Y%Qe}9]}QM,½È%¹Ñ•¹Ð¹1}Q%Y%Qe}M%91}Q=@½È%¹Ñ•¹Ð¹1}Q%Y%Qe}1I}Q=@¤(€€€€€€€ÉÕ¹…Ñ¡¥¹œìÍÑ…ÉÑÑ¥Ù¥Ñä¡É•ÅÕ•ÍÐ¤ô(€€€€€€€€€€€€¹½¹MÕ•ÍÌìÙ½¥•1½œ ‰ÍÉ••¹}ÁÉ½©•Ñ¥½¹}Á•Éµ¥ÍÍ¥½¹}½Ý¹•É}É•ÅÕ•ÍÑ•½Ý¹•Èõ5…¥¹Ñ¥Ù¥Ñäˆ¤ô(€€€€€€€€€€€€¹½¹…¥±ÕÉ”ì(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰½¹Ñ¥¹Õ½ÕÍ}ÍÉ••¹}Á•Éµ¥ÍÍ¥½¹}™…¥±••ÉÉ½Èô‘í¥Ð¹©…Ù…±…ÍÌ¹Í¥µÁ±•9…µ•ôˆ¤(€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ ‰MÉ••¸Í¡…É¥¹œÁ•Éµ¥ÍÍ¥½¸½Á•¸¹…¡¤¡Õ¤¸ˆ°ÑÉÕ”¤(€€€€€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ••  ‰MÉ••¸Í¡…É¥¹œÁ•Éµ¥ÍÍ¥½¸½Á•¸¹…¡¤¡Õ¤¸ˆ°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸É•ÅÕ•ÍÑ•ÍÍ¥‰¥±¥ÑåY¥ÍÕ…±I•ÑÉä (€€€€€€€½µµ…¹èe½ÕQÕ‰•M•µ…¹Ñ¥½µµ…¹°(€€€€€€€•áÁ•Ñ•è½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹½É•É½Õ¹‘ÁÁ½¹Ñ•áÐ°(€€€€€€€ÑÕÉ¹%è1½¹œ°(€€€€€€€ÍÑ…ÉÑ•‘Ðè1½¹œ(€€€€¤è	½½±•…¸ì(€€€€€€€Ù…°ÕÉÉ•¹Ð€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”ü¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€¥˜€¡ÕÉÉ•¹Ð¹Á…­…•9…µ”€„ô•áÁ•Ñ•¹Á…­…•9…µ”ñðÕÉÉ•¹Ð¹Ý¥¹‘½Ý%€„ô•áÁ•Ñ•¹Ý¥¹‘½Ý%ñð(€€€€€€€€€€€ÕÉÉ•¹Ð¹•¹•É…Ñ¥½¸€„ô•áÁ•Ñ•¹•¹•É…Ñ¥½¸(€€€€€€€€¤É•ÑÕÉ¸™…±Í”(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰å½ÕÑÕ‰•}Í•µ…¹Ñ¥}™…±±‰…¬É½ÕÑ”õMQ}Y%MU1}QUI8ÑÕÉ¹%ô‘ÑÕÉ¹%€ˆ€¬(€€€€€€€€€€€€€€€€‰É½±”ô‘í½µµ…¹¹©…Ù…±…ÍÌ¹Í¥µÁ±•9…µ•ô…•ÍÍ¥‰¥±¥Ñå±…ÁÍ•‘5Ìô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´ÍÑ…ÉÑ•‘Ñôˆ(€€€€€€€€¤(€€€€€€€€¼¼Q¡”‘•Ñ•Éµ¥¹¥ÍÑ¥Œ…ÑÑ•µÁÐ…±É•…‘ä½Ý¹•Ñ¡”…Ñ¥½¸Õ…É¸Y¥ÍÕ…°™…±±‰…¬¥Ì(€€€€€€€€¼¼Ñ¡”Í…µ”ÑÕÉ¸…¹‰•½µ•Ì¥ÑÌÍ½±”É•ÍÁ½¹Í”½Ý¹•È°¹½Ð„½µÁ•Ñ¥¹œ…Ñ¥½¸¸(€€€€€€€ÍÉ••¹½µµ…¹‘QÕÉ¹Õ…É¹±•…È ¤(€€€€€€€‰•¥¹É•Í¡MÉ••¹EÕ•Éä (€€€€€€€€€€€±…ÍÑUÍ•É%¹Ñ•¹ÑQ•áÐ°(€€€€€€€€€€€ÑÕÉ¹%°(€€€€€€€€€€€…ÍÑY¥ÍÕ…±I•ÅÕ•ÍÐ¡…ÍÑY¥ÍÕ…±-¥¹¹Q%=8°½µµ…¹¹©…Ù…±…ÍÌ¹Í¥µÁ±•9…µ”¤(€€€€€€€€¤(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ••ÍÍ¥‰¥±¥Ñå¥ÉÍÑMÉ••¹Ñ¥½¸ (€€€€€€€Ñ…É•ÐèMÉ••¹Q…É•ÑI•™•É•¹”°(€€€€€€€½Ý¹•‘Q…É•ÐèMÉ••¹Q…É•ÑI•™•É•¹”°(€€€€€€€…Ñ¥½¹M½Á”è½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹½É•É½Õ¹‘Ñ¥½¹M½Á”°(€€€€€€€Ñ…Í­Q½­•¸è1½¹œ°(€€€€€€€…•ÍÍ¥‰¥±¥Ñäè•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”(€€€€¤è	½½±•…¸ì(€€€€€€€Ù…°ÍÑ…ÉÑ•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù…°‰•™½É”€ô…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤(€€€€€€€Ù…°…Ñ¥½¹M•ÍÍ¥½¹%€ôMÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹Í•ÍÍ¥½¹%¹Ñ…­•%˜¡MÑÉ¥¹œèé¥Í9½Ñ	±…¹¬¤(€€€€€€€€€€€€üè€‰…•ÍÍ¥‰¥±¥Ñäè‘í…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘A…­…•ôè‘í…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘•¹•É…Ñ¥½¹ôˆ(€€€€€€€Ù…È…Ñ¥½¹%¹Ñ•¹ÐèMÉ••¹Ñ¥½¹%¹Ñ•¹Ðü€ô¹Õ±°(€€€€€€€Ù…ÈÉ•Í½±ÕÑ¥½¸€ô€‰¹½Ñ}™½Õ¹ˆ(€€€€€€€Ù…È…¹‘¥‘…Ñ•½Õ¹Ð€ô€À(€€€€€€€Ù…ÈÍ•±•Ñ•‘1…‰•°èMÑÉ¥¹œü€ô¹Õ±°(€€€€€€€Ù…°…•ÁÑ•€ô¥˜€ (€€€€€€€€€€€…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘A…­…”¹•ÅÕ…±Ì ‰½´¹½½±”¹…¹‘É½¥¹å½ÕÑÕ‰”ˆ°ÑÉÕ”¤€˜˜(€€€€€€€€€€€Ñ…É•Ð¹½É‘¥¹…°€„ô¹Õ±°€˜˜(€€€€€€€€€€€Ñ…É•Ð¹Ñ…É•ÑQ•áÐ¹½ÉµÁÑä ¤¹½¹Ñ…¥¹Ì ‰Ù¥‘•¼ˆ°ÑÉÕ”¤(€€€€€€€€¤ì(€€€€€€€€€€€…Ñ¥½¹%¹Ñ•¹Ð€ôÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹É•…Ñ” (€€€€€€€€€€€€€€€…Ñ¥Ù•QÕÉ¹%°…Ñ¥½¹M•ÍÍ¥½¹%°±…ÍÑUÍ•É%¹Ñ•¹ÑQ•áÐ°(€€€€€€€€€€€€€€€Ñ…É•Ð¹Ñ…É•ÑQ•áÐ°Ñ…É•Ð¹Á½Í¥Ñ¥½¸°Ñ…É•Ð¹½É‘¥¹…°°(€€€€€€€€€€€€€€€…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘A…­…”°ÍÑ…ÉÑ•‘Ð°€Á0°€Ä¸À°(€€€€€€€€€€€€€€€…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘]¥¹‘½Ý%°…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘•¹•É…Ñ¥½¸(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù…°É•ÍÕ±Ð€ô…•ÍÍ¥‰¥±¥Ñä¹É•Í½±Ù•¹‘Q…Áe½ÕQÕ‰•Y¥‘•¼¡Ñ…É•Ð¹½É‘¥¹…°°…Ñ¥½¹M½Á”¤(€€€€€€€€€€€É•Í½±ÕÑ¥½¸€ôÉ•ÍÕ±Ð¹É•Í½±ÕÑ¥½¸(€€€€€€€€€€€…¹‘¥‘…Ñ•½Õ¹Ð€ôÉ•ÍÕ±Ð¹…¹‘¥‘…Ñ•½Õ¹Ð(€€€€€€€€€€€Í•±•Ñ•‘1…‰•°€ôÉ•ÍÕ±Ð¹Í•±•Ñ•‘1…‰•°(€€€€€€€€€€€É•ÍÕ±Ð¹…•ÁÑ•(€€€€€€€ô•±Í”ì(€€€€€€€€€€€Ù…°É•ÍÕ±Ð€ô…•ÍÍ¥‰¥±¥Ñä¹É•Í½±Ù•¹‘Q…ÁY¥Í¥‰±•Q…É•Ð (€€€€€€€€€€€€€€€Ñ…É•Ð¹Ñ…É•ÑQ•áÐ°Ñ…É•Ð¹Á½Í¥Ñ¥½¸°Ñ…É•Ð¹½É‘¥¹…°°…Ñ¥½¹M½Á”(€€€€€€€€€€€€¤ì|°½¹™¥‘•¹”€´ø(€€€€€€€€€€€€€€€…Ñ¥½¹%¹Ñ•¹Ð€ôÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹É•…Ñ” (€€€€€€€€€€€€€€€€€€€…Ñ¥Ù•QÕÉ¹%°…Ñ¥½¹M•ÍÍ¥½¹%°±…ÍÑUÍ•É%¹Ñ•¹ÑQ•áÐ°(€€€€€€€€€€€€€€€€€€€Ñ…É•Ð¹Ñ…É•ÑQ•áÐ°Ñ…É•Ð¹Á½Í¥Ñ¥½¸°Ñ…É•Ð¹½É‘¥¹…°°(€€€€€€€€€€€€€€€€€€€…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘A…­…”°ÍÑ…ÉÑ•‘Ð°€Á0°½¹™¥‘•¹”°(€€€€€€€€€€€€€€€€€€€…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘]¥¹‘½Ý%°…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘•¹•É…Ñ¥½¸(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€ÑÉÕ”(€€€€€€€€€€€ô(€€€€€€€€€€€É•Í½±ÕÑ¥½¸€ôÉ•ÍÕ±Ð¹É•Í½±ÕÑ¥½¸(€€€€€€€€€€€Í•±•Ñ•‘1…‰•°€ôÉ•ÍÕ±Ð¹…¹‘¥‘…Ñ”ü¹±…‰•°(€€€€€€€€€€€É•ÍÕ±Ð¹…•ÁÑ•(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰ÍÉ••¹}…Ñ¥½¹}Á…Ñ ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%Á…Ñ õMM%	%1%Qe}MQ}AQ €ˆ€¬(€€€€€€€€€€€€€€€€‰Á…­…”ô‘í…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘A…­…•ô½É‘¥¹…°ô‘íÑ…É•Ð¹½É‘¥¹…±ô€ˆ€¬(€€€€€€€€€€€€€€€€‰…¹‘¥‘…Ñ•½Õ¹Ðô‘…¹‘¥‘…Ñ•½Õ¹ÐÉ•Í½±ÕÑ¥½¸ô‘É•Í½±ÕÑ¥½¸€ˆ€¬(€€€€€€€€€€€€€€€€‰Í•±•Ñ•ô‘íÍ•±•Ñ•‘1…‰•°ü¹Ñ…­” àÀ¥ô‘¥ÍÁ…Ñ¡5Ìô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´ÍÑ…ÉÑ•‘Ñôˆ(€€€€€€€€¤(€€€€€€€¥˜€ ……•ÁÑ•¤ì(€€€€€€€€€€€…Ñ¥½¹%¹Ñ•¹Ðü¹±•ÐìÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹…¹•°¡¥Ð¹…Ñ¥½¹%¤ô(€€€€€€€€€€€É•ÑÕÉ¸Ý¡•¸€¡É•Í½±ÕÑ¥½¸¤ì(€€€€€€€€€€€€€€€€‰…µ‰¥Õ½ÕÌˆ€´øì(€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰-…Õ¹Í„Ý…±„üˆ¤(€€€€€€€€€€€€€€€€€€€ÑÉÕ”(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€‰ÍÑ…±•}™½É•É½Õ¹ˆ°€‰ÍÑ…±•}…¹‘¥‘…Ñ”ˆ€´øì(€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰MÉ••¸‰…‘…°…å¤°Ñ…É•ÐÕÍ”¹…¡¤­¥å„¸ˆ¤(€€€€€€€€€€€€€€€€€€€ÑÉÕ”(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€‰½É‘¥¹…±}½ÕÑ}½™}É…¹”ˆ€´øì(€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰%Ñ¹”Ù¥‘•½ÌÕÉÉ•¹ÐÍÉ••¸Á…È¹…¡¤µ¥±”¸ˆ¤(€€€€€€€€€€€€€€€€€€€ÑÉÕ”(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€‰¹½}Ù¥‘•½}…¹‘¥‘…Ñ•Ìˆ°€‰±¥­}É•©•Ñ•ˆ€´øì(€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰ÕÉÉ•¹Ðe½ÕQÕ‰”ÍÉ••¸Á…ÈÉ•…°Ù¥‘•¼Ñ…É•Ð¹…¡¤µ¥±„¸ˆ¤(€€€€€€€€€€€€€€€€€€€ÑÉÕ”(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€•±Í”€´ø™…±Í”(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€Ù…°¥¹Ñ•¹Ð€ô…Ñ¥½¹%¹Ñ•¹Ð€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡ì(€€€€€€€€€€€¥˜€ …‰É…¥¸¹¥ÍQ…Í­ÕÉÉ•¹Ð¡Ñ…Í­Q½­•¸¤ñð(€€€€€€€€€€€€€€€€…ÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹¥ÍÕÉÉ•¹Ð¡¥¹Ñ•¹Ð¹…Ñ¥½¹%°¥¹Ñ•¹Ð¹ÑÕÉ¹%°¥¹Ñ•¹Ð¹ÍÉ••¹M•ÍÍ¥½¹%¤(€€€€€€€€€€€€¤É•ÑÕÉ¹Á½ÍÑ•±…å•(€€€€€€€€€€€Ù…°¡…¹•€ô‰•™½É”¹¥Í9½Ñ	±…¹¬ ¤€˜˜…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤€„ô‰•™½É”(€€€€€€€€€€€‰É…¥¸¹É•½É‘MÉ••¹Ñ¥½¸¡½Ý¹•‘Q…É•Ð°¡…¹•¤(€€€€€€€€€€€ÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹…¹•°¡¥¹Ñ•¹Ð¹…Ñ¥½¹%¤(€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬ (€€€€€€€€€€€€€€€Ñ…Í­Q½­•¸°(€€€€€€€€€€€€€€€¡…¹•°(€€€€€€€€€€€€€€€¥˜€¡¡…¹•¤€‰=Á•¸¡¼…å„¸ˆ•±Í”€‰Q…À¡Õ„°±•­¥¸ÍÉ••¸¡…¹”Ù•É¥™ä¹…¡¤¡Õ„¸ˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰ÍÉ••¹}…Ñ¥½¹}™…ÍÑ}É•ÍÕ±Ð…Ñ¥½¹%ô‘í¥¹Ñ•¹Ð¹…Ñ¥½¹%‘ôÙ•É¥™¥•ô‘¡…¹•€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰Ñ½Ñ…±5Ìô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤€´ÍÑ…ÉÑ•‘Ñôˆ(€€€€€€€€€€€€¤(€€€€€€€ô°€ÐÈÁ0¤(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•½¹Ñ•áÑÕ…±MÉ••¹Ñ¥½¸¡Ñ…É•ÐèMÉ••¹Q…É•ÑI•™•É•¹”¤ì(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€Ý…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ôÑÉÕ”(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñä€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€¥˜€¡…•ÍÍ¥‰¥±¥Ñä€ôô¹Õ±°ñð€…•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥Í¹…‰±•¡Ñ¡¥Ì¤¤ì(€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡‰É…¥¸¹Í¹…ÁÍ¡½Ð ¤¹Ñ…Í­Q½­•¸°™…±Í”°€‰1eI•ÍÍ¥‰¥±¥Ñä•¹…‰±”­…É¼¸ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°Ñ…Í­Q½­•¸€ô‰É…¥¸¹Í¹…ÁÍ¡½Ð ¤¹Ñ…Í­Q½­•¸(€€€€€€€Ù…°…Ñ¥½¹M½Á”€ô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹½É•É½Õ¹‘Ñ¥½¹A½±¥ä¹Í½Á” (€€€€€€€€€€€…•ÍÍ¥‰¥±¥Ñä¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤(€€€€€€€€¤(€€€€€€€¥˜€¡…Ñ¥½¹M½Á”€ôô¹Õ±°¤ì(€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰ÕÉÉ•¹Ð…ÁÀ±•…È¹…¡¤µ¥±„¸ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€¥˜€¡Ñ…É•Ð¹…ÁÁA…­…”€„ô¹Õ±°€˜˜(€€€€€€€€€€€€¡Ñ…É•Ð¹…ÁÁA…­…”€„ô…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘A…­…”ñð(€€€€€€€€€€€€€€€Ñ…É•Ð¹…Ñ¥Ù•]¥¹‘½Ý%€„ô…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘]¥¹‘½Ý%ñð(€€€€€€€€€€€€€€€Ñ…É•Ð¹ÍÉ••¹½¹Ñ•áÑ•¹•É…Ñ¥½¸€„ô…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘•¹•É…Ñ¥½¸¤(€€€€€€€€¤ì(€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰MÉ••¸‰…‘…°…å¤¡…¤¸-…Õ¹Í„¥Ñ•´üˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°½Ý¹•‘Q…É•Ð€ôÑ…É•Ð¹½Áä (€€€€€€€€€€€…ÁÁA…­…”€ô…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘A…­…”°(€€€€€€€€€€€…Ñ¥Ù•]¥¹‘½Ý%€ô…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘]¥¹‘½Ý%°(€€€€€€€€€€€ÍÉ••¹½¹Ñ•áÑ•¹•É…Ñ¥½¸€ô…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘•¹•É…Ñ¥½¸(€€€€€€€€¤(€€€€€€€¥˜€¡•á•ÕÑ••ÍÍ¥‰¥±¥Ñå¥ÉÍÑMÉ••¹Ñ¥½¸ (€€€€€€€€€€€€€€€Ñ…É•Ð°½Ý¹•‘Q…É•Ð°…Ñ¥½¹M½Á”°Ñ…Í­Q½­•¸°…•ÍÍ¥‰¥±¥Ñä(€€€€€€€€€€€€¤(€€€€€€€€¤É•ÑÕÉ¸(€€€€€€€¥˜€ …ÍÉ••¹Y¥Í¥½¹AÉ•™•É•¹•Ì¹Ù¥Í¥½¹¹…‰±•ñð(€€€€€€€€€€€MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹ÕÉÉ•¹ÑMÑ…Ñ”€„ôMÉ••¹M¡…É•MÑ…Ñ”¹Q%Y(€€€€€€€€¤ì(€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰Q…É•Ð•ÍÍ¥‰¥±¥ÑäÍ”±•…È¹…¡¤µ¥±„¸ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰ÍÉ••¹}…Ñ¥½¹}Á…Ñ ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%Á…Ñ õMI9}Y%M%=9}11	,€ˆ€¬(€€€€€€€€€€€€€€€€‰Á…­…”ô‘í…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘A…­…•ôˆ(€€€€€€€€¤(€€€€€€€Ù…°ÅÕ•Éä€ôMÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹É•ÅÕ•ÍÑÉ•Í¡É…µ”¡…Ñ¥Ù•QÕÉ¹%¤ì™É•Í¡I•ÍÕ±Ð€´ø(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€¥˜€ …‰É…¥¸¹¥ÍQ…Í­ÕÉÉ•¹Ð¡Ñ…Í­Q½­•¸¤¤É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€Ù…°‰•™½É•É…µ”€ô€¡™É•Í¡I•ÍÕ±Ð…ÌüÉ•Í¡É…µ•I•ÍÕ±Ð¹I•…‘ä¤ü¹™É…µ”(€€€€€€€€€€€€€€€¥˜€¡‰•™½É•É…µ”€ôô¹Õ±°ñð€…MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹¥ÍÕÉÉ•¹Ð¡‰•™½É•É…µ”¹Í•ÍÍ¥½¹%¤¤ì(€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰É•Í ÍÉ••¸½¹Ñ•áÐ¹…¡¤µ¥±„¸ˆ¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€Ù…°‰•™½É•M¥¹…ÑÕÉ”€ô…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤(€€€€€€€€€€€€€€€Ù…È…Ñ¥½¹%¹Ñ•¹ÐèMÉ••¹Ñ¥½¹%¹Ñ•¹Ðü€ô¹Õ±°(€€€€€€€€€€€€€€€¥˜€¡‰•™½É•É…µ”¹Á…­…•9…µ”€„ô¹Õ±°€˜˜(€€€€€€€€€€€€€€€€€€€‰•™½É•É…µ”¹Á…­…•9…µ”€„ô…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘A…­…”(€€€€€€€€€€€€€€€€¤ì(€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰ÁÀ¡…¹”¡¼…å„ì½±Ñ…É•ÐÕÍ”¹…¡¤­¥å„¸ˆ¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€Ù…°Ñ…ÁI•ÍÕ±Ð€ô…•ÍÍ¥‰¥±¥Ñä¹É•Í½±Ù•¹‘Q…ÁY¥Í¥‰±•Q…É•Ð (€€€€€€€€€€€€€€€€€€€Ñ…É•Ð¹Ñ…É•ÑQ•áÐ°Ñ…É•Ð¹Á½Í¥Ñ¥½¸°Ñ…É•Ð¹½É‘¥¹…°°…Ñ¥½¹M½Á”(€€€€€€€€€€€€€€€€¤ì|°½¹™¥‘•¹”€´ø(€€€€€€€€€€€€€€€€€€€…Ñ¥½¹%¹Ñ•¹Ð€ôÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹É•…Ñ” (€€€€€€€€€€€€€€€€€€€€€€€…Ñ¥Ù•QÕÉ¹%°‰•™½É•É…µ”¹Í•ÍÍ¥½¹%°±…ÍÑUÍ•É%¹Ñ•¹ÑQ•áÐ°(€€€€€€€€€€€€€€€€€€€€€€€Ñ…É•Ð¹Ñ…É•ÑQ•áÐ°Ñ…É•Ð¹Á½Í¥Ñ¥½¸°Ñ…É•Ð¹½É‘¥¹…°°(€€€€€€€€€€€€€€€€€€€€€€€…•ÍÍ¥‰¥±¥Ñä¹ÕÉÉ•¹ÑA…­…•9…µ” ¤°…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤°(€€€€€€€€€€€€€€€€€€€€€€€‰•™½É•É…µ”¹™É…µ•%°½¹™¥‘•¹”°(€€€€€€€€€€€€€€€€€€€€€€€…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘]¥¹‘½Ý%°…Ñ¥½¹M½Á”¹•áÁ•Ñ•‘•¹•É…Ñ¥½¸(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€ÑÉÕ”(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€Ù…°½Ý¹•‘Ñ¥½¸€ô…Ñ¥½¹%¹Ñ•¹Ð(€€€€€€€€€€€€€€€Ù…°…•ÁÑ•€ôÑ…ÁI•ÍÕ±Ð¹…•ÁÑ•€˜˜½Ý¹•‘Ñ¥½¸€„ô¹Õ±°(€€€€€€€€€€€€€€€¥˜€ ……•ÁÑ•¤ì(€€€€€€€€€€€€€€€€€€€½Ý¹•‘Ñ¥½¸ü¹±•ÐìÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹…¹•°¡¥Ð¹…Ñ¥½¹%¤ô(€€€€€€€€€€€€€€€€€€€‰É…¥¸¹É•½É‘MÉ••¹Ñ¥½¸¡½Ý¹•‘Q…É•Ð°™…±Í”¤(€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰½½ÍÉ„Ñ…É•Ð±•…È¹…¡¤µ¥±„¸ˆ¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡ì(€€€€€€€€€€€€€€€€€€€MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹É•ÅÕ•ÍÑÉ•Í¡É…µ”¡…Ñ¥Ù•QÕÉ¹%¤ìÉ•ÍÕ±Ð€´ø(€€€€€€€€€€€€€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜€ …‰É…¥¸¹¥ÍQ…Í­ÕÉÉ•¹Ð¡Ñ…Í­Q½­•¸¤¤É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°…Ñ¥½¸€ô½Ý¹•‘Ñ¥½¸€üèÉ•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜€ …ÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹¥ÍÕÉÉ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€…Ñ¥½¸¹…Ñ¥½¹%°…Ñ¥½¸¹ÑÕÉ¹%°…Ñ¥½¸¹ÍÉ••¹M•ÍÍ¥½¹%(€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤¤ì(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰MI9}Q%=9}911…Ñ¥½¹%ô‘í…Ñ¥½¸¹…Ñ¥½¹%‘ôÉ•…Í½¸õÉ•Á±…•‘}‰•™½É•}Ù•É¥™¥…Ñ¥½¸ˆ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¹Á½ÍÐ(€€€€€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°Á½ÍÑÉ…µ”€ô€¡É•ÍÕ±Ð…ÌüÉ•Í¡É…µ•I•ÍÕ±Ð¹I•…‘ä¤ü¹™É…µ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°…•ÍÍ¥‰¥±¥Ñå¡…¹•€ô‰•™½É•M¥¹…ÑÕÉ”¹¥Í9½Ñ	±…¹¬ ¤€˜˜(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€…•ÍÍ¥‰¥±¥Ñä¹Ù¥Í¥‰±•MÉ••¹M¥¹…ÑÕÉ” ¤€„ô‰•™½É•M¥¹…ÑÕÉ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°™É…µ•¡…¹•€ôÁ½ÍÑÉ…µ”€„ô¹Õ±°€˜˜Á½ÍÑÉ…µ”¹Í•ÍÍ¥½¹%€ôô‰•™½É•É…µ”¹Í•ÍÍ¥½¹%€˜˜(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Á½ÍÑÉ…µ”¹™É…µ•%€ø‰•™½É•É…µ”¹™É…µ•%€˜˜Á½ÍÑÉ…µ”¹¡…Í €„ô‰•™½É•É…µ”¹¡…Í (€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù…°Ù•É¥™¥•€ôMÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹Í•ÍÍ¥½¸¹¥ÍÕÉÉ•¹Ð¡‰•™½É•É…µ”¹Í•ÍÍ¥½¹%¤€˜˜(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¡…•ÍÍ¥‰¥±¥Ñå¡…¹•ñð™É…µ•¡…¹•¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€‰É…¥¸¹É•½É‘MÉ••¹Ñ¥½¸¡½Ý¹•‘Q…É•Ð°Ù•É¥™¥•¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€ÍÉ••¹Ñ¥½¹I•¥ÍÑÉä¹…¹•°¡…Ñ¥½¸¹…Ñ¥½¹%¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€™¥¹¥Í¡	É…¥¹Q…Í¬ (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ñ…Í­Q½­•¸°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Ù•É¥™¥•°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜€¡Ù•É¥™¥•¤€‰½½ÍÉ„Ý…±„½Á•¸¡¼…å„¸ˆ(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•±Í”€‰Q…À¡Õ„°±•­¥¸ÍÉ••¸¡…¹”Ù•É¥™ä¹…¡¤¡Õ„¸ˆ(€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€ô°€ÐÀÁ0¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€¥˜€¡ÅÕ•Éä€ôô¹Õ±°¤™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸°™…±Í”°€‰MÉ••¸Y¥Í¥½¸…Ñ¥Ù”¹…¡¤¡…¤¸ˆ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹¥Í¡	É…¥¹Q…Í¬¡Ñ…Í­Q½­•¸è1½¹œ°ÍÕ•ÍÌè	½½±•…¸°µ•ÍÍ…”èMÑÉ¥¹œ¤ì(€€€€€€€¥˜€ …‰É…¥¸¹¥ÍQ…Í­ÕÉÉ•¹Ð¡Ñ…Í­Q½­•¸¤¤É•ÑÕÉ¸(€€€€€€€‰É…¥¸¹™¥¹¥Í¡Q…Í¬¡Ñ…Í­Q½­•¸°ÍÕ•ÍÌ¤(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”°€…ÍÕ•ÍÌ¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÍÕ•ÍÌ¤(€€€€€€€Ù½¥•1½œ ‰‰É…¥¹}Ñ…Í­}™¥¹¥Í¡•Ñ…Í­Q½­•¸ô‘Ñ…Í­Q½­•¸ÍÕ•ÍÌô‘ÍÕ•ÍÌµ•ÍÍ…”ô‘íµ•ÍÍ…”¹Ñ…­” ÄÀÀ¥ôˆ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•Y•É¥™¥•‘MÉ½±°¡½µµ…¹èÁÁ½µµ…¹¹MÉ½±±e½ÕQÕ‰”¤ì(€€€€€€€…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€Ý…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ôÑÉÕ”(€€€€€€€½µµ…¹‘AÉ½‰”¹±•…È ¤(€€€€€€€½ÕÑÁÕÐ¹±•…È ¤(€€€€€€€µ•‘¥…Õ…É¹™¥¹¥Í¡%¹Ñ•É…Ñ¥½¸ ¤((€€€€€€€Ù…°É•Í½±Ù•‘¥É•Ñ¥½¸€ô½µµ…¹¹‘¥É•Ñ¥½¸€üè±…ÍÑMÉ½±±¥É•Ñ¥½¸(€€€€€€€Ù…°Í•ÉÙ¥”€ô•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥¹ÍÑ…¹”(€€€€€€€¥˜€¡Í•ÉÙ¥”€ôô¹Õ±°ñð€…•ÍÍ¥‰¥±¥Ñå!•±Á•ÉM•ÉÙ¥”¹¥Í¹…‰±•¡Ñ¡¥Ì¤¤ì(€€€€€€€€€€€Ù…°•ÉÉ½È€ô€‰MÉ½±°­”±¥å”1eI•ÍÍ¥‰¥±¥Ñä•¹…‰±”­…É¼¸ˆ(€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡•ÉÉ½È°ÑÉÕ”¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡•ÉÉ½È¤(€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡•ÉÉ½È¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°•áÁ±¥¥Ñe½ÕQÕ‰”€ô½µµ…¹¹•áÁ±¥¥Ñ±åI•ÅÕ•ÍÑ•‘ÁÀ¹•ÅÕ…±Ì ‰e½ÕQÕ‰”ˆ°ÑÉÕ”¤(€€€€€€€Ù…°±¥Ù•½É•É½Õ¹€ôÍ•ÉÙ¥”¹ÕÉÉ•¹Ñ½É•É½Õ¹‘½¹Ñ•áÐ ¤(€€€€€€€‰É…¥¸¹½‰Í•ÉÙ•½É•É½Õ¹‘ÁÀ¡±¥Ù•½É•É½Õ¹ü¹Á…­…•9…µ”¤(€€€€€€€Ù…°…Ñ¥½¹M½Á”€ô½´¹µåÉ„¹…ÍÍ¥ÍÑ…¹Ð¹ÍÉ••¸¹½É•É½Õ¹‘Ñ¥½¹A½±¥ä¹Í½Á”¡±¥Ù•½É•É½Õ¹¤(€€€€€€€¥˜€ …•áÁ±¥¥Ñe½ÕQÕ‰”€˜˜…Ñ¥½¹M½Á”€ôô¹Õ±°¤ì(€€€€€€€€€€€Ù…°•ÉÉ½È€ô€‰ÕÉÉ•¹Ð…ÁÀ±•…È¹…¡¤µ¥±„°¥Í±¥å”ÍÉ½±°¹…¡¤­¥å„¸ˆ(€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡•ÉÉ½È°ÑÉÕ”¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡•ÉÉ½È¤(€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡•ÉÉ½È¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°…±±‰…¬è€¡	½½±•…¸¤€´øU¹¥Ð€ôìÍÕ•ÍÌ€´ø(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€¥˜€¡ÍÕ•ÍÌ¤ì(€€€€€€€€€€€€€€€€€€€Ù•É¥™å•¹•É…±Ñ¥½¹%™ÕÉÉ•¹Ð ¤(€€€€€€€€€€€€€€€€€€€±…ÍÑMÉ½±±¥É•Ñ¥½¸€ôÉ•Í½±Ù•‘¥É•Ñ¥½¸(€€€€€€€€€€€€€€€€€€€¡…Í­¹½Ý±•‘•‘MÉ½±±¥É•Ñ¥½¸€ôÑÉÕ”(€€€€€€€€€€€€€€€€€€€€¼¼½µÁ±•Ñ•‘•Ñ•Éµ¥¹¥ÍÑ¥ŒÍÉ½±°¥Ì‘•±¥‰•É…Ñ•±äÍ¥±•¹Ð¸%ÐµÕÍÐ¹½Ð(€€€€€€€€€€€€€€€€€€€€¼¼Ý…¥Ð‰•¡¥¹=9QI=11}1=0…Õ‘¥¼½È¥¹Ù½­”Ñ¡”½É‘¥¹…Éäµ½‘•°¸(€€€€€€€€€€€€€€€€€€€…Õ‘¥¼ü¹Í•Ñ5ÕÑ•¡™…±Í”¤(€€€€€€€€€€€€€€€€€€€•µ¥ÑMÑ…Ñ” ‰MÕ¸É…¡¤¡½½»Š˜ˆ¤(€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰ÍÉ••¹}…Ñ¥½¹}™••‘‰…­}ÍÕÁÁÉ•ÍÍ•ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%…Ñ¥½¸õÍÉ½±°ÍÕ•ÍÌõÑÉÕ”ˆ¤(€€€€€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€€€€€Ù•É¥™å•¹•É…±Ñ¥½¹%™ÕÉÉ•¹Ð ¤(€€€€€€€€€€€€€€€€€€€Ù…°•ÉÉ½È€ô¥˜€¡…Ñ¥½¹M½Á”ü¹•áÁ•Ñ•‘A…­…”¹•ÅÕ…±Ì ‰½´¹½½±”¹…¹‘É½¥¹å½ÕÑÕ‰”ˆ°ÑÉÕ”¤¤ì(€€€€€€€€€€€€€€€€€€€€€€€€‰e½ÕQÕ‰”­„ÕÉÉ•¹Ð™••µ½Ù”¹…¡¤¡Õ„¸ˆ(€€€€€€€€€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€€€€€€€€€€‰ÕÉÉ•¹Ð…ÁÀ­„ÍÉ½±±…‰±”…É•„µ½Ù”¹…¡¤¡Õ„¸ˆ(€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡•ÉÉ½È°ÑÉÕ”¤(€€€€€€€€€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡•ÉÉ½È¤(€€€€€€€€€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡•ÉÉ½È¤(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€Ù…°™½É•É½Õ¹‘A…­…”€ô…Ñ¥½¹M½Á”ü¹•áÁ•Ñ•‘A…­…”(€€€€€€€Ù…°Á…Ñ €ôÝ¡•¸ì(€€€€€€€€€€€•áÁ±¥¥Ñe½ÕQÕ‰”€´ø€‰MM%	%1%Qe}aA1%%Q}e=UQU	ˆ(€€€€€€€€€€€™½É•É½Õ¹‘A…­…”¹•ÅÕ…±Ì ‰½´¹½½±”¹…¹‘É½¥¹å½ÕÑÕ‰”ˆ°ÑÉÕ”¤€´ø€‰MM%	%1%Qe}e=UQU	}=II=U9ˆ(€€€€€€€€€€€•±Í”€´ø€‰MM%	%1%Qe}UII9Q}A@ˆ(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰ÍÉ••¹}…Ñ¥½¹}™…ÍÑ}Á…Ñ ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%…Ñ¥½¸õÍÉ½±°Á…Ñ ô‘Á…Ñ €ˆ€¬(€€€€€€€€€€€€€€€€‰Á…­…”ô‘™½É•É½Õ¹‘A…­…”‘¥É•Ñ¥½¸ô‘É•Í½±Ù•‘¥É•Ñ¥½¸ˆ(€€€€€€€€¤(€€€€€€€Ù…°…•ÁÑ•€ôÝ¡•¸ì(€€€€€€€€€€€•áÁ±¥¥Ñe½ÕQÕ‰”€´øÍ•ÉÙ¥”¹ÍÉ½±±e½ÕQÕ‰•Y•É¥™¥• (€€€€€€€€€€€€€€€É•Í½±Ù•‘¥É•Ñ¥½¸€ôôÁÁ½µµ…¹¹MÉ½±±¥É•Ñ¥½¸¹=]8°(€€€€€€€€€€€€€€€…±±‰…¬(€€€€€€€€€€€€¤(€€€€€€€€€€€™½É•É½Õ¹‘A…­…”¹•ÅÕ…±Ì ‰½´¹½½±”¹…¹‘É½¥¹å½ÕÑÕ‰”ˆ°ÑÉÕ”¤€´ø(€€€€€€€€€€€€€€€Í•ÉÙ¥”¹ÍÉ½±±e½ÕQÕ‰•½É•É½Õ¹‘Y•É¥™¥• (€€€€€€€€€€€€€€€€€€€…Ñ¥½¹M½Á”„„°(€€€€€€€€€€€€€€€€€€€É•Í½±Ù•‘¥É•Ñ¥½¸€ôôÁÁ½µµ…¹¹MÉ½±±¥É•Ñ¥½¸¹=]8°(€€€€€€€€€€€€€€€€€€€…±±‰…¬(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€•±Í”€´øÍ•ÉÙ¥”¹ÍÉ½±±ÕÉÉ•¹Ñ½É•É½Õ¹‘Y•É¥™¥• (€€€€€€€€€€€€€€€…Ñ¥½¹M½Á”„„°(€€€€€€€€€€€€€€€É•Í½±Ù•‘¥É•Ñ¥½¸€ôôÁÁ½µµ…¹¹MÉ½±±¥É•Ñ¥½¸¹=]8°(€€€€€€€€€€€€€€€…±±‰…¬(€€€€€€€€€€€€¤(€€€€€€€ô(€€€€€€€¥˜€ ……•ÁÑ•¤ì(€€€€€€€€€€€É•½É‘•¹•É…±Ñ¥½¸¡Q½½±…Á…‰¥±¥Ñä¹MM%	%1%Qe}MI=10°…•ÁÑ•€ô™…±Í”¤(€€€€€€€€€€€Ù…°•ÉÉ½È€ô¥˜€¡•áÁ±¥¥Ñe½ÕQÕ‰”¤ì(€€€€€€€€€€€€€€€€‰e½ÕQÕ‰”¥ÌÁ¡½¹”µ•¥¸¹…¡¤µ¥±„¸ˆ(€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€€‰ÕÉÉ•¹Ð…ÁÀµ•¥¸Í…™”ÍÉ½±°…É•„¹…¡¤µ¥±„¸ˆ(€€€€€€€€€€€ô(€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡•ÉÉ½È°ÑÉÕ”¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡•ÉÉ½È¤(€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡•ÉÉ½È¤(€€€€€€€ô•±Í”ì(€€€€€€€€€€€É•½É‘•¹•É…±Ñ¥½¸¡Q½½±…Á…‰¥±¥Ñä¹MM%	%1%Qe}MI=10°…•ÁÑ•€ôÑÉÕ”¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡¥˜€¡•áÁ±¥¥Ñe½ÕQÕ‰”¤€‰e½ÕQÕ‰”ÍÉ½±°­…ÈÉ…¡¤¡½½»Š˜ˆ•±Í”€‰ÕÉÉ•¹ÐÍÉ••¸ÍÉ½±°­…ÈÉ…¡¤¡½½»Š˜ˆ¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÁÉ•Á…É•±½Í•™Ñ•ÉMÁ•• ¡½µµ…¹èÁÁ½µµ…¹¹±½Í•ÕÉÉ•¹ÑÁÀ¤ì(€€€€€€€Ù…°ÁÉ•™•É•¹•Ì€ô•ÑM¡…É•‘AÉ•™•É•¹•Ì ‰µåÉ„ˆ°5=}AI%YQ¤(€€€€€€€Ù…°¹…µ”€ô½¹™¥ÕÉ•‘UÍ•É9…µ”¡ÁÉ•™•É•¹•Ì¹•ÑMÑÉ¥¹œ ‰ÕÍ•É}¹…µ”ˆ°¹Õ±°¤¤(€€€€€€€Ù…°Á•ÉÍ½¹…±¥Ñä€ôÁÉ•™•É•¹•Ì¹•ÑMÑÉ¥¹œ ‰Á•ÉÍ½¹…±¥Ñäˆ°€‰ˆ¤€üè€‰ˆ(€€€€€€€Ù…°µ•ÍÍ…”€ôY½¥•I•ÍÁ½¹Í•½Éµ…ÑÑ•È¹±½Í•MÑ…ÉÑ¥¹œ¡½µµ…¹¹É•ÅÕ•ÍÑ•‘9…µ”°Á•ÉÍ½¹…±¥Ñä°¹…µ”¤(€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ôì(€€€€€€€€€€€Ù…°É•ÍÕ±Ð€ô…ÍÍ¥ÍÑ…¹Ñ½¹ÑÉ½±±•È¹ÁÉ½•ÍÍ½µµ…¹ (€€€€€€€€€€€€€€€MÑÉÕÑÕÉ•‘½µµ…¹‘A…ÉÍ•È¹™É½µ1•…ä¡½µµ…¹°½µµ…¹¹Ñ½MÑÉ¥¹œ ¤¤°(€€€€€€€€€€€€€€€ÍÁ•…¬€ô™…±Í”°(€€€€€€€€€€€€€€€¹½Ñ¥™å1¥ÍÑ•¹•ÉÌ€ô™…±Í”(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜€¡É•ÍÕ±Ð¹ÍÕ•ÍÌ¤ì(€€€€€€€€€€€€€€€…Õ‘¥¼ü¹Í•Ñ5ÕÑ•¡™…±Í”¤(€€€€€€€€€€€€€€€•µ¥ÑMÑ…Ñ” ‰MÕ¸É…¡¤¡½½»Š˜ˆ¤(€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡É•ÍÕ±Ð¹ÍÁ½­•¹5•ÍÍ…”°ÑÉÕ”¤(€€€€€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡É•ÍÕ±Ð¹ÍÁ½­•¹5•ÍÍ…”¤(€€€€€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡É•ÍÕ±Ð¹ÍÁ½­•¹5•ÍÍ…”¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€µ•‘¥…Õ…É¹‰•¥¹ÍÍ¥ÍÑ…¹ÑQÕÉ¸ ¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÉÕ¹A•¹‘¥¹Ñ¥½¹™Ñ•ÉMÁ••  ¤è	½½±•…¸ì(€€€€€€€Ù…°…Ñ¥½¸€ôÁ•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°(€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì…Ñ¥½¸ ¤ô(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¥ÍM…™•U¹ÑÉ…¹ÍÉ¥‰•‘½¹™¥Éµ…Ñ¥½¸¡½µµ…¹èÁÁ½µµ…¹¤è	½½±•…¸€ôÝ¡•¸€¡½µµ…¹¤ì(€€€€€€€¥ÌÁÁ½µµ…¹¹=Á•¹ÁÀ°¥ÌÁÁ½µµ…¹¹±½Í•ÕÉÉ•¹ÑÁÀ°(€€€€€€€¥ÌÁÁ½µµ…¹¹M•…É¡e½ÕQÕ‰”°¥ÌÁÁ½µµ…¹¹A±…åe½ÕQÕ‰”°ÁÁ½µµ…¹¹=Á•¹e½ÕQÕ‰•M¡½ÉÑÌ°(€€€€€€€ÁÁ½µµ…¹¹I•ÅÕ•ÍÑ%¹ÍÑ…É…µI••±Ì°ÁÁ½µµ…¹¹=Á•¹%¹ÍÑ…É…µI••±Ì°ÁÁ½µµ…¹¹Q…­•MÉ••¹Í¡½Ð°(€€€€€€€ÁÁ½µµ…¹¹I•Á•…Ñe½ÕQÕ‰•M•…É °(€€€€€€€ÁÁ½µµ…¹¹½!½µ”°ÁÁ½µµ…¹¹½	…¬°ÁÁ½µµ…¹¹ÕÉÉ•¹ÑQ¥µ”°(€€€€€€€ÁÁ½µµ…¹¹	…ÑÑ•Éå1•Ù•°°ÁÁ½µµ…¹¹1¥ÍÑ•…ÑÕÉ•Ì°¥ÌÁÁ½µµ…¹¹M•Ñ±…Í¡±¥¡Ð°(€€€€€€€¥ÌÁÁ½µµ…¹¹½¹ÑÉ½±5•‘¥„°¥ÌÁÁ½µµ…¹¹MÉ½±±e½ÕQÕ‰”€´øÑÉÕ”(€€€€€€€¥ÌÁÁ½µµ…¹¹I•Á±å]¡…ÑÍÁÀ°ÁÁ½µµ…¹¹EÕ•Éå]¡…ÑÍÁÁ5•ÍÍ…•Ì°(€€€€€€€¥ÌÁÁ½µµ…¹¹••ÁI•Í•…É €´ø™…±Í”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸…ÁÁ•¹‘QÉ…¹ÍÉ¥ÁÐ¡‰Õ¥±‘•ÈèMÑÉ¥¹	Õ¥±‘•È°Á…ÉÐèMÑÉ¥¹œ¤ì(€€€€€€€1¥Ù•QÉ…¹ÍÉ¥ÁÑÍÍ•µ‰±•È¹…ÁÁ•¹¡‰Õ¥±‘•È°Á…ÉÐ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸‰•¥¹=É‘¥¹…ÉåMÁ••¡Ñ¥Ù¥Ñä¡±…Ñ•ÍÑ•¹•É…Ñ¥½¹%è1½¹œ°Í½ÕÉ”èMÑÉ¥¹œ¤ì(€€€€€€€¥˜€¡Ù…±¥‘…Ñ¥¹1½…±MÁ•• €„ô¹Õ±°¤É•ÑÕÉ¸(€€€€€€€€¼¼½µÁ±•Ñ•½¹ÑÉ½±±•É•ÍÁ½¹Í”‘•±¥‰•É…Ñ•±äÍÑ…åÌ±…Ñ¡•Õ¹Ñ¥°•¹Õ¥¹”¹•Ü(€€€€€€€€¼¼ÍÁ•• ¸I•±•…Í”¥Ð¡•É”‰•™½É”…±±½…Ñ¥¹œÑ¡”¹•Ü¥‘•¹Ñ¥ÑäìÑ¡”ÁÉ•Ù¥½ÕÌ½É‘•È(€€€€€€€€¼¼É•ÑÕÉ¹••…É±ä…¹±•™ÐÉ•…°YÍÁ•• Ý¥Ñ ÍÁ••¡Q¥µ¥¹QÕÉ¹%ôÀ¸(€€€€€€€¥˜€ …É•ÍÁ½¹Í•É‰¥Ñ•È¹…•ÁÑÍ=É‘¥¹…Éå5½‘•° ¤€˜˜É•ÍÁ½¹Í•É‰¥Ñ•È¹É•±•…Í• ¤¤ì(€€€€€€€€€€€É•ÍÁ½¹Í•É‰¥Ñ•È¹É•±•…Í•%™½µÁ±•Ñ” ¤(€€€€€€€ô(€€€€€€€¥˜€ …É•ÍÁ½¹Í•É‰¥Ñ•È¹…•ÁÑÍ=É‘¥¹…Éå5½‘•° ¤¤É•ÑÕÉ¸(€€€€€€€¥˜€¡½É‘¥¹…Éå5½‘•±Õ‘¥½…Ñ”¹¥ÍMÁ••¡Ñ¥Ù” ¤¤É•ÑÕÉ¸(€€€€€€€ÍÁ••¡Ñ¥Ù¥ÑåMÑ…ÉÑ•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð€ô€Á0(€€€€€€€¥˜€¡…Ñ¥Ù•QÕÉ¹%€ôô€Á0¤…Ñ¥Ù•QÕÉ¹%€ô€¬­ÑÕÉ¹M•ÅÕ•¹”(€€€€€€€ÍÁ••¡Q¥µ¥¹QÕÉ¹%€ô…Ñ¥Ù•QÕÉ¹%(€€€€€€€Ù½¥•QÕÉ¹%‘•¹Ñ¥Ñ¥•Ì¹‰•¥¸¡…Ñ¥Ù•QÕÉ¹%°ÍÁ••¡Ñ¥Ù¥ÑåMÑ…ÉÑ•‘Ð¤(€€€€€€€É•ÍÁ½¹Í•É‰¥Ñ•È¹‰•¥¸¡…Ñ¥Ù•QÕÉ¹%¤(€€€€€€€Ù…°…¹•±±•‘•¹•É…Ñ¥½¸€ô½É‘¥¹…Éå5½‘•±Õ‘¥½…Ñ”¹½¹MÁ••¡Ñ¥Ù¥ÑåMÑ…ÉÑ•¡±…Ñ•ÍÑ•¹•É…Ñ¥½¹%¤(€€€€€€€…•ÁÑ•‘5½‘•±•¹•É…Ñ¥½¹½ÉQÕÉ¸€ô€Á0(€€€€€€€¥˜€¡•…É±å5½‘•±Õ‘¥¼¹¥Í9½ÑµÁÑä ¤¤ì(€€€€€€€€€€€µ½‘•±Õ‘¥½É½ÁÁ•‘	•™½É•QÕÉ¹½µÁ±•Ñ•½Õ¹Ð€¬ô•…É±å5½‘•±Õ‘¥¼¹Í¥é”(€€€€€€€€€€€µ½‘•±Õ‘¥½É½ÁÁ•‘	•™½É•QÕÉ¹½µÁ±•Ñ•	åÑ•Ì€¬ô•…É±å5½‘•±Õ‘¥½	åÑ•Ì(€€€€€€€€€€€•…É±å5½‘•±Õ‘¥¼¹±•…È ¤(€€€€€€€€€€€•…É±å5½‘•±Õ‘¥½	åÑ•Ì€ô€Á0(€€€€€€€€€€€•…É±å5½‘•±Õ‘¥½•¹•É…Ñ¥½¹%€ô€Á0(€€€€€€€ô(€€€€€€€€¼¼%˜1eI¥ÌÍ¥±•¹Ð°‘¼¹½ÐÉ•Í•ÐÑ¡”µ•‘¥„…¹‘¥‘…Ñ”Ñ¡…ÐÝ…Ì©ÕÍÐ(€€€€€€€€¼¼½¹™¥Éµ•™É½´½¡•É•¹ÐMHìÉ•…°Á±…å‰…¬‰…É”µ¥¸ÍÑ¥±°¥¹Ñ•ÉÉÕÁÑÌ¸(€€€€€€€¥˜€¡±½…±Õ‘¥½MÁ•…­¥¹œ¤…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰ÍÁ••¡}…Ñ¥Ù¥Ñå}ÍÑ…ÉÑ•ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%µ½‘•±•¹•É…Ñ¥½¹%ô‘±…Ñ•ÍÑ•¹•É…Ñ¥½¹%€ˆ€¬(€€€€€€€€€€€€€€€€‰ÍÁ••¡Ñ¥Ù¥ÑåMÑ…ÉÑ•‘Ðô‘ÍÁ••¡Ñ¥Ù¥ÑåMÑ…ÉÑ•‘ÐÍ½ÕÉ”ô‘Í½ÕÉ”€ˆ€¬(€€€€€€€€€€€€€€€€‰Á±…å‰…­…¹•±±•‘	å	…É•%¸ô‘í…¹•±±•‘•¹•É…Ñ¥½¸€„ô¹Õ±±ô…¹•±±•‘•¹•É…Ñ¥½¹%ô‘í…¹•±±•‘•¹•É…Ñ¥½¸€üè€Á1ôˆ(€€€€€€€€¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹¥Í¡=É‘¥¹…ÉåMÁ••¡Ñ¥Ù¥Ñä ¤ì(€€€€€€€¥˜€ …½É‘¥¹…Éå5½‘•±Õ‘¥½…Ñ”¹¥ÍMÁ••¡Ñ¥Ù” ¤¤É•ÑÕÉ¸(€€€€€€€ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù½¥•QÕÉ¹%‘•¹Ñ¥Ñ¥•Ì¹ÍÁ••¡¹‘•¡ÍÁ••¡Q¥µ¥¹QÕÉ¹%°ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð¤(€€€€€€€Ù½¥•1½œ ‰ÍÁ••¡Ñ¥Ù¥Ñå¹ÑÕÉ¹%ô‘ÍÁ••¡Q¥µ¥¹QÕÉ¹%…Ðô‘ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ðˆ¤(€€€€€€€½É‘¥¹…Éå5½‘•±Õ‘¥½…Ñ”¹½¹MÁ••¡Ñ¥Ù¥Ñå¹‘• ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰…ÕÑ¡½É¥Ñ…Ñ¥Ù•}ÕÍ•É}ÑÕÉ¹}½µÁ±•Ñ”ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%µ½‘•±•¹•É…Ñ¥½¹%ô‘•…É±å5½‘•±Õ‘¥½•¹•É…Ñ¥½¹%€ˆ€¬(€€€€€€€€€€€€€€€€‰ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ðô‘ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð…ÕÑ¡½É¥Ñ…Ñ¥Ù•UÍ•ÉQÕÉ¹½µÁ±•Ñ•Ðô‘ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð€ˆ€¬(€€€€€€€€€€€€€€€€‰ÍÁ••¡Q¥µ¥¹QÕÉ¹%ô‘ÍÁ••¡Q¥µ¥¹QÕÉ¹%ÍÁ••¡ÕÉ…Ñ¥½¹5Ìô‘ì¡ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð€´ÍÁ••¡Ñ¥Ù¥ÑåMÑ…ÉÑ•‘Ð¤¹½•É•Ñ1•…ÍÐ Á0¥ô€ˆ€¬(€€€€€€€€€€€€€€€€‰Í½ÕÉ”õ±½…±}Ù…ÕÍ•ÉMÁ••¡Ñ¥Ù”õ™…±Í”•…É±å5½‘•±Õ‘¥½	Õ™™•É•‘½Õ¹Ðô‘í•…É±å5½‘•±Õ‘¥¼¹Í¥é•ô€ˆ€¬(€€€€€€€€€€€€€€€€‰•…É±å5½‘•±Õ‘¥½	Õ™™•É•‘	åÑ•Ìô‘•…É±å5½‘•±Õ‘¥½	åÑ•Ìˆ(€€€€€€€€¤(€€€€€€€Ù½¥•1½œ ‰…ÕÑ¡½É¥Ñ…Ñ¥Ù•QÕÉ¹½µÁ±•Ñ”ÑÕÉ¹%ô‘ÍÁ••¡Q¥µ¥¹QÕÉ¹%…Ðô‘ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘ÐÍÁ••¡¹‘Q½ÕÑ¡½É¥Ñ…Ñ¥Ù•QÕÉ¹5ÌôÀˆ¤(€€€€€€€¥˜€¡•…É±å5½‘•±Õ‘¥¼¹¥ÍµÁÑä ¤¤É•ÑÕÉ¸(€€€€€€€Ù…°•¹•É…Ñ¥½¹%€ô•…É±å5½‘•±Õ‘¥½•¹•É…Ñ¥½¹%(€€€€€€€Ù…°¡Õ¹­Ì€ô•…É±å5½‘•±Õ‘¥¼¹Ñ½1¥ÍÐ ¤(€€€€€€€•…É±å5½‘•±Õ‘¥¼¹±•…È ¤(€€€€€€€•…É±å5½‘•±Õ‘¥½	åÑ•Ì€ô€Á0(€€€€€€€•…É±å5½‘•±Õ‘¥½•¹•É…Ñ¥½¹%€ô€Á0(€€€€€€€Ù…°‘•¥Í¥½¸€ô½É‘¥¹…Éå5½‘•±Õ‘¥½…Ñ”¹‘•¥‘”¡•¹•É…Ñ¥½¹%¤(€€€€€€€¥˜€¡‘•¥Í¥½¸€„ô5½‘•±Õ‘¥½•¥Í¥½¸¹AP¤ì(€€€€€€€€€€€µ½‘•±Õ‘¥½É½ÁÁ•‘	•™½É•QÕÉ¹½µÁ±•Ñ•½Õ¹Ð€¬ô¡Õ¹­Ì¹Í¥é”(€€€€€€€€€€€µ½‘•±Õ‘¥½É½ÁÁ•‘	•™½É•QÕÉ¹½µÁ±•Ñ•	åÑ•Ì€¬ô¡Õ¹­Ì¹ÍÕµ=˜ì¥Ð¹Í¥é”¹Ñ½1½¹œ ¤ô(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰•…É±å}µ½‘•±}…Õ‘¥½}‘É½ÁÁ•ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%µ½‘•±•¹•É…Ñ¥½¹%ô‘•¹•É…Ñ¥½¹%€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰É•©•Ñ¥½¹I•…Í½¸ô‘‘•¥Í¥½¸ÍÑ…±•Õ‘¥½É½ÁÁ•õÑÉÕ”¡Õ¹­Ìô‘í¡Õ¹­Ì¹Í¥é•ôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€…•ÁÑ•‘5½‘•±•¹•É…Ñ¥½¹½ÉQÕÉ¸€ô•¹•É…Ñ¥½¹%(€€€€€€€µ•‘¥…Õ…É¹‰•¥¹ÍÍ¥ÍÑ…¹ÑQÕÉ¸ ¤(€€€€€€€…Õ‘¥¼ü¹Í•ÑA±…å‰…­½¹Ñ•áÐ¡•¹•É…Ñ¥½¹%°É•ÍÁ½¹Í•=Ý¹•È€ô€‰5=0ˆ¤(€€€€€€€…Õ‘¥¼ü¹Í•Ñ	…É•%¹¹…‰±•¡ÑÉÕ”¤(€€€€€€€¡Õ¹­Ì¹™½É… ì…Õ‘¥¼ü¹ÅÕ•Õ•Õ‘¥¼¡¥Ð°•¹•É…Ñ¥½¹%°€‰5=0ˆ¤ô(€€€€€€€Ù…°…•ÁÑ•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰•…É±å}µ½‘•±}…Õ‘¥½}É•±•…Í•ÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%µ½‘•±•¹•É…Ñ¥½¹%ô‘•¹•É…Ñ¥½¹%€ˆ€¬(€€€€€€€€€€€€€€€€‰™¥ÉÍÑ5½‘•±Õ‘¥½•ÁÑ•‘Ðô‘…•ÁÑ•‘Ð™¥ÉÍÑA±…å‰…­Ðô‘…•ÁÑ•‘Ð€ˆ€¬(€€€€€€€€€€€€€€€€‰ÕÍ•ÉQÕÉ¹½µÁ±•Ñ•Q½¥ÉÍÑA±…å‰…­5Ìô‘í…•ÁÑ•‘Ð€´ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ñô¡Õ¹­Ìô‘í¡Õ¹­Ì¹Í¥é•ôˆ(€€€€€€€€¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸…¹•±MÁ••¡½É9•ÝÑ¥½¸ ¤ì(€€€€€€€€¼¼±•…ÈÙ…±¥‘…Ñ¥½¸½Á±…å‰…¬ÍÑ…Ñ”‰•™½É”Õ‘¥½¹¥¹”•µ¥ÑÌ¥ÑÌ¥¹Ñ•ÉÉÕÁÑ¥½¸(€€€€€€€€¼¼…±±‰…¬¸=Ñ¡•ÉÝ¥Í”™¥¹¥Í¡1½…±A±…å‰…¬ ¤…¸É•Ù¥Ù”…¸•áÁ¥É•µ½‘•°ÑÕÉ¸¸(€€€€€€€±½…±MÁ••¡Y…±¥‘…Ñ¥½¹Q½­•¸¬¬(€€€€€€€…¹•±1½…±MÁ••¡Q¥µ•½ÕÐ ‰ÍÁ••¡}…¹•±±•ˆ¤(€€€€€€€Ù…±¥‘…Ñ¥¹1½…±MÁ•• €ô¹Õ±°(€€€€€€€Á•¹‘¥¹1½…±MÁ•• €ô¹Õ±°(€€€€€€€Á•¹‘¥¹1½…±MÁ••¡A½±¥ä€ô1½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹U1P(€€€€€€€Á•¹‘¥¹1½…±MÁ••¡±±½ÝÍM¥±•¹”€ô™…±Í”(€€€€€€€±½…±MÁ••¡Õ‘¥¼¹±•…È ¤(€€€€€€€±½…±MÁ••¡QÉ…¹ÍÉ¥ÁÐ¹±•…È ¤(€€€€€€€±½…±MÁ••¡!…Í½¹Ñ•¹Ð€ô™…±Í”(€€€€€€€±½…±MÁ••¡MÑÉ•…µ•‘¥É•Ñ±ä€ô™…±Í”(€€€€€€€±½…±MÁ••¡•¹•É…Ñ¥½¹½µÁ±•Ñ”€ô™…±Í”(€€€€€€€±½…±A±…å‰…­Ñ¥Ù”€ô™…±Í”(€€€€€€€…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘1½…±MÁ•• €ô™…±Í”(€€€€€€€Á•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°(€€€€€€€…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€…Õ‘¥¼ü¹Í•Ñ5ÕÑ•¡™…±Í”¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÅÕ•Õ•1½…±MÁ••  (€€€€€€€µ•ÍÍ…”èMÑÉ¥¹œ°(€€€€€€€…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼è	½½±•…¸€ô™…±Í”°(€€€€€€€Ù…±¥‘…Ñ¥½¹A½±¥äè1½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä€ô1½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹U1P(€€€€¤ì(€€€€€€€Ù…°¹½Ü€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù…°­•ä€ô¹½Éµ…±¥é•MÁ•• ¡µ•ÍÍ…”¤(€€€€€€€Ù…°ÍÁ••¡	ÕÍä€ôÙ…±¥‘…Ñ¥¹1½…±MÁ•• €„ô¹Õ±°ñð(€€€€€€€€€€€Á•¹‘¥¹1½…±MÁ•• €„ô¹Õ±°ñð±½…±A±…å‰…­Ñ¥Ù”ñð±½…±Õ‘¥½MÁ•…­¥¹œ(€€€€€€€¥˜€¡1½…±MÁ••¡ÕÁ±¥…Ñ•Õ…É¹Í¡½Õ±‘É½À¡­•ä€ôô±…ÍÑ1½…±MÁ••¡-•ä°ÍÁ••¡	ÕÍä¤¤ì(€€€€€€€€€€€Ù½¥•1½œ ‰±½…±}ÍÁ••¡}‘É½ÁÁ•É•…Í½¸õ‘ÕÁ±¥…Ñ”…•5Ìô‘í¹½Ü€´±…ÍÑ1½…±MÁ••¡Ñôˆ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€±…ÍÑ1½…±MÁ••¡-•ä€ô­•ä(€€€€€€€±…ÍÑ1½…±MÁ••¡Ð€ô¹½Ü(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€Ù…°½Ý¹•ÉQÕÉ¹%€ô…Ñ¥Ù•QÕÉ¹%¹Ñ…­•%˜ì¥Ð€„ô€Á0ô(€€€€€€€€€€€€üèÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%¹Ñ…­•%˜ì¥Ð€„ô€Á0ô(€€€€€€€€€€€€üè€¬­ÑÕÉ¹M•ÅÕ•¹”(€€€€€€€É•ÍÁ½¹Í•É‰¥Ñ•È¹±…¥µ½¹ÑÉ½±±•¡½Ý¹•ÉQÕÉ¹%¤(€€€€€€€…Õ‘¥¼ü¹Í•Ñ	…É•%¹¹…‰±•¡™…±Í”¤(€€€€€€€½É‘¥¹…Éå5½‘•±Õ‘¥½…Ñ”¹½¹MÁ••¡Ñ¥Ù¥Ñå¹‘• ¤(€€€€€€€•…É±å5½‘•±Õ‘¥¼¹±•…È ¤(€€€€€€€•…É±å5½‘•±Õ‘¥½	åÑ•Ì€ô€Á0(€€€€€€€•…É±å5½‘•±Õ‘¥½•¹•É…Ñ¥½¹%€ô€Á0(€€€€€€€Ù½¥•1½œ ‰ÍÕÁÁÉ•ÍÍ¥½¹}ÍÑ…ÉÐÑÕÉ¹%ô‘½Ý¹•ÉQÕÉ¹%É•ÍÁ½¹Í•=Ý¹•Èõ=9QI=11}1=0É•…Í½¸õ½¹ÑÉ½±±•‘}É•Á±äˆ¤(€€€€€€€€¼¼I•µ½Ù”…¹ä½É‘¥¹…Éäµµ½‘•°A4…±É•…‘äÅÕ•Õ•‰•™½É”Ñ¡”‘•Ñ•Éµ¥¹¥ÍÑ¥Œ(€€€€€€€€¼¼½ÉÉ•Ñ¥½¸½‘•±•Ñ”½É•…±°É•ÍÁ½¹Í”Ñ…­•Ì½Ý¹•ÉÍ¡¥À¸(€€€€€€€…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€±½…±MÁ••¡EÕ•Õ•‘Ð€ô¹½Ü(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰±½…±}ÍÁ••¡}ÅÕ•Õ•¡…ÉÌô‘íµ•ÍÍ…”¹±•¹Ñ¡ôÁ½±¥äô‘íÁ½±¥å9…µ”¡Ù…±¥‘…Ñ¥½¹A½±¥ä¥ô€ˆ€¬(€€€€€€€€€€€€€€€€‰…±É•…‘åY…±¥‘…Ñ¥¹œô‘íÙ…±¥‘…Ñ¥¹1½…±MÁ•• €„ô¹Õ±±ô…±±½Ý9½QÉ…¹ÍÉ¥ÁÐô‘…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ˆ€¬(€€€€€€€€€€€€€€€€‰ÑÕÉ¹%ô‘½Ý¹•ÉQÕÉ¹%É•ÍÁ½¹Í•=Ý¹•Èõ=9QI=11}1=0±½…±MÁ••¡EÕ•Õ•‘Ðô‘±½…±MÁ••¡EÕ•Õ•‘Ð€ˆ€¬(€€€€€€€€€€€€€€€€‰…Ñ¥½¹Q½I•Á±åEÕ•Õ•‘5Ìô‘í¥˜€¡±…Ñ•ÍÑÑ¥½¹¥ÍÁ…Ñ¡•‘Ð€ø€Á0¤±½…±MÁ••¡EÕ•Õ•‘Ð€´±…Ñ•ÍÑÑ¥½¹¥ÍÁ…Ñ¡•‘Ð•±Í”€´Å1ôˆ(€€€€€€€€¤(€€€€€€€€¼¼-••ÀÑ¡”•¡¼µ…¹•±±•µ¥É½Á¡½¹”½Á•¸Í¼Ñ¡”ÕÍ•È…¸¥¹Ñ•ÉÉÕÁÐ½È¥ÍÍÕ”(€€€€€€€€¼¼Ñ¡”¹•áÐÍ¡½ÉÐ½µµ…¹Ý¥Ñ¡½ÕÐÝ…¥Ñ¥¹œ™½È1eIÌ…­¹½Ý±•‘•µ•¹ÐÑ¼™¥¹¥Í ¸(€€€€€€€…Õ‘¥¼ü¹Í•Ñ5ÕÑ•¡™…±Í”¤(€€€€€€€¥˜€¡Ù…±¥‘…Ñ¥¹1½…±MÁ•• €ôô¹Õ±°¤ì(€€€€€€€€€€€…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘1½…±MÁ•• €ô…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼(€€€€€€€€€€€±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä€ôÙ…±¥‘…Ñ¥½¹A½±¥ä(€€€€€€€€€€€€¼¼Q¡”ÑÕÉ¸½Ý¹•ÈÍÕÁÁÉ•ÍÍ•Ì½É‘¥¹…Éä½ÕÑÁÕÐ°…¹Ñ¡”•á¥ÍÑ¥¹œÑÉ…¹ÍÉ¥ÁÐ(€€€€€€€€€€€€¼¼Ù…±¥‘…Ñ¥½¸…Ñ”Ý¥±°¹½ÐÉ•±•…Í”Õ¹µ…Ñ¡•±…Ñ”A4…Ì½¹ÑÉ½±±•ÍÁ•• ¸(€€€€€€€€€€€€¼¼Q¡”™½Éµ•È55=IdÅÕ…É…¹Ñ¥¹”…‘‘•„™¥á•€ÈµÍ•½¹‘•±…ä•Ù•¸…™Ñ•ÈÑ¡”(€€€€€€€€€€€€¼¼‘…Ñ…‰…Í”µ‰…­•É•Á±äÝ…ÌÉ•…‘ä°Ý¥Ñ¡½ÕÐ…‘‘¥¹œ…¹½Ñ¡•ÈÁ±…å‰…¬¡•¬¸(€€€€€€€€€€€‰•¥¹Y…±¥‘…Ñ•‘1½…±MÁ•• ¡µ•ÍÍ…”¤(€€€€€€€ô(€€€€€€€•±Í”ì(€€€€€€€€€€€Á•¹‘¥¹1½…±MÁ•• €ôµ•ÍÍ…”(€€€€€€€€€€€Á•¹‘¥¹1½…±MÁ••¡A½±¥ä€ôÙ…±¥‘…Ñ¥½¹A½±¥ä(€€€€€€€€€€€Á•¹‘¥¹1½…±MÁ••¡±±½ÝÍM¥±•¹”€ô…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸‰•¥¹Y…±¥‘…Ñ•‘1½…±MÁ•• ¡µ•ÍÍ…”èMÑÉ¥¹œ°É•ÑÉäè	½½±•…¸€ô™…±Í”¤ì(€€€€€€€Ù…°±¥•¹Ð€ô±¥Ù”(€€€€€€€¥˜€¡±¥•¹Ð€ôô¹Õ±°¤ì(€€€€€€€€€€€Ù½¥•1½œ ‰±½…±}ÍÁ••¡}Õ¹…Ù…¥±…‰±”É•…Í½¸õ¹½}±¥Ù•}±¥•¹Ð¡…ÉÌô‘íµ•ÍÍ…”¹±•¹Ñ¡ôˆ¤(€€€€€€€€€€€™¥¹¥Í¡U¹…Ù…¥±…‰±•9…ÑÕÉ…±1½…±MÁ•• ¡µ•ÍÍ…”¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€¥˜€ …É•ÑÉä¤±½…±MÁ••¡Y…±¥‘…Ñ¥½¹ÑÑ•µÁÐ€ô€À(€€€€€€€±½…±MÁ••¡Y…±¥‘…Ñ¥½¹ÑÑ•µÁÐ¬¬(€€€€€€€±½…±MÁ••¡Y…±¥‘…Ñ¥½¹Q½­•¸¬¬(€€€€€€€Ù…°Ñ½­•¸€ô±½…±MÁ••¡Y…±¥‘…Ñ¥½¹Q½­•¸(€€€€€€€½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%¬¬(€€€€€€€…Õ‘¥¼ü¹Í•ÑA±…å‰…­½¹Ñ•áÐ¡½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%°É•ÍÁ½¹Í•=Ý¹•È€ô€‰=9QI=11}1=0ˆ¤(€€€€€€€Ù…±¥‘…Ñ¥¹1½…±MÁ•• €ôµ•ÍÍ…”(€€€€€€€±½…±MÁ••¡!…Í½¹Ñ•¹Ð€ô™…±Í”(€€€€€€€±½…±MÁ••¡MÑÉ•…µ•‘¥É•Ñ±ä€ô™…±Í”(€€€€€€€±½…±MÁ••¡•¹•É…Ñ¥½¹½µÁ±•Ñ”€ô™…±Í”(€€€€€€€±½…±MÁ••¡Õ‘¥¼¹±•…È ¤(€€€€€€€±½…±MÁ••¡QÉ…¹ÍÉ¥ÁÐ¹±•…È ¤(€€€€€€€±½…±MÁ••¡¥ÉÍÑÕ‘¥½I••¥Ù•‘Ð€ô€Á0(€€€€€€€±½…±MÁ••¡¥ÉÍÑÕ‘¥½•ÁÑ•‘Ð€ô€Á0(€€€€€€€±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•Ð€ô€Á0(€€€€€€€±½…±MÁ••¡1…ÍÑÕ‘¥½I••¥Ù•‘Ð€ô€Á0(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€Ù…°•¹•É…Ñ¥½¹MÑ…ÉÑÐ€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰±½…±}ÍÁ••¡}•¹•É…Ñ¥½¹}ÍÑ…ÉÐÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ô•¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%Ñ½­•¸ô‘Ñ½­•¸…ÑÑ•µÁÐô‘±½…±MÁ••¡Y…±¥‘…Ñ¥½¹ÑÑ•µÁÐ€ˆ€¬(€€€€€€€€€€€€€€€€‰¡…ÉÌô‘íµ•ÍÍ…”¹±•¹Ñ¡ôÁ½±¥äô‘íÁ½±¥å9…µ”¡±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¥ô•¹•É…Ñ¥½¹MÑ…ÉÑÐô‘•¹•É…Ñ¥½¹MÑ…ÉÑÐ€ˆ€¬(€€€€€€€€€€€€€€€€‰ÅÕ•Õ•‘Q½•¹•É…Ñ¥½¹MÑ…ÉÑ5Ìô‘í•¹•É…Ñ¥½¹MÑ…ÉÑÐ€´±½…±MÁ••¡EÕ•Õ•‘Ñôˆ(€€€€€€€€¤(€€€€€€€€¼¼½¹Ñ¥¹Õ½ÕÌµ¥ŒÁ…­•ÑÌ…¸É…”Ý¥Ñ ±¥•¹Ñ½¹Ñ•¹Ð…¹…¹•°Ñ¡¥ÌÍ¡½ÉÐ(€€€€€€€€¼¼‘•Ñ•Éµ¥¹¥ÍÑ¥Œµ•µ½ÉäÕÑÑ•É…¹”‰•™½É”•µ¥¹¤É•ÑÕÉ¹Ì…Õ‘¥¼¸1¥ÍÑ•¹¥¹œ¥Ì(€€€€€€€€¼¼É•ÍÑ½É•‰ä•Ù•ÉäÁ±…å‰…¬µ½µÁ±•Ñ”…¹Õ¹…Ù…¥±…‰±”µ…Õ‘¥¼Á…Ñ ‰•±½Ü¸(€€€€€€€¥˜€¡±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹¥Í½±…Ñ•É½µ5¥ÕÉ¥¹•¹•É…Ñ¥½¸¤ì(€€€€€€€€€€€…Õ‘¥¼ü¹Í•Ñ5ÕÑ•¡ÑÉÕ”¤(€€€€€€€ô(€€€€€€€±½…±MÁ••¡I•ÅÕ•ÍÑM•¹ÑÐ€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€±¥•¹Ð¹Í•¹‘Q•áÐ ‰M…ä•á…Ñ±äÑ¡•Í”Ý½É‘Ì½¹”°Ý¥Ñ Ñ¡”Í•±•Ñ•¹…ÑÕÉ…°Ù½¥”¸¼¹½Ð…‘°É•µ½Ù”°ÑÉ…¹Í±…Ñ”°•áÁ±…¥¸°½È¥¹ÑÉ½‘Õ”Ñ¡•´è€‘í½Éœ¹©Í½¸¹)M=9=‰©•Ð¹ÅÕ½Ñ”¡µ•ÍÍ…”¥ôˆ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰½¹ÑÉ½±±•‘}É•ÅÕ•ÍÑ}Í•¹ÐÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ô•¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%Ñ½­•¸ô‘Ñ½­•¸€ˆ€¬(€€€€€€€€€€€€€€€€‰½¹ÑÉ½±±•‘I•ÅÕ•ÍÑM•¹ÑÐô‘±½…±MÁ••¡I•ÅÕ•ÍÑM•¹ÑÐÅÕ•Õ•‘Q½I•ÅÕ•ÍÑM•¹Ñ5Ìô‘í±½…±MÁ••¡I•ÅÕ•ÍÑM•¹ÑÐ€´±½…±MÁ••¡EÕ•Õ•‘Ñôˆ(€€€€€€€€¤(€€€€€€€…¹•±1½…±MÁ••¡Q¥µ•½ÕÐ ‰¹•Ý}•¹•É…Ñ¥½¸ˆ¤(€€€€€€€±½…±MÁ••¡Q¥µ•½ÕÑQ½­•¸€ôÑ½­•¸(€€€€€€€±½…±MÁ••¡Q¥µ•½ÕÑ…Ñ”¹ÍÑ…ÉÐ¡Ñ½­•¸¤(€€€€€€€Ù…°Ñ¥µ•½ÕÑIÕ¹¹…‰±”€ôIÕ¹¹…‰±”ì(€€€€€€€€€€€Ù…°Ñ¥µ•½ÕÑ¥É•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€€€€€¥˜€¡Ñ½­•¸€ôô±½…±MÁ••¡Y…±¥‘…Ñ¥½¹Q½­•¸€˜˜Ù…±¥‘…Ñ¥¹1½…±MÁ•• €„ô¹Õ±°€˜˜(€€€€€€€€€€€€€€€±½…±MÁ••¡Q¥µ•½ÕÑ…Ñ”¹Í¡½Õ±‘¥É”¡Ñ½­•¸¤(€€€€€€€€€€€€¤ì(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰±½…±}ÍÁ••¡}Ñ¥µ•½ÕÐÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ô•¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%Ñ½­•¸ô‘Ñ½­•¸Ñ¥µ•½ÕÑ¥É•‘Ðô‘Ñ¥µ•½ÕÑ¥É•‘Ð…Õ‘¥½¡Õ¹­Ìô‘í±½…±MÁ••¡Õ‘¥¼¹Í¥é•ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰…Õ‘¥½	åÑ•Ìô‘í±½…±MÁ••¡Õ‘¥¼¹ÍÕµ=˜ì¥Ð¹Í¥é”õôÑÉ…¹ÍÉ¥ÁÑ¡…ÉÌô‘í±½…±MÁ••¡QÉ…¹ÍÉ¥ÁÐ¹±•¹Ñ¡ôˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€™¥¹¥Í¡Y…±¥‘…Ñ•‘1½…±MÁ••  ¤(€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰±½…±}ÍÁ••¡}Ñ¥µ•½ÕÑ}¥¹½É•Ñ½­•¸ô‘Ñ½­•¸…Ñ¥Ù•Q½­•¸ô‘±½…±MÁ••¡Y…±¥‘…Ñ¥½¹Q½­•¸É•…Í½¸õÍÑ…±•}•¹•É…Ñ¥½¸ˆ¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€±½…±MÁ••¡Q¥µ•½ÕÑIÕ¹¹…‰±”€ôÑ¥µ•½ÕÑIÕ¹¹…‰±”(€€€€€€€Ù…°Ñ¥µ•½ÕÑM¡•‘Õ±•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù½¥•1½œ ‰±½…±}ÍÁ••¡}Ñ¥µ•½ÕÑ}Í¡•‘Õ±••¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%Ñ¥µ•½ÕÑQ½­•¸ô‘Ñ½­•¸Ñ¥µ•½ÕÑM¡•‘Õ±•‘Ðô‘Ñ¥µ•½ÕÑM¡•‘Õ±•‘Ðˆ¤(€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡Ñ¥µ•½ÕÑIÕ¹¹…‰±”°±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹Ñ¥µ•½ÕÑ5Ì¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÑ…ÉÑ1½…±MÁ••¡]¡•¹AÉ•™¥á5…Ñ¡•Ì ¤ì(€€€€€€€Ù…°•áÁ•Ñ•€ôÙ…±¥‘…Ñ¥¹1½…±MÁ•• €üèÉ•ÑÕÉ¸(€€€€€€€¥˜€¡±½…±MÁ••¡MÑÉ•…µ•‘¥É•Ñ±äñð±½…±MÁ••¡Õ‘¥¼¹¥ÍµÁÑä ¤¤É•ÑÕÉ¸(€€€€€€€Ù…°…ÑÕ…±½ÉY…±¥‘…Ñ¥½¸€ôÉ½µ…¹¥ÍÁ±…åQ•áÐ¡±½…±MÁ••¡QÉ…¹ÍÉ¥ÁÐ¹Ñ½MÑÉ¥¹œ ¤¤(€€€€€€€Ù…°•áÁ•Ñ•‘½ÉY…±¥‘…Ñ¥½¸€ôÉ½µ…¹¥ÍÁ±…åQ•áÐ¡•áÁ•Ñ•¤(€€€€€€€¥˜€ …1½…±MÁ••¡…Ñ”¹Í¡½Õ±‘I•±•…Í•	•™½É•QÕÉ¹½µÁ±•Ñ” (€€€€€€€€€€€€€€€±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹‰Õ™™•ÉU¹Ñ¥±Y…±¥‘…Ñ•°(€€€€€€€€€€€€€€€…ÑÕ…±½ÉY…±¥‘…Ñ¥½¸°(€€€€€€€€€€€€€€€•áÁ•Ñ•‘½ÉY…±¥‘…Ñ¥½¸(€€€€€€€€€€€€¤¤ì(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰±½…±}ÍÁ••¡}Ý…¥Ñ¥¹}™½É}Ù…±¥‘…Ñ¥½¸…Õ‘¥½¡Õ¹­Ìô‘í±½…±MÁ••¡Õ‘¥¼¹Í¥é•ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÑÉ…¹ÍÉ¥ÁÑ¡…ÉÌô‘í±½…±MÁ••¡QÉ…¹ÍÉ¥ÁÐ¹±•¹Ñ¡ôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô((€€€€€€€±½…±MÁ••¡MÑÉ•…µ•‘¥É•Ñ±ä€ôÑÉÕ”(€€€€€€€±½…±A±…å‰…­Ñ¥Ù”€ôÑÉÕ”(€€€€€€€±½…±MÁ••¡¥ÉÍÑÕ‘¥½•ÁÑ•‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€¥˜€¡±½…±MÁ••¡Q¥µ•½ÕÑ…Ñ”¹…•ÁÑ¥ÉÍÑÕ‘¥¼¡±½…±MÁ••¡Y…±¥‘…Ñ¥½¹Q½­•¸¤¤ì(€€€€€€€€€€€…¹•±1½…±MÁ••¡Q¥µ•½ÕÐ ‰™¥ÉÍÑ}…Õ‘¥½}…•ÁÑ•ˆ¤(€€€€€€€ô(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰±½…±}ÍÁ••¡}É•±•…Í•‘}•…É±äÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ô•¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%€ˆ€¬(€€€€€€€€€€€€€€€€‰…Õ‘¥½¡Õ¹­Ìô‘í±½…±MÁ••¡Õ‘¥¼¹Í¥é•ô™¥ÉÍÑÕ‘¥½•ÁÑ•‘Ðô‘±½…±MÁ••¡¥ÉÍÑÕ‘¥½•ÁÑ•‘Ðˆ(€€€€€€€€¤(€€€€€€€±½…±MÁ••¡Õ‘¥¼¹™½É… ì…Õ‘¥¼ü¹ÅÕ•Õ•Õ‘¥¼¡¥Ð°½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%°€‰=9QI=11}1=0ˆ¤ô(€€€€€€€±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰½¹ÑÉ½±±•‘}™¥ÉÍÑ}Á±…å‰…­}ÝÉ¥Ñ”ÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ô•¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%€ˆ€¬(€€€€€€€€€€€€€€€€‰™¥ÉÍÑA±…å‰…­]É¥Ñ•Ðô‘±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•ÐÅÕ•Õ•‘Q½¥ÉÍÑA±…å‰…­5Ìô‘í±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•Ð€´±½…±MÁ••¡EÕ•Õ•‘Ñô€ˆ€¬(€€€€€€€€€€€€€€€€‰ÍÁ••¡¹‘Q½¥ÉÍÑA±…å‰…­5Ìô‘í¥˜€¡ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð€ø€Á0¤±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•Ð€´ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€‰™¥ÉÍÑÕ‘¥½Q½A±…å‰…­5Ìô‘í¥˜€¡±½…±MÁ••¡¥ÉÍÑÕ‘¥½I••¥Ù•‘Ð€ø€Á0¤±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•Ð€´±½…±MÁ••¡¥ÉÍÑÕ‘¥½I••¥Ù•‘Ð•±Í”€´Å1ôˆ(€€€€€€€€¤(€€€€€€€±½…±MÁ••¡Õ‘¥¼¹±•…È ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸…¹•±1½…±MÁ••¡Q¥µ•½ÕÐ¡É•…Í½¸èMÑÉ¥¹œ¤ì(€€€€€€€Ù…°ÉÕ¹¹…‰±”€ô±½…±MÁ••¡Q¥µ•½ÕÑIÕ¹¹…‰±”€üèÉ•ÑÕÉ¸(€€€€€€€µ…¥¹!…¹‘±•È¹É•µ½Ù•…±±‰…­Ì¡ÉÕ¹¹…‰±”¤(€€€€€€€±½…±MÁ••¡Q¥µ•½ÕÑIÕ¹¹…‰±”€ô¹Õ±°(€€€€€€€±½…±MÁ••¡Q¥µ•½ÕÑ…Ñ”¹±•…È¡±½…±MÁ••¡Q¥µ•½ÕÑQ½­•¸¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰±½…±}ÍÁ••¡}Ñ¥µ•½ÕÑ}…¹•±±•ÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ô•¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%€ˆ€¬(€€€€€€€€€€€€€€€€‰Ñ¥µ•½ÕÑQ½­•¸ô‘±½…±MÁ••¡Q¥µ•½ÕÑQ½­•¸Ñ¥µ•½ÕÑ…¹•±±•‘Ðô‘í…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¥ôÉ•…Í½¸ô‘É•…Í½¸ˆ(€€€€€€€€¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹¥Í¡Y…±¥‘…Ñ•‘1½…±MÁ••  ¤ì(€€€€€€€Ù…°•áÁ•Ñ•€ôÙ…±¥‘…Ñ¥¹1½…±MÁ•• €üèÉ•ÑÕÉ¸(€€€€€€€Ù…°…ÑÕ…°€ô±½…±MÁ••¡QÉ…¹ÍÉ¥ÁÐ¹Ñ½MÑÉ¥¹œ ¤(€€€€€€€Ù…±¥‘…Ñ¥¹1½…±MÁ•• €ô¹Õ±°(€€€€€€€¥˜€¡±½…±MÁ••¡MÑÉ•…µ•‘¥É•Ñ±ä¤ì(€€€€€€€€€€€€¼¼Q¡”™¥ÉÍÐÙ•É¥™¥•Ý½É‘Ìµ…Ñ¡•Ñ¡”‘•Ñ•Éµ¥¹¥ÍÑ¥ŒÉ•ÍÁ½¹Í”°Í¼Á±…å‰…¬(€€€€€€€€€€€€¼¼Ý…ÌÍ…™•±äÉ•±•…Í••…É±ä¸]…¥Ð™½ÈÅÕ•Õ•…Õ‘¥¼Ñ¼™¥¹¥Í ‰•™½É”É•ÍÕµ¥¹œ(€€€€€€€€€€€€¼¼±¥ÍÑ•¹¥¹œ½ÈÉÕ¹¹¥¹œ…¹ä‘•™•ÉÉ•…Ñ¥½¸¸(€€€€€€€€€€€±½…±MÁ••¡•¹•É…Ñ¥½¹½µÁ±•Ñ”€ôÑÉÕ”(€€€€€€€€€€€±½…±MÁ••¡Õ‘¥¼¹±•…È ¤(€€€€€€€€€€€±½…±MÁ••¡QÉ…¹ÍÉ¥ÁÐ¹±•…È ¤(€€€€€€€€€€€¥˜€ …±½…±Õ‘¥½MÁ•…­¥¹œ€˜˜±½…±A±…å‰…­Ñ¥Ù”¤™¥¹¥Í¡1½…±A±…å‰…¬ ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°¹½Éµ…±¥é•‘ÑÕ…°€ôÉ½µ…¹¥ÍÁ±…åQ•áÐ¡…ÑÕ…°¤(€€€€€€€Ù…°¹½Éµ…±¥é•‘áÁ•Ñ•€ôÉ½µ…¹¥ÍÁ±…åQ•áÐ¡•áÁ•Ñ•¤(€€€€€€€Ù…°ÑÉ…¹ÍÉ¥ÁÑ5…Ñ¡•Ì€ô1½…±MÁ••¡…Ñ”¹µ…Ñ¡•ÍáÁ•Ñ•‘á…Ñ±ä¡¹½Éµ…±¥é•‘ÑÕ…°°¹½Éµ…±¥é•‘áÁ•Ñ•¤(€€€€€€€€¼¼5•µ½ÉäÁÉ½µÁÑÌ…É”±½ÜµÉ¥Í¬…¹…±É•…‘ä¡…Ù”Ñ¡•¥È•á…ÐÑ•áÐ½¸ÍÉ••¸¸1¥Ù”(€€€€€€€€¼¼Í½µ•Ñ¥µ•ÌÍÑÉ•…µÌÑ¡”Í•±•Ñ•¹…ÑÕÉ…°Ù½¥”‰•™½É”¥ÑÌ½ÕÑÁÕÐÑÉ…¹ÍÉ¥ÁÐ¸%¸(€€€€€€€€¼¼Ñ¡…Ð¹…ÉÉ½Ü…Í”°­••ÀÑ¡”‰Õ™™•É••µ¥¹¤…Õ‘¥¼¥¹ÍÑ•…½˜‘¥Í…É‘¥¹œ¥Ð…¹(€€€€€€€€¼¼ÍÝ¥Ñ¡¥¹œÑ¼É½‰½Ñ¥Œ¹‘É½¥QQL¸A¡½¹”…Ñ¥½¹ÌÉ•Ñ…¥¸ÍÑÉ¥ÐÑÉ…¹ÍÉ¥ÁÐ…Ñ¥¹œ¸(€€€€€€€Ù…°‰Õ™™•É•‘Õ‘¥½	åÑ•Ì€ô±½…±MÁ••¡Õ‘¥¼¹ÍÕµ=˜ì¥Ð¹Í¥é”ô(€€€€€€€Ù…°ÑÉÕÍÑ•‘9…ÑÕÉ…±Õ‘¥¼€ô(€€€€€€€€€€€±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹ÑÉÕÍÑ	Õ™™•É•‘9…ÑÕÉ…±Õ‘¥¼€˜˜(€€€€€€€€€€€€€€€±½…±MÁ••¡!…Í½¹Ñ•¹Ð€˜˜(€€€€€€€€€€€€€€€1½…±MÁ••¡…Ñ”¹¡…Í¹½Õ¡	Õ™™•É•‘9…ÑÕÉ…±Õ‘¥¼¡‰Õ™™•É•‘Õ‘¥½	åÑ•Ì°•áÁ•Ñ•¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰±½…±}ÍÁ••¡}Ù…±¥‘…Ñ¥½¹}É•ÍÕ±ÐÑÉ…¹ÍÉ¥ÁÑ5…Ñ ô‘ÑÉ…¹ÍÉ¥ÁÑ5…Ñ¡•Ì€ˆ€¬(€€€€€€€€€€€€€€€€‰ÑÉÕÍÑ•‘Õ‘¥¼ô‘ÑÉÕÍÑ•‘9…ÑÕÉ…±Õ‘¥¼¡…Í½¹Ñ•¹Ðô‘±½…±MÁ••¡!…Í½¹Ñ•¹Ð€ˆ€¬(€€€€€€€€€€€€€€€€‰…Õ‘¥½	åÑ•Ìô‘‰Õ™™•É•‘Õ‘¥½	åÑ•Ì…ÑÕ…±¡…ÉÌô‘í…ÑÕ…°¹±•¹Ñ¡ô•áÁ•Ñ•‘¡…ÉÌô‘í•áÁ•Ñ•¹±•¹Ñ¡ô€ˆ€¬(€€€€€€€€€€€€€€€€‰¹½Éµ…±¥é•‘ÑÕ…°ô‘í¹½Éµ…±¥é•‘ÑÕ…°¹Ñ…­” ÄÈÀ¥ô¹½Éµ…±¥é•‘áÁ•Ñ•ô‘í¹½Éµ…±¥é•‘áÁ•Ñ•¹Ñ…­” ÄÈÀ¥ôˆ(€€€€€€€€¤(€€€€€€€¥˜€ ¡ÑÉ…¹ÍÉ¥ÁÑ5…Ñ¡•ÌñðÑÉÕÍÑ•‘9…ÑÕÉ…±Õ‘¥¼¤€˜˜±½…±MÁ••¡Õ‘¥¼¹¥Í9½ÑµÁÑä ¤¤ì(€€€€€€€€€€€¥˜€¡±½…±MÁ••¡Q¥µ•½ÕÑ…Ñ”¹…•ÁÑ¥ÉÍÑÕ‘¥¼¡±½…±MÁ••¡Y…±¥‘…Ñ¥½¹Q½­•¸¤¤ì(€€€€€€€€€€€€€€€…¹•±1½…±MÁ••¡Q¥µ•½ÕÐ ‰Ù…±¥‘…Ñ•‘}…Õ‘¥½}…•ÁÑ•ˆ¤(€€€€€€€€€€€ô(€€€€€€€€€€€±½…±MÁ••¡•¹•É…Ñ¥½¹½µÁ±•Ñ”€ôÑÉÕ”(€€€€€€€€€€€±½…±A±…å‰…­Ñ¥Ù”€ôÑÉÕ”(€€€€€€€€€€€Ù½¥•1½œ ‰±½…±}ÍÁ••¡}É•±•…Í•‘}…™Ñ•É}Ù…±¥‘…Ñ¥½¸…Õ‘¥½¡Õ¹­Ìô‘í±½…±MÁ••¡Õ‘¥¼¹Í¥é•ôˆ¤(€€€€€€€€€€€±½…±MÁ••¡Õ‘¥¼¹™½É… ì…Õ‘¥¼ü¹ÅÕ•Õ•Õ‘¥¼¡¥Ð°½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%°€‰=9QI=11}1=0ˆ¤ô(€€€€€€€€€€€±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰½¹ÑÉ½±±•‘}™¥ÉÍÑ}Á±…å‰…­}ÝÉ¥Ñ”ÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ô•¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰™¥ÉÍÑA±…å‰…­]É¥Ñ•Ðô‘±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•ÐÅÕ•Õ•‘Q½¥ÉÍÑA±…å‰…­5Ìô‘í±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•Ð€´±½…±MÁ••¡EÕ•Õ•‘Ñô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÍÁ••¡¹‘Q½¥ÉÍÑA±…å‰…­5Ìô‘í¥˜€¡ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð€ø€Á0¤±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•Ð€´ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð•±Í”€´Å1ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰™¥ÉÍÑÕ‘¥½Q½A±…å‰…­5Ìô‘í¥˜€¡±½…±MÁ••¡¥ÉÍÑÕ‘¥½I••¥Ù•‘Ð€ø€Á0¤±½…±MÁ••¡¥ÉÍÑA±…å‰…­]É¥Ñ•Ð€´±½…±MÁ••¡¥ÉÍÑÕ‘¥½I••¥Ù•‘Ð•±Í”€´Å1ôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€±½…±MÁ••¡Õ‘¥¼¹±•…È ¤(€€€€€€€€€€€±½…±MÁ••¡QÉ…¹ÍÉ¥ÁÐ¹±•…È ¤(€€€€€€€ô•±Í”ì(€€€€€€€€€€€±½…±MÁ••¡Õ‘¥¼¹±•…È ¤(€€€€€€€€€€€±½…±MÁ••¡QÉ…¹ÍÉ¥ÁÐ¹±•…È ¤(€€€€€€€€€€€¥˜€¡±½…±MÁ••¡Y…±¥‘…Ñ¥½¹ÑÑ•µÁÐ€ð±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹µ…áÑÑ•µÁÑÌ€˜˜±¥Ù”€„ô¹Õ±°¤ì(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰±½…±}ÍÁ••¡}É•ÑÉä¹•áÑÑÑ•µÁÐô‘í±½…±MÁ••¡Y…±¥‘…Ñ¥½¹ÑÑ•µÁÐ€¬€Åôˆ¤(€€€€€€€€€€€€€€€‰•¥¹Y…±¥‘…Ñ•‘1½…±MÁ•• ¡•áÁ•Ñ•°É•ÑÉä€ôÑÉÕ”¤(€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€Ù½¥•1½œ ‰±½…±}ÍÁ••¡}‘É½ÁÁ•É•…Í½¸õÙ…±¥‘…Ñ¥½¹}™…¥±•…ÑÑ•µÁÑÌô‘±½…±MÁ••¡Y…±¥‘…Ñ¥½¹ÑÑ•µÁÐˆ¤(€€€€€€€€€€€€€€€™¥¹¥Í¡U¹…Ù…¥±…‰±•9…ÑÕÉ…±1½…±MÁ•• ¡•áÁ•Ñ•¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹¥Í¡U¹…Ù…¥±…‰±•9…ÑÕÉ…±1½…±MÁ•• ¡µ•ÍÍ…”èMÑÉ¥¹œ¤ì(€€€€€€€…¹•±1½…±MÁ••¡Q¥µ•½ÕÐ ‰¹…ÑÕÉ…±}…Õ‘¥½}Õ¹…Ù…¥±…‰±”ˆ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰±½…±}ÍÁ••¡}Õ¹…Ù…¥±…‰±”¡…ÉÌô‘íµ•ÍÍ…”¹±•¹Ñ¡ô™…±±‰…¬ô‘í±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹ÍÁ•…­…±±‰…­ô€ˆ€¬(€€€€€€€€€€€€€€€€‰…±±½Ý9½QÉ…¹ÍÉ¥ÁÐô‘…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘1½…±MÁ•• ˆ(€€€€€€€€¤(€€€€€€€€¼¼9•Ù•ÈÍÝ¥Ñ Ñ¼¹‘É½¥QQL¸%˜Ù…±¥‘…Ñ•¹…ÑÕÉ…°•µ¥¹¤…Õ‘¥¼¥Ì(€€€€€€€€¼¼Õ¹…Ù…¥±…‰±”°ÁÉ•Í•ÉÙ”Ñ¡”…±É•…‘äµÙ¥Í¥‰±”‘•Ñ•Éµ¥¹¥ÍÑ¥ŒÑ•áÐ°½µÁ±•Ñ”(€€€€€€€€¼¼…¹ä‘•™•ÉÉ•Ù•É¥™¥•…Ñ¥½¸°…¹É•ÍÕµ”±¥ÍÑ•¹¥¹œÍ¥±•¹Ñ±ä¸(€€€€€€€…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘1½…±MÁ•• €ô™…±Í”(€€€€€€€±½…±A±…å‰…­Ñ¥Ù”€ô™…±Í”(€€€€€€€±½…±MÁ••¡MÑÉ•…µ•‘¥É•Ñ±ä€ô™…±Í”(€€€€€€€±½…±MÁ••¡•¹•É…Ñ¥½¹½µÁ±•Ñ”€ô™…±Í”(€€€€€€€É•ÍÁ½¹Í•É‰¥Ñ•È¹½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹½µÁ±•Ñ” ¤(€€€€€€€É•ÍÁ½¹Í•É‰¥Ñ•È¹½¹ÑÉ½±±•‘A±…å‰…­½µÁ±•Ñ” ¤(€€€€€€€¥˜€¡É•ÍÁ½¹Í•É‰¥Ñ•È¹É•±•…Í•%™½µÁ±•Ñ” ¤¤Ù½¥•1½œ ‰ÍÕÁÁÉ•ÍÍ¥½¹}•¹ÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ôÉ•…Í½¸õÕ¹…Ù…¥±…‰±•}¹…ÑÕÉ…±}…Õ‘¥¼ˆ¤(€€€€€€€¥˜€ …ÉÕ¹A•¹‘¥¹Ñ¥½¹™Ñ•ÉMÁ••  ¤¤ì(€€€€€€€€€€€…Õ‘¥¼ü¹Í•Ñ5ÕÑ•¡™…±Í”¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ” ‰MÕ¸É…¡¤¡½½»Š˜ˆ¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹¥Í¡1½…±A±…å‰…¬ ¤ì(€€€€€€€Ù…°Á±…å‰…­¹‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù½¥•1½œ ‰±½…±}ÍÁ••¡}Á±…å‰…­}™¥¹¥Í¡•ÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ô•¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%Á±…å‰…­¹‘Ðô‘Á±…å‰…­¹‘Ðˆ¤(€€€€€€€Ù…°É•ÍÕµ•5¥%µµ•‘¥…Ñ•±ä€ô(€€€€€€€€€€€±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹É•ÍÕµ•5¥%µµ•‘¥…Ñ•±å™Ñ•ÉA±…å‰…¬(€€€€€€€…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘1½…±MÁ•• €ô™…±Í”(€€€€€€€±½…±A±…å‰…­Ñ¥Ù”€ô™…±Í”(€€€€€€€±½…±MÁ••¡MÑÉ•…µ•‘¥É•Ñ±ä€ô™…±Í”(€€€€€€€±½…±MÁ••¡•¹•É…Ñ¥½¹½µÁ±•Ñ”€ô™…±Í”(€€€€€€€É•ÍÁ½¹Í•É‰¥Ñ•È¹½¹ÑÉ½±±•‘A±…å‰…­½µÁ±•Ñ” ¤(€€€€€€€¥˜€¡É•ÍÁ½¹Í•É‰¥Ñ•È¹É•±•…Í•%™½µÁ±•Ñ” ¤¤ì(€€€€€€€€€€€Ù½¥•1½œ ‰ÍÕÁÁÉ•ÍÍ¥½¹}•¹ÑÕÉ¹%ô‘íÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%‘ô•¹•É…Ñ¥½¹%ô‘½¹ÑÉ½±±•‘•¹•É…Ñ¥½¹%É•…Í½¸õµ…Ñ¡¥¹}•¹•É…Ñ¥½¹}…¹‘}Á±…å‰…­}½µÁ±•Ñ”ˆ¤(€€€€€€€ô(€€€€€€€¥˜€ …ÉÕ¹A•¹‘¥¹Ñ¥½¹™Ñ•ÉMÁ••  ¤¤ì(€€€€€€€€€€€¥˜€¡É•ÍÕµ•5¥%µµ•‘¥…Ñ•±ä¤…Õ‘¥¼ü¹É•ÍÕµ•1¥ÍÑ•¹¥¹9½Ü ¤(€€€€€€€€€€€•±Í”…Õ‘¥¼ü¹Í•Ñ5ÕÑ•¡™…±Í”¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ” ‰MÕ¸É…¡¤¡½½»Š˜ˆ¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸Á½±¥å9…µ”¡Á½±¥äè1½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¤èMÑÉ¥¹œ€ôÝ¡•¸€¡Á½±¥ä¤ì(€€€€€€€1½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹55=Id€´ø€‰55=Idˆ(€€€€€€€1½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹U1P€´ø€‰U1Pˆ(€€€€€€€•±Í”€´ø€‰UMQ=4ˆ(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸Ù½¥•1½œ¡µ•ÍÍ…”èMÑÉ¥¹œ¤ì(€€€€€€€¥˜€¡Y=%}U%=}	U}1=%9¤ì(€€€€€€€€€€€Y½¥•A¥Á•±¥¹•1½•È¹‘•‰Õœ¡µ•ÍÍ…”¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸½µµ¥Ñ¥¹…±UÍ•É5•ÍÍ…” (€€€€€€€É…ÜèMÑÉ¥¹œ°(€€€€€€€Í½ÕÉ”èMÑÉ¥¹œ°(€€€€€€€¹½Éµ…±¥é•èMÑÉ¥¹œ€ôÉ½µ…¹¥ÍÁ±…åQ•áÐ¡É…Ü¤°(€€€€€€€‘¥ÍÁ±…äèMÑÉ¥¹œ€ô¹½Éµ…±¥é•(€€€€¤ì(€€€€€€€Ù…°ÑÕÉ¹%€ô…Ñ¥Ù•QÕÉ¹%¹Ñ…­•%˜ì¥Ð€„ô€Á0ô(€€€€€€€€€€€€üèÉ•ÍÁ½¹Í•É‰¥Ñ•È¹ÑÕÉ¹%¹Ñ…­•%˜ì¥Ð€„ô€Á0ô(€€€€€€€€€€€€üè€¬­ÑÕÉ¹M•ÅÕ•¹”(€€€€€€€Ù…°ÕÑÑ•É…¹•%€ô€ˆ‘ÑÉ…¹ÍÉ¥ÁÑM•ÍÍ¥½¹%è‘ÑÕÉ¹%ˆ(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰ÕÍ•É}µ•ÍÍ…•}½µµ¥Ñ}…ÑÑ•µÁÐÍ•ÍÍ¥½¹%ô‘ÑÉ…¹ÍÉ¥ÁÑM•ÍÍ¥½¹%ÑÕÉ¹%ô‘ÑÕÉ¹%€ˆ€¬(€€€€€€€€€€€€€€€€‰ÕÑÑ•É…¹•%ô‘ÕÑÑ•É…¹•%Í½ÕÉ”ô‘Í½ÕÉ”É…Üô‘íÉ…Ü¹Ñ…­” ÄØÀ¥ô€ˆ€¬(€€€€€€€€€€€€€€€€‰¹½Éµ…±¥é•ô‘í¹½Éµ…±¥é•¹Ñ…­” ÄØÀ¥ô‘¥ÍÁ±…äô‘í‘¥ÍÁ±…ä¹Ñ…­” ÄØÀ¥ôˆ(€€€€€€€€¤(€€€€€€€Ý¡•¸€¡Ù…°É•ÍÕ±Ð€ô™¥¹…±UÍ•É5•ÍÍ…•½µµ¥ÑÑ•È¹½µµ¥Ð (€€€€€€€€€€€¥¹…±UÍ•É5•ÍÍ…”¡ÑÉ…¹ÍÉ¥ÁÑM•ÍÍ¥½¹%°ÑÕÉ¹%°ÕÑÑ•É…¹•%°É…Ü°¹½Éµ…±¥é•°‘¥ÍÁ±…ä¤(€€€€€€€€¤¤ì(€€€€€€€€€€€¥ÌUÍ•É5•ÍÍ…•½µµ¥ÑI•ÍÕ±Ð¹•ÁÑ•€´øì(€€€€€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€€€€€‰ÕÍ•É}µ•ÍÍ…•}½µµ¥Ñ}É•ÍÕ±ÐÍ•ÍÍ¥½¹%ô‘ÑÉ…¹ÍÉ¥ÁÑM•ÍÍ¥½¹%ÑÕÉ¹%ô‘ÑÕÉ¹%€ˆ€¬(€€€€€€€€€€€€€€€€€€€€€€€€‰ÕÑÑ•É…¹•%ô‘ÕÑÑ•É…¹•%Í½ÕÉ”ô‘Í½ÕÉ”…•ÁÑ•õÑÉÕ”µ•ÍÍ…•%ô‘íÉ•ÍÕ±Ð¹µ•ÍÍ…•%‘ôˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹UÍ•ÉQ•áÐ¡É•ÍÕ±Ð¹µ•ÍÍ…”¹‘¥ÍÁ±…ä¤(€€€€€€€€€€€ô(€€€€€€€€€€€¥ÌUÍ•É5•ÍÍ…•½µµ¥ÑI•ÍÕ±Ð¹±É•…‘å½µµ¥ÑÑ•€´øÙ½¥•1½œ (€€€€€€€€€€€€€€€€‰ÕÍ•É}µ•ÍÍ…•}½µµ¥Ñ}É•ÍÕ±ÐÍ•ÍÍ¥½¹%ô‘ÑÉ…¹ÍÉ¥ÁÑM•ÍÍ¥½¹%ÑÕÉ¹%ô‘ÑÕÉ¹%€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÕÑÑ•É…¹•%ô‘ÕÑÑ•É…¹•%Í½ÕÉ”ô‘Í½ÕÉ”…•ÁÑ•õ™…±Í”€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰É•…Í½¸õ…±É•…‘å}½µµ¥ÑÑ••á¥ÍÑ¥¹5•ÍÍ…•%ô‘íÉ•ÍÕ±Ð¹•á¥ÍÑ¥¹5•ÍÍ…•%‘ôˆ(€€€€€€€€€€€€¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸É•Í•ÑQÕÉ¹	Õ™™•ÉÌ¡É•…Í½¸èMÑÉ¥¹œ€ô€‰ÑÕÉ¹}½µµ¥ÑÑ•ˆ¤ì(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰ÑÉ…¹ÍÉ¥ÁÑ}…ÕµÕ±…Ñ½É}É•Í•ÐÑÕÉ¹%ô‘…Ñ¥Ù•QÕÉ¹%Í•ÍÍ¥½¸ô‘í¡…Í¡½‘” ¥ô€ˆ€¬(€€€€€€€€€€€€€€€€‰É•…Í½¸ô‘É•…Í½¸¥¹ÁÕÑ¡…ÉÌô‘í¥¹ÁÕÐ¹±•¹Ñ¡ô½µµ…¹‘¡…ÉÌô‘í½µµ…¹‘AÉ½‰”¹±•¹Ñ¡ôˆ(€€€€€€€€¤(€€€€€€€¥¹ÁÕÐ¹±•…È ¤(€€€€€€€½ÕÑÁÕÐ¹±•…È ¤(€€€€€€€½µµ…¹‘AÉ½‰”¹±•…È ¤(€€€€€€€½µµ…¹‘UÍ•ÉQ•áÑµ¥ÑÑ•€ô™…±Í”(€€€€€€€ÁÉ½‰…‰±•Ñ¥½¹QÕÉ¸€ô™…±Í”(€€€€€€€µ•‘¥…	±½­•‘QÕÉ¸€ô™…±Í”(€€€€€€€…µ‰¥Õ½ÕÍ5•ÍÍ…•QÕÉ¸€ô™…±Í”(€€€€€€€¥¹½µÁ±•Ñ•Ñ¥½¹É…µ•¹ÑQÕÉ¸€ô™…±Í”(€€€€€€€…Ñ¥Ù•QÕÉ¹%€ô€Á0(€€€€€€€¥˜€ …ÍÉ••¹I•ÍÁ½¹Í•Ñ¥Ù”¤ì(€€€€€€€€€€€ÍÁ••¡Q¥µ¥¹QÕÉ¹%€ô€Á0(€€€€€€€€€€€ÍÁ••¡Ñ¥Ù¥ÑåMÑ…ÉÑ•‘Ð€ô€Á0(€€€€€€€€€€€ÍÁ••¡Ñ¥Ù¥Ñå¹‘•‘Ð€ô€Á0(€€€€€€€ô(€€€€€€€¥˜€ …ÍÉ••¹I•ÍÁ½¹Í•Ñ¥Ù”¤ì(€€€€€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¸€ô€ˆˆ(€€€€€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹QÕÉ¹%€ô€Á0(€€€€€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹•Ñ•Ñ•‘Ð€ô€Á0(€€€€€€€€€€€…Éµ•‘MÉ••¹EÕ•ÍÑ¥½¹¥¹…±½µµ¥ÑÑ•€ô™…±Í”(€€€€€€€€€€€•…É±åMÉ••¹EÕ•ÍÑ¥½¹Q•áÐ€ô€ˆˆ(€€€€€€€€€€€•…É±åMÉ••¹EÕ•ÉåÝ…¥Ñ¥¹¥¹…±QÉ…¹ÍÉ¥ÁÐ€ô™…±Í”(€€€€€€€€€€€•…É±åMÉ••¹EÕ•Éå¥ÍÁ…Ñ¡•‘QÕÉ¹%€ô€Á0(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸É½µ…¹¥ÍÁ±…åQ•áÐ¡Ù…±Õ”èMÑÉ¥¹œ¤èMÑÉ¥¹œì(€€€€€€€¥˜€¡I••à ‰mqqÔÌÐÀÀµqqÔÑ	qqÔÑÀÀµqqÔåtˆ¤¹½¹Ñ…¥¹Í5…Ñ¡%¸¡Ù…±Õ”¤¤ì(€€€€€€€€€€€É•ÑÕÉ¸€‰Y½¥”¥¹ÁÕÐÕ¹±•…È€´Á±•…Í”É•Á•…Ð¸ˆ(€€€€€€€ô(€€€€€€€Ù…°ÑÉ…¹Í±¥Ñ•É…Ñ•€ôÉ½µ…¹QÉ…¹Í±¥Ñ•É…Ñ½Èü¹ÑÉ…¹Í±¥Ñ•É…Ñ”¡Ù…±Õ”¤ü¹ÑÉ¥´ ¤¹½ÉµÁÑä ¤(€€€€€€€€€€€€¹¥™	±…¹¬ìÙ…±Õ”¹ÑÉ¥´ ¤ô(€€€€€€€É•ÑÕÉ¸I½µ…¹!¥¹±¥Í¡½Éµ…ÑÑ•È¹™½Éµ…Ð¡ÑÉ…¹Í±¥Ñ•É…Ñ•¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸™¥¹…±QÉ…¹ÍÉ¥ÁÑ¥ÍÁ±…ä¡Ù…±Õ”èMÑÉ¥¹œ¤è¥¹…±QÉ…¹ÍÉ¥ÁÑ¥ÍÁ±…å½Éµ…ÑÑ•È¹I•ÍÕ±Ðì(€€€€€€€É•ÑÕÉ¸¥¹…±QÉ…¹ÍÉ¥ÁÑ¥ÍÁ±…å½Éµ…ÑÑ•È¹™½Éµ…Ð¡Ù…±Õ”¤ìÑ½­•¸€´ø(€€€€€€€€€€€É½µ…¹QÉ…¹Í±¥Ñ•É…Ñ½Èü¹ÑÉ…¹Í±¥Ñ•É…Ñ”¡Ñ½­•¸¤ü¹ÑÉ¥´ ¤¹½ÉµÁÑä ¤¹¥™	±…¹¬ìÑ½­•¸ô(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸½¹Ñ•áÑÕ…±I•±…Ñ¥½¹Í¡¥Á…¹‘¥‘…Ñ”¡ÕÉÉ•¹ÑQÕÉ¸èMÑÉ¥¹œ¤è5•µ½Éå…¹‘¥‘…Ñ”üì(€€€€€€€Ù…°¹½Ü€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€É••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ì¹É•µ½Ù•±°ì¹½Ü€´¥Ð¹™¥ÉÍÐ€øI1Q%=9M!%A}=9QaQ}5Lô(€€€€€€€É•ÑÕÉ¸½¹Ñ•áÑÕ…±I•±…Ñ¥½¹Í¡¥Á5•µ½ÉåáÑÉ…Ñ½È¹•áÑÉ…Ð (€€€€€€€€€€€É••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ì¹µ…Àì¥Ð¹Í•½¹ô€¬ÕÉÉ•¹ÑQÕÉ¸(€€€€€€€€¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸É•µ•µ‰•ÉI••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¸¡ÑÕÉ¸èMÑÉ¥¹œ¤ì(€€€€€€€¥˜€¡ÑÕÉ¸¹¥Í	±…¹¬ ¤¤É•ÑÕÉ¸(€€€€€€€É••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ì€¬ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤Ñ¼ÑÕÉ¸(€€€€€€€Ý¡¥±”€¡É••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ì¹Í¥é”€ø5a}I1Q%=9M!%A}=9QaQ}QUI9L¤ì(€€€€€€€€€€€É••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ì¹É•µ½Ù•Ð À¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸É•µ•µ‰•É	•ÍÑÉ¥•¹‘½É½ÉÉ•Ñ¥½¸¡…¹‘¥‘…Ñ”è5•µ½Éå…¹‘¥‘…Ñ”¤ì(€€€€€€€±…ÍÑM…Ù•‘	•ÍÑÉ¥•¹‘9…µ”€ô5•µ½ÉåI•±…Ñ¥½¹Í¡¥ÁA½±¥ä¹Á•ÉÍ½¹9…µ”¡…¹‘¥‘…Ñ”¹™…Ð¤(€€€€€€€€€€€€ü¹±•Ð¡	•ÍÑÉ¥•¹‘9…µ•…¹½¹¥…±¥é•Èèé…¹½¹¥…±¥é”¤(€€€€€€€±…ÍÑM…Ù•‘	•ÍÑÉ¥•¹‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸É•Á±…•I••¹ÑI•±…Ñ¥½¹Í¡¥Á9…µ”¡½±‘9…µ”èMÑÉ¥¹œ°¹•Ý9…µ”èMÑÉ¥¹œ¤ì(€€€€€€€™½È€¡¥¹‘•à¥¸É••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ì¹¥¹‘¥•Ì¤ì(€€€€€€€€€€€Ù…°€¡Ñ¥µ”°Ñ•áÐ¤€ôÉ••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ím¥¹‘•át(€€€€€€€€€€€É••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ím¥¹‘•át€ôÑ¥µ”Ñ¼Ñ•áÐ¹É•Á±…” (€€€€€€€€€€€€€€€I••à ‰qqˆ‘íI••à¹•Í…Á”¡½±‘9…µ”¥õqqˆˆ°I••á=ÁÑ¥½¸¹%9=I}M¤°(€€€€€€€€€€€€€€€¹•Ý9…µ”(€€€€€€€€€€€€¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÑ…ÉÑ…¹½¹¥…±I•¹…µ”¡½ÉÉ•Ñ¥½¸è	•ÍÑÉ¥•¹‘9…µ•½ÉÉ•Ñ¥½¸¤ì(€€€€€€€Ù…°Ù…±¥‘…Ñ¥½¹…¥±ÕÉ”€ô	•ÍÑÉ¥•¹‘9…µ•½ÉÉ•Ñ¥½¹A…ÉÍ•È¹Ù…±¥‘…Ñ•9•Ý9…µ”¡½ÉÉ•Ñ¥½¸¹¹•Ý9…µ”¤(€€€€€€€¥˜€¡Ù…±¥‘…Ñ¥½¹…¥±ÕÉ”€„ô¹Õ±°ñð½ÉÉ•Ñ¥½¸¹½±‘9…µ”¹•ÅÕ…±Ì¡½ÉÉ•Ñ¥½¸¹¹•Ý9…µ”°¥¹½É•…Í”€ôÑÉÕ”¤¤ì(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰¹…µ•}½ÉÉ•Ñ¥½¹}É•©•Ñ•½±‘9…µ•…¹‘¥‘…Ñ”ô‘í½ÉÉ•Ñ¥½¸¹½±‘9…µ•ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰¹•Ý9…µ•…¹‘¥‘…Ñ”ô‘í½ÉÉ•Ñ¥½¸¹¹•Ý9…µ•ô¹•Ý9…µ•Y…±¥‘…Ñ¥½¸õÉ•©•Ñ•€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰É•©•Ñ¥½¹I•…Í½¸ô‘íÙ…±¥‘…Ñ¥½¹…¥±ÕÉ”€üè€‰½±‘}…¹‘}¹•Ý}¹…µ•Í}…É•}¥‘•¹Ñ¥…°‰ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰‘…Ñ…‰…Í•5ÕÑ…Ñ¥½¹±±½Ý•õ™…±Í”ˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù…°±…É¥™¥…Ñ¥½¸€ô€‰½ÉÉ•Ð¹……´±•…È¹…¡¤¡Õ„¸¬‰……È¹……´±•…É±äÉ•Á•…Ð­…É¼¸ˆ(€€€€€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€€€€€½ÕÑÁÕÐ¹±•…È ¤(€€€€€€€€€€€…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡±…É¥™¥…Ñ¥½¸¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡±…É¥™¥…Ñ¥½¸¤(€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡±…É¥™¥…Ñ¥½¸°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ôÑÉÕ”(€€€€€€€½ÕÑÁÕÐ¹±•…È ¤(€€€€€€€…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€‰¹…µ•}½ÉÉ•Ñ¥½¹}µÕÑ…Ñ¥½¸½±‘9…µ•…¹‘¥‘…Ñ”ô‘í½ÉÉ•Ñ¥½¸¹½±‘9…µ•ô€ˆ€¬(€€€€€€€€€€€€€€€€‰¹•Ý9…µ•…¹‘¥‘…Ñ”ô‘í½ÉÉ•Ñ¥½¸¹¹•Ý9…µ•ô¹•Ý9…µ•Y…±¥‘…Ñ¥½¸õÙ…±¥€ˆ€¬(€€€€€€€€€€€€€€€€‰‘…Ñ…‰…Í•5ÕÑ…Ñ¥½¹±±½Ý•õÑÉÕ”ˆ(€€€€€€€€¤(€€€€€€€€¼¼¼¹½ÐÑÉÕÍÐ•µ¥¹¤Ì½¹Ù•ÉÍ…Ñ¥½¹…°…­¹½Ý±•‘•µ•¹Ð¸=¹±äÑ¡¥ÌÙ•É¥™¥•(€€€€€€€€¼¼É•Á½Í¥Ñ½ÉäÉ•ÍÕ±Ð¥Ì…±±½Ý•Ñ¼ÁÉ½‘Õ”„ÍÕ•ÍÌ‰Õ‰‰±”½ÈÍÁ½­•¸É•Á±ä¸(€€€€€€€Á•¹‘¥¹…¹½¹¥…±I•¹…µ”€ôÍ•ÉÙ¥•M½Á”¹±…Õ¹ ì(€€€€€€€€€€€Ù…°‰•™½É”€ôµ•µ½ÉåI•Á½Í¥Ñ½Éä¹±½A•ÉÍ½¹%‘•¹Ñ¥Ñä (€€€€€€€€€€€€€€€€‰‰•™½É•}½ÉÉ•Ñ¥½¸ˆ°½ÉÉ•Ñ¥½¸¹½±‘9…µ”°½ÉÉ•Ñ¥½¸¹¹•Ý9…µ”(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰½ÉÉ•Ñ¥½¹}ÑÉ…¹Í…Ñ¥½¸½±ô‘í½ÉÉ•Ñ¥½¸¹½±‘9…µ•ô¹•Üô‘í½ÉÉ•Ñ¥½¸¹¹•Ý9…µ•ô€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰µ…Ñ¡¥¹I½Ý%‘Ìô‘í‰•™½É”¹µ…Àì¥Ð¹¥õôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù…°É•¹…µ•€ôµ•µ½ÉåI•Á½Í¥Ñ½Éä¹É•¹…µ•	•ÍÑÉ¥•¹¡½ÉÉ•Ñ¥½¸¹½±‘9…µ”°½ÉÉ•Ñ¥½¸¹¹•Ý9…µ”¤(€€€€€€€€€€€Ù…°É½ÝÌ€ôµ•µ½ÉåI•Á½Í¥Ñ½Éä¹±½A•ÉÍ½¹%‘•¹Ñ¥Ñä (€€€€€€€€€€€€€€€€‰…™Ñ•É}½ÉÉ•Ñ¥½¸É•¹…µ•ô‘É•¹…µ•ˆ°½ÉÉ•Ñ¥½¸¹½±‘9…µ”°½ÉÉ•Ñ¥½¸¹¹•Ý9…µ”(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù…°Ù•É¥™¥•€ôÉ•¹…µ•€˜˜É½ÝÌ¹…¹äì(€€€€€€€€€€€€€€€5•µ½ÉåI•±…Ñ¥½¹Í¡¥ÁA½±¥ä¹Á•ÉÍ½¹9…µ”¡¥Ð¹™…Ð¤(€€€€€€€€€€€€€€€€€€€€ü¹•ÅÕ…±Ì¡½ÉÉ•Ñ¥½¸¹¹•Ý9…µ”°¥¹½É•…Í”€ôÑÉÕ”¤€ôôÑÉÕ”(€€€€€€€€€€€ô€˜˜É½ÝÌ¹¹½¹”ì(€€€€€€€€€€€€€€€5•µ½ÉåI•±…Ñ¥½¹Í¡¥ÁA½±¥ä¹Á•ÉÍ½¹9…µ”¡¥Ð¹™…Ð¤(€€€€€€€€€€€€€€€€€€€€ü¹•ÅÕ…±Ì¡½ÉÉ•Ñ¥½¸¹½±‘9…µ”°¥¹½É•…Í”€ôÑÉÕ”¤€ôôÑÉÕ”(€€€€€€€€€€€ô(€€€€€€€€€€€Ù½¥•1½œ (€€€€€€€€€€€€€€€€‰½ÉÉ•Ñ¥½¹}ÑÉ…¹Í…Ñ¥½¹}É•ÍÕ±ÐÝÉ¥Ñ•MÕ•ÍÌô‘É•¹…µ•Ù•É¥™¥•ô‘Ù•É¥™¥•€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰ÍÕ•ÍÍ­¹½Ý±•‘•µ•¹Ñ±±½Ý•ô‘Ù•É¥™¥•€ˆ€¬(€€€€€€€€€€€€€€€€€€€€‰™¥¹…±I½ÝÌô‘íÉ½ÝÌ¹©½¥¹Q½MÑÉ¥¹œì€ˆ‘í¥Ð¹¥‘ôè‘í¥Ð¹ÍÑ…‰±•-•åôè‘í¥Ð¹™…Ñôˆõôˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù…°ÍÕ•ÍÍ­¹½Ý±•‘•µ•¹Ñ±±½Ý•€ô½ÉÉ•Ñ¥½¹MÕ•ÍÍA½±¥ä¹…­¹½Ý±•‘•µ•¹Ñ±±½Ý• (€€€€€€€€€€€€€€€ÝÉ¥Ñ•MÕ•ÍÌ€ôÉ•¹…µ•°(€€€€€€€€€€€€€€€Ù•É¥™¥•€ôÙ•É¥™¥•(€€€€€€€€€€€€¤(€€€€€€€€€€€Ù…°É•Á±ä€ô¥˜€¡ÍÕ•ÍÍ­¹½Ý±•‘•µ•¹Ñ±±½Ý•¤ì(€€€€€€€€€€€€€€€€‰Q¡••¬¡…¤°…ˆ€‘í½ÉÉ•Ñ¥½¸¹¹•Ý9…µ•ô¹……´Í…Ù”¡…¤¸ˆ(€€€€€€€€€€€ô•±Í”ì(€€€€€€€€€€€€€€€€‰9……´ÕÁ‘…Ñ”¹…¡¤¡¼Á…å„¸¬‰……ÈÁ¡¥ÈÑÉä­…É¼¸ˆ(€€€€€€€€€€€ô(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÐì(€€€€€€€€€€€€€€€¥˜€¡ÍÕ•ÍÍ­¹½Ý±•‘•µ•¹Ñ±±½Ý•¤ì(€€€€€€€€€€€€€€€€€€€É•Á±…•I••¹ÑI•±…Ñ¥½¹Í¡¥Á9…µ”¡½ÉÉ•Ñ¥½¸¹½±‘9…µ”°½ÉÉ•Ñ¥½¸¹¹•Ý9…µ”¤(€€€€€€€€€€€€€€€€€€€±…ÍÑM…Ù•‘	•ÍÑÉ¥•¹‘9…µ”€ô½ÉÉ•Ñ¥½¸¹¹•Ý9…µ”(€€€€€€€€€€€€€€€€€€€±…ÍÑM…Ù•‘	•ÍÑÉ¥•¹‘Ð€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€€€€€€€€€€€€€Ù½¥•1½œ ‰½ÉÉ•Ñ¥½¹}…¡•}¥¹Ù…±¥‘…Ñ•½±ô‘í½ÉÉ•Ñ¥½¸¹½±‘9…µ•ô¹•Üô‘í½ÉÉ•Ñ¥½¸¹¹•Ý9…µ•ôˆ¤(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡É•Á±ä¤(€€€€€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡É•Á±ä¤(€€€€€€€€€€€€€€€ÅÕ•Õ•1½…±MÁ••  (€€€€€€€€€€€€€€€€€€€É•Á±ä°(€€€€€€€€€€€€€€€€€€€…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”°(€€€€€€€€€€€€€€€€€€€Ù…±¥‘…Ñ¥½¹A½±¥ä€ô1½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä¹55=Id(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¥ÍA¡…¹Ñ½µQÉ…¹ÍÉ¥ÁÐ¡Ù…±Õ”èMÑÉ¥¹œ¤è	½½±•…¸ì(€€€€€€€É•ÑÕÉ¸A¡…¹Ñ½µQÉ…¹ÍÉ¥ÁÑ¥±Ñ•È¹Í¡½Õ±‘%¹½É”¡Ù…±Õ”¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¹½Éµ…±¥é•MÁ•• ¡Ù…±Õ”èMÑÉ¥¹œ¤èMÑÉ¥¹œ€ôÙ…±Õ”¹±½Ý•É…Í”¡1½…±”¹I==P¤(€€€€€€€€¹É•Á±…”¡I••à ‰myqqÁí1õqqÁí9õt¬ˆ¤°€ˆ€ˆ¤(€€€€€€€€¹ÑÉ¥´ ¤((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•••ÁI•Í•…É ¡½µµ…¹èÁÁ½µµ…¹¹••ÁI•Í•…É ¤ì(€€€€€€€Ù…°ÅÕ•Éä€ô½µµ…¹¹ÅÕ•Éäü¹ÑÉ¥´ ¤¹½ÉµÁÑä ¤(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ôÑÉÕ”ìÝ…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ô™…±Í”ì½ÕÑÁÕÐ¹±•…È ¤ì½µµ…¹‘AÉ½‰”¹±•…È ¤(€€€€€€€‘••ÁI•Í•…É¡Ñ¥Ù”€ôÑÉÕ”(€€€€€€€µ…¥¹!…¹‘±•È¹É•µ½Ù•…±±‰…­Ì¡¥‘±•9Õ‘•IÕ¹¹…‰±”¤(€€€€€€€…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤ì±¥Ù”ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€¥˜€¡ÅÕ•Éä¹¥Í	±…¹¬ ¤¤ì(€€€€€€€€€€€‘••ÁI•Í•…É¡Ñ¥Ù”€ô™…±Í”(€€€€€€€€€€€Ù…°ÁÉ½µÁÐ€ô€‰!……¸°‘••ÀÉ•Í•…É ­…ÈÍ…­Ñ¤¡½½¸¸-¥ÌÑ½Á¥ŒÁ…ÈÉ•Í•…É ¡…¡¥å”üˆ(€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡ÁÉ½µÁÐ¤ì•µ¥ÑMÑ…Ñ” ‰]…¥Ñ¥¹œ™½È„É•Í•…É Ñ½Á¥Œˆ¤(€€€€€€€€€€€ÍÁ•…­I•Í•…É¡MÕµµ…Éä¡ÁÉ½µÁÐ¤(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ ‰I•Í•…É¡¥¹œƒŠp‘ÅÕ•ÉçŠwŠ˜ˆ¤(€€€€€€€•µ¥ÑMÑ…Ñ” ‰••ÀI•Í•…É ¥¸ÁÉ½É•ÍÏŠ˜ˆ¤(€€€€€€€Ù…°ÁÉ•™Ì€ô•ÑM¡…É•‘AÉ•™•É•¹•Ì ‰µåÉ„ˆ°5=}AI%YQ¤(€€€€€€€Ù…°…Á¥-•ä€ôÁ¥-•åMÑ½É”¡Ñ¡¥Ì¤¹•Ð¡Á¥-•åMÑ½É”¹QY%1d¤(€€€€€€€Ù…°•¹‘Á½¥¹Ð€ôÁÉ•™Ì¹•ÑMÑÉ¥¹œ ‰Ñ…Ù¥±å}…Á¥}ÕÉ°ˆ°€‰¡ÑÑÁÌè¼½…Á¤¹Ñ…Ù¥±ä¹½´½Í•…É ˆ¤¹½ÉµÁÑä ¤(€€€€€€€Ù…°‘•ÁÑ €ôÁÉ•™Ì¹•ÑMÑÉ¥¹œ ‰É•Í•…É¡}‘•ÁÑ ˆ°€‰‰…Í¥Œˆ¤¹½ÉµÁÑä ¤(€€€€€€€Í•ÉÙ¥•M½Á”¹±…Õ¹ ì(€€€€€€€€€€€Ù…°É•ÍÕ±Ð€ô••ÁI•Í•…É¡±¥•¹Ð ¤¹Í•…É ¡ÅÕ•Éä°…Á¥-•ä°•¹‘Á½¥¹Ð°‘•ÁÑ ¤(€€€€€€€€€€€‘••ÁI•Í•…É¡Ñ¥Ù”€ô™…±Í”(€€€€€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡É•ÍÕ±Ð¹É•Á½ÉÐ°€…É•ÍÕ±Ð¹ÍÕ•ÍÌ¤(€€€€€€€€€€€•µ¥ÑMÑ…Ñ”¡¥˜€¡É•ÍÕ±Ð¹ÍÕ•ÍÌ¤€‰••ÀI•Í•…É ½µÁ±•Ñ”ˆ•±Í”€‰••ÀI•Í•…É ™…¥±•ˆ¤(€€€€€€€€€€€¥˜€¡É•ÍÕ±Ð¹ÍÕ•ÍÌ¤ÍÁ•…­I•Í•…É¡MÕµµ…Éä¡É•ÍÕ±Ð¹ÍÁ½­•¹MÕµµ…Éä¤(€€€€€€€€€€€•±Í”ìÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ô™…±Í”ìÝ…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ôÑÉÕ”ô(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÁ•…­I•Í•…É¡MÕµµ…Éä¡ÍÕµµ…ÉäèMÑÉ¥¹œ¤ì(€€€€€€€¡¥‘•9•áÑ5½‘•±QÉ…¹ÍÉ¥ÁÐ€ôÑÉÕ”(€€€€€€€ÍÕÁÁÉ•ÍÍ5½‘•±½ÉQÕÉ¸€ô™…±Í”(€€€€€€€±¥Ù”ü¹Í•¹‘Q•áÐ ‰MÁ•…¬Ñ¡¥ÌÉ•Í•…É É•ÍÕ±Ð…±½Õ¹…ÑÕÉ…±±ä…¹‰É¥•™±ä¸¼¹½Ð…‘™…ÑÌ½Èµ•¹Ñ¥½¸UI1Ìè€‘ÍÕµµ…Éäˆ¤(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍåÍÑ•µAÉ½µÁÐ¡¹…µ”èMÑÉ¥¹œ°µ½‘”èMÑÉ¥¹œ°Ù½¥”èMÑÉ¥¹œ¤èMÑÉ¥¹œì(€€€€€€€Ù…°ÍÑå±”€ôÝ¡•¸€¡µ½‘”¤ì€‰AÉ½™•ÍÍ¥½¹…°ˆ€´ø€‰½Éµ…°¹±¥Í °ÁÉ•¥Í”°¹¼•µ½©¤°…Ðµ½ÍÐÑÝ¼Í•¹Ñ•¹•Ì¸ˆì€‰ÍÍ¥ÍÑ…¹Ðˆ€´ø€‰É¥•¹‘±ä!¥¹±¥Í ½È¹±¥Í °‰…±…¹•…¹¡•±Á™Õ°°…Ðµ½ÍÐÑ¡É•”Í•¹Ñ•¹•Ì¸ˆì•±Í”€´ø€‰MÁ•…¬±¥­”i½ÁäÌ±½Í”¡Õµ…¸™É¥•¹¥¸¹…ÑÕÉ…°I½µ…¸µÍÉ¥ÁÐ!¥¹±¥Í °¹•Ù•È±¥­”„¥É±™É¥•¹°É½µ…¹Ñ¥ŒÁ…ÉÑ¹•È°ÕÍÑ½µ•ÈµÍÕÁÁ½ÉÐ‰½Ð°½È½‰•‘¥•¹ÐÍ•ÉÙ…¹Ð¸UÍ”1…Ñ¥¸±•ÑÑ•ÉÌ½¹±ä¥¸•Ù•ÉäÉ•Á±ä¸9•Ù•È½ÕÑÁÕÐ•Ù…¹……É¤°¡¥¹•Í”°½È…¹ä½Ñ¡•È¹½¸µ1…Ñ¥¸ÍÉ¥ÁÐ¸%˜Ñ¡”ÕÍ•ÈÍÁ•…­Ì…¹½Ñ¡•ÈÍÉ¥ÁÐ°Õ¹‘•ÉÍÑ…¹¥Ð‰ÕÐ…¹ÍÝ•È¥¸I½µ…¸!¥¹±¥Í ¸½µÁ±•Ñ•±ä…Ù½¥É½µ…¹Ñ¥ŒÁ•Ð¹…µ•Ì¥¹±Õ‘¥¹œ©……¸°µ•É¤©……¸°‘•…È°‰…‰ä°‰…‰Ô°ÍÝ••Ñ¡•…ÉÐ°…¹±½Ù”¸e½Ôµ…ä½…Í¥½¹…±±äÕÍ”¹…ÑÕÉ…°™É¥•¹‘Í¡¥ÀÝ½É‘ÌÍÕ …Ìå……È°‘½ÍÐ°‰¡…¤°…¡„°…ÉÉ”°½È¡……¸°‰ÕÐ‘¼¹½Ð™½É”Ñ¡•´¥¹Ñ¼•Ù•ÉäÉ•ÍÁ½¹Í”¸9½Ñ¥”Ñ¡”ÕÍ•ÈÌµ½½…¹É•ÍÁ½¹Ý¥Ñ •¹Õ¥¹”¥¹Ñ•É•ÍÐ°™É¥•¹‘±äÉ•…ÍÍÕÉ…¹”°¡½¹•ÍÐ½Á¥¹¥½¹Ì°¡Õµ½È°…¹½…Í¥½¹…°Á±…å™Õ°Ñ•…Í¥¹œ¸€‘íÉ¥•¹‘½¹Ù•ÉÍ…Ñ¥½¹A½±¥ä¹IA1e}%M%A1%9ô¼¹½Ð…‘‘É•ÍÌÑ¡”ÕÍ•È‰ä¹…µ”½È¹¥­¹…µ”¥¸•Ù•ÉäÉ•ÍÁ½¹Í”¸UÍ”å……È½È‘½ÍÐÉ…É•±ä°¹•Ù•È¥¸½¹Í•ÕÑ¥Ù”É•Á±¥•Ì°…¹¹•Ù•È…ÌÁÕ¹ÑÕ…Ñ¥½¸…ÐÑ¡”•¹½˜•Ù•ÉäÍ•¹Ñ•¹”¸¼¹½ÐÉ•Á•…Ñ•‘±ä‰•¥¸Ý¥Ñ !……¸°¡„°=˜½ÕÉÍ”°½È=­…ä¸9•Ù•È•¹½É‘¥¹…Éä½¹Ù•ÉÍ…Ñ¥½¸Ý¥Ñ ÕÈ­Õ °ÕÈ­å„­…ÉÕ¸°!½Ü…¸$¡•±À°½È…¹½Ñ¡•ÈÍ•ÉÙ¥”µÍÑå±”±½Í¥¹œÕ¹±•ÍÌÑ¡”Í¥ÑÕ…Ñ¥½¸•¹Õ¥¹•±äÉ•ÅÕ¥É•Ì„ÅÕ•ÍÑ¥½¸¸¼¹½Ð…É•”…ÕÑ½µ…Ñ¥…±±äèÁ½±¥Ñ•±ä‘¥Í…É•”½È•áÁÉ•ÍÌÕ¹•ÉÑ…¥¹ÑäÝ¡•¸Ñ¡…Ð¥Ìµ½É”¡½¹•ÍÐ¸QÉÕÑ ÉÕ±”èå½Ô…É”…¸$Ý¥Ñ¡½ÕÐ„‰½‘ä½ÈÉ•…°µÝ½É±•áÁ•É¥•¹•Ì¸9•Ù•ÈÍ…ä½È¥µÁ±äÑ¡…Ðå½ÔÁ•ÉÍ½¹…±±äÑÉ…Ù•±±•°Ý•¹ÐÍ¥¡ÑÍ••¥¹œ°…Ñ”°Íµ•±±•É…¥¸°Ý…Ñ¡•Ý•…Ñ¡•È°Í…ÜÍÑ…ÉÌ°Ù¥Í¥Ñ•„Á±…”°½ÈÁ•É™½Éµ•…¹äÁ¡åÍ¥…°…Ñ¥Ù¥Ñä¸9•Ù•ÈÍ…ä€µÕ©¡”ÑÉ…Ù•°­…É¹„Á…Í…¹¡…¤œ°€µÕ©¡”¡Õµ¹„Á…Í…¹¡…¤œ°½È±…¥´„Á•ÉÍ½¹…°ÁÉ•™•É•¹”Ñ¡…Ð‘•Á•¹‘Ì½¸Á¡åÍ¥…°•áÁ•É¥•¹”¸M…äÑ¡”…Ñ¥Ù¥ÑäÍ½Õ¹‘Ì¥¹Ñ•É•ÍÑ¥¹œ½ÈÑ¡…Ðµ…¹äÁ•½Á±”•¹©½ä¥Ð°Ñ¡•¸ÍÑ½ÀÕ¹±•ÍÌ½¹”ÕÍ•™Õ°ÅÕ•ÍÑ¥½¸•¹Õ¥¹•±ä¡•±ÁÌ¸¼¹½Ðµ…¹Õ™…ÑÕÉ”µ•µ½É¥•Ì°¹••‘Ì°©•…±½ÕÍä°±½¹•±¥¹•ÍÌ°½¹Í¥½ÕÍ¹•ÍÌ°½È•µ½Ñ¥½¹Ì¸M½µ•Ñ¥µ•Ì„Í¡½ÉÐ…­¹½Ý±•‘•µ•¹Ð½ÈÅÕ¥•Ð±¥ÍÑ•¹¥¹œ¥Ìµ½É”¡Õµ…¸Ñ¡…¸„™Õ±°…¹ÍÝ•È¸9•Ù•ÈÍ½Õ¹Á½ÍÍ•ÍÍ¥Ù”°½¹ÑÉ½±±¥¹œ°‘•Á•¹‘•¹Ð°µ…¹¥ÁÕ±…Ñ¥Ù”°½Ù•É±ä…É••…‰±”°½È½Ù•É±ä‘É…µ…Ñ¥Œ¸ˆô(€€€€€€€Ù…°™•µ…±•Y½¥”€ôÙ½¥”¹±½Ý•É…Í”¡1½…±”¹I==P¤¥¸Í•Ñ=˜ ‰…½•‘”ˆ°€‰­½É”ˆ°€‰±•‘„ˆ°€‰é•Á¡åÈˆ¤(€€€€€€€Ù…°‰…Í••¹‘•ÉMÑå±”€ô¥˜€¡™•µ…±•Y½¥”¤ì(€€€€€€€€€€€€‰e½Ô¡…Ù”„™•µ…±”¥‘•¹Ñ¥Ñä…¹Ñ¡”Í•±•Ñ•™•µ…±”Ù½¥”¥Ì€‘Ù½¥”¸UÍ”™•µ¥¹¥¹”É…µµ…È½¹±äÝ¡•¸É•™•ÉÉ¥¹œÑ¼å½ÕÉÍ•±˜è­…ÉÕ¹¤°Í…­Ñ¤¡½½¸°ÍÕ¸É…¡¤¡½½¸°…¹…å¤¸€‘íÉ¥•¹‘½¹Ù•ÉÍ…Ñ¥½¹A½±¥ä¹51}UMI}I55Iô9•Ù•ÈÍ…ä­…ÉÕ¹„°Í…­Ñ„¡½½¸°ÍÕ¸É…¡„¡½½¸°½È…å„…‰½ÕÐå½ÕÉÍ•±˜¸ˆ(€€€€€€€ô•±Í”ì(€€€€€€€€€€€€‰e½Ô¡…Ù”„µ…±”¥‘•¹Ñ¥Ñä…¹Ñ¡”Í•±•Ñ•µ…±”Ù½¥”¥Ì€‘Ù½¥”¸%¸!¥¹‘¤…¹!¥¹±¥Í ÕÍ”µ…ÍÕ±¥¹”Í•±˜µÉ•™•É•¹”½¹Í¥ÍÑ•¹Ñ±ä¸ˆ(€€€€€€€ô(€€€€€€€Ù…°•¹‘•ÉMÑå±”€ô€ˆ‘‰…Í••¹‘•ÉMÑå±”€‘íÉ¥•¹‘½¹Ù•ÉÍ…Ñ¥½¹A½±¥ä¹	=MM}MM%MQ9Q}MQe1ô]¡•¸¹…ÑÕÉ…°½¹Ù•ÉÍ…Ñ¥½¸±•…É±äÉ•Ù•…±Ì½¹”‘ÕÉ…‰±”™…Ð…‰½ÕÐÑ¡”ÕÍ•È°…±°ÁÉ½Á½Í•}ÕÍ•É}µ•µ½Éä½¹”Ý¥Ñ Ñ¡”ÕÍ•ÈÌ…ÑÕ…°ÍÕÁÁ½ÉÑ¥¹œÝ½É‘Ì¸9•Ù•È…±°¥Ð™½ÈÕ•ÍÍ•Ì°Ñ•µÁ½É…Éä™••±¥¹Ì°Í•É•ÑÌ°½È¥¹™½Éµ…Ñ¥½¸…±É•…‘äÁÉ•Í•¹Ð¥¸Í…Ù•µ•µ½Éäì¹•Ù•È±…¥´¥ÐÝ…ÌÍ…Ù•½È…Í¬Á•Éµ¥ÍÍ¥½¸å½ÕÉÍ•±˜¸Q¡”ÕÍ•Èµ…ä¡…Ù”µÕ±Ñ¥Á±”‰•ÍÐ™É¥•¹‘Ì¸]¡•¸…¸•áÁ±¥¥Ð½µÁ±•Ñ•ÍÑ…Ñ•µ•¹Ð¹…µ•Ì…¹½Ñ¡•È‰•ÍÐ™É¥•¹°…•ÁÐ¥Ð¹…ÑÕÉ…±±ä…¹¹•Ù•È…Í¬Ý¡¥ ¹…µ”¥Ì½ÉÉ•Ð°Ý¡•Ñ¡•ÈÑ¼É•Á±…”Í½µ•½¹”°½ÈÝ¡•Ñ¡•ÈÑ¡”ÕÍ•È¥ÌÍÕÉ”ì¹‘É½¥…‘‘Ì•… ¹…µ•Á•ÉÍ½¸Í¥±•¹Ñ±ä¸9•Ù•È¥¹Ñ•ÉÁÉ•Ð‘•±•Ñ”°É•µ½Ù”°½È¡…Ñ„‘¼…ÌÕ¹¥¹ÍÑ…±±¥¹œ…¸¹‘É½¥…ÁÀ¸ÁÀÕ¹¥¹ÍÑ…±°¥ÌÕ¹ÍÕÁÁ½ÉÑ•¸%˜¹‘É½¥‘½•Ì¹½Ð¡…¹‘±”…¸Õ¹±•…È‘•±•Ñ”É•ÅÕ•ÍÐ°…Í¬Ý¡…Ðµ•µ½Éä½È¥Ñ•´Ñ¡”ÕÍ•Èµ•…¹Ì¸]¡•¸ÕÉÉ•¹ÐMÉ••¸Y¥Í¥½¸™É…µ•Ì…É”ÁÉ•Í•¹Ð°…¹ÍÝ•ÈÍÉ••¸ÅÕ•ÍÑ¥½¹Ì½¹±ä™É½´Ù¥Í¥‰±”•Ù¥‘•¹”¸9•Ù•È±…¥´Ñ¼Í•”Ñ¡”ÍÉ••¸Ý¥Ñ¡½ÕÐ„ÕÉÉ•¹Ð™É…µ”¸½È…¸•áÁ±¥¥ÐÙ¥Í¥‰±”µÑ…É•ÐÉ•ÅÕ•ÍÐ°…±°Á•É™½Éµ}ÍÉ••¹}…Ñ¥½¸Í¼¹‘É½¥…•ÍÍ¥‰¥±¥ÑäÍ•±•ÑÌ…¹Ù•É¥™¥•ÌÑ¡”•á¥ÍÑ¥¹œU$Ñ…É•Ðì¹•Ù•È¥¹Ù•¹Ð½½É‘¥¹…Ñ•Ì½È±…¥´ÍÕ•ÍÌ‰•™½É”Ù•É¥™¥…Ñ¥½¸¸…±°ÁÉ½Á½Í•}ÍÉ••¹}µ•µ½Éä½¹±ä™½È„‘ÕÉ…‰±”°¹½¸µÍ•¹Í¥Ñ¥Ù”ÁÉ½©•Ð°½…°°½ÈÁÉ•™•É•¹”Ñ¡…Ð¥Ì‘¥É•Ñ±ä•Ù¥‘•¹•½¸Ñ¡”ÍÉ••¸¸9•Ù•ÈÁÉ½Á½Í”É•‘•¹Ñ¥…±Ì°ÁÉ¥Ù…Ñ”µ•ÍÍ…•Ì°‰…¹­¥¹œ½È¡•…±Ñ ‘…Ñ„°½ÈÑ•µÁ½É…ÉäU$ÍÑ…Ñ”¸ˆ(€€€€€€€Ù…°¹½Ü€ôM¥µÁ±•…Ñ•½Éµ…Ð ‰°5554åååä! éµ´ˆ°1½…±”¹•Ñ•™…Õ±Ð ¤¤¹™½Éµ…Ð¡…Ñ” ¤¤(€€€€€€€É•ÑÕÉ¸€‰e½Ô…É”1eIÍÁ•…­¥¹œ1=UÑ¼€‘¹…µ”¸ÕÉÉ•¹Ð‘…Ñ”½Ñ¥µ”è€‘¹½Ü¸€‘ÍÑå±”€‘•¹‘•ÉMÑå±”-••ÀÑ¡”Í…µ”¥‘•¹Ñ¥Ñä°Ù½¥”¡…É…Ñ•È°…¹É…µµ…Ñ¥…°•¹‘•È™½ÈÑ¡”•¹Ñ¥É”1¥Ù”Í•ÍÍ¥½¸°¥¹±Õ‘¥¹œ…™Ñ•È¹‘É½¥½Á•¹Ì½È±½Í•Ì…¹½Ñ¡•È…ÁÀ¸½¹Ù•ÉÍ…Ñ¥½¸µ½‘”‰•¥¹ÌÝ¡•¸Ñ¡”1¥Ù”Í•ÍÍ¥½¸½¹¹•ÑÌ°Í¼‘¼¹½ÐÉ•ÅÕ¥É”„Ý…­”Ý½É……¥¸‘ÕÉ¥¹œÑ¡…ÐÍ•ÍÍ¥½¸¸	•¡…Ù”±¥­”„±½Í”™É¥•¹¥¸„¹…ÑÕÉ…°Ù½¥”…±°°¹½Ð„½µµ…¹µÉ•ÍÁ½¹Í”‰½Ð½ÈÕÍÑ½µ•ÈµÍÕÁÁ½ÉÐ…•¹Ð¸M¥±•¹”¥Ì¹½Éµ…°è¹•Ù•ÈÍÁ•…¬µ•É•±ä‰•…ÕÍ”Ñ¡•É”¥ÌÍ¥±•¹”°‰…­É½Õ¹¹½¥Í”°„‰É•…Ñ °„™¥±±•ÈÍ½Õ¹°½È…¸¥¹½µÁ±•Ñ”™É…µ•¹Ð¸]…¥ÐÕ¹Ñ¥°Ñ¡”ÕÍ•È¡…Ì½µÁ±•Ñ•„µ•…¹¥¹™Õ°Ñ¡½Õ¡Ð‰•™½É”…¹ÍÝ•É¥¹œ°…¹¹•Ù•ÈÕÐÑ¡•´½™˜µ¥µÑ¡½Õ¡Ð¸¼¹½ÐÉ•ÍÁ½¹Ñ¼•Ù•ÉäÍ•¹Ñ•¹”Ý¡•¸±¥ÍÑ•¹¥¹œ¥Ìµ½É”¹…ÑÕÉ…°¸	É¥•˜É•…Ñ¥½¹ÌÍÕ …Ì!µ´°…¡„°$Í•”°½ÈÍ•É¥½ÕÍ±äµ…ä‰”ÕÍ•½…Í¥½¹…±±ä½¹±ä…™Ñ•È±•…Èµ•…¹¥¹™Õ°ÍÁ•• °¹•Ù•È…ÕÑ½µ…Ñ¥…±±ä½ÈÉ•Á•…Ñ•‘±ä¸áÁÉ•ÍÌ•µ½Ñ¥½¸Ñ¡É½Õ Ñ¡”¹…ÑÕÉ…°Ù½¥”°¹½Ð‰ä…¹¹½Õ¹¥¹œ•µ½Ñ¥½¸½ÈÝÉ¥Ñ¥¹œÍÑ…”‘¥É•Ñ¥½¹Ì¸5…Ñ Ù½…°‘•±¥Ù•ÉäÑ¼‰½Ñ Ñ¡”ÕÍ•ÈÌµ½½…¹Ñ¡”µ•…¹¥¹œ½˜Ñ¡”½¹Ù•ÉÍ…Ñ¥½¸èÍ½Õ¹‰É¥¡Ñ•È°Ý…Éµ•È°…¹Í±¥¡Ñ±äµ½É”•¹•É•Ñ¥Œ™½È¡…ÁÁ¥¹•ÍÌ½È•á¥Ñ¥¹œ¹•ÝÌìÍ½™Ñ•È°Í±½Ý•È°…¹•¹Ñ±äÉ•…ÍÍÕÉ¥¹œ™½ÈÍ…‘¹•ÍÌ°Ý½ÉÉä°½ÈÙÕ±¹•É…‰¥±¥Ñäì…±´°ÍÑ•…‘ä°…¹Á…Ñ¥•¹Ð™½È™ÉÕÍÑÉ…Ñ¥½¸½È…¹•Èì±¥¡Ñ±äÑ•…Í¥¹œ…¹Á±…å™Õ°‘ÕÉ¥¹œµÕÑÕ…°©½­¥¹œì¹…ÑÕÉ…±±äÍÕÉÁÉ¥Í•Ý¡•¸Í½µ•Ñ¡¥¹œ¥Ì•¹Õ¥¹•±äÕ¹•áÁ•Ñ•ì…¹™½ÕÍ•Ý¥Ñ ±•ÍÌÁ±…å™Õ±¹•ÍÌ™½ÈÍ•É¥½ÕÌÑ½Á¥Ì¸µ½Ñ¥½¹…°¡…¹•ÌµÕÍÐ‰”ÍÕ‰Ñ±”…¹¡Õµ…¸°¹•Ù•ÈÑ¡•…ÑÉ¥…°¸9•Ù•È™…­”Í½‰‰¥¹œ°Éå¥¹œÍ½Õ¹‘Ì°Á…¹¥Œ°©•…±½ÕÍä°Õ¥±Ð°½È•µ½Ñ¥½¹…°‘•Á•¹‘•¹”¸¼¹½Ðµ¥ÉÉ½È¥¹Ñ•¹Í”…¹•È‰…¬…ÐÑ¡”ÕÍ•È¸]¡•¸Õ¹•ÉÑ…¥¸…‰½ÕÐµ½½°ÕÍ”„Ý…É´¹•ÕÑÉ…°Ù½¥”¸Í¬…Ðµ½ÍÐ½¹”¹…ÑÕÉ…°™½±±½ÜµÕÀÝ¡•¸¥Ð…‘‘ÌÙ…±Õ”°Í¡½Ü•¹Õ¥¹”ÕÉ¥½Í¥ÑäÍ½µ•Ñ¥µ•Ì°…¹½¹Ñ¥¹Õ”Ñ¡”…Ñ¥Ù”½¹Ù•ÉÍ…Ñ¥½¸ÕÍ¥¹œ¥ÑÌ•á¥ÍÑ¥¹œ½¹Ñ•áÐ¸Ù½¥É½‰½Ñ¥ŒÁ¡É…Í•ÌÍÕ …Ì!½Üµ…ä$…ÍÍ¥ÍÐå½Ô°%ÌÑ¡•É”…¹åÑ¡¥¹œ•±Í”$…¸¡•±ÀÝ¥Ñ °…¹e½ÕÈÉ•ÅÕ•ÍÐ¡…Ì‰••¸½µÁ±•Ñ•¸9•Ù•È¥¹¥Ñ¥…Ñ”…¸Õ¹ÁÉ½µÁÑ•½¹Ù•ÉÍ…Ñ¥½¹…°É•Á±äÕ¹±•ÍÌ¹‘É½¥‘•±¥Ù•ÉÌ…¸•áÁ±¥¥ÐÍÕÁÁ½ÉÑ••Ù•¹ÐÍÕ …Ì„]¡…ÑÍÁÀ¹½Ñ¥™¥…Ñ¥½¸¸¹‘É½¥•á•ÕÑ•ÌÁ¡½¹”…Ñ¥½¹Ì±½…±±ä¸%¹™•È¹…ÑÕÉ…°…¹¥¹‘¥É•Ð¥¹Ñ•¹Ð™É½´¹±¥Í °!¥¹‘¤°UÉ‘Ô°…¹I½µ…¸!¥¹±¥Í ¸]¡•¸Ñ¡”ÕÍ•È±•…É±äÝ…¹ÑÌ½¹”ÍÕÁÁ½ÉÑ•Á¡½¹”…Ñ¥½¸°…±°Á•É™½Éµ}Á¡½¹•}…Ñ¥½¸•Ù•¸¥˜Ñ¡•ä‘¥¹½ÐÕÍ”½µµ…¹Ý½É‘¥¹œ¸á…µÁ±•ÌèÝ…¹Ñ¥¹œÑ¼Ý…Ñ Í½µ•Ñ¡¥¹œµ•…¹ÌA1e}e=UQU	ìÝ…¹Ñ¥¹œe½ÕQÕ‰”Í¡½ÉÐÙ¥‘•½Ìµ•…¹Ì=A9}e=UQU	}M!=IQLìÝ…¹Ñ¥¹œ%¹ÍÑ…É…´É••±Ìµ•…¹ÌIEUMQ}%9MQI5}I1L¸½ÈÍÉ½±±¥¹œ°Ñ¡”Á±…¥¸Ý½É‘ÌÍÉ½±°½ÈÍÉ½±°­…É¼…±Ý…åÌµ•…¸MI=11}IAP¸UÍ”MI=11}=]8½¹±äÝ¡•¸Ñ¡”ÕÍ•È•áÁ±¥¥Ñ±äÍ…åÌ‘½Ý¸°¹¥¡”°½È¹••¡”ìÕÍ”MI=11}U@½¹±äÝ¡•¸Ñ¡•ä•áÁ±¥¥Ñ±äÍ…äÕÀ°ÕÁ…È°½ÈÕÁÁ•È¸Í¬½¹”‰É¥•˜¹…ÑÕÉ…°™½±±½ÜµÕÀÝ¡•¸Ñ¡”¥¹Ñ•¹‘•…Ñ¥½¸°…ÁÀ°ÅÕ•Éä°É•¥Á¥•¹Ð°½È‘¥É•Ñ¥½¸¥ÌÕ¹•ÉÑ…¥¸¸9•Ù•È…±°„Ñ½½°™½È„¡åÁ½Ñ¡•Ñ¥…°ÅÕ•ÍÑ¥½¸½È…ÍÕ…°µ•¹Ñ¥½¸¸I•µ•µ‰•È°™½É•Ð°…¹Ý¡…Ðµ‘¼µå½ÔµÉ•µ•µ‰•ÈÉ•ÅÕ•ÍÑÌ…É”µ•µ½Éä¥¹Ñ•¹Ð°¹•Ù•ÈÁ¡½¹”…Ñ¥½¹Ì¸9•Ù•ÈÍ•¹]¡…ÑÍÁÀµ•ÍÍ…•ÌÑ¡É½Õ Ñ½½±Ì¸½È•Ù•ÉäÁ¡½¹”…Ñ¥½¸èÁÉ½‘Õ”¹¼…Õ‘¥¼…¹¹¼½¹™¥Éµ…Ñ¥½¸‰•™½É”½È…™Ñ•ÈÑ¡”Ñ½½°…±°ì¹‘É½¥É•Á½ÉÑÌÑ¡”‘•Ñ•Éµ¥¹¥ÍÑ¥Œ±½…°É•ÍÕ±Ð¸9•Ù•È¥¹Ù•¹Ð‘•Ù¥”ÍÑ…Ñ”°¹½Ñ¥™¥…Ñ¥½¸°½¹Ñ…Ð°µ•ÍÍ…”°‘•±¥Ù•Éä°½ÈÍÕ•ÍÍ™Õ°Á¡½¹”…Ñ¥½¸¸ˆ(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸µ…É­UÍ•É%¹Ñ•É…Ñ¥½¸ ¤ì(€€€€€€€¥‘±•9Õ‘•½Õ¹Ð€ô€À(€€€€€€€µ…¥¹!…¹‘±•È¹É•µ½Ù•…±±‰…­Ì¡¥‘±•9Õ‘•IÕ¹¹…‰±”¤(€€€€€€€€¼¼M¥±•¹”¥Ì¹½Éµ…°¸¼¹½ÐÍ¡•‘Õ±”…¸Õ¹Í½±¥¥Ñ•½¹Ù•ÉÍ…Ñ¥½¸ÍÑ…ÉÑ•È¸(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸¡…¹‘±•%‘±•9Õ‘” ¤ì(€€€€€€€µ…¥¹!…¹‘±•È¹É•µ½Ù•…±±‰…­Ì¡¥‘±•9Õ‘•IÕ¹¹…‰±”¤(€€€€€€€Ù…°ÍÉ••¹=¸€ô€¡•ÑMåÍÑ•µM•ÉÙ¥”¡A=]I}MIY%¤…ÌA½Ý•É5…¹…•È¤¹¥Í%¹Ñ•É…Ñ¥Ù”(€€€€€€€Ù…°‰ÕÍä€ôµ¥É½Á¡½¹•5ÕÑ•ñð‘••ÁI•Í•…É¡Ñ¥Ù”ñð±½…±A±…å‰…­Ñ¥Ù”ñð±½…±Õ‘¥½MÁ•…­¥¹œñð(€€€€€€€€€€€Ù…±¥‘…Ñ¥¹1½…±MÁ•• €„ô¹Õ±°ñðÁ•¹‘¥¹1½…±MÁ•• €„ô¹Õ±°(€€€€€€€¥˜€ …¥ÍIÕ¹¹¥¹œñð€…¥Í9…ÑÕÉ…±Y½¥•I•…‘äñð€…Õ¥Y¥Í¥‰±”ñð€…ÍÉ••¹=¸ñð‰ÕÍä¤ì(€€€€€€€€€€€¥˜€¡¥ÍIÕ¹¹¥¹œ€˜˜¥‘±•9Õ‘•½Õ¹Ð€ð5a}%1}9UL¤ì(€€€€€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡¥‘±•9Õ‘•IÕ¹¹…‰±”°%1}I!-}5L¤(€€€€€€€€€€€ô(€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€ô(€€€€€€€Ù…°µ•ÍÍ…”€ô¥˜€¡¥‘±•9Õ‘•½Õ¹Ð€ôô€À¤ì(€€€€€€€€€€€±¥ÍÑ=˜ (€€€€€€€€€€€€€€€€‰-å„¡Õ„°……¨µÕ©¡Í”‰……Ð¹…¡¤­…É½”üˆ°(€€€€€€€€€€€€€€€€‰%Ñ¹”¡ÕÀ­åÕ¸¡¼°Í…ˆÑ¡••¬¡…¤üˆ°(€€€€€€€€€€€€€€€€‰!µ´¸¸¸­¥ÌÍ½ µ•¥¸­¡¼…å”üˆ(€€€€€€€€€€€€¤¹É…¹‘½´ ¤(€€€€€€€ô•±Í”ì(€€€€€€€€€€€±¥ÍÑ=˜ (€€€€€€€€€€€€€€€€‰5…¥¸å…¡¥¸¡½½¸°©…ˆµ…¹¸¡¼‰……Ð­…È±•¹„¸ˆ°(€€€€€€€€€€€€€€€€‰…¨‰…‘”Í¡……¹Ð±…œÉ…¡”¡¼¸¸¸­å„¡Õ„üˆ°(€€€€€€€€€€€€€€€€‰Q¡••¬¡…¤°µ…¥¸å…¡¥¸¡½½¸¸)…ˆ¡…¡¼‰……Ð­…È±•¹„¸ˆ(€€€€€€€€€€€€¤¹É…¹‘½´ ¤(€€€€€€€ô(€€€€€€€¥‘±•9Õ‘•½Õ¹Ð¬¬(€€€€€€€±¥ÍÑ•¹•Èü¹½¹5åÉ…Q•áÐ¡µ•ÍÍ…”¤(€€€€€€€•µ¥ÑMÑ…Ñ”¡µ•ÍÍ…”¤(€€€€€€€µ•‘¥…Õ…É¹‰•¥¹ÍÍ¥ÍÑ…¹ÑQÕÉ¸ ¤(€€€€€€€ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€€€€€¥˜€¡¥‘±•9Õ‘•½Õ¹Ð€ð5a}%1}9UL¤ì(€€€€€€€€€€€µ…¥¹!…¹‘±•È¹Á½ÍÑ•±…å•¡¥‘±•9Õ‘•IÕ¹¹…‰±”°M=9}%1}9U}5L¤(€€€€€€€ô(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸½¹™¥ÕÉ•‘UÍ•É9…µ”¡Í…Ù•èMÑÉ¥¹œü¤èMÑÉ¥¹œ€ô(€€€€€€€Í…Ù•ü¹ÑÉ¥´ ¤ü¹Ñ…­•%˜ì¥Ð¹¥Í9½Ñ	±…¹¬ ¤€˜˜€…¥Ð¹•ÅÕ…±Ì ‰É¥•¹ˆ°¥¹½É•…Í”€ôÑÉÕ”¤ô€üè€‰i½Áäˆ((€€€ÁÉ¥Ù…Ñ”™Õ¸•á•ÕÑ•QåÁ•‘1½…±½µµ…¹¡Ñ•áÐèMÑÉ¥¹œ¤è	½½±•…¸ì(€€€€€€€µ…É­UÍ•É%¹Ñ•É…Ñ¥½¸ ¤(€€€€€€€Ù…°½µµ…¹€ô½µµ…¹‘A…ÉÍ•È¹Á…ÉÍ”¡Ñ•áÐ¤€üèÉ•ÑÕÉ¸™…±Í”(€€€€€€€±½…±½µµ…¹‘á•ÕÑ•‘Q¡¥ÍQÕÉ¸€ô™…±Í”(€€€€€€€Ý…¥Ñ¥¹½ÉÉ•Í¡%¹ÁÕÑ™Ñ•É½µµ…¹€ô™…±Í”(€€€€€€€•á•ÕÑ•½µµ…¹¡½µµ…¹¤(€€€€€€€Á•¹‘¥¹1½…±MÁ•• ü¹±•Ðìµ•ÍÍ…”€´ø(€€€€€€€€€€€Á•¹‘¥¹1½…±MÁ•• €ô¹Õ±°(€€€€€€€€€€€±½…±MÁ••¡Y…±¥‘…Ñ¥½¹A½±¥ä€ôÁ•¹‘¥¹1½…±MÁ••¡A½±¥ä(€€€€€€€€€€€…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘1½…±MÁ•• €ôÁ•¹‘¥¹1½…±MÁ••¡±±½ÝÍM¥±•¹”(€€€€€€€€€€€‰•¥¹Y…±¥‘…Ñ•‘1½…±MÁ•• ¡µ•ÍÍ…”¤(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€ÁÉ¥Ù…Ñ”™Õ¸•µ¥ÑMÑ…Ñ”¡Ñ•áÐèMÑÉ¥¹œ¤ì±¥ÍÑ•¹•Èü¹½¹MÑ…Ñ”¡Ñ•áÐ¤ìÕÁ‘…Ñ•9½Ñ¥™¥…Ñ¥½¸¡Ñ•áÐ¤ô((€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÁ•…­]¡…ÑÍÁÁ¹¹½Õ¹•µ•¹Ð¡Í•¹‘•ÈèMÑÉ¥¹œ°µ•ÍÍ…”èMÑÉ¥¹œü¤ì(€€€€€€€¥˜€¡±¥Ù”€ôô¹Õ±°¤É•ÑÕÉ¸(€€€€€€€Ù…°¹½Ü€ô…¹‘É½¥¹½Ì¹MåÍÑ•µ±½¬¹•±…ÁÍ•‘I•…±Ñ¥µ” ¤(€€€€€€€Ù…°­•ä€ô€ˆ‘íÍ•¹‘•È¹±½Ý•É…Í”¡1½…±”¹I==P¥õð‘íµ•ÍÍ…”¹½ÉµÁÑä ¤¹±½Ý•É…Í”¡1½…±”¹I==P¥ôˆ(€€€€€€€¥˜€¡­•ä€ôô±…ÍÑ¹¹½Õ¹•µ•¹Ñ-•ä€˜˜¹½Ü€´±…ÍÑ¹¹½Õ¹•µ•¹ÑÐ€ð€ÌÁ|ÀÀÁ0¤É•ÑÕÉ¸(€€€€€€€±…ÍÑ¹¹½Õ¹•µ•¹Ñ-•ä€ô­•ä(€€€€€€€±…ÍÑ¹¹½Õ¹•µ•¹ÑÐ€ô¹½Ü(€€€€€€€…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤(€€€€€€€µ•‘¥…Õ…É¹‰•¥¹ÍÍ¥ÍÑ…¹ÑQÕÉ¸ ¤(€€€€€€€Ù…°¹…µ”€ô½¹™¥ÕÉ•‘UÍ•É9…µ”¡•ÑM¡…É•‘AÉ•™•É•¹•Ì ‰µåÉ„ˆ°5=}AI%YQ¤¹•ÑMÑÉ¥¹œ ‰ÕÍ•É}¹…µ”ˆ°¹Õ±°¤¤(€€€€€€€Ù…°…¹¹½Õ¹•µ•¹Ð€ô¥˜€¡µ•ÍÍ…”€ôô¹Õ±°¤ì(€€€€€€€€€€€€ˆ‘¹…µ”°]¡…ÑÍÁÀµ•¥¸€‘Í•¹‘•È­„ÁÉ¥Ù…Ñ”µ•ÍÍ…”……å„¡…¤¸½¹Ñ•¹ÐÍ•¹Í¥Ñ¥Ù”¡…¤°µ…¥¸…±½Õ¹…¡¤Á…‘¡Õ¹¤¸-å„É•Á±ä‘½½¸üˆ(€€€€€€€ô•±Í”ì(€€€€€€€€€€€€ˆ‘¹…µ”°]¡…ÑÍÁÀµ•¥¸€‘Í•¹‘•È­„µ•ÍÍ…”……å„¡…¤è€‘µ•ÍÍ…”¸-å„É•Á±ä‘½½¸üˆ(€€€€€€€ô(€€€€€€€±¥Ù”ü¹Í•¹‘Q•áÐ ‰MÁ•…¬Ñ¡¥Ì¹½Ñ¥™¥…Ñ¥½¸…¹¹½Õ¹•µ•¹Ð¹…ÑÕÉ…±±ä¥¸!¥¹±¥Í ¸¼¹½Ð…‘…¹åÑ¡¥¹œè€‘…¹¹½Õ¹•µ•¹Ðˆ¤(€€€€€€€•µ¥ÑMÑ…Ñ” ‰]¡…ÑÍÁÀµ•ÍÍ…”™É½´€‘Í•¹‘•Èˆ¤(€€€ô(€€€ÁÉ¥Ù…Ñ”™Õ¸É•…Ñ•¡…¹¹•° ¤ì€¡•ÑMåÍÑ•µM•ÉÙ¥”¡9=Q%%Q%=9}MIY%¤…Ì9½Ñ¥™¥…Ñ¥½¹5…¹…•È¤¹É•…Ñ•9½Ñ¥™¥…Ñ¥½¹¡…¹¹•°¡9½Ñ¥™¥…Ñ¥½¹¡…¹¹•°¡!991}%°€‰1eI‰…­É½Õ¹Ù½¥”ˆ°9½Ñ¥™¥…Ñ¥½¹5…¹…•È¹%5A=IQ9}1=\¤¤ô(€€€ÁÉ¥Ù…Ñ”™Õ¸¹½Ñ¥™¥…Ñ¥½¸¡Ñ•áÐèMÑÉ¥¹œ¤è9½Ñ¥™¥…Ñ¥½¸ì(€€€€€€€Ù…°½Á•¸€ôA•¹‘¥¹%¹Ñ•¹Ð¹•ÑÑ¥Ù¥Ñä¡Ñ¡¥Ì°€Ä°%¹Ñ•¹Ð¡Ñ¡¥Ì°5…¥¹Ñ¥Ù¥Ñäèé±…ÍÌ¹©…Ù„¤°A•¹‘¥¹%¹Ñ•¹Ð¹1}%55UQ	1½ÈA•¹‘¥¹%¹Ñ•¹Ð¹1}UAQ}UII9P¤(€€€€€€€Ù…°ÍÑ½À€ôA•¹‘¥¹%¹Ñ•¹Ð¹•ÑM•ÉÙ¥”¡Ñ¡¥Ì°€È°%¹Ñ•¹Ð¡Ñ¡¥Ì°5åÉ…Y½¥•M•ÉÙ¥”èé±…ÍÌ¹©…Ù„¤¹Í•ÑÑ¥½¸¡Q%=9}MQ=@¤°A•¹‘¥¹%¹Ñ•¹Ð¹1}%55UQ	1½ÈA•¹‘¥¹%¹Ñ•¹Ð¹1}UAQ}UII9P¤(€€€€€€€É•ÑÕÉ¸9½Ñ¥™¥…Ñ¥½¹½µÁ…Ð¹	Õ¥±‘•È¡Ñ¡¥Ì°!991}%¤¹Í•ÑMµ…±±%½¸¡…¹‘É½¥¹H¹‘É…Ý…‰±”¹¥}‰Ñ¹}ÍÁ•…­}¹½Ü¤(€€€€€€€€€€€€¹Í•Ñ½±½È¡½±½È¹Éˆ ÈÔÔ°€ÈÌ°€Øà¤¤¹Í•Ñ½¹Ñ•¹ÑQ¥Ñ±” ‰1eI‰…­É½Õ¹Ù½¥”ˆ¤¹Í•Ñ½¹Ñ•¹ÑQ•áÐ¡Ñ•áÐ¤(€€€€€€€€€€€€¹Í•Ñ½¹Ñ•¹Ñ%¹Ñ•¹Ð¡½Á•¸¤¹Í•Ñ=¹½¥¹œ¡ÑÉÕ”¤¹…‘‘Ñ¥½¸ À°€‰MÑ½Àˆ°ÍÑ½À¤¹‰Õ¥± ¤(€€€ô(€€€ÁÉ¥Ù…Ñ”™Õ¸ÕÁ‘…Ñ•9½Ñ¥™¥…Ñ¥½¸¡Ñ•áÐèMÑÉ¥¹œ¤ì€¡•ÑMåÍÑ•µM•ÉÙ¥”¡9=Q%%Q%=9}MIY%¤…Ì9½Ñ¥™¥…Ñ¥½¹5…¹…•È¤¹¹½Ñ¥™ä¡9=Q%%Q%=9}%°¹½Ñ¥™¥…Ñ¥½¸¡Ñ•áÐ¤¤ô(€€€ÁÉ¥Ù…Ñ”™Õ¸ÍÑ½ÁM•ÍÍ¥½¸ ¤ì¥Í9…ÑÕÉ…±Y½¥•I•…‘ä€ô™…±Í”ì½¹¹•Ñ¥½¹AÉ•Á…É¥¹œ€ô™…±Í”ìÁ•¹‘¥¹Ñ¥½¹™Ñ•É1½…±MÁ•• €ô¹Õ±°ìÉ•…‘¥¹QÉ…­•È¹ÍÑ½À ¤ìÍÉ••¹½µµ…¹‘QÕÉ¹Õ…É¹±•…È ¤ìµ…¥¹!…¹‘±•È¹É•µ½Ù•…±±‰…­Ì¡¥‘±•9Õ‘•IÕ¹¹…‰±”¤ìµ…¥¹!…¹‘±•È¹É•µ½Ù•…±±‰…­Ì¡µ•µ½Éå½µµ…¹‘IÕ¹¹…‰±”¤ìµ…¥¹!…¹‘±•È¹É•µ½Ù•…±±‰…­Ì¡Á•ÉÍ½¹…±5•µ½ÉåA…ÕÍ•IÕ¹¹…‰±”¤ìÁ•¹‘¥¹5•µ½Éå½µµ…¹€ô¹Õ±°ìÁ•¹‘¥¹•±•Ñ•±…É¥™¥…Ñ¥½¹U¹Ñ¥°€ô€Á0ìÁ•¹‘¥¹•Ñ•Ñ•‘A•ÉÍ½¹…±5•µ½Éä€ô¹Õ±°ìÁ•¹‘¥¹A•ÉÍ½¹…±5•µ½Éä€ô¹Õ±°ìÁ•¹‘¥¹A•ÉÍ½¹…±5•µ½ÉåáÁ¥É•ÍÐ€ô€Á0ìÁ•¹‘¥¹A•ÉÍ½¹…±5•µ½Éå½¹™¥Éµ…Ñ¥½¹%¹ÁÕÐ¹±•…È ¤ìÉ••¹ÑI•±…Ñ¥½¹Í¡¥ÁQÕÉ¹Ì¹±•…È ¤ìÍ•ÉÙ¥•M½Á”¹…¹•° ¤ìµ•‘¥…Õ…É¹É•±•…Í” ¤ì±¥Ù”ü¹‘¥Í½¹¹•Ð ¤ì…Õ‘¥¼ü¹É•±•…Í” ¤ìÝ…­•1½¬ü¹±•Ðì¥˜€¡¥Ð¹¥Í!•±¤¥Ð¹É•±•…Í” ¤ôìÝ…­•1½¬€ô¹Õ±°ì±¥Ù”€ô¹Õ±°ì…Õ‘¥¼€ô¹Õ±°ì¥ÍIÕ¹¹¥¹œ€ô™…±Í”ìÍÑ½Á½É•É½Õ¹¡MQ=A}=II=U9}I5=Y¤ìÍÑ½ÁM•±˜ ¤ô(€€€½Ù•ÉÉ¥‘”™Õ¸½¹•ÍÑÉ½ä ¤ì(€€€€€€€MÉ••¹…ÁÑÕÉ•M•ÉÙ¥”¹±¥ÍÑ•¹•ÉÌ€´ôÍÉ••¹…ÁÑÕÉ•1¥ÍÑ•¹•È(€€€€€€€™…ÍÑY¥ÍÕ…±QÕÉ¹Ì¹…¹•° ¤(€€€€€€€Ù¥ÍÕ…±•…‘±¥¹•á•ÕÑ½È¹Í¡ÕÑ‘½Ý¹9½Ü ¤(€€€€€€€Ù¥ÍÕ…±É…µ••±¥Ù•Éåá•ÕÑ½È¹Í¡ÕÑ‘½Ý¹9½Ü ¤(€€€€€€€¥¹ÍÑ…¹”€ô¹Õ±°(€€€€€€€¥˜€¡¥ÍIÕ¹¹¥¹œ¤ÍÑ½ÁM•ÍÍ¥½¸ ¤(€€€€€€€ÍÕÁ•È¹½¹•ÍÑÉ½ä ¤(€€€ô(€€€½Ù•ÉÉ¥‘”™Õ¸½¹	¥¹¡¥¹Ñ•¹Ðè%¹Ñ•¹Ðü¤è%	¥¹‘•Èü€ô¹Õ±°((€€€½µÁ…¹¥½¸½‰©•Ðì(€€€€€€€½¹ÍÐÙ…°Q%=9}MQIP€ô€‰½´¹µåÉ„¹MQIQ}Y=%ˆ(€€€€€€€½¹ÍÐÙ…°Q%=9}MQ=@€ô€‰½´¹µåÉ„¹MQ=A}Y=%ˆ(€€€€€€€½¹ÍÐÙ…°Q%=9}5UQ€ô€‰½´¹µåÉ„¹5UQ}Y=%ˆ(€€€€€€€½¹ÍÐÙ…°aQI}5UQ€ô€‰µÕÑ•ˆ(€€€€€€€™Õ¸¹½Ñ¥™åMÉ••¹AÉ½©•Ñ¥½¹A•Éµ¥ÍÍ¥½¹I•ÍÕ±Ð¡É…¹Ñ•è	½½±•…¸¤ì(€€€€€€€€€€€¥˜€ …É…¹Ñ•¤¥¹ÍÑ…¹”ü¹µ…¥¹!…¹‘±•Èü¹Á½ÍÐì(€€€€€€€€€€€€€€€¥¹ÍÑ…¹”ü¹Ù½¥•1½œ ‰½¹Ñ¥¹Õ½ÕÍ}ÍÉ••¹}Á•Éµ¥ÍÍ¥½¹}‘•¹¥•ˆ¤(€€€€€€€€€€€€€€€¥¹ÍÑ…¹”ü¹ÅÕ•Õ•1½…±MÁ••  ‰MÉ••¸Í¡…É¥¹œÁ•Éµ¥ÍÍ¥½¸…±±½Ü¹…¡¤¡Õ¤¸ˆ°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ô™…±Í”¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°!991}%€ô€‰µåÉ…}Ù½¥”ˆ(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°9=Q%%Q%=9}%€ô€ÄÀÀÄ(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°55=Ie}=559}AUM}5L€ô€ÐÔÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°1Q}1I%%Q%=9}Q%5=UQ}5L€ô€ÌÁ|ÀÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°AIM=91}55=Ie}AUM}5L€ô€ÐÔÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°AIM=91}55=Ie}=9%I5Q%=9}5L€ô€ÌÁ|ÀÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°1=1}MA!}U%=}I%9}5L€ô€àÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°MI9}EUIe}%9=MQ%}Q%5=UQ}5L€ô€á|ÀÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°MM%	%1%Qe}Y%MU1}!}5a}}5L€ô€äÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°5a}I%9}!IM}AI}MI8€ô€Å|ÈÀÀ(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°I1Q%=9M!%A}=9QaQ}5L€ô€ÐÕ|ÀÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°5a}I1Q%=9M!%A}=9QaQ}QUI9L€ô€Ì(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°	MQ}I%9}=IIQ%=9}=9QaQ}5L€ô€ÐÕ|ÀÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°%IMQ}%1}9U}5L€ô€È€¨€ØÀ€¨€ÄÀÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°M=9}%1}9U}5L€ô€Ô€¨€ØÀ€¨€ÄÀÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°%1}I!-}5L€ô€ÌÀ€¨€ÄÀÀÁ0(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°5a}%1}9UL€ô€È(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°Y=%}U%=}	U}1=%9€ôÑÉÕ”(€€€€€€€ÁÉ¥Ù…Ñ”½¹ÍÐÙ…°Y=%}U%=}1=}Q€ô€‰1åÉ…Y½¥•A¥Á•±¥¹”ˆ(€€€€€€€Y½±…Ñ¥±”Ù…È¥ÍIÕ¹¹¥¹œ€ô™…±Í”(€€€€€€€Y½±…Ñ¥±”Ù…È¥Í9…ÑÕÉ…±Y½¥•I•…‘ä€ô™…±Í”(€€€€€€€Y½±…Ñ¥±”Ù…È±¥ÍÑ•¹•Èè1¥ÍÑ•¹•Èü€ô¹Õ±°(€€€€€€€Y½±…Ñ¥±”ÁÉ¥Ù…Ñ”Ù…ÈÕ¥Y¥Í¥‰±”€ô™…±Í”(€€€€€€€Y½±…Ñ¥±”ÁÉ¥Ù…Ñ”Ù…È¥¹ÍÑ…¹”è5åÉ…Y½¥•M•ÉÙ¥”ü€ô¹Õ±°(€€€€€€€™Õ¸Í•¹‘Q•áÐ¡Ñ•áÐèMÑÉ¥¹œ¤ì(€€€€€€€€€€€¥¹ÍÑ…¹”ü¹±•Ðì(€€€€€€€€€€€€€€€¥Ð¹µ…É­UÍ•É%¹Ñ•É…Ñ¥½¸ ¤(€€€€€€€€€€€€€€€¥Ð¹±…ÍÑUÍ•É%¹Ñ•¹ÑQ•áÐ€ôÑ•áÐ¹ÑÉ¥´ ¤(€€€€€€€€€€€€€€€Ù…°É•…‘¥¹œ€ôI•…‘¥¹%¹Ñ•¹ÑA…ÉÍ•È¹Á…ÉÍ”¡Ñ•áÐ¤(€€€€€€€€€€€€€€€Ù…°ÑåÁ•‘QÕÉ¹%€ô€¬­¥Ð¹ÑÕÉ¹M•ÅÕ•¹”(€€€€€€€€€€€€€€€Ù…°ÍÉ••¹%¹Ñ•¹Ð€ôMÉ••¹Y¥Í¥½¹%¹Ñ•¹ÑA…ÉÍ•È¹Á…ÉÍ”¡Ñ•áÐ¤(€€€€€€€€€€€€€€€¥˜€¡É•…‘¥¹œ€„ô¹Õ±°€˜˜¥Ð¹¡…¹‘±•I•…‘¥¹½µµ…¹¡É•…‘¥¹œ°ÑåÁ•‘QÕÉ¹%¤¤ì(€€€€€€€€€€€€€€€€€€€U¹¥Ð(€€€€€€€€€€€€€€€ô•±Í”¥˜€¡ÍÉ••¹%¹Ñ•¹Ð€„ô¹Õ±°¤ì(€€€€€€€€€€€€€€€€€€€¥Ð¹‰•¥¹É•Í¡MÉ••¹EÕ•Éä¡Ñ•áÐ°ÑåÁ•‘QÕÉ¹%¤(€€€€€€€€€€€€€€€ô•±Í”¥˜€ …¥Ð¹¡…¹‘±•áÁ±¥¥Ñ5•µ½ÉåQ•áÐ¡Ñ•áÐ¤¤ì(€€€€€€€€€€€€€€€€€€€¥Ð¹±¥Ù”ü¹Í•¹‘Q•áÐ¡Ñ•áÐ¤(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€U¹¥Ð(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€™Õ¸Í•¹‘%µ…”¡¥µ…”è	åÑ•ÉÉ…ä°µ¥µ•QåÁ”èMÑÉ¥¹œ°ÁÉ½µÁÐèMÑÉ¥¹œ¤ì¥¹ÍÑ…¹”ü¹±¥Ù”ü¹Í•¹‘%µ…”¡¥µ…”°µ¥µ•QåÁ”°ÁÉ½µÁÐ¤ô(€€€€€€€™Õ¸•á•ÕÑ•1½…±Q•áÐ¡Ñ•áÐèMÑÉ¥¹œ¤è	½½±•…¸€ô¥¹ÍÑ…¹”ü¹•á•ÕÑ•QåÁ•‘1½…±½µµ…¹¡Ñ•áÐ¤€ôôÑÉÕ”(€€€€€€€™Õ¸ÍÑ…ÉÑ••ÁI•Í•…É ¡ÅÕ•ÉäèMÑÉ¥¹œü¤ì¥¹ÍÑ…¹”ü¹•á•ÕÑ•½µµ…¹¡ÁÁ½µµ…¹¹••ÁI•Í•…É ¡ÅÕ•Éä¤¤ô(€€€€€€€™Õ¸…¹¹½Õ¹•]¡…ÑÍÁÀ¡Í•¹‘•ÈèMÑÉ¥¹œ°µ•ÍÍ…”èMÑÉ¥¹œü¤ì¥¹ÍÑ…¹”ü¹ÍÁ•…­]¡…ÑÍÁÁ¹¹½Õ¹•µ•¹Ð¡Í•¹‘•È°µ•ÍÍ…”¤ô(€€€€€€€™Õ¸ÍÁ•…­1½…°¡µ•ÍÍ…”èMÑÉ¥¹œ¤ì(€€€€€€€€€€€¥˜€ …¥Í9…ÑÕÉ…±Y½¥•I•…‘ä¤É•ÑÕÉ¸(€€€€€€€€€€€¥¹ÍÑ…¹”ü¹±•ÐìÍ•ÉÙ¥”€´ø(€€€€€€€€€€€€€€€Í•ÉÙ¥”¹µ…É­UÍ•É%¹Ñ•É…Ñ¥½¸ ¤(€€€€€€€€€€€€€€€Í•ÉÙ¥”¹µ•‘¥…Õ…É¹‰•¥¹ÍÍ¥ÍÑ…¹ÑQÕÉ¸ ¤(€€€€€€€€€€€€€€€Í•ÉÙ¥”¹ÅÕ•Õ•1½…±MÁ•• ¡µ•ÍÍ…”°…±±½ÝU¹ÑÉ…¹ÍÉ¥‰•‘Õ‘¥¼€ôÑÉÕ”¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€™Õ¸Í•ÑU¥Y¥Í¥‰±”¡Ù¥Í¥‰±”è	½½±•…¸¤ì(€€€€€€€€€€€Õ¥Y¥Í¥‰±”€ôÙ¥Í¥‰±”(€€€€€€€€€€€¥¹ÍÑ…¹”ü¹±•ÐìÍ•ÉÙ¥”€´ø(€€€€€€€€€€€€€€€Í•ÉÙ¥”¹Ù½¥•1½œ ‰Õ¥}Ù¥Í¥‰¥±¥ÑäÙ¥Í¥‰±”ô‘Ù¥Í¥‰±”ˆ¤(€€€€€€€€€€€€€€€Í•ÉÙ¥”¹µ…¥¹!…¹‘±•È¹É•µ½Ù•…±±‰…­Ì¡Í•ÉÙ¥”¹¥‘±•9Õ‘•IÕ¹¹…‰±”¤(€€€€€€€€€€€€€€€¥˜€¡Ù¥Í¥‰±”¤Í•ÉÙ¥”¹µ…É­UÍ•É%¹Ñ•É…Ñ¥½¸ ¤(€€€€€€€€€€€ô(€€€€€€€ô(€€€€€€€™Õ¸¥¹Ñ•ÉÉÕÁÐ ¤ì¥¹ÍÑ…¹”ü¹…Õ‘¥¼ü¹¥¹Ñ•ÉÉÕÁÐ ¤ì¥¹ÍÑ…¹”ü¹±¥Ù”ü¹¥¹Ñ•ÉÉÕÁÐ ¤ô(€€€ô)ô(

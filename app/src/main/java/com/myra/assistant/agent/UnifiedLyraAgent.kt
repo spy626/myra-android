@@ -10,15 +10,53 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
     fun currentTask(): AgentTask? = active
 
     /** First and authoritative owner of every completed user turn. */
-    @Synchronized fun acceptTurn(request: String, context: CurrentActivityContext?, visualAllowed: Boolean): AgentTurnDecision {
+    @Synchronized fun acceptTurn(request: String, context: CurrentActivityContext?, visualAllowed: Boolean, turnId: Long = 0L): AgentTurnDecision {
         val working = WorkingTaskRuntime.store.snapshot()
         val decision = UnifiedTurnInterpreter.interpret(request, working)
         val scene = context?.let { ScreenSceneFactory.from(it, working.activeExternalApp) }
         val task = if (decision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
             createTask(request, context, visualAllowed, decision)
-        } else active
+        } else if (decision.intent in setOf(TurnIntent.FOLLOW_UP, TurnIntent.CORRECTION, TurnIntent.CLARIFICATION)) {
+            active
+        } else {
+            active = active?.copy(state = AgentTaskState.CANCELLED)
+            active = null
+            null
+        }
         WorkingTaskRuntime.store.onTurn(decision, task, scene)
+        val structured = toStructuredIntent(request, decision, task)
+        if (decision.authorizesPhoneActions) {
+            GeneralAgentRuntimeStore.runtime.start(turnId, structured)
+        } else if (decision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION, TurnIntent.CANCEL)) {
+            GeneralAgentRuntimeStore.runtime.cancel()
+        }
         return decision
+    }
+
+    fun toStructuredIntent(request: String, decision: AgentTurnDecision, task: AgentTask? = null): StructuredAgentIntent {
+        val goal = task?.interpretedGoal ?: understandGoal(request, decision)
+        val capabilities = when (goal) {
+            AgentGoalType.TAP -> setOf(ToolCapability.FIND_ELEMENT, ToolCapability.ACCESSIBILITY_CLICK)
+            AgentGoalType.SCROLL -> setOf(ToolCapability.ACCESSIBILITY_SCROLL)
+            AgentGoalType.TYPE -> setOf(ToolCapability.FIND_ELEMENT, ToolCapability.ACCESSIBILITY_TYPE)
+            AgentGoalType.SEND -> setOf(ToolCapability.FIND_ELEMENT, ToolCapability.ACCESSIBILITY_CLICK)
+            AgentGoalType.OPEN_APP -> setOf(ToolCapability.OPEN_APP)
+            AgentGoalType.NAVIGATE -> setOf(ToolCapability.BACK)
+            AgentGoalType.BROWSER_SEARCH -> setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN, ToolCapability.VERIFY_SCREEN)
+            AgentGoalType.WEB_SEARCH -> setOf(ToolCapability.WEB_SEARCH, ToolCapability.OBSERVE_SCREEN, ToolCapability.VERIFY_SCREEN)
+            AgentGoalType.ANSWER_SCREEN -> setOf(ToolCapability.OBSERVE_SCREEN)
+            AgentGoalType.UNKNOWN -> emptySet()
+        }
+        return StructuredAgentIntent(
+            turnIntent = decision.intent,
+            originalUtterance = request,
+            interpretedGoal = decision.goal,
+            requiresAction = decision.authorizesPhoneActions,
+            targetDescription = request.takeIf { decision.authorizesPhoneActions },
+            requiredCapabilities = capabilities,
+            confidence = decision.confidence,
+            needsClarification = decision.intent == TurnIntent.CLARIFICATION
+        )
     }
 
     @Synchronized fun createTask(
@@ -104,7 +142,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
     private fun understandGoal(raw: String, decision: AgentTurnDecision? = null): AgentGoalType {
         val text = normalize(raw)
         return when {
-            decision?.intent == TurnIntent.MULTI_STEP_GOAL && Regex("\\b(?:google|browser|chrome)\\b").containsMatchIn(text) -> AgentGoalType.BROWSER_SEARCH
+            decision?.intent == TurnIntent.MULTI_STEP_GOAL && BrowserSearchRequestParser.parse(raw) != null -> AgentGoalType.BROWSER_SEARCH
             decision?.intent == TurnIntent.MULTI_STEP_GOAL -> AgentGoalType.WEB_SEARCH
             Regex("\\b(?:scroll|niche|neeche|upar)\\b").containsMatchIn(text) -> AgentGoalType.SCROLL
             Regex("\\b(?:type|likho|write)\\b").containsMatchIn(text) -> AgentGoalType.TYPE

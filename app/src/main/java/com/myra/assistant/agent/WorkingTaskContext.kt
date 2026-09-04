@@ -5,8 +5,14 @@ data class WorkingTaskContext(
     val conversationTopic: String? = null,
     val currentGoal: String? = null,
     val activeExternalApp: String? = null,
+    val expectedApp: String? = null,
+    val screenType: String? = null,
     val screenGeneration: Long = 0,
+    val windowGeneration: Long = 0,
+    val currentStep: String? = null,
+    val planRevision: Int = 0,
     val lastRequestedAction: String? = null,
+    val previousActionTarget: String? = null,
     val expectedOutcome: String? = null,
     val lastObservedOutcome: String? = null,
     val lastVerifiedSuccess: Boolean? = null,
@@ -14,6 +20,9 @@ data class WorkingTaskContext(
     val unresolvedReference: String? = null,
     val rejectedTargets: Set<String> = emptySet(),
     val recoveryCount: Int = 0,
+    val currentModal: ModalKind = ModalKind.NONE,
+    val taskStatus: AgentRuntimeStatus? = null,
+    val contextGeneration: Long = 0,
     val searchQuery: String? = null,
     val resolvedDestination: SearchDestination? = null,
     val selectedExecutor: String? = null,
@@ -46,13 +55,29 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
             WorkingTaskContext(
                 taskId = task?.id, currentGoal = decision.goal,
                 activeExternalApp = scene?.externalForegroundPackage ?: scene?.packageName,
+                expectedApp = task?.expectedApp,
+                screenType = scene?.screenType,
                 screenGeneration = scene?.generation ?: 0,
+                windowGeneration = scene?.windowId?.toLong() ?: 0,
                 lastRequestedAction = decision.goal,
                 expectedOutcome = task?.expectedResult,
+                currentModal = scene?.modal ?: ModalKind.NONE,
+                taskStatus = AgentRuntimeStatus.UNDERSTANDING,
+                contextGeneration = value.contextGeneration + 1,
                 lastCompletedTask = value.lastCompletedTask,
                 updatedAt = now()
             )
-        } else value.copy(conversationTopic = decision.goal.takeIf { decision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION) }, updatedAt = now())
+        } else if (decision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION)) {
+            WorkingTaskContext(
+                conversationTopic = decision.goal,
+                activeExternalApp = scene?.externalForegroundPackage ?: value.activeExternalApp,
+                screenGeneration = scene?.generation ?: value.screenGeneration,
+                windowGeneration = scene?.windowId?.toLong() ?: value.windowGeneration,
+                lastCompletedTask = value.lastCompletedTask,
+                contextGeneration = value.contextGeneration + 1,
+                updatedAt = now()
+            )
+        } else value.copy(updatedAt = now())
         return value
     }
 
@@ -84,7 +109,9 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
             conversationTopic = value.conversationTopic,
             activeExternalApp = value.activeExternalApp,
             screenGeneration = value.screenGeneration,
+            windowGeneration = value.windowGeneration,
             lastCompletedTask = completed,
+            contextGeneration = value.contextGeneration + 1,
             updatedAt = completedAt
         )
         return completed
@@ -100,6 +127,7 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
                 conversationTopic = value.conversationTopic,
                 activeExternalApp = packageName,
                 screenGeneration = generation,
+                contextGeneration = value.contextGeneration + 1,
                 lastCompletedTask = value.lastCompletedTask,
                 updatedAt = now()
             )
@@ -111,7 +139,9 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
             conversationTopic = value.conversationTopic,
             activeExternalApp = value.activeExternalApp,
             screenGeneration = value.screenGeneration,
+            windowGeneration = value.windowGeneration,
             lastCompletedTask = value.lastCompletedTask,
+            contextGeneration = value.contextGeneration + 1,
             updatedAt = now()
         )
     }
