@@ -1,5 +1,7 @@
 package com.myra.assistant.screen
 
+import com.myra.assistant.agent.TurnIntent
+import com.myra.assistant.agent.UnifiedTurnInterpreter
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -11,6 +13,8 @@ class FastVisualTurnTest {
         assertEquals(FastVisualKind.QUESTION, FastVisualRequestClassifier.classify("स्क्रीन पर क्या दिख रहा है?")?.kind)
         // Real-phone ASR variant from the supplied diagnostic log.
         assertEquals(FastVisualKind.QUESTION, FastVisualRequestClassifier.classify("Admi kya bikra?")?.kind)
+        assertEquals(TurnIntent.SCREEN_QUESTION, UnifiedTurnInterpreter.interpret("Abhi kya dikh raha hai?", null).intent)
+        assertEquals(TurnIntent.SCREEN_QUESTION, UnifiedTurnInterpreter.interpret("What do you see?", null).intent)
     }
 
     @Test fun naturalVisualActionsDoNotNeedExactSentenceParser() {
@@ -34,6 +38,10 @@ class FastVisualTurnTest {
         val frame = AccessibilityScreenshot(byteArrayOf(1, 2), 10, 20, 1_000, "pkg", 4, 5)
         AccessibilityVisualCache.put(frame, "same")
         assertSame(frame, AccessibilityVisualCache.fresh("pkg", 4, 5, "same", 1_500, 900))
+        assertEquals(
+            VisualFrameSource.ACCESSIBILITY_CACHE,
+            AccessibilityVisualCache.selectFresh("pkg", 4, 5, "same", 1_500, 900)?.source
+        )
         assertNull(AccessibilityVisualCache.fresh("pkg", 4, 5, "changed", 1_500, 900))
         assertNull(AccessibilityVisualCache.fresh("other", 4, 5, "same", 1_500, 900))
         assertNull(AccessibilityVisualCache.fresh("pkg", 4, 5, "same", 2_000, 900))

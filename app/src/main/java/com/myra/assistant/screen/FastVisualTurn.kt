@@ -62,6 +62,9 @@ data class FastVisualTurn(
     val generation: Long,
     val speechEndedAt: Long,
     val startedAt: Long,
+    var authoritativeTurnCompleteAt: Long = 0,
+    var finalTranscriptAt: Long = 0,
+    var intentResolvedAt: Long = 0,
     var frameRequestedAt: Long = 0,
     var frameReadyAt: Long = 0,
     var modelRequestAt: Long = 0,
@@ -69,7 +72,9 @@ data class FastVisualTurn(
     var actionResolvedAt: Long = 0,
     var actionExecutedAt: Long = 0,
     var verificationAt: Long = 0,
-    var firstAudioAt: Long = 0
+    var firstAudioAt: Long = 0,
+    var replyQueuedAt: Long = 0,
+    var firstPlaybackAt: Long = 0
 )
 
 class FastVisualTurnCoordinator {

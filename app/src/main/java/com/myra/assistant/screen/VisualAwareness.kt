@@ -34,6 +34,13 @@ data class AccessibilityScreenshot(
     val generation: Long
 )
 
+enum class VisualFrameSource { ACCESSIBILITY_CACHE, ACCESSIBILITY_FRESH }
+
+data class VisualScreenshotSelection(
+    val screenshot: AccessibilityScreenshot,
+    val source: VisualFrameSource
+)
+
 /** In-memory only. Raw screenshots never enter Room or long-term memory. */
 object AccessibilityVisualCache {
     private data class Entry(
@@ -63,6 +70,17 @@ object AccessibilityVisualCache {
                 (now - it.capturedAt).coerceAtLeast(0L) <= maxAgeMs
         }
     }
+
+    fun selectFresh(
+        packageName: String,
+        windowId: Int,
+        generation: Long,
+        semanticSignature: String,
+        now: Long,
+        maxAgeMs: Long
+    ): VisualScreenshotSelection? = fresh(
+        packageName, windowId, generation, semanticSignature, now, maxAgeMs
+    )?.let { VisualScreenshotSelection(it, VisualFrameSource.ACCESSIBILITY_CACHE) }
 
     @Synchronized fun invalidate() { entry = null }
 }

@@ -49,6 +49,8 @@ import com.myra.assistant.screen.VisualAwarenessPreferences
 import com.myra.assistant.screen.VisualObservationPolicy
 import com.myra.assistant.screen.AccessibilityScreenshot
 import com.myra.assistant.screen.AccessibilityVisualCache
+import com.myra.assistant.screen.VisualFrameSource
+import com.myra.assistant.screen.VisualScreenshotSelection
 import com.myra.assistant.agent.ActivityContextStore
 import com.myra.assistant.agent.ActivityObservationCoalescer
 import com.myra.assistant.agent.CurrentActivityContext
@@ -294,16 +296,18 @@ class AccessibilityHelperService : AccessibilityService() {
     }
 
     /** Select exactly one context-bound screenshot for a visual turn. */
-    fun requestFreshVisualScreenshot(maxAgeMs: Long, callback: (Result<AccessibilityScreenshot>) -> Unit): Boolean {
+    fun requestFreshVisualScreenshot(maxAgeMs: Long, callback: (Result<VisualScreenshotSelection>) -> Unit): Boolean {
         val current = currentForegroundContext() ?: return false
-        AccessibilityVisualCache.fresh(
+        AccessibilityVisualCache.selectFresh(
             current.packageName, current.windowId, current.generation, visibleScreenSignature(),
             android.os.SystemClock.elapsedRealtime(), maxAgeMs
         )?.let {
             callback(Result.success(it))
             return true
         }
-        return requestVisualScreenshot(callback)
+        return requestVisualScreenshot { result ->
+            callback(result.map { VisualScreenshotSelection(it, VisualFrameSource.ACCESSIBILITY_FRESH) })
+        }
     }
 
     fun openYouTubeShorts(): Boolean = clickNavigationTarget(

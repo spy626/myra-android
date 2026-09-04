@@ -16,6 +16,20 @@ class SearchDestinationResolverTest {
             SearchDestinationResolver.resolve(request, "com.google.android.googlequicksearchbox", null)
         )
         assertFalse(CommandParser.parse("search karo new AI") is AppCommand.SearchYouTube)
+        val resolution = SearchDestinationResolver.resolveDetailed(request, "com.android.chrome", null)
+        assertEquals(BrowserSearchExecutor.CURRENT_BROWSER, resolution.selectedExecutor)
+        assertEquals("com.android.chrome", resolution.targetPackage)
+    }
+
+    @Test fun google_foreground_generic_search_stays_in_current_google_search_environment() {
+        val request = BrowserSearchRequestParser.parse("Search karo new AI")!!
+        val resolution = SearchDestinationResolver.resolveDetailed(
+            request, "com.google.android.googlequicksearchbox", "com.google.android.youtube"
+        )
+        assertEquals(SearchDestination.BROWSER, resolution.destination)
+        assertEquals(BrowserSearchExecutor.CURRENT_GOOGLE_APP, resolution.selectedExecutor)
+        assertEquals("com.google.android.googlequicksearchbox", resolution.targetPackage)
+        assertEquals("current_google_search_context", resolution.reason)
     }
 
     @Test fun explicit_youtube_destination_is_allowed() {

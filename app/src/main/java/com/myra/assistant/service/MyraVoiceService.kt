@@ -256,6 +256,7 @@ class MyraVoiceService : Service() {
     private var inputTurnStartedAt = 0L
     private var latestTurnAcceptedAt = 0L
     private var latestIntentDecidedAt = 0L
+    private var latestIntentTimingTurnId = 0L
     private var latestActionDispatchedAt = 0L
     private var latestObservedModelGenerationId = 0L
     private var earlyModelAudioGenerationId = 0L
@@ -478,10 +479,13 @@ class MyraVoiceService : Service() {
                             fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId }?.let {
                                 it.firstModelResponseAt = audioReceivedAt
                                 it.firstAudioAt = audioReceivedAt
+                                it.replyQueuedAt = audioReceivedAt
                                 voiceLog(
                                     "visual_model_first_response visualTurnId=${it.id} source=AUDIO " +
                                         "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L) audioReceivedAt - it.modelRequestAt else -1L}"
                                 )
+                                voiceLog("visualModelFirstStructuredResult visualTurnId=${it.id} source=AUDIO at=$audioReceivedAt")
+                                voiceLog("replyQueued visualTurnId=${it.id} at=$audioReceivedAt owner=CONTROLLED_SCREEN")
                                 voiceLog(
                                     "visual_reply_audio_started visualTurnId=${it.id} " +
                                         "speechEndToFirstAudioMs=${if (it.speechEndedAt > 0L) audioReceivedAt - it.speechEndedAt else -1L}"
@@ -874,10 +878,13 @@ class MyraVoiceService : Service() {
                             val now = android.os.SystemClock.elapsedRealtime()
                             fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId }?.let {
                                 it.firstModelResponseAt = now
+                                it.replyQueuedAt = now
                                 voiceLog(
                                     "visual_model_first_response visualTurnId=${it.id} source=TEXT " +
                                         "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L) now - it.modelRequestAt else -1L}"
                                 )
+                                voiceLog("visualModelFirstStructuredResult visualTurnId=${it.id} source=TEXT at=$now")
+                                voiceLog("replyQueued visualTurnId=${it.id} at=$now owner=CONTROLLED_SCREEN")
                             }
                         }
                         screenResponseHasContent = true
@@ -932,6 +939,10 @@ class MyraVoiceService : Service() {
                     val current = isScreenResponseContextCurrent()
                     val text = output.toString().trim()
                     if (current && text.isNotBlank() && !screenResponseTextCommitted) {
+                        fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId && it.replyQueuedAt == 0L }?.apply {
+                            replyQueuedAt = android.os.SystemClock.elapsedRealtime()
+                            voiceLog("replyQueued visualTurnId=$id at=$replyQueuedAt")
+                        }
                         listener?.onMyraText(romanDisplayText(text))
                         com.myra.assistant.screen.ScreenContextStore.onAnalysis(
                             text, android.os.SystemClock.elapsedRealtime()
@@ -1115,11 +1126,20 @@ class MyraVoiceService : Service() {
                 }
                 val activityContext = ActivityContextStore.snapshot()
                 latestTurnAcceptedAt = android.os.SystemClock.elapsedRealtime()
+                latestIntentTimingTurnId = activeTurnId
+                voiceLog(
+                    "finalTranscriptReady turnId=$activeTurnId at=$latestTurnAcceptedAt " +
+                        "authoritativeTurnToTranscriptMs=${if (speechActivityEndedAt > 0L) latestTurnAcceptedAt - speechActivityEndedAt else -1L}"
+                )
                 latestActionDispatchedAt = 0L
                 val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
                     userText, activityContext, visualAwarenessPreferences.enabled
                 )
                 latestIntentDecidedAt = android.os.SystemClock.elapsedRealtime()
+                voiceLog(
+                    "turnIntentResolved turnId=$activeTurnId intent=${turnDecision.intent} at=$latestIntentDecidedAt " +
+                        "transcriptToIntentMs=${latestIntentDecidedAt - latestTurnAcceptedAt}"
+                )
                 val unifiedTask = UnifiedLyraAgentRuntime.agent.currentTask()
                 voiceLog(
                     "agent_turn_owned turnId=$activeTurnId intent=${turnDecision.intent} " +
@@ -1533,6 +1553,12 @@ class MyraVoiceService : Service() {
                         "generationComplete=$localSpeechGenerationComplete"
                 )
                 localAudioSpeaking = speaking
+                if (speaking && screenResponseActive) {
+                    fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId && it.firstPlaybackAt == 0L }?.apply {
+                        firstPlaybackAt = android.os.SystemClock.elapsedRealtime()
+                        voiceLog("firstPlayback visualTurnId=$id at=$firstPlaybackAt speechEndToFirstPlaybackMs=${if (speechEndedAt > 0L) firstPlaybackAt - speechEndedAt else -1L}")
+                    }
+                }
                 listener?.onSpeaking(speaking)
                 updateNotification(if (speaking) "LYRA is speaking" else "LYRA is listening")
                 if (!speaking && localPlaybackActive && localSpeechGenerationComplete) {
@@ -1969,10 +1995,19 @@ class MyraVoiceService : Service() {
             fastVisualTurns.begin(userTurnId, visualRequest, it.packageName, it.windowId, it.generation,
                 screenResponseSpeechEndedAt, screenQuestionDetectedAt)
         }
+        visualTurn?.apply {
+            authoritativeTurnCompleteAt = screenResponseSpeechEndedAt
+            finalTranscriptAt = latestTurnAcceptedAt.takeIf { latestIntentTimingTurnId == userTurnId } ?: 0L
+            intentResolvedAt = latestIntentDecidedAt.takeIf { latestIntentTimingTurnId == userTurnId } ?: screenQuestionDetectedAt
+        }
         voiceLog(
             "visual_turn_started visualTurnId=${visualTurn?.id.orEmpty()} userTurnId=$userTurnId " +
                 "kind=${visualRequest.kind} package=${foreground?.packageName.orEmpty()} " +
                 "windowId=${foreground?.windowId ?: -1} generation=${foreground?.generation ?: -1}"
+        )
+        voiceLog(
+            "visualTurnAccepted visualTurnId=${visualTurn?.id.orEmpty()} at=$screenQuestionDetectedAt " +
+                "intentToVisualTurnMs=${if (latestIntentDecidedAt > 0L) screenQuestionDetectedAt - latestIntentDecidedAt else -1L}"
         )
         // Preserve an active media-speech candidate when LYRA is already silent;
         // interrupt/reset is only needed for a genuine barge-in on LYRA playback.
@@ -2133,15 +2168,16 @@ class MyraVoiceService : Service() {
         val requestedAt = android.os.SystemClock.elapsedRealtime()
         val queryId = "a11y-$userTurnId-${requestedAt.toString(16)}"
         fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.frameRequestedAt = requestedAt
-        voiceLog("visual_frame_requested visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId")
+        voiceLog("visualFrameRequested visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId at=$requestedAt")
         val accepted = accessibility.requestFreshVisualScreenshot(ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS) { result ->
             mainHandler.post {
-                val screenshot = result.getOrNull()
-                if (screenshot == null) {
+                val selection = result.getOrNull()
+                if (selection == null) {
                     voiceLog("agent_observation package=${foreground.packageName} screenshotUsed=false reason=accessibility_screenshot_failed")
                     speakScreenUnavailable("Current screen image nahi mili.")
                     return@post
                 }
+                val screenshot = selection.screenshot
                 val current = accessibility.currentForegroundContext()
                 if (current == null || current.packageName != screenshot.packageName ||
                     current.windowId != screenshot.windowId || current.generation != screenshot.generation
@@ -2153,8 +2189,14 @@ class MyraVoiceService : Service() {
                 fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.frameReadyAt = frameReadyAt
                 voiceLog(
                     "visual_frame_ready visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId " +
+                        "visualFrameSource=${selection.source} selectionReason=${if (selection.source == com.myra.assistant.screen.VisualFrameSource.ACCESSIBILITY_CACHE) "fresh_matching_cache" else "cache_stale_or_changed"} " +
                         "frameAgeMs=${(frameReadyAt - screenshot.capturedAt).coerceAtLeast(0L)} " +
+                        "visualFrameAcquisitionMs=${(frameReadyAt - requestedAt).coerceAtLeast(0L)} " +
                         "speechEndToFrameReadyMs=${if (screenResponseSpeechEndedAt > 0L) frameReadyAt - screenResponseSpeechEndedAt else -1L}"
+                )
+                voiceLog(
+                    "visualFrameAvailable visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId " +
+                        "at=$frameReadyAt visualFrameSource=${selection.source}"
                 )
                 val elements = accessibility.visibleElements(100)
                 val privacyResult = ScreenFramePrivacyFilter.apply(
@@ -2199,6 +2241,8 @@ class MyraVoiceService : Service() {
                     "visual_model_request_sent visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId " +
                         "frameReadyToModelRequestMs=${(screenFrameSentAt - frameReadyAt).coerceAtLeast(0L)}"
                 )
+                voiceLog("visualModelRequestSent visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId at=$screenFrameSentAt")
+                voiceLog("ttsRequestSent visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} screenQueryId=$queryId at=$screenFrameSentAt owner=CONTROLLED_SCREEN")
                 val visualInstruction = if (visualRequest.kind == FastVisualKind.ACTION) {
                     "This is a visual action. Identify exactly one safe current-screen target. " +
                         "Call perform_screen_action with its semantic label or position. Do not answer conversationally or claim success."
@@ -2334,12 +2378,20 @@ class MyraVoiceService : Service() {
             val now = android.os.SystemClock.elapsedRealtime()
             voiceLog(
                 "TOTAL_VISUAL_TURN visualTurnId=${it.id} reason=$reason " +
+                    "speechEndToAuthoritativeTurnMs=${if (it.speechEndedAt > 0L && it.authoritativeTurnCompleteAt > 0L) it.authoritativeTurnCompleteAt - it.speechEndedAt else -1L} " +
+                    "authoritativeTurnToTranscriptMs=${if (it.authoritativeTurnCompleteAt > 0L && it.finalTranscriptAt > 0L) it.finalTranscriptAt - it.authoritativeTurnCompleteAt else -1L} " +
+                    "transcriptToIntentMs=${if (it.finalTranscriptAt > 0L && it.intentResolvedAt > 0L) it.intentResolvedAt - it.finalTranscriptAt else -1L} " +
+                    "intentToVisualFrameMs=${if (it.intentResolvedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.intentResolvedAt else -1L} " +
+                    "visualFrameAcquisitionMs=${if (it.frameRequestedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.frameRequestedAt else -1L} " +
                     "speechEndToFrameReadyMs=${if (it.speechEndedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.speechEndedAt else -1L} " +
                     "frameReadyToModelRequestMs=${if (it.frameReadyAt > 0L && it.modelRequestAt > 0L) it.modelRequestAt - it.frameReadyAt else -1L} " +
                     "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L && it.firstModelResponseAt > 0L) it.firstModelResponseAt - it.modelRequestAt else -1L} " +
                     "responseToActionMs=${if (it.firstModelResponseAt > 0L && it.actionExecutedAt > 0L) it.actionExecutedAt - it.firstModelResponseAt else -1L} " +
                     "speechEndToActionMs=${if (it.speechEndedAt > 0L && it.actionExecutedAt > 0L) it.actionExecutedAt - it.speechEndedAt else -1L} " +
                     "speechEndToFirstAudioMs=${if (it.speechEndedAt > 0L && it.firstAudioAt > 0L) it.firstAudioAt - it.speechEndedAt else -1L} " +
+                    "visualResultToReplyQueuedMs=${if (it.firstModelResponseAt > 0L && it.replyQueuedAt > 0L) it.replyQueuedAt - it.firstModelResponseAt else -1L} " +
+                    "replyQueuedToFirstAudioMs=${if (it.replyQueuedAt > 0L && it.firstAudioAt > 0L) it.firstAudioAt - it.replyQueuedAt else -1L} " +
+                    "speechEndToFirstPlaybackMs=${if (it.speechEndedAt > 0L && it.firstPlaybackAt > 0L) it.firstPlaybackAt - it.speechEndedAt else -1L} " +
                     "totalVisualTurnMs=${now - it.startedAt}"
             )
             fastVisualTurns.finish(it.id)
@@ -3078,16 +3130,19 @@ class MyraVoiceService : Service() {
         val request = BrowserSearchRequestParser.parse(raw) ?: return false
         val accessibility = AccessibilityHelperService.instance
         val freshForeground = accessibility?.currentForegroundContext()
-        val destination = SearchDestinationResolver.resolve(
+        val working = WorkingTaskRuntime.store.snapshot()
+        val resolution = SearchDestinationResolver.resolveDetailed(
             request,
             freshForeground?.packageName,
-            WorkingTaskRuntime.store.snapshot().activeExternalApp
+            working.activeExternalApp
         )
         voiceLog(
-            "search_destination_resolved turnId=$activeTurnId destination=$destination explicit=${request.explicitDestination} " +
-                "foregroundPackage=${freshForeground?.packageName} taskPackage=${WorkingTaskRuntime.store.snapshot().activeExternalApp}"
+            "search_intent_resolved turnId=$activeTurnId queryLength=${request.query.length} " +
+                "explicitDestination=${request.explicitDestination} workingContextDestination=${working.activeExternalApp} " +
+                "foregroundPackage=${freshForeground?.packageName} resolvedDestination=${resolution.destination} " +
+                "resolutionReason=${resolution.reason} selectedExecutor=${resolution.selectedExecutor}"
         )
-        if (destination == SearchDestination.YOUTUBE) {
+        if (resolution.destination == SearchDestination.YOUTUBE) {
             executeCommand(AppCommand.SearchYouTube(request.query))
             return true
         }
@@ -3098,7 +3153,7 @@ class MyraVoiceService : Service() {
         val startedAt = android.os.SystemClock.elapsedRealtime()
         latestActionDispatchedAt = startedAt
         val taskTurnId = activeTurnId
-        val dispatch = BrowserSearchTool(this).execute(request)
+        val dispatch = BrowserSearchTool(this).execute(request, resolution)
         voiceLog(
             "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
                 "tool=browser_search accepted=${dispatch.accepted} expectedPackage=${dispatch.expectedPackage} " +
@@ -3687,6 +3742,7 @@ class MyraVoiceService : Service() {
     private fun finishOrdinarySpeechActivity() {
         if (!ordinaryModelAudioGate.isSpeechActive()) return
         speechActivityEndedAt = android.os.SystemClock.elapsedRealtime()
+        voiceLog("speechActivityEnd turnId=$speechTimingTurnId at=$speechActivityEndedAt")
         ordinaryModelAudioGate.onSpeechActivityEnded()
         voiceLog(
             "authoritative_user_turn_complete turnId=$activeTurnId modelGenerationId=$earlyModelAudioGenerationId " +
@@ -3695,6 +3751,7 @@ class MyraVoiceService : Service() {
                 "source=local_vad userSpeechActive=false earlyModelAudioBufferedCount=${earlyModelAudio.size} " +
                 "earlyModelAudioBufferedBytes=$earlyModelAudioBytes"
         )
+        voiceLog("authoritativeTurnComplete turnId=$speechTimingTurnId at=$speechActivityEndedAt speechEndToAuthoritativeTurnMs=0")
         if (earlyModelAudio.isEmpty()) return
         val generationId = earlyModelAudioGenerationId
         val chunks = earlyModelAudio.toList()

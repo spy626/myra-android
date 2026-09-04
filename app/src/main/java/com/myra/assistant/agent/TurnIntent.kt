@@ -2,6 +2,8 @@ package com.myra.assistant.agent
 
 import java.text.Normalizer
 import java.util.Locale
+import com.myra.assistant.screen.FastVisualKind
+import com.myra.assistant.screen.FastVisualRequestClassifier
 
 enum class TurnIntent {
     CONVERSATION, QUESTION, SCREEN_QUESTION, ACTION_REQUEST, MULTI_STEP_GOAL,
@@ -33,7 +35,7 @@ object UnifiedTurnInterpreter {
             return AgentTurnDecision(TurnIntent.FOLLOW_UP, text, requiresPerception = true, confidence = .94)
         }
         if (isMetaDiscussion(text)) return conversation(raw, .96)
-        if (isScreenQuestion(text)) {
+        if (FastVisualRequestClassifier.classify(raw)?.kind == FastVisualKind.QUESTION) {
             return AgentTurnDecision(TurnIntent.SCREEN_QUESTION, text, requiresPerception = true, confidence = .94)
         }
         if (isExplicitMemoryMutation(text)) {
@@ -82,12 +84,6 @@ object UnifiedTurnInterpreter {
         val requested = Regex("\\b(?:karo|kar do|please|करो|कर दो)\\b").containsMatchIn(text)
         return searchAction && requested
     }
-
-    private fun isScreenQuestion(text: String): Boolean = listOf(
-        Regex("\\b(?:what|kya|क्या).*(?:screen|dikh|दिख|see|visible|error|problem)\\b"),
-        Regex("\\b(?:screen|स्क्रीन).*(?:what|kya|क्या|dikh|दिख)\\b"),
-        Regex("^(?:ye|yeh|this|यह|ये) (?:kya|क्या) (?:hai|है)$")
-    ).any { it.containsMatchIn(text) }
 
     private fun isActionFollowUp(text: String): Boolean = listOf(
         "abhi nahi hua na", "abhi hua kya", "did it work", "did that work", "hua nahi na", "nahi hua na"

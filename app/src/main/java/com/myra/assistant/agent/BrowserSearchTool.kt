@@ -1,5 +1,6 @@
 package com.myra.assistant.agent
 
+import android.app.SearchManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -7,6 +8,15 @@ import java.net.URLEncoder
 import java.util.Locale
 
 enum class SearchDestination { YOUTUBE, BROWSER }
+
+enum class BrowserSearchExecutor { CURRENT_GOOGLE_APP, CURRENT_BROWSER, GENERIC_WEB }
+
+data class SearchResolution(
+    val destination: SearchDestination,
+    val reason: String,
+    val selectedExecutor: BrowserSearchExecutor? = null,
+    val targetPackage: String? = null
+)
 
 data class BrowserSearchRequest(
     val query: String,
@@ -25,16 +35,35 @@ object SearchDestinationResolver {
         request: BrowserSearchRequest,
         currentPackage: String?,
         activeTaskPackage: String?
-    ): SearchDestination {
-        request.explicitDestination?.let { return it }
+    ): SearchDestination = resolveDetailed(request, currentPackage, activeTaskPackage).destination
+
+    fun resolveDetailed(
+        request: BrowserSearchRequest,
+        currentPackage: String?,
+        activeTaskPackage: String?
+    ): SearchResolution {
+        request.explicitDestination?.let {
+            return SearchResolution(it, "explicit_destination")
+        }
         val currentIsAssistantTransition = currentPackage in setOf("com.myra.assistant", "com.android.systemui")
         val contextualPackage = when {
             currentPackage == null || currentIsAssistantTransition -> activeTaskPackage
             activeTaskPackage == currentPackage -> activeTaskPackage
             else -> currentPackage // Actual external foreground wins over stale task state.
         }
-        return if (contextualPackage == "com.google.android.youtube") SearchDestination.YOUTUBE
-        else SearchDestination.BROWSER
+        if (contextualPackage == "com.google.android.youtube") {
+            return SearchResolution(SearchDestination.YOUTUBE, "current_youtube_context", targetPackage = contextualPackage)
+        }
+        if (contextualPackage == "com.google.android.googlequicksearchbox") {
+            return SearchResolution(SearchDestination.BROWSER, "current_google_search_context",
+                BrowserSearchExecutor.CURRENT_GOOGLE_APP, contextualPackage)
+        }
+        if (isCompatibleBrowser(contextualPackage)) {
+            return SearchResolution(SearchDestination.BROWSER, "current_browser_context",
+                BrowserSearchExecutor.CURRENT_BROWSER, contextualPackage)
+        }
+        return SearchResolution(SearchDestination.BROWSER, "generic_web_fallback",
+            BrowserSearchExecutor.GENERIC_WEB)
     }
 
     fun isCompatibleBrowser(packageName: String?): Boolean = packageName in browserPackages
@@ -70,14 +99,18 @@ data class BrowserSearchDispatch(val accepted: Boolean, val expectedPackage: Str
 /** General browser capability. It opens a standards-based search URL; observation and result
  * interpretation remain separate plan steps owned by UnifiedLyraAgent. */
 class BrowserSearchTool(private val context: Context) {
-    fun execute(request: BrowserSearchRequest): BrowserSearchDispatch {
+    fun execute(request: BrowserSearchRequest, resolution: SearchResolution): BrowserSearchDispatch {
         val encoded = URLEncoder.encode(request.query, Charsets.UTF_8.name())
         val uri = Uri.parse("https://www.google.com/search?q=$encoded")
         val chrome = "com.android.chrome"
-        val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        )
-        val expected = if (context.packageManager.getLaunchIntentForPackage(chrome) != null) chrome else null
+        val expected = resolution.targetPackage ?: chrome.takeIf {
+            context.packageManager.getLaunchIntentForPackage(it) != null
+        }
+        val intent = if (resolution.selectedExecutor == BrowserSearchExecutor.CURRENT_GOOGLE_APP) {
+            Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, request.query)
+        } else {
+            Intent(Intent.ACTION_VIEW, uri)
+        }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         if (expected != null) intent.setPackage(expected)
         return try {
             context.startActivity(intent)
