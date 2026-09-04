@@ -63,6 +63,21 @@ class FastVisualTurnTest {
         assertFalse(gate.tryComplete("turn-a", 2_201))
     }
 
+    @Test fun successfulPlatformCallbackDoesNotCompleteOuterDeadlineBeforeFrameDelivery() {
+        val gate = VisualAcquisitionGate("turn-a", requestedAt = 1_000, deadlineAt = 2_200)
+        assertTrue(gate.onPlatformCallback("turn-a", 1_080))
+        assertFalse(gate.isComplete())
+        assertTrue(gate.tryTimeout(2_200))
+        assertFalse(gate.tryComplete("turn-a", 2_201))
+    }
+
+    @Test fun usableFrameDeliveryCompletesAndCancelsTimeoutOwnership() {
+        val gate = VisualAcquisitionGate("turn-a", requestedAt = 1_000, deadlineAt = 2_200)
+        assertTrue(gate.onPlatformCallback("turn-a", 1_080))
+        assertTrue(gate.tryComplete("turn-a", 1_160))
+        assertFalse(gate.tryTimeout(2_200))
+    }
+
     @Test fun replacedVisualTurnCannotInvokeQueuedCapture() {
         val gate = VisualAcquisitionGate("turn-a", requestedAt = 1_000, deadlineAt = 2_200)
         assertFalse(gate.mayDispatch("turn-b", 1_100))

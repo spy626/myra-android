@@ -3,6 +3,7 @@ package com.myra.assistant.service
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class VoiceTurnIdentityTest {
@@ -25,5 +26,15 @@ class VoiceTurnIdentityTest {
         assertNull(store.finalTranscript(14L, "session:14"))
         assertEquals(15L, store.current()?.userTurnId)
         assertNull(store.current()?.finalTranscriptId)
+    }
+
+    @Test fun genuineVadTurnCannotStartWithZeroIdentity() {
+        val store = VoiceTurnIdentityStore()
+        try {
+            store.begin(0L, 2_000L)
+            fail("zero turn must be rejected")
+        } catch (_: IllegalArgumentException) {
+            assertNull(store.current())
+        }
     }
 }

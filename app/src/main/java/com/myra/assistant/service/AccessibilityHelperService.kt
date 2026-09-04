@@ -107,9 +107,15 @@ class AccessibilityHelperService : AccessibilityService() {
     private val visualTimeoutExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "lyra-visual-timeout").apply { isDaemon = true }
     }
-    private val visualProcessingExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "lyra-visual-processing").apply { isDaemon = true }
-    }
+    private val visualProcessingExecutor = java.util.concurrent.ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS, java.util.concurrent.LinkedBlockingQueue(),
+        java.util.concurrent.ThreadFactory { runnable ->
+            Thread(runnable, "lyra-visual-processing").apply {
+                isDaemon = true
+                priority = Thread.MAX_PRIORITY
+            }
+        }
+    )
     private val screenWatcher = object : Runnable {
         override fun run() {
             // Accessibility context is the normal always-lightweight observation path.
@@ -284,6 +290,13 @@ class AccessibilityHelperService : AccessibilityService() {
         VoicePipelineLogger.debug("screenshotApiCalled requestToken=$requestToken at=$dispatchAt")
         takeScreenshot(Display.DEFAULT_DISPLAY, visualProcessingExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
+                val callbackEnteredAt = android.os.SystemClock.elapsedRealtime()
+                val queueDepth = (visualProcessingExecutor as? java.util.concurrent.ThreadPoolExecutor)?.queue?.size ?: 0
+                VoicePipelineLogger.debug(
+                    "SCREENSHOT_CALLBACK_ENTER requestToken=$requestToken visualTurnId=$requestToken " +
+                        "executorName=lyra-visual-processing threadName=${Thread.currentThread().name} " +
+                        "timestamp=$callbackEnteredAt queueDepth=$queueDepth taskAgeMs=${callbackEnteredAt - dispatchAt} lockWaitMs=0"
+                )
                 if (!isCurrentRequest()) {
                     result.hardwareBuffer.close()
                     VoicePipelineLogger.debug("screenshot_callback_received requestToken=$requestToken accepted=false reason=stale_request")
@@ -299,25 +312,60 @@ class AccessibilityHelperService : AccessibilityService() {
                     return
                 }
                 val buffer = result.hardwareBuffer
+                val wrapStartedAt = android.os.SystemClock.elapsedRealtime()
+                VoicePipelineLogger.debug("hardwareBufferToBitmapStarted requestToken=$requestToken timestamp=$wrapStartedAt")
                 val wrapped = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
+                val wrapCompletedAt = android.os.SystemClock.elapsedRealtime()
+                VoicePipelineLogger.debug(
+                    "hardwareBufferToBitmapCompleted requestToken=$requestToken timestamp=$wrapCompletedAt " +
+                        "elapsedMs=${wrapCompletedAt - wrapStartedAt} bitmapWidth=${wrapped?.width ?: 0} bitmapHeight=${wrapped?.height ?: 0}"
+                )
+                val copyStartedAt = android.os.SystemClock.elapsedRealtime()
+                VoicePipelineLogger.debug("bitmapCopyStarted requestToken=$requestToken timestamp=$copyStartedAt")
                 val bitmap = wrapped?.copy(Bitmap.Config.ARGB_8888, false)
+                val copyCompletedAt = android.os.SystemClock.elapsedRealtime()
+                VoicePipelineLogger.debug(
+                    "bitmapCopyCompleted requestToken=$requestToken timestamp=$copyCompletedAt " +
+                        "elapsedMs=${copyCompletedAt - copyStartedAt} bitmapWidth=${bitmap?.width ?: 0} bitmapHeight=${bitmap?.height ?: 0}"
+                )
                 buffer.close()
                 if (bitmap == null) {
                     callback(Result.failure(IllegalStateException("screenshot_decode_failed")))
                     return
                 }
+                val resizeAt = android.os.SystemClock.elapsedRealtime()
+                VoicePipelineLogger.debug("bitmapResizeStarted requestToken=$requestToken timestamp=$resizeAt")
+                VoicePipelineLogger.debug("bitmapResizeCompleted requestToken=$requestToken timestamp=$resizeAt elapsedMs=0 reason=not_required")
+                val encodeStartedAt = android.os.SystemClock.elapsedRealtime()
+                VoicePipelineLogger.debug("jpegEncodeStarted requestToken=$requestToken timestamp=$encodeStartedAt")
                 val bytes = ByteArrayOutputStream().use { output ->
                     bitmap.compress(Bitmap.CompressFormat.JPEG, 86, output)
                     output.toByteArray()
                 }
+                val encodeCompletedAt = android.os.SystemClock.elapsedRealtime()
+                VoicePipelineLogger.debug(
+                    "jpegEncodeCompleted requestToken=$requestToken timestamp=$encodeCompletedAt " +
+                        "elapsedMs=${encodeCompletedAt - encodeStartedAt} encodedBytes=${bytes.size}"
+                )
                 val capturedAt = android.os.SystemClock.elapsedRealtime()
                 val screenshot = AccessibilityScreenshot(bytes, bitmap.width, bitmap.height, capturedAt,
                     current.packageName, current.windowId, current.generation)
                 bitmap.recycle()
                 AccessibilityVisualCache.put(screenshot, semanticSignature)
+                val sceneStartedAt = android.os.SystemClock.elapsedRealtime()
+                VoicePipelineLogger.debug("semanticSceneSnapshotStarted requestToken=$requestToken timestamp=$sceneStartedAt")
                 ActivityContextStore.attachScreenshot(
                     ScreenshotReference(UUID.randomUUID().toString(), capturedAt, screenshot.width, screenshot.height),
                     current.packageName, current.windowId
+                )
+                val sceneCompletedAt = android.os.SystemClock.elapsedRealtime()
+                VoicePipelineLogger.debug(
+                    "semanticSceneSnapshotCompleted requestToken=$requestToken timestamp=$sceneCompletedAt " +
+                        "elapsedMs=${sceneCompletedAt - sceneStartedAt}"
+                )
+                VoicePipelineLogger.debug(
+                    "visualFrameObjectCreated requestToken=$requestToken timestamp=$sceneCompletedAt " +
+                        "bitmapWidth=${screenshot.width} bitmapHeight=${screenshot.height} encodedBytes=${screenshot.bytes.size}"
                 )
                 callback(Result.success(screenshot))
             }

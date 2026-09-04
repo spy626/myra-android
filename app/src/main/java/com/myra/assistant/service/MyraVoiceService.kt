@@ -201,6 +201,15 @@ class MyraVoiceService : Service() {
     private val visualDeadlineExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "lyra-visual-deadline").apply { isDaemon = true }
     }
+    private val visualFrameDeliveryExecutor = java.util.concurrent.ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS, java.util.concurrent.LinkedBlockingQueue(),
+        java.util.concurrent.ThreadFactory { runnable ->
+            Thread(runnable, "lyra-current-visual-delivery").apply {
+                isDaemon = true
+                priority = Thread.MAX_PRIORITY
+            }
+        }
+    )
     private var pendingMemoryCommand: MemoryCommand? = null
     private var pendingDeleteClarificationUntil = 0L
     private var pendingBestFriendCorrectionOldName: String? = null
@@ -2310,8 +2319,10 @@ class MyraVoiceService : Service() {
                 "visual_frame_outer_timeout visualTurnId=$visualTurnId screenQueryId=$queryId " +
                     "elapsedMs=${now - requestedAt} timeoutMs=${VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS}"
             )
-            mainHandler.post {
-                if (!fastVisualTurns.owns(visualTurnId)) return@post
+            // Deadline fallback must not queue behind the very image worker it is
+            // timing out. This executor owns only deadlines and can terminate the turn
+            // even if frame delivery is blocked.
+            if (fastVisualTurns.owns(visualTurnId)) {
                 completeScreenQuestionFromSemanticScene(question, userTurnId, visualTurnId, queryId, foreground)
             }
         }, VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -2322,28 +2333,56 @@ class MyraVoiceService : Service() {
                 acquisitionGate.mayDispatch(fastVisualTurns.current()?.id, android.os.SystemClock.elapsedRealtime())
             }
         ) { result ->
-            val completedAt = android.os.SystemClock.elapsedRealtime()
-            if (!acquisitionGate.tryComplete(fastVisualTurns.current()?.id, completedAt)) {
+            val scheduledAt = android.os.SystemClock.elapsedRealtime()
+            if (!acquisitionGate.onPlatformCallback(fastVisualTurns.current()?.id, scheduledAt)) {
                 voiceLog(
-                    "screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=$visualTurnId " +
-                        "reason=outer_deadline_or_replaced"
+                    "visualFrameDeliveryScheduled visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                        "accepted=false reason=callback_after_outer_deadline_or_replacement taskAgeMs=${scheduledAt - requestedAt}"
                 )
                 return@requestFreshVisualScreenshot
             }
-            outerTimeout.cancel(false)
-            mainHandler.post {
+            val queueDepth = visualFrameDeliveryExecutor.queue.size
+            voiceLog(
+                "visualFrameDeliveryScheduled visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                    "timestamp=$scheduledAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
+                    "queueDepth=$queueDepth taskAgeMs=${scheduledAt - requestedAt}"
+            )
+            visualFrameDeliveryExecutor.execute {
+                val deliveryStartedAt = android.os.SystemClock.elapsedRealtime()
+                voiceLog(
+                    "visualFrameDeliveryStarted visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                        "timestamp=$deliveryStartedAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
+                        "queueDepth=${visualFrameDeliveryExecutor.queue.size} taskAgeMs=${deliveryStartedAt - requestedAt} lockWaitMs=0"
+                )
+                // The outer deadline owns the complete operation through usable-frame
+                // delivery. Android callback success alone must not complete this gate.
+                if (!acquisitionGate.tryComplete(fastVisualTurns.current()?.id, deliveryStartedAt)) {
+                    result.getOrNull()?.screenshot?.let {
+                        voiceLog(
+                            "visualFrameDelivered visualTurnId=$visualTurnId screenQueryId=$queryId accepted=false " +
+                                "reason=outer_deadline_or_replaced cacheWarmOnly=true taskAgeMs=${deliveryStartedAt - requestedAt}"
+                        )
+                    }
+                    voiceLog(
+                        "screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=$visualTurnId " +
+                            "reason=outer_deadline_or_replaced"
+                    )
+                    return@execute
+                }
+                outerTimeout.cancel(false)
                 if (visualTurnId == null || !fastVisualTurns.owns(visualTurnId)) {
                     voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=${visualTurnId.orEmpty()} reason=visual_turn_replaced")
-                    return@post
+                    return@execute
                 }
                 val selection = result.getOrNull()
                 if (selection == null) {
                     val reason = result.exceptionOrNull()?.message ?: "accessibility_screenshot_failed"
                     voiceLog("screenshot_failure_reason screenQueryId=$queryId reason=$reason")
                     voiceLog("agent_observation package=${foreground.packageName} screenshotUsed=false reason=$reason")
-                    fastVisualTurns.finish(visualTurnId)
-                    speakScreenUnavailable("Current screen image nahi mili.")
-                    return@post
+                    completeScreenQuestionFromSemanticScene(
+                        question, userTurnId, visualTurnId, queryId, foreground
+                    )
+                    return@execute
                 }
                 val screenshot = selection.screenshot
                 val current = accessibility.currentForegroundContext()
@@ -2352,7 +2391,7 @@ class MyraVoiceService : Service() {
                 ) {
                     voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId reason=accessibility_context_changed")
                     fastVisualTurns.finish(visualTurnId)
-                    return@post
+                    return@execute
                 }
                 val frameReadyAt = android.os.SystemClock.elapsedRealtime()
                 fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameReadyAt = frameReadyAt
@@ -2366,6 +2405,11 @@ class MyraVoiceService : Service() {
                 voiceLog(
                     "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId " +
                         "at=$frameReadyAt visualFrameSource=${selection.source}"
+                )
+                voiceLog(
+                    "visualFrameDelivered visualTurnId=$visualTurnId screenQueryId=$queryId accepted=true " +
+                        "timestamp=$frameReadyAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
+                        "queueDepth=${visualFrameDeliveryExecutor.queue.size} taskAgeMs=${frameReadyAt - requestedAt}"
                 )
                 // Reuse the already-published semantic scene. Rewalking a large
                 // Accessibility tree here previously delayed the visual model request.
@@ -2388,7 +2432,7 @@ class MyraVoiceService : Service() {
                     voiceLog("screen_query_terminal screenQueryId=$queryId state=REJECTED_PRIVACY source=ACCESSIBILITY_SCREENSHOT")
                     fastVisualTurns.finish(visualTurnId)
                     speakScreenPrivacyBlocked()
-                    return@post
+                    return@execute
                 }
                 val allowed = privacyResult as ScreenPrivacyResult.Allowed
                 screenResponseActive = true
@@ -2580,9 +2624,11 @@ class MyraVoiceService : Service() {
         val turnId = armedScreenQuestionTurnId.takeIf { it != 0L } ?: return
         if (screenResponseActive) return
         val now = android.os.SystemClock.elapsedRealtime()
-        if (!com.myra.assistant.screen.ArmedScreenQuestionPolicy.isFresh(armedScreenQuestionDetectedAt, now)) {
+        if (!com.myra.assistant.screen.ArmedScreenQuestionPolicy.mayDispatchForIdentity(
+                turnId, voiceTurnIdentities.current()?.userTurnId
+            )) {
             voiceLog(
-                "screen_query_armed_cancelled userTurnId=$turnId reason=stale_arm " +
+                "screen_query_armed_cancelled userTurnId=$turnId reason=replaced_voice_identity " +
                     "ageMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
             )
             armedScreenQuestion = ""
@@ -4099,7 +4145,14 @@ class MyraVoiceService : Service() {
     }
 
     private fun beginOrdinarySpeechActivity(latestGenerationId: Long, source: String) {
-        if (validatingLocalSpeech != null || !responseArbiter.acceptsOrdinaryModel()) return
+        if (validatingLocalSpeech != null) return
+        // A completed controlled response deliberately stays latched until genuine new
+        // speech. Release it here before allocating the new identity; the previous order
+        // returned early and left real VAD speech with speechTimingTurnId=0.
+        if (!responseArbiter.acceptsOrdinaryModel() && responseArbiter.released()) {
+            responseArbiter.releaseIfComplete()
+        }
+        if (!responseArbiter.acceptsOrdinaryModel()) return
         if (ordinaryModelAudioGate.isSpeechActive()) return
         speechActivityStartedAt = android.os.SystemClock.elapsedRealtime()
         speechActivityEndedAt = 0L
@@ -4814,6 +4867,7 @@ class MyraVoiceService : Service() {
         ScreenCaptureService.listeners -= screenCaptureListener
         fastVisualTurns.cancel()
         visualDeadlineExecutor.shutdownNow()
+        visualFrameDeliveryExecutor.shutdownNow()
         instance = null
         if (isRunning) stopSession()
         super.onDestroy()

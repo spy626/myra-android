@@ -66,6 +66,10 @@ class VisualAcquisitionGate(
     fun mayDispatch(currentVisualTurnId: String?, now: Long): Boolean =
         !completed.get() && currentVisualTurnId == visualTurnId && now <= deadlineAt
 
+    /** Platform callback is an intermediate milestone, not a terminal usable frame. */
+    fun onPlatformCallback(currentVisualTurnId: String?, now: Long): Boolean =
+        mayDispatch(currentVisualTurnId, now)
+
     fun tryComplete(currentVisualTurnId: String?, now: Long): Boolean =
         currentVisualTurnId == visualTurnId && now <= deadlineAt && completed.compareAndSet(false, true)
 

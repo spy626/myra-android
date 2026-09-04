@@ -11,6 +11,11 @@ object ArmedScreenQuestionPolicy {
 
     fun isFresh(detectedAt: Long, now: Long, maxAgeMs: Long = MAX_AGE_MS): Boolean =
         detectedAt > 0L && now >= detectedAt && now - detectedAt <= maxAgeMs
+
+    /** A recognized read-only question remains valid while delayed final ASR belongs
+     * to the same speech identity. Time alone must not force the slow final path. */
+    fun mayDispatchForIdentity(armedTurnId: Long, activeVoiceTurnId: Long?): Boolean =
+        armedTurnId != 0L && activeVoiceTurnId == armedTurnId
 }
 
 enum class ScreenQuestionReconciliation { MATCH, MATERIAL_CHANGE }

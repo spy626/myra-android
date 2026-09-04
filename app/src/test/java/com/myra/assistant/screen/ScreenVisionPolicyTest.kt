@@ -111,6 +111,12 @@ class ScreenVisionPolicyTest {
         assertFalse(ScreenQueryDispatchPolicy.shouldDispatch(true, dispatchedTurnId = 0, currentTurnId = 46))
     }
 
+    @Test fun delayedFinalAsrDoesNotExpireArmedQuestionFromSameVoiceIdentity() {
+        assertTrue(ArmedScreenQuestionPolicy.mayDispatchForIdentity(23, 23))
+        assertFalse(ArmedScreenQuestionPolicy.mayDispatchForIdentity(23, 24))
+        assertFalse(ArmedScreenQuestionPolicy.mayDispatchForIdentity(23, null))
+    }
+
     @Test fun screenLatencyUsesSpeechEndOnlyFromTheSameLogicalTurn() {
         assertEquals(ScreenQuerySpeechTiming(true, 1_200), ScreenQueryTimingPolicy.bind(27, 27, 1_200))
         assertEquals(ScreenQuerySpeechTiming(false, 0), ScreenQueryTimingPolicy.bind(27, 26, 1_200))
