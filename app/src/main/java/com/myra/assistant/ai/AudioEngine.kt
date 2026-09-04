@@ -31,8 +31,14 @@ class AudioEngine(private val context: Context) {
     private val muted = AtomicBoolean(false)
     private val speaking = AtomicBoolean(false)
     private val bargeInEnabled = AtomicBoolean(false)
+    private val playbackBargeInAccepted = AtomicBoolean(false)
     @Volatile private var ignoreMicUntilMs = 0L
-    private data class AudioChunk(val generationId: Long, val playbackId: Long, val bytes: ByteArray)
+    private data class AudioChunk(
+        val generationId: Long,
+        val responseOwner: String,
+        val playbackId: Long,
+        val bytes: ByteArray
+    )
     private val queue = LinkedBlockingQueue<AudioChunk>()
     private var recorder: AudioRecord? = null
     private var track: AudioTrack? = null
@@ -61,6 +67,7 @@ class AudioEngine(private val context: Context) {
     @Volatile private var activePlaybackId = 0L
     private var playbackSequence = 0L
     private var lastVadRejectLogAt = 0L
+    private val generationOwner = AudioGenerationOwner()
 
     fun start() {
         if (running.getAndSet(true)) return
@@ -100,7 +107,7 @@ class AudioEngine(private val context: Context) {
                             mediaActive -> mediaSpeechActivityDetector
                             else -> speechActivityDetector
                         }
-                        val dynamicStart = if (speaking.get()) max(0.060f, playbackReferenceRms * 0.25f) else null
+                        val dynamicStart = if (speaking.get()) max(0.085f, playbackReferenceRms * 1.65f) else null
                         when (detector.update(level, dynamicStart)) {
                             SpeechActivityEvent.STARTED -> {
                                 if (mediaActive && !speaking.get()) {
@@ -108,7 +115,24 @@ class AudioEngine(private val context: Context) {
                                     voiceLog("vad_decision vadEnergy=$level playbackActive=false mediaActive=true probableMediaLeak=true vadState=POSSIBLE_MEDIA vadDecision=WAIT_FOR_ASR vadConfirmationReason=media_requires_transcript")
                                     continue
                                 }
-                                voiceLog("vad_decision vadEnergy=$level vadTriggerDurationMs=${if (speaking.get()) 200 else if (mediaActive) 250 else 50} playbackActive=${speaking.get()} mediaActive=$mediaActive probableSelfPlayback=${speaking.get()} probableMediaLeak=${mediaActive && !speaking.get()} vadDecision=ACCEPT_SUSTAINED")
+                                if (speaking.get()) {
+                                    val assessment = SelfPlaybackBargeInGate.assess(
+                                        level, playbackReferenceRms, sustained = true, enabled = bargeInEnabled.get()
+                                    )
+                                    voiceLog(
+                                        "vad_decision vadEnergy=$level playbackActive=true mediaActive=$mediaActive " +
+                                            "probableSelfPlayback=${!assessment.accepted} selfPlaybackProbability=${assessment.selfPlaybackProbability} " +
+                                            "playbackReferenceCorrelation=${assessment.playbackReferenceCorrelation} " +
+                                            "bargeInDecision=${if (assessment.accepted) "ACCEPT" else "REJECT"} " +
+                                            "bargeInAcceptedReason=${if (assessment.accepted) assessment.reason else "none"} " +
+                                            "bargeInRejectedReason=${if (assessment.accepted) "none" else assessment.reason}"
+                                    )
+                                    if (!assessment.accepted) {
+                                        playbackSpeechActivityDetector.reset()
+                                        continue
+                                    }
+                                    playbackBargeInAccepted.set(true)
+                                } else voiceLog("vad_decision vadEnergy=$level vadTriggerDurationMs=${if (mediaActive) 250 else 50} playbackActive=false mediaActive=$mediaActive probableSelfPlayback=false probableMediaLeak=${mediaActive} vadDecision=ACCEPT_SUSTAINED bargeInDecision=NOT_APPLICABLE")
                                 onSpeechActivityChanged?.invoke(true)
                             }
                             SpeechActivityEvent.ENDED -> {
@@ -132,7 +156,7 @@ class AudioEngine(private val context: Context) {
                             }
                         }
                     }
-                    if (MicBargeInPolicy.shouldForward(muted.get(), speaking.get(), bargeInEnabled.get()) &&
+                    if (MicBargeInPolicy.shouldForward(muted.get(), speaking.get(), bargeInEnabled.get(), playbackBargeInAccepted.get()) &&
                         android.os.SystemClock.elapsedRealtime() >= ignoreMicUntilMs
                     ) onMicChunk?.invoke(chunk)
                 }
@@ -170,29 +194,32 @@ class AudioEngine(private val context: Context) {
                         audioFocus.abandon("playback_end")
                         voiceLog("audio_focus_release reason=playback_end")
                         playbackGeneration = 0L
+                        generationOwner.clear()
                         activePlaybackId = 0L
                         playbackScreenQueryId = ""
                         playbackResponseOwner = "MODEL"
                         playbackSpeechActivityDetector.reset()
+                        playbackBargeInAccepted.set(false)
                         mediaSpeechActivityDetector.reset()
                         mediaAwareVadGate.reset()
                         onSpeakingChanged?.invoke(false)
                     }
                     continue
                 }
-                if (chunk.generationId != playbackGeneration) {
-                    voiceLog("DUPLICATE_AUDIO_BLOCKED playbackId=${chunk.playbackId} chunkGeneration=${chunk.generationId} activeGeneration=$playbackGeneration reason=stale_generation")
+                if (!generationOwner.accepts(chunk.generationId, chunk.responseOwner) || chunk.generationId != playbackGeneration) {
+                    voiceLog("audio_chunk_dropped_stale_generation playbackId=${chunk.playbackId} chunkGeneration=${chunk.generationId} chunkOwner=${chunk.responseOwner} activeAuthorizedGeneration=${generationOwner.generationId()} activeAudioOwner=${generationOwner.owner()} reason=stale_generation")
                     continue
                 }
                 synchronized(playbackLock) {
                     if (!running.get()) return@synchronized
-                    if (chunk.generationId != playbackGeneration) {
-                        voiceLog("DUPLICATE_AUDIO_BLOCKED playbackId=${chunk.playbackId} reason=generation_changed_before_write")
+                    if (!generationOwner.accepts(chunk.generationId, chunk.responseOwner) || chunk.generationId != playbackGeneration) {
+                        voiceLog("audio_chunk_dropped_stale_generation playbackId=${chunk.playbackId} chunkGeneration=${chunk.generationId} chunkOwner=${chunk.responseOwner} activeAuthorizedGeneration=${generationOwner.generationId()} activeAudioOwner=${generationOwner.owner()} reason=generation_changed_before_write")
                         return@synchronized
                     }
                     runCatching {
                         if (track?.playState != AudioTrack.PLAYSTATE_PLAYING) track?.play()
                         if (speaking.compareAndSet(false, true)) {
+                            playbackBargeInAccepted.set(false)
                             val focusGranted = audioFocus.request(
                                 playbackGeneration, playbackScreenQueryId,
                                 responseOwner = playbackResponseOwner,
@@ -214,26 +241,40 @@ class AudioEngine(private val context: Context) {
         }
     }
 
-    fun queueAudio(bytes: ByteArray) {
-        val generation = playbackGeneration
+    fun queueAudio(
+        bytes: ByteArray,
+        generationId: Long = playbackGeneration,
+        responseOwner: String = playbackResponseOwner
+    ) {
+        if (!generationOwner.accepts(generationId, responseOwner) || generationId != playbackGeneration) {
+            voiceLog(
+                "audio_chunk_dropped_stale_generation chunkGeneration=$generationId " +
+                    "activeAuthorizedGeneration=${generationOwner.generationId()} activeAudioOwner=${generationOwner.owner()} bytes=${bytes.size}"
+            )
+            return
+        }
+        val generation = generationId
         val playbackId = ++playbackSequence
-        val accepted = queue.offer(AudioChunk(generation, playbackId, bytes.copyOf()))
+        val accepted = queue.offer(AudioChunk(generation, responseOwner, playbackId, bytes.copyOf()))
         voiceLog("playback_queued playbackId=$playbackId generationId=$generation seq=${++queuedAudioChunk} bytes=${bytes.size} accepted=$accepted queueSize=${queue.size} activePlaybackId=$activePlaybackId running=${running.get()}")
     }
 
     fun setPlaybackContext(generationId: Long, screenQueryId: String = "", responseOwner: String = "MODEL") {
         val previous = playbackGeneration
         if (previous != 0L && generationId != 0L && previous != generationId) cancelPlayback("new_generation", generationId)
+        val authorization = generationOwner.authorize(generationId, responseOwner)
         playbackGeneration = generationId
         playbackScreenQueryId = screenQueryId
         playbackResponseOwner = responseOwner
-        voiceLog("audio_owner_changed generationId=$generationId previousGeneration=$previous owner=$responseOwner screenQueryId=$screenQueryId")
+        if (authorization.concurrent) voiceLog("concurrent_generation_detected previousGeneration=${authorization.previousGeneration} replacementGeneration=$generationId owner=$responseOwner")
+        voiceLog("audio_generation_owner generationId=$generationId previousGeneration=$previous owner=$responseOwner screenQueryId=$screenQueryId")
     }
 
     private fun cancelPlayback(reason: String, replacementGenerationId: Long = 0L) {
         val cancelledId = activePlaybackId
         queue.clear()
         playbackGeneration = replacementGenerationId
+        if (replacementGenerationId == 0L) generationOwner.clear()
         synchronized(playbackLock) {
             runCatching { track?.pause() }
             runCatching { track?.flush() }
@@ -272,10 +313,12 @@ class AudioEngine(private val context: Context) {
         audioFocus.abandon("playback_interrupt")
         voiceLog("audio_focus_release reason=playback_interrupt")
         playbackGeneration = 0L
+        generationOwner.clear()
         activePlaybackId = 0L
         playbackScreenQueryId = ""
         playbackResponseOwner = "MODEL"
         playbackSpeechActivityDetector.reset()
+        playbackBargeInAccepted.set(false)
         mediaSpeechActivityDetector.reset()
         mediaAwareVadGate.reset()
         speaking.set(false)
@@ -283,7 +326,7 @@ class AudioEngine(private val context: Context) {
     }
     fun release() {
         if (!running.getAndSet(false)) return
-        queue.offer(AudioChunk(playbackGeneration, ++playbackSequence, ByteArray(0)))
+        queue.offer(AudioChunk(playbackGeneration, playbackResponseOwner, ++playbackSequence, ByteArray(0)))
         runCatching { recorder?.stop() }
         runCatching { micThread?.join(750) }
         runCatching { speakerThread?.join(750) }

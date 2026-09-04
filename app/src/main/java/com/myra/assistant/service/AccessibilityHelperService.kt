@@ -50,6 +50,7 @@ import com.myra.assistant.screen.VisualObservationPolicy
 import com.myra.assistant.screen.AccessibilityScreenshot
 import com.myra.assistant.screen.AccessibilityVisualCache
 import com.myra.assistant.agent.ActivityContextStore
+import com.myra.assistant.agent.ActivityObservationCoalescer
 import com.myra.assistant.agent.CurrentActivityContext
 import com.myra.assistant.agent.SemanticElement
 import com.myra.assistant.agent.SemanticRoleClassifier
@@ -82,6 +83,7 @@ data class YouTubeSemanticActionResult(
 )
 
 class AccessibilityHelperService : AccessibilityService() {
+    private val activityObservationCoalescer = ActivityObservationCoalescer()
     private var currentVideoQuery: String? = null
     private var previousVideoQuery: String? = null
     private var pendingHistoryRestoreQuery: String? = null
@@ -1079,7 +1081,7 @@ class AccessibilityHelperService : AccessibilityService() {
         if (!accepted) return false
         Handler(Looper.getMainLooper()).postDelayed({
             val changed = before.isNotBlank() && visibleScreenSignature() != before
-            if (changed) refreshScreenContext()
+            if (changed) refreshScreenContext(force = true)
             onResult(changed)
         }, 500L)
         return true
@@ -1215,7 +1217,10 @@ class AccessibilityHelperService : AccessibilityService() {
 
     fun lastSnapshotAt(): Long = accessibilitySnapshotAt
 
-    fun refreshScreenContext(observedAt: Long = android.os.SystemClock.elapsedRealtime()) {
+    fun refreshScreenContext(
+        observedAt: Long = android.os.SystemClock.elapsedRealtime(),
+        force: Boolean = false
+    ) {
         val root = rootInActiveWindow ?: return
         val packageName = root.packageName?.toString()
         val appName = packageName?.let { value ->
@@ -1236,12 +1241,19 @@ class AccessibilityHelperService : AccessibilityService() {
                     actionable = element.clickable
                 )
             }
-            val updated = ActivityContextStore.update(CurrentActivityContext(
+            val observation = CurrentActivityContext(
                 packageName = foreground.packageName, appLabel = foreground.appName,
                 screenType = detectContentType().name, windowId = foreground.windowId,
                 generation = foreground.generation, visibleElements = semantic,
                 confidence = if (semantic.isEmpty()) 0.25 else 0.9, timestamp = observedAt
-            ))
+            )
+            if (!activityObservationCoalescer.shouldPublish(observation, force)) {
+                com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
+                    "SCREEN_CONTEXT_COALESCED package=${observation.packageName} windowId=${observation.windowId} semanticElements=${semantic.size}"
+                )
+                return
+            }
+            val updated = ActivityContextStore.update(observation)
             UnifiedLyraAgentRuntime.agent.invalidateForContext(updated)
             com.myra.assistant.agent.WorkingTaskRuntime.store.invalidateIfExternalAppChanged(
                 updated.packageName, updated.generation

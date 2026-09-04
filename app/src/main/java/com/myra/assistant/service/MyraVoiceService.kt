@@ -87,6 +87,8 @@ import com.myra.assistant.agent.TurnIntent
 import com.myra.assistant.agent.WorkingTaskRuntime
 import com.myra.assistant.agent.BrowserSearchRequestParser
 import com.myra.assistant.agent.BrowserSearchTool
+import com.myra.assistant.agent.SearchDestination
+import com.myra.assistant.agent.SearchDestinationResolver
 import com.myra.assistant.screen.FreshFrameResult
 import com.myra.assistant.screen.ScreenResponseBinding
 import com.myra.assistant.screen.ReadingCommand
@@ -252,6 +254,9 @@ class MyraVoiceService : Service() {
     private var speechActivityEndedAt = 0L
     private var speechTimingTurnId = 0L
     private var inputTurnStartedAt = 0L
+    private var latestTurnAcceptedAt = 0L
+    private var latestIntentDecidedAt = 0L
+    private var latestActionDispatchedAt = 0L
     private var latestObservedModelGenerationId = 0L
     private var earlyModelAudioGenerationId = 0L
     private val earlyModelAudio = mutableListOf<ByteArray>()
@@ -450,7 +455,7 @@ class MyraVoiceService : Service() {
                         // The transcript prefix already matched the prepared response.
                         // Continue streaming the remaining natural voice without waiting
                         // for the complete sentence.
-                        audio?.queueAudio(pcm)
+                        audio?.queueAudio(pcm, controlledGenerationId, "CONTROLLED_LOCAL")
                         voiceLog("service_audio_routed route=direct_playback bytes=${pcm.size}")
                     } else {
                         localSpeechAudio += pcm.copyOf()
@@ -487,7 +492,7 @@ class MyraVoiceService : Service() {
                         mediaGuard.beginAssistantTurn()
                         audio?.setPlaybackContext(modelGenerationId, screenResponseQueryId, "CONTROLLED_SCREEN")
                         audio?.setBargeInEnabled(true)
-                        audio?.queueAudio(pcm)
+                        audio?.queueAudio(pcm, modelGenerationId, "CONTROLLED_SCREEN")
                         voiceLog(
                             "route_decision turnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId responseOwner=CONTROLLED_SCREEN " +
                                 "screen_query_id=$screenResponseQueryId route=screen_response accepted=true firstResponseAudioAt=$audioReceivedAt " +
@@ -513,7 +518,7 @@ class MyraVoiceService : Service() {
                             mediaGuard.beginAssistantTurn()
                             audio?.setPlaybackContext(modelGenerationId, responseOwner = "MODEL")
                             audio?.setBargeInEnabled(true)
-                            audio?.queueAudio(pcm)
+                            audio?.queueAudio(pcm, modelGenerationId, "MODEL")
                             voiceLog(
                                 "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL " +
                                     "route=ordinary_model accepted=true firstModelAudioAcceptedAt=$audioReceivedAt " +
@@ -833,7 +838,8 @@ class MyraVoiceService : Service() {
                     ambiguousMessageTurn = false
                     suppressModelForTurn = false
                 }
-                val command = CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString())
+                val command = (CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString()))
+                    ?.takeUnless { it is AppCommand.SearchYouTube }
                 if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
                     probableActionTurn = true
                     suppressModelForTurn = true
@@ -1108,14 +1114,21 @@ class MyraVoiceService : Service() {
                     voiceLog("foreground_context_propagated turnId=$activeTurnId package=${it.packageName} windowId=${it.windowId} generation=${it.generation}")
                 }
                 val activityContext = ActivityContextStore.snapshot()
+                latestTurnAcceptedAt = android.os.SystemClock.elapsedRealtime()
+                latestActionDispatchedAt = 0L
                 val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
                     userText, activityContext, visualAwarenessPreferences.enabled
                 )
+                latestIntentDecidedAt = android.os.SystemClock.elapsedRealtime()
                 val unifiedTask = UnifiedLyraAgentRuntime.agent.currentTask()
                 voiceLog(
                     "agent_turn_owned turnId=$activeTurnId intent=${turnDecision.intent} " +
                         "phoneActions=${turnDecision.authorizesPhoneActions} memoryMutation=${turnDecision.authorizesMemoryMutation} " +
                         "requiresPerception=${turnDecision.requiresPerception} taskId=${unifiedTask?.id}"
+                )
+                voiceLog(
+                    "turn_latency turnId=$activeTurnId speechEndToTurnAcceptedMs=${if (speechActivityEndedAt > 0L) latestTurnAcceptedAt - speechActivityEndedAt else -1L} " +
+                        "turnAcceptedToIntentMs=${latestIntentDecidedAt - latestTurnAcceptedAt}"
                 )
                 if (unifiedTask != null && turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
                     voiceLog(
@@ -2526,6 +2539,7 @@ class MyraVoiceService : Service() {
     private fun executeCommand(command: AppCommand) {
         if (localCommandExecutedThisTurn || !shouldExecute(command)) return
         localCommandExecutedThisTurn = true
+        latestActionDispatchedAt = android.os.SystemClock.elapsedRealtime()
         if (command == AppCommand.RequestInstagramReels) {
             pendingConfirmedCommand = AppCommand.OpenInstagramReels
             pendingConfirmationExpiresAt = android.os.SystemClock.elapsedRealtime() + 30_000L
@@ -2954,6 +2968,7 @@ class MyraVoiceService : Service() {
         localCommandExecutedThisTurn = true
         cancelSpeechForNewAction()
         val startedAt = android.os.SystemClock.elapsedRealtime()
+        latestActionDispatchedAt = startedAt
         val before = accessibility.visibleScreenSignature()
 
         if (command == YouTubeSemanticCommand.SendComment &&
@@ -3061,17 +3076,34 @@ class MyraVoiceService : Service() {
 
     private fun executeUnifiedBrowserSearch(raw: String): Boolean {
         val request = BrowserSearchRequestParser.parse(raw) ?: return false
+        val accessibility = AccessibilityHelperService.instance
+        val freshForeground = accessibility?.currentForegroundContext()
+        val destination = SearchDestinationResolver.resolve(
+            request,
+            freshForeground?.packageName,
+            WorkingTaskRuntime.store.snapshot().activeExternalApp
+        )
+        voiceLog(
+            "search_destination_resolved turnId=$activeTurnId destination=$destination explicit=${request.explicitDestination} " +
+                "foregroundPackage=${freshForeground?.packageName} taskPackage=${WorkingTaskRuntime.store.snapshot().activeExternalApp}"
+        )
+        if (destination == SearchDestination.YOUTUBE) {
+            executeCommand(AppCommand.SearchYouTube(request.query))
+            return true
+        }
         if (!screenCommandTurnGuard.tryCommit(activeTurnId)) return true
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
         cancelSpeechForNewAction()
         val startedAt = android.os.SystemClock.elapsedRealtime()
+        latestActionDispatchedAt = startedAt
         val taskTurnId = activeTurnId
         val dispatch = BrowserSearchTool(this).execute(request)
         voiceLog(
             "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
                 "tool=browser_search accepted=${dispatch.accepted} expectedPackage=${dispatch.expectedPackage} " +
-                "queryLength=${request.query.length} dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
+                "queryLength=${request.query.length} dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt} " +
+                "intentToActionMs=${if (latestIntentDecidedAt > 0L) startedAt - latestIntentDecidedAt else -1L}"
         )
         if (!dispatch.accepted) {
             WorkingTaskRuntime.store.recordOutcome(dispatch.reason, false)
@@ -3082,7 +3114,7 @@ class MyraVoiceService : Service() {
         }
         mainHandler.postDelayed({
             val accessibility = AccessibilityHelperService.instance
-            accessibility?.refreshScreenContext()
+            accessibility?.refreshScreenContext(force = true)
             val foreground = accessibility?.currentForegroundContext()
             val packageMatches = dispatch.expectedPackage == null || foreground?.packageName == dispatch.expectedPackage
             val verified = foreground != null && packageMatches
@@ -3154,7 +3186,7 @@ class MyraVoiceService : Service() {
                     val message = if (result.resolution == "ambiguous") "Kaunsa wala?" else "Ye target clear nahi mila."
                     listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
                 } else mainHandler.postDelayed({
-                    accessibility.refreshScreenContext()
+                    accessibility.refreshScreenContext(force = true)
                     val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
                     UnifiedLyraAgentRuntime.agent.recordAction(
                         com.myra.assistant.agent.AgentActionRecord("accessibility_click", target.id, true, changed, android.os.SystemClock.elapsedRealtime()),
@@ -3683,7 +3715,7 @@ class MyraVoiceService : Service() {
         mediaGuard.beginAssistantTurn()
         audio?.setPlaybackContext(generationId, responseOwner = "MODEL")
         audio?.setBargeInEnabled(true)
-        chunks.forEach { audio?.queueAudio(it) }
+        chunks.forEach { audio?.queueAudio(it, generationId, "MODEL") }
         val acceptedAt = android.os.SystemClock.elapsedRealtime()
         voiceLog(
             "early_model_audio_released turnId=$activeTurnId modelGenerationId=$generationId " +
@@ -3746,7 +3778,8 @@ class MyraVoiceService : Service() {
         voiceLog(
             "local_speech_queued chars=${message.length} policy=${policyName(validationPolicy)} " +
                 "alreadyValidating=${validatingLocalSpeech != null} allowNoTranscript=$allowUntranscribedAudio " +
-                "turnId=$ownerTurnId responseOwner=CONTROLLED_LOCAL localSpeechQueuedAt=$localSpeechQueuedAt"
+                "turnId=$ownerTurnId responseOwner=CONTROLLED_LOCAL localSpeechQueuedAt=$localSpeechQueuedAt " +
+                "actionToReplyQueuedMs=${if (latestActionDispatchedAt > 0L) localSpeechQueuedAt - latestActionDispatchedAt else -1L}"
         )
         // Keep the echo-cancelled microphone open so the user can interrupt or issue
         // the next short command without waiting for LYRA's acknowledgement to finish.
@@ -3859,11 +3892,13 @@ class MyraVoiceService : Service() {
             "local_speech_released_early turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
                 "audioChunks=${localSpeechAudio.size} firstAudioAcceptedAt=$localSpeechFirstAudioAcceptedAt"
         )
-        localSpeechAudio.forEach { audio?.queueAudio(it) }
+        localSpeechAudio.forEach { audio?.queueAudio(it, controlledGenerationId, "CONTROLLED_LOCAL") }
         localSpeechFirstPlaybackWriteAt = android.os.SystemClock.elapsedRealtime()
         voiceLog(
             "controlled_first_playback_write turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt}"
+                "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt} " +
+                "speechEndToFirstPlaybackMs=${if (speechActivityEndedAt > 0L) localSpeechFirstPlaybackWriteAt - speechActivityEndedAt else -1L} " +
+                "firstAudioToPlaybackMs=${if (localSpeechFirstAudioReceivedAt > 0L) localSpeechFirstPlaybackWriteAt - localSpeechFirstAudioReceivedAt else -1L}"
         )
         localSpeechAudio.clear()
     }
@@ -3918,11 +3953,13 @@ class MyraVoiceService : Service() {
             localSpeechGenerationComplete = true
             localPlaybackActive = true
             voiceLog("local_speech_released_after_validation audioChunks=${localSpeechAudio.size}")
-            localSpeechAudio.forEach { audio?.queueAudio(it) }
+            localSpeechAudio.forEach { audio?.queueAudio(it, controlledGenerationId, "CONTROLLED_LOCAL") }
             localSpeechFirstPlaybackWriteAt = android.os.SystemClock.elapsedRealtime()
             voiceLog(
                 "controlled_first_playback_write turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                    "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt}"
+                    "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt} " +
+                    "speechEndToFirstPlaybackMs=${if (speechActivityEndedAt > 0L) localSpeechFirstPlaybackWriteAt - speechActivityEndedAt else -1L} " +
+                    "firstAudioToPlaybackMs=${if (localSpeechFirstAudioReceivedAt > 0L) localSpeechFirstPlaybackWriteAt - localSpeechFirstAudioReceivedAt else -1L}"
             )
             localSpeechAudio.clear()
             localSpeechTranscript.clear()

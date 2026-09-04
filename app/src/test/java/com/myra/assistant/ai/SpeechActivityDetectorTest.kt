@@ -38,4 +38,13 @@ class SpeechActivityDetectorTest {
         repeat(3) { assertEquals(SpeechActivityEvent.NONE, detector.update(.10f, .08f)) }
         assertEquals(SpeechActivityEvent.STARTED, detector.update(.10f, .08f))
     }
+
+    @Test fun selfPlaybackGateRejectsSpeakerLeakAndAcceptsStrongNearMicInterruption() {
+        val leak = SelfPlaybackBargeInGate.assess(.052f, .050f, sustained = true, enabled = true)
+        assertEquals(false, leak.accepted)
+        assertEquals("probable_self_playback", leak.reason)
+        val user = SelfPlaybackBargeInGate.assess(.12f, .050f, sustained = true, enabled = true)
+        assertEquals(true, user.accepted)
+        assertEquals("independent_near_mic_speech", user.reason)
+    }
 }

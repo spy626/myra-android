@@ -6,7 +6,11 @@ import org.junit.Test
 
 class MicBargeInPolicyTest {
     @Test fun ordinaryPlaybackAllowsUserBargeInAudioToReachGemini() {
-        assertTrue(MicBargeInPolicy.shouldForward(muted = false, speakerActive = true, bargeInEnabled = true))
+        assertTrue(MicBargeInPolicy.shouldForward(false, true, true, confirmedPlaybackBargeIn = true))
+    }
+
+    @Test fun playbackAloneCannotReachGeminiBeforeIndependentBargeInConfirmation() {
+        assertFalse(MicBargeInPolicy.shouldForward(false, true, true, confirmedPlaybackBargeIn = false))
     }
 
     @Test fun controlledOrMutedPlaybackCannotFeedMicIntoGeneration() {
