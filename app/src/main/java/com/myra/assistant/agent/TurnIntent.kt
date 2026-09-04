@@ -70,7 +70,7 @@ object UnifiedTurnInterpreter {
 
     private fun isExplicitAction(text: String): Boolean {
         val direct = Regex("^(?:please )?(?:lyra )?(?:open|close|launch|start|click|tap|press|scroll|swipe|type|write|send|post|search|find|show|go|play|pause|like|subscribe|read|continue|kholo|khol|dabao|daba do|chalao|likho|bhejo|dhundo|dhoondo|dikhao|niche|neeche|upar|back|home|screen mode|screen sharing|screen vision)\\b")
-        val objectFirst = Regex("^(?:chrome|youtube|google|whatsapp|instagram|facebook|settings|video|comment|comments|channel|screen|article|page|इसको|इसे|वीडियो|कमेंट|स्क्रीन)\\b.*\\b(?:kholo|open|karo|kar do|dabao|dikhao|search|scroll|like|subscribe|send|post|read|padho|ऑन करो|बंद करो|खोलो|दिखाओ)\\b")
+        val objectFirst = Regex("^(?:chrome|youtube|google|whatsapp|instagram|facebook|settings|video|comment|comments|channel|screen|article|page|इसको|इसे|वीडियो|कमेंट|स्क्रीन)\\b.*\\b(?:kholo|open karo|karo|kar do|dabao|dikhao|search karo|scroll karo|like karo|subscribe karo|send karo|post karo|read karo|padho|ऑन करो|बंद करो|खोलो|दिखाओ)$")
         val devaDirect = Regex("^(?:खोलो|दबाओ|स्क्रॉल|लिखो|भेजो|ढूंढो|दिखाओ|लाइक करो|सब्सक्राइब करो)\\b")
         val contextualImperative = Regex("\\b(?:dabao|press karo|click karo|kholo|khol do|kar do|daba do|दबाओ|खोलो)\\b$").containsMatchIn(text) &&
             Regex("\\b(?:jo|ye|yeh|this|that|isko|usko|wala|wali|जिस|जो|ये|इसको|उसको)\\b").containsMatchIn(text)
@@ -91,7 +91,7 @@ object UnifiedTurnInterpreter {
 
     private fun isActionFollowUp(text: String): Boolean = listOf(
         "abhi nahi hua na", "abhi hua kya", "did it work", "did that work", "hua nahi na", "nahi hua na"
-    ).any { text == it || text.startsWith("$it ") }
+    ).any { candidate -> text.trimEnd('?', '.', '!') == candidate }
 
     private fun isExplicitCorrection(text: String): Boolean =
         Regex("^(?:actually|correction|correct|nahi |no |galat |असल में|नहीं )").containsMatchIn(text) &&
