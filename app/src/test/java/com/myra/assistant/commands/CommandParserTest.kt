@@ -40,15 +40,16 @@ class CommandParserTest {
         }
     }
 
-    @Test fun parsesContextualYouTubeSearchAndScrolling() {
+    @Test fun contextFreeSearchIsNotOwnedByLegacyYouTubeParserAndScrollingRemainsSupported() {
         listOf(
-            "search karo new song" to "new song",
-            "Jonathan Gaming search karo" to "jonathan gaming"
-        ).forEach { (phrase, expectedQuery) ->
-            val command = CommandParser.parse(phrase)
-            assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
-            assertEquals(expectedQuery, command.content)
+            "search karo new song",
+            "Jonathan Gaming search karo"
+        ).forEach { phrase ->
+            assertEquals(CommandType.UNKNOWN, CommandParser.parse(phrase).type)
         }
+        val explicit = CommandParser.parse("YouTube pe new song search karo")
+        assertEquals(CommandType.SEARCH_YOUTUBE, explicit.type)
+        assertEquals("new song", explicit.content)
 
         val parser = com.myra.assistant.ai.CommandParser
         assertEquals(
