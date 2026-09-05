@@ -99,6 +99,24 @@ class UnifiedTurnOwnershipTest {
         assertFalse(decision.authorizesPhoneActions)
     }
 
+    @Test fun thodaAurWithExplicitDirectionIsAnActionWithoutGuessingOldContext() {
+        val decision = UnifiedTurnInterpreter.interpret("Thoda aur niche", WorkingTaskContext())
+        assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)
+        assertTrue(decision.authorizesPhoneActions)
+        val structured = UnifiedLyraAgent().toStructuredIntent("Thoda aur niche", decision)
+        assertEquals(setOf(ToolCapability.ACCESSIBILITY_SCROLL), structured.requiredCapabilities)
+        assertEquals("DOWN", structured.parameters["direction"])
+    }
+
+    @Test fun actionRequestSearchCreatesBrowserSearchPlanInsteadOfUnknownTask() {
+        val agent = UnifiedLyraAgent()
+        val decision = agent.acceptTurn("Search a new AI", context(), true, turnId = 18L)
+        assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)
+        assertEquals(AgentGoalType.BROWSER_SEARCH, agent.currentTask()?.interpretedGoal)
+        assertTrue(GeneralAgentRuntimeStore.runtime.activeTask()!!.intent.requiredCapabilities.contains(ToolCapability.BROWSER_SEARCH))
+        assertTrue(agent.currentTask()!!.plan.isNotEmpty())
+    }
+
     @Test fun devanagariDirectionKeepsMeaningAndCreatesScrollAction() {
         val decision = UnifiedTurnInterpreter.interpret("नीचे जाओ", null)
         assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)

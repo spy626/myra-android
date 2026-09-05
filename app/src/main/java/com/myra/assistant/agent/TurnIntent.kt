@@ -89,7 +89,9 @@ object UnifiedTurnInterpreter {
             Regex("\\b(?:jo|ye|yeh|this|that|isko|usko|wala|wali|जिस|जो|ये|इसको|उसको)\\b").containsMatchIn(text)
         val hindiDirectionalImperative = containsHindiDirection(text) &&
             Regex("(?:जाओ|जाइए|जाएँ|चलो|स्क्रॉल(?: करो)?)$").containsMatchIn(text)
-        return direct.containsMatchIn(text) || objectFirst.containsMatchIn(text) || devaDirect.containsMatchIn(text) || contextualImperative || hindiDirectionalImperative
+        val directionalContinuation = containsAnyDirection(text) &&
+            text.split(' ').any { it in setOf("thoda", "thora", "aur", "थोड़ा", "थोड़ा", "और") }
+        return direct.containsMatchIn(text) || objectFirst.containsMatchIn(text) || devaDirect.containsMatchIn(text) || contextualImperative || hindiDirectionalImperative || directionalContinuation
     }
 
     private fun isExplicitSearchGoal(text: String): Boolean {
@@ -122,6 +124,7 @@ object UnifiedTurnInterpreter {
     private fun isCancel(text: String) = text in setOf("stop", "cancel", "cancel karo", "rehne do", "chhodo", "mat karo", "रहने दो", "रुको")
 
     private fun containsHindiDirection(text: String) = text.split(' ').any { it in setOf("नीचे", "ऊपर") }
+    private fun containsAnyDirection(text: String) = text.split(' ').any { it in setOf("down", "niche", "neeche", "up", "upar", "नीचे", "ऊपर") }
 
     private fun normalize(raw: String): String = Normalizer.normalize(raw, Normalizer.Form.NFC)
         .lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{M}\\p{N}?]+"), " ")

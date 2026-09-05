@@ -72,6 +72,21 @@ class VoiceTurnIdentityTest {
         assertEquals(1_500L, store.current()?.speechEndAt)
     }
 
+    @Test fun independentVadUtterancesReceiveIndependentTurnOwnership() {
+        val store = VoiceTurnIdentityStore()
+        store.begin(18L, 1_000L)
+        store.speechEnded(18L, 1_500L)
+        store.finalTranscript(18L, "session:18")
+
+        store.begin(19L, 2_000L)
+
+        val second = store.current()!!
+        assertEquals(19L, second.userTurnId)
+        assertEquals(19L, second.transcriptTurnId)
+        assertEquals(0L, second.speechEndAt)
+        assertNull(second.finalTranscriptId)
+    }
+
     @Test fun multiplePreFinalProposalsMergeWithoutConsumingTheTurn() {
         val candidates = PendingScrollCandidateStore()
         candidates.stage(5L, "DOWN", 1_000L, source = "gemini_phone_tool", foregroundPackage = "chrome", windowId = 7)

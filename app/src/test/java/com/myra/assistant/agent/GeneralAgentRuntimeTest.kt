@@ -87,6 +87,21 @@ class GeneralAgentRuntimeTest {
         assertFalse(ScrollMovementAnalyzer.analyze(before, after).proven)
     }
 
+    @Test fun unknownScrollEvidenceUsesVerificationOnlyResamplingWithoutAnotherAction() {
+        var gestureCount = 0
+        gestureCount++
+        assertTrue(ScrollVerificationResamplePolicy.shouldResample(true, false, 0))
+        assertTrue(ScrollVerificationResamplePolicy.shouldResample(true, false, 1))
+        assertFalse(ScrollVerificationResamplePolicy.shouldResample(true, false, 2))
+        assertEquals(1, gestureCount)
+        assertEquals(250L, ScrollVerificationResamplePolicy.DELAY_MS)
+    }
+
+    @Test fun provenScrollDoesNotScheduleVerificationResample() {
+        assertFalse(ScrollVerificationResamplePolicy.shouldResample(true, true, 0))
+        assertFalse(ScrollVerificationResamplePolicy.shouldResample(false, false, 0))
+    }
+
     @Test fun validated_adapter_outcome_completes_same_general_task_owner() {
         val runtime = GeneralAgentRuntime(now = { 7 })
         val task = runtime.start(44, intent(ToolCapability.BROWSER_SEARCH))!!

@@ -168,7 +168,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
         val text = normalize(raw)
         return when {
             decision?.goal == "SCROLL" -> AgentGoalType.SCROLL
-            decision?.intent == TurnIntent.MULTI_STEP_GOAL && BrowserSearchRequestParser.parse(raw) != null -> AgentGoalType.BROWSER_SEARCH
+            decision?.authorizesPhoneActions == true && BrowserSearchRequestParser.parse(raw) != null -> AgentGoalType.BROWSER_SEARCH
             decision?.intent == TurnIntent.MULTI_STEP_GOAL -> AgentGoalType.WEB_SEARCH
             Regex("\\b(?:scroll|niche|neeche|upar)\\b").containsMatchIn(text) ||
                 text.split(' ').any { it in setOf("नीचे", "ऊपर") } -> AgentGoalType.SCROLL

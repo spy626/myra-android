@@ -237,8 +237,8 @@ data class ProductionAdapterExecutors(
 
 object ProductionGeneralAdapters {
     fun create(registry: AgentToolRegistry, executors: ProductionAdapterExecutors): List<GeneralToolAdapter> = listOf(
-        ProductionGeneralToolAdapter("GenericScrollAdapter", requireNotNull(registry.forCapability(ToolCapability.ACCESSIBILITY_SCROLL)), 220L, executors.scroll),
-        ProductionGeneralToolAdapter("BrowserSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.BROWSER_SEARCH)), 250L, executors.browserSearch),
+        ProductionGeneralToolAdapter("GenericScrollAdapter", requireNotNull(registry.forCapability(ToolCapability.ACCESSIBILITY_SCROLL)), 650L, executors.scroll),
+        ProductionGeneralToolAdapter("BrowserSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.BROWSER_SEARCH)), 900L, executors.browserSearch),
         ProductionGeneralToolAdapter("ObserveScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.OBSERVE_SCREEN)), 0L, executors.observeScreen),
         ProductionGeneralToolAdapter("VerifyScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.VERIFY_SCREEN)), 0L, executors.verifyScreen),
         ProductionGeneralToolAdapter("BackAdapter", requireNotNull(registry.forCapability(ToolCapability.BACK)), 400L, executors.back)
@@ -377,6 +377,15 @@ object ScrollMovementAnalyzer {
             windowShift, anchorMovement || windowShift
         )
     }
+}
+
+/** UNKNOWN scroll evidence is sampled again without routing another physical action. */
+object ScrollVerificationResamplePolicy {
+    const val MAX_RESAMPLES = 2
+    const val DELAY_MS = 250L
+
+    fun shouldResample(dispatchAccepted: Boolean, movementProven: Boolean, resampleCount: Int): Boolean =
+        dispatchAccepted && !movementProven && resampleCount < MAX_RESAMPLES
 }
 
 sealed interface RecoveryDecision {

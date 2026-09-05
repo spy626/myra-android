@@ -113,15 +113,8 @@ import com.myra.assistant.agent.ProductionGeneralAdapters
 import com.myra.assistant.agent.RecoveryDecision
 import com.myra.assistant.agent.ScreenSceneFactory
 import com.myra.assistant.agent.ScrollMovementAnalyzer
+import com.myra.assistant.agent.ScrollVerificationResamplePolicy
 import com.myra.assistant.agent.ToolCapability
-import com.myra.assistant.agent.FastActionAuthorizationPolicy
-import com.myra.assistant.agent.FastActionCandidate
-import com.myra.assistant.agent.FastActionCandidateStore
-import com.myra.assistant.agent.FastAuthorizationDecision
-import com.myra.assistant.agent.FastCommittedAction
-import com.myra.assistant.agent.FastCommittedActionStore
-import com.myra.assistant.agent.ModalSafetyPolicy
-import com.myra.assistant.agent.UnifiedTurnInterpreter
 import com.myra.assistant.screen.FreshFrameResult
 import com.myra.assistant.screen.ScreenResponseBinding
 import com.myra.assistant.screen.ReadingCommand
@@ -302,8 +295,6 @@ class MyraVoiceService : Service() {
     private var speechTimingTurnId = 0L
     private val voiceTurnIdentities = VoiceTurnIdentityStore()
     private val pendingScrollCandidates = PendingScrollCandidateStore()
-    private val fastActionCandidates = FastActionCandidateStore()
-    private val fastCommittedActions = FastCommittedActionStore()
     private var inputTurnStartedAt = 0L
     private var latestTurnAcceptedAt = 0L
     private var latestIntentDecidedAt = 0L
@@ -826,8 +817,7 @@ class MyraVoiceService : Service() {
                 lastUserIntentText = input.toString().trim()
                 val currentTranscript = commandProbe.toString().trim()
                 val currentScreenText = romanDisplayText(currentTranscript)
-                val partialSearch = BrowserSearchRequestParser.parse(currentTranscript)
-                if (partialSearch != null) {
+                if (BrowserSearchRequestParser.parse(currentTranscript) != null) {
                     // Search is resolved only at FINAL, but speculative conversational
                     // audio must not ask for a destination after a contextual action has
                     // already been authorized and executed.
@@ -835,16 +825,6 @@ class MyraVoiceService : Service() {
                     output.clear()
                     audio?.interrupt()
                     voiceLog("search_turn_reserved turnId=$activeTurnId source=PARTIAL_FINAL_REQUIRED")
-                    stageFastActionCandidate(
-                        ToolCapability.BROWSER_SEARCH,
-                        mapOf(
-                            "query" to partialSearch.query,
-                            "destination" to (partialSearch.explicitDestination?.name ?: "CONTEXTUAL")
-                        ),
-                        currentTranscript,
-                        "partial_transcript",
-                        .97
-                    )
                 }
                 if (ScreenVisionIntentParser.parse(currentScreenText) != null ||
                     FastVisualRequestClassifier.classify(currentTranscript) != null
@@ -1289,32 +1269,6 @@ class MyraVoiceService : Service() {
                     "finalTranscriptReady turnId=$activeTurnId at=$latestTurnAcceptedAt " +
                         "authoritativeTurnToTranscriptMs=${if (speechActivityEndedAt > 0L) latestTurnAcceptedAt - speechActivityEndedAt else -1L}"
                 )
-                fastCommittedActions.forTurn(activeTurnId)?.let { committed ->
-                    val finalWorking = WorkingTaskRuntime.store.snapshot()
-                    val finalDecision = UnifiedTurnInterpreter.interpret(normalizedFinalUserText, finalWorking)
-                    val finalCapabilities = UnifiedLyraAgentRuntime.agent.toStructuredIntent(
-                        normalizedFinalUserText, finalDecision, working = finalWorking
-                    ).requiredCapabilities
-                    val compatible = finalDecision.authorizesPhoneActions && committed.capability in finalCapabilities
-                    voiceLog(
-                        "FAST_ACTION_FINAL_RECONCILIATION turnId=$activeTurnId finalIntent=${finalDecision.intent} " +
-                            "committedCapability=${committed.capability} compatible=$compatible " +
-                            "decision=${if (compatible) "CONFIRMED_NO_REEXECUTION" else "CONFLICT_BLOCK_SECOND_ACTION"}"
-                    )
-                    voiceLog(
-                        "FAST_ACTION_DUPLICATE_PREVENTED turnId=$activeTurnId taskId=${committed.taskId} " +
-                            "capability=${committed.capability} finalCompatible=$compatible"
-                    )
-                    pendingScrollCandidates.discardForTurn(activeTurnId)
-                    fastActionCandidates.discard(activeTurnId)
-                    suppressModelForTurn = true
-                    localCommandExecutedThisTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    resetTurnBuffers("fast_action_final_reconciled")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
                 latestActionDispatchedAt = 0L
                 val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
                     normalizedFinalUserText, activityContext, visualAwarenessPreferences.enabled, activeTurnId
@@ -3662,25 +3616,42 @@ class MyraVoiceService : Service() {
             "ACTION_RETURNED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} " +
                 "adapter=${adapter.adapterId} accepted=${result.accepted} elapsedMs=${android.os.SystemClock.elapsedRealtime() - enteredAt}"
         )
-        mainHandler.postDelayed({
+        lateinit var observeAndVerify: (Int) -> Unit
+        observeAndVerify = observe@ { resampleCount ->
             val current = runtime.activeTask()
-            if (current?.id != task.id || current.turnId != task.turnId) return@postDelayed
+            if (current?.id != task.id || current.turnId != task.turnId) return@observe
             val observationStartedAt = android.os.SystemClock.elapsedRealtime()
-            voiceLog("POST_ACTION_OBSERVATION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability}")
+            voiceLog(
+                "POST_ACTION_OBSERVATION_STARTED taskId=${task.id} turnId=${task.turnId} " +
+                    "stepId=${step.id} capability=${step.capability} resampleCount=$resampleCount"
+            )
             AccessibilityHelperService.instance?.refreshScreenContext(force = true)
             val after = runtimePerception(task.id)
             if (after == null) {
+                if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL &&
+                    ScrollVerificationResamplePolicy.shouldResample(result.accepted, false, resampleCount)
+                ) {
+                    voiceLog(
+                        "SCROLL_VERIFY_RESAMPLE_SCHEDULED taskId=${task.id} turnId=${task.turnId} " +
+                            "resample=${resampleCount + 1} reason=fresh_scene_unavailable delayMs=${ScrollVerificationResamplePolicy.DELAY_MS}"
+                    )
+                    mainHandler.postDelayed({
+                        voiceLog("SCROLL_VERIFY_RESAMPLE_READY taskId=${task.id} turnId=${task.turnId} resample=${resampleCount + 1}")
+                        observeAndVerify(resampleCount + 1)
+                    }, ScrollVerificationResamplePolicy.DELAY_MS)
+                    return@observe
+                }
                 runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN, "fresh screen unavailable")
                 onTerminal(GeneralVerificationStatus.UNKNOWN, "fresh screen unavailable")
-                return@postDelayed
+                return@observe
             }
             voiceLog(
                 "POST_ACTION_OBSERVATION_READY taskId=${task.id} turnId=${task.turnId} stepId=${step.id} " +
                     "foregroundPackage=${after.scene.externalForegroundPackage} screenGeneration=${after.scene.generation}"
             )
             voiceLog("VERIFICATION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} expected=${step.expectedOutcome.summary}")
-            if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
-                val evidence = ScrollMovementAnalyzer.analyze(actionBefore.scene, after.scene)
+            val scrollEvidence = if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
+                ScrollMovementAnalyzer.analyze(actionBefore.scene, after.scene).also { evidence ->
                 voiceLog(
                     "SCROLL_VERIFICATION_EVIDENCE taskId=${task.id} turnId=${task.turnId} " +
                         "preGeneration=${actionBefore.scene.generation} postGeneration=${after.scene.generation} " +
@@ -3688,6 +3659,30 @@ class MyraVoiceService : Service() {
                         "medianDeltaY=${evidence.medianDeltaY} newVisibleElements=${evidence.newVisibleElements} " +
                         "lostVisibleElements=${evidence.lostVisibleElements} scrollStateBefore=unavailable " +
                         "scrollStateAfter=unavailable accessibilityScrollEvent=unavailable decision=${if (evidence.proven) "SUCCESS" else "UNKNOWN"}"
+                )
+                }
+            } else null
+            if (scrollEvidence != null && ScrollVerificationResamplePolicy.shouldResample(
+                    result.accepted, scrollEvidence.proven, resampleCount
+                )
+            ) {
+                voiceLog(
+                    "SCROLL_VERIFY_RESAMPLE_SCHEDULED taskId=${task.id} turnId=${task.turnId} " +
+                        "resample=${resampleCount + 1} reason=unstable_or_insufficient_semantic_evidence " +
+                        "delayMs=${ScrollVerificationResamplePolicy.DELAY_MS}"
+                )
+                mainHandler.postDelayed({
+                    voiceLog("SCROLL_VERIFY_RESAMPLE_READY taskId=${task.id} turnId=${task.turnId} resample=${resampleCount + 1}")
+                    observeAndVerify(resampleCount + 1)
+                }, ScrollVerificationResamplePolicy.DELAY_MS)
+                return@observe
+            }
+            if (scrollEvidence != null) {
+                voiceLog(
+                    "SCROLL_VERIFY_FINAL_EVIDENCE taskId=${task.id} turnId=${task.turnId} samples=${resampleCount + 1} " +
+                        "stableAnchorCount=${scrollEvidence.stableAnchorCount} movedAnchorCount=${scrollEvidence.movedAnchorCount} " +
+                        "medianDeltaY=${scrollEvidence.medianDeltaY} newVisibleElements=${scrollEvidence.newVisibleElements} " +
+                        "lostVisibleElements=${scrollEvidence.lostVisibleElements} decision=${if (scrollEvidence.proven) "SUCCESS" else "UNKNOWN"}"
                 )
             }
             val (verification, recovery) = runtime.verify(after)
@@ -3697,18 +3692,15 @@ class MyraVoiceService : Service() {
                 "VERIFICATION_RESULT taskId=${task.id} turnId=${task.turnId} stepId=${step.id} status=${verification.status} " +
                     "expected=${verification.expected} observed=${verification.observed} recoveryCount=${runtime.activeTask()?.recoveryCount ?: task.recoveryCount}"
             )
-            fastCommittedActions.forTurn(task.turnId)?.takeIf { it.taskId == task.id }?.let { fast ->
-                voiceLog(
-                    "ACTION_LATENCY_BREAKDOWN turnId=${task.turnId} capability=${step.capability} " +
-                        "speechEndToCandidateMs=${(fast.candidateAt - fast.speechEndedAt).coerceAtLeast(0L)} " +
-                        "speechEndToAuthorizationMs=${fast.authorizedAt - fast.speechEndedAt} " +
-                        "authorizationToTaskMs=0 taskToRuntimeMs=${enteredAt - fast.authorizedAt} " +
-                        "runtimeToActionStartedMs=${actionStartedAt - enteredAt} actionElapsedMs=${actionReturnedAt - actionStartedAt} " +
-                        "actionReturnToObservationMs=${observationStartedAt - actionReturnedAt} " +
-                        "observationToVerificationMs=${verificationAt - observationStartedAt} " +
-                        "speechEndToVisibleActionEstimateMs=${actionReturnedAt - fast.speechEndedAt}"
-                )
-            }
+            voiceLog(
+                "ACTION_LATENCY_BREAKDOWN turnId=${task.turnId} capability=${step.capability} " +
+                    "speechEndToAuthorizationMs=${if (speechActivityEndedAt > 0L) latestIntentDecidedAt - speechActivityEndedAt else -1L} " +
+                    "taskToRuntimeMs=${if (latestIntentDecidedAt > 0L) enteredAt - latestIntentDecidedAt else -1L} " +
+                    "runtimeToActionStartedMs=${actionStartedAt - enteredAt} actionElapsedMs=${actionReturnedAt - actionStartedAt} " +
+                    "actionReturnToObservationMs=${observationStartedAt - actionReturnedAt} " +
+                    "observationToVerificationMs=${verificationAt - observationStartedAt} " +
+                    "speechEndToVisibleActionEstimateMs=${if (speechActivityEndedAt > 0L) actionReturnedAt - speechActivityEndedAt else -1L}"
+            )
             WorkingTaskRuntime.store.recordOutcome(
                 verification.observed,
                 verification.status == GeneralVerificationStatus.SUCCESS,
@@ -3737,7 +3729,8 @@ class MyraVoiceService : Service() {
                 voiceLog("AGENT_TASK_TERMINAL taskId=${task.id} turnId=${task.turnId} status=${verification.status} elapsedMs=${android.os.SystemClock.elapsedRealtime() - enteredAt}")
                 onTerminal(verification.status, verification.observed)
             }
-        }, adapter.observationDelayMs)
+        }
+        mainHandler.postDelayed({ observeAndVerify(0) }, adapter.observationDelayMs)
         return true
     }
 
@@ -4293,124 +4286,6 @@ class MyraVoiceService : Service() {
         voiceLog("brain_task_finished taskToken=$taskToken success=$success message=${message.take(100)}")
     }
 
-    private fun stageFastActionCandidate(
-        capability: ToolCapability,
-        parameters: Map<String, String>,
-        semanticText: String,
-        source: String,
-        confidence: Double
-    ) {
-        if (activeTurnId <= 0L || semanticText.isBlank()) return
-        val now = android.os.SystemClock.elapsedRealtime()
-        val foreground = AccessibilityHelperService.instance?.currentForegroundContext()
-        val staged = fastActionCandidates.stage(
-            FastActionCandidate(
-                turnId = activeTurnId,
-                capability = capability,
-                parameters = parameters,
-                semanticText = semanticText,
-                source = source,
-                confidence = confidence,
-                foregroundPackage = foreground?.packageName,
-                windowId = foreground?.windowId,
-                screenGeneration = foreground?.generation ?: 0L,
-                firstStableAt = now,
-                updatedAt = now
-            )
-        )
-        voiceLog(
-            "FAST_ACTION_CANDIDATE turnId=${staged.turnId} capability=${staged.capability} " +
-                "candidateAgeMs=0 confidence=${staged.confidence} source=${staged.source} " +
-                "conflicting=${staged.conflicting}"
-        )
-        val identity = voiceTurnIdentities.current()
-        if (identity?.userTurnId == activeTurnId && identity.speechEndAt > 0L) {
-            scheduleFastActionAuthorization(activeTurnId)
-        }
-    }
-
-    private fun scheduleFastActionAuthorization(turnId: Long) {
-        val candidate = fastActionCandidates.current()?.takeIf { it.turnId == turnId } ?: return
-        val now = android.os.SystemClock.elapsedRealtime()
-        val remaining = (FastActionAuthorizationPolicy.STABILITY_MS - (now - candidate.firstStableAt)).coerceAtLeast(0L)
-        mainHandler.postDelayed({ attemptFastActionAuthorization(turnId) }, remaining)
-    }
-
-    private fun attemptFastActionAuthorization(turnId: Long) {
-        val candidate = fastActionCandidates.current()?.takeIf { it.turnId == turnId } ?: return
-        val identity = voiceTurnIdentities.current()
-        val speechEndAt = identity?.takeIf { it.userTurnId == turnId }?.speechEndAt ?: 0L
-        val now = android.os.SystemClock.elapsedRealtime()
-        val context = ActivityContextStore.snapshot()
-        val foreground = AccessibilityHelperService.instance?.currentForegroundContext()
-        val working = WorkingTaskRuntime.store.snapshot()
-        val semanticDecision = UnifiedTurnInterpreter.interpret(candidate.semanticText, working)
-        val scene = context?.let { ScreenSceneFactory.from(it, working.activeExternalApp) }
-        val result = FastActionAuthorizationPolicy.decide(
-            candidate = candidate,
-            now = now,
-            speechEnded = speechEndAt > 0L,
-            authoritativeTurnId = turnId,
-            unifiedDecision = semanticDecision,
-            currentPackage = foreground?.packageName ?: context?.packageName,
-            currentWindowId = foreground?.windowId ?: context?.windowId,
-            protectedModal = scene?.let(ModalSafetyPolicy::requiresAuthorization) == true,
-            alreadyCommitted = screenCommandTurnGuard.hasCommitted(turnId)
-        )
-        voiceLog(
-            "FAST_ACTION_AUTHORIZATION turnId=$turnId capability=${candidate.capability} decision=${result.decision} " +
-                "reason=${result.reason} speechEndToAuthorizationMs=${if (speechEndAt > 0L) now - speechEndAt else -1L}"
-        )
-        if (result.decision == FastAuthorizationDecision.WAIT_FOR_FINAL && result.reason == "candidate_stabilizing") {
-            scheduleFastActionAuthorization(turnId)
-            return
-        }
-        if (result.decision != FastAuthorizationDecision.FAST_AUTHORIZE) return
-
-        val accepted = UnifiedLyraAgentRuntime.agent.acceptTurn(
-            candidate.semanticText, context, visualAwarenessPreferences.enabled, turnId
-        )
-        val runtimeTask = GeneralAgentRuntimeStore.runtime.activeTask()
-        if (!accepted.authorizesPhoneActions || runtimeTask == null || runtimeTask.turnId != turnId ||
-            candidate.capability !in runtimeTask.intent.requiredCapabilities
-        ) {
-            voiceLog("FAST_ACTION_AUTHORIZATION turnId=$turnId decision=REJECT reason=runtime_task_capability_mismatch")
-            return
-        }
-        fastActionCandidates.consume(turnId)
-        val authorizedAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog(
-            "AGENT_TASK_CREATED taskId=${runtimeTask.id} turnId=$turnId goal=${runtimeTask.intent.interpretedGoal} " +
-                "source=FAST_ACTION_AUTHORIZATION foregroundPackage=${context?.packageName} screenGeneration=${context?.generation ?: 0L}"
-        )
-        val dispatched = when (candidate.capability) {
-            ToolCapability.ACCESSIBILITY_SCROLL -> {
-                val direction = runCatching {
-                    AppCommand.ScrollDirection.valueOf(candidate.parameters["direction"] ?: "DOWN")
-                }.getOrDefault(AppCommand.ScrollDirection.DOWN)
-                handleScrollProposal(
-                    AppCommand.ScrollYouTube(direction), "fast_speech_end_authorization",
-                    ScrollProposalAuthorization.FINAL_AUTHORIZED, requestedTaskId = runtimeTask.id
-                )
-            }
-            ToolCapability.BROWSER_SEARCH -> executeUnifiedBrowserSearch(candidate.semanticText)
-            else -> false
-        }
-        val dispatchedAt = android.os.SystemClock.elapsedRealtime()
-        if (dispatched) {
-            fastCommittedActions.record(
-                FastCommittedAction(
-                    turnId, runtimeTask.id, candidate.capability, candidate.parameters,
-                    candidate.semanticText, candidate.updatedAt, speechEndAt, authorizedAt, dispatchedAt
-                )
-            )
-            voiceLog(
-                "FAST_ACTION_DISPATCH turnId=$turnId taskId=${runtimeTask.id} capability=${candidate.capability} " +
-                    "speechEndToDispatchMs=${dispatchedAt - speechEndAt}"
-            )
-        }
-    }
-
     private fun handleScrollProposal(
         command: AppCommand.ScrollYouTube,
         source: String,
@@ -4441,13 +4316,6 @@ class MyraVoiceService : Service() {
                 "SCROLL_CANDIDATE_DETECTED turnId=$turnId direction=$direction source=$source " +
                     "foregroundPackage=${foreground?.packageName} observedGeneration=${foreground?.generation ?: 0L} " +
                     "authorization=PRE_FINAL decision=STAGED"
-            )
-            stageFastActionCandidate(
-                ToolCapability.ACCESSIBILITY_SCROLL,
-                mapOf("direction" to direction.name),
-                lastUserIntentText.ifBlank { input.toString().trim() },
-                source,
-                if (source == "partial_transcript" || source == "media_pre_final") .97 else .80
             )
             return false
         }
@@ -4532,9 +4400,16 @@ class MyraVoiceService : Service() {
                     voiceLog("screen_action_feedback_suppressed turnId=$activeTurnId action=scroll success=true owner=GENERAL_RUNTIME")
                 }
                 GeneralVerificationStatus.UNKNOWN -> {
-                    val message = "Scroll bheja tha, lekin screen movement verify nahi hua."
-                    listener?.onMyraText(message, false); emitState(message)
-                    queueLocalSpeech(message, allowUntranscribedAudio = false)
+                    val dispatchAccepted = GeneralAgentRuntimeStore.runtime.lastCompletedTask()
+                        ?.actionHistory?.lastOrNull()?.accepted == true
+                    if (dispatchAccepted) {
+                        audio?.setMuted(false)
+                        emitState("Sun rahi hoon…")
+                        voiceLog(
+                            "screen_action_feedback_suppressed turnId=$activeTurnId action=scroll " +
+                                "success=unknown accepted=true owner=GENERAL_RUNTIME reason=insufficient_movement_evidence"
+                        )
+                    }
                 }
                 GeneralVerificationStatus.FAILURE -> {
                     val message = if (explicitYouTube) "YouTube ka current feed move nahi hua."
@@ -4658,15 +4533,6 @@ class MyraVoiceService : Service() {
                 "earlyModelAudioBufferedBytes=$earlyModelAudioBytes"
         )
         voiceLog("authoritativeTurnComplete turnId=$speechTimingTurnId at=$speechActivityEndedAt speechEndToAuthoritativeTurnMs=0")
-        scheduleFastActionAuthorization(endingTurnId)
-        if (fastActionCandidates.current()?.turnId == endingTurnId) {
-            // A plausible action candidate owns the short stabilization window. Model audio
-            // cannot race ahead of grounded action authorization.
-            earlyModelAudio.clear()
-            earlyModelAudioBytes = 0L
-            earlyModelAudioGenerationId = 0L
-            return
-        }
         if (earlyModelAudio.isEmpty()) return
         val generationId = earlyModelAudioGenerationId
         val chunks = earlyModelAudio.toList()
