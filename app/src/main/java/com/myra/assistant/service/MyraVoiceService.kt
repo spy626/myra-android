@@ -1290,15 +1290,12 @@ class MyraVoiceService : Service() {
                         "authoritativeTurnToTranscriptMs=${if (speechActivityEndedAt > 0L) latestTurnAcceptedAt - speechActivityEndedAt else -1L}"
                 )
                 fastCommittedActions.forTurn(activeTurnId)?.let { committed ->
-                    val finalDecision = UnifiedTurnInterpreter.interpret(
-                        normalizedFinalUserText, WorkingTaskRuntime.store.snapshot()
-                    )
-                    val compatible = when (committed.capability) {
-                        ToolCapability.ACCESSIBILITY_SCROLL -> finalDecision.authorizesPhoneActions && finalDecision.goal == "SCROLL"
-                        ToolCapability.BROWSER_SEARCH -> finalDecision.authorizesPhoneActions &&
-                            BrowserSearchRequestParser.parse(normalizedFinalUserText) != null
-                        else -> false
-                    }
+                    val finalWorking = WorkingTaskRuntime.store.snapshot()
+                    val finalDecision = UnifiedTurnInterpreter.interpret(normalizedFinalUserText, finalWorking)
+                    val finalCapabilities = UnifiedLyraAgentRuntime.agent.toStructuredIntent(
+                        normalizedFinalUserText, finalDecision, working = finalWorking
+                    ).requiredCapabilities
+                    val compatible = finalDecision.authorizesPhoneActions && committed.capability in finalCapabilities
                     voiceLog(
                         "FAST_ACTION_FINAL_RECONCILIATION turnId=$activeTurnId finalIntent=${finalDecision.intent} " +
                             "committedCapability=${committed.capability} compatible=$compatible " +

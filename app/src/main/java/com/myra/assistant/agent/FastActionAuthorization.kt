@@ -52,12 +52,12 @@ object FastActionAuthorizationPolicy {
         if (!unifiedDecision.authorizesPhoneActions || unifiedDecision.intent !in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
             return FastAuthorizationResult(FastAuthorizationDecision.REJECT, "unified_semantics_not_action")
         }
-        val expectedCapability = when {
-            unifiedDecision.goal == "SCROLL" -> ToolCapability.ACCESSIBILITY_SCROLL
-            BrowserSearchRequestParser.parse(candidate.semanticText) != null -> ToolCapability.BROWSER_SEARCH
-            else -> null
+        val semanticCapabilities = UnifiedLyraAgent().toStructuredIntent(
+            candidate.semanticText, unifiedDecision, working = null
+        ).requiredCapabilities
+        if (candidate.capability !in semanticCapabilities) {
+            return FastAuthorizationResult(FastAuthorizationDecision.WAIT_FOR_FINAL, "semantic_capability_mismatch")
         }
-        if (expectedCapability != candidate.capability) return FastAuthorizationResult(FastAuthorizationDecision.WAIT_FOR_FINAL, "semantic_capability_mismatch")
         if (candidate.capability == ToolCapability.BROWSER_SEARCH && candidate.parameters["query"].isNullOrBlank()) {
             return FastAuthorizationResult(FastAuthorizationDecision.WAIT_FOR_FINAL, "incomplete_search_query")
         }
