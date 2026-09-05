@@ -66,5 +66,38 @@ class UnifiedTurnOwnershipTest {
         assertEquals("aaj koi new AI aaya hai kya", request?.query)
     }
 
+    @Test fun nicheJaoCreatesScrollRuntimeTaskForTheSameTurn() {
+        val agent = UnifiedLyraAgent()
+        val decision = agent.acceptTurn("Niche jao", context(), true, turnId = 7L)
+        val runtime = GeneralAgentRuntimeStore.runtime.activeTask()!!
+        assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)
+        assertEquals(7L, runtime.turnId)
+        assertEquals(agent.currentTask()?.id, runtime.id)
+        assertEquals("DOWN", runtime.intent.parameters["direction"])
+        assertEquals(setOf(ToolCapability.ACCESSIBILITY_SCROLL), runtime.intent.requiredCapabilities)
+    }
+
+    @Test fun thodaAurCreatesANewTurnTaskAndInheritsSuccessfulScrollDirection() {
+        val completed = CompletedTaskContext(
+            taskId = "old", goal = "SCROLL", action = ToolCapability.ACCESSIBILITY_SCROLL.name,
+            query = null, destination = null, executor = ToolCapability.ACCESSIBILITY_SCROLL.name,
+            observedOutcome = "screen moved", completionState = TaskCompletionState.SUCCESS,
+            completedAt = 1L, scrollDirection = "DOWN"
+        )
+        val working = WorkingTaskContext(lastCompletedTask = completed)
+        val decision = UnifiedTurnInterpreter.interpret("Thoda aur", working)
+        val structured = UnifiedLyraAgent().toStructuredIntent("Thoda aur", decision, working = working)
+        assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)
+        assertTrue(decision.authorizesPhoneActions)
+        assertEquals("DOWN", structured.parameters["direction"])
+        assertEquals(setOf(ToolCapability.ACCESSIBILITY_SCROLL), structured.requiredCapabilities)
+    }
+
+    @Test fun thodaAurWithoutSuccessfulScrollContextExecutesNoTools() {
+        val decision = UnifiedTurnInterpreter.interpret("Thoda aur", WorkingTaskContext())
+        assertEquals(TurnIntent.CONVERSATION, decision.intent)
+        assertFalse(decision.authorizesPhoneActions)
+    }
+
     private fun context() = CurrentActivityContext("com.android.chrome", "Chrome", "BROWSER", 1, 2, emptyList(), confidence = .8, timestamp = 3)
 }

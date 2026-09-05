@@ -24,7 +24,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
             null
         }
         WorkingTaskRuntime.store.onTurn(decision, task, scene)
-        val structured = toStructuredIntent(request, decision, task)
+        val structured = toStructuredIntent(request, decision, task, working)
         if (decision.authorizesPhoneActions) {
             val runtime = GeneralAgentRuntimeStore.runtime
             val runtimeTask = runtime.start(turnId, structured, task?.id)
@@ -40,7 +40,12 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
         return decision
     }
 
-    fun toStructuredIntent(request: String, decision: AgentTurnDecision, task: AgentTask? = null): StructuredAgentIntent {
+    fun toStructuredIntent(
+        request: String,
+        decision: AgentTurnDecision,
+        task: AgentTask? = null,
+        working: WorkingTaskContext? = WorkingTaskRuntime.store.snapshot()
+    ): StructuredAgentIntent {
         val goal = task?.interpretedGoal ?: understandGoal(request, decision)
         val capabilities = when (goal) {
             AgentGoalType.TAP -> setOf(ToolCapability.FIND_ELEMENT, ToolCapability.ACCESSIBILITY_CLICK)
@@ -61,10 +66,22 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
             requiresAction = decision.authorizesPhoneActions,
             targetDescription = request.takeIf { decision.authorizesPhoneActions },
             requiredCapabilities = capabilities,
-            parameters = BrowserSearchRequestParser.parse(request)?.let { mapOf("query" to it.query) }.orEmpty(),
+            parameters = when (goal) {
+                AgentGoalType.SCROLL -> mapOf("direction" to resolveScrollDirection(request, working))
+                else -> BrowserSearchRequestParser.parse(request)?.let { mapOf("query" to it.query) }.orEmpty()
+            },
             confidence = decision.confidence,
             needsClarification = decision.intent == TurnIntent.CLARIFICATION
         )
+    }
+
+    private fun resolveScrollDirection(request: String, working: WorkingTaskContext?): String {
+        val normalized = normalize(request)
+        return when {
+            Regex("\\b(?:up|upar|upper|ऊपर)\\b").containsMatchIn(normalized) -> "UP"
+            Regex("\\b(?:down|niche|neeche|नीचे)\\b").containsMatchIn(normalized) -> "DOWN"
+            else -> working?.lastCompletedTask?.scrollDirection ?: "DOWN"
+        }
     }
 
     @Synchronized fun createTask(
@@ -150,6 +167,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
     private fun understandGoal(raw: String, decision: AgentTurnDecision? = null): AgentGoalType {
         val text = normalize(raw)
         return when {
+            decision?.goal == "SCROLL" -> AgentGoalType.SCROLL
             decision?.intent == TurnIntent.MULTI_STEP_GOAL && BrowserSearchRequestParser.parse(raw) != null -> AgentGoalType.BROWSER_SEARCH
             decision?.intent == TurnIntent.MULTI_STEP_GOAL -> AgentGoalType.WEB_SEARCH
             Regex("\\b(?:scroll|niche|neeche|upar)\\b").containsMatchIn(text) -> AgentGoalType.SCROLL

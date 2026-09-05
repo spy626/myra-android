@@ -35,3 +35,39 @@ internal class VoiceTurnIdentityStore {
         if (active?.userTurnId != turnId) active = null
     }
 }
+
+/** A pre-final transcript may identify a likely scroll, but cannot authorize execution. */
+internal data class PendingScrollCandidate(
+    val turnId: Long,
+    val direction: String,
+    val detectedAt: Long
+)
+
+internal class PendingScrollCandidateStore {
+    @Volatile private var pending: PendingScrollCandidate? = null
+
+    @Synchronized fun stage(turnId: Long, direction: String, detectedAt: Long): PendingScrollCandidate {
+        require(turnId > 0L) { "A pending action candidate requires a real user turn" }
+        return PendingScrollCandidate(turnId, direction, detectedAt).also { pending = it }
+    }
+
+    /** Consumes only an exact authoritative-turn match; candidates never rebind across turns. */
+    @Synchronized fun consume(authoritativeTurnId: Long): PendingScrollCandidate? {
+        val candidate = pending ?: return null
+        if (candidate.turnId != authoritativeTurnId) return null
+        pending = null
+        return candidate
+    }
+
+    fun current(): PendingScrollCandidate? = pending
+
+    @Synchronized fun discardForTurn(turnId: Long) {
+        if (pending?.turnId == turnId) pending = null
+    }
+}
+
+internal object RuntimeActionBindingGuard {
+    fun matches(requestedTurnId: Long, requestedTaskId: String, taskTurnId: Long, activeTaskId: String): Boolean =
+        requestedTurnId > 0L && requestedTurnId == taskTurnId &&
+            requestedTaskId.isNotBlank() && requestedTaskId == activeTaskId
+}

@@ -41,7 +41,8 @@ data class CompletedTaskContext(
     val executor: String?,
     val observedOutcome: String,
     val completionState: TaskCompletionState,
-    val completedAt: Long
+    val completedAt: Long,
+    val scrollDirection: String? = null
 )
 
 enum class TaskCompletionState { EXECUTING, SUCCESS, FAILURE, UNKNOWN }
@@ -149,11 +150,13 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     @Synchronized fun completeRuntime(task: GeneralRuntimeTask, observed: String, state: TaskCompletionState): CompletedTaskContext {
         val completedAt = now()
         val completed = CompletedTaskContext(
-            task.id, task.intent.interpretedGoal, task.currentStep?.capability?.name,
+            task.id, task.intent.interpretedGoal,
+            task.actionHistory.lastOrNull()?.capability?.name ?: task.currentStep?.capability?.name,
             task.intent.parameters["query"],
             task.intent.parameters["destination"]?.let { runCatching { SearchDestination.valueOf(it) }.getOrNull() },
             task.actionHistory.lastOrNull()?.capability?.name,
-            observed, state, completedAt
+            observed, state, completedAt,
+            task.intent.parameters["direction"]
         )
         value = WorkingTaskContext(
             conversationTopic = value.conversationTopic,

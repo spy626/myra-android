@@ -34,6 +34,17 @@ object UnifiedTurnInterpreter {
         if (working?.lastRequestedAction != null && isActionFollowUp(text)) {
             return AgentTurnDecision(TurnIntent.FOLLOW_UP, text, requiresPerception = true, confidence = .94)
         }
+        if (isScrollContinuation(text) && working?.lastCompletedTask?.let {
+                it.completionState == TaskCompletionState.SUCCESS &&
+                    it.action == ToolCapability.ACCESSIBILITY_SCROLL.name &&
+                    it.scrollDirection != null
+            } == true
+        ) {
+            return AgentTurnDecision(
+                TurnIntent.ACTION_REQUEST, "SCROLL", authorizesPhoneActions = true,
+                requiresPerception = true, confidence = .94
+            )
+        }
         if (isMetaDiscussion(text)) return conversation(raw, .96)
         if (FastVisualRequestClassifier.classify(raw)?.kind == FastVisualKind.QUESTION) {
             return AgentTurnDecision(TurnIntent.SCREEN_QUESTION, text, requiresPerception = true, confidence = .94)
@@ -88,6 +99,9 @@ object UnifiedTurnInterpreter {
     private fun isActionFollowUp(text: String): Boolean = listOf(
         "abhi nahi hua na", "abhi hua kya", "did it work", "did that work", "hua nahi na", "nahi hua na"
     ).any { candidate -> text.trimEnd('?', '.', '!') == candidate }
+
+    private fun isScrollContinuation(text: String): Boolean =
+        text.trimEnd('?', '.', '!') in setOf("thoda aur", "thora aur", "aur", "continue")
 
     private fun isExplicitCorrection(text: String): Boolean =
         Regex("^(?:actually|correction|correct|nahi |no |galat |असल में|नहीं )").containsMatchIn(text) &&

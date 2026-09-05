@@ -37,4 +37,38 @@ class VoiceTurnIdentityTest {
             assertNull(store.current())
         }
     }
+
+    @Test fun preFinalScrollCandidateDoesNotExecuteAndBindsOnlyToItsFinalTurn() {
+        val candidates = PendingScrollCandidateStore()
+        candidates.stage(7L, "DOWN", 1_000L)
+        assertEquals("DOWN", candidates.current()?.direction)
+        assertNull(candidates.consume(8L))
+        assertEquals(7L, candidates.current()?.turnId)
+        assertEquals("DOWN", candidates.consume(7L)?.direction)
+        assertNull(candidates.current())
+    }
+
+    @Test fun completedCandidateCannotBeReusedByLaterTurn() {
+        val candidates = PendingScrollCandidateStore()
+        candidates.stage(7L, "DOWN", 1_000L)
+        assertEquals(7L, candidates.consume(7L)?.turnId)
+        assertNull(candidates.consume(8L))
+    }
+
+    @Test fun runtimeActionRequiresExactNonZeroTurnAndTaskIdentity() {
+        assertTrue(RuntimeActionBindingGuard.matches(7L, "task-7", 7L, "task-7"))
+        assertTrue(!RuntimeActionBindingGuard.matches(8L, "task-7", 7L, "task-7"))
+        assertTrue(!RuntimeActionBindingGuard.matches(7L, "task-8", 7L, "task-7"))
+        assertTrue(!RuntimeActionBindingGuard.matches(0L, "task-7", 7L, "task-7"))
+    }
+
+    @Test fun zeroIdSpeechEndCannotReplaceAuthorizedIdentity() {
+        val store = VoiceTurnIdentityStore()
+        store.begin(7L, 1_000L)
+        assertNull(store.speechEnded(0L, 1_500L))
+        assertEquals(7L, store.current()?.userTurnId)
+        assertEquals(0L, store.current()?.speechEndAt)
+        store.speechEnded(store.current()!!.userTurnId, 1_500L)
+        assertEquals(1_500L, store.current()?.speechEndAt)
+    }
 }

@@ -292,6 +292,7 @@ class MyraVoiceService : Service() {
     private var speechActivityEndedAt = 0L
     private var speechTimingTurnId = 0L
     private val voiceTurnIdentities = VoiceTurnIdentityStore()
+    private val pendingScrollCandidates = PendingScrollCandidateStore()
     private var inputTurnStartedAt = 0L
     private var latestTurnAcceptedAt = 0L
     private var latestIntentDecidedAt = 0L
@@ -739,6 +740,15 @@ class MyraVoiceService : Service() {
                                 voiceLog("direct_media_action_rejected_by_unified_owner turnId=$activeTurnId intent=${ownerDecision.intent}")
                                 return@inputTranscript
                             }
+                            if (directCommand is AppCommand.ScrollYouTube) {
+                                val direction = (directCommand.direction ?: lastScrollDirection).name
+                                pendingScrollCandidates.stage(activeTurnId, direction, android.os.SystemClock.elapsedRealtime())
+                                voiceLog("SCROLL_CANDIDATE_DETECTED turnId=$activeTurnId direction=$direction source=media_pre_final execution=staged")
+                                probableActionTurn = true
+                                suppressModelForTurn = true
+                                output.clear()
+                                return@inputTranscript
+                            }
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
                                 commitFinalUserMessage(spoken, "DIRECT_MEDIA_COMMAND")
                                 commandUserTextEmitted = true
@@ -946,6 +956,11 @@ class MyraVoiceService : Service() {
                         "GenericScroll"
                     } else command.javaClass.simpleName
                     voiceLog("partial_action_held_for_unified_owner turnId=$activeTurnId candidate=$candidateName")
+                    if (command is AppCommand.ScrollYouTube) {
+                        val direction = (command.direction ?: lastScrollDirection).name
+                        pendingScrollCandidates.stage(activeTurnId, direction, android.os.SystemClock.elapsedRealtime())
+                        voiceLog("SCROLL_CANDIDATE_DETECTED turnId=$activeTurnId direction=$direction source=partial execution=staged")
+                    }
                 }
             }
             client.onOutputTranscript = { transcript, modelGenerationId ->
@@ -1292,12 +1307,37 @@ class MyraVoiceService : Service() {
                     probableActionTurn = false
                     suppressModelForTurn = false
                     voiceLog("agent_phone_tools_locked turnId=$activeTurnId reason=${turnDecision.intent}")
+                    pendingScrollCandidates.discardForTurn(activeTurnId)
                 }
                 if (turnDecision.intent == TurnIntent.FOLLOW_UP) {
                     handleUnifiedActionFollowUp()
                     resetTurnBuffers("unified_action_follow_up")
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
+                }
+                if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
+                    unifiedTask?.interpretedGoal == com.myra.assistant.agent.AgentGoalType.SCROLL
+                ) {
+                    val runtimeTask = GeneralAgentRuntimeStore.runtime.activeTask()
+                    val candidate = pendingScrollCandidates.consume(activeTurnId)
+                    val directionName = runtimeTask?.intent?.parameters?.get("direction")
+                        ?: candidate?.direction
+                        ?: lastScrollDirection.name
+                    val direction = runCatching { AppCommand.ScrollDirection.valueOf(directionName) }
+                        .getOrDefault(lastScrollDirection)
+                    if (runtimeTask == null) {
+                        voiceLog("SCROLL_RUNTIME_MISSING turnId=$activeTurnId reason=authoritative_task_not_created")
+                    } else {
+                        voiceLog("SCROLL_RUNTIME_BOUND turnId=$activeTurnId taskId=${runtimeTask.id} direction=$direction")
+                        executeVerifiedScroll(
+                            AppCommand.ScrollYouTube(direction),
+                            requestedTurnId = activeTurnId,
+                            requestedTaskId = runtimeTask.id
+                        )
+                        resetTurnBuffers("unified_runtime_scroll")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
                 }
                 if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
                     executeUnifiedBrowserSearch(userText)
@@ -3490,10 +3530,23 @@ class MyraVoiceService : Service() {
      * adapter; the service schedules observation but never calls the low-level executor twice. */
     private fun executeGeneralRuntimeCapability(
         expectedCapability: ToolCapability,
+        requestedTurnId: Long,
+        requestedTaskId: String,
         onTerminal: (GeneralVerificationStatus, String) -> Unit
     ): Boolean {
         val runtime = GeneralAgentRuntimeStore.runtime
         val task = runtime.activeTask() ?: return false
+        if (!RuntimeActionBindingGuard.matches(requestedTurnId, requestedTaskId, task.turnId, task.id)) {
+            voiceLog(
+                "AGENT_RUNTIME_TURN_MISMATCH requestedTurnId=$requestedTurnId taskTurnId=${task.turnId} " +
+                    "requestedTaskId=$requestedTaskId activeTaskId=${task.id} action=$expectedCapability decision=blocked"
+            )
+            voiceLog(
+                "VOICE_ACTION_IDENTITY_INVALID speechTurnId=$requestedTurnId runtimeTurnId=${task.turnId} " +
+                    "reason=runtime_task_identity_mismatch"
+            )
+            return false
+        }
         val enteredAt = android.os.SystemClock.elapsedRealtime()
         voiceLog("AGENT_RUNTIME_ENTER taskId=${task.id} turnId=${task.turnId} capability=$expectedCapability recoveryCount=${task.recoveryCount}")
         var before = runtimePerception(task.id)
@@ -3513,7 +3566,7 @@ class MyraVoiceService : Service() {
                 onTerminal(GeneralVerificationStatus.UNKNOWN, "screen unavailable")
                 return true
             }
-            return executeGeneralRuntimeCapability(expectedCapability, onTerminal)
+            return executeGeneralRuntimeCapability(expectedCapability, requestedTurnId, requestedTaskId, onTerminal)
         }
         if (planned is PlannerResult.NeedClarification || planned is PlannerResult.Fail || planned is PlannerResult.Complete) {
             val observed = when (planned) {
@@ -3596,7 +3649,7 @@ class MyraVoiceService : Service() {
             } else if (recovery is RecoveryDecision.Retry) {
                 voiceLog("RECOVERY_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} recoveryCount=${runtime.activeTask()?.recoveryCount}")
                 voiceLog("RECOVERY_DECISION taskId=${task.id} turnId=${task.turnId} decision=RETRY rejected=${recovery.rejectedTarget}")
-                executeGeneralRuntimeCapability(expectedCapability, onTerminal)
+                executeGeneralRuntimeCapability(expectedCapability, requestedTurnId, requestedTaskId, onTerminal)
             } else {
                 voiceLog("RECOVERY_DECISION taskId=${task.id} turnId=${task.turnId} decision=${recovery?.javaClass?.simpleName ?: "NONE"}")
                 runtime.completeFromAdapter(verification.status, verification.observed)
@@ -3720,7 +3773,8 @@ class MyraVoiceService : Service() {
             relevantApp = expectedPackage,
             textHint = request.query
         )
-        return executeGeneralRuntimeCapability(ToolCapability.BROWSER_SEARCH) { status, observed ->
+        val runtimeTaskId = GeneralAgentRuntimeStore.runtime.activeTask()?.id ?: return false
+        return executeGeneralRuntimeCapability(ToolCapability.BROWSER_SEARCH, taskTurnId, runtimeTaskId) { status, observed ->
             val verification = when (status) {
                 GeneralVerificationStatus.SUCCESS -> SearchVerification.SUCCESS
                 GeneralVerificationStatus.FAILURE -> SearchVerification.FAILURE
@@ -4160,7 +4214,11 @@ class MyraVoiceService : Service() {
         voiceLog("brain_task_finished taskToken=$taskToken success=$success message=${message.take(100)}")
     }
 
-    private fun executeVerifiedScroll(command: AppCommand.ScrollYouTube) {
+    private fun executeVerifiedScroll(
+        command: AppCommand.ScrollYouTube,
+        requestedTurnId: Long = activeTurnId,
+        requestedTaskId: String = GeneralAgentRuntimeStore.runtime.activeTask()?.id.orEmpty()
+    ) {
         cancelSpeechForNewAction()
         suppressModelForTurn = true
         waitingForFreshInputAfterCommand = true
@@ -4203,7 +4261,9 @@ class MyraVoiceService : Service() {
             "explicitApp" to command.explicitlyRequestedApp.orEmpty(),
             "path" to path
         ), relevantApp = foregroundPackage)
-        val owned = executeGeneralRuntimeCapability(ToolCapability.ACCESSIBILITY_SCROLL) { status, _ ->
+        val owned = executeGeneralRuntimeCapability(
+            ToolCapability.ACCESSIBILITY_SCROLL, requestedTurnId, requestedTaskId
+        ) { status, _ ->
             when (status) {
                 GeneralVerificationStatus.SUCCESS -> {
                     lastScrollDirection = resolvedDirection
@@ -4225,7 +4285,9 @@ class MyraVoiceService : Service() {
             }
         }
         if (!owned) {
-            voiceLog("LEGACY_FALLBACK_USED turnId=$activeTurnId capability=ACCESSIBILITY_SCROLL reason=no_active_runtime_task execution=blocked")
+            val reason = if (GeneralAgentRuntimeStore.runtime.activeTask() == null) "no_active_runtime_task" else "runtime_turn_mismatch"
+            voiceLog("SCROLL_RUNTIME_MISSING turnId=$requestedTurnId reason=$reason")
+            voiceLog("LEGACY_FALLBACK_USED turnId=$requestedTurnId capability=ACCESSIBILITY_SCROLL reason=$reason execution=blocked")
             val message = "Scroll task active nahi hai, isliye action nahi kiya."
             listener?.onMyraText(message, true); emitState(message); queueLocalSpeech(message)
         } else {
@@ -4320,8 +4382,16 @@ class MyraVoiceService : Service() {
     private fun finishOrdinarySpeechActivity() {
         if (!ordinaryModelAudioGate.isSpeechActive()) return
         speechActivityEndedAt = android.os.SystemClock.elapsedRealtime()
-        voiceTurnIdentities.speechEnded(speechTimingTurnId, speechActivityEndedAt)
-        voiceLog("speechActivityEnd turnId=$speechTimingTurnId at=$speechActivityEndedAt")
+        val endingTurnId = speechTimingTurnId.takeIf { it > 0L }
+            ?: voiceTurnIdentities.current()?.userTurnId
+            ?: 0L
+        if (endingTurnId == 0L) {
+            voiceLog("VOICE_ACTION_IDENTITY_INVALID speechTurnId=0 runtimeTurnId=${GeneralAgentRuntimeStore.runtime.activeTask()?.turnId ?: 0L} reason=speech_end_without_identity")
+        } else {
+            speechTimingTurnId = endingTurnId
+            voiceTurnIdentities.speechEnded(endingTurnId, speechActivityEndedAt)
+        }
+        voiceLog("speechActivityEnd turnId=$endingTurnId at=$speechActivityEndedAt")
         ordinaryModelAudioGate.onSpeechActivityEnded()
         voiceLog(
             "authoritative_user_turn_complete turnId=$activeTurnId modelGenerationId=$earlyModelAudioGenerationId " +
@@ -4713,7 +4783,7 @@ class MyraVoiceService : Service() {
         ambiguousMessageTurn = false
         incompleteActionFragmentTurn = false
         activeTurnId = 0L
-        if (!screenResponseActive) {
+        if (!screenResponseActive && !ordinaryModelAudioGate.isSpeechActive()) {
             speechTimingTurnId = 0L
             speechActivityStartedAt = 0L
             speechActivityEndedAt = 0L
