@@ -164,7 +164,7 @@ object UnifiedTurnInterpreter {
     private fun isMetaDiscussion(text: String): Boolean {
         val reflective = listOf("main soch", "mai soch", "मैं सोच", "i think", "i was thinking", "लगता", "सोच रहा", "lagta hai", "shayad", "should", "chahiye", "चाहिए")
             .any(text::contains)
-        val architectureSubject = listOf("lyra ko", "lyra should", "feature", "फीचर", "system", "सिस्टम", "architecture", "अगर ", "agar ", "if ", "चाहिए")
+        val architectureSubject = listOf("lyra ko", "lyra should", "feature", "फीचर", "system", "सिस्टम", "architecture", "अगर ", "agar ", "if ", "chahiye", "चाहिए")
             .any(text::contains)
         val explicitFirstPerson = text.startsWith("main ") || text.startsWith("mai ") || text.startsWith("मैं ") || text.startsWith("i ")
         return (reflective && architectureSubject) ||

@@ -247,9 +247,9 @@ class GeneralAgentRuntimeTest {
     }
 
     @Test fun ordinal_is_applied_to_unique_logical_groups() {
-        val firstThumb = element("thumb1", top = 10, group = "card1")
-        val firstTitle = element("title1", top = 20, group = "card1")
-        val second = element("card2", top = 100, group = "card2")
+        val firstThumb = element("thumb1", top = 10, group = "card1").copy(role = SemanticRole.RESULT)
+        val firstTitle = element("title1", top = 20, group = "card1").copy(role = SemanticRole.RESULT)
+        val second = element("card2", top = 100, group = "card2").copy(role = SemanticRole.RESULT)
         val result = GeneralSemanticTargetResolver().resolve(
             SemanticTargetRequest("second logical result", ordinal = 2),
             scene("unknown", 1, listOf(firstThumb, firstTitle, second))
