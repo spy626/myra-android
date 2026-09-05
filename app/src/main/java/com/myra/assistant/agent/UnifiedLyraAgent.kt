@@ -26,7 +26,12 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
         WorkingTaskRuntime.store.onTurn(decision, task, scene)
         val structured = toStructuredIntent(request, decision, task)
         if (decision.authorizesPhoneActions) {
-            GeneralAgentRuntimeStore.runtime.start(turnId, structured)
+            val runtime = GeneralAgentRuntimeStore.runtime
+            val runtimeTask = runtime.start(turnId, structured)
+            val perception = if (runtimeTask != null && scene != null) {
+                PerceptionSnapshot(scene, runtimeTask.id, scene.observedAt)
+            } else null
+            runtime.next(perception)
         } else if (decision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION, TurnIntent.CANCEL)) {
             GeneralAgentRuntimeStore.runtime.cancel()
         }

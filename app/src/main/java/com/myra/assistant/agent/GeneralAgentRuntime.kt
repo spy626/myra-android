@@ -338,6 +338,31 @@ class GeneralAgentRuntime(
         return result to decision
     }
 
+    /** Allows a validated platform adapter to feed its stronger domain evidence back into the
+     * same general task owner. UNKNOWN remains non-success and FAILURE is never inferred. */
+    @Synchronized fun completeFromAdapter(status: GeneralVerificationStatus, observed: String): GeneralRuntimeTask? {
+        val task = active ?: return null
+        val step = task.currentStep ?: return null
+        val updatedHistory = task.actionHistory.map {
+            if (it.stepId == step.id) it.copy(verification = status) else it
+        }
+        val terminal = when (status) {
+            GeneralVerificationStatus.SUCCESS -> AgentRuntimeStatus.COMPLETED
+            GeneralVerificationStatus.FAILURE -> AgentRuntimeStatus.FAILED
+            GeneralVerificationStatus.UNKNOWN -> AgentRuntimeStatus.NEEDS_CLARIFICATION
+        }
+        val completed = task.copy(
+            status = terminal,
+            actionHistory = updatedHistory,
+            updatedAt = now(),
+            intent = task.intent.copy(desiredEndState = observed)
+        )
+        active = null
+        lastCompleted = completed
+        beforeByStep.clear()
+        return completed
+    }
+
     @Synchronized fun cancel() { active = active?.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now()); active = null; beforeByStep.clear() }
 }
 

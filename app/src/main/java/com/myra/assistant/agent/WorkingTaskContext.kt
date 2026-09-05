@@ -98,6 +98,14 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     }
 
     @Synchronized fun completeSearch(observed: String, state: TaskCompletionState): CompletedTaskContext {
+        GeneralAgentRuntimeStore.runtime.completeFromAdapter(
+            when (state) {
+                TaskCompletionState.SUCCESS -> GeneralVerificationStatus.SUCCESS
+                TaskCompletionState.FAILURE -> GeneralVerificationStatus.FAILURE
+                TaskCompletionState.UNKNOWN, TaskCompletionState.EXECUTING -> GeneralVerificationStatus.UNKNOWN
+            },
+            observed
+        )
         val completedAt = now()
         val completed = CompletedTaskContext(
             value.taskId, value.currentGoal, value.lastRequestedAction, value.searchQuery,

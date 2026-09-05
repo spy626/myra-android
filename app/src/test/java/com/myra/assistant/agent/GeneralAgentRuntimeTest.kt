@@ -47,6 +47,19 @@ class GeneralAgentRuntimeTest {
         assertEquals(AgentRuntimeStatus.COMPLETED, runtime.lastCompletedTask()?.status)
     }
 
+    @Test fun validated_adapter_outcome_completes_same_general_task_owner() {
+        val runtime = GeneralAgentRuntime(now = { 7 })
+        val task = runtime.start(44, intent(ToolCapability.BROWSER_SEARCH))!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        runtime.recordAction(step, GeneralActionResult(true), before)
+        val completed = runtime.completeFromAdapter(GeneralVerificationStatus.SUCCESS, "search results visible")
+        assertEquals(task.id, completed?.id)
+        assertEquals(44, completed?.turnId)
+        assertEquals(AgentRuntimeStatus.COMPLETED, completed?.status)
+        assertNull(runtime.activeTask())
+    }
+
     @Test fun wrong_result_rejects_target_and_recovery_is_bounded() {
         val runtime = GeneralAgentRuntime(recovery = GeneralRecoveryEngine(maxRetries = 0), now = { 5 })
         val requested = intent(ToolCapability.ACCESSIBILITY_CLICK).copy(roleHint = SemanticRole.VIDEO)
