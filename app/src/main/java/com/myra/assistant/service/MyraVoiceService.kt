@@ -368,7 +368,9 @@ class MyraVoiceService : Service() {
                         android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK
                     ) == true
                     GeneralActionResult(accepted, failureReason = "back_dispatch_rejected".takeIf { !accepted })
-                }
+                },
+                findElement = { step, perception -> executeGeneralFindElementAdapter(step, perception) },
+                tapElement = { step, perception -> executeGeneralSemanticTapAdapter(step, perception) }
             )
         ))
     }
@@ -1286,6 +1288,8 @@ class MyraVoiceService : Service() {
                     com.myra.assistant.agent.AgentGoalType.SCROLL -> ToolCapability.ACCESSIBILITY_SCROLL.name
                     com.myra.assistant.agent.AgentGoalType.BROWSER_SEARCH,
                     com.myra.assistant.agent.AgentGoalType.WEB_SEARCH -> ToolCapability.BROWSER_SEARCH.name
+                    com.myra.assistant.agent.AgentGoalType.TAP -> ToolCapability.ACCESSIBILITY_CLICK.name
+                    com.myra.assistant.agent.AgentGoalType.NAVIGATE -> ToolCapability.BACK.name
                     else -> "NONE"
                 }
                 val discardedCapabilities = stagedCapabilities.filter { it != selectedCapability }
@@ -1358,6 +1362,11 @@ class MyraVoiceService : Service() {
                 if (turnDecision.authorizesPhoneActions && screenMode != null) {
                     executeScreenModeCommand(screenMode)
                     resetTurnBuffers("screen_mode_command")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
+                }
+                if (turnDecision.authorizesPhoneActions && executeGenericSemanticRuntime(unifiedTask)) {
+                    resetTurnBuffers("general_semantic_runtime")
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
@@ -2087,6 +2096,7 @@ class MyraVoiceService : Service() {
         live?.sendToolResponse(id, functionName, true, "Android accepted the validated action")
     }
 
+    @Suppress("UNREACHABLE_CODE")
     private fun handleScreenActionTool(id: String, args: org.json.JSONObject) {
         val intentText = lastUserIntentText.ifBlank { input.toString().trim() }
         screenActionRegistry.cancel()?.let {
@@ -2099,6 +2109,18 @@ class MyraVoiceService : Service() {
             live?.sendToolResponse(id, "perform_screen_action", false, "No explicit visible-screen action was requested")
             return
         }
+        // Model screen-tool output is only a proposal. Physical action is owned by
+        // the final unified transcript and its GeneralAgentRuntime task.
+        voiceLog(
+            "SEMANTIC_TARGET_CANDIDATE_STAGED turnId=$activeTurnId source=perform_screen_action " +
+                "target=${args.optString("target_text").take(100)} position=${args.optString("position")} " +
+                "ordinal=${args.optInt("ordinal", 0)} decision=WAIT_FOR_FINAL"
+        )
+        live?.sendToolResponse(
+            id, "perform_screen_action", true,
+            "Semantic target proposal staged; final Android turn authorization is pending"
+        )
+        return
         if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
             voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId source=perform_screen_action")
             live?.sendToolResponse(id, "perform_screen_action", false, "This screen command was already committed for the current voice turn")
@@ -3692,6 +3714,12 @@ class MyraVoiceService : Service() {
                 "VERIFICATION_RESULT taskId=${task.id} turnId=${task.turnId} stepId=${step.id} status=${verification.status} " +
                     "expected=${verification.expected} observed=${verification.observed} recoveryCount=${runtime.activeTask()?.recoveryCount ?: task.recoveryCount}"
             )
+            if (step.capability == ToolCapability.ACCESSIBILITY_CLICK || step.capability == ToolCapability.BACK) {
+                voiceLog(
+                    "SEMANTIC_VERIFICATION_RESULT taskId=${task.id} turnId=${task.turnId} capability=${step.capability} " +
+                        "status=${verification.status} expected=${verification.expected} observed=${verification.observed}"
+                )
+            }
             voiceLog(
                 "ACTION_LATENCY_BREAKDOWN turnId=${task.turnId} capability=${step.capability} " +
                     "speechEndToAuthorizationMs=${if (speechActivityEndedAt > 0L) latestIntentDecidedAt - speechActivityEndedAt else -1L} " +
@@ -3704,7 +3732,7 @@ class MyraVoiceService : Service() {
             WorkingTaskRuntime.store.recordOutcome(
                 verification.observed,
                 verification.status == GeneralVerificationStatus.SUCCESS,
-                result.targetId,
+                result.targetId.takeIf { verification.status != GeneralVerificationStatus.SUCCESS },
                 runtimeOwnsRecoveryCount = true
             )
             if (verification.status == GeneralVerificationStatus.SUCCESS) {
@@ -3716,6 +3744,10 @@ class MyraVoiceService : Service() {
             } else if (recovery is RecoveryDecision.Retry) {
                 voiceLog("RECOVERY_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} recoveryCount=${runtime.activeTask()?.recoveryCount}")
                 voiceLog("RECOVERY_DECISION taskId=${task.id} turnId=${task.turnId} decision=RETRY rejected=${recovery.rejectedTarget}")
+                if (expectedCapability == ToolCapability.ACCESSIBILITY_CLICK) {
+                    voiceLog("TARGET_REJECTED_FOR_RECOVERY taskId=${task.id} target=${recovery.rejectedTarget}")
+                    voiceLog("ALTERNATE_TARGET_SELECTED taskId=${task.id} decision=RESOLVE_FRESH_EXCLUDING_REJECTED")
+                }
                 executeGeneralRuntimeCapability(expectedCapability, requestedTurnId, requestedTaskId, onTerminal)
             } else {
                 voiceLog("RECOVERY_DECISION taskId=${task.id} turnId=${task.turnId} decision=${recovery?.javaClass?.simpleName ?: "NONE"}")
@@ -3750,6 +3782,160 @@ class MyraVoiceService : Service() {
             else -> accessibility.scrollCurrentForegroundVerified(scope, down) { }
         }
         return GeneralActionResult(accepted, failureReason = "scroll_dispatch_rejected".takeIf { !accepted }, metadata = mapOf("direction" to direction))
+    }
+
+    private fun semanticTargetRequest(step: com.myra.assistant.agent.GeneralPlanStep): com.myra.assistant.agent.SemanticTargetRequest =
+        com.myra.assistant.agent.SemanticTargetRequest(
+            description = step.targetDescription.orEmpty(),
+            roleHint = step.parameters["role"]?.let { runCatching { com.myra.assistant.agent.SemanticRole.valueOf(it) }.getOrNull() },
+            textHint = step.parameters["text"],
+            spatialHint = step.parameters["spatial"]?.let { runCatching { com.myra.assistant.agent.SpatialHint.valueOf(it) }.getOrNull() },
+            ordinal = step.parameters["ordinal"]?.toIntOrNull(),
+            relativeToElementId = step.parameters["reference"],
+            currentGoal = WorkingTaskRuntime.store.snapshot().searchQuery
+                ?: WorkingTaskRuntime.store.snapshot().lastCompletedTask?.query
+        )
+
+    private fun resolveGeneralSemanticTarget(
+        step: com.myra.assistant.agent.GeneralPlanStep,
+        perception: com.myra.assistant.agent.PerceptionSnapshot
+    ): com.myra.assistant.agent.SemanticTargetResolution {
+        voiceLog("TARGET_RESOLUTION_STARTED taskId=${step.taskId} goal=${step.targetDescription.orEmpty().take(160)}")
+        val resolution = com.myra.assistant.agent.GeneralSemanticTargetResolver().resolve(
+            semanticTargetRequest(step), perception.scene,
+            GeneralAgentRuntimeStore.runtime.activeTask()?.rejectedTargets.orEmpty()
+        )
+        val scored = when (resolution) {
+            is com.myra.assistant.agent.SemanticTargetResolution.Unique ->
+                listOf(com.myra.assistant.agent.TargetCandidateScore(resolution.element, resolution.confidence, resolution.matchingReasons)) + resolution.alternatives
+            is com.myra.assistant.agent.SemanticTargetResolution.Ambiguous -> resolution.scored
+            else -> emptyList()
+        }
+        scored.take(5).forEach { candidate ->
+            voiceLog(
+                "TARGET_CANDIDATE elementId=${candidate.element.id} role=${candidate.element.role} " +
+                    "text=${candidate.element.label.take(100)} position=${candidate.element.horizontalPosition}_${candidate.element.verticalPosition} " +
+                    "score=${candidate.score} reasons=${candidate.reasons.joinToString("|")}"
+            )
+        }
+        when (resolution) {
+            is com.myra.assistant.agent.SemanticTargetResolution.Unique -> voiceLog(
+                "TARGET_RESOLUTION_RESULT decision=FOUND_UNIQUE selectedElementId=${resolution.element.id} " +
+                    "confidence=${resolution.confidence} alternativeCount=${resolution.alternatives.size}"
+            )
+            is com.myra.assistant.agent.SemanticTargetResolution.Ambiguous -> {
+                voiceLog("TARGET_RESOLUTION_RESULT decision=FOUND_AMBIGUOUS selectedElementId= confidence=0 alternativeCount=${resolution.candidates.size}")
+                voiceLog("CLARIFICATION_REQUIRED taskId=${step.taskId} reason=target_ambiguity")
+            }
+            com.myra.assistant.agent.SemanticTargetResolution.NotFound ->
+                voiceLog("TARGET_RESOLUTION_RESULT decision=NOT_FOUND selectedElementId= confidence=0 alternativeCount=0")
+        }
+        return resolution
+    }
+
+    private fun executeGeneralFindElementAdapter(
+        step: com.myra.assistant.agent.GeneralPlanStep,
+        perception: com.myra.assistant.agent.PerceptionSnapshot
+    ): GeneralActionResult = when (val resolution = resolveGeneralSemanticTarget(step, perception)) {
+        is com.myra.assistant.agent.SemanticTargetResolution.Unique -> GeneralActionResult(true, resolution.element.id,
+            metadata = mapOf("confidence" to resolution.confidence.toString()))
+        is com.myra.assistant.agent.SemanticTargetResolution.Ambiguous -> GeneralActionResult(false, failureReason = "target_ambiguous")
+        com.myra.assistant.agent.SemanticTargetResolution.NotFound -> GeneralActionResult(false, failureReason = "target_not_found")
+    }
+
+    private fun executeGeneralSemanticTapAdapter(
+        step: com.myra.assistant.agent.GeneralPlanStep,
+        perception: com.myra.assistant.agent.PerceptionSnapshot
+    ): GeneralActionResult {
+        if (com.myra.assistant.agent.ModalSafetyPolicy.requiresAuthorization(perception.scene)) {
+            return GeneralActionResult(false, failureReason = "protected_modal")
+        }
+        val resolution = resolveGeneralSemanticTarget(step, perception)
+        val unique = resolution as? com.myra.assistant.agent.SemanticTargetResolution.Unique
+            ?: return GeneralActionResult(false, failureReason = when (resolution) {
+                is com.myra.assistant.agent.SemanticTargetResolution.Ambiguous -> "target_ambiguous"
+                else -> "target_not_found"
+            })
+        val bound = unique.element.copy(
+            packageName = perception.scene.externalForegroundPackage,
+            windowId = perception.scene.windowId,
+            screenGeneration = perception.scene.generation
+        )
+        val safetyTarget = com.myra.assistant.agent.ResolvedActionTarget(
+            bound.id, bound.packageName.orEmpty(), bound.windowId ?: -1, bound.screenGeneration ?: -1,
+            listOf(bound.left, bound.top, bound.right, bound.bottom)
+        )
+        if (!com.myra.assistant.agent.GeneralActionSafety.validate(safetyTarget, perception)) {
+            voiceLog("TARGET_STALE_REJECTED taskId=${step.taskId} elementId=${bound.id} reason=scene_binding_mismatch")
+            return GeneralActionResult(false, bound.id, "stale_target")
+        }
+        val result = AccessibilityHelperService.instance?.tapResolvedSemanticTarget(bound)
+            ?: return GeneralActionResult(false, bound.id, "accessibility_unavailable")
+        if (result.resolution.startsWith("stale")) {
+            voiceLog("TARGET_STALE_REJECTED taskId=${step.taskId} elementId=${bound.id} reason=${result.resolution}")
+        }
+        voiceLog("SEMANTIC_ACTION_DISPATCH taskId=${step.taskId} elementId=${bound.id} method=${result.method}")
+        voiceLog("SEMANTIC_ACTION_RETURNED taskId=${step.taskId} elementId=${bound.id} accepted=${result.accepted} resolution=${result.resolution}")
+        return GeneralActionResult(result.accepted, bound.id, result.resolution.takeIf { !result.accepted },
+            mapOf("method" to result.method, "fingerprint" to com.myra.assistant.agent.SemanticTargetFingerprint.of(bound)))
+    }
+
+    /** Final-turn production owner for generic semantic tap and Back. */
+    private fun executeGenericSemanticRuntime(task: com.myra.assistant.agent.AgentTask?): Boolean {
+        val goal = task?.interpretedGoal ?: return false
+        val capability = when (goal) {
+            com.myra.assistant.agent.AgentGoalType.TAP -> ToolCapability.ACCESSIBILITY_CLICK
+            com.myra.assistant.agent.AgentGoalType.NAVIGATE -> ToolCapability.BACK
+            else -> return false
+        }
+        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
+            voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId source=general_semantic_runtime")
+            return true
+        }
+        val runtimeTask = GeneralAgentRuntimeStore.runtime.activeTask()
+        if (runtimeTask == null || runtimeTask.turnId != activeTurnId || runtimeTask.id != task.id) {
+            voiceLog(
+                "AGENT_RUNTIME_TURN_MISMATCH requestedTurnId=$activeTurnId taskTurnId=${runtimeTask?.turnId} " +
+                    "requestedTaskId=${task.id} activeTaskId=${runtimeTask?.id} action=$capability decision=blocked"
+            )
+            return true
+        }
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        cancelSpeechForNewAction()
+        AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+        val scene = ActivityContextStore.snapshot()?.let {
+            com.myra.assistant.agent.ScreenSceneFactory.from(it, WorkingTaskRuntime.store.snapshot().activeExternalApp)
+        }
+        voiceLog(
+            "SCREEN_SCENE_READY turnId=$activeTurnId package=${scene?.externalForegroundPackage} " +
+                "windowId=${scene?.windowId} generation=${scene?.generation} elementCount=${scene?.semanticElements?.size ?: 0}"
+        )
+        return executeGeneralRuntimeCapability(capability, activeTurnId, runtimeTask.id) { status, observed ->
+            val completed = GeneralAgentRuntimeStore.runtime.lastCompletedTask()
+            val history = completed?.actionHistory?.lastOrNull()
+            when (status) {
+                GeneralVerificationStatus.SUCCESS -> {
+                    history?.targetId?.let(WorkingTaskRuntime.store::recordReference)
+                    emitState("Sun rahi hoon…")
+                }
+                GeneralVerificationStatus.UNKNOWN -> {
+                    val message = "Result clear verify nahi hua. Screen par kaunsa target chahiye?"
+                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                }
+                GeneralVerificationStatus.FAILURE -> {
+                    val reason = history?.failureReason
+                    val message = when (reason) {
+                        "target_ambiguous", "clarification_required" -> "Kaunsa wala — upar wala ya neeche wala?"
+                        "target_not_found" -> "Current screen par woh target clear nahi mila."
+                        "protected_modal" -> "Protected dialog hai. Confirm karna hai ya cancel?"
+                        else -> "Target open nahi hua. Kaunsa wala chahiye?"
+                    }
+                    voiceLog("CLARIFICATION_REQUIRED taskId=${task.id} reason=${reason ?: observed}")
+                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                }
+            }
+        }
     }
 
     private fun executeGeneralBrowserSearchAdapter(parameters: Map<String, String>): GeneralActionResult {

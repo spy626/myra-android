@@ -116,7 +116,8 @@ data class GeneralActionHistory(
     val verification: GeneralVerificationStatus?,
     val recoveryAttempt: Int,
     val failureReason: String?,
-    val timestamp: Long
+    val timestamp: Long,
+    val targetFingerprint: String? = null
 )
 
 sealed interface PlannerResult {
@@ -232,7 +233,9 @@ data class ProductionAdapterExecutors(
     val browserSearch: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
     val observeScreen: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
     val verifyScreen: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
-    val back: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult
+    val back: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
+    val findElement: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult = { _, _ -> GeneralActionResult(false, failureReason = "find_not_configured") },
+    val tapElement: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult = { _, _ -> GeneralActionResult(false, failureReason = "tap_not_configured") }
 )
 
 object ProductionGeneralAdapters {
@@ -241,7 +244,9 @@ object ProductionGeneralAdapters {
         ProductionGeneralToolAdapter("BrowserSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.BROWSER_SEARCH)), 900L, executors.browserSearch),
         ProductionGeneralToolAdapter("ObserveScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.OBSERVE_SCREEN)), 0L, executors.observeScreen),
         ProductionGeneralToolAdapter("VerifyScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.VERIFY_SCREEN)), 0L, executors.verifyScreen),
-        ProductionGeneralToolAdapter("BackAdapter", requireNotNull(registry.forCapability(ToolCapability.BACK)), 400L, executors.back)
+        ProductionGeneralToolAdapter("BackAdapter", requireNotNull(registry.forCapability(ToolCapability.BACK)), 400L, executors.back),
+        ProductionGeneralToolAdapter("FindElementAdapter", requireNotNull(registry.forCapability(ToolCapability.FIND_ELEMENT)), 0L, executors.findElement),
+        ProductionGeneralToolAdapter("GenericSemanticTapAdapter", requireNotNull(registry.forCapability(ToolCapability.ACCESSIBILITY_CLICK)), 450L, executors.tapElement)
     )
 }
 
@@ -279,8 +284,14 @@ class GeneralVerifier {
     fun verify(step: GeneralPlanStep, before: PerceptionSnapshot, after: PerceptionSnapshot): GeneralVerificationResult {
         val expected = step.expectedOutcome
         val packageChanged = before.scene.externalForegroundPackage != after.scene.externalForegroundPackage
+        val windowChanged = before.scene.windowId != after.scene.windowId
         val generationChanged = before.scene.generation != after.scene.generation
         val elementsChanged = before.scene.semanticElements != after.scene.semanticElements
+        val beforeFingerprints = before.scene.semanticElements.map(SemanticTargetFingerprint::of).toSet()
+        val afterFingerprints = after.scene.semanticElements.map(SemanticTargetFingerprint::of).toSet()
+        val shared = beforeFingerprints.intersect(afterFingerprints).size
+        val union = beforeFingerprints.union(afterFingerprints).size.coerceAtLeast(1)
+        val majorSemanticChange = shared.toDouble() / union < .55
         val fresh = after.capturedAt > before.capturedAt || after.scene.observedAt > before.scene.observedAt
         if (!fresh) return GeneralVerificationResult(
             GeneralVerificationStatus.UNKNOWN, expected.summary, "observation was not fresh", .2,
@@ -296,7 +307,7 @@ class GeneralVerifier {
             ExpectedOutcomeType.MODAL_APPEARED -> after.scene.modal != ModalKind.NONE
             ExpectedOutcomeType.TARGET_STATE_CHANGED -> {
                 val expectedRolePresent = expected.role?.let { role -> after.scene.semanticElements.any { it.role == role } } ?: true
-                (packageChanged || generationChanged || elementsChanged) && expectedRolePresent
+                (packageChanged || windowChanged || generationChanged || majorSemanticChange) && expectedRolePresent
             }
             ExpectedOutcomeType.RESULT_SET_CHANGED -> {
                 val packageMatches = expected.packageName == null || after.scene.externalForegroundPackage == expected.packageName
@@ -306,7 +317,8 @@ class GeneralVerifier {
                     tokens.any { element.label.lowercase().contains(it) }
                 }
             }
-            ExpectedOutcomeType.NAVIGATION_OCCURRED, ExpectedOutcomeType.SCREEN_CHANGED,
+            ExpectedOutcomeType.NAVIGATION_OCCURRED -> packageChanged || windowChanged || generationChanged || majorSemanticChange
+            ExpectedOutcomeType.SCREEN_CHANGED,
             ExpectedOutcomeType.SCREEN_TYPE_CHANGED -> packageChanged || generationChanged || elementsChanged
             ExpectedOutcomeType.SCROLL_CHANGED -> scrollEvidence?.proven == true
             ExpectedOutcomeType.ELEMENT_APPEARED -> expected.role?.let { role -> after.scene.semanticElements.any { it.role == role } } == true
@@ -321,7 +333,7 @@ class GeneralVerifier {
         val unchanged = !packageChanged && !generationChanged && !elementsChanged
         val wrongPackage = expected.packageName != null && after.scene.externalForegroundPackage != expected.packageName
         return GeneralVerificationResult(
-            if (wrongPackage || (!unchanged && expected.type == ExpectedOutcomeType.TARGET_STATE_CHANGED)) GeneralVerificationStatus.FAILURE
+            if (wrongPackage || expected.type == ExpectedOutcomeType.TARGET_STATE_CHANGED) GeneralVerificationStatus.FAILURE
             else GeneralVerificationStatus.UNKNOWN,
             expected.summary,
             if (unchanged) "no observable change" else "screen changed differently",
@@ -399,13 +411,17 @@ class GeneralRecoveryEngine(private val maxRetries: Int = 1) {
     fun decide(task: GeneralRuntimeTask, verification: GeneralVerificationResult, scene: ScreenScene, targetId: String?): RecoveryDecision {
         if (scene.modal != ModalKind.NONE) return RecoveryDecision.PauseForModal
         if (verification.status == GeneralVerificationStatus.SUCCESS) return RecoveryDecision.Fail("recovery_not_needed")
+        if (task.actionHistory.lastOrNull()?.failureReason in setOf(
+                "target_ambiguous", "target_not_found", "protected_modal", "clarification_required"
+            )
+        ) return RecoveryDecision.Clarify("Kaunsa wala?")
         // UNKNOWN can mean the gesture worked but the available scene lacked stable anchors.
         // Repeating it would risk two visible scrolls for one user turn.
         if (verification.status == GeneralVerificationStatus.UNKNOWN) {
             return RecoveryDecision.Clarify("Screen movement reliably verify nahi hua.")
         }
         if (task.recoveryCount >= maxRetries) return RecoveryDecision.Clarify("Target verify nahi hua. Kaunsa wala?")
-        return RecoveryDecision.Retry(targetId)
+        return RecoveryDecision.Retry(task.actionHistory.lastOrNull()?.targetFingerprint ?: targetId)
     }
 }
 
@@ -471,7 +487,8 @@ class GeneralAgentRuntime(
         val task = requireNotNull(active) { "no active task" }
         require(step.taskId == task.id) { "step belongs to another task" }
         val history = GeneralActionHistory(step.id, step.capability, result.targetId, before.scene.externalForegroundPackage,
-            before.scene.generation, null, result.accepted, null, task.recoveryCount, result.failureReason, now())
+            before.scene.generation, null, result.accepted, null, task.recoveryCount, result.failureReason, now(),
+            result.metadata["fingerprint"])
         beforeByStep[step.id] = before
         return task.copy(status = if (result.accepted) AgentRuntimeStatus.WAITING_FOR_RESULT else AgentRuntimeStatus.RECOVERING,
             previousSteps = task.previousSteps + step, actionHistory = task.actionHistory + history, updatedAt = now()).also { active = it }

@@ -154,7 +154,8 @@ class GeneralAgentRuntimeTest {
         val router = GeneralActionRouter(adapters)
         assertTrue(router.registeredCapabilities().containsAll(setOf(
             ToolCapability.ACCESSIBILITY_SCROLL, ToolCapability.BROWSER_SEARCH,
-            ToolCapability.OBSERVE_SCREEN, ToolCapability.VERIFY_SCREEN, ToolCapability.BACK
+            ToolCapability.OBSERVE_SCREEN, ToolCapability.VERIFY_SCREEN, ToolCapability.BACK,
+            ToolCapability.FIND_ELEMENT, ToolCapability.ACCESSIBILITY_CLICK
         )))
         val runtime = GeneralAgentRuntime(now = { 1 })
         val task = runtime.start(25, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!

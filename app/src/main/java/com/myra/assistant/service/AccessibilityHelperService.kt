@@ -74,6 +74,13 @@ data class VisibleTargetTapResult(
     val resolution: String
 )
 
+data class GenericSemanticTapResult(
+    val accepted: Boolean,
+    val method: String,
+    val resolution: String,
+    val targetId: String? = null
+)
+
 data class YouTubeVideoTapResult(
     val accepted: Boolean,
     val resolution: String,
@@ -1145,13 +1152,19 @@ class AccessibilityHelperService : AccessibilityService() {
         fun collect(node: AccessibilityNodeInfo) {
             if (result.size >= limit) return
             if (node.isVisibleToUser) {
-                val label = listOfNotNull(node.text, node.contentDescription)
+                val rawText = node.text?.toString().orEmpty().trim()
+                val description = node.contentDescription?.toString().orEmpty().trim()
+                val hint = node.hintText?.toString().orEmpty().trim()
+                val label = listOf(rawText, description, hint).filter(String::isNotBlank)
                     .joinToString(" ").trim().replace(Regex("\\s+"), " ")
                 if (label.isNotBlank()) {
                     val bounds = Rect().also(node::getBoundsInScreen)
                     if (!bounds.isEmpty) result += VisibleScreenElement(
                         label.take(240), bounds, findClickable(node) != null,
-                        node.className?.toString().orEmpty()
+                        node.className?.toString().orEmpty(), rawText.take(240),
+                        description.take(240), hint.take(240), node.isLongClickable,
+                        node.isScrollable, node.isEditable, node.isEnabled, node.isSelected,
+                        node.isChecked, node.isFocused, node.viewIdResourceName
                     )
                 }
             }
@@ -1394,10 +1407,33 @@ class AccessibilityHelperService : AccessibilityService() {
             val semantic = elements.mapIndexed { index, element ->
                 SemanticElement(
                     id = "${foreground.windowId}:${foreground.generation}:$index",
-                    role = SemanticRoleClassifier.classify(element.label, element.className, element.clickable),
+                    role = SemanticRoleClassifier.classify(element.label, element.className, element.clickable, element.scrollable),
                     label = element.label.take(240), left = element.bounds.left, top = element.bounds.top,
                     right = element.bounds.right, bottom = element.bounds.bottom,
-                    actionable = element.clickable
+                    actionable = element.clickable, sourceNodeId = element.sourceNodeId,
+                    packageName = foreground.packageName, windowId = foreground.windowId,
+                    screenGeneration = foreground.generation, text = element.text,
+                    contentDescription = element.contentDescription, hint = element.hint,
+                    className = element.className, clickable = element.clickable,
+                    longClickable = element.longClickable, scrollable = element.scrollable,
+                    editable = element.editable, enabled = element.enabled,
+                    selected = element.selected, checked = element.checked, focused = element.focused,
+                    horizontalPosition = when {
+                        element.bounds.centerX() < resources.displayMetrics.widthPixels / 3 -> com.myra.assistant.agent.RelativeHorizontalPosition.LEFT
+                        element.bounds.centerX() > resources.displayMetrics.widthPixels * 2 / 3 -> com.myra.assistant.agent.RelativeHorizontalPosition.RIGHT
+                        else -> com.myra.assistant.agent.RelativeHorizontalPosition.CENTER
+                    },
+                    verticalPosition = when {
+                        element.bounds.centerY() < resources.displayMetrics.heightPixels / 3 -> com.myra.assistant.agent.RelativeVerticalPosition.TOP
+                        element.bounds.centerY() > resources.displayMetrics.heightPixels * 2 / 3 -> com.myra.assistant.agent.RelativeVerticalPosition.BOTTOM
+                        else -> com.myra.assistant.agent.RelativeVerticalPosition.MIDDLE
+                    },
+                    possibleActions = buildSet {
+                        if (element.clickable) add(com.myra.assistant.agent.ToolCapability.ACCESSIBILITY_CLICK)
+                        if (element.longClickable) add(com.myra.assistant.agent.ToolCapability.LONG_PRESS)
+                        if (element.scrollable) add(com.myra.assistant.agent.ToolCapability.ACCESSIBILITY_SCROLL)
+                        if (element.editable) add(com.myra.assistant.agent.ToolCapability.ACCESSIBILITY_TYPE)
+                    }
                 )
             }
             val observation = CurrentActivityContext(
@@ -1533,6 +1569,55 @@ class AccessibilityHelperService : AccessibilityService() {
             selected.confidence,
             "selected"
         )
+    }
+
+    /** Executes only a semantic target bound to the current foreground/window/scene. */
+    fun tapResolvedSemanticTarget(target: SemanticElement): GenericSemanticTapResult {
+        val context = ActivityContextStore.snapshot()
+            ?: return GenericSemanticTapResult(false, "NONE", "no_scene", target.id)
+        val foreground = currentForegroundContext()
+            ?: return GenericSemanticTapResult(false, "NONE", "no_accessibility_root", target.id)
+        val currentElement = context.visibleElements.firstOrNull { it.id == target.id }
+        if (target.packageName != foreground.packageName || target.windowId != foreground.windowId ||
+            target.screenGeneration != context.generation || context.packageName != foreground.packageName ||
+            context.windowId != foreground.windowId || currentElement == null ||
+            currentElement.label != target.label || currentElement.left != target.left || currentElement.top != target.top ||
+            currentElement.right != target.right || currentElement.bottom != target.bottom
+        ) return GenericSemanticTapResult(false, "NONE", "stale_target", target.id)
+        val root = rootInActiveWindow
+            ?: return GenericSemanticTapResult(false, "NONE", "no_accessibility_root", target.id)
+        val expectedBounds = Rect(target.left, target.top, target.right, target.bottom)
+        var exact: AccessibilityNodeInfo? = null
+        fun collect(node: AccessibilityNodeInfo) {
+            if (exact != null || !node.isVisibleToUser) return
+            val bounds = Rect().also(node::getBoundsInScreen)
+            val label = listOfNotNull(node.text, node.contentDescription, node.hintText)
+                .joinToString(" ").trim().replace(Regex("\\s+"), " ")
+            val idMatches = target.sourceNodeId != null && node.viewIdResourceName == target.sourceNodeId
+            if (bounds == expectedBounds && (idMatches || label.equals(target.label, true))) exact = node
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
+        }
+        collect(root)
+        exact?.let { node ->
+            if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return GenericSemanticTapResult(true, "ACCESSIBILITY_CLICK", "exact_node", target.id)
+            }
+            val ancestor = findClickable(node)
+            if (ancestor != null && ancestor !== node && ancestor.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return GenericSemanticTapResult(true, "ACCESSIBILITY_ANCESTOR_CLICK", "clickable_ancestor", target.id)
+            }
+        }
+        val latest = ActivityContextStore.snapshot()
+        val latestForeground = currentForegroundContext()
+        if (latest?.generation != target.screenGeneration || latest.packageName != target.packageName ||
+            latest.windowId != target.windowId || latestForeground?.packageName != target.packageName ||
+            latestForeground?.windowId != target.windowId || expectedBounds.isEmpty
+        ) return GenericSemanticTapResult(false, "NONE", "stale_bounds", target.id)
+        val path = Path().apply { moveTo(expectedBounds.centerX().toFloat(), expectedBounds.centerY().toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 80L)).build()
+        val accepted = dispatchGesture(gesture, null, null)
+        return GenericSemanticTapResult(accepted, "GESTURE_LAST_RESORT", if (accepted) "fresh_bounds" else "gesture_rejected", target.id)
     }
 
     private fun findClickable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {

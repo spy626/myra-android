@@ -6,8 +6,11 @@ enum class SemanticRole {
     BUTTON, TEXT, IMAGE, VIDEO, VIDEO_CARD, LIKE_CONTROL, COMMENTS_CONTROL,
     SUBSCRIBE_CONTROL, CHANNEL_PROFILE, CHANNEL_NAME, SEARCH, NAVIGATION,
     TEXT_INPUT, SEND, MENU, TOGGLE, LINK, TAB, LIST_ITEM, SCROLL_CONTAINER,
-    BACK, SHARE, PLAY_PAUSE, CUSTOM_CONTROL, UNKNOWN
+    BACK, CLOSE, SETTINGS, RESULT, CARD, ICON, SHARE, PLAY_PAUSE, CUSTOM_CONTROL, UNKNOWN
 }
+
+enum class RelativeHorizontalPosition { LEFT, CENTER, RIGHT }
+enum class RelativeVerticalPosition { TOP, MIDDLE, BOTTOM }
 
 data class SemanticElement(
     val id: String,
@@ -19,7 +22,26 @@ data class SemanticElement(
     val bottom: Int,
     val actionable: Boolean,
     val selected: Boolean = false,
-    val groupId: String? = null
+    val groupId: String? = null,
+    val sourceNodeId: String? = null,
+    val packageName: String? = null,
+    val windowId: Int? = null,
+    val screenGeneration: Long? = null,
+    val text: String = label,
+    val contentDescription: String = "",
+    val hint: String = "",
+    val className: String = "",
+    val clickable: Boolean = actionable,
+    val longClickable: Boolean = false,
+    val scrollable: Boolean = false,
+    val editable: Boolean = false,
+    val enabled: Boolean = true,
+    val checked: Boolean = false,
+    val focused: Boolean = false,
+    val horizontalPosition: RelativeHorizontalPosition = RelativeHorizontalPosition.CENTER,
+    val verticalPosition: RelativeVerticalPosition = RelativeVerticalPosition.MIDDLE,
+    val possibleActions: Set<ToolCapability> = if (actionable) setOf(ToolCapability.ACCESSIBILITY_CLICK) else emptySet(),
+    val confidence: Double = if (label.isBlank()) .5 else .9
 ) {
     val centerX get() = (left + right) / 2
     val centerY get() = (top + bottom) / 2
@@ -78,6 +100,9 @@ object SemanticRoleClassifier {
         return when {
             scrollable -> SemanticRole.SCROLL_CONTAINER
             clazz.contains("edittext") -> SemanticRole.TEXT_INPUT
+            text.matches(Regex(".*\\b(?:settings?|preferences?|gear|cog)\\b.*")) -> SemanticRole.SETTINGS
+            text.matches(Regex(".*\\b(?:close|dismiss|cancel|not now)\\b.*")) -> SemanticRole.CLOSE
+            text.matches(Regex(".*\\b(?:back|navigate up)\\b.*")) -> SemanticRole.BACK
             text.contains("subscribe") || text.contains("subscribed") -> SemanticRole.SUBSCRIBE_CONTROL
             text.contains("comment") && (clickable || clazz.contains("button")) -> SemanticRole.COMMENTS_CONTROL
             text.contains("like") && !text.contains("comment") -> SemanticRole.LIKE_CONTROL
@@ -87,8 +112,10 @@ object SemanticRoleClassifier {
             text.contains("channel") && (text.contains("profile") || text.contains("avatar")) -> SemanticRole.CHANNEL_PROFILE
             text.contains("channel") -> SemanticRole.CHANNEL_NAME
             text.contains("video") || text.contains("thumbnail") -> SemanticRole.VIDEO
-            clazz.contains("button") || clickable -> SemanticRole.BUTTON
+            clazz.contains("button") -> SemanticRole.BUTTON
             clazz.contains("image") -> SemanticRole.IMAGE
+            clickable && clazz.contains("text") -> SemanticRole.LINK
+            clickable -> SemanticRole.BUTTON
             clazz.contains("text") -> SemanticRole.TEXT
             else -> SemanticRole.UNKNOWN
         }

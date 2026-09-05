@@ -119,6 +119,10 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
         )
     }
 
+    @Synchronized fun recordReference(elementId: String) {
+        value = value.copy(currentReference = elementId, unresolvedReference = null, updatedAt = now())
+    }
+
     @Synchronized fun beginSearch(query: String, destination: SearchDestination, executor: String, expected: String) {
         value = value.copy(
             searchQuery = query, resolvedDestination = destination, selectedExecutor = executor,

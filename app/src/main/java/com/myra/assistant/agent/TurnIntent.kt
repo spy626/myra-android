@@ -91,7 +91,12 @@ object UnifiedTurnInterpreter {
             Regex("(?:जाओ|जाइए|जाएँ|चलो|स्क्रॉल(?: करो)?)$").containsMatchIn(text)
         val directionalContinuation = containsAnyDirection(text) &&
             text.split(' ').any { it in setOf("thoda", "thora", "aur", "थोड़ा", "थोड़ा", "और") }
-        return direct.containsMatchIn(text) || objectFirst.containsMatchIn(text) || devaDirect.containsMatchIn(text) || contextualImperative || hindiDirectionalImperative || directionalContinuation
+        val genericTargetImperative = text.split(' ').size >= 2 &&
+            Regex("(?:open|kholo|khol do|tap|click|press|dabao|दबाओ|खोलो)$").containsMatchIn(text)
+        val contextualSelection = Regex("^(?:ye|yeh|woh|wo|this|that|isko|usko|ये|यह|वो|इसे|इसको)(?: wala| wali)?$").matches(text)
+        val navigationImperative = Regex("\\b(?:back|peeche|piche|वापस|पीछे)\\b").containsMatchIn(text) &&
+            Regex("(?:go|jao|जाओ|जाइए)$").containsMatchIn(text)
+        return direct.containsMatchIn(text) || objectFirst.containsMatchIn(text) || devaDirect.containsMatchIn(text) || contextualImperative || hindiDirectionalImperative || directionalContinuation || genericTargetImperative || contextualSelection || navigationImperative
     }
 
     private fun isExplicitSearchGoal(text: String): Boolean {

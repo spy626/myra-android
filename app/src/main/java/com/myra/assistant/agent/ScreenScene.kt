@@ -19,10 +19,17 @@ data class ScreenScene(
 
 object ScreenSceneFactory {
     private const val ASSISTANT_PACKAGE = "com.myra.assistant"
+    private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
     fun from(context: CurrentActivityContext, previousExternalPackage: String? = null): ScreenScene {
-        val external = if (context.packageName == ASSISTANT_PACKAGE) previousExternalPackage ?: context.packageName else context.packageName
+        val overlay = context.packageName in setOf(ASSISTANT_PACKAGE, SYSTEM_UI_PACKAGE)
+        val external = if (overlay) previousExternalPackage ?: context.packageName else context.packageName
+        val permissionSignal = context.visibleElements.any {
+            Regex("\\b(?:allow|permission|while using|only this time|deny)\\b", RegexOption.IGNORE_CASE).containsMatchIn(it.label)
+        }
         val modal = when {
-            context.packageName == "com.android.systemui" -> ModalKind.SYSTEM_DIALOG
+            context.packageName == SYSTEM_UI_PACKAGE && permissionSignal -> ModalKind.PERMISSION
+            context.packageName == SYSTEM_UI_PACKAGE -> ModalKind.SYSTEM_DIALOG
+            context.screenType.contains("KEYBOARD", true) -> ModalKind.KEYBOARD
             context.screenType.contains("DIALOG", true) -> ModalKind.APP_DIALOG
             context.screenType.contains("MENU", true) -> ModalKind.MENU
             else -> ModalKind.NONE

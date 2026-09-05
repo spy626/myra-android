@@ -47,6 +47,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
         working: WorkingTaskContext? = WorkingTaskRuntime.store.snapshot()
     ): StructuredAgentIntent {
         val goal = task?.interpretedGoal ?: understandGoal(request, decision)
+        val semanticTarget = SemanticTargetRequestParser.parse(request, working)
         val capabilities = when (goal) {
             AgentGoalType.TAP -> setOf(ToolCapability.FIND_ELEMENT, ToolCapability.ACCESSIBILITY_CLICK)
             AgentGoalType.SCROLL -> setOf(ToolCapability.ACCESSIBILITY_SCROLL)
@@ -65,9 +66,23 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
             interpretedGoal = decision.goal,
             requiresAction = decision.authorizesPhoneActions,
             targetDescription = request.takeIf { decision.authorizesPhoneActions },
+            roleHint = semanticTarget.roleHint,
+            textHint = when (goal) {
+                AgentGoalType.TAP -> semanticTarget.textHint
+                else -> BrowserSearchRequestParser.parse(request)?.query
+            },
+            spatialHint = semanticTarget.spatialHint?.name,
+            ordinalHint = semanticTarget.ordinal,
             requiredCapabilities = capabilities,
             parameters = when (goal) {
                 AgentGoalType.SCROLL -> mapOf("direction" to resolveScrollDirection(request, working))
+                AgentGoalType.TAP -> buildMap {
+                    semanticTarget.roleHint?.let { put("role", it.name) }
+                    semanticTarget.textHint?.let { put("text", it) }
+                    semanticTarget.spatialHint?.let { put("spatial", it.name) }
+                    semanticTarget.ordinal?.let { put("ordinal", it.toString()) }
+                    semanticTarget.relativeToElementId?.let { put("reference", it) }
+                }
                 else -> BrowserSearchRequestParser.parse(request)?.let { mapOf("query" to it.query) }.orEmpty()
             },
             confidence = decision.confidence,
@@ -174,6 +189,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
                 text.split(' ').any { it in setOf("नीचे", "ऊपर") } -> AgentGoalType.SCROLL
             Regex("\\b(?:type|likho|write)\\b").containsMatchIn(text) -> AgentGoalType.TYPE
             Regex("^(?:send|post)(?: karo)?$").matches(text) -> AgentGoalType.SEND
+            Regex("\\b(?:back|peeche|piche|वापस|पीछे)\\b").containsMatchIn(text) -> AgentGoalType.NAVIGATE
             Regex("\\b(?:click|tap|dabao|kholo|open|wala|thumb|hand)\\b").containsMatchIn(text) -> AgentGoalType.TAP
             Regex("\\b(?:screen|dikh|problem|error)\\b").containsMatchIn(text) -> AgentGoalType.ANSWER_SCREEN
             else -> AgentGoalType.UNKNOWN
