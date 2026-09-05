@@ -224,7 +224,7 @@ class GeneralSemanticTargetResolver {
     }
 
     companion object {
-        const val STRONG_SCORE = .62; const val MIN_SCORE = .32; const val AMBIGUITY_MARGIN = .10
+        const val STRONG_SCORE = .50; const val MIN_SCORE = .32; const val AMBIGUITY_MARGIN = .10
         private val RESULT_ROLES = setOf(SemanticRole.RESULT, SemanticRole.CARD, SemanticRole.LIST_ITEM, SemanticRole.LINK, SemanticRole.VIDEO_CARD, SemanticRole.VIDEO)
     }
 }
