@@ -7,6 +7,30 @@ internal enum class AssistantResponseOwner {
     MODEL, CONTROLLED_LOCAL, CONTROLLED_SCREEN, TOOL_CALLBACK, LEGACY_COMMAND, RUNTIME
 }
 
+internal data class ResponseGenerationIdentity(
+    val responseId: String,
+    val sourceTurnId: Long,
+    val responseGenerationId: Long,
+    val owner: AssistantResponseOwner
+)
+
+/** Response identity is independent of the user utterance lifetime and message text. */
+internal class ResponseGenerationIdentityStore(private val sessionId: String) {
+    private var sequence = 0L
+    private val byId = linkedMapOf<String, ResponseGenerationIdentity>()
+
+    @Synchronized fun create(sourceTurnId: Long, owner: AssistantResponseOwner): ResponseGenerationIdentity {
+        val generation = ++sequence
+        val responseId = "assistant:$sessionId:$sourceTurnId:$generation"
+        return ResponseGenerationIdentity(responseId, sourceTurnId, generation, owner).also {
+            byId[responseId] = it
+            while (byId.size > 64) byId.remove(byId.keys.first())
+        }
+    }
+
+    @Synchronized fun get(responseId: String): ResponseGenerationIdentity? = byId[responseId]
+}
+
 internal data class GroundedPhysicalAction(
     val turnId: Long,
     val taskId: String,
@@ -85,6 +109,13 @@ internal class ChatMessageDeliveryStore {
     }
 
     @Synchronized fun snapshot(): List<StoredChatMessage> = messages.values.toList()
+}
+
+/** Process-wide canonical chat repository shared by service and visible UI producers. */
+internal object CanonicalChatMessageStore {
+    private val delegate = ChatMessageDeliveryStore()
+    fun commit(message: StoredChatMessage): ChatMessageStoreResult = delegate.commit(message)
+    fun snapshot(): List<StoredChatMessage> = delegate.snapshot()
 }
 
 /** Pre-final model suggestions cannot own app launch or visible-target opening. */

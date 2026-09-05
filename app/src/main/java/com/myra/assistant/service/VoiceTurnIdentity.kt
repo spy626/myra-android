@@ -6,13 +6,33 @@ internal data class VoiceTurnIdentity(
     val speechStartAt: Long,
     val speechEndAt: Long = 0L,
     val transcriptTurnId: Long = userTurnId,
-    val finalTranscriptId: String? = null
+    val finalTranscriptId: String? = null,
+    val lifecycle: UserUtteranceState = UserUtteranceState.SPEECH_ACTIVE
 ) {
     val consistent: Boolean
         get() = userTurnId != 0L && transcriptTurnId == userTurnId
 
-    fun speechEnded(at: Long): VoiceTurnIdentity = copy(speechEndAt = at)
-    fun finalTranscript(id: String): VoiceTurnIdentity = copy(finalTranscriptId = id)
+    fun speechEnded(at: Long): VoiceTurnIdentity = copy(
+        speechEndAt = at,
+        lifecycle = UserUtteranceState.SPEECH_ENDED_AWAITING_TRANSCRIPT
+    )
+    fun finalTranscript(id: String): VoiceTurnIdentity = copy(
+        finalTranscriptId = id,
+        lifecycle = UserUtteranceState.FINAL_TRANSCRIPT_COMMITTED
+    )
+    fun terminal(): VoiceTurnIdentity = copy(lifecycle = UserUtteranceState.TERMINAL)
+}
+
+internal enum class UserUtteranceState {
+    IDLE,
+    SPEECH_ACTIVE,
+    SPEECH_ENDED_AWAITING_TRANSCRIPT,
+    FINAL_TRANSCRIPT_COMMITTED,
+    RESPONSE_ACTIVE,
+    TERMINAL;
+
+    val closedForTranscript: Boolean
+        get() = this == FINAL_TRANSCRIPT_COMMITTED || this == TERMINAL
 }
 
 internal class VoiceTurnIdentityStore {
@@ -28,6 +48,9 @@ internal class VoiceTurnIdentityStore {
 
     @Synchronized fun finalTranscript(turnId: Long, transcriptId: String): VoiceTurnIdentity? =
         active?.takeIf { it.userTurnId == turnId }?.finalTranscript(transcriptId)?.also { active = it }
+
+    @Synchronized fun terminal(turnId: Long): VoiceTurnIdentity? =
+        active?.takeIf { it.userTurnId == turnId }?.terminal()?.also { active = it }
 
     fun current(): VoiceTurnIdentity? = active
 
@@ -112,7 +135,35 @@ internal object SpeechCycleBoundaryPolicy {
         activeTurnId: Long,
         previousSpeechEndedAt: Long,
         newSpeechStartedAt: Long,
-        transcriptStarted: Boolean
-    ): Boolean = activeTurnId > 0L && previousSpeechEndedAt > 0L && !transcriptStarted &&
-        newSpeechStartedAt - previousSpeechEndedAt >= MIN_INDEPENDENT_GAP_MS
+        transcriptStarted: Boolean,
+        utteranceState: UserUtteranceState? = null
+    ): Boolean {
+        if (activeTurnId <= 0L) return true
+        if (utteranceState?.closedForTranscript == true) return true
+        if (previousSpeechEndedAt <= 0L) return false
+        // A short VAD split may still be one physical sentence. Once the gap is an
+        // independent speech episode, partial text must not pin the old identity.
+        return newSpeechStartedAt - previousSpeechEndedAt >= MIN_INDEPENDENT_GAP_MS
+    }
+}
+
+/** Binds streamed transcript text to one user utterance and freezes it at final commit. */
+internal class TranscriptAccumulatorOwnership {
+    private var utteranceId: String? = null
+    private var terminal = false
+
+    @Synchronized fun bind(id: String) {
+        utteranceId = id
+        terminal = false
+    }
+
+    @Synchronized fun close(id: String): Boolean {
+        if (utteranceId != id) return false
+        terminal = true
+        return true
+    }
+
+    @Synchronized fun mayAppend(id: String): Boolean = utteranceId == id && !terminal
+    @Synchronized fun currentId(): String? = utteranceId
+    @Synchronized fun isTerminal(): Boolean = terminal
 }

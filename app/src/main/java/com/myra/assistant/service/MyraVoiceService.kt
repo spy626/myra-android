@@ -211,7 +211,7 @@ class MyraVoiceService : Service() {
     private var probableActionTurn = false
     private var groundedActionResultState = GroundedActionResultState.NOT_DISPATCHED
     private val groundedActionLedger = GroundedActionLedger()
-    private val chatMessageStore = ChatMessageDeliveryStore()
+    private val chatMessageStore = CanonicalChatMessageStore
     private var blockedModelActionClaim = false
     private var pendingLocalSpeech: String? = null
     private var pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
@@ -246,6 +246,8 @@ class MyraVoiceService : Service() {
     private val responseArbiter = TurnResponseArbiter()
     private val ordinaryModelAudioGate = OrdinaryModelAudioGate()
     private val transcriptSessionId = java.util.UUID.randomUUID().toString()
+    private val responseGenerationIdentities = ResponseGenerationIdentityStore(transcriptSessionId)
+    private var latestAssistantResponseIdentity: ResponseGenerationIdentity? = null
     private val transcriptPlausibilityGate = FinalTranscriptPlausibilityGate()
     private val finalUserMessageCommitter = FinalUserMessageCommitter()
     private val memoryCommandRunnable = Runnable {
@@ -303,6 +305,7 @@ class MyraVoiceService : Service() {
     private var speechActivityEndedAt = 0L
     private var speechTimingTurnId = 0L
     private val voiceTurnIdentities = VoiceTurnIdentityStore()
+    private val transcriptAccumulatorOwnership = TranscriptAccumulatorOwnership()
     private val pendingScrollCandidates = PendingScrollCandidateStore()
     private var inputTurnStartedAt = 0L
     private var latestTurnAcceptedAt = 0L
@@ -674,8 +677,32 @@ class MyraVoiceService : Service() {
                     )
                     return@inputTranscript
                 }
+                val currentVoiceIdentity = voiceTurnIdentities.current()
+                if (activeTurnId == 0L && currentVoiceIdentity?.lifecycle?.closedForTranscript == true) {
+                    voiceLog(
+                        "TRANSCRIPT_APPEND_REJECTED_TERMINAL_UTTERANCE turnId=${currentVoiceIdentity.userTurnId} " +
+                            "utteranceId=${currentVoiceIdentity.finalTranscriptId ?: transcriptAccumulatorOwnership.currentId().orEmpty()} " +
+                            "latestModelGenerationId=$latestModelGenerationId textChars=${part.length}"
+                    )
+                    return@inputTranscript
+                }
                 if (input.isEmpty()) {
-                    if (activeTurnId == 0L) activeTurnId = ++turnSequence
+                    if (activeTurnId == 0L) {
+                        activeTurnId = ++turnSequence
+                        voiceTurnIdentities.begin(activeTurnId, android.os.SystemClock.elapsedRealtime())
+                        val utteranceId = "$transcriptSessionId:$activeTurnId"
+                        transcriptAccumulatorOwnership.bind(utteranceId)
+                        voiceLog("USER_UTTERANCE_CREATED turnId=$activeTurnId utteranceId=$utteranceId source=transcript_fallback")
+                        voiceLog("TRANSCRIPT_ACCUMULATOR_BOUND turnId=$activeTurnId utteranceId=$utteranceId")
+                    }
+                    val activeUtteranceId = "$transcriptSessionId:$activeTurnId"
+                    if (!transcriptAccumulatorOwnership.mayAppend(activeUtteranceId)) {
+                        voiceLog(
+                            "TRANSCRIPT_APPEND_REJECTED_TERMINAL_UTTERANCE turnId=$activeTurnId " +
+                                "utteranceId=$activeUtteranceId latestModelGenerationId=$latestModelGenerationId textChars=${part.length}"
+                        )
+                        return@inputTranscript
+                    }
                     inputTurnStartedAt = android.os.SystemClock.elapsedRealtime()
                     if (speechTimingTurnId == 0L && speechActivityStartedAt > 0L) speechTimingTurnId = activeTurnId
                     if (responseArbiter.turnId != activeTurnId) {
@@ -1227,7 +1254,6 @@ class MyraVoiceService : Service() {
                 )
                 val normalizedFinalUserText = finalUtterance.canonicalSemanticText
                 val displayedFinalUserText = finalUtterance.displayText
-                voiceTurnIdentities.finalTranscript(activeTurnId, finalUtterance.utteranceId)
                 voiceLog(
                     "final_input_transcript raw=${userText.take(160)} " +
                         "normalized=${normalizedFinalUserText.take(160)} " +
@@ -4818,22 +4844,35 @@ class MyraVoiceService : Service() {
         if (!responseArbiter.acceptsOrdinaryModel()) return
         if (ordinaryModelAudioGate.isSpeechActive()) return
         val newSpeechStartedAt = android.os.SystemClock.elapsedRealtime()
-        if (com.myra.assistant.service.SpeechCycleBoundaryPolicy.startsNewTurn(
-                activeTurnId, speechActivityEndedAt, newSpeechStartedAt, input.isNotBlank()
-            )
-        ) {
-            val previousTurnId = activeTurnId
+        val previousIdentity = voiceTurnIdentities.current()
+        val previousTurnId = activeTurnId.takeIf { it > 0L } ?: previousIdentity?.userTurnId ?: 0L
+        val previousSpeechEnd = previousIdentity?.speechEndAt?.takeIf { it > 0L } ?: speechActivityEndedAt
+        val startsNewUtterance = com.myra.assistant.service.SpeechCycleBoundaryPolicy.startsNewTurn(
+            previousTurnId,
+            previousSpeechEnd,
+            newSpeechStartedAt,
+            input.isNotBlank(),
+            previousIdentity?.lifecycle
+        )
+        if (startsNewUtterance) {
             pendingScrollCandidates.discardForTurn(previousTurnId)
             activeTurnId = ++turnSequence
             speechTimingTurnId = 0L
             lastUserIntentText = ""
+            input.clear()
+            output.clear()
             commandProbe.clear()
             probableActionTurn = false
             groundedActionResultState = GroundedActionResultState.NOT_DISPATCHED
+            val utteranceId = "$transcriptSessionId:$activeTurnId"
+            voiceTurnIdentities.begin(activeTurnId, newSpeechStartedAt)
+            transcriptAccumulatorOwnership.bind(utteranceId)
+            voiceLog("USER_UTTERANCE_CREATED turnId=$activeTurnId utteranceId=$utteranceId")
+            voiceLog("TRANSCRIPT_ACCUMULATOR_BOUND turnId=$activeTurnId utteranceId=$utteranceId")
             voiceLog(
                 "TURN_LIFECYCLE_DIAGNOSTIC turnId=$activeTurnId speechCycleIndex=1 state=NEW_UTTERANCE " +
-                    "reason=independent_vad_after_unfinalized_turn previousTurnId=$previousTurnId " +
-                    "gapMs=${newSpeechStartedAt - speechActivityEndedAt}"
+                    "reason=${if (previousIdentity?.lifecycle?.closedForTranscript == true) "previous_utterance_terminal" else "independent_vad_cycle"} " +
+                    "previousTurnId=$previousTurnId gapMs=${(newSpeechStartedAt - previousSpeechEnd).coerceAtLeast(0L)}"
             )
         } else {
             voiceLog(
@@ -4843,9 +4882,18 @@ class MyraVoiceService : Service() {
         }
         speechActivityStartedAt = newSpeechStartedAt
         speechActivityEndedAt = 0L
-        if (activeTurnId == 0L) activeTurnId = ++turnSequence
+        if (activeTurnId == 0L) {
+            activeTurnId = ++turnSequence
+            val utteranceId = "$transcriptSessionId:$activeTurnId"
+            voiceTurnIdentities.begin(activeTurnId, speechActivityStartedAt)
+            transcriptAccumulatorOwnership.bind(utteranceId)
+            voiceLog("USER_UTTERANCE_CREATED turnId=$activeTurnId utteranceId=$utteranceId")
+            voiceLog("TRANSCRIPT_ACCUMULATOR_BOUND turnId=$activeTurnId utteranceId=$utteranceId")
+        }
         speechTimingTurnId = activeTurnId
-        voiceTurnIdentities.begin(activeTurnId, speechActivityStartedAt)
+        if (voiceTurnIdentities.current()?.userTurnId != activeTurnId) {
+            voiceTurnIdentities.begin(activeTurnId, speechActivityStartedAt)
+        }
         responseArbiter.supersedeForNewUserTurn(activeTurnId)
         suppressModelForTurn = false
         blockedModelActionClaim = false
@@ -4880,6 +4928,10 @@ class MyraVoiceService : Service() {
         } else {
             speechTimingTurnId = endingTurnId
             voiceTurnIdentities.speechEnded(endingTurnId, speechActivityEndedAt)
+            voiceLog(
+                "USER_UTTERANCE_STATE turnId=$endingTurnId utteranceId=$transcriptSessionId:$endingTurnId " +
+                    "from=SPEECH_ACTIVE to=SPEECH_ENDED_AWAITING_TRANSCRIPT reason=vad_end"
+            )
         }
         voiceLog("speechActivityEnd turnId=$endingTurnId at=$speechActivityEndedAt")
         ordinaryModelAudioGate.onSpeechActivityEnded()
@@ -5262,7 +5314,17 @@ class MyraVoiceService : Service() {
         turnId: Long = currentResponseTurnId()
     ): Boolean {
         if (message.isBlank() || !physicalActionClaimAllowed(message, owner, turnId, "chat")) return false
-        val messageId = "assistant:$transcriptSessionId:$turnId:${owner.name}:${normalizeSpeech(message).hashCode()}"
+        val responseIdentity = responseGenerationIdentities.create(turnId, owner)
+        latestAssistantResponseIdentity = responseIdentity
+        val messageId = responseIdentity.responseId
+        voiceLog(
+            "RESPONSE_GENERATION_CREATED responseId=${responseIdentity.responseId} sourceTurnId=$turnId " +
+                "responseGenerationId=${responseIdentity.responseGenerationId} owner=$owner"
+        )
+        voiceLog(
+            "ASSISTANT_MESSAGE_IDENTITY_CREATED messageId=$messageId responseId=${responseIdentity.responseId} " +
+                "sourceTurnId=$turnId owner=$owner"
+        )
         voiceLog(
             "CHAT_MESSAGE_STORE_ATTEMPT messageId=$messageId turnId=$turnId role=ASSISTANT owner=$owner"
         )
@@ -5295,6 +5357,12 @@ class MyraVoiceService : Service() {
             ?: responseArbiter.turnId.takeIf { it != 0L }
             ?: ++turnSequence
         val utteranceId = "$transcriptSessionId:$turnId"
+        voiceTurnIdentities.finalTranscript(turnId, utteranceId)
+        transcriptAccumulatorOwnership.close(utteranceId)
+        voiceLog(
+            "USER_UTTERANCE_STATE turnId=$turnId utteranceId=$utteranceId " +
+                "from=SPEECH_ENDED_AWAITING_TRANSCRIPT to=FINAL_TRANSCRIPT_COMMITTED reason=$source"
+        )
         voiceLog(
             "user_message_commit_attempt sessionId=$transcriptSessionId turnId=$turnId " +
                 "utteranceId=$utteranceId source=$source raw=${raw.take(160)} " +
@@ -5334,6 +5402,14 @@ class MyraVoiceService : Service() {
     }
 
     private fun resetTurnBuffers(reason: String = "turn_committed") {
+        val terminalTurnId = activeTurnId.takeIf { it > 0L }
+            ?: voiceTurnIdentities.current()?.userTurnId?.takeIf { it > 0L }
+        if (terminalTurnId != null && voiceTurnIdentities.current()?.lifecycle?.closedForTranscript == true) {
+            voiceTurnIdentities.terminal(terminalTurnId)
+            voiceLog(
+                "USER_UTTERANCE_TERMINAL turnId=$terminalTurnId utteranceId=$transcriptSessionId:$terminalTurnId reason=$reason"
+            )
+        }
         voiceLog(
             "transcript_accumulator_reset turnId=$activeTurnId session=${hashCode()} " +
                 "reason=$reason inputChars=${input.length} commandChars=${commandProbe.length}"
@@ -5716,9 +5792,19 @@ class MyraVoiceService : Service() {
             instance?.let { service ->
                 service.markUserInteraction()
                 service.mediaGuard.beginAssistantTurn()
+                service.deliverAssistantText(
+                    message,
+                    owner = AssistantResponseOwner.CONTROLLED_LOCAL,
+                    turnId = service.currentResponseTurnId()
+                )
                 service.queueLocalSpeech(message, allowUntranscribedAudio = true)
             }
         }
+        fun publishAssistantText(
+            message: String,
+            error: Boolean = false,
+            owner: AssistantResponseOwner = AssistantResponseOwner.CONTROLLED_LOCAL
+        ): Boolean = instance?.deliverAssistantText(message, error, owner) == true
         fun setUiVisible(visible: Boolean) {
             uiVisible = visible
             instance?.let { service ->

@@ -95,4 +95,32 @@ class ResponseDeliveryOwnershipTest {
         )
         assertEquals(PhysicalActionClaimDecision.ALLOW, verdict.decision)
     }
+
+    @Test fun equalTextOnSeparateUtterancesHasDistinctUserMessageIdentity() {
+        val store = ChatMessageDeliveryStore()
+        val first = StoredChatMessage("user:s:2", 2L, ChatRole.USER, "Sun rahe ho kya?")
+        val second = StoredChatMessage("user:s:3", 3L, ChatRole.USER, "Sun rahe ho kya?")
+        assertTrue(store.commit(first) is ChatMessageStoreResult.Accepted)
+        assertTrue(store.commit(second) is ChatMessageStoreResult.Accepted)
+        assertEquals(2, store.snapshot().size)
+    }
+
+    @Test fun assistantIdentityUsesTurnAndResponseGenerationNotTextHash() {
+        val identities = ResponseGenerationIdentityStore("session")
+        val first = identities.create(2L, AssistantResponseOwner.MODEL)
+        val repeated = identities.create(3L, AssistantResponseOwner.MODEL)
+        assertTrue(first.responseId != repeated.responseId)
+        assertEquals(2L, first.sourceTurnId)
+        assertEquals(3L, repeated.sourceTurnId)
+        assertTrue(first.responseGenerationId < repeated.responseGenerationId)
+    }
+
+    @Test fun oldResponseGenerationIsSupersededWithoutReusingUserTurn() {
+        val arbiter = TurnResponseArbiter()
+        arbiter.begin(2L)
+        val oldGeneration = arbiter.generationId
+        arbiter.supersedeForNewUserTurn(3L)
+        assertFalse(arbiter.isCurrent(2L, oldGeneration))
+        assertEquals(3L, arbiter.turnId)
+    }
 }

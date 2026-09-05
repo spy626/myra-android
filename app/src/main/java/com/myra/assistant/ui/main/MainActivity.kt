@@ -75,7 +75,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
         override fun onResult(command: Command, result: AssistantResult) = runOnUiThread {
-            addBubble(result.spokenMessage, false, !result.success)
+            MyraVoiceService.publishAssistantText(
+                result.spokenMessage,
+                !result.success,
+                com.myra.assistant.service.AssistantResponseOwner.LEGACY_COMMAND
+            )
             showStatus(result.spokenMessage)
         }
     }
@@ -121,8 +125,12 @@ class MainActivity : AppCompatActivity() {
         override fun onReady() = runOnUiThread { b.connectButton.setColorFilter(Color.WHITE); showStatus("Sun rahi hoon…") }
         override fun onAmplitude(value: Float) = runOnUiThread { b.orb.amplitude = value }
         override fun onSpeaking(speaking: Boolean) = runOnUiThread { b.orb.state = if (speaking) OrbAnimationView.State.SPEAKING else OrbAnimationView.State.LISTENING; showStatus(if (speaking) "Bol rahi hoon…" else "Sun rahi hoon…") }
-        override fun onUserText(text: String) = runOnUiThread { addBubble(text, true) }
-        override fun onMyraText(text: String, error: Boolean) = runOnUiThread { addBubble(text, false, error) }
+        override fun onUserText(text: String) = runOnUiThread {
+            VoicePipelineLogger.debug("CHAT_DIRECT_DELIVERY_REJECTED role=USER reason=missing_canonical_message_identity")
+        }
+        override fun onMyraText(text: String, error: Boolean) = runOnUiThread {
+            VoicePipelineLogger.debug("CHAT_DIRECT_DELIVERY_REJECTED role=ASSISTANT reason=missing_canonical_response_identity")
+        }
         override fun onUserMessage(messageId: String, text: String) = runOnUiThread {
             VoicePipelineLogger.debug("CHAT_UI_STATE_UPDATED messageId=$messageId role=USER")
             addBubble(text, true, messageId = messageId)
@@ -282,7 +290,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val message = reactions[next]
-        addBubble(message, false)
         showStatus(message)
         MyraVoiceService.speakLocal(message)
     }
@@ -466,7 +473,8 @@ class MainActivity : AppCompatActivity() {
         if (command is AppCommand.DeepResearch) {
             if (!MyraVoiceService.isRunning) {
                 val message = "Connect LYRA first, then start Deep Research."
-                showStatus(message); addBubble(message, false, true)
+                showStatus(message)
+                MyraVoiceService.publishAssistantText(message, true)
             } else {
                 MyraVoiceService.startDeepResearch(command.query)
             }
@@ -475,7 +483,11 @@ class MainActivity : AppCompatActivity() {
         val result = appActions.execute(command)
         showStatus(result.message)
         Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
-        addBubble(result.message, false, !result.success)
+        MyraVoiceService.publishAssistantText(
+            result.message,
+            !result.success,
+            com.myra.assistant.service.AssistantResponseOwner.LEGACY_COMMAND
+        )
     }
     private fun shouldExecute(command: AppCommand): Boolean {
         val now = android.os.SystemClock.elapsedRealtime()

@@ -129,11 +129,36 @@ class VoiceTurnIdentityTest {
             newSpeechStartedAt = 1_200L,
             transcriptStarted = false
         ))
-        assertTrue(!SpeechCycleBoundaryPolicy.startsNewTurn(
+        assertTrue(SpeechCycleBoundaryPolicy.startsNewTurn(
             activeTurnId = 6L,
             previousSpeechEndedAt = 1_000L,
             newSpeechStartedAt = 2_000L,
             transcriptStarted = true
         ))
+    }
+
+    @Test fun finalCommittedUtteranceAlwaysForcesNewVadIdentity() {
+        val store = VoiceTurnIdentityStore()
+        store.begin(2L, 1_000L)
+        store.speechEnded(2L, 1_500L)
+        store.finalTranscript(2L, "session:2")
+        assertTrue(SpeechCycleBoundaryPolicy.startsNewTurn(
+            activeTurnId = 2L,
+            previousSpeechEndedAt = 1_500L,
+            newSpeechStartedAt = 1_550L,
+            transcriptStarted = true,
+            utteranceState = store.current()?.lifecycle
+        ))
+    }
+
+    @Test fun terminalTranscriptAccumulatorRejectsLatePacketsAndNewTurnGetsFreshBinding() {
+        val ownership = TranscriptAccumulatorOwnership()
+        ownership.bind("session:2")
+        assertTrue(ownership.mayAppend("session:2"))
+        assertTrue(ownership.close("session:2"))
+        assertTrue(!ownership.mayAppend("session:2"))
+        ownership.bind("session:3")
+        assertTrue(ownership.mayAppend("session:3"))
+        assertTrue(!ownership.mayAppend("session:2"))
     }
 }
