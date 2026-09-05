@@ -27,11 +27,13 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
         val structured = toStructuredIntent(request, decision, task)
         if (decision.authorizesPhoneActions) {
             val runtime = GeneralAgentRuntimeStore.runtime
-            val runtimeTask = runtime.start(turnId, structured)
+            val runtimeTask = runtime.start(turnId, structured, task?.id)
             val perception = if (runtimeTask != null && scene != null) {
                 PerceptionSnapshot(scene, runtimeTask.id, scene.observedAt)
             } else null
-            runtime.next(perception)
+            // Production execution owner asks the planner for the next step after it has
+            // attached executor parameters (query, direction, destination). Starting here
+            // preserves one authoritative task without prematurely selecting a legacy path.
         } else if (decision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION, TurnIntent.CANCEL)) {
             GeneralAgentRuntimeStore.runtime.cancel()
         }
@@ -59,6 +61,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
             requiresAction = decision.authorizesPhoneActions,
             targetDescription = request.takeIf { decision.authorizesPhoneActions },
             requiredCapabilities = capabilities,
+            parameters = BrowserSearchRequestParser.parse(request)?.let { mapOf("query" to it.query) }.orEmpty(),
             confidence = decision.confidence,
             needsClarification = decision.intent == TurnIntent.CLARIFICATION
         )

@@ -24,6 +24,32 @@ class GeneralAgentRuntimeTest {
         assertEquals(ActionCategory.BROWSER, next.step.category)
     }
 
+    @Test fun planner_chooses_execution_capability_instead_of_first_set_entry() {
+        val runtime = GeneralAgentRuntime(now = { 1 })
+        val structured = intent(ToolCapability.OBSERVE_SCREEN).copy(
+            requiredCapabilities = linkedSetOf(ToolCapability.OBSERVE_SCREEN, ToolCapability.BROWSER_SEARCH),
+            textHint = "android ai"
+        )
+        val task = runtime.start(21, structured)!!
+        val result = runtime.next(perception(task.id, scene("com.android.chrome", 1))) as PlannerResult.Next
+        assertEquals(ToolCapability.BROWSER_SEARCH, result.step.capability)
+    }
+
+    @Test fun planner_requests_observation_when_screen_capability_has_no_scene() {
+        val runtime = GeneralAgentRuntime(now = { 1 })
+        runtime.start(22, intent(ToolCapability.ACCESSIBILITY_SCROLL))
+        assertTrue(runtime.next(null) is PlannerResult.NeedObservation)
+    }
+
+    @Test fun waiting_action_requests_verification_instead_of_second_execution() {
+        val runtime = GeneralAgentRuntime(now = { 1 })
+        val task = runtime.start(23, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!
+        val before = perception(task.id, scene("pkg", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        runtime.recordAction(step, GeneralActionResult(true), before)
+        assertTrue(runtime.next(before.copy(capturedAt = 2)) is PlannerResult.VerifyPrevious)
+    }
+
     @Test fun accepted_dispatch_without_observed_change_is_unknown_not_success() {
         val runtime = GeneralAgentRuntime(now = { 2 })
         val task = runtime.start(3, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!
@@ -73,12 +99,105 @@ class GeneralAgentRuntimeTest {
         assertTrue(recovery is RecoveryDecision.Clarify)
     }
 
+    @Test fun failed_action_enters_real_recovery_and_planner_returns_recover_step() {
+        val runtime = GeneralAgentRuntime(now = { 5 })
+        val task = runtime.start(24, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!
+        val before = perception(task.id, scene("pkg", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        runtime.recordAction(step, GeneralActionResult(false, targetId = "container-a", failureReason = "rejected"), before)
+        val (_, decision) = runtime.verify(before.copy(capturedAt = 2))
+        assertTrue(decision is RecoveryDecision.Retry)
+        assertTrue("container-a" in runtime.activeTask()!!.rejectedTargets)
+        val recovered = runtime.next(before.copy(capturedAt = 3)) as PlannerResult.Recover
+        assertEquals("safe_retry_1", recovered.step.strategy)
+    }
+
+    @Test fun production_router_registers_required_real_capability_adapters_and_executes_once() {
+        var scrollCalls = 0
+        val registry = AgentToolRegistry()
+        val adapters = ProductionGeneralAdapters.create(registry, ProductionAdapterExecutors(
+            scroll = { _, _ -> scrollCalls++; GeneralActionResult(true) },
+            browserSearch = { _, _ -> GeneralActionResult(true) },
+            observeScreen = { _, _ -> GeneralActionResult(true) },
+            verifyScreen = { _, _ -> GeneralActionResult(true) },
+            back = { _, _ -> GeneralActionResult(true) }
+        ))
+        val router = GeneralActionRouter(adapters)
+        assertTrue(router.registeredCapabilities().containsAll(setOf(
+            ToolCapability.ACCESSIBILITY_SCROLL, ToolCapability.BROWSER_SEARCH,
+            ToolCapability.OBSERVE_SCREEN, ToolCapability.VERIFY_SCREEN, ToolCapability.BACK
+        )))
+        val runtime = GeneralAgentRuntime(now = { 1 })
+        val task = runtime.start(25, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!
+        val before = perception(task.id, scene("unknown.app", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        val adapter = router.select(step, before)!!
+        runtime.recordAction(step, adapter.execute(step, before), before)
+        assertEquals("GenericScrollAdapter", adapter.adapterId)
+        assertEquals(1, scrollCalls)
+        assertTrue(runtime.next(before.copy(capturedAt = 2)) is PlannerResult.VerifyPrevious)
+    }
+
+    @Test fun browser_search_routes_through_adapter_and_completes_from_general_verifier() {
+        var searchCalls = 0
+        val registry = AgentToolRegistry()
+        val adapters = ProductionGeneralAdapters.create(registry, ProductionAdapterExecutors(
+            scroll = { _, _ -> GeneralActionResult(true) },
+            browserSearch = { _, _ -> searchCalls++; GeneralActionResult(true) },
+            observeScreen = { _, _ -> GeneralActionResult(true) },
+            verifyScreen = { _, _ -> GeneralActionResult(true) },
+            back = { _, _ -> GeneralActionResult(true) }
+        ))
+        val runtime = GeneralAgentRuntime(now = { 1 })
+        val searchIntent = intent(ToolCapability.BROWSER_SEARCH).copy(
+            relevantApp = "com.android.chrome", textHint = "new ai", parameters = mapOf("query" to "new ai")
+        )
+        val task = runtime.start(26, searchIntent)!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        val adapter = GeneralActionRouter(adapters).select(step, before)!!
+        runtime.recordAction(step, adapter.execute(step, before), before)
+        val after = perception(task.id, scene("com.android.chrome", 2, listOf(element("new ai results"))))
+        val (verification, recovery) = runtime.verify(after)
+        assertEquals(1, searchCalls)
+        assertEquals(GeneralVerificationStatus.SUCCESS, verification.status)
+        assertNull(recovery)
+        assertEquals(AgentRuntimeStatus.COMPLETED, runtime.lastCompletedTask()?.status)
+    }
+
+    @Test fun changed_but_unproven_search_result_remains_unknown_not_failure() {
+        val runtime = GeneralAgentRuntime(now = { 1 })
+        val task = runtime.start(27, intent(ToolCapability.BROWSER_SEARCH).copy(
+            relevantApp = "com.android.chrome", textHint = "new ai"
+        ))!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        runtime.recordAction(step, GeneralActionResult(true), before)
+        val after = perception(task.id, scene("com.android.chrome", 2, listOf(element("unrelated"))))
+        val (verification, _) = runtime.verify(after)
+        assertEquals(GeneralVerificationStatus.UNKNOWN, verification.status)
+    }
+
+    @Test fun protected_modal_pauses_planner_before_adapter_selection() {
+        val runtime = GeneralAgentRuntime(now = { 1 })
+        val task = runtime.start(28, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!
+        val permission = perception(task.id, scene("pkg", 1).copy(modal = ModalKind.PERMISSION))
+        assertTrue(runtime.next(permission) is PlannerResult.NeedClarification)
+    }
+
     @Test fun modal_pauses_old_plan_before_retry() {
         val recovery = GeneralRecoveryEngine()
         val task = GeneralRuntimeTask(turnId = 1, intent = intent(ToolCapability.ACCESSIBILITY_CLICK), createdAt = 1)
         val modal = scene("pkg", 2).copy(modal = ModalKind.PERMISSION)
         val result = GeneralVerificationResult(GeneralVerificationStatus.FAILURE, "page", "permission dialog", .9)
         assertTrue(recovery.decide(task, result, modal, "x") is RecoveryDecision.PauseForModal)
+    }
+
+    @Test fun permission_modal_requires_authorization_but_menu_does_not() {
+        val protected = scene("pkg", 2).copy(modal = ModalKind.PERMISSION)
+        val menu = scene("pkg", 2).copy(modal = ModalKind.MENU)
+        assertTrue(ModalSafetyPolicy.requiresAuthorization(protected))
+        assertFalse(ModalSafetyPolicy.requiresAuthorization(menu))
     }
 
     @Test fun target_from_old_app_or_generation_is_rejected() {

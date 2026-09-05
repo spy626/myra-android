@@ -160,16 +160,6 @@ class BrowserSearchTool(private val context: Context) {
             Intent(Intent.ACTION_VIEW, uri)
         }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         if (expected != null) intent.setPackage(expected)
-        val runtime = GeneralAgentRuntimeStore.runtime
-        val runtimeTask = runtime.activeTask()
-        val runtimeStep = runtimeTask?.currentStep?.takeIf { it.capability == ToolCapability.BROWSER_SEARCH }
-        val runtimeBefore = ActivityContextStore.snapshot()?.let {
-            PerceptionSnapshot(
-                ScreenSceneFactory.from(it, WorkingTaskRuntime.store.snapshot().activeExternalApp),
-                runtimeTask?.id,
-                System.currentTimeMillis()
-            )
-        }
         return try {
             VoicePipelineLogger.debug(
                 "SEARCH_EXECUTOR_ENTRY class=BrowserSearchTool method=execute turnId=service_owned " +
@@ -181,17 +171,11 @@ class BrowserSearchTool(private val context: Context) {
                     "selectedExecutor=${resolution.selectedExecutor} destination=${resolution.destination} expectedPackage=$expected"
             )
             context.startActivity(intent)
-            if (runtimeStep != null && runtimeBefore != null) {
-                runtime.recordAction(runtimeStep, GeneralActionResult(accepted = true), runtimeBefore)
-            }
             VoicePipelineLogger.debug(
                 "SEARCH_ACTION_RETURNED executorClass=BrowserSearchTool accepted=true expectedPackage=$expected"
             )
             BrowserSearchDispatch(true, expected, "dispatched")
         } catch (error: Exception) {
-            if (runtimeStep != null && runtimeBefore != null) {
-                runtime.recordAction(runtimeStep, GeneralActionResult(false, failureReason = "browser_unavailable"), runtimeBefore)
-            }
             VoicePipelineLogger.debug(
                 "SEARCH_ACTION_RETURNED executorClass=BrowserSearchTool accepted=false " +
                     "failure=${error.javaClass.simpleName} expectedPackage=$expected"

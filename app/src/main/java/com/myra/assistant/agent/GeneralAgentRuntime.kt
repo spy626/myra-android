@@ -25,6 +25,7 @@ data class StructuredAgentIntent(
     val ordinalHint: Int? = null,
     val relevantApp: String? = null,
     val desiredEndState: String? = null,
+    val parameters: Map<String, String> = emptyMap(),
     val requiredCapabilities: Set<ToolCapability> = emptySet(),
     val confidence: Double,
     val needsClarification: Boolean = false
@@ -62,6 +63,8 @@ data class GeneralPlanStep(
     val capability: ToolCapability,
     val targetDescription: String? = null,
     val textPayload: String? = null,
+    val parameters: Map<String, String> = emptyMap(),
+    val strategy: String = "primary",
     val expectedOutcome: ExpectedOutcome,
     val requiresFreshPerception: Boolean = true,
     val requiresVerification: Boolean = true,
@@ -119,6 +122,8 @@ data class GeneralActionHistory(
 sealed interface PlannerResult {
     data class Next(val step: GeneralPlanStep) : PlannerResult
     data class NeedObservation(val visual: Boolean) : PlannerResult
+    data class VerifyPrevious(val step: GeneralPlanStep) : PlannerResult
+    data class Recover(val step: GeneralPlanStep) : PlannerResult
     data class NeedClarification(val message: String) : PlannerResult
     data class Complete(val reason: String) : PlannerResult
     data class Fail(val reason: String) : PlannerResult
@@ -129,13 +134,19 @@ class GeneralAgentPlanner {
     fun next(task: GeneralRuntimeTask, perception: PerceptionSnapshot?, relevantTools: List<ToolDefinition>): PlannerResult {
         if (!task.intent.requiresAction) return PlannerResult.Complete("conversation_tools_locked")
         if (task.recoveryCount > MAX_RECOVERIES) return PlannerResult.Fail("safe_retry_limit")
+        task.currentStep?.takeIf { task.status == AgentRuntimeStatus.WAITING_FOR_RESULT }?.let {
+            return PlannerResult.VerifyPrevious(it)
+        }
         if (perception == null && task.intent.requiredCapabilities.any { it.requiresScreen() }) {
             return PlannerResult.NeedObservation(visual = task.intent.turnIntent == TurnIntent.SCREEN_QUESTION)
         }
-        if (perception?.scene?.modal != null && perception.scene.modal != ModalKind.NONE) {
-            return PlannerResult.NeedClarification("Screen par naya dialog hai. Kya karun?")
+        if (perception?.scene?.modal != null && perception.scene.modal != ModalKind.NONE &&
+            ModalSafetyPolicy.requiresAuthorization(perception.scene)
+        ) {
+            return PlannerResult.NeedClarification("Screen par protected dialog hai. Kya karun?")
         }
-        val capability = task.intent.requiredCapabilities.firstOrNull { wanted -> relevantTools.any { it.capability == wanted } }
+        val capability = primaryCapability(task.intent.requiredCapabilities)
+            ?.takeIf { wanted -> relevantTools.any { it.capability == wanted } }
             ?: return PlannerResult.Fail("no_safe_tool")
         val expected = expectedFor(capability, task.intent)
         return PlannerResult.Next(
@@ -145,19 +156,35 @@ class GeneralAgentPlanner {
                 capability = capability,
                 targetDescription = task.intent.targetDescription,
                 textPayload = task.intent.textHint,
+                parameters = task.intent.parameters,
+                strategy = if (task.status == AgentRuntimeStatus.RECOVERING) "safe_retry_${task.recoveryCount}" else "primary",
                 expectedOutcome = expected,
                 requiresFreshPerception = capability.requiresScreen(),
                 requiresVerification = capability !in setOf(ToolCapability.OBSERVE_SCREEN, ToolCapability.VISUAL_CHECK),
                 risk = relevantTools.first { it.capability == capability }.risk
             )
+        ).let { if (task.status == AgentRuntimeStatus.RECOVERING) PlannerResult.Recover(it.step) else it }
+    }
+
+    private fun primaryCapability(capabilities: Set<ToolCapability>): ToolCapability? {
+        val executionOrder = listOf(
+            ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH,
+            ToolCapability.ACCESSIBILITY_SCROLL, ToolCapability.ACCESSIBILITY_CLICK,
+            ToolCapability.ACCESSIBILITY_TYPE, ToolCapability.BACK, ToolCapability.HOME,
+            ToolCapability.OPEN_APP, ToolCapability.SWITCH_APP,
+            ToolCapability.OBSERVE_SCREEN, ToolCapability.VISUAL_CHECK, ToolCapability.VERIFY_SCREEN
         )
+        return executionOrder.firstOrNull { it in capabilities }
+            ?: capabilities.firstOrNull()
     }
 
     private fun expectedFor(capability: ToolCapability, intent: StructuredAgentIntent) = when (capability) {
         ToolCapability.OPEN_APP, ToolCapability.SWITCH_APP -> ExpectedOutcome(ExpectedOutcomeType.FOREGROUND_PACKAGE, "requested app foreground", intent.relevantApp)
         ToolCapability.ACCESSIBILITY_SCROLL, ToolCapability.SWIPE -> ExpectedOutcome(ExpectedOutcomeType.SCROLL_CHANGED, "visible content changes")
         ToolCapability.ACCESSIBILITY_TYPE -> ExpectedOutcome(ExpectedOutcomeType.INPUT_CONTAINS, "owned input contains payload", text = intent.textHint)
-        ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH -> ExpectedOutcome(ExpectedOutcomeType.RESULT_SET_CHANGED, "search results visible")
+        ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH -> ExpectedOutcome(
+            ExpectedOutcomeType.RESULT_SET_CHANGED, "search results visible", intent.relevantApp, intent.textHint
+        )
         ToolCapability.ACCESSIBILITY_CLICK, ToolCapability.GESTURE -> ExpectedOutcome(ExpectedOutcomeType.TARGET_STATE_CHANGED, intent.desiredEndState ?: "target state or navigation changes", role = intent.roleHint)
         ToolCapability.BACK, ToolCapability.HOME -> ExpectedOutcome(ExpectedOutcomeType.NAVIGATION_OCCURRED, "navigation changes current screen")
         else -> ExpectedOutcome(ExpectedOutcomeType.SCREEN_CHANGED, intent.desiredEndState ?: "screen reflects requested result")
@@ -185,8 +212,37 @@ class GeneralAgentPlanner {
 }
 
 interface GeneralToolAdapter {
+    val adapterId: String
     val definition: ToolDefinition
+    val observationDelayMs: Long get() = 400L
     fun execute(step: GeneralPlanStep, perception: PerceptionSnapshot): GeneralActionResult
+}
+
+class ProductionGeneralToolAdapter(
+    override val adapterId: String,
+    override val definition: ToolDefinition,
+    override val observationDelayMs: Long = 400L,
+    private val executor: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult
+) : GeneralToolAdapter {
+    override fun execute(step: GeneralPlanStep, perception: PerceptionSnapshot) = executor(step, perception)
+}
+
+data class ProductionAdapterExecutors(
+    val scroll: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
+    val browserSearch: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
+    val observeScreen: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
+    val verifyScreen: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
+    val back: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult
+)
+
+object ProductionGeneralAdapters {
+    fun create(registry: AgentToolRegistry, executors: ProductionAdapterExecutors): List<GeneralToolAdapter> = listOf(
+        ProductionGeneralToolAdapter("GenericScrollAdapter", requireNotNull(registry.forCapability(ToolCapability.ACCESSIBILITY_SCROLL)), 650L, executors.scroll),
+        ProductionGeneralToolAdapter("BrowserSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.BROWSER_SEARCH)), 900L, executors.browserSearch),
+        ProductionGeneralToolAdapter("ObserveScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.OBSERVE_SCREEN)), 0L, executors.observeScreen),
+        ProductionGeneralToolAdapter("VerifyScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.VERIFY_SCREEN)), 0L, executors.verifyScreen),
+        ProductionGeneralToolAdapter("BackAdapter", requireNotNull(registry.forCapability(ToolCapability.BACK)), 400L, executors.back)
+    )
 }
 
 class GeneralActionRouter(adapters: List<GeneralToolAdapter>) {
@@ -196,6 +252,8 @@ class GeneralActionRouter(adapters: List<GeneralToolAdapter>) {
         adaptersByCapability[step.capability].orEmpty()
             .filter { !it.definition.foregroundRequired || perception.scene.externalForegroundPackage.isNotBlank() }
             .minByOrNull { it.definition.risk.ordinal }
+
+    fun registeredCapabilities(): Set<ToolCapability> = adaptersByCapability.keys
 }
 
 data class ResolvedActionTarget(
@@ -223,6 +281,11 @@ class GeneralVerifier {
         val packageChanged = before.scene.externalForegroundPackage != after.scene.externalForegroundPackage
         val generationChanged = before.scene.generation != after.scene.generation
         val elementsChanged = before.scene.semanticElements != after.scene.semanticElements
+        val fresh = after.capturedAt > before.capturedAt || after.scene.observedAt > before.scene.observedAt
+        if (!fresh) return GeneralVerificationResult(
+            GeneralVerificationStatus.UNKNOWN, expected.summary, "observation was not fresh", .2,
+            mismatchReason = "stale_observation"
+        )
         val success = when (expected.type) {
             ExpectedOutcomeType.FOREGROUND_PACKAGE -> expected.packageName != null && after.scene.externalForegroundPackage == expected.packageName
             ExpectedOutcomeType.TEXT_PRESENT -> expected.text?.let { needle -> after.scene.semanticElements.any { it.label.contains(needle, true) } } == true
@@ -232,8 +295,16 @@ class GeneralVerifier {
                 val expectedRolePresent = expected.role?.let { role -> after.scene.semanticElements.any { it.role == role } } ?: true
                 (packageChanged || generationChanged || elementsChanged) && expectedRolePresent
             }
+            ExpectedOutcomeType.RESULT_SET_CHANGED -> {
+                val packageMatches = expected.packageName == null || after.scene.externalForegroundPackage == expected.packageName
+                val tokens = expected.text.orEmpty().lowercase().split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
+                    .filter { it.length >= 2 }
+                packageMatches && tokens.isNotEmpty() && after.scene.semanticElements.any { element ->
+                    tokens.any { element.label.lowercase().contains(it) }
+                }
+            }
             ExpectedOutcomeType.NAVIGATION_OCCURRED, ExpectedOutcomeType.SCREEN_CHANGED,
-            ExpectedOutcomeType.SCREEN_TYPE_CHANGED, ExpectedOutcomeType.RESULT_SET_CHANGED,
+            ExpectedOutcomeType.SCREEN_TYPE_CHANGED,
             ExpectedOutcomeType.SCROLL_CHANGED -> packageChanged || generationChanged || elementsChanged
             ExpectedOutcomeType.ELEMENT_APPEARED -> expected.role?.let { role -> after.scene.semanticElements.any { it.role == role } } == true
             ExpectedOutcomeType.ELEMENT_DISAPPEARED -> expected.role?.let { role -> after.scene.semanticElements.none { it.role == role } } == true
@@ -241,13 +312,15 @@ class GeneralVerifier {
         }
         if (success) return GeneralVerificationResult(GeneralVerificationStatus.SUCCESS, expected.summary, "fresh screen matched", .9, listOf("fresh_observation"))
         val unchanged = !packageChanged && !generationChanged && !elementsChanged
+        val wrongPackage = expected.packageName != null && after.scene.externalForegroundPackage != expected.packageName
         return GeneralVerificationResult(
-            if (unchanged) GeneralVerificationStatus.UNKNOWN else GeneralVerificationStatus.FAILURE,
+            if (wrongPackage || (!unchanged && expected.type == ExpectedOutcomeType.TARGET_STATE_CHANGED)) GeneralVerificationStatus.FAILURE
+            else GeneralVerificationStatus.UNKNOWN,
             expected.summary,
             if (unchanged) "no observable change" else "screen changed differently",
-            if (unchanged) .45 else .75,
+            if (unchanged) .45 else .65,
             listOf("fresh_observation"),
-            if (unchanged) "insufficient_evidence" else "expected_state_missing"
+            if (wrongPackage) "wrong_foreground_package" else if (unchanged) "insufficient_evidence" else "expected_state_missing"
         )
     }
 }
@@ -268,6 +341,15 @@ class GeneralRecoveryEngine(private val maxRetries: Int = 2) {
     }
 }
 
+object ModalSafetyPolicy {
+    private val protectedTerms = Regex("\\b(?:allow|permission|pay|purchase|delete|remove|send|post|password|pin|account|security|confirm)\\b", RegexOption.IGNORE_CASE)
+    fun requiresAuthorization(scene: ScreenScene): Boolean = when (scene.modal) {
+        ModalKind.NONE, ModalKind.KEYBOARD, ModalKind.MENU -> false
+        ModalKind.PERMISSION, ModalKind.SYSTEM_DIALOG, ModalKind.UNKNOWN -> true
+        ModalKind.APP_DIALOG -> scene.semanticElements.any { protectedTerms.containsMatchIn(it.label) }
+    }
+}
+
 /** Single state owner for plan/action/observation/verification/recovery. */
 class GeneralAgentRuntime(
     private val registry: AgentToolRegistry = AgentToolRegistry(),
@@ -280,11 +362,12 @@ class GeneralAgentRuntime(
     @Volatile private var lastCompleted: GeneralRuntimeTask? = null
     private val beforeByStep = mutableMapOf<String, PerceptionSnapshot>()
 
-    @Synchronized fun start(turnId: Long, intent: StructuredAgentIntent): GeneralRuntimeTask? {
+    @Synchronized fun start(turnId: Long, intent: StructuredAgentIntent, taskId: String? = null): GeneralRuntimeTask? {
         active = active?.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now())
         beforeByStep.clear()
         if (!intent.requiresAction) { active = null; return null }
-        return GeneralRuntimeTask(turnId = turnId, intent = intent, status = AgentRuntimeStatus.OBSERVING, createdAt = now()).also { active = it }
+        return GeneralRuntimeTask(id = taskId ?: UUID.randomUUID().toString(), turnId = turnId, intent = intent,
+            status = AgentRuntimeStatus.OBSERVING, createdAt = now()).also { active = it }
     }
 
     fun activeTask(): GeneralRuntimeTask? = active
@@ -293,15 +376,27 @@ class GeneralAgentRuntime(
     @Synchronized fun next(perception: PerceptionSnapshot?): PlannerResult {
         val task = active ?: return PlannerResult.Fail("no_active_task")
         val tools = registry.relevant(task.intent.requiredCapabilities)
-        val result = planner.next(task.copy(status = AgentRuntimeStatus.PLANNING), perception, tools)
+        val result = planner.next(task, perception, tools)
         active = when (result) {
             is PlannerResult.Next -> task.copy(status = AgentRuntimeStatus.READY_TO_ACT, currentStep = result.step, planRevision = task.planRevision + 1, updatedAt = now())
+            is PlannerResult.Recover -> task.copy(status = AgentRuntimeStatus.READY_TO_ACT, currentStep = result.step, planRevision = task.planRevision + 1, updatedAt = now())
+            is PlannerResult.VerifyPrevious -> task.copy(status = AgentRuntimeStatus.VERIFYING, updatedAt = now())
             is PlannerResult.NeedClarification -> task.copy(status = AgentRuntimeStatus.NEEDS_CLARIFICATION, updatedAt = now())
             is PlannerResult.Complete -> task.copy(status = AgentRuntimeStatus.COMPLETED, updatedAt = now()).also { lastCompleted = it }
             is PlannerResult.Fail -> task.copy(status = AgentRuntimeStatus.FAILED, updatedAt = now()).also { lastCompleted = it }
             else -> task.copy(status = AgentRuntimeStatus.OBSERVING, updatedAt = now())
         }
         return result
+    }
+
+    @Synchronized fun enrich(parameters: Map<String, String>, relevantApp: String? = null, textHint: String? = null) {
+        active = active?.let { task ->
+            task.copy(intent = task.intent.copy(
+                parameters = task.intent.parameters + parameters,
+                relevantApp = relevantApp ?: task.intent.relevantApp,
+                textHint = textHint ?: task.intent.textHint
+            ), updatedAt = now())
+        }
     }
 
     @Synchronized fun recordAction(step: GeneralPlanStep, result: GeneralActionResult, before: PerceptionSnapshot): GeneralRuntimeTask {
@@ -319,7 +414,12 @@ class GeneralAgentRuntime(
         val step = requireNotNull(task.currentStep) { "no active step" }
         val history = task.actionHistory.lastOrNull { it.stepId == step.id }
         val before = beforeByStep.remove(step.id) ?: after
-        val result = verifier.verify(step, before, after)
+        val actionAccepted = history?.accepted != false
+        val result = if (actionAccepted) verifier.verify(step, before, after) else GeneralVerificationResult(
+            GeneralVerificationStatus.FAILURE, step.expectedOutcome.summary,
+            history?.failureReason ?: "adapter rejected action", .95,
+            evidence = listOf("adapter_rejected"), mismatchReason = history?.failureReason ?: "dispatch_rejected"
+        )
         val updatedHistory = task.actionHistory.map { if (it.stepId == step.id) it.copy(afterGeneration = after.scene.generation, verification = result.status) else it }
         if (result.status == GeneralVerificationStatus.SUCCESS) {
             val completed = task.copy(status = AgentRuntimeStatus.COMPLETED, actionHistory = updatedHistory, updatedAt = now())
@@ -342,9 +442,9 @@ class GeneralAgentRuntime(
      * same general task owner. UNKNOWN remains non-success and FAILURE is never inferred. */
     @Synchronized fun completeFromAdapter(status: GeneralVerificationStatus, observed: String): GeneralRuntimeTask? {
         val task = active ?: return null
-        val step = task.currentStep ?: return null
+        val step = task.currentStep
         val updatedHistory = task.actionHistory.map {
-            if (it.stepId == step.id) it.copy(verification = status) else it
+            if (step != null && it.stepId == step.id) it.copy(verification = status) else it
         }
         val terminal = when (status) {
             GeneralVerificationStatus.SUCCESS -> AgentRuntimeStatus.COMPLETED

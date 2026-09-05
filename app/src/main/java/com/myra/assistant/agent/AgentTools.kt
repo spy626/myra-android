@@ -23,6 +23,8 @@ class AgentToolRegistry(definitions: List<ToolDefinition> = defaults()) {
     fun relevant(capabilities: Set<ToolCapability>): List<ToolDefinition> =
         tools.values.filter { it.capability in capabilities }.sortedBy { it.risk.ordinal }
     fun get(id: String): ToolDefinition? = tools[id]
+    fun forCapability(capability: ToolCapability): ToolDefinition? =
+        tools.values.filter { it.capability == capability }.minByOrNull { it.risk.ordinal }
 
     companion object {
         fun defaults() = listOf(

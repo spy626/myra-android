@@ -99,6 +99,20 @@ import com.myra.assistant.agent.YouTubeSearchVerificationPolicy
 import com.myra.assistant.agent.SearchTaskResultPolicy
 import com.myra.assistant.agent.SearchVerification
 import com.myra.assistant.agent.TaskCompletionState
+import com.myra.assistant.agent.AgentToolRegistry
+import com.myra.assistant.agent.GeneralActionResult
+import com.myra.assistant.agent.GeneralActionRouter
+import com.myra.assistant.agent.GeneralAgentRuntimeStore
+import com.myra.assistant.agent.GeneralRuntimeTask
+import com.myra.assistant.agent.GeneralToolAdapter
+import com.myra.assistant.agent.GeneralVerificationStatus
+import com.myra.assistant.agent.PerceptionSnapshot
+import com.myra.assistant.agent.PlannerResult
+import com.myra.assistant.agent.ProductionAdapterExecutors
+import com.myra.assistant.agent.ProductionGeneralAdapters
+import com.myra.assistant.agent.RecoveryDecision
+import com.myra.assistant.agent.ScreenSceneFactory
+import com.myra.assistant.agent.ToolCapability
 import com.myra.assistant.screen.FreshFrameResult
 import com.myra.assistant.screen.ScreenResponseBinding
 import com.myra.assistant.screen.ReadingCommand
@@ -337,6 +351,24 @@ class MyraVoiceService : Service() {
         } else null
     }
     private val appActions by lazy { AppActionExecutor(this) }
+    private val generalToolRegistry = AgentToolRegistry()
+    private val generalActionRouter by lazy {
+        GeneralActionRouter(ProductionGeneralAdapters.create(
+            generalToolRegistry,
+            ProductionAdapterExecutors(
+                scroll = { step, _ -> executeGeneralScrollAdapter(step.parameters) },
+                browserSearch = { step, _ -> executeGeneralBrowserSearchAdapter(step.parameters) },
+                observeScreen = { _, _ -> GeneralActionResult(ActivityContextStore.snapshot() != null) },
+                verifyScreen = { _, _ -> GeneralActionResult(ActivityContextStore.snapshot() != null) },
+                back = { _, _ ->
+                    val accepted = AccessibilityHelperService.instance?.performGlobalAction(
+                        android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK
+                    ) == true
+                    GeneralActionResult(accepted, failureReason = "back_dispatch_rejected".takeIf { !accepted })
+                }
+            )
+        ))
+    }
     private val memoryRepository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
     private val assistantController by lazy { (application as MyApplication).assistantController }
     private val screenVisionPreferences by lazy { ScreenVisionPreferences(this) }
@@ -1226,7 +1258,7 @@ class MyraVoiceService : Service() {
                 )
                 latestActionDispatchedAt = 0L
                 val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
-                    userText, activityContext, visualAwarenessPreferences.enabled
+                    userText, activityContext, visualAwarenessPreferences.enabled, activeTurnId
                 )
                 latestIntentDecidedAt = android.os.SystemClock.elapsedRealtime()
                 voiceLog(
@@ -1244,6 +1276,10 @@ class MyraVoiceService : Service() {
                         "turnAcceptedToIntentMs=${latestIntentDecidedAt - latestTurnAcceptedAt}"
                 )
                 if (unifiedTask != null && turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
+                    voiceLog(
+                        "AGENT_TASK_CREATED taskId=${unifiedTask.id} turnId=$activeTurnId goal=${unifiedTask.interpretedGoal} " +
+                            "foregroundPackage=${activityContext?.packageName} screenGeneration=${activityContext?.generation ?: 0L}"
+                    )
                     voiceLog(
                         "agent_task_created taskId=${unifiedTask.id} goal=${unifiedTask.interpretedGoal} package=${activityContext?.packageName} " +
                             "planSteps=${unifiedTask.plan.size} confidence=${unifiedTask.confidence}"
@@ -3444,6 +3480,178 @@ class MyraVoiceService : Service() {
         )
     }
 
+    private fun runtimePerception(taskId: String): PerceptionSnapshot? {
+        val context = ActivityContextStore.snapshot() ?: return null
+        val scene = ScreenSceneFactory.from(context, WorkingTaskRuntime.store.snapshot().activeExternalApp)
+        return PerceptionSnapshot(scene, taskId, android.os.SystemClock.elapsedRealtime())
+    }
+
+    /** Production owner for migrated capabilities. Planner output is the only path to an
+     * adapter; the service schedules observation but never calls the low-level executor twice. */
+    private fun executeGeneralRuntimeCapability(
+        expectedCapability: ToolCapability,
+        onTerminal: (GeneralVerificationStatus, String) -> Unit
+    ): Boolean {
+        val runtime = GeneralAgentRuntimeStore.runtime
+        val task = runtime.activeTask() ?: return false
+        val enteredAt = android.os.SystemClock.elapsedRealtime()
+        voiceLog("AGENT_RUNTIME_ENTER taskId=${task.id} turnId=${task.turnId} capability=$expectedCapability recoveryCount=${task.recoveryCount}")
+        var before = runtimePerception(task.id)
+        if (before == null) {
+            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+            before = runtimePerception(task.id)
+        }
+        voiceLog("PLANNER_STARTED taskId=${task.id} turnId=${task.turnId} status=${task.status} recoveryCount=${task.recoveryCount}")
+        val planned = runtime.next(before)
+        runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, before?.scene) }
+        voiceLog("PLANNER_RESULT taskId=${task.id} turnId=${task.turnId} result=${planned.javaClass.simpleName}")
+        if (planned is PlannerResult.NeedObservation) {
+            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+            val observed = runtimePerception(task.id)
+            if (observed == null) {
+                runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN, "screen unavailable")
+                onTerminal(GeneralVerificationStatus.UNKNOWN, "screen unavailable")
+                return true
+            }
+            return executeGeneralRuntimeCapability(expectedCapability, onTerminal)
+        }
+        if (planned is PlannerResult.NeedClarification || planned is PlannerResult.Fail || planned is PlannerResult.Complete) {
+            val observed = when (planned) {
+                is PlannerResult.NeedClarification -> planned.message
+                is PlannerResult.Fail -> planned.reason
+                is PlannerResult.Complete -> planned.reason
+                else -> "planner stopped"
+            }
+            val status = if (planned is PlannerResult.Fail) GeneralVerificationStatus.FAILURE else GeneralVerificationStatus.UNKNOWN
+            runtime.completeFromAdapter(status, observed)
+            onTerminal(status, observed)
+            return true
+        }
+        val step = when (planned) {
+            is PlannerResult.Next -> planned.step
+            is PlannerResult.Recover -> planned.step
+            is PlannerResult.VerifyPrevious -> planned.step
+            else -> return false
+        }
+        val actionBefore = before
+        if (step.capability != expectedCapability || actionBefore == null) {
+            runtime.completeFromAdapter(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
+            onTerminal(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
+            return true
+        }
+        val adapter = generalActionRouter.select(step, actionBefore)
+        if (adapter == null) {
+            voiceLog("LEGACY_FALLBACK_USED taskId=${task.id} turnId=${task.turnId} capability=${step.capability} reason=no_registered_adapter")
+            runtime.completeFromAdapter(GeneralVerificationStatus.FAILURE, "no registered adapter")
+            onTerminal(GeneralVerificationStatus.FAILURE, "no registered adapter")
+            return true
+        }
+        voiceLog(
+            "ACTION_ROUTER_SELECTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} " +
+                "adapter=${adapter.adapterId} foregroundPackage=${actionBefore.scene.externalForegroundPackage} screenGeneration=${actionBefore.scene.generation}"
+        )
+        voiceLog("ACTION_ADAPTER_ENTER taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} adapter=${adapter.adapterId}")
+        voiceLog("ACTION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability}")
+        val result = adapter.execute(step, actionBefore)
+        runtime.recordAction(step, result, actionBefore)
+        runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, actionBefore.scene) }
+        voiceLog(
+            "ACTION_RETURNED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} " +
+                "adapter=${adapter.adapterId} accepted=${result.accepted} elapsedMs=${android.os.SystemClock.elapsedRealtime() - enteredAt}"
+        )
+        mainHandler.postDelayed({
+            val current = runtime.activeTask()
+            if (current?.id != task.id || current.turnId != task.turnId) return@postDelayed
+            voiceLog("POST_ACTION_OBSERVATION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability}")
+            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+            val after = runtimePerception(task.id)
+            if (after == null) {
+                runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN, "fresh screen unavailable")
+                onTerminal(GeneralVerificationStatus.UNKNOWN, "fresh screen unavailable")
+                return@postDelayed
+            }
+            voiceLog(
+                "POST_ACTION_OBSERVATION_READY taskId=${task.id} turnId=${task.turnId} stepId=${step.id} " +
+                    "foregroundPackage=${after.scene.externalForegroundPackage} screenGeneration=${after.scene.generation}"
+            )
+            voiceLog("VERIFICATION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} expected=${step.expectedOutcome.summary}")
+            val (verification, recovery) = runtime.verify(after)
+            (runtime.activeTask() ?: runtime.lastCompletedTask())?.let { WorkingTaskRuntime.store.syncRuntime(it, after.scene) }
+            voiceLog(
+                "VERIFICATION_RESULT taskId=${task.id} turnId=${task.turnId} stepId=${step.id} status=${verification.status} " +
+                    "expected=${verification.expected} observed=${verification.observed} recoveryCount=${runtime.activeTask()?.recoveryCount ?: task.recoveryCount}"
+            )
+            WorkingTaskRuntime.store.recordOutcome(
+                verification.observed,
+                verification.status == GeneralVerificationStatus.SUCCESS,
+                result.targetId,
+                runtimeOwnsRecoveryCount = true
+            )
+            if (verification.status == GeneralVerificationStatus.SUCCESS) {
+                runtime.lastCompletedTask()?.takeIf { expectedCapability != ToolCapability.BROWSER_SEARCH }?.let {
+                    WorkingTaskRuntime.store.completeRuntime(it, verification.observed, TaskCompletionState.SUCCESS)
+                }
+                voiceLog("AGENT_TASK_TERMINAL taskId=${task.id} turnId=${task.turnId} status=SUCCESS elapsedMs=${android.os.SystemClock.elapsedRealtime() - enteredAt}")
+                onTerminal(verification.status, verification.observed)
+            } else if (recovery is RecoveryDecision.Retry) {
+                voiceLog("RECOVERY_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} recoveryCount=${runtime.activeTask()?.recoveryCount}")
+                voiceLog("RECOVERY_DECISION taskId=${task.id} turnId=${task.turnId} decision=RETRY rejected=${recovery.rejectedTarget}")
+                executeGeneralRuntimeCapability(expectedCapability, onTerminal)
+            } else {
+                voiceLog("RECOVERY_DECISION taskId=${task.id} turnId=${task.turnId} decision=${recovery?.javaClass?.simpleName ?: "NONE"}")
+                runtime.completeFromAdapter(verification.status, verification.observed)
+                runtime.lastCompletedTask()?.takeIf { expectedCapability != ToolCapability.BROWSER_SEARCH }?.let {
+                    WorkingTaskRuntime.store.completeRuntime(
+                        it, verification.observed,
+                        if (verification.status == GeneralVerificationStatus.FAILURE) TaskCompletionState.FAILURE else TaskCompletionState.UNKNOWN
+                    )
+                }
+                voiceLog("AGENT_TASK_TERMINAL taskId=${task.id} turnId=${task.turnId} status=${verification.status} elapsedMs=${android.os.SystemClock.elapsedRealtime() - enteredAt}")
+                onTerminal(verification.status, verification.observed)
+            }
+        }, adapter.observationDelayMs)
+        return true
+    }
+
+    private fun executeGeneralScrollAdapter(parameters: Map<String, String>): GeneralActionResult {
+        val accessibility = AccessibilityHelperService.instance
+            ?: return GeneralActionResult(false, failureReason = "accessibility_unavailable")
+        val explicitYouTube = parameters["explicitApp"].equals("YouTube", true)
+        val direction = parameters["direction"] ?: "DOWN"
+        val down = direction != "UP"
+        val foreground = accessibility.currentForegroundContext()
+        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
+        val accepted = when {
+            explicitYouTube -> accessibility.scrollYouTubeVerified(down) { }
+            scope == null -> false
+            scope.expectedPackage.equals("com.google.android.youtube", true) ->
+                accessibility.scrollYouTubeForegroundVerified(scope, down) { }
+            else -> accessibility.scrollCurrentForegroundVerified(scope, down) { }
+        }
+        return GeneralActionResult(accepted, failureReason = "scroll_dispatch_rejected".takeIf { !accepted }, metadata = mapOf("direction" to direction))
+    }
+
+    private fun executeGeneralBrowserSearchAdapter(parameters: Map<String, String>): GeneralActionResult {
+        val query = parameters["query"].orEmpty()
+        if (query.isBlank()) return GeneralActionResult(false, failureReason = "missing_search_query")
+        val destination = runCatching { SearchDestination.valueOf(parameters["destination"].orEmpty()) }.getOrDefault(SearchDestination.BROWSER)
+        if (destination == SearchDestination.YOUTUBE) {
+            val command = AppCommand.SearchYouTube(query)
+            val result = assistantController.processCommand(
+                StructuredCommandParser.fromLegacy(command, command.toString()), speak = false, notifyListeners = false
+            )
+            return GeneralActionResult(result.success, failureReason = "youtube_search_dispatch_failed".takeIf { !result.success })
+        }
+        val selected = parameters["executor"]?.takeIf { it.isNotBlank() }?.let {
+            runCatching { com.myra.assistant.agent.BrowserSearchExecutor.valueOf(it) }.getOrNull()
+        }
+        val resolution = com.myra.assistant.agent.SearchResolution(
+            destination, parameters["reason"].orEmpty(), selected, parameters["targetPackage"]?.takeIf { it.isNotBlank() }
+        )
+        val dispatch = BrowserSearchTool(this).execute(com.myra.assistant.agent.BrowserSearchRequest(query, destination), resolution)
+        return GeneralActionResult(dispatch.accepted, failureReason = dispatch.reason.takeIf { !dispatch.accepted })
+    }
+
     private fun executeUnifiedBrowserSearch(raw: String): Boolean {
         val request = BrowserSearchRequestParser.parse(raw) ?: return false
         val accessibility = AccessibilityHelperService.instance
@@ -3495,83 +3703,31 @@ class MyraVoiceService : Service() {
             "search_execution_started turnId=$taskTurnId destination=${resolution.destination} " +
                 "reason=${resolution.reason} executor=$executorName"
         )
-        voiceLog("SEARCH_ACTION_STARTED turnId=$taskTurnId executor=$executorName destination=${resolution.destination}")
-        if (resolution.destination == SearchDestination.YOUTUBE) {
-            val result = assistantController.processCommand(
-                StructuredCommandParser.fromLegacy(
-                    AppCommand.SearchYouTube(request.query),
-                    AppCommand.SearchYouTube(request.query).toString()
-                ),
-                speak = false,
-                notifyListeners = false
-            )
-            voiceLog("SEARCH_ACTION_RETURNED turnId=$taskTurnId executor=YOUTUBE accepted=${result.success}")
-            if (!result.success) {
-                finishSearchTaskResult(taskTurnId, SearchVerification.FAILURE, "youtube_search_dispatch_failed")
-                return true
+        val expectedPackage = resolution.targetPackage ?: when (resolution.destination) {
+            SearchDestination.YOUTUBE -> "com.google.android.youtube"
+            SearchDestination.BROWSER -> "com.android.chrome".takeIf {
+                packageManager.getLaunchIntentForPackage(it) != null
             }
-            mainHandler.postDelayed({
-                val service = AccessibilityHelperService.instance
-                val foreground = service?.currentForegroundContext()
-                val observedScene = ActivityContextStore.snapshot()?.takeIf {
-                    it.packageName == foreground?.packageName &&
-                        android.os.SystemClock.elapsedRealtime() - it.timestamp <= 2_500L
-                }
-                val labels = observedScene?.visibleElements?.map { it.label }.orEmpty()
-                voiceLog(
-                    "SEARCH_OBSERVATION_RECEIVED turnId=$taskTurnId destination=YOUTUBE " +
-                        "package=${foreground?.packageName} visibleElements=${labels.size}"
-                )
-                voiceLog("SEARCH_VERIFICATION_STARTED turnId=$taskTurnId destination=YOUTUBE")
-                val verification = YouTubeSearchVerificationPolicy.verify(
-                    request.query, foreground?.packageName, labels
-                )
-                finishSearchTaskResult(taskTurnId, verification, "youtube_search_foreground=${foreground?.packageName}")
-            }, 900L)
-            return true
         }
-        voiceLog(
-            "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
-                "tool=browser_search phase=starting queryLength=${request.query.length}"
+        GeneralAgentRuntimeStore.runtime.enrich(
+            mapOf(
+                "query" to request.query,
+                "destination" to resolution.destination.name,
+                "executor" to resolution.selectedExecutor?.name.orEmpty(),
+                "reason" to resolution.reason,
+                "targetPackage" to expectedPackage.orEmpty()
+            ),
+            relevantApp = expectedPackage,
+            textHint = request.query
         )
-        val dispatch = BrowserSearchTool(this).execute(request, resolution)
-        voiceLog("SEARCH_ACTION_RETURNED turnId=$taskTurnId executor=$executorName accepted=${dispatch.accepted}")
-        voiceLog(
-            "agent_action_dispatched taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} " +
-                "tool=browser_search accepted=${dispatch.accepted} expectedPackage=${dispatch.expectedPackage} " +
-                "queryLength=${request.query.length} dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt} " +
-                "intentToActionMs=${if (latestIntentDecidedAt > 0L) startedAt - latestIntentDecidedAt else -1L}"
-        )
-        if (!dispatch.accepted) {
-            voiceLog("search_execution_failed turnId=$activeTurnId destination=BROWSER reason=${dispatch.reason}")
-            finishSearchTaskResult(taskTurnId, SearchVerification.FAILURE, dispatch.reason)
-            return true
-        }
-        mainHandler.postDelayed({
-            val accessibility = AccessibilityHelperService.instance
-            val foreground = accessibility?.currentForegroundContext()
-            val observedScene = ActivityContextStore.snapshot()?.takeIf {
-                it.packageName == foreground?.packageName &&
-                    android.os.SystemClock.elapsedRealtime() - it.timestamp <= 2_500L
+        return executeGeneralRuntimeCapability(ToolCapability.BROWSER_SEARCH) { status, observed ->
+            val verification = when (status) {
+                GeneralVerificationStatus.SUCCESS -> SearchVerification.SUCCESS
+                GeneralVerificationStatus.FAILURE -> SearchVerification.FAILURE
+                GeneralVerificationStatus.UNKNOWN -> SearchVerification.UNKNOWN
             }
-            val labels = observedScene?.visibleElements?.map { it.label }.orEmpty()
-            voiceLog(
-                "SEARCH_OBSERVATION_RECEIVED turnId=$taskTurnId destination=BROWSER " +
-                    "package=${foreground?.packageName} visibleElements=${labels.size}"
-            )
-            voiceLog("task_verification_started turnId=$taskTurnId taskId=${WorkingTaskRuntime.store.snapshot().taskId} tool=browser_search")
-            voiceLog("SEARCH_VERIFICATION_STARTED turnId=$taskTurnId destination=BROWSER")
-            val verification = BrowserSearchVerificationPolicy.verify(
-                request, resolution, foreground?.packageName,
-                labels
-            )
-            voiceLog(
-                "search_execution_completed turnId=$taskTurnId destination=BROWSER " +
-                    "accepted=true verification=$verification package=${foreground?.packageName}"
-            )
-            finishSearchTaskResult(taskTurnId, verification, "browser_search_package=${foreground?.packageName}")
-        }, 900L)
-        return true
+            finishSearchTaskResult(taskTurnId, verification, observed)
+        }
     }
 
     private fun finishSearchTaskResult(turnId: Long, verification: SearchVerification, observed: String) {
@@ -4013,8 +4169,8 @@ class MyraVoiceService : Service() {
         mediaGuard.finishInteraction()
 
         val resolvedDirection = command.direction ?: lastScrollDirection
-        val service = AccessibilityHelperService.instance
-        if (service == null || !AccessibilityHelperService.isEnabled(this)) {
+        val accessibility = AccessibilityHelperService.instance
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
             val error = "Scroll ke liye LYRA Accessibility enable karo."
             listener?.onMyraText(error, true)
             emitState(error)
@@ -4022,7 +4178,7 @@ class MyraVoiceService : Service() {
             return
         }
         val explicitYouTube = command.explicitlyRequestedApp.equals("YouTube", true)
-        val liveForeground = service.currentForegroundContext()
+        val liveForeground = accessibility.currentForegroundContext()
         brain.observeForegroundApp(liveForeground?.packageName)
         val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(liveForeground)
         if (!explicitYouTube && actionScope == null) {
@@ -4032,28 +4188,6 @@ class MyraVoiceService : Service() {
             queueLocalSpeech(error)
             return
         }
-        val callback: (Boolean) -> Unit = { success ->
-            mainHandler.post {
-                if (success) {
-                    lastScrollDirection = resolvedDirection
-                    hasAcknowledgedScrollDirection = true
-                    // A completed deterministic scroll is deliberately silent. It must not
-                    // wait behind CONTROLLED_LOCAL audio or invoke the ordinary model.
-                    audio?.setMuted(false)
-                    emitState("Sun rahi hoon…")
-                    voiceLog("screen_action_feedback_suppressed turnId=$activeTurnId action=scroll success=true")
-                } else {
-                    val error = if (actionScope?.expectedPackage.equals("com.google.android.youtube", true)) {
-                        "YouTube ka current feed move nahi hua."
-                    } else {
-                        "Current app ka scrollable area move nahi hua."
-                    }
-                    listener?.onMyraText(error, true)
-                    emitState(error)
-                    queueLocalSpeech(error)
-                }
-            }
-        }
         val foregroundPackage = actionScope?.expectedPackage
         val path = when {
             explicitYouTube -> "ACCESSIBILITY_EXPLICIT_YOUTUBE"
@@ -4061,35 +4195,39 @@ class MyraVoiceService : Service() {
             else -> "ACCESSIBILITY_CURRENT_APP"
         }
         voiceLog(
-            "screen_action_fast_path turnId=$activeTurnId action=scroll path=$path " +
+            "screen_action_runtime_path turnId=$activeTurnId action=scroll path=$path " +
                 "package=$foregroundPackage direction=$resolvedDirection"
         )
-        val accepted = when {
-            explicitYouTube -> service.scrollYouTubeVerified(
-                resolvedDirection == AppCommand.ScrollDirection.DOWN,
-                callback
-            )
-            foregroundPackage.equals("com.google.android.youtube", true) ->
-                service.scrollYouTubeForegroundVerified(
-                    actionScope!!,
-                    resolvedDirection == AppCommand.ScrollDirection.DOWN,
-                    callback
-                )
-            else -> service.scrollCurrentForegroundVerified(
-                actionScope!!,
-                resolvedDirection == AppCommand.ScrollDirection.DOWN,
-                callback
-            )
-        }
-        if (!accepted) {
-            val error = if (explicitYouTube) {
-                "YouTube is phone mein nahi mila."
-            } else {
-                "Current app mein safe scroll area nahi mila."
+        GeneralAgentRuntimeStore.runtime.enrich(mapOf(
+            "direction" to resolvedDirection.name,
+            "explicitApp" to command.explicitlyRequestedApp.orEmpty(),
+            "path" to path
+        ), relevantApp = foregroundPackage)
+        val owned = executeGeneralRuntimeCapability(ToolCapability.ACCESSIBILITY_SCROLL) { status, _ ->
+            when (status) {
+                GeneralVerificationStatus.SUCCESS -> {
+                    lastScrollDirection = resolvedDirection
+                    hasAcknowledgedScrollDirection = true
+                    audio?.setMuted(false)
+                    emitState("Sun rahi hoon…")
+                    voiceLog("screen_action_feedback_suppressed turnId=$activeTurnId action=scroll success=true owner=GENERAL_RUNTIME")
+                }
+                GeneralVerificationStatus.UNKNOWN -> {
+                    val message = "Scroll bheja tha, lekin screen movement verify nahi hua."
+                    listener?.onMyraText(message, false); emitState(message)
+                    queueLocalSpeech(message, allowUntranscribedAudio = false)
+                }
+                GeneralVerificationStatus.FAILURE -> {
+                    val message = if (explicitYouTube) "YouTube ka current feed move nahi hua."
+                    else "Current app ka scrollable area move nahi hua."
+                    listener?.onMyraText(message, true); emitState(message); queueLocalSpeech(message)
+                }
             }
-            listener?.onMyraText(error, true)
-            emitState(error)
-            queueLocalSpeech(error)
+        }
+        if (!owned) {
+            voiceLog("LEGACY_FALLBACK_USED turnId=$activeTurnId capability=ACCESSIBILITY_SCROLL reason=no_active_runtime_task execution=blocked")
+            val message = "Scroll task active nahi hai, isliye action nahi kiya."
+            listener?.onMyraText(message, true); emitState(message); queueLocalSpeech(message)
         } else {
             emitState(if (explicitYouTube) "YouTube scroll kar rahi hoon…" else "Current screen scroll kar rahi hoon…")
         }

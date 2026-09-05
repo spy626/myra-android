@@ -50,6 +50,28 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     @Volatile private var value = WorkingTaskContext()
     fun snapshot(): WorkingTaskContext = value
 
+    @Synchronized fun syncRuntime(task: GeneralRuntimeTask, scene: ScreenScene? = null) {
+        value = value.copy(
+            taskId = task.id,
+            currentGoal = task.intent.interpretedGoal,
+            activeExternalApp = scene?.externalForegroundPackage ?: value.activeExternalApp,
+            expectedApp = task.intent.relevantApp ?: value.expectedApp,
+            screenType = scene?.screenType ?: value.screenType,
+            screenGeneration = scene?.generation ?: value.screenGeneration,
+            windowGeneration = scene?.windowId?.toLong() ?: value.windowGeneration,
+            currentStep = task.currentStep?.id,
+            planRevision = task.planRevision,
+            previousActionTarget = task.actionHistory.lastOrNull()?.targetId ?: value.previousActionTarget,
+            expectedOutcome = task.currentStep?.expectedOutcome?.summary ?: value.expectedOutcome,
+            rejectedTargets = task.rejectedTargets,
+            recoveryCount = task.recoveryCount,
+            currentModal = scene?.modal ?: value.currentModal,
+            taskStatus = task.status,
+            contextGeneration = value.contextGeneration + 1,
+            updatedAt = now()
+        )
+    }
+
     @Synchronized fun onTurn(decision: AgentTurnDecision, task: AgentTask?, scene: ScreenScene?): WorkingTaskContext {
         value = if (decision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
             WorkingTaskContext(
@@ -81,11 +103,18 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
         return value
     }
 
-    @Synchronized fun recordOutcome(observed: String, verified: Boolean, rejectedTarget: String? = null) {
+    @Synchronized fun recordOutcome(
+        observed: String,
+        verified: Boolean,
+        rejectedTarget: String? = null,
+        runtimeOwnsRecoveryCount: Boolean = false
+    ) {
         value = value.copy(
             lastObservedOutcome = observed, lastVerifiedSuccess = verified,
+            previousActionTarget = rejectedTarget ?: value.previousActionTarget,
             rejectedTargets = rejectedTarget?.let { value.rejectedTargets + it } ?: value.rejectedTargets,
-            recoveryCount = if (verified) 0 else value.recoveryCount + 1, updatedAt = now()
+            recoveryCount = if (verified) 0 else if (runtimeOwnsRecoveryCount) value.recoveryCount else value.recoveryCount + 1,
+            updatedAt = now()
         )
     }
 
@@ -98,14 +127,6 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     }
 
     @Synchronized fun completeSearch(observed: String, state: TaskCompletionState): CompletedTaskContext {
-        GeneralAgentRuntimeStore.runtime.completeFromAdapter(
-            when (state) {
-                TaskCompletionState.SUCCESS -> GeneralVerificationStatus.SUCCESS
-                TaskCompletionState.FAILURE -> GeneralVerificationStatus.FAILURE
-                TaskCompletionState.UNKNOWN, TaskCompletionState.EXECUTING -> GeneralVerificationStatus.UNKNOWN
-            },
-            observed
-        )
         val completedAt = now()
         val completed = CompletedTaskContext(
             value.taskId, value.currentGoal, value.lastRequestedAction, value.searchQuery,
@@ -113,6 +134,27 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
         )
         // Terminal task details are history, not active routing context. In particular,
         // a completed YouTube destination must never bias a later generic search.
+        value = WorkingTaskContext(
+            conversationTopic = value.conversationTopic,
+            activeExternalApp = value.activeExternalApp,
+            screenGeneration = value.screenGeneration,
+            windowGeneration = value.windowGeneration,
+            lastCompletedTask = completed,
+            contextGeneration = value.contextGeneration + 1,
+            updatedAt = completedAt
+        )
+        return completed
+    }
+
+    @Synchronized fun completeRuntime(task: GeneralRuntimeTask, observed: String, state: TaskCompletionState): CompletedTaskContext {
+        val completedAt = now()
+        val completed = CompletedTaskContext(
+            task.id, task.intent.interpretedGoal, task.currentStep?.capability?.name,
+            task.intent.parameters["query"],
+            task.intent.parameters["destination"]?.let { runCatching { SearchDestination.valueOf(it) }.getOrNull() },
+            task.actionHistory.lastOrNull()?.capability?.name,
+            observed, state, completedAt
+        )
         value = WorkingTaskContext(
             conversationTopic = value.conversationTopic,
             activeExternalApp = value.activeExternalApp,
