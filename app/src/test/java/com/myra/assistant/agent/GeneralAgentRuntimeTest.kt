@@ -69,7 +69,7 @@ class GeneralAgentRuntimeTest {
         val after = perception(task.id, scene("pkg", 2, listOf(element("new"))))
         val (result, recovery) = runtime.verify(after)
         assertEquals(GeneralVerificationStatus.UNKNOWN, result.status)
-        assertTrue(recovery is RecoveryDecision.Retry)
+        assertTrue(recovery is RecoveryDecision.Clarify)
     }
 
     @Test fun stable_anchors_moving_vertically_verify_scroll() {

@@ -390,6 +390,11 @@ class GeneralRecoveryEngine(private val maxRetries: Int = 1) {
     fun decide(task: GeneralRuntimeTask, verification: GeneralVerificationResult, scene: ScreenScene, targetId: String?): RecoveryDecision {
         if (scene.modal != ModalKind.NONE) return RecoveryDecision.PauseForModal
         if (verification.status == GeneralVerificationStatus.SUCCESS) return RecoveryDecision.Fail("recovery_not_needed")
+        // UNKNOWN can mean the gesture worked but the available scene lacked stable anchors.
+        // Repeating it would risk two visible scrolls for one user turn.
+        if (verification.status == GeneralVerificationStatus.UNKNOWN) {
+            return RecoveryDecision.Clarify("Screen movement reliably verify nahi hua.")
+        }
         if (task.recoveryCount >= maxRetries) return RecoveryDecision.Clarify("Target verify nahi hua. Kaunsa wala?")
         return RecoveryDecision.Retry(targetId)
     }
