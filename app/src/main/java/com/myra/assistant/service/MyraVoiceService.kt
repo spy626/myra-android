@@ -1320,6 +1320,13 @@ class MyraVoiceService : Service() {
                 ) {
                     val runtimeTask = GeneralAgentRuntimeStore.runtime.activeTask()
                     val candidate = pendingScrollCandidates.consume(activeTurnId)
+                    if (candidate == null) {
+                        voiceLog(
+                            "SCROLL_CANDIDATE_DETECTED turnId=$activeTurnId " +
+                                "direction=${runtimeTask?.intent?.parameters?.get("direction") ?: lastScrollDirection.name} " +
+                                "source=final_authoritative execution=staged"
+                        )
+                    }
                     val directionName = runtimeTask?.intent?.parameters?.get("direction")
                         ?: candidate?.direction
                         ?: lastScrollDirection.name
@@ -1327,6 +1334,11 @@ class MyraVoiceService : Service() {
                         .getOrDefault(lastScrollDirection)
                     if (runtimeTask == null) {
                         voiceLog("SCROLL_RUNTIME_MISSING turnId=$activeTurnId reason=authoritative_task_not_created")
+                    } else if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
+                        voiceLog("SCROLL_RUNTIME_MISSING turnId=$activeTurnId reason=duplicate_turn_dispatch_blocked")
+                        resetTurnBuffers("duplicate_runtime_scroll")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
                     } else {
                         voiceLog("SCROLL_RUNTIME_BOUND turnId=$activeTurnId taskId=${runtimeTask.id} direction=$direction")
                         executeVerifiedScroll(
