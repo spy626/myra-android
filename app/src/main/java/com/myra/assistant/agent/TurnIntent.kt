@@ -35,7 +35,8 @@ object SemanticCapabilityParser {
         val target = SemanticTargetRequestParser.parse(raw, working)
         val opensTarget = words.any { it in OPEN_TARGET }
         val direction = words.any { it in DIRECTION }
-        val movement = words.any { it in MOVE } || (direction && words.any { it in GO })
+        val movement = words.any { it in MOVE } ||
+            (direction && (words.any { it in GO } || words.any { it in CONTINUATION }))
         val back = words.any { it in BACK } && words.any { it in GO + OPEN_TARGET }
         val predicate = when {
             opensTarget -> SemanticPredicate.OPEN_TARGET
@@ -62,6 +63,7 @@ object SemanticCapabilityParser {
     private val MOVE = setOf("scroll", "swipe", "स्क्रॉल")
     private val GO = setOf("go", "jao", "jaiye", "jaye", "जाओ", "जाइए", "जाएँ", "चलो")
     private val DIRECTION = setOf("down", "niche", "neeche", "bottom", "up", "upar", "upper", "नीचे", "ऊपर")
+    private val CONTINUATION = setOf("more", "further", "thoda", "thora", "aur", "थोड़ा", "थोड़ा", "और")
     private val BACK = setOf("back", "peeche", "piche", "वापस", "पीछे")
 }
 
@@ -97,10 +99,10 @@ object UnifiedTurnInterpreter {
         if (text.isBlank()) return conversation(raw)
 
         if (isCancel(text)) return AgentTurnDecision(TurnIntent.CANCEL, text, authorizesPhoneActions = true, confidence = .99)
+        if (isMetaDiscussion(text)) return conversation(raw, .96)
         if (working?.lastRequestedAction != null && isActionFollowUp(text)) {
             return AgentTurnDecision(TurnIntent.FOLLOW_UP, text, requiresPerception = true, confidence = .94)
         }
-        if (isMetaDiscussion(text)) return conversation(raw, .96)
         val semanticCapability = SemanticCapabilityParser.parse(raw, working)
         if (isScrollContinuation(text) && working?.lastCompletedTask?.let {
                 it.completionState == TaskCompletionState.SUCCESS &&

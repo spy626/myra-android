@@ -174,6 +174,7 @@ class GeneralSemanticTargetResolver {
         }
         var candidates = actionable
         val requestedFamily = request.targetFamily ?: request.roleHint?.let(::familyForRole)
+            ?: SemanticTargetRequestParser.parse(request.description).targetFamily
         if (requestedFamily != null) {
             candidates = candidates.filter { familyCompatible(requestedFamily, effectiveFamily(it)) }
             if (candidates.isEmpty()) return SemanticTargetResolution.NotFound
