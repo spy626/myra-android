@@ -1,0 +1,75 @@
+package com.myra.assistant.data.memory
+
+import java.util.Locale
+
+/** Finds an explicit forget target while keeping typo matching conservative. */
+object MemoryForgetMatcher {
+    fun find(query: String, memories: List<MemoryEntity>): MemoryEntity? {
+        val target = normalize(query)
+        if (target.length < 2) return null
+
+        memories.firstOrNull { containsToken(it.normalizedFact, target) }?.let { return it }
+        val significantTargetTokens = target.split(' ').filter { it.matches(Regex("[\\p{L}]{4,}")) }
+        if (significantTargetTokens.isEmpty()) return null
+
+        val fuzzyMatches = memories.filter { memory ->
+            val factTokens = normalize(memory.normalizedFact).split(' ')
+            significantTargetTokens.all { wanted ->
+                factTokens.any { token ->
+                    token.length >= 4 &&
+                        (editDistanceAtMostOne(token, wanted) || sameConservativeNameSound(token, wanted))
+                }
+            }
+        }
+        return fuzzyMatches.singleOrNull()
+    }
+
+    /**
+     * Handles conservative ASR spelling variants such as Kareem/Karim. It is only
+     * accepted when exactly one active memory matches, so a similar second name can
+     * never be deleted silently.
+     */
+    private fun sameConservativeNameSound(left: String, right: String): Boolean {
+        if (left.length !in 4..20 || right.length !in 4..20) return false
+        if (left.first() != right.first() || left.last() != right.last()) return false
+        return consonantKey(left) == consonantKey(right)
+    }
+
+    private fun consonantKey(value: String): String = value
+        .replace("ph", "f")
+        .replace('v', 'f')
+        .replace('p', 'f')
+        .replace(Regex("([a-z])\\1+"), "\$1")
+        .filterNot { it in "aeiou" }
+
+    private fun containsToken(fact: String, target: String): Boolean =
+        normalize(fact).split(' ').any { it == target } || normalize(fact).contains(target)
+
+    private fun editDistanceAtMostOne(left: String, right: String): Boolean {
+        if (kotlin.math.abs(left.length - right.length) > 1) return false
+        if (left == right) return true
+        var i = 0
+        var j = 0
+        var edits = 0
+        while (i < left.length && j < right.length) {
+            if (left[i] == right[j]) {
+                i++
+                j++
+            } else {
+                if (++edits > 1) return false
+                when {
+                    left.length > right.length -> i++
+                    right.length > left.length -> j++
+                    else -> { i++; j++ }
+                }
+            }
+        }
+        if (i < left.length || j < right.length) edits++
+        return edits <= 1
+    }
+
+    private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+}

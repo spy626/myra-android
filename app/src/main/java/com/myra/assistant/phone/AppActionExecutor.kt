@@ -1,0 +1,341 @@
+package com.myra.assistant.phone
+
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
+import android.media.AudioManager
+import android.view.KeyEvent
+import com.myra.assistant.model.AppCommand
+import com.myra.assistant.service.AccessibilityHelperService
+import com.myra.assistant.service.WhatsAppReplyStore
+import java.util.Locale
+import java.net.URLEncoder
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.Handler
+import android.os.Looper
+import android.hardware.camera2.CameraManager
+import com.myra.assistant.commands.Command
+import com.myra.assistant.core.AssistantResult
+import com.myra.assistant.diagnostics.VoicePipelineLogger
+import java.text.SimpleDateFormat
+import java.util.Date
+
+class AppActionExecutor(private val context: Context) {
+    data class Result(val message: String, val success: Boolean)
+
+    private val knownPackages = mapOf(
+        "youtube" to "com.google.android.youtube", "whatsapp" to "com.whatsapp",
+        "instagram" to "com.instagram.android", "facebook" to "com.facebook.katana",
+        "chrome" to "com.android.chrome", "gmail" to "com.google.android.gm",
+        "maps" to "com.google.android.apps.maps", "google maps" to "com.google.android.apps.maps",
+        "spotify" to "com.spotify.music", "netflix" to "com.netflix.mediaclient",
+        "x" to "com.twitter.android", "twitter" to "com.twitter.android",
+        "telegram" to "org.telegram.messenger", "snapchat" to "com.snapchat.android",
+        "play store" to "com.android.vending", "settings" to "com.android.settings",
+        "phonepe" to "com.phonepe.app", "gpay" to "com.google.android.apps.nbu.paisa.user",
+        "google pay" to "com.google.android.apps.nbu.paisa.user", "paytm" to "net.one97.paytm",
+        "amazon" to "in.amazon.mShop.android.shopping", "flipkart" to "com.flipkart.android",
+        "discord" to "com.discord", "linkedin" to "com.linkedin.android"
+    )
+
+    fun execute(command: AppCommand): Result = when (command) {
+        is AppCommand.OpenApp -> openApp(command.appName)
+        is AppCommand.CloseCurrentApp -> closeCurrentApp()
+        is AppCommand.SearchYouTube -> {
+            VoicePipelineLogger.debug(
+                "SEARCH_EXECUTOR_ENTRY class=AppActionExecutor method=searchYouTube turnId=caller_owned " +
+                    "finalTranscript=caller_authorized query=${command.query.take(120)} destination=YOUTUBE " +
+                    "foregroundPackage=${AccessibilityHelperService.instance?.currentForegroundContext()?.packageName}"
+            )
+            searchYouTube(command.query)
+        }
+        is AppCommand.PlayYouTube -> playYouTube(command.query)
+        AppCommand.OpenYouTubeShorts -> openYouTubeShorts()
+        AppCommand.RequestInstagramReels -> Result("Instagram open kar dun tumhare liye?", true)
+        AppCommand.OpenInstagramReels -> openInstagramReels()
+        AppCommand.TakeScreenshot -> takeScreenshot()
+        AppCommand.RepeatYouTubeSearch -> repeatYouTubeSearch()
+        is AppCommand.DeepResearch -> Result("Deep Research needs LYRA to be connected.", false)
+        is AppCommand.ReplyWhatsApp -> WhatsAppReplyStore.reply(context, command.sender, command.message)
+            .let { Result(it.message, it.success) }
+        AppCommand.QueryWhatsAppMessages -> WhatsAppReplyStore.latestMessage().let { Result(it.message, it.success) }
+        AppCommand.GoHome -> navigateHome()
+        AppCommand.GoBack -> navigateBack()
+        AppCommand.CurrentTime -> currentTime()
+        AppCommand.BatteryLevel -> batteryLevel()
+        AppCommand.ListFeatures -> listFeatures()
+        is AppCommand.SetFlashlight -> setFlashlight(command.enabled)
+        is AppCommand.ControlMedia -> controlMedia(command.action)
+        is AppCommand.ScrollYouTube -> scrollYouTube(command.direction)
+    }
+
+    fun executeStructured(command: Command): AssistantResult {
+        val local = command.localCommand ?: return AssistantResult(false, false, command.type.name, command.target, "Zopy, ye command abhi supported nahi hai.")
+        val result = execute(local)
+        val acceptedOnly = local is AppCommand.OpenApp || local is AppCommand.CloseCurrentApp ||
+            local is AppCommand.SearchYouTube || local is AppCommand.PlayYouTube ||
+            local is AppCommand.OpenYouTubeShorts || local is AppCommand.OpenInstagramReels ||
+            local is AppCommand.ReplyWhatsApp ||
+            local is AppCommand.ControlMedia || local is AppCommand.ScrollYouTube
+        return AssistantResult(
+            success = result.success,
+            verified = result.success && !acceptedOnly,
+            actionType = command.type.name,
+            target = command.target,
+            spokenMessage = result.message,
+            technicalError = if (result.success) null else result.message,
+            shouldResumeListening = true
+        )
+    }
+
+    private fun listFeatures(): Result = Result(
+        "Haan jaan, main YouTube open aur band kar sakti hoon, YouTube par videos search kar sakti hoon, first, next aur pichhla video chala sakti hoon, aur play-pause bhi control kar sakti hoon. Main available YouTube ads skip kar sakti hoon, flashlight on-off aur screenshot le sakti hoon, Home aur Back control kar sakti hoon, time aur battery bata sakti hoon, WhatsApp messages check karke reply de sakti hoon, Deep Research kar sakti hoon, aur tumse English ya Hinglish mein normally baat bhi kar sakti hoon.",
+        true
+    )
+
+    private fun navigateHome(): Result {
+        val service = AccessibilityHelperService.instance
+        return when {
+            service != null && service.goHome() -> Result("Home screen khol di.", true)
+            else -> try {
+                context.startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                Result("Home screen khol di.", true)
+            } catch (error: Exception) { Result("Home screen nahi khul paayi.", false) }
+        }
+    }
+
+    private fun navigateBack(): Result {
+        val service = AccessibilityHelperService.instance
+        if (service == null || !AccessibilityHelperService.isEnabled(context)) return Result("Back control ke liye LYRA Accessibility enable karo.", false)
+        return if (service.goBack()) Result("Peechhe aa gayi.", true) else Result("Android back action complete nahi kar paaya.", false)
+    }
+
+    private fun currentTime(): Result = Result("Abhi ${SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date())} ho rahe hain.", true)
+
+    private fun batteryLevel(): Result {
+        val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        if (level < 0) return Result("Battery level read nahi ho paaya.", false)
+        return Result("Battery ${level * 100 / scale} percent hai.", true)
+    }
+
+    private fun setFlashlight(enabled: Boolean): Result {
+        return try {
+            val camera = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val id = camera.cameraIdList.firstOrNull { camera.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
+                ?: return Result("Is phone mein flashlight available nahi hai.", false)
+            camera.setTorchMode(id, enabled)
+            Result(if (enabled) "Flashlight on kar di." else "Flashlight off kar di.", true)
+        } catch (error: Exception) {
+            Result("Flashlight change nahi ho paayi.", false)
+        }
+    }
+
+    private fun scrollYouTube(direction: AppCommand.ScrollDirection?): Result {
+        val service = AccessibilityHelperService.instance
+        if (service == null || !AccessibilityHelperService.isEnabled(context)) {
+            return Result("YouTube scroll ke liye LYRA Accessibility enable karo.", false)
+        }
+        val completed = service.scrollYouTube(
+            when (direction) {
+                AppCommand.ScrollDirection.DOWN -> true
+                AppCommand.ScrollDirection.UP -> false
+                null -> null
+            }
+        )
+        if (!completed) return Result("YouTube screen visible nahi hai. YouTube kholo aur phir try karo.", false)
+        return Result(
+            when (direction) {
+                AppCommand.ScrollDirection.DOWN -> "Neeche ek baar scroll kar diya."
+                AppCommand.ScrollDirection.UP -> "Upar ek baar scroll kar diya."
+                null -> "Pichhli direction mein ek baar scroll kar diya."
+            },
+            true
+        )
+    }
+
+    private fun controlMedia(action: AppCommand.MediaAction): Result {
+        if (action == AppCommand.MediaAction.NEXT ||
+            action == AppCommand.MediaAction.FIRST ||
+            action == AppCommand.MediaAction.PREVIOUS
+        ) {
+            val service = AccessibilityHelperService.instance
+            if (service == null || !AccessibilityHelperService.isEnabled(context)) {
+                return Result("YouTube video select karne ke liye LYRA Accessibility enable karo.", false)
+            }
+            val completed = when (action) {
+                AppCommand.MediaAction.NEXT -> service.clickNextYouTubeVideo()
+                AppCommand.MediaAction.FIRST -> service.clickFirstYouTubeVideo()
+                AppCommand.MediaAction.PREVIOUS -> service.openPreviousYouTubeVideo()
+                else -> false
+            }
+            if (!completed) {
+                val target = when (action) {
+                    AppCommand.MediaAction.NEXT -> "Next recommendation"
+                    AppCommand.MediaAction.FIRST -> "First video"
+                    AppCommand.MediaAction.PREVIOUS -> "Previous LYRA-opened video"
+                    else -> "Video"
+                }
+                return Result("$target screen par nahi mila. YouTube video list visible rakho aur phir try karo.", false)
+            }
+            return Result(
+                when (action) {
+                    AppCommand.MediaAction.NEXT -> "Next video par tap kar diya."
+                    AppCommand.MediaAction.FIRST -> "First video par tap kar diya."
+                    AppCommand.MediaAction.PREVIOUS -> "Pichhla video khol diya."
+                    else -> "Video command complete ho gaya."
+                },
+                true
+            )
+        }
+
+        val keyCode = when (action) {
+            AppCommand.MediaAction.PAUSE -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            AppCommand.MediaAction.PLAY -> KeyEvent.KEYCODE_MEDIA_PLAY
+            AppCommand.MediaAction.PREVIOUS -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            AppCommand.MediaAction.NEXT, AppCommand.MediaAction.FIRST ->
+                return Result("Media command complete nahi ho paaya.", false)
+        }
+        return try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val downTime = android.os.SystemClock.uptimeMillis()
+            audioManager.dispatchMediaKeyEvent(KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0))
+            audioManager.dispatchMediaKeyEvent(KeyEvent(downTime, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0))
+            val message = when (action) {
+                AppCommand.MediaAction.PAUSE -> "Pause command bhej diya."
+                AppCommand.MediaAction.PLAY -> "Play command bhej diya."
+                AppCommand.MediaAction.PREVIOUS -> "Previous command bhej diya."
+                AppCommand.MediaAction.NEXT, AppCommand.MediaAction.FIRST -> "Media command bhej diya."
+            }
+            Result(message, true)
+        } catch (_: Exception) {
+            Result("Media control complete nahi ho paaya.", false)
+        }
+    }
+
+    private fun openYouTubeShorts(): Result {
+        val service = AccessibilityHelperService.instance
+        if (service?.openYouTubeShorts() == true) return Result("YouTube Shorts open kar diya.", true)
+        val packageName = knownPackages.getValue("youtube")
+        if (context.packageManager.getLaunchIntentForPackage(packageName) == null) {
+            return Result("YouTube is phone mein nahi mila.", false)
+        }
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/shorts")).apply {
+                setPackage(packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            context.startActivity(intent)
+            Handler(Looper.getMainLooper()).postDelayed({
+                AccessibilityHelperService.instance?.openYouTubeShorts()
+            }, 1_500L)
+            Result("YouTube Shorts khol rahi hoon.", true)
+        } catch (_: Exception) {
+            Result("YouTube Shorts open nahi ho paaya.", false)
+        }
+    }
+
+    private fun takeScreenshot(): Result {
+        val service = AccessibilityHelperService.instance
+        if (service == null || !AccessibilityHelperService.isEnabled(context)) {
+            return Result("Screenshot ke liye LYRA Accessibility enable karo.", false)
+        }
+        return if (service.takeScreenshot()) Result("Screenshot le liya.", true)
+        else Result("Screenshot nahi le paayi.", false)
+    }
+
+    private fun openInstagramReels(): Result {
+        val opened = openApp("Instagram")
+        if (!opened.success) return opened
+        Handler(Looper.getMainLooper()).postDelayed({
+            AccessibilityHelperService.instance?.openInstagramReels()
+        }, 1_500L)
+        return Result("Instagram Reels open kar rahi hoon.", true)
+    }
+
+    private fun playYouTube(query: String?): Result {
+        val started = if (query.isNullOrBlank()) openApp("YouTube") else searchYouTube(query)
+        if (!started.success) return started
+        Handler(Looper.getMainLooper()).postDelayed({
+            AccessibilityHelperService.instance?.clickFirstYouTubeVideo()
+        }, 1_500L)
+        return Result(
+            if (query.isNullOrBlank()) "Tumhare liye ek video chala rahi hoon."
+            else "YouTube par $query dhoondhkar chala rahi hoon.",
+            true
+        )
+    }
+
+    private fun searchYouTube(rawQuery: String): Result {
+        val query = rawQuery.trim()
+        if (query.isBlank()) return Result("Tell me what you want to search on YouTube.", false)
+        val packageName = knownPackages.getValue("youtube")
+        if (context.packageManager.getLaunchIntentForPackage(packageName) == null) {
+            return Result("I couldn't find YouTube on this phone.", false)
+        }
+        val encoded = URLEncoder.encode(query, Charsets.UTF_8.name())
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$encoded")).apply {
+            setPackage(packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        }
+        return try {
+            context.startActivity(intent)
+            context.getSharedPreferences("myra", Context.MODE_PRIVATE).edit().putString("last_youtube_query", query).apply()
+            Result("Searching YouTube for $query.", true)
+        } catch (_: Exception) {
+            Result("Android couldn't start that YouTube search.", false)
+        }
+    }
+
+    private fun repeatYouTubeSearch(): Result {
+        val last = context.getSharedPreferences("myra", Context.MODE_PRIVATE)
+            .getString("last_youtube_query", "").orEmpty()
+        return if (last.isBlank()) Result("Tell me which channel or video to search first.", false)
+        else searchYouTube(last)
+    }
+
+    private fun openApp(rawName: String): Result {
+        val name = normalize(rawName)
+        val pm = context.packageManager
+        val launch = knownPackages[name]?.let(pm::getLaunchIntentForPackage) ?: findInstalledApp(name, pm)
+        if (launch == null) return Result("I couldn't find $rawName on this phone.", false)
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        return try {
+            context.startActivity(launch); Result("Opening $rawName.", true)
+        } catch (_: Exception) { Result("$rawName is installed, but Android would not let me open it.", false) }
+    }
+
+    private fun findInstalledApp(name: String, pm: PackageManager): Intent? {
+        val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val matches = pm.queryIntentActivities(query, PackageManager.MATCH_ALL)
+        val match = matches.firstOrNull { normalize(it.loadLabel(pm).toString()) == name }
+            ?: matches.firstOrNull {
+                normalize(it.loadLabel(pm).toString()).let { label ->
+                    // Never fuzzy-match a one- or two-character launcher label. The
+                    // Twitter label "X" previously matched the x inside "next video".
+                    label.length >= 3 && name.length >= 3 &&
+                        (label.contains(name) || name.contains(label))
+                }
+            }
+        return match?.activityInfo?.let {
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setClassName(it.packageName, it.name)
+        }
+    }
+
+    private fun closeCurrentApp(): Result {
+        val service = AccessibilityHelperService.instance
+        if (service == null || !AccessibilityHelperService.isEnabled(context)) {
+            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return Result("Enable LYRA Accessibility, then try the close command again.", false)
+        }
+        return if (service.returnToMyra()) Result("YouTube se bahar aa rahi hoon.", true)
+        else Result("Zopy, Android YouTube se bahar nahi aa paaya.", false)
+    }
+
+    private fun normalize(value: String) = value.lowercase(Locale.ROOT)
+        .replace(Regex("[^a-z0-9]+"), " ").trim()
+}

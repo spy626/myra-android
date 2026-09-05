@@ -1,0 +1,347 @@
+package com.myra.assistant.ai
+
+import com.myra.assistant.model.AppCommand
+import java.util.Locale
+
+object CommandParser {
+    private val appAliases = linkedMapOf(
+        "google maps" to "Google Maps", "play store" to "Play Store", "google pay" to "Google Pay",
+        "व्हाट्सएप" to "WhatsApp", "वॉट्सऐप" to "WhatsApp", "whatsapp" to "WhatsApp",
+        "इंस्टाग्राम" to "Instagram", "instagram" to "Instagram",
+        "यूट्यूब" to "YouTube", "youtube" to "YouTube",
+        "स्नैपचैट" to "Snapchat", "snapchat" to "Snapchat",
+        "टेलीग्राम" to "Telegram", "telegram" to "Telegram",
+        "फेसबुक" to "Facebook", "facebook" to "Facebook",
+        "क्रोम" to "Chrome", "chrome" to "Chrome", "जीमेल" to "Gmail", "gmail" to "Gmail",
+        "मैप्स" to "Maps", "maps" to "Maps", "स्पॉटिफाई" to "Spotify", "spotify" to "Spotify",
+        "नेटफ्लिक्स" to "Netflix", "netflix" to "Netflix", "ट्विटर" to "Twitter", "twitter" to "Twitter",
+        "सेटिंग्स" to "Settings", "settings" to "Settings", "फोनपे" to "PhonePe", "phonepe" to "PhonePe",
+        "जीपे" to "GPay", "gpay" to "GPay", "पेटीएम" to "Paytm", "paytm" to "Paytm",
+        "फ्लिपकार्ट" to "Flipkart", "flipkart" to "Flipkart", "अमेज़न" to "Amazon", "amazon" to "Amazon",
+        "डिस्कॉर्ड" to "Discord", "discord" to "Discord", "लिंक्डइन" to "LinkedIn", "linkedin" to "LinkedIn"
+    )
+
+    private val openAction = Regex(
+        "(?:\\b(?:open|opening|launch|start|get|kholo|kholo|khol|khul|kholna|khol\\s+do|khol\\s+dena|open\\s+karo|open\\s+karna|open\\s+kar\\s+do|open\\s+kar\\s+sakti\\s+ho|chalao|chalu\\s+karo|dikhao|check\\s+karna|check\\s+karna\\s+hai)\\b|खोलो|खोलना|खोल\\s+दो|खोल\\s+देना|ओपन\\s+करो|ओपन\\s+करना|ओपन\\s+कर\\s+दो|चलाओ|चालू\\s+करो|दिखाओ|देखना)"
+    )
+    private val closeAction = Regex(
+        "(?:\\b(?:close|close\\s+karo|close\\s+karna|band\\s+karo|band\\s+kar\\s+do|band\\s+karna)\\b|बंद\\s+करो|बंद\\s+कर\\s+दो|बंद\\s+करना|क्लोज\\s+करो)"
+    )
+
+    fun parse(raw: String): AppCommand? {
+        val text = normalize(raw)
+        if (text.isBlank()) return null
+        val asksForFeatures = listOf(
+            Regex("^(?:(?:lyra|laira)\\s+)?(?:(?:tumhare|aapke|abhi)\\s+)?(?:kaun|kon|kya)(?:\\s+sa)?\\s+(?:kaun|kon|kya)(?:\\s+sa)?\\s+(?:se\\s+)?features?\\s+(?:hain|hai|he)$"),
+            Regex("^(?:(?:lyra|laira)\\s+)?(?:tum\\s+)?kya\\s+kya\\s+kar\\s+(?:sakti|sakte)\\s+ho$"),
+            Regex("^(?:(?:lyra|laira)\\s+)?(?:apne\\s+)?(?:(?:saare|all)\\s+)?features?\\s+(?:batao|bata\\s+do|dikhao)$"),
+            Regex("^(?:what\\s+can\\s+you\\s+do|list\\s+(?:all\\s+)?features?|show\\s+(?:all\\s+)?features?)$"),
+            Regex("^(?:तुम\\s+)?क्या\\s+क्या\\s+कर\\s+सक(?:ती|ते)\\s+हो$"),
+            Regex("^(?:अपने\\s+)?(?:सारे\\s+)?फीचर्स?\\s+(?:बताओ|बता\\s+दो)$"),
+            Regex("^(?:अभी\\s+)?(?:(?:कौन|कोन)(?:\\s+(?:सा|सी|से))?\\s+){1,2}(?:फीचर्स?|फिचर्स?)(?:\\s+(?:है|हैं))?(?:\\s+अभी)?$"),
+            Regex("^kauna\\s+si\\s+phicara\\s+hai$"),
+            Regex("^कौन\\s+सी\\s+फीचर\\s+है$"),
+            Regex("^अभी\\s+कौन\\s+कौन\\s+से\\s+फीचर्स\\s+हैं$"),
+            Regex("^(?:(?:kaun|kon|kauna)(?:\\s+(?:sa|si|se))?\\s+){1,2}(?:features?|phicara|phichara|fichara?|phichar)(?:\\s+(?:hai|hain|haim|he))?(?:\\s+abhi)?$"),
+            Regex("^(?:features?|phicara|phichara|fichara?|phichar)\\s+(?:(?:kaun|kon|kauna|konsi|kaunsi)(?:\\s+(?:sa|si|se))?\\s*){1,2}(?:hai|hain|haim|he)?(?:\\s+abhi)?$")
+        ).any { it.matches(text) }
+        if (asksForFeatures) return AppCommand.ListFeatures
+        if (Regex("^(?:go )?home(?: screen)?$|^home (?:jao|chalo|karo)$|^होम").containsMatchIn(text)) return AppCommand.GoHome
+        if (Regex("^(?:go )?back$|^back (?:jao|karo)$|^peeche (?:jao|chalo)$|^पीछे").containsMatchIn(text)) return AppCommand.GoBack
+        if (isCurrentTimeQuery(text)) return AppCommand.CurrentTime
+        if (Regex("(?:battery|बैटरी).*(?:level|percent|percentage|kitna|kitni|batao|status|charge|कितना|कितनी|बताओ)|^(?:battery|बैटरी)$").containsMatchIn(text)) return AppCommand.BatteryLevel
+        if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:on|open|chalu|jala|चालू|जलाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(true)
+        if (Regex("(?:flashlight|flash|torch|टॉर्च).*(?:off|close|band|bujha|बंद|बुझाओ)").containsMatchIn(text)) return AppCommand.SetFlashlight(false)
+        if (Regex("^(?:(?:is|this|current)\\s+screen\\s+(?:ka\\s+)?)?(?:screenshot|screen\\s+shot)(?:\\s+(?:lo|le\\s+lo|lena|take\\s+karo|capture\\s+karo))?$|^(?:take|capture)\\s+(?:a\\s+)?screenshot$|^(?:jo\\s+dikh\\s+raha\\s+hai|is\\s+screen)\\s+(?:use\\s+)?save\\s+kar\\s+lo$").matches(text)) return AppCommand.TakeScreenshot
+        parseNaturalEntertainmentIntent(text)?.let { return it }
+        parseNaturalYouTubePlay(text)?.let { return it }
+        parseExactMediaControl(text)?.let { return it }
+        parseYouTubeScroll(text)?.let { return it }
+        if (isWhatsAppMessageQuery(text)) return AppCommand.QueryWhatsAppMessages
+        extractWhatsAppReply(text)?.let { return it }
+        extractDeepResearch(text)?.let { return it }
+        if (isRepeatYouTubeSearch(text)) return AppCommand.RepeatYouTubeSearch
+        extractYouTubeSearch(text)?.let { return AppCommand.SearchYouTube(it) }
+        if (closeAction.containsMatchIn(text)) return AppCommand.CloseCurrentApp(findKnownApp(text))
+        val knownApp = findKnownApp(text)
+        if (openAction.containsMatchIn(text)) {
+            knownApp?.let { return AppCommand.OpenApp(it) }
+            extractSimpleAppName(text)?.let { return AppCommand.OpenApp(it) }
+        }
+
+        // Gemini input transcription often turns Hindi "kholo" into short words such as
+        // "get", "hello" or drops it completely. A short utterance naming one known app is
+        // still a command; longer conversational mentions are deliberately not executed.
+        if (knownApp != null && looksLikeShortAppCommand(text)) return AppCommand.OpenApp(knownApp)
+        return null
+    }
+
+    fun isMemoryIntent(raw: String): Boolean {
+        val text = normalize(raw)
+        return listOf(
+            Regex("^(?:please\\s+)?remember\\s+(?:that\\s+)?\\S.+$"),
+            Regex("^(?:please\\s+)?forget\\s+(?:that\\s+)?\\S.+$"),
+            Regex("^(?:what|kya)\\s+do\\s+you\\s+remember(?:\\s+about\\s+me)?$"),
+            Regex("^(?:tumhe|tumko)\\s+mere\\s+baare\\s+mein\\s+kya\\s+yaad\\s+hai$"),
+            Regex("^(?:yaad\\s+rakhna|yaad\\s+rakho)\\s+(?:ki\\s+)?\\S.+$"),
+            Regex("^(?:ye|yeh|is\\s+baat\\s+ko)\\s+(?:bhool\\s+jao|bhoolna)$")
+        ).any { it.matches(text) }
+    }
+
+    fun isProbableDeviceAction(raw: String): Boolean {
+        val text = normalize(raw)
+        if (text.isBlank()) return false
+        val hasTimeWord = Regex("(?:^|\\s)(?:time|samay|समय|टाइम)(?:$|\\s)").containsMatchIn(text)
+        val otherDeviceTarget = Regex("(?:youtube|whatsapp|instagram|facebook|chrome|gmail|maps|spotify|telegram|snapchat|settings|app|application|torch|flashlight|flash|screenshot|screen\\s+shot|battery|home|back|यूट्यूब|व्हाट्सएप|टॉर्च|बैटरी|होम)").containsMatchIn(text)
+        if (hasTimeWord && !otherDeviceTarget && !isCurrentTimeQuery(text)) return false
+        val target = Regex("(?:youtube|whatsapp|instagram|facebook|chrome|gmail|maps|spotify|telegram|snapchat|settings|app|application|torch|flashlight|flash|screenshot|screen\\s+shot|battery|time|home|back|यूट्यूब|व्हाट्सएप|टॉर्च|बैटरी|होम)")
+        val action = Regex("(?:open|close|launch|start|search|play|pause|resume|next|previous|agla|pichla|pichhla|chalao|lagao|khol|kholo|band|chalu|on|off|bhejo|send|reply|jawab|batao|kitna|kitni|jao|karo|take|capture|save|खोलो|बंद|चालू|भेजो|जवाब|बताओ)")
+        return target.containsMatchIn(text) && action.containsMatchIn(text)
+    }
+
+    fun isExplicitOpenCommand(raw: String): Boolean {
+        val text = normalize(raw)
+        return findKnownApp(text) != null && openAction.containsMatchIn(text)
+    }
+
+    fun isAmbiguousFlashlightCommand(raw: String): Boolean {
+        val text = normalize(raw)
+        val target = Regex("(?:flashlight|flash|torch|टॉर्च)").containsMatchIn(text)
+        val direction = Regex("(?:on|off|open|close|chalu|band|jala|bujha|चालू|बंद|जलाओ|बुझाओ)").containsMatchIn(text)
+        return target && !direction
+    }
+
+    private fun extractWhatsAppReply(text: String): AppCommand.ReplyWhatsApp? {
+        val reply = "(?:reply|replay|re\\s+ply|jawab|रिप्लाई|रिप्लाय|जवाब)"
+        val action = "(?:do|karo|bhejo|send\\s+karo|भेजो|करो|दो)"
+        val filler = "(?:bolke|bol\\s+kar|likh\\s+ke|likh\\s+kar|बोलके|बोल\\s+कर|लिख\\s+के|लिख\\s+कर)"
+        val named = listOf(
+            Regex("^(.+?)\\s+ko\\s+(?:whatsapp\\s+)?$reply\\s+(?:$action)?\\s*(.+)$"),
+            Regex("^(.+?)\\s+ko\\s+(.+?)\\s+$filler\\s+(?:(?:message|msg|मैसेज)\\s+)?(?:$reply\\s+(?:$action)?|bhejo|send\\s+karo|भेजो)$"),
+            Regex("^(.+?)\\s+ko\\s+(.+?)\\s+(?:message|msg|मैसेज)\\s+(?:bhejo|send\\s+karo|भेजो)$")
+        )
+        named.firstNotNullOfOrNull { pattern ->
+            pattern.matchEntire(text)?.let { AppCommand.ReplyWhatsApp(it.groupValues[1].trim(), cleanReplyText(it.groupValues[2])) }
+        }?.takeIf { it.message.isNotBlank() }?.let { return it }
+        val contextual = listOf(
+            Regex("^$reply\\s+(?:$action)?\\s*(.+)$"),
+            Regex("^(.+?)\\s+$filler\\s+(?:(?:message|msg|मैसेज)\\s+)?(?:$reply\\s+(?:$action)?|bhejo|send\\s+karo|भेजो)$"),
+            Regex("^(.+?)\\s+(?:message|msg|मैसेज)\\s+(?:bhejo|send\\s+karo|भेजो)$"),
+            Regex("^(.+?)\\s+(?:bhejo|send\\s+karo|भेजो)$")
+        ).firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1)?.let(::cleanReplyText) }
+        contextual?.takeIf { it.isNotBlank() }?.let { return AppCommand.ReplyWhatsApp(null, it) }
+        // Only an explicit standalone messaging instruction may open the
+        // WhatsApp reply flow. Ordinary conversation can mention a friend,
+        // messages, or delayed replies without becoming a phone command.
+        val explicitPrompt = Regex(
+            "^(?:(?:whatsapp|व्हाट्सएप|वॉट्सऐप)\\s+)?(?:reply|replay|jawab|रिप्लाई|रिप्लाय|जवाब)(?:\\s+(?:do|karo|करो|दो))?$" +
+                "|^(?:message|msg|मैसेज)\\s+(?:bhejo|send\\s+karo|भेजो)$"
+        )
+        return if (explicitPrompt.matches(text)) AppCommand.ReplyWhatsApp(null, "") else null
+    }
+
+    fun isExplicitWhatsAppMessageQuery(raw: String): Boolean =
+        isWhatsAppMessageQuery(normalize(raw))
+
+    fun isAmbiguousMessageReference(raw: String): Boolean =
+        Regex("^(?:message|msg|मैसेज)$").matches(normalize(raw))
+
+    /**
+     * Gemini Live occasionally finalizes a turn while a command word is only partly
+     * transcribed. These observed fragments are not meaningful user messages and
+     * must be held silently instead of reaching Gemini conversation output.
+     */
+    fun isLikelyIncompleteActionFragment(raw: String): Boolean {
+        val text = normalize(raw)
+        return Regex("^(?:ti|tim|tem|tai|tain|taim|mes|mese|meses|mess|messa|messag)$").matches(text)
+    }
+
+    private fun isCurrentTimeQuery(text: String): Boolean = listOf(
+        Regex("^(?:what(?:'s| is) the (?:current )?time|current time)$"),
+        Regex("^(?:abhi )?time (?:kya|kitna|kitni|batao)(?: (?:hai|he|hua|ho raha hai))?$"),
+        Regex("^(?:abhi )?(?:kya|kitna|kitni) time (?:hai|he|hua|ho raha hai)$"),
+        Regex("^(?:abhi )?kitne baje(?: hain| hai| he)?$"),
+        Regex("^(?:abhi )?(?:samay|समय|टाइम)(?: kya hai| batao)?$"),
+        Regex("^(?:normal )?time$")
+    ).any { it.matches(text) }
+
+    private fun isWhatsAppMessageQuery(text: String): Boolean {
+        val whatsapp = Regex("(?:whatsapp|व्हाट्सएप|वॉट्सऐप)")
+        val message = Regex("(?:message|msg|मैसेज|संदेश)")
+        val question = Regex("(?:aaya|aya|aayi|hai|kaun|kisne|who|what|check|batao|आया|आई|कौन|किसने|बताओ)")
+        return whatsapp.containsMatchIn(text) && message.containsMatchIn(text) && question.containsMatchIn(text)
+    }
+
+    private fun cleanReplyText(value: String): String {
+        var cleaned = value.trim().trim('"', '\'', '.', ',')
+        val suffix = Regex("\\s+(?:bolke|bol\\s+kar|likh\\s+ke|likh\\s+kar|message|msg|send\\s+karo|bhejo|reply\\s+(?:do|karo)|jawab\\s+(?:do|karo)|बोलके|लिख\\s+के|मैसेज|भेजो)$")
+        while (suffix.containsMatchIn(cleaned)) cleaned = suffix.replace(cleaned, "").trim()
+        return cleaned.trim('"', '\'', '.', ',')
+    }
+
+    /**
+     * Commands allowed while external media is playing without requiring a wake word.
+     * Keep this deliberately strict so ordinary dialogue from a video is ignored.
+     */
+    fun parseDirectMediaControl(raw: String): AppCommand? {
+        val text = normalize(raw)
+        val close = Regex(
+            "^(?:(?:and|aur|और)\\s+)?(?:(?:youtube|यूट्यूब)\\s+(?:ko\\s+)?)?(?:(?:go\\s+to\\s+)?(?:close|clothes|closed)(?:\\s+(?:karo|kar\\s+do))?|band\\s+karo|band\\s+kar\\s+do|बंद\\s+करो|बंद\\s+कर\\s+दो|क्लोज\\s+करो)(?:\\s+(?:youtube|यूट्यूब))?$"
+        )
+        // Live transcription may split "YouTube" and "close karo" into separate
+        // packets, or leave a few media words at the front of commandProbe. Check a
+        // short trailing window as well as the complete utterance. The accepted suffix
+        // remains deliberately strict; arbitrary media dialogue must not become a
+        // phone action.
+        val words = text.split(' ').filter(String::isNotBlank)
+        val hasDirectSuffix = (2..minOf(7, words.size)).any { count ->
+            close.matches(words.takeLast(count).joinToString(" "))
+        }
+        if (close.matches(text) || hasDirectSuffix) {
+            return AppCommand.CloseCurrentApp(findKnownApp(text) ?: "YouTube")
+        }
+        parseExactMediaControl(text)?.let { return it }
+        parseYouTubeScroll(text)?.let { return it }
+        return (2..minOf(7, words.size)).firstNotNullOfOrNull { count ->
+            val suffix = words.takeLast(count).joinToString(" ")
+            parseExactMediaControl(suffix) ?: parseYouTubeScroll(suffix)
+        }
+    }
+
+    private fun parseNaturalEntertainmentIntent(text: String): AppCommand? {
+        val shorts = listOf(
+            Regex("^(?:(?:youtube|यूट्यूब)(?:\\s+(?:home|home\\s+page))?\\s+)?shorts?\\s+(?:open\\s+karo|kholo|dikhao|chalao)$"),
+            Regex("^(?:mujhe\\s+)?(?:youtube\\s+)?shorts?\\s+(?:dekhna|dekhni)\\s+(?:hai|hain|he)$")
+        ).any { it.matches(text) }
+        if (shorts) return AppCommand.OpenYouTubeShorts
+
+        val reels = listOf(
+            Regex("^(?:mujhe|main|mai)\\s+(?:instagram\\s+)?reels?\\s+(?:dekhna|dekhni)\\s+(?:hai|hain|he)$"),
+            Regex("^(?:i\\s+)?(?:want|need)\\s+to\\s+watch\\s+(?:instagram\\s+)?reels?$")
+        ).any { it.matches(text) }
+        return if (reels) AppCommand.RequestInstagramReels else null
+    }
+
+    private fun parseNaturalYouTubePlay(text: String): AppCommand.PlayYouTube? {
+        if (Regex("^(?:main|mai)\\s+(?:bore|bor)\\s+ho\\s+raha\\s+(?:hun|hoon)\\s+(?:koi|ek)\\s+video\\s+(?:open\\s+karo|chalao|laga\\s+do)$").matches(text)) {
+            return AppCommand.PlayYouTube(null)
+        }
+        val query = listOf(
+            Regex("^(?:mujhe|mere\\s+liye)\\s+(.+?)\\s+(?:sunna|sunana)\\s+(?:hai|he)$"),
+            Regex("^i\\s+(?:want|need)\\s+to\\s+(?:hear|listen\\s+to)\\s+(.+)$")
+        ).firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1)?.trim() }
+        return query?.takeIf { it.length in 2..80 }?.let(AppCommand::PlayYouTube)
+    }
+
+    private fun parseYouTubeScroll(text: String): AppCommand.ScrollYouTube? {
+        val explicitApp = if (Regex("(?:^|\\s)(?:youtube|यूट्यूब)(?:$|\\s)").containsMatchIn(text)) "YouTube" else null
+        val withoutApp = text.replace(Regex("(?:^|\\s)(?:youtube|यूट्यूब)(?:$|\\s)"), " ")
+            .replace(Regex("\\s+"), " ").trim()
+        return when {
+            Regex("^(?:(?:niche|neeche|down)\\s+(?:scroll|swipe)|(?:scroll|swipe)\\s+(?:down|niche|neeche))(?:\\s+karo)?$").matches(withoutApp) ->
+                AppCommand.ScrollYouTube(AppCommand.ScrollDirection.DOWN, explicitApp)
+            Regex("^(?:(?:upar|upper|up)\\s+(?:scroll|swipe)|(?:scroll|swipe)\\s+(?:up|upar|upper))(?:\\s+karo)?$").matches(withoutApp) ->
+                AppCommand.ScrollYouTube(AppCommand.ScrollDirection.UP, explicitApp)
+            Regex("^(?:scroll|swipe)(?:\\s+karo)?$").matches(withoutApp) ->
+                AppCommand.ScrollYouTube(null, explicitApp)
+            else -> null
+        }
+    }
+
+    private fun parseExactMediaControl(text: String): AppCommand.ControlMedia? {
+        val polite = "(?:please\\s+)?"
+        val video = "(?:(?:is|ye|this)\\s+)?(?:video\\s+)?"
+        return when {
+            Regex("^$polite$video(?:pause\\s+karo|pause\\s+kar\\s+do|rok\\s+do)$").matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.PAUSE)
+            Regex("^$polite$video(?:play\\s+karo|play\\s+kar\\s+do|chalao|resume\\s+karo|wapas\\s+chala\\s+do)$").matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.PLAY)
+            Regex("^$polite(?:next|agla)\\s+(?:video\\s+)?(?:chalao|chala|chalo|play\\s+karo|play\\s+kar\\s+do|open\\s+karo|open\\s+kar\\s+do|kholo|khol\\s+do|lagao|karo)$").matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.NEXT)
+            Regex("^$polite(?:pichla|pichle|pichhla|previous|pehle\\s+wala|peeche\\s+wala)\\s+(?:video\\s+)?(?:chalao|chala|chalo|lagao|play\\s+karo|play\\s+kar\\s+do|open\\s+karo|open\\s+kar\\s+do|kholo|khol\\s+do|karo)$").matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.PREVIOUS)
+            Regex("^$polite(?:first|pehla|pehli)\\s+(?:video\\s+)?(?:chalao|chala|chalo|lagao|play\\s+karo|play\\s+kar\\s+do|open\\s+karo|open\\s+kar\\s+do|kholo|khol\\s+do|karo)$").matches(text) ->
+                AppCommand.ControlMedia(AppCommand.MediaAction.FIRST)
+            else -> null
+        }
+    }
+
+    private fun extractDeepResearch(text: String): AppCommand.DeepResearch? {
+        val trigger = Regex("(?:deep\\s+(?:research|search)|in-depth\\s+(?:research|search)|गहरी\\s+(?:रिसर्च|सर्च)|डीप\\s+(?:रिसर्च|सर्च))")
+        if (!trigger.containsMatchIn(text)) return null
+        val intent = Regex("(?:karo|karna|kar\\s+do|karke|batao|dhundo|dhoondo|find|do|can\\s+you|sakti\\s+ho|sakta\\s+hai|करो|करना|कर\\s+दो|करके|बताओ|ढूंढो)")
+        if (!text.startsWith("deep ") && !text.startsWith("in depth ") && !intent.containsMatchIn(text)) return null
+        val filler = Regex("(?:please|kya|mere\\s+liye|kar\\s+sakti\\s+ho|kar\\s+sakta\\s+hai|sakti\\s+ho|sakta\\s+hai|can\\s+you|karo|karna|kar\\s+do|karke|batao|dhundo|dhoondo|find|about|on|please|क्या|कर\\s+सकती\\s+हो|कर\\s+सकता\\s+है|करो|करना|कर\\s+दो|करके|बताओ|ढूंढो)")
+        val query = trigger.replace(text, " ").let { filler.replace(it, " ") }
+            .replace(Regex("\\s+"), " ").trim().trim('?', '.', ',')
+            .takeIf { it.length >= 3 }
+        return AppCommand.DeepResearch(query)
+    }
+
+    private fun extractYouTubeSearch(text: String): String? {
+        val action = "(?:search(?:ing)?(?:\\s+karo|\\s+kar\\s+do|\\s+karna)?|find|dhundo|dhoondo|khojo|सर्च(?:\\s+करो|\\s+कर\\s+दो|\\s+करना)?|ढूंढो|खोजो)"
+        val youtube = "(?:youtube|यूट्यूब)"
+        val place = "(?:mein|me|par|pe|में|पर)"
+        val prefix = "(?:(?:please|ek\\s+(?:aur\\s+)?baar|ek\\s+bar|phir\\s+se|fir\\s+se|dobara|again|एक\\s+(?:और\\s+)?बार|फिर\\s+से|दोबारा)\\s+)?"
+        val repeatWord = "(?:(?:phir\\s+se|fir\\s+se|dobara|again|फिर\\s+से|दोबारा)\\s+)?"
+        val patterns = listOf(
+            Regex("^$prefix$youtube\\s+$place\\s+$repeatWord(.+?)\\s+$action$"),
+            Regex("^$prefix$youtube\\s+$place\\s+$repeatWord$action\\s+(.+?)$"),
+            Regex("^$prefix$youtube\\s+(.+?)\\s+$action$"),
+            Regex("^$prefix$youtube\\s+$action\\s+(.+?)$"),
+            Regex("^(.+?)\\s+$youtube\\s+$place\\s+$action$"),
+            Regex("^$action\\s+(.+?)\\s+(?:on|in|$place)\\s+$youtube$"),
+            Regex("^$action\\s+(.+?)\\s+$youtube$"),
+            Regex("^(?:phir\\s+se|fir\\s+se|dobara|again)\\s+(.+?)\\s+$youtube\\s+$place\\s+$action$")
+        )
+        return patterns.firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1) }
+            ?.replace(Regex("^(?:for|the|video|channel)\\s+"), "")
+            ?.replace(Regex("\\s+(?:video|channel)$"), "")
+            ?.replace(Regex("^(?:please|youtube\\s+(?:mein|me|par|pe)|यूट्यूब\\s+(?:में|पर))\\s+"), "")
+            ?.trim()?.takeIf { it.length in 2..80 }
+    }
+
+    private fun isRepeatYouTubeSearch(text: String): Boolean {
+        val explicitReference = Regex("(?:same\\s+(?:channel|search)|wahi\\s+(?:channel|search)|usi\\s+channel|phir\\s+se\\s+wahi|fir\\s+se\\s+wahi|वही\\s+(?:चैनल|सर्च)|उसी\\s+चैनल)")
+        val action = Regex("(?:open|kholo|khol\\s+do|search|find|dhundo|dhoondo|khojo|ओपन|खोलो|खोल\\s+दो|सर्च|ढूंढो|खोजो)")
+        if (explicitReference.containsMatchIn(text) && action.containsMatchIn(text)) return true
+
+        // Live transcription sometimes turns "phir se" into "police se". These short
+        // commands are contextual repeats; AppActionExecutor safely refuses them when no
+        // previous YouTube query has been stored.
+        return Regex("^(?:(?:phir|fir|police)\\s+se|dobara|again|फिर\\s+से|दोबारा)\\s+(?:open|kholo|khol\\s+do|search|ओपन|खोलो|सर्च)(?:\\s+karo)?$").matches(text)
+    }
+
+    private fun looksLikeShortAppCommand(text: String): Boolean {
+        val words = text.split(' ').filter { it.isNotBlank() }
+        if (words.size > 7) return false
+        // These endings indicate an incomplete streamed instruction, for example
+        // "YouTube mein ..." before "search karo Lols Gaming" arrives. Waiting for
+        // the next transcription chunk prevents an accidental plain app launch.
+        if (Regex("(?:\\b(?:mein|me|par|pe|on|in|search|find|dhundo|dhoondo|khojo)\\b|में|पर|सर्च|ढूंढो|खोजो)$").containsMatchIn(text)) return false
+        val conversational = Regex("\\b(?:cannot|cant|nahi|nahin|problem|message|video|about|like|pasand|mein\\s+message)\\b")
+        return !conversational.containsMatchIn(text)
+    }
+
+    private fun findKnownApp(text: String): String? = appAliases.entries.firstOrNull { (alias, _) ->
+        Regex("(?:^|\\s)${Regex.escape(alias)}(?:$|\\s)").containsMatchIn(text)
+    }?.value
+
+    private fun extractSimpleAppName(text: String): String? {
+        val contextualWords = Regex("(?:same\\s+channel|wahi\\s+channel|usi\\s+channel|phir\\s+se|fir\\s+se|police\\s+se|वही\\s+चैनल|उसी\\s+चैनल)")
+        if (contextualWords.containsMatchIn(text)) return null
+        // Media navigation phrases are not app names. Without this guard a failed
+        // media parse can fall through to OpenApp("next video").
+        if (Regex("^(?:next|agla|first|pehla|pehli|previous|pichla|pichle|pichhla|peeche\\s+wala)\\s+(?:video\\s+)?").containsMatchIn(text)) return null
+        val patterns = listOf(
+            Regex("^(?:please\\s+)?(?:open|launch|start)\\s+([\\p{L}\\p{N} ]{1,35})$"),
+            Regex("^([\\p{L}\\p{N} ]{1,35})\\s+(?:kholo|khol\\s+do|open\\s+karo|open\\s+kar\\s+do|chalao)$")
+        )
+        return patterns.firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1) }
+            ?.replace(Regex("^(?:the|my|mera|meri)\\s+"), "")
+            ?.replace(Regex("\\s+(?:app|application)$"), "")?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
+        .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
+}
