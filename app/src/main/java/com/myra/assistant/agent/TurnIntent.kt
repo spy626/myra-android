@@ -75,16 +75,37 @@ enum class GroundedActionResultState {
 object GroundedActionClaimPolicy {
     private val physicalAction = Regex(
         "\\b(?:tapped|clicked|opened|scrolled|searched|pressed|launched|" +
-            "tap\\s+(?:kar|ho)\\s+(?:diya|gaya)|click\\s+(?:kar|ho)\\s+(?:diya|gaya)|" +
-            "open\\s+(?:kar|ho)\\s+(?:diya|gaya)|khol\\s+diya|scroll\\s+(?:kar|ho)\\s+(?:diya|gaya)|" +
-            "search\\s+(?:kar|ho)\\s+(?:diya|gaya)|दबा\\s+दिया|खोल\\s+दिया|स्क्रॉल\\s+कर\\s+दिया)\\b",
+            "tap\\s+(?:kar|ho)\\s+(?:diya|di|gaya|gayi|hua|hui)|click\\s+(?:kar|ho)\\s+(?:diya|di|gaya|gayi|hua|hui)|" +
+            "open\\s+(?:kar|ho)\\s+(?:diya|di|gaya|gayi|hua|hui)|khol\\s+(?:diya|di)|scroll\\s+(?:kar|ho)\\s+(?:diya|di|gaya|gayi|hua|hui)|" +
+            "search\\s+(?:kar|ho)\\s+(?:diya|di|gaya|gayi|hua|hui)|दबा\\s+दिया|खोल\\s+दिया|स्क्रॉल\\s+कर\\s+दिया)\\b",
         RegexOption.IGNORE_CASE
     )
 
     fun containsPhysicalActionClaim(text: String): Boolean = physicalAction.containsMatchIn(text)
 
+    fun claimedCapability(text: String): String? {
+        if (!containsPhysicalActionClaim(text)) return null
+        val normalized = text.lowercase(Locale.ROOT)
+        return when {
+            Regex("scroll|स्क्रॉल").containsMatchIn(normalized) -> "SCROLL"
+            Regex("search|searched").containsMatchIn(normalized) -> "SEARCH"
+            Regex("tap|click|open|khol|दबा|खोल|launch|press").containsMatchIn(normalized) -> "OPEN_OR_TAP"
+            else -> "OTHER"
+        }
+    }
+
+    fun capabilityMatches(claimed: String, groundedCapability: String): Boolean {
+        val grounded = groundedCapability.uppercase(Locale.ROOT)
+        return when (claimed) {
+            "SCROLL" -> grounded.contains("SCROLL")
+            "SEARCH" -> grounded.contains("SEARCH")
+            "OPEN_OR_TAP" -> grounded.contains("CLICK") || grounded.contains("TAP") || grounded.contains("OPEN_APP")
+            else -> false
+        }
+    }
+
     fun shouldSuppress(text: String, state: GroundedActionResultState): Boolean =
-        state == GroundedActionResultState.NOT_DISPATCHED && containsPhysicalActionClaim(text)
+        state != GroundedActionResultState.VERIFIED_SUCCESS && containsPhysicalActionClaim(text)
 }
 
 /**

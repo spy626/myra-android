@@ -177,6 +177,8 @@ class MyraVoiceService : Service() {
         fun onSpeaking(speaking: Boolean)
         fun onUserText(text: String)
         fun onMyraText(text: String, error: Boolean = false)
+        fun onUserMessage(messageId: String, text: String) = onUserText(text)
+        fun onMyraMessage(messageId: String, text: String, error: Boolean = false) = onMyraText(text, error)
     }
 
     private var audio: AudioEngine? = null
@@ -208,6 +210,9 @@ class MyraVoiceService : Service() {
     private var mediaBlockedTurn = false
     private var probableActionTurn = false
     private var groundedActionResultState = GroundedActionResultState.NOT_DISPATCHED
+    private val groundedActionLedger = GroundedActionLedger()
+    private val chatMessageStore = ChatMessageDeliveryStore()
+    private var blockedModelActionClaim = false
     private var pendingLocalSpeech: String? = null
     private var pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
     private var pendingLocalSpeechAllowsSilence = false
@@ -585,7 +590,7 @@ class MyraVoiceService : Service() {
                         )
                     }
                 }
-                else if (responseArbiter.acceptsOrdinaryModel() && LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
+                else if (!blockedModelActionClaim && responseArbiter.acceptsOrdinaryModel() && LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
                         suppressed = suppressModelForTurn,
                         assistantAlreadySpeaking = localAudioSpeaking,
                         mediaGuardAllowsResponse = mediaGuard.allowModelResponse()
@@ -673,7 +678,14 @@ class MyraVoiceService : Service() {
                     if (activeTurnId == 0L) activeTurnId = ++turnSequence
                     inputTurnStartedAt = android.os.SystemClock.elapsedRealtime()
                     if (speechTimingTurnId == 0L && speechActivityStartedAt > 0L) speechTimingTurnId = activeTurnId
-                    if (responseArbiter.turnId != activeTurnId) responseArbiter.begin(activeTurnId)
+                    if (responseArbiter.turnId != activeTurnId) {
+                        responseArbiter.begin(activeTurnId)
+                        // Suppression is scoped to its owning turn/generation. A fresh
+                        // transcript turn cannot inherit a previous controlled owner.
+                        suppressModelForTurn = false
+                        blockedModelActionClaim = false
+                        waitingForFreshInputAfterCommand = false
+                    }
                     acceptedModelGenerationForTurn = 0L
                     modelAudioDroppedBeforeTurnCompleteCount = 0
                     modelAudioDroppedBeforeTurnCompleteBytes = 0L
@@ -1001,7 +1013,7 @@ class MyraVoiceService : Service() {
                 ) {
                     val candidateOutput = output.toString() + transcript
                     if (GroundedActionClaimPolicy.shouldSuppress(candidateOutput, groundedActionResultState)) {
-                        suppressModelForTurn = true
+                        blockedModelActionClaim = true
                         output.clear()
                         audio?.interrupt()
                         voiceLog(
@@ -1071,7 +1083,11 @@ class MyraVoiceService : Service() {
                             replyQueuedAt = android.os.SystemClock.elapsedRealtime()
                             voiceLog("replyQueued visualTurnId=$id at=$replyQueuedAt")
                         }
-                        listener?.onMyraText(romanDisplayText(text))
+                        deliverAssistantText(
+                            romanDisplayText(text),
+                            owner = AssistantResponseOwner.CONTROLLED_SCREEN,
+                            turnId = screenResponseUserTurnId
+                        )
                         com.myra.assistant.screen.ScreenContextStore.onAnalysis(
                             text, android.os.SystemClock.elapsedRealtime()
                         )
@@ -1192,7 +1208,7 @@ class MyraVoiceService : Service() {
                     suppressModelForTurn = true
                     localCommandExecutedThisTurn = true
                     output.clear(); audio?.interrupt()
-                    listener?.onMyraText(FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY)
+                    deliverAssistantText(FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY)
                     emitState(FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY)
                     queueLocalSpeech(
                         FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY,
@@ -1485,7 +1501,7 @@ class MyraVoiceService : Service() {
                         suppressModelForTurn = true
                         localCommandExecutedThisTurn = true
                         cancelSpeechForNewAction()
-                        listener?.onMyraText(brainDecision.message)
+                        deliverAssistantText(brainDecision.message)
                         emitState(brainDecision.message)
                         queueLocalSpeech(brainDecision.message, allowUntranscribedAudio = true)
                         resetTurnBuffers("brain_reference_clarification")
@@ -1512,7 +1528,7 @@ class MyraVoiceService : Service() {
                     if (CommandParser.isAmbiguousMessageReference(userText)) {
                         val clarification = "Message ke baare mein baat kar rahe ho, ya kisi ko bhejna hai?"
                         localCommandExecutedThisTurn = true
-                        listener?.onMyraText(clarification)
+                        deliverAssistantText(clarification)
                         emitState(clarification)
                         queueLocalSpeech(clarification, allowUntranscribedAudio = true)
                         resetTurnBuffers()
@@ -1557,7 +1573,7 @@ class MyraVoiceService : Service() {
                                 suppressModelForTurn = true
                                 localCommandExecutedThisTurn = true
                                 output.clear(); audio?.interrupt()
-                                listener?.onMyraText(clarification)
+                                deliverAssistantText(clarification)
                                 emitState(clarification)
                                 queueLocalSpeech(clarification, allowUntranscribedAudio = true)
                                 resetTurnBuffers("incomplete_spelling_confirmation")
@@ -1576,7 +1592,7 @@ class MyraVoiceService : Service() {
                                     "correction_clarification_unresolved target=$pendingCorrectionOld " +
                                         "databaseMutationAllowed=false successAcknowledgementAllowed=false"
                                 )
-                                listener?.onMyraText(clarification)
+                                deliverAssistantText(clarification)
                                 emitState(clarification)
                                 queueLocalSpeech(clarification, allowUntranscribedAudio = true)
                                 resetTurnBuffers("clarification_unresolved")
@@ -1617,7 +1633,7 @@ class MyraVoiceService : Service() {
                                 "target=${pendingBestFriendCorrectionOldName} raw=${userText.take(100)} " +
                                 "normalized=${displayText.take(100)}"
                         )
-                        listener?.onMyraText(clarification)
+                        deliverAssistantText(clarification)
                         emitState(clarification)
                         queueLocalSpeech(clarification, allowUntranscribedAudio = true)
                         resetTurnBuffers()
@@ -1635,7 +1651,7 @@ class MyraVoiceService : Service() {
                         // ever calling MemoryRepository.forgetMatching().
                         pendingDeleteClarificationUntil = android.os.SystemClock.elapsedRealtime() +
                             DELETE_CLARIFICATION_TIMEOUT_MS
-                        listener?.onMyraText(clarification)
+                        deliverAssistantText(clarification)
                         emitState(clarification)
                         queueLocalSpeech(clarification, allowUntranscribedAudio = true)
                         resetTurnBuffers()
@@ -1653,7 +1669,7 @@ class MyraVoiceService : Service() {
                         } else {
                             "Zopy, command samajh aayi, lekin action clear nahi hua. Ek baar seedha bolkar try karo."
                         }
-                        listener?.onMyraText(error, true)
+                        deliverAssistantText(error, true)
                         emitState(error)
                         queueLocalSpeech(error)
                     }
@@ -1702,7 +1718,7 @@ class MyraVoiceService : Service() {
                         suppressModelForTurn = true
                         localCommandExecutedThisTurn = true
                         output.clear(); audio?.interrupt()
-                        listener?.onMyraText(clarification)
+                        deliverAssistantText(clarification)
                         emitState(clarification)
                         queueLocalSpeech(clarification, allowUntranscribedAudio = true)
                         resetTurnBuffers("semantic_name_mismatch")
@@ -1735,8 +1751,13 @@ class MyraVoiceService : Service() {
                     rememberRecentRelationshipTurn(displayUserText)
                     learnSafePreferenceFromCompletedTurn(userText)
                 }
-                if (myraText.isNotBlank() && !suppressModelForTurn && responseArbiter.acceptsOrdinaryModel()) {
-                    listener?.onMyraText(romanDisplayText(myraText))
+                if (blockedModelActionClaim && !localCommandExecutedThisTurn) {
+                    deliverAssistantText(
+                        "Mainne koi phone action perform nahi kiya.",
+                        owner = AssistantResponseOwner.CONTROLLED_LOCAL
+                    )
+                } else if (myraText.isNotBlank() && !suppressModelForTurn && responseArbiter.acceptsOrdinaryModel()) {
+                    deliverAssistantText(romanDisplayText(myraText), owner = AssistantResponseOwner.MODEL)
                 }
                 resetTurnBuffers("normal_turn_complete")
                 if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
@@ -1858,7 +1879,7 @@ class MyraVoiceService : Service() {
                 }
             }
             mainHandler.post {
-                listener?.onMyraText(response)
+                deliverAssistantText(response)
                 emitState(response)
                 queueLocalSpeech(
                     response,
@@ -1900,7 +1921,7 @@ class MyraVoiceService : Service() {
                         android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
                     PersonalMemoryPermissionPrompt.format(candidate)
                 }
-                listener?.onMyraText(message)
+                deliverAssistantText(message)
                 emitState(message)
                 queueLocalSpeech(
                     message,
@@ -1957,7 +1978,7 @@ class MyraVoiceService : Service() {
 
         if (decision == MemoryConfirmationDecision.NO) {
             val message = "Theek hai, save nahi karungi."
-            listener?.onMyraText(message)
+            deliverAssistantText(message)
             emitState(message)
             queueLocalSpeech(
                 message,
@@ -1984,7 +2005,7 @@ class MyraVoiceService : Service() {
                 is MemoryWriteResult.Rejected -> "Ye memory safely save nahi kar sakti."
             }
             mainHandler.post {
-                listener?.onMyraText(message)
+                deliverAssistantText(message)
                 emitState(message)
                 queueLocalSpeech(
                     message,
@@ -2038,6 +2059,24 @@ class MyraVoiceService : Service() {
         if (action == "QUERY_WHATSAPP" && !CommandParser.isExplicitWhatsAppMessageQuery(guardedText)) {
             suppressModelForTurn = false
             live?.sendToolResponse(id, functionName, false, "No explicit WhatsApp notification query was made")
+            return
+        }
+        if (!PreFinalPhoneToolOwnershipPolicy.mayExecute(
+                action = action,
+                authoritativeFinalTranscript = false
+            )
+        ) {
+            probableActionTurn = true
+            voiceLog(
+                "phone_tool_proposal_held_for_unified_owner turnId=$activeTurnId " +
+                    "action=$action target=${args.optString("target").take(100)} decision=WAIT_FOR_FINAL"
+            )
+            live?.sendToolResponse(
+                id,
+                functionName,
+                false,
+                "App launch or visible-target opening waits for the final authoritative Android turn"
+            )
             return
         }
         val target = args.optString("target").trim()
@@ -2813,14 +2852,14 @@ class MyraVoiceService : Service() {
         screenResponseAccessibilityPackage = ""
         screenResponseAccessibilityGeneration = 0L
         screenResponseQueryId = ""
-        listener?.onMyraText(message, true)
+        deliverAssistantText(message, true)
         emitState(message)
         queueLocalSpeech(message, allowUntranscribedAudio = true)
     }
 
     private fun speakScreenPrivacyBlocked() {
         val message = "Sensitive information visible hai, isliye main screen details read nahi kar rahi."
-        listener?.onMyraText(message, true)
+        deliverAssistantText(message, true)
         emitState(message)
         queueLocalSpeech(message, allowUntranscribedAudio = true)
     }
@@ -2990,7 +3029,7 @@ class MyraVoiceService : Service() {
         } else {
             suppressModelForTurn = true
             val message = "Theek hai yaar, nahi kholungi."
-            listener?.onMyraText(message)
+            deliverAssistantText(message)
             emitState(message)
             queueLocalSpeech(message, allowUntranscribedAudio = true)
         }
@@ -3065,7 +3104,7 @@ class MyraVoiceService : Service() {
             commandProbe.clear()
             output.clear()
             val message = "Instagram open kar dun tumhare liye?"
-            listener?.onMyraText(message)
+            deliverAssistantText(message)
             emitState(message)
             queueLocalSpeech(message, allowUntranscribedAudio = true)
             return
@@ -3083,12 +3122,31 @@ class MyraVoiceService : Service() {
             speak = false,
             notifyListeners = false
         )
+        val legacyCapability = when (command) {
+            is AppCommand.OpenApp -> "OPEN_APP"
+            is AppCommand.SearchYouTube -> "BROWSER_SEARCH"
+            is AppCommand.ScrollYouTube -> "ACCESSIBILITY_SCROLL"
+            else -> command.javaClass.simpleName.uppercase(Locale.ROOT)
+        }
+        groundedActionResultState = when {
+            result.success && result.verified -> GroundedActionResultState.VERIFIED_SUCCESS
+            result.success -> GroundedActionResultState.DISPATCH_ACCEPTED
+            else -> GroundedActionResultState.VERIFIED_FAILURE
+        }
+        groundedActionLedger.record(
+            GroundedPhysicalAction(
+                activeTurnId,
+                "legacy:$activeTurnId:${legacyCapability.lowercase(Locale.ROOT)}",
+                legacyCapability,
+                groundedActionResultState
+            )
+        )
         brain.recordPhoneAction(
             app = (command as? AppCommand.OpenApp)?.appName,
             action = command.toString(),
             success = result.success && result.verified
         )
-        listener?.onMyraText(result.spokenMessage, !result.success)
+        deliverAssistantText(result.spokenMessage, !result.success)
         emitState(result.spokenMessage)
         queueLocalSpeech(
             result.spokenMessage,
@@ -3110,7 +3168,7 @@ class MyraVoiceService : Service() {
         }
         brain.finishTask(taskToken, true)
         val message = "Theek hai, rok diya."
-        listener?.onMyraText(message)
+        deliverAssistantText(message)
         emitState(message)
         queueLocalSpeech(message, allowUntranscribedAudio = true)
         voiceLog("brain_task_cancelled taskToken=$taskToken")
@@ -3268,7 +3326,7 @@ class MyraVoiceService : Service() {
                     "READING_CONTENT_READ reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} " +
                         "timestamp=${android.os.SystemClock.elapsedRealtime()} chars=${spoken.length} segments=${fresh.size}"
                 )
-                listener?.onMyraText(spoken)
+                deliverAssistantText(spoken)
                 emitState("Article padh rahi hoon…")
                 if (allowAutoScroll) readingTracker.markWaitingForScroll()
                 pendingActionAfterLocalSpeech = if (allowAutoScroll) ({ autoScrollArticle(turnId) }) else null
@@ -3356,7 +3414,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun speakReadingStatus(message: String, error: Boolean = false) {
-        listener?.onMyraText(message, error)
+        deliverAssistantText(message, error)
         emitState(message)
         queueLocalSpeech(message, allowUntranscribedAudio = true)
     }
@@ -3563,7 +3621,7 @@ class MyraVoiceService : Service() {
             false -> "Haan, abhi result verify nahi hua."
             null -> "Abhi result verify nahi hua; current screen dobara check karni hogi."
         }
-        listener?.onMyraText(message, working.lastVerifiedSuccess != true)
+        deliverAssistantText(message, working.lastVerifiedSuccess != true)
         emitState(message)
         queueLocalSpeech(message, allowUntranscribedAudio = false)
         voiceLog(
@@ -3661,6 +3719,9 @@ class MyraVoiceService : Service() {
         val result = adapter.execute(step, actionBefore)
         groundedActionResultState = if (result.accepted) GroundedActionResultState.DISPATCH_ACCEPTED
         else GroundedActionResultState.VERIFIED_FAILURE
+        groundedActionLedger.record(
+            GroundedPhysicalAction(task.turnId, task.id, step.capability.name, groundedActionResultState)
+        )
         val actionReturnedAt = android.os.SystemClock.elapsedRealtime()
         runtime.recordAction(step, result, actionBefore)
         runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, actionBefore.scene) }
@@ -3764,6 +3825,9 @@ class MyraVoiceService : Service() {
                 GeneralVerificationStatus.FAILURE -> GroundedActionResultState.VERIFIED_FAILURE
                 GeneralVerificationStatus.UNKNOWN -> GroundedActionResultState.UNKNOWN
             }
+            groundedActionLedger.record(
+                GroundedPhysicalAction(task.turnId, task.id, step.capability.name, groundedActionResultState)
+            )
             val verificationAt = android.os.SystemClock.elapsedRealtime()
             (runtime.activeTask() ?: runtime.lastCompletedTask())?.let { WorkingTaskRuntime.store.syncRuntime(it, after.scene) }
             voiceLog(
@@ -3987,7 +4051,7 @@ class MyraVoiceService : Service() {
                 }
                 GeneralVerificationStatus.UNKNOWN -> {
                     val message = "Result clear verify nahi hua. Screen par kaunsa target chahiye?"
-                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                    deliverAssistantText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
                 }
                 GeneralVerificationStatus.FAILURE -> {
                     val reason = history?.failureReason
@@ -3998,7 +4062,7 @@ class MyraVoiceService : Service() {
                         else -> "Target open nahi hua. Kaunsa wala chahiye?"
                     }
                     voiceLog("CLARIFICATION_REQUIRED taskId=${task.id} reason=${reason ?: observed}")
-                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                    deliverAssistantText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
                 }
             }
         }
@@ -4144,7 +4208,7 @@ class MyraVoiceService : Service() {
             }
             SearchVerification.UNKNOWN -> {
                 val message = "Search open hui, lekin results verify nahi hue."
-                listener?.onMyraText(message, true)
+                deliverAssistantText(message, true)
                 queueLocalSpeech(message, allowUntranscribedAudio = false)
                 voiceLog("task_result_spoken turnId=$turnId spoken=true result=UNKNOWN destination=${completed.destination}")
                 voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=true result=UNKNOWN")
@@ -4153,7 +4217,7 @@ class MyraVoiceService : Service() {
                 check(SearchTaskResultPolicy.maySpeakFailure(verification))
                 val destination = if (completed.destination == SearchDestination.YOUTUBE) "YouTube" else "Browser"
                 val message = "$destination search start nahi ho paayi."
-                listener?.onMyraText(message, true)
+                deliverAssistantText(message, true)
                 queueLocalSpeech(message, allowUntranscribedAudio = false)
                 voiceLog("task_result_spoken turnId=$turnId spoken=true result=FAILURE destination=${completed.destination}")
                 voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=true result=FAILURE")
@@ -4175,7 +4239,7 @@ class MyraVoiceService : Service() {
         cancelSpeechForNewAction()
         when (decision) {
             is com.myra.assistant.agent.AgentDecision.Clarify -> {
-                listener?.onMyraText(decision.message)
+                deliverAssistantText(decision.message)
                 emitState(decision.message)
                 queueLocalSpeech(decision.message, allowUntranscribedAudio = true)
                 voiceLog("agent_clarification taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} reason=ambiguous_reference")
@@ -4189,7 +4253,7 @@ class MyraVoiceService : Service() {
                     context.windowId != scope.expectedWindowId || context.generation != ActivityContextStore.snapshot()?.generation
                 ) {
                     val message = "Screen badal gayi. Dobara target batao."
-                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                    deliverAssistantText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
                     return true
                 }
                 val before = accessibility.visibleScreenSignature()
@@ -4203,7 +4267,7 @@ class MyraVoiceService : Service() {
                     )
                     WorkingTaskRuntime.store.recordOutcome(result.resolution, false, target.id)
                     val message = if (result.resolution == "ambiguous") "Kaunsa wala?" else "Ye target clear nahi mila."
-                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                    deliverAssistantText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
                 } else mainHandler.postDelayed({
                     accessibility.refreshScreenContext(force = true)
                     val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
@@ -4215,7 +4279,7 @@ class MyraVoiceService : Service() {
                     voiceLog("agent_verification taskId=$taskId accepted=true verified=$changed")
                     if (!changed) {
                         val message = "Tap hua, lekin result verify nahi hua."
-                        listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
+                        deliverAssistantText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
                     }
                 }, 350L)
             }
@@ -4225,13 +4289,13 @@ class MyraVoiceService : Service() {
                     !accessibility.requestVisualScreenshot { result ->
                         mainHandler.post {
                             val message = if (result.isSuccess) "Kaunsa wala?" else "Current screen clear nahi mili."
-                            listener?.onMyraText(message, result.isFailure)
+                            deliverAssistantText(message, result.isFailure)
                             queueLocalSpeech(message, allowUntranscribedAudio = result.isSuccess)
                         }
                     }
                 ) {
                     val message = "Kaunsa wala?"
-                    listener?.onMyraText(message); queueLocalSpeech(message, allowUntranscribedAudio = true)
+                    deliverAssistantText(message); queueLocalSpeech(message, allowUntranscribedAudio = true)
                 }
             }
             else -> return false
@@ -4247,7 +4311,7 @@ class MyraVoiceService : Service() {
         resolution: String
     ) {
         if (!success) {
-            listener?.onMyraText(message, true)
+            deliverAssistantText(message, true)
             emitState(message)
             queueLocalSpeech(message, allowUntranscribedAudio = false)
         }
@@ -4288,7 +4352,7 @@ class MyraVoiceService : Service() {
             .onSuccess { voiceLog("screen_projection_permission_owner_requested owner=MainActivity") }
             .onFailure {
                 voiceLog("continuous_screen_permission_failed error=${it.javaClass.simpleName}")
-                listener?.onMyraText("Screen sharing permission open nahi hui.", true)
+                deliverAssistantText("Screen sharing permission open nahi hui.", true)
                 queueLocalSpeech("Screen sharing permission open nahi hui.", allowUntranscribedAudio = false)
             }
     }
@@ -4532,7 +4596,7 @@ class MyraVoiceService : Service() {
     private fun finishBrainTask(taskToken: Long, success: Boolean, message: String) {
         if (!brain.isTaskCurrent(taskToken)) return
         brain.finishTask(taskToken, success)
-        listener?.onMyraText(message, !success)
+        deliverAssistantText(message, !success)
         emitState(message)
         queueLocalSpeech(message, allowUntranscribedAudio = success)
         voiceLog("brain_task_finished taskToken=$taskToken success=$success message=${message.take(100)}")
@@ -4666,7 +4730,7 @@ class MyraVoiceService : Service() {
                 GeneralVerificationStatus.FAILURE -> {
                     val message = if (explicitYouTube) "YouTube ka current feed move nahi hua."
                     else "Current app ka scrollable area move nahi hua."
-                    listener?.onMyraText(message, true); emitState(message); queueLocalSpeech(message)
+                    deliverAssistantText(message, true); emitState(message); queueLocalSpeech(message)
                 }
             }
         }
@@ -4675,7 +4739,7 @@ class MyraVoiceService : Service() {
             voiceLog("SCROLL_RUNTIME_MISSING turnId=$requestedTurnId reason=$reason")
             voiceLog("LEGACY_FALLBACK_USED turnId=$requestedTurnId capability=ACCESSIBILITY_SCROLL reason=$reason execution=blocked")
             val message = "Scroll task active nahi hai, isliye action nahi kiya."
-            listener?.onMyraText(message, true); emitState(message); queueLocalSpeech(message)
+            deliverAssistantText(message, true); emitState(message); queueLocalSpeech(message)
         }
     }
 
@@ -4694,12 +4758,12 @@ class MyraVoiceService : Service() {
                 audio?.setMuted(false)
                 emitState("Sun rahi hoon…")
             } else {
-                listener?.onMyraText(result.spokenMessage, true)
+                deliverAssistantText(result.spokenMessage, true)
                 emitState(result.spokenMessage)
                 queueLocalSpeech(result.spokenMessage)
             }
         }
-        listener?.onMyraText(message)
+        deliverAssistantText(message)
         emitState(message)
         mediaGuard.beginAssistantTurn()
         queueLocalSpeech(message, allowUntranscribedAudio = true)
@@ -4729,7 +4793,22 @@ class MyraVoiceService : Service() {
     }
 
     private fun beginOrdinarySpeechActivity(latestGenerationId: Long, source: String) {
-        if (validatingLocalSpeech != null) return
+        if (validatingLocalSpeech != null || !responseArbiter.acceptsOrdinaryModel()) {
+            val previousTurnId = responseArbiter.turnId
+            val previousGeneration = responseArbiter.generationId
+            cancelSpeechForNewAction()
+            responseArbiter.invalidateCurrent()
+            suppressModelForTurn = false
+            blockedModelActionClaim = false
+            waitingForFreshInputAfterCommand = false
+            input.clear(); output.clear(); commandProbe.clear()
+            activeTurnId = 0L
+            speechTimingTurnId = 0L
+            voiceLog(
+                "suppression_end turnId=$previousTurnId generationId=$previousGeneration " +
+                    "reason=new_authoritative_user_utterance"
+            )
+        }
         // A completed controlled response deliberately stays latched until genuine new
         // speech. Release it here before allocating the new identity; the previous order
         // returned early and left real VAD speech with speechTimingTurnId=0.
@@ -4767,7 +4846,10 @@ class MyraVoiceService : Service() {
         if (activeTurnId == 0L) activeTurnId = ++turnSequence
         speechTimingTurnId = activeTurnId
         voiceTurnIdentities.begin(activeTurnId, speechActivityStartedAt)
-        responseArbiter.begin(activeTurnId)
+        responseArbiter.supersedeForNewUserTurn(activeTurnId)
+        suppressModelForTurn = false
+        blockedModelActionClaim = false
+        waitingForFreshInputAfterCommand = false
         val cancelledGeneration = ordinaryModelAudioGate.onSpeechActivityStarted(latestGenerationId)
         acceptedModelGenerationForTurn = 0L
         if (earlyModelAudio.isNotEmpty()) {
@@ -4864,6 +4946,11 @@ class MyraVoiceService : Service() {
         allowUntranscribedAudio: Boolean = false,
         validationPolicy: LocalSpeechValidationPolicy = LocalSpeechValidationPolicy.DEFAULT
     ) {
+        val speechTurnId = currentResponseTurnId()
+        if (!physicalActionClaimAllowed(
+                message, AssistantResponseOwner.CONTROLLED_LOCAL, speechTurnId, "speech"
+            )
+        ) return
         val now = android.os.SystemClock.elapsedRealtime()
         val key = normalizeSpeech(message)
         val speechBusy = validatingLocalSpeech != null ||
@@ -5144,6 +5231,60 @@ class MyraVoiceService : Service() {
         }
     }
 
+    private fun currentResponseTurnId(): Long = activeTurnId.takeIf { it != 0L }
+        ?: responseArbiter.turnId.takeIf { it != 0L }
+        ?: voiceTurnIdentities.current()?.userTurnId
+        ?: 0L
+
+    private fun physicalActionClaimAllowed(
+        message: String,
+        owner: AssistantResponseOwner,
+        turnId: Long,
+        route: String
+    ): Boolean {
+        val grounded = groundedActionLedger.forTurn(turnId)
+        val verdict = PhysicalActionClaimGate.evaluate(message, turnId, grounded)
+        if (GroundedActionClaimPolicy.containsPhysicalActionClaim(message)) {
+            voiceLog(
+                "PHYSICAL_ACTION_CLAIM_GATE turnId=$turnId owner=$owner " +
+                    "taskId=${grounded?.taskId.orEmpty()} capability=${grounded?.capability.orEmpty()} " +
+                    "groundedState=${grounded?.state ?: GroundedActionResultState.NOT_DISPATCHED} " +
+                    "decision=${verdict.decision} reason=${verdict.reason} route=$route"
+            )
+        }
+        return verdict.decision == PhysicalActionClaimDecision.ALLOW
+    }
+
+    private fun deliverAssistantText(
+        message: String,
+        error: Boolean = false,
+        owner: AssistantResponseOwner = AssistantResponseOwner.CONTROLLED_LOCAL,
+        turnId: Long = currentResponseTurnId()
+    ): Boolean {
+        if (message.isBlank() || !physicalActionClaimAllowed(message, owner, turnId, "chat")) return false
+        val messageId = "assistant:$transcriptSessionId:$turnId:${owner.name}:${normalizeSpeech(message).hashCode()}"
+        voiceLog(
+            "CHAT_MESSAGE_STORE_ATTEMPT messageId=$messageId turnId=$turnId role=ASSISTANT owner=$owner"
+        )
+        return when (val stored = chatMessageStore.commit(
+            StoredChatMessage(messageId, turnId, ChatRole.ASSISTANT, message, error)
+        )) {
+            is ChatMessageStoreResult.Accepted -> {
+                voiceLog("CHAT_MESSAGE_STORE_RESULT messageId=$messageId accepted=true role=ASSISTANT")
+                voiceLog("CHAT_UI_STATE_UPDATED messageId=$messageId turnId=$turnId role=ASSISTANT")
+                listener?.onMyraMessage(messageId, stored.message.text, stored.message.error)
+                true
+            }
+            is ChatMessageStoreResult.AlreadyStored -> {
+                voiceLog(
+                    "CHAT_MESSAGE_STORE_RESULT messageId=${stored.messageId} accepted=false " +
+                        "role=ASSISTANT reason=already_stored"
+                )
+                false
+            }
+        }
+    }
+
     private fun commitFinalUserMessage(
         raw: String,
         source: String,
@@ -5167,7 +5308,22 @@ class MyraVoiceService : Service() {
                     "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
                         "utteranceId=$utteranceId source=$source accepted=true messageId=${result.messageId}"
                 )
-                listener?.onUserText(result.message.display)
+                voiceLog(
+                    "CHAT_MESSAGE_STORE_ATTEMPT messageId=${result.messageId} turnId=$turnId role=USER owner=USER"
+                )
+                when (chatMessageStore.commit(
+                    StoredChatMessage(result.messageId, turnId, ChatRole.USER, result.message.display)
+                )) {
+                    is ChatMessageStoreResult.Accepted -> {
+                        voiceLog("CHAT_MESSAGE_STORE_RESULT messageId=${result.messageId} accepted=true role=USER")
+                        voiceLog("CHAT_UI_STATE_UPDATED messageId=${result.messageId} turnId=$turnId role=USER")
+                        listener?.onUserMessage(result.messageId, result.message.display)
+                    }
+                    is ChatMessageStoreResult.AlreadyStored -> voiceLog(
+                        "CHAT_MESSAGE_STORE_RESULT messageId=${result.messageId} accepted=false " +
+                            "role=USER reason=already_stored"
+                    )
+                }
             }
             is UserMessageCommitResult.AlreadyCommitted -> voiceLog(
                 "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
@@ -5188,6 +5344,7 @@ class MyraVoiceService : Service() {
         commandUserTextEmitted = false
         probableActionTurn = false
         groundedActionResultState = GroundedActionResultState.NOT_DISPATCHED
+        blockedModelActionClaim = false
         mediaBlockedTurn = false
         ambiguousMessageTurn = false
         incompleteActionFragmentTurn = false
@@ -5269,7 +5426,7 @@ class MyraVoiceService : Service() {
             localCommandExecutedThisTurn = true
             output.clear()
             audio?.interrupt()
-            listener?.onMyraText(clarification)
+            deliverAssistantText(clarification)
             emitState(clarification)
             queueLocalSpeech(clarification, allowUntranscribedAudio = true)
             return
@@ -5325,7 +5482,7 @@ class MyraVoiceService : Service() {
                     lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
                     voiceLog("correction_cache_invalidated old=${correction.oldName} new=${correction.newName}")
                 }
-                listener?.onMyraText(reply)
+                deliverAssistantText(reply)
                 emitState(reply)
                 queueLocalSpeech(
                     reply,
@@ -5353,11 +5510,11 @@ class MyraVoiceService : Service() {
         if (query.isBlank()) {
             deepResearchActive = false
             val prompt = "Haan, deep research kar sakti hoon. Kis topic par research chahiye?"
-            listener?.onMyraText(prompt); emitState("Waiting for a research topic")
+            deliverAssistantText(prompt); emitState("Waiting for a research topic")
             speakResearchSummary(prompt)
             return
         }
-        listener?.onMyraText("Researching “$query”…")
+        deliverAssistantText("Researching “$query”…")
         emitState("Deep Research in progress…")
         val prefs = getSharedPreferences("myra", MODE_PRIVATE)
         val apiKey = ApiKeyStore(this).get(ApiKeyStore.TAVILY)
@@ -5366,7 +5523,7 @@ class MyraVoiceService : Service() {
         serviceScope.launch {
             val result = DeepResearchClient().search(query, apiKey, endpoint, depth)
             deepResearchActive = false
-            listener?.onMyraText(result.report, !result.success)
+            deliverAssistantText(result.report, !result.success)
             emitState(if (result.success) "Deep Research complete" else "Deep Research failed")
             if (result.success) speakResearchSummary(result.spokenSummary)
             else { suppressModelForTurn = false; waitingForFreshInputAfterCommand = true }
@@ -5423,7 +5580,7 @@ class MyraVoiceService : Service() {
             ).random()
         }
         idleNudgeCount++
-        listener?.onMyraText(message)
+        deliverAssistantText(message)
         emitState(message)
         mediaGuard.beginAssistantTurn()
         queueLocalSpeech(message, allowUntranscribedAudio = true)
@@ -5450,7 +5607,14 @@ class MyraVoiceService : Service() {
         return true
     }
 
-    private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }
+    private fun emitState(text: String) {
+        if (!physicalActionClaimAllowed(
+                text, AssistantResponseOwner.CONTROLLED_LOCAL, currentResponseTurnId(), "status"
+            )
+        ) return
+        listener?.onState(text)
+        updateNotification(text)
+    }
 
     private fun speakWhatsAppAnnouncement(sender: String, message: String?) {
         if (live == null) return

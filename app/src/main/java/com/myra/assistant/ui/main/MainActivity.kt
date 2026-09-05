@@ -43,6 +43,7 @@ import com.myra.assistant.core.AssistantController
 import com.myra.assistant.core.AssistantResult
 import com.myra.assistant.core.AssistantState
 import com.myra.assistant.commands.Command
+import com.myra.assistant.diagnostics.VoicePipelineLogger
 import com.myra.assistant.databinding.ActivityMainBinding
 import com.myra.assistant.databinding.SheetSettingsBinding
 import com.myra.assistant.ui.settings.SettingsActivity
@@ -122,6 +123,14 @@ class MainActivity : AppCompatActivity() {
         override fun onSpeaking(speaking: Boolean) = runOnUiThread { b.orb.state = if (speaking) OrbAnimationView.State.SPEAKING else OrbAnimationView.State.LISTENING; showStatus(if (speaking) "Bol rahi hoon…" else "Sun rahi hoon…") }
         override fun onUserText(text: String) = runOnUiThread { addBubble(text, true) }
         override fun onMyraText(text: String, error: Boolean) = runOnUiThread { addBubble(text, false, error) }
+        override fun onUserMessage(messageId: String, text: String) = runOnUiThread {
+            VoicePipelineLogger.debug("CHAT_UI_STATE_UPDATED messageId=$messageId role=USER")
+            addBubble(text, true, messageId = messageId)
+        }
+        override fun onMyraMessage(messageId: String, text: String, error: Boolean) = runOnUiThread {
+            VoicePipelineLogger.debug("CHAT_UI_STATE_UPDATED messageId=$messageId role=ASSISTANT")
+            addBubble(text, false, error, messageId)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -382,7 +391,15 @@ class MainActivity : AppCompatActivity() {
         }
         dialog.show()
     }
-    private fun addBubble(text: String, isUser: Boolean, isError: Boolean = false) {
+    private fun addBubble(
+        text: String,
+        isUser: Boolean,
+        isError: Boolean = false,
+        messageId: String = "ui:${if (isUser) "user" else "assistant"}:${text.hashCode()}"
+    ) {
+        VoicePipelineLogger.debug(
+            "CHAT_BUBBLE_RENDER_REQUESTED messageId=$messageId role=${if (isUser) "USER" else "ASSISTANT"}"
+        )
         val bubble = TextView(this).apply {
             this.text = text
             setTextColor(if (isError) Color.rgb(255, 110, 130) else Color.rgb(238, 238, 238))

@@ -1,6 +1,7 @@
 package com.myra.assistant.service
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,5 +43,13 @@ class TurnResponseArbiterTest {
         assertFalse(arbiter.acceptsOrdinaryModel())
         arbiter.controlledGenerationComplete()
         assertTrue(arbiter.releaseIfComplete())
+    }
+
+    @Test fun independentLaterVadTurnClearsStaleControlledOwnership() {
+        val arbiter = TurnResponseArbiter()
+        arbiter.claimControlled(30L)
+        arbiter.supersedeForNewUserTurn(31L)
+        assertTrue(arbiter.acceptsOrdinaryModel())
+        assertEquals(31L, arbiter.turnId)
     }
 }

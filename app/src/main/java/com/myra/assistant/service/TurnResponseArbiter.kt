@@ -19,7 +19,10 @@ internal class TurnResponseArbiter {
     var generationId: Long = 0L; private set
 
     @Synchronized fun begin(turnId: Long) {
-        if (owner == ResponseOwner.CONTROLLED_LOCAL && !released()) return
+        // A controlled response owns only its exact turn. A genuinely newer user
+        // turn must supersede it even if an interrupted audio callback never reported
+        // generation/playback completion. Same-turn late packets remain blocked.
+        if (owner == ResponseOwner.CONTROLLED_LOCAL && !released() && this.turnId == turnId) return
         this.turnId = turnId
         owner = ResponseOwner.MODEL
         lifecycle = ResponseLifecycle.THINKING
@@ -68,6 +71,18 @@ internal class TurnResponseArbiter {
     }
 
     fun acceptsOrdinaryModel(): Boolean = owner == ResponseOwner.MODEL
+
+    @Synchronized fun supersedeForNewUserTurn(turnId: Long): Long {
+        require(turnId > 0L)
+        val oldGeneration = generationId
+        this.turnId = turnId
+        owner = ResponseOwner.MODEL
+        lifecycle = ResponseLifecycle.THINKING
+        generationComplete = false
+        playbackComplete = false
+        generationId = generationSequence.incrementAndGet()
+        return oldGeneration
+    }
     @Synchronized fun controlledGenerationComplete() {
         if (owner == ResponseOwner.CONTROLLED_LOCAL) {
             generationComplete = true
