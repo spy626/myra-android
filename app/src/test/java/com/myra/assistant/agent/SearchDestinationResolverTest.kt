@@ -5,6 +5,7 @@ import com.myra.assistant.model.AppCommand
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SearchDestinationResolverTest {
@@ -42,7 +43,9 @@ class SearchDestinationResolverTest {
         val runtime = GeneralAgentRuntimeStore.runtime.activeTask()!!
         assertEquals(TurnIntent.MULTI_STEP_GOAL, decision.intent)
         assertEquals(41L, runtime.turnId)
-        assertEquals(setOf(ToolCapability.BROWSER_SEARCH), runtime.intent.requiredCapabilities)
+        assertTrue(runtime.intent.requiredCapabilities.containsAll(setOf(
+            ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN, ToolCapability.VERIFY_SCREEN
+        )))
         val resolution = SearchDestinationResolver.resolveDetailed(
             BrowserSearchRequestParser.parse("Google mein search karo new AI")!!,
             context.packageName, null
