@@ -5800,7 +5800,7 @@ class MyraVoiceService : Service() {
                 service.queueLocalSpeech(message, allowUntranscribedAudio = true)
             }
         }
-        fun publishAssistantText(
+        internal fun publishAssistantText(
             message: String,
             error: Boolean = false,
             owner: AssistantResponseOwner = AssistantResponseOwner.CONTROLLED_LOCAL
