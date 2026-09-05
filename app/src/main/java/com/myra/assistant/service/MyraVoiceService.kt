@@ -741,12 +741,10 @@ class MyraVoiceService : Service() {
                                 return@inputTranscript
                             }
                             if (directCommand is AppCommand.ScrollYouTube) {
-                                val direction = (directCommand.direction ?: lastScrollDirection).name
-                                pendingScrollCandidates.stage(activeTurnId, direction, android.os.SystemClock.elapsedRealtime())
-                                voiceLog("SCROLL_CANDIDATE_DETECTED turnId=$activeTurnId direction=$direction source=media_pre_final execution=staged")
-                                probableActionTurn = true
-                                suppressModelForTurn = true
-                                output.clear()
+                                handleScrollProposal(
+                                    directCommand, "media_pre_final", ScrollProposalAuthorization.PRE_FINAL
+                                )
+                                mediaBlockedTurn = false
                                 return@inputTranscript
                             }
                             if (spoken.isNotBlank() && !commandUserTextEmitted) {
@@ -957,9 +955,7 @@ class MyraVoiceService : Service() {
                     } else command.javaClass.simpleName
                     voiceLog("partial_action_held_for_unified_owner turnId=$activeTurnId candidate=$candidateName")
                     if (command is AppCommand.ScrollYouTube) {
-                        val direction = (command.direction ?: lastScrollDirection).name
-                        pendingScrollCandidates.stage(activeTurnId, direction, android.os.SystemClock.elapsedRealtime())
-                        voiceLog("SCROLL_CANDIDATE_DETECTED turnId=$activeTurnId direction=$direction source=partial execution=staged")
+                        handleScrollProposal(command, "partial_transcript", ScrollProposalAuthorization.PRE_FINAL)
                     }
                 }
             }
@@ -1319,37 +1315,18 @@ class MyraVoiceService : Service() {
                     unifiedTask?.interpretedGoal == com.myra.assistant.agent.AgentGoalType.SCROLL
                 ) {
                     val runtimeTask = GeneralAgentRuntimeStore.runtime.activeTask()
-                    val candidate = pendingScrollCandidates.consume(activeTurnId)
-                    if (candidate == null) {
-                        voiceLog(
-                            "SCROLL_CANDIDATE_DETECTED turnId=$activeTurnId " +
-                                "direction=${runtimeTask?.intent?.parameters?.get("direction") ?: lastScrollDirection.name} " +
-                                "source=final_authoritative execution=staged"
-                        )
-                    }
                     val directionName = runtimeTask?.intent?.parameters?.get("direction")
-                        ?: candidate?.direction
                         ?: lastScrollDirection.name
                     val direction = runCatching { AppCommand.ScrollDirection.valueOf(directionName) }
                         .getOrDefault(lastScrollDirection)
-                    if (runtimeTask == null) {
-                        voiceLog("SCROLL_RUNTIME_MISSING turnId=$activeTurnId reason=authoritative_task_not_created")
-                    } else if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-                        voiceLog("SCROLL_RUNTIME_MISSING turnId=$activeTurnId reason=duplicate_turn_dispatch_blocked")
-                        resetTurnBuffers("duplicate_runtime_scroll")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    } else {
-                        voiceLog("SCROLL_RUNTIME_BOUND turnId=$activeTurnId taskId=${runtimeTask.id} direction=$direction")
-                        executeVerifiedScroll(
-                            AppCommand.ScrollYouTube(direction),
-                            requestedTurnId = activeTurnId,
-                            requestedTaskId = runtimeTask.id
-                        )
-                        resetTurnBuffers("unified_runtime_scroll")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
+                    handleScrollProposal(
+                        AppCommand.ScrollYouTube(direction), "final_unified_turn",
+                        ScrollProposalAuthorization.FINAL_AUTHORIZED,
+                        requestedTaskId = runtimeTask?.id
+                    )
+                    resetTurnBuffers("unified_runtime_scroll")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
                 }
                 if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
                     executeUnifiedBrowserSearch(userText)
@@ -2073,6 +2050,14 @@ class MyraVoiceService : Service() {
         }
         if (command == null) {
             live?.sendToolResponse(id, functionName, false, "Missing or unsupported action details")
+            return
+        }
+        if (command is AppCommand.ScrollYouTube) {
+            handleScrollProposal(command, "gemini_phone_tool", ScrollProposalAuthorization.PRE_FINAL)
+            live?.sendToolResponse(
+                id, functionName, true,
+                "Scroll proposal staged; final Android turn authorization is pending"
+            )
             return
         }
         // A semantic tool call is a new action turn. Android remains the authority:
@@ -2988,6 +2973,12 @@ class MyraVoiceService : Service() {
     }
 
     private fun executeCommand(command: AppCommand) {
+        if (command is AppCommand.ScrollYouTube) {
+            // Every non-final caller is reduced to a proposal here. Physical scroll is
+            // reachable only from handleScrollProposal(FINAL_AUTHORIZED).
+            handleScrollProposal(command, "legacy_command_boundary", ScrollProposalAuthorization.PRE_FINAL)
+            return
+        }
         if (localCommandExecutedThisTurn || !shouldExecute(command)) return
         if (command is AppCommand.SearchYouTube) {
             voiceLog(
@@ -3012,10 +3003,6 @@ class MyraVoiceService : Service() {
             return
         }
         if (command is AppCommand.DeepResearch) { executeDeepResearch(command); return }
-        if (command is AppCommand.ScrollYouTube) {
-            executeVerifiedScroll(command)
-            return
-        }
         cancelSpeechForNewAction()
         suppressModelForTurn = true
         waitingForFreshInputAfterCommand = true
@@ -3033,21 +3020,6 @@ class MyraVoiceService : Service() {
             action = command.toString(),
             success = result.success && result.verified
         )
-        val silentRepeatedScroll =
-            command is AppCommand.ScrollYouTube &&
-                command.direction == null &&
-                result.success &&
-                hasAcknowledgedScrollDirection
-        if (command is AppCommand.ScrollYouTube && result.success) {
-            hasAcknowledgedScrollDirection = true
-        }
-        if (silentRepeatedScroll) {
-            audio?.setMuted(false)
-            // Keep this turn suppressed until the next real user transcript. Gemini may
-            // still deliver late packets for the intercepted utterance; none may speak.
-            emitState("Sun rahi hoon…")
-            return
-        }
         listener?.onMyraText(result.spokenMessage, !result.success)
         emitState(result.spokenMessage)
         queueLocalSpeech(
@@ -4224,6 +4196,75 @@ class MyraVoiceService : Service() {
         emitState(message)
         queueLocalSpeech(message, allowUntranscribedAudio = success)
         voiceLog("brain_task_finished taskToken=$taskToken success=$success message=${message.take(100)}")
+    }
+
+    private fun handleScrollProposal(
+        command: AppCommand.ScrollYouTube,
+        source: String,
+        authorization: ScrollProposalAuthorization,
+        requestedTaskId: String? = null
+    ): Boolean {
+        val turnId = activeTurnId
+        val direction = command.direction ?: lastScrollDirection
+        val foreground = AccessibilityHelperService.instance?.currentForegroundContext()
+        if (authorization == ScrollProposalAuthorization.PRE_FINAL) {
+            if (turnId <= 0L) {
+                voiceLog(
+                    "SCROLL_CANDIDATE_REJECTED turnId=$turnId direction=$direction source=$source " +
+                        "authorization=PRE_FINAL decision=REJECTED reason=missing_voice_turn"
+                )
+                return false
+            }
+            pendingScrollCandidates.stage(
+                turnId = turnId,
+                direction = direction.name,
+                detectedAt = android.os.SystemClock.elapsedRealtime(),
+                source = source,
+                foregroundPackage = foreground?.packageName,
+                windowId = foreground?.windowId,
+                observedGeneration = foreground?.generation ?: 0L
+            )
+            voiceLog(
+                "SCROLL_CANDIDATE_DETECTED turnId=$turnId direction=$direction source=$source " +
+                    "foregroundPackage=${foreground?.packageName} observedGeneration=${foreground?.generation ?: 0L} " +
+                    "authorization=PRE_FINAL decision=STAGED"
+            )
+            return false
+        }
+
+        val runtimeTask = GeneralAgentRuntimeStore.runtime.activeTask()
+        if (runtimeTask == null || requestedTaskId.isNullOrBlank()) {
+            voiceLog(
+                "SCROLL_RUNTIME_MISSING turnId=$turnId reason=post_final_authoritative_task_missing " +
+                    "authorization=FINAL_AUTHORIZED"
+            )
+            executeVerifiedScroll(command, requestedTurnId = turnId, requestedTaskId = requestedTaskId.orEmpty())
+            return false
+        }
+        val candidate = pendingScrollCandidates.consume(turnId)
+        val now = android.os.SystemClock.elapsedRealtime()
+        val candidateCompatible = candidate?.let {
+            ScrollCandidatePolicy.compatible(it, turnId, foreground?.packageName, foreground?.windowId, now) &&
+                it.direction == direction.name
+        } ?: false
+        if (candidate != null && !candidateCompatible) {
+            voiceLog(
+                "SCROLL_CANDIDATE_REJECTED turnId=$turnId candidateTurnId=${candidate.turnId} " +
+                    "candidateDirection=${candidate.direction} finalDirection=$direction source=${candidate.source} " +
+                    "foregroundPackage=${foreground?.packageName} observedGeneration=${foreground?.generation ?: 0L} " +
+                    "reason=stale_or_incompatible_final_intent"
+            )
+        }
+        if (!screenCommandTurnGuard.tryCommit(turnId)) {
+            voiceLog("SCROLL_RUNTIME_DUPLICATE_BLOCKED turnId=$turnId taskId=${runtimeTask.id} source=$source")
+            return false
+        }
+        voiceLog(
+            "SCROLL_RUNTIME_BOUND turnId=$turnId taskId=${runtimeTask.id} direction=$direction " +
+                "source=$source stagedCandidateCompatible=$candidateCompatible"
+        )
+        executeVerifiedScroll(command, requestedTurnId = turnId, requestedTaskId = runtimeTask.id)
+        return true
     }
 
     private fun executeVerifiedScroll(

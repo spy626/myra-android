@@ -71,4 +71,33 @@ class VoiceTurnIdentityTest {
         store.speechEnded(store.current()!!.userTurnId, 1_500L)
         assertEquals(1_500L, store.current()?.speechEndAt)
     }
+
+    @Test fun multiplePreFinalProposalsMergeWithoutConsumingTheTurn() {
+        val candidates = PendingScrollCandidateStore()
+        candidates.stage(5L, "DOWN", 1_000L, source = "gemini_phone_tool", foregroundPackage = "chrome", windowId = 7)
+        candidates.stage(5L, "DOWN", 1_100L, source = "partial_transcript", foregroundPackage = "chrome", windowId = 7)
+        assertEquals(5L, candidates.current()?.turnId)
+        assertEquals(1_100L, candidates.current()?.detectedAt)
+        assertEquals("partial_transcript", candidates.current()?.source)
+        assertEquals(5L, candidates.consume(5L)?.turnId)
+        assertNull(candidates.consume(5L))
+    }
+
+    @Test fun stagedCandidateRequiresFreshCompatibleFinalScreen() {
+        val candidate = PendingScrollCandidate(
+            5L, "DOWN", 1_000L, "gemini_phone_tool", "chrome", 7, 20L
+        )
+        assertTrue(ScrollCandidatePolicy.compatible(candidate, 5L, "chrome", 7, 2_000L))
+        assertTrue(!ScrollCandidatePolicy.compatible(candidate, 6L, "chrome", 7, 2_000L))
+        assertTrue(!ScrollCandidatePolicy.compatible(candidate, 5L, "youtube", 7, 2_000L))
+        assertTrue(!ScrollCandidatePolicy.compatible(candidate, 5L, "chrome", 8, 2_000L))
+        assertTrue(!ScrollCandidatePolicy.compatible(candidate, 5L, "chrome", 7, 20_000L))
+    }
+
+    @Test fun conversationalFinalDiscardsItsStagedCandidate() {
+        val candidates = PendingScrollCandidateStore()
+        candidates.stage(5L, "DOWN", 1_000L, source = "gemini_phone_tool")
+        candidates.discardForTurn(5L)
+        assertNull(candidates.current())
+    }
 }

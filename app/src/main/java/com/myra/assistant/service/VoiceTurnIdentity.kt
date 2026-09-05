@@ -40,15 +40,29 @@ internal class VoiceTurnIdentityStore {
 internal data class PendingScrollCandidate(
     val turnId: Long,
     val direction: String,
-    val detectedAt: Long
+    val detectedAt: Long,
+    val source: String = "unknown",
+    val foregroundPackage: String? = null,
+    val windowId: Int? = null,
+    val observedGeneration: Long = 0L
 )
 
 internal class PendingScrollCandidateStore {
     @Volatile private var pending: PendingScrollCandidate? = null
 
-    @Synchronized fun stage(turnId: Long, direction: String, detectedAt: Long): PendingScrollCandidate {
+    @Synchronized fun stage(
+        turnId: Long,
+        direction: String,
+        detectedAt: Long,
+        source: String = "unknown",
+        foregroundPackage: String? = null,
+        windowId: Int? = null,
+        observedGeneration: Long = 0L
+    ): PendingScrollCandidate {
         require(turnId > 0L) { "A pending action candidate requires a real user turn" }
-        return PendingScrollCandidate(turnId, direction, detectedAt).also { pending = it }
+        return PendingScrollCandidate(
+            turnId, direction, detectedAt, source, foregroundPackage, windowId, observedGeneration
+        ).also { pending = it }
     }
 
     /** Consumes only an exact authoritative-turn match; candidates never rebind across turns. */
@@ -64,6 +78,23 @@ internal class PendingScrollCandidateStore {
     @Synchronized fun discardForTurn(turnId: Long) {
         if (pending?.turnId == turnId) pending = null
     }
+}
+
+internal enum class ScrollProposalAuthorization { PRE_FINAL, FINAL_AUTHORIZED }
+
+internal object ScrollCandidatePolicy {
+    const val MAX_AGE_MS = 15_000L
+
+    fun compatible(
+        candidate: PendingScrollCandidate,
+        authoritativeTurnId: Long,
+        foregroundPackage: String?,
+        windowId: Int?,
+        now: Long
+    ): Boolean = candidate.turnId == authoritativeTurnId &&
+        now - candidate.detectedAt in 0..MAX_AGE_MS &&
+        (candidate.foregroundPackage == null || candidate.foregroundPackage == foregroundPackage) &&
+        (candidate.windowId == null || candidate.windowId == windowId)
 }
 
 internal object RuntimeActionBindingGuard {
