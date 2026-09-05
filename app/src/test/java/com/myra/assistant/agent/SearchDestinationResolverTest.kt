@@ -32,6 +32,24 @@ class SearchDestinationResolverTest {
         assertEquals("current_google_search_context", resolution.reason)
     }
 
+    @Test fun finalGoogleSearchBuildsRuntimeIntentWhileGoogleAppIsForeground() {
+        val agent = UnifiedLyraAgent()
+        val context = CurrentActivityContext(
+            "com.google.android.googlequicksearchbox", "Google", "SEARCH", 1, 1,
+            emptyList(), confidence = .9, timestamp = 1
+        )
+        val decision = agent.acceptTurn("Google mein search karo new AI", context, true, turnId = 41L)
+        val runtime = GeneralAgentRuntimeStore.runtime.activeTask()!!
+        assertEquals(TurnIntent.MULTI_STEP_GOAL, decision.intent)
+        assertEquals(41L, runtime.turnId)
+        assertEquals(setOf(ToolCapability.BROWSER_SEARCH), runtime.intent.requiredCapabilities)
+        val resolution = SearchDestinationResolver.resolveDetailed(
+            BrowserSearchRequestParser.parse("Google mein search karo new AI")!!,
+            context.packageName, null
+        )
+        assertEquals(BrowserSearchExecutor.CURRENT_GOOGLE_APP, resolution.selectedExecutor)
+    }
+
     @Test fun explicit_youtube_destination_is_allowed() {
         val request = BrowserSearchRequestParser.parse("Youtube pe new AI search karo")!!
         assertEquals(SearchDestination.YOUTUBE, request.explicitDestination)

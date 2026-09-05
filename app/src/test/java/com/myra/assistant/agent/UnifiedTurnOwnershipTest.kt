@@ -99,5 +99,31 @@ class UnifiedTurnOwnershipTest {
         assertFalse(decision.authorizesPhoneActions)
     }
 
+    @Test fun devanagariDirectionKeepsMeaningAndCreatesScrollAction() {
+        val decision = UnifiedTurnInterpreter.interpret("नीचे जाओ", null)
+        assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)
+        assertTrue(decision.authorizesPhoneActions)
+        val structured = UnifiedLyraAgent().toStructuredIntent("नीचे जाओ", decision)
+        assertEquals("DOWN", structured.parameters["direction"])
+    }
+
+    @Test fun devanagariContinuationUsesOnlyVerifiedScrollContext() {
+        val completed = CompletedTaskContext(
+            taskId = "old", goal = "SCROLL", action = ToolCapability.ACCESSIBILITY_SCROLL.name,
+            query = null, destination = null, executor = ToolCapability.ACCESSIBILITY_SCROLL.name,
+            observedOutcome = "viewport movement proven", completionState = TaskCompletionState.SUCCESS,
+            completedAt = 1L, scrollDirection = "DOWN"
+        )
+        val decision = UnifiedTurnInterpreter.interpret("और थोड़ा", WorkingTaskContext(lastCompletedTask = completed))
+        assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)
+        assertTrue(decision.authorizesPhoneActions)
+    }
+
+    @Test fun hindiDiscussionContainingDirectionExecutesNoTools() {
+        val decision = UnifiedTurnInterpreter.interpret("मैं सोच रहा हूं कि नीचे जाने का फीचर कैसा होना चाहिए", null)
+        assertEquals(TurnIntent.CONVERSATION, decision.intent)
+        assertFalse(decision.authorizesPhoneActions)
+    }
+
     private fun context() = CurrentActivityContext("com.android.chrome", "Chrome", "BROWSER", 1, 2, emptyList(), confidence = .8, timestamp = 3)
 }

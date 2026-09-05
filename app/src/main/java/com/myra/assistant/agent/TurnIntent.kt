@@ -34,6 +34,7 @@ object UnifiedTurnInterpreter {
         if (working?.lastRequestedAction != null && isActionFollowUp(text)) {
             return AgentTurnDecision(TurnIntent.FOLLOW_UP, text, requiresPerception = true, confidence = .94)
         }
+        if (isMetaDiscussion(text)) return conversation(raw, .96)
         if (isScrollContinuation(text) && working?.lastCompletedTask?.let {
                 it.completionState == TaskCompletionState.SUCCESS &&
                     it.action == ToolCapability.ACCESSIBILITY_SCROLL.name &&
@@ -45,7 +46,6 @@ object UnifiedTurnInterpreter {
                 requiresPerception = true, confidence = .94
             )
         }
-        if (isMetaDiscussion(text)) return conversation(raw, .96)
         if (FastVisualRequestClassifier.classify(raw)?.kind == FastVisualKind.QUESTION) {
             return AgentTurnDecision(TurnIntent.SCREEN_QUESTION, text, requiresPerception = true, confidence = .94)
         }
@@ -72,13 +72,13 @@ object UnifiedTurnInterpreter {
         AgentTurnDecision(TurnIntent.CONVERSATION, raw.trim(), confidence = confidence)
 
     private fun isMetaDiscussion(text: String): Boolean {
-        val reflective = listOf("main soch", "mai soch", "i think", "i was thinking", "lagta hai", "shayad", "should", "chahiye")
+        val reflective = listOf("main soch", "mai soch", "मैं सोच", "i think", "i was thinking", "लगता", "सोच रहा", "lagta hai", "shayad", "should", "chahiye", "चाहिए")
             .any(text::contains)
-        val architectureSubject = listOf("lyra ko", "lyra should", "feature", "system", "architecture", "agar ", "if ")
+        val architectureSubject = listOf("lyra ko", "lyra should", "feature", "फीचर", "system", "सिस्टम", "architecture", "अगर ", "agar ", "if ", "चाहिए")
             .any(text::contains)
-        val explicitFirstPerson = text.startsWith("main ") || text.startsWith("mai ") || text.startsWith("i ")
+        val explicitFirstPerson = text.startsWith("main ") || text.startsWith("mai ") || text.startsWith("मैं ") || text.startsWith("i ")
         return (reflective && architectureSubject) ||
-            (explicitFirstPerson && Regex("\\b(?:soch|think|wonder|shayad|lagta)\\b").containsMatchIn(text))
+            (explicitFirstPerson && (Regex("\\b(?:soch|think|wonder|shayad|lagta)\\b").containsMatchIn(text) || text.contains("सोच")))
     }
 
     private fun isExplicitAction(text: String): Boolean {
@@ -87,7 +87,9 @@ object UnifiedTurnInterpreter {
         val devaDirect = Regex("^(?:खोलो|दबाओ|स्क्रॉल|लिखो|भेजो|ढूंढो|दिखाओ|लाइक करो|सब्सक्राइब करो)\\b")
         val contextualImperative = Regex("\\b(?:dabao|press karo|click karo|kholo|khol do|kar do|daba do|दबाओ|खोलो)\\b$").containsMatchIn(text) &&
             Regex("\\b(?:jo|ye|yeh|this|that|isko|usko|wala|wali|जिस|जो|ये|इसको|उसको)\\b").containsMatchIn(text)
-        return direct.containsMatchIn(text) || objectFirst.containsMatchIn(text) || devaDirect.containsMatchIn(text) || contextualImperative
+        val hindiDirectionalImperative = containsHindiDirection(text) &&
+            Regex("(?:जाओ|जाइए|जाएँ|चलो|स्क्रॉल(?: करो)?)$").containsMatchIn(text)
+        return direct.containsMatchIn(text) || objectFirst.containsMatchIn(text) || devaDirect.containsMatchIn(text) || contextualImperative || hindiDirectionalImperative
     }
 
     private fun isExplicitSearchGoal(text: String): Boolean {
@@ -100,8 +102,12 @@ object UnifiedTurnInterpreter {
         "abhi nahi hua na", "abhi hua kya", "did it work", "did that work", "hua nahi na", "nahi hua na"
     ).any { candidate -> text.trimEnd('?', '.', '!') == candidate }
 
-    private fun isScrollContinuation(text: String): Boolean =
-        text.trimEnd('?', '.', '!') in setOf("thoda aur", "thora aur", "aur", "continue")
+    private fun isScrollContinuation(text: String): Boolean {
+        val words = text.trimEnd('?', '.', '!').split(' ').filter(String::isNotBlank).toSet()
+        val latin = words.contains("continue") || words.contains("aur") && words.any { it == "thoda" || it == "thora" }
+        val hindi = words.contains("और") && words.any { it == "थोड़ा" || it == "थोड़ा" }
+        return latin || hindi
+    }
 
     private fun isExplicitCorrection(text: String): Boolean =
         Regex("^(?:actually|correction|correct|nahi |no |galat |असल में|नहीं )").containsMatchIn(text) &&
@@ -111,9 +117,11 @@ object UnifiedTurnInterpreter {
         Regex("^(?:please )?(?:remember|forget|yaad rakho|yaad rakhna|bhool jao|याद रखो|भूल जाओ)\\b").containsMatchIn(text)
 
     private fun isShortClarification(text: String) = text.split(' ').size <= 8
-    private fun requiresScreen(text: String) = Regex("\\b(?:click|tap|press|scroll|swipe|screen|video|button|this|that|ye|isko|usko|wala|comment|like|subscribe)\\b").containsMatchIn(text)
+    private fun requiresScreen(text: String) = Regex("\\b(?:click|tap|press|scroll|swipe|screen|video|button|this|that|ye|isko|usko|wala|comment|like|subscribe)\\b").containsMatchIn(text) || containsHindiDirection(text)
     private fun isQuestion(text: String) = text.endsWith("?") || Regex("^(?:what|why|how|when|where|who|kya|kaise|kyun|kab|kahan|क्या|कैसे|क्यों)\\b").containsMatchIn(text)
     private fun isCancel(text: String) = text in setOf("stop", "cancel", "cancel karo", "rehne do", "chhodo", "mat karo", "रहने दो", "रुको")
+
+    private fun containsHindiDirection(text: String) = text.split(' ').any { it in setOf("नीचे", "ऊपर") }
 
     private fun normalize(raw: String): String = Normalizer.normalize(raw, Normalizer.Form.NFC)
         .lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{M}\\p{N}?]+"), " ")

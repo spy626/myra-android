@@ -1,6 +1,7 @@
 package com.myra.assistant.voice
 
 import com.myra.assistant.data.memory.CorrectionTranscriptNormalizer
+import java.text.Normalizer
 
 /** One immutable finalized transcript shared by UI and every durable-memory consumer. */
 data class FinalSemanticUserUtterance(
@@ -13,10 +14,12 @@ data class FinalSemanticUserUtterance(
     val canonicalNameTokens: List<String>,
     val displayNameTokens: List<String>
 ) {
-    val memoryExtractorInput: String get() = canonicalSemanticText
-    val correctionParserInput: String get() = canonicalSemanticText
-    val deleteParserInput: String get() = canonicalSemanticText
-    val clarificationResolverInput: String get() = canonicalSemanticText
+    // Memory's established name protection consumes the corrected display form. Intent and
+    // action ownership consume canonicalSemanticText, which deliberately preserves Unicode.
+    val memoryExtractorInput: String get() = displayText
+    val correctionParserInput: String get() = displayText
+    val deleteParserInput: String get() = displayText
+    val clarificationResolverInput: String get() = displayText
     val semanticConsistency: Boolean get() = canonicalNameTokens == displayNameTokens
 
     companion object {
@@ -29,13 +32,15 @@ data class FinalSemanticUserUtterance(
             // Entity protection has already happened inside formatted.display. Apply the
             // narrowly scoped correction normalizer only after that protection, never to
             // ICU's ambiguous karima/karīma output.
-            val semantic = CorrectionTranscriptNormalizer.normalize(
+            val display = CorrectionTranscriptNormalizer.normalize(
                 rawGeminiTranscript,
                 formatted.display
             )
+            val semantic = Normalizer.normalize(rawGeminiTranscript, Normalizer.Form.NFC)
+                .replace(Regex("\\s+"), " ").trim()
             val displayNames = formatted.protectedNameTokens.filter { name ->
                 Regex("\\b${Regex.escape(name)}\\b", RegexOption.IGNORE_CASE)
-                    .containsMatchIn(semantic)
+                    .containsMatchIn(display)
             }
             return FinalSemanticUserUtterance(
                 sessionId = sessionId,
@@ -43,7 +48,7 @@ data class FinalSemanticUserUtterance(
                 utteranceId = "$sessionId:$turnId",
                 rawGeminiTranscript = rawGeminiTranscript,
                 canonicalSemanticText = semantic,
-                displayText = semantic,
+                displayText = display,
                 canonicalNameTokens = formatted.protectedNameTokens,
                 displayNameTokens = displayNames
             )

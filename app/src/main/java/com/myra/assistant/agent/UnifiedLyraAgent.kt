@@ -170,7 +170,8 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
             decision?.goal == "SCROLL" -> AgentGoalType.SCROLL
             decision?.intent == TurnIntent.MULTI_STEP_GOAL && BrowserSearchRequestParser.parse(raw) != null -> AgentGoalType.BROWSER_SEARCH
             decision?.intent == TurnIntent.MULTI_STEP_GOAL -> AgentGoalType.WEB_SEARCH
-            Regex("\\b(?:scroll|niche|neeche|upar)\\b").containsMatchIn(text) -> AgentGoalType.SCROLL
+            Regex("\\b(?:scroll|niche|neeche|upar)\\b").containsMatchIn(text) ||
+                text.split(' ').any { it in setOf("नीचे", "ऊपर") } -> AgentGoalType.SCROLL
             Regex("\\b(?:type|likho|write)\\b").containsMatchIn(text) -> AgentGoalType.TYPE
             Regex("^(?:send|post)(?: karo)?$").matches(text) -> AgentGoalType.SEND
             Regex("\\b(?:click|tap|dabao|kholo|open|wala|thumb|hand)\\b").containsMatchIn(text) -> AgentGoalType.TAP

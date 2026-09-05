@@ -60,7 +60,7 @@ class GeneralAgentRuntimeTest {
         assertEquals(GeneralVerificationStatus.UNKNOWN, result.status)
     }
 
-    @Test fun fresh_changed_observation_completes_verified_task() {
+    @Test fun semantic_count_change_alone_does_not_verify_scroll() {
         val runtime = GeneralAgentRuntime(now = { 4 })
         val task = runtime.start(4, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!
         val before = perception(task.id, scene("pkg", 1))
@@ -68,9 +68,23 @@ class GeneralAgentRuntimeTest {
         runtime.recordAction(step, GeneralActionResult(true), before)
         val after = perception(task.id, scene("pkg", 2, listOf(element("new"))))
         val (result, recovery) = runtime.verify(after)
-        assertEquals(GeneralVerificationStatus.SUCCESS, result.status)
-        assertNull(recovery)
-        assertEquals(AgentRuntimeStatus.COMPLETED, runtime.lastCompletedTask()?.status)
+        assertEquals(GeneralVerificationStatus.UNKNOWN, result.status)
+        assertTrue(recovery is RecoveryDecision.Retry)
+    }
+
+    @Test fun stable_anchors_moving_vertically_verify_scroll() {
+        val before = scene("pkg", 1, listOf(element("one", top = 300), element("two", top = 500)))
+        val after = scene("pkg", 1, listOf(element("one", top = 180), element("two", top = 380)))
+        val evidence = ScrollMovementAnalyzer.analyze(before, after)
+        assertTrue(evidence.proven)
+        assertEquals(2, evidence.movedAnchorCount)
+        assertEquals(-120, evidence.medianDeltaY)
+    }
+
+    @Test fun node_churn_without_anchor_displacement_is_not_scroll_success() {
+        val before = scene("pkg", 1, listOf(element("one", top = 300), element("two", top = 500)))
+        val after = scene("pkg", 2, listOf(element("one", top = 300), element("two", top = 500), element("new", top = 700)))
+        assertFalse(ScrollMovementAnalyzer.analyze(before, after).proven)
     }
 
     @Test fun validated_adapter_outcome_completes_same_general_task_owner() {

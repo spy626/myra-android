@@ -112,6 +112,7 @@ import com.myra.assistant.agent.ProductionAdapterExecutors
 import com.myra.assistant.agent.ProductionGeneralAdapters
 import com.myra.assistant.agent.RecoveryDecision
 import com.myra.assistant.agent.ScreenSceneFactory
+import com.myra.assistant.agent.ScrollMovementAnalyzer
 import com.myra.assistant.agent.ToolCapability
 import com.myra.assistant.screen.FreshFrameResult
 import com.myra.assistant.screen.ScreenResponseBinding
@@ -1269,7 +1270,7 @@ class MyraVoiceService : Service() {
                 )
                 latestActionDispatchedAt = 0L
                 val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
-                    userText, activityContext, visualAwarenessPreferences.enabled, activeTurnId
+                    normalizedFinalUserText, activityContext, visualAwarenessPreferences.enabled, activeTurnId
                 )
                 latestIntentDecidedAt = android.os.SystemClock.elapsedRealtime()
                 voiceLog(
@@ -1277,6 +1278,22 @@ class MyraVoiceService : Service() {
                         "transcriptToIntentMs=${latestIntentDecidedAt - latestTurnAcceptedAt}"
                 )
                 val unifiedTask = UnifiedLyraAgentRuntime.agent.currentTask()
+                val stagedCapabilities = buildList {
+                    if (pendingScrollCandidates.current()?.turnId == activeTurnId) add(ToolCapability.ACCESSIBILITY_SCROLL.name)
+                }
+                val selectedCapability = when (unifiedTask?.interpretedGoal) {
+                    com.myra.assistant.agent.AgentGoalType.SCROLL -> ToolCapability.ACCESSIBILITY_SCROLL.name
+                    com.myra.assistant.agent.AgentGoalType.BROWSER_SEARCH,
+                    com.myra.assistant.agent.AgentGoalType.WEB_SEARCH -> ToolCapability.BROWSER_SEARCH.name
+                    else -> "NONE"
+                }
+                val discardedCapabilities = stagedCapabilities.filter { it != selectedCapability }
+                if (selectedCapability != ToolCapability.ACCESSIBILITY_SCROLL.name) pendingScrollCandidates.discardForTurn(activeTurnId)
+                voiceLog(
+                    "FINAL_INTENT_CAPABILITY_RESOLUTION turnId=$activeTurnId finalIntent=${turnDecision.intent} " +
+                        "selectedCapability=$selectedCapability stagedCapabilities=${stagedCapabilities.joinToString(",")} " +
+                        "discardedCapabilities=${discardedCapabilities.joinToString(",")} reason=final_unified_intent_authoritative"
+                )
                 voiceLog(
                     "agent_turn_owned turnId=$activeTurnId intent=${turnDecision.intent} " +
                         "phoneActions=${turnDecision.authorizesPhoneActions} memoryMutation=${turnDecision.authorizesMemoryMutation} " +
@@ -1329,7 +1346,7 @@ class MyraVoiceService : Service() {
                     return@turnComplete
                 }
                 if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
-                    executeUnifiedBrowserSearch(userText)
+                    executeUnifiedBrowserSearch(normalizedFinalUserText)
                 ) {
                     resetTurnBuffers("unified_browser_search")
                     waitingForFreshInputAfterCommand = true
@@ -3612,6 +3629,17 @@ class MyraVoiceService : Service() {
                     "foregroundPackage=${after.scene.externalForegroundPackage} screenGeneration=${after.scene.generation}"
             )
             voiceLog("VERIFICATION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} expected=${step.expectedOutcome.summary}")
+            if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
+                val evidence = ScrollMovementAnalyzer.analyze(actionBefore.scene, after.scene)
+                voiceLog(
+                    "SCROLL_VERIFICATION_EVIDENCE taskId=${task.id} turnId=${task.turnId} " +
+                        "preGeneration=${actionBefore.scene.generation} postGeneration=${after.scene.generation} " +
+                        "stableAnchorCount=${evidence.stableAnchorCount} movedAnchorCount=${evidence.movedAnchorCount} " +
+                        "medianDeltaY=${evidence.medianDeltaY} newVisibleElements=${evidence.newVisibleElements} " +
+                        "lostVisibleElements=${evidence.lostVisibleElements} scrollStateBefore=unavailable " +
+                        "scrollStateAfter=unavailable accessibilityScrollEvent=unavailable decision=${if (evidence.proven) "SUCCESS" else "UNKNOWN"}"
+                )
+            }
             val (verification, recovery) = runtime.verify(after)
             (runtime.activeTask() ?: runtime.lastCompletedTask())?.let { WorkingTaskRuntime.store.syncRuntime(it, after.scene) }
             voiceLog(
@@ -3722,6 +3750,10 @@ class MyraVoiceService : Service() {
         voiceLog(
             "SEARCH_TASK_CREATED turnId=$taskTurnId taskId=${WorkingTaskRuntime.store.snapshot().taskId} " +
                 "queryLength=${request.query.length} destination=${resolution.destination}"
+        )
+        voiceLog(
+            "SEARCH_RUNTIME_BOUND turnId=$taskTurnId taskId=${GeneralAgentRuntimeStore.runtime.activeTask()?.id} " +
+                "destination=${resolution.destination} executor=$executorName"
         )
         voiceLog(
             "SEARCH_EXECUTOR_SELECTED turnId=$taskTurnId executor=$executorName " +
@@ -4263,6 +4295,7 @@ class MyraVoiceService : Service() {
             "SCROLL_RUNTIME_BOUND turnId=$turnId taskId=${runtimeTask.id} direction=$direction " +
                 "source=$source stagedCandidateCompatible=$candidateCompatible"
         )
+        voiceLog("SCROLL_FINAL_DISPATCH turnId=$turnId taskId=${runtimeTask.id} direction=$direction owner=FINAL_UNIFIED_TURN")
         executeVerifiedScroll(command, requestedTurnId = turnId, requestedTaskId = runtimeTask.id)
         return true
     }
@@ -4280,26 +4313,11 @@ class MyraVoiceService : Service() {
         mediaGuard.finishInteraction()
 
         val resolvedDirection = command.direction ?: lastScrollDirection
-        val accessibility = AccessibilityHelperService.instance
-        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
-            val error = "Scroll ke liye LYRA Accessibility enable karo."
-            listener?.onMyraText(error, true)
-            emitState(error)
-            queueLocalSpeech(error)
-            return
-        }
         val explicitYouTube = command.explicitlyRequestedApp.equals("YouTube", true)
-        val liveForeground = accessibility.currentForegroundContext()
+        val liveForeground = AccessibilityHelperService.instance?.currentForegroundContext()
         brain.observeForegroundApp(liveForeground?.packageName)
         val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(liveForeground)
-        if (!explicitYouTube && actionScope == null) {
-            val error = "Current app clear nahi mila, isliye scroll nahi kiya."
-            listener?.onMyraText(error, true)
-            emitState(error)
-            queueLocalSpeech(error)
-            return
-        }
-        val foregroundPackage = actionScope?.expectedPackage
+        val foregroundPackage = actionScope?.expectedPackage ?: ActivityContextStore.snapshot()?.packageName
         val path = when {
             explicitYouTube -> "ACCESSIBILITY_EXPLICIT_YOUTUBE"
             foregroundPackage.equals("com.google.android.youtube", true) -> "ACCESSIBILITY_YOUTUBE_FOREGROUND"
@@ -4343,8 +4361,6 @@ class MyraVoiceService : Service() {
             voiceLog("LEGACY_FALLBACK_USED turnId=$requestedTurnId capability=ACCESSIBILITY_SCROLL reason=$reason execution=blocked")
             val message = "Scroll task active nahi hai, isliye action nahi kiya."
             listener?.onMyraText(message, true); emitState(message); queueLocalSpeech(message)
-        } else {
-            emitState(if (explicitYouTube) "YouTube scroll kar rahi hoon…" else "Current screen scroll kar rahi hoon…")
         }
     }
 

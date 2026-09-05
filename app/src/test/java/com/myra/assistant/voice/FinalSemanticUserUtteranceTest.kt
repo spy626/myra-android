@@ -13,8 +13,8 @@ import org.junit.Test
 class FinalSemanticUserUtteranceTest {
     @Test fun kareemIsIdenticalForDisplayAndEverySemanticConsumer() {
         val utterance = utterance("मेरा बेस्ट फ्रेंड करीम है।")
-        assertEquals("Mera best friend Kareem hai.", utterance.canonicalSemanticText)
-        assertEquals(utterance.canonicalSemanticText, utterance.displayText)
+        assertEquals("मेरा बेस्ट फ्रेंड करीम है।", utterance.canonicalSemanticText)
+        assertEquals("Mera best friend Kareem hai.", utterance.displayText)
         assertEquals(utterance.displayText, utterance.memoryExtractorInput)
         assertEquals(utterance.displayText, utterance.correctionParserInput)
         assertEquals(utterance.displayText, utterance.deleteParserInput)
@@ -28,7 +28,8 @@ class FinalSemanticUserUtteranceTest {
     @Test fun karimaRemainsASeparateStoredIdentity() {
         val kareem = utterance("मेरा बेस्ट फ्रेंड करीम है।")
         val karima = utterance("मेरा बेस्ट फ्रेंड करीमा है।")
-        assertEquals("Mera best friend Karima hai.", karima.canonicalSemanticText)
+        assertEquals("मेरा बेस्ट फ्रेंड करीमा है।", karima.canonicalSemanticText)
+        assertEquals("Mera best friend Karima hai.", karima.displayText)
         assertFalse(kareem.canonicalNameTokens == karima.canonicalNameTokens)
         val candidate = PersonLinkedMemoryExtractor.extractAll(karima.memoryExtractorInput).first()
         assertEquals("Karima", MemoryRelationshipPolicy.personName(candidate.fact))
@@ -53,8 +54,8 @@ class FinalSemanticUserUtteranceTest {
 
     @Test fun unknownOldHindiNameCannotCorruptProtectedKareemToken() {
         val utterance = utterance("हरीमा नहीं करीम")
-        assertEquals("Harima nahi Kareem", utterance.canonicalSemanticText)
-        assertEquals(utterance.canonicalSemanticText, utterance.displayText)
+        assertEquals("हरीमा नहीं करीम", utterance.canonicalSemanticText)
+        assertEquals("Harima nahi Kareem", utterance.displayText)
         assertEquals(
             BestFriendNameCorrection("Harima", "Kareem"),
             BestFriendNameCorrectionParser.parse(utterance.correctionParserInput, null)
@@ -78,6 +79,17 @@ class FinalSemanticUserUtteranceTest {
             displayNameTokens = listOf("Karima")
         )
         assertFalse(inconsistent.semanticConsistency)
+    }
+
+    @Test fun displayTransliterationCannotCorruptSemanticIntentText() {
+        val formatted = FinalTranscriptDisplayFormatter.Result(
+            transliterated = "Nice jao.", display = "Nice jao.",
+            latinWordsPreserved = false, properNameProtected = false,
+            protectedNameTokens = emptyList(), appliedRuleIds = emptyList()
+        )
+        val utterance = FinalSemanticUserUtterance.from("session", 3L, "नीचे जाओ।", formatted)
+        assertEquals("नीचे जाओ।", utterance.canonicalSemanticText)
+        assertEquals("Nice jao.", utterance.displayText)
     }
 
     private fun utterance(raw: String): FinalSemanticUserUtterance {

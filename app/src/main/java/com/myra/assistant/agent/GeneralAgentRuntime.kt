@@ -286,6 +286,9 @@ class GeneralVerifier {
             GeneralVerificationStatus.UNKNOWN, expected.summary, "observation was not fresh", .2,
             mismatchReason = "stale_observation"
         )
+        val scrollEvidence = if (expected.type == ExpectedOutcomeType.SCROLL_CHANGED) {
+            ScrollMovementAnalyzer.analyze(before.scene, after.scene)
+        } else null
         val success = when (expected.type) {
             ExpectedOutcomeType.FOREGROUND_PACKAGE -> expected.packageName != null && after.scene.externalForegroundPackage == expected.packageName
             ExpectedOutcomeType.TEXT_PRESENT -> expected.text?.let { needle -> after.scene.semanticElements.any { it.label.contains(needle, true) } } == true
@@ -304,13 +307,17 @@ class GeneralVerifier {
                 }
             }
             ExpectedOutcomeType.NAVIGATION_OCCURRED, ExpectedOutcomeType.SCREEN_CHANGED,
-            ExpectedOutcomeType.SCREEN_TYPE_CHANGED,
-            ExpectedOutcomeType.SCROLL_CHANGED -> packageChanged || generationChanged || elementsChanged
+            ExpectedOutcomeType.SCREEN_TYPE_CHANGED -> packageChanged || generationChanged || elementsChanged
+            ExpectedOutcomeType.SCROLL_CHANGED -> scrollEvidence?.proven == true
             ExpectedOutcomeType.ELEMENT_APPEARED -> expected.role?.let { role -> after.scene.semanticElements.any { it.role == role } } == true
             ExpectedOutcomeType.ELEMENT_DISAPPEARED -> expected.role?.let { role -> after.scene.semanticElements.none { it.role == role } } == true
             ExpectedOutcomeType.INFORMATION_RETURNED -> false
         }
-        if (success) return GeneralVerificationResult(GeneralVerificationStatus.SUCCESS, expected.summary, "fresh screen matched", .9, listOf("fresh_observation"))
+        if (success) return GeneralVerificationResult(
+            GeneralVerificationStatus.SUCCESS, expected.summary,
+            if (scrollEvidence != null) "viewport movement proven" else "fresh screen matched", .9,
+            listOf("fresh_observation") + (scrollEvidence?.evidenceTokens ?: emptyList())
+        )
         val unchanged = !packageChanged && !generationChanged && !elementsChanged
         val wrongPackage = expected.packageName != null && after.scene.externalForegroundPackage != expected.packageName
         return GeneralVerificationResult(
@@ -319,8 +326,55 @@ class GeneralVerifier {
             expected.summary,
             if (unchanged) "no observable change" else "screen changed differently",
             if (unchanged) .45 else .65,
-            listOf("fresh_observation"),
+            listOf("fresh_observation") + (scrollEvidence?.evidenceTokens ?: emptyList()),
             if (wrongPackage) "wrong_foreground_package" else if (unchanged) "insufficient_evidence" else "expected_state_missing"
+        )
+    }
+}
+
+data class ScrollMovementEvidence(
+    val stableAnchorCount: Int,
+    val movedAnchorCount: Int,
+    val medianDeltaY: Int,
+    val newVisibleElements: Int,
+    val lostVisibleElements: Int,
+    val consistentDirection: Boolean,
+    val contentWindowShift: Boolean,
+    val proven: Boolean
+) {
+    val evidenceTokens: List<String> get() = listOf(
+        "stable_anchors=$stableAnchorCount", "moved_anchors=$movedAnchorCount",
+        "median_delta_y=$medianDeltaY", "new_visible=$newVisibleElements",
+        "lost_visible=$lostVisibleElements", "consistent_direction=$consistentDirection",
+        "content_window_shift=$contentWindowShift"
+    )
+}
+
+/** Proves viewport displacement from stable semantic content. Snapshot freshness, generation,
+ * and node-count churn are intentionally excluded: none of them proves a scroll occurred. */
+object ScrollMovementAnalyzer {
+    private const val MIN_ANCHOR_DELTA_PX = 40
+
+    fun analyze(before: ScreenScene, after: ScreenScene): ScrollMovementEvidence {
+        fun key(element: SemanticElement) = "${element.role}:${element.label.trim().lowercase()}"
+        fun uniqueByKey(elements: List<SemanticElement>) = elements
+            .filter { it.label.isNotBlank() && it.role != SemanticRole.SCROLL_CONTAINER }
+            .groupBy(::key).filterValues { it.size == 1 }.mapValues { it.value.single() }
+        val pre = uniqueByKey(before.semanticElements)
+        val post = uniqueByKey(after.semanticElements)
+        val common = pre.keys intersect post.keys
+        val deltas = common.map { post.getValue(it).centerY - pre.getValue(it).centerY }
+        val meaningful = deltas.filter { kotlin.math.abs(it) >= MIN_ANCHOR_DELTA_PX }
+        val median = meaningful.sorted().let { if (it.isEmpty()) 0 else it[it.size / 2] }
+        val sameDirection = meaningful.isNotEmpty() &&
+            maxOf(meaningful.count { it > 0 }, meaningful.count { it < 0 }) * 4 >= meaningful.size * 3
+        val newCount = (post.keys - pre.keys).size
+        val lostCount = (pre.keys - post.keys).size
+        val windowShift = newCount >= 2 && lostCount >= 2 && common.isNotEmpty() && sameDirection
+        val anchorMovement = meaningful.size >= 2 && sameDirection
+        return ScrollMovementEvidence(
+            common.size, meaningful.size, median, newCount, lostCount, sameDirection,
+            windowShift, anchorMovement || windowShift
         )
     }
 }
@@ -332,7 +386,7 @@ sealed interface RecoveryDecision {
     data object PauseForModal : RecoveryDecision
 }
 
-class GeneralRecoveryEngine(private val maxRetries: Int = 2) {
+class GeneralRecoveryEngine(private val maxRetries: Int = 1) {
     fun decide(task: GeneralRuntimeTask, verification: GeneralVerificationResult, scene: ScreenScene, targetId: String?): RecoveryDecision {
         if (scene.modal != ModalKind.NONE) return RecoveryDecision.PauseForModal
         if (verification.status == GeneralVerificationStatus.SUCCESS) return RecoveryDecision.Fail("recovery_not_needed")
