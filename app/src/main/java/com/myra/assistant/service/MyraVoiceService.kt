@@ -97,6 +97,9 @@ import com.myra.assistant.agent.SearchDestinationResolver
 import com.myra.assistant.agent.BrowserSearchVerificationPolicy
 import com.myra.assistant.agent.YouTubeSearchVerificationPolicy
 import com.myra.assistant.agent.SearchTaskResultPolicy
+import com.myra.assistant.agent.GroundedActionClaimPolicy
+import com.myra.assistant.agent.GroundedActionResultState
+import com.myra.assistant.agent.SemanticCapabilityParser
 import com.myra.assistant.agent.SearchVerification
 import com.myra.assistant.agent.TaskCompletionState
 import com.myra.assistant.agent.AgentToolRegistry
@@ -204,6 +207,7 @@ class MyraVoiceService : Service() {
     private var hideNextModelTranscript = false
     private var mediaBlockedTurn = false
     private var probableActionTurn = false
+    private var groundedActionResultState = GroundedActionResultState.NOT_DISPATCHED
     private var pendingLocalSpeech: String? = null
     private var pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
     private var pendingLocalSpeechAllowsSilence = false
@@ -994,7 +998,18 @@ class MyraVoiceService : Service() {
                 }
                 else if (responseArbiter.acceptsOrdinaryModel() && !suppressModelForTurn &&
                     !hideNextModelTranscript && mediaGuard.allowModelResponse()
-                ) appendTranscript(output, transcript)
+                ) {
+                    val candidateOutput = output.toString() + transcript
+                    if (GroundedActionClaimPolicy.shouldSuppress(candidateOutput, groundedActionResultState)) {
+                        suppressModelForTurn = true
+                        output.clear()
+                        audio?.interrupt()
+                        voiceLog(
+                            "MODEL_ACTION_CLAIM_SUPPRESSED turnId=$activeTurnId claim=${candidateOutput.take(160)} " +
+                                "reason=no_grounded_runtime_action"
+                        )
+                    } else appendTranscript(output, transcript)
+                }
                 else voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} responseOwner=${responseArbiter.owner} route=ordinary_model_text")
             }
             client.onTurnComplete = turnComplete@ {
@@ -1281,6 +1296,15 @@ class MyraVoiceService : Service() {
                         "transcriptToIntentMs=${latestIntentDecidedAt - latestTurnAcceptedAt}"
                 )
                 val unifiedTask = UnifiedLyraAgentRuntime.agent.currentTask()
+                val semanticParse = SemanticCapabilityParser.parse(
+                    normalizedFinalUserText, WorkingTaskRuntime.store.snapshot()
+                )
+                voiceLog(
+                    "SEMANTIC_CAPABILITY_PARSE turnId=$activeTurnId predicate=${semanticParse.predicate} " +
+                        "targetText=${semanticParse.request.textHint.orEmpty().take(100)} " +
+                        "spatialConstraint=${semanticParse.request.spatialHint} ordinal=${semanticParse.request.ordinal} " +
+                        "targetFamily=${semanticParse.request.targetFamily} decision=${unifiedTask?.interpretedGoal ?: "NONE"}"
+                )
                 val stagedCapabilities = buildList {
                     if (pendingScrollCandidates.current()?.turnId == activeTurnId) add(ToolCapability.ACCESSIBILITY_SCROLL.name)
                 }
@@ -2111,6 +2135,10 @@ class MyraVoiceService : Service() {
         }
         // Model screen-tool output is only a proposal. Physical action is owned by
         // the final unified transcript and its GeneralAgentRuntime task.
+        probableActionTurn = true
+        suppressModelForTurn = true
+        output.clear()
+        audio?.interrupt()
         voiceLog(
             "SEMANTIC_TARGET_CANDIDATE_STAGED turnId=$activeTurnId source=perform_screen_action " +
                 "target=${args.optString("target_text").take(100)} position=${args.optString("position")} " +
@@ -3631,6 +3659,8 @@ class MyraVoiceService : Service() {
         voiceLog("ACTION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability}")
         val actionStartedAt = android.os.SystemClock.elapsedRealtime()
         val result = adapter.execute(step, actionBefore)
+        groundedActionResultState = if (result.accepted) GroundedActionResultState.DISPATCH_ACCEPTED
+        else GroundedActionResultState.VERIFIED_FAILURE
         val actionReturnedAt = android.os.SystemClock.elapsedRealtime()
         runtime.recordAction(step, result, actionBefore)
         runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, actionBefore.scene) }
@@ -3707,7 +3737,33 @@ class MyraVoiceService : Service() {
                         "lostVisibleElements=${scrollEvidence.lostVisibleElements} decision=${if (scrollEvidence.proven) "SUCCESS" else "UNKNOWN"}"
                 )
             }
+            if (step.capability == ToolCapability.ACCESSIBILITY_CLICK) {
+                val preview = com.myra.assistant.agent.GeneralVerifier().verify(step, actionBefore, after)
+                if (com.myra.assistant.agent.SemanticVerificationResamplePolicy.shouldResample(
+                        result.accepted, preview.status, resampleCount
+                    )
+                ) {
+                    voiceLog(
+                        "SEMANTIC_VERIFY_RESAMPLE_SCHEDULED taskId=${task.id} turnId=${task.turnId} " +
+                            "resample=${resampleCount + 1} status=${preview.status} " +
+                            "delayMs=${com.myra.assistant.agent.SemanticVerificationResamplePolicy.DELAY_MS} physicalRetry=false"
+                    )
+                    mainHandler.postDelayed({
+                        voiceLog(
+                            "SEMANTIC_VERIFY_RESAMPLE_READY taskId=${task.id} turnId=${task.turnId} " +
+                                "resample=${resampleCount + 1}"
+                        )
+                        observeAndVerify(resampleCount + 1)
+                    }, com.myra.assistant.agent.SemanticVerificationResamplePolicy.DELAY_MS)
+                    return@observe
+                }
+            }
             val (verification, recovery) = runtime.verify(after)
+            groundedActionResultState = when (verification.status) {
+                GeneralVerificationStatus.SUCCESS -> GroundedActionResultState.VERIFIED_SUCCESS
+                GeneralVerificationStatus.FAILURE -> GroundedActionResultState.VERIFIED_FAILURE
+                GeneralVerificationStatus.UNKNOWN -> GroundedActionResultState.UNKNOWN
+            }
             val verificationAt = android.os.SystemClock.elapsedRealtime()
             (runtime.activeTask() ?: runtime.lastCompletedTask())?.let { WorkingTaskRuntime.store.syncRuntime(it, after.scene) }
             voiceLog(
@@ -3801,7 +3857,17 @@ class MyraVoiceService : Service() {
         perception: com.myra.assistant.agent.PerceptionSnapshot
     ): com.myra.assistant.agent.SemanticTargetResolution {
         voiceLog("TARGET_RESOLUTION_STARTED taskId=${step.taskId} goal=${step.targetDescription.orEmpty().take(160)}")
-        val resolution = com.myra.assistant.agent.GeneralSemanticTargetResolver().resolve(
+        val resolver = com.myra.assistant.agent.GeneralSemanticTargetResolver()
+        resolver.logicalGroups(perception.scene).forEach { group ->
+            voiceLog("TARGET_GROUP_CREATED groupRole=${group.family} candidateCount=${group.members.size}")
+            group.members.take(12).forEachIndexed { index, element ->
+                voiceLog(
+                    "TARGET_GROUP_MEMBER elementId=${element.id} groupRole=${group.family} " +
+                        "logicalIndex=${element.logicalIndex ?: index + 1}"
+                )
+            }
+        }
+        val resolution = resolver.resolve(
             semanticTargetRequest(step), perception.scene,
             GeneralAgentRuntimeStore.runtime.activeTask()?.rejectedTargets.orEmpty()
         )
@@ -4672,7 +4738,31 @@ class MyraVoiceService : Service() {
         }
         if (!responseArbiter.acceptsOrdinaryModel()) return
         if (ordinaryModelAudioGate.isSpeechActive()) return
-        speechActivityStartedAt = android.os.SystemClock.elapsedRealtime()
+        val newSpeechStartedAt = android.os.SystemClock.elapsedRealtime()
+        if (com.myra.assistant.service.SpeechCycleBoundaryPolicy.startsNewTurn(
+                activeTurnId, speechActivityEndedAt, newSpeechStartedAt, input.isNotBlank()
+            )
+        ) {
+            val previousTurnId = activeTurnId
+            pendingScrollCandidates.discardForTurn(previousTurnId)
+            activeTurnId = ++turnSequence
+            speechTimingTurnId = 0L
+            lastUserIntentText = ""
+            commandProbe.clear()
+            probableActionTurn = false
+            groundedActionResultState = GroundedActionResultState.NOT_DISPATCHED
+            voiceLog(
+                "TURN_LIFECYCLE_DIAGNOSTIC turnId=$activeTurnId speechCycleIndex=1 state=NEW_UTTERANCE " +
+                    "reason=independent_vad_after_unfinalized_turn previousTurnId=$previousTurnId " +
+                    "gapMs=${newSpeechStartedAt - speechActivityEndedAt}"
+            )
+        } else {
+            voiceLog(
+                "TURN_LIFECYCLE_DIAGNOSTIC turnId=$activeTurnId speechCycleIndex=1 state=CONTINUE " +
+                    "reason=same_active_utterance"
+            )
+        }
+        speechActivityStartedAt = newSpeechStartedAt
         speechActivityEndedAt = 0L
         if (activeTurnId == 0L) activeTurnId = ++turnSequence
         speechTimingTurnId = activeTurnId
@@ -5097,6 +5187,7 @@ class MyraVoiceService : Service() {
         commandProbe.clear()
         commandUserTextEmitted = false
         probableActionTurn = false
+        groundedActionResultState = GroundedActionResultState.NOT_DISPATCHED
         mediaBlockedTurn = false
         ambiguousMessageTurn = false
         incompleteActionFragmentTurn = false

@@ -102,3 +102,17 @@ internal object RuntimeActionBindingGuard {
         requestedTurnId > 0L && requestedTurnId == taskTurnId &&
             requestedTaskId.isNotBlank() && requestedTaskId == activeTaskId
 }
+
+/** A later VAD cycle is a new user utterance even if Gemini has not delivered the
+ * previous final transcript. This changes identity only; it never authorizes a tool. */
+internal object SpeechCycleBoundaryPolicy {
+    const val MIN_INDEPENDENT_GAP_MS = 700L
+
+    fun startsNewTurn(
+        activeTurnId: Long,
+        previousSpeechEndedAt: Long,
+        newSpeechStartedAt: Long,
+        transcriptStarted: Boolean
+    ): Boolean = activeTurnId > 0L && previousSpeechEndedAt > 0L && !transcriptStarted &&
+        newSpeechStartedAt - previousSpeechEndedAt >= MIN_INDEPENDENT_GAP_MS
+}

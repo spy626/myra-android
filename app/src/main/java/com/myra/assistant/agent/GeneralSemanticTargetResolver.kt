@@ -10,7 +10,8 @@ data class SemanticTargetRequest(
     val spatialHint: SpatialHint? = null,
     val ordinal: Int? = null,
     val relativeToElementId: String? = null,
-    val currentGoal: String? = null
+    val currentGoal: String? = null,
+    val targetFamily: SemanticTargetFamily? = null
 )
 
 enum class SpatialHint { TOP, BOTTOM, LEFT, RIGHT, TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT, CENTER }
@@ -20,6 +21,11 @@ data class TargetCandidateScore(
     val score: Double,
     val reasons: List<String>,
     val fingerprint: String = SemanticTargetFingerprint.of(element)
+)
+
+data class LogicalTargetGroup(
+    val family: SemanticTargetFamily,
+    val members: List<SemanticElement>
 )
 
 sealed interface SemanticTargetResolution {
@@ -57,7 +63,7 @@ object SemanticClickPolicy {
 /** Converts an authorized natural-language target into semantic constraints, never coordinates. */
 object SemanticTargetRequestParser {
     fun parse(raw: String, working: WorkingTaskContext? = null): SemanticTargetRequest {
-        val text = normalize(raw)
+        val text = normalize(raw.replace(Regex("\\{\\s*[a-z_ -]+\\s*}", RegexOption.IGNORE_CASE), " "))
         val words = text.split(' ').filter(String::isNotBlank)
         val ordinal = words.firstNotNullOfOrNull(::ordinal)
         val top = words.any { it in TOP }; val bottom = words.any { it in BOTTOM }
@@ -92,7 +98,23 @@ object SemanticTargetRequestParser {
             .joinToString(" ").takeIf { it.isNotBlank() }
         return SemanticTargetRequest(raw, role, textHint, spatial, ordinal,
             if (deicticOnly) working?.currentReference else null,
-            working?.searchQuery ?: working?.currentGoal ?: working?.lastCompletedTask?.query)
+            working?.searchQuery ?: working?.currentGoal ?: working?.lastCompletedTask?.query,
+            familyForRole(role))
+    }
+
+    private fun familyForRole(role: SemanticRole?): SemanticTargetFamily? = when (role) {
+        SemanticRole.RESULT -> SemanticTargetFamily.RESULT
+        SemanticRole.CARD -> SemanticTargetFamily.CARD
+        SemanticRole.LIST_ITEM -> SemanticTargetFamily.LIST_ITEM
+        SemanticRole.BUTTON -> SemanticTargetFamily.BUTTON
+        SemanticRole.ICON, SemanticRole.IMAGE -> SemanticTargetFamily.ICON
+        SemanticRole.SETTINGS -> SemanticTargetFamily.SETTINGS
+        SemanticRole.BACK -> SemanticTargetFamily.BACK
+        SemanticRole.CLOSE -> SemanticTargetFamily.CLOSE
+        SemanticRole.TEXT_INPUT -> SemanticTargetFamily.INPUT
+        SemanticRole.TAB -> SemanticTargetFamily.TAB
+        SemanticRole.MENU -> SemanticTargetFamily.MENU
+        else -> null
     }
 
     private fun ordinal(word: String): Int? = when (word) {
@@ -124,6 +146,15 @@ object SemanticTargetRequestParser {
 
 /** App-independent, multi-signal ranking against one fresh normalized scene. */
 class GeneralSemanticTargetResolver {
+    fun logicalGroups(scene: ScreenScene): List<LogicalTargetGroup> = scene.semanticElements
+        .filter { it.actionable && it.enabled && it.right > it.left && it.bottom > it.top }
+        .groupBy { effectiveFamily(it) }
+        .filterKeys { it != SemanticTargetFamily.UNKNOWN }
+        .map { (family, values) ->
+            LogicalTargetGroup(family, values.distinctBy { it.containerId ?: it.groupId ?: it.id }
+                .sortedWith(compareBy<SemanticElement> { it.top }.thenBy { it.left }))
+        }
+
     fun resolve(request: SemanticTargetRequest, scene: ScreenScene, rejected: Set<String> = emptySet()): SemanticTargetResolution {
         val actionable = scene.semanticElements.filter { element ->
             element.actionable && element.enabled && element.right > element.left && element.bottom > element.top &&
@@ -142,12 +173,22 @@ class GeneralSemanticTargetResolver {
             }
         }
         var candidates = actionable
+        val requestedFamily = request.targetFamily ?: request.roleHint?.let(::familyForRole)
+        if (requestedFamily != null) {
+            candidates = candidates.filter { familyCompatible(requestedFamily, effectiveFamily(it)) }
+            if (candidates.isEmpty()) return SemanticTargetResolution.NotFound
+        }
         if (request.ordinal != null) {
-            val resultLike = candidates.filter { it.role in RESULT_ROLES }
-            if (resultLike.isNotEmpty()) candidates = resultLike
-            candidates = candidates.distinctBy { it.groupId ?: it.id }.sortedWith(compareBy<SemanticElement> { it.top }.thenBy { it.left })
+            // Ordinals are meaningful only inside the requested logical family. Never
+            // broaden "second result" into a traversal over Home/tabs/navigation links.
+            val family = requestedFamily ?: return SemanticTargetResolution.NotFound
+            candidates = candidates.filterNot { it.navigationElement || effectiveFamily(it) == SemanticTargetFamily.NAVIGATION }
+                .distinctBy { it.containerId ?: it.groupId ?: it.id }
+                .sortedWith(compareBy<SemanticElement> { it.logicalIndex ?: Int.MAX_VALUE }.thenBy { it.top }.thenBy { it.left })
             val index = if (request.ordinal == Int.MAX_VALUE) candidates.lastIndex else request.ordinal - 1
-            return candidates.getOrNull(index)?.let { SemanticTargetResolution.Unique(it, .96, listOf("ordinal=${request.ordinal}")) }
+            return candidates.getOrNull(index)?.let {
+                SemanticTargetResolution.Unique(it, .96, listOf("family=${family.name}", "ordinal=${request.ordinal}"))
+            }
                 ?: SemanticTargetResolution.NotFound
         }
         val scored = candidates.map { score(it, request, scene) }.filter { it.score >= MIN_SCORE }.sortedByDescending { it.score }
@@ -192,6 +233,35 @@ class GeneralSemanticTargetResolver {
         if (requested == SemanticRole.SETTINGS && actual in setOf(SemanticRole.SETTINGS, SemanticRole.ICON, SemanticRole.BUTTON))
             return Regex("\\b(?:settings?|preferences?|gear|cog)\\b", RegexOption.IGNORE_CASE).containsMatchIn(label)
         return false
+    }
+
+    private fun effectiveFamily(element: SemanticElement): SemanticTargetFamily =
+        element.targetFamily.takeUnless { it == SemanticTargetFamily.UNKNOWN }
+            ?: SemanticElementSemantics.family(
+                element.role, element.label,
+                element.navigationElement || SemanticElementSemantics.isNavigation(element.label, element.role)
+            )
+
+    private fun familyForRole(role: SemanticRole): SemanticTargetFamily? = when (role) {
+        SemanticRole.RESULT, SemanticRole.LINK, SemanticRole.VIDEO, SemanticRole.VIDEO_CARD -> SemanticTargetFamily.RESULT
+        SemanticRole.CARD -> SemanticTargetFamily.CARD
+        SemanticRole.LIST_ITEM -> SemanticTargetFamily.LIST_ITEM
+        SemanticRole.BUTTON -> SemanticTargetFamily.BUTTON
+        SemanticRole.ICON, SemanticRole.IMAGE -> SemanticTargetFamily.ICON
+        SemanticRole.SETTINGS -> SemanticTargetFamily.SETTINGS
+        SemanticRole.TAB -> SemanticTargetFamily.TAB
+        SemanticRole.MENU -> SemanticTargetFamily.MENU
+        SemanticRole.BACK -> SemanticTargetFamily.BACK
+        SemanticRole.CLOSE -> SemanticTargetFamily.CLOSE
+        SemanticRole.TEXT_INPUT -> SemanticTargetFamily.INPUT
+        else -> null
+    }
+
+    private fun familyCompatible(requested: SemanticTargetFamily, actual: SemanticTargetFamily): Boolean = when (requested) {
+        SemanticTargetFamily.RESULT -> actual in setOf(SemanticTargetFamily.RESULT, SemanticTargetFamily.ARTICLE, SemanticTargetFamily.CARD, SemanticTargetFamily.LIST_ITEM)
+        SemanticTargetFamily.SETTINGS -> actual in setOf(SemanticTargetFamily.SETTINGS, SemanticTargetFamily.ICON, SemanticTargetFamily.BUTTON)
+        SemanticTargetFamily.ICON -> actual in setOf(SemanticTargetFamily.ICON, SemanticTargetFamily.SETTINGS)
+        else -> requested == actual
     }
     private fun tokenSimilarity(a: String, b: String): Double {
         val left = tokens(a); val right = tokens(b)

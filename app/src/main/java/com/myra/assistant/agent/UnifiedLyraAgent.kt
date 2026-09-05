@@ -12,7 +12,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
     /** First and authoritative owner of every completed user turn. */
     @Synchronized fun acceptTurn(request: String, context: CurrentActivityContext?, visualAllowed: Boolean, turnId: Long = 0L): AgentTurnDecision {
         val working = WorkingTaskRuntime.store.snapshot()
-        val decision = UnifiedTurnInterpreter.interpret(request, working)
+        val decision = UnifiedTurnInterpreter.interpret(request, working, context)
         val scene = context?.let { ScreenSceneFactory.from(it, working.activeExternalApp) }
         val task = if (decision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
             createTask(request, context, visualAllowed, decision)
@@ -181,12 +181,15 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
 
     private fun understandGoal(raw: String, decision: AgentTurnDecision? = null): AgentGoalType {
         val text = normalize(raw)
+        val semantic = SemanticCapabilityParser.parse(raw, WorkingTaskRuntime.store.snapshot())
         return when {
             decision?.goal == "SCROLL" -> AgentGoalType.SCROLL
             decision?.authorizesPhoneActions == true && BrowserSearchRequestParser.parse(raw) != null -> AgentGoalType.BROWSER_SEARCH
             decision?.intent == TurnIntent.MULTI_STEP_GOAL -> AgentGoalType.WEB_SEARCH
-            Regex("\\b(?:scroll|niche|neeche|upar)\\b").containsMatchIn(text) ||
-                text.split(' ').any { it in setOf("नीचे", "ऊपर") } -> AgentGoalType.SCROLL
+            semantic.predicate == SemanticPredicate.OPEN_TARGET -> AgentGoalType.TAP
+            semantic.predicate == SemanticPredicate.NAVIGATE_BACK -> AgentGoalType.NAVIGATE
+            semantic.predicate == SemanticPredicate.MOVE_VIEWPORT -> AgentGoalType.SCROLL
+            decision?.authorizesPhoneActions == true && SemanticCapabilityParser.containsStructuredTranscriptArtifact(raw) -> AgentGoalType.TAP
             Regex("\\b(?:type|likho|write)\\b").containsMatchIn(text) -> AgentGoalType.TYPE
             Regex("^(?:send|post)(?: karo)?$").matches(text) -> AgentGoalType.SEND
             Regex("\\b(?:back|peeche|piche|वापस|पीछे)\\b").containsMatchIn(text) -> AgentGoalType.NAVIGATE

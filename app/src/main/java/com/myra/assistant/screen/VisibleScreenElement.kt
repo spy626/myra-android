@@ -19,3 +19,4 @@ data class VisibleScreenElement(
     val focused: Boolean = false,
     val sourceNodeId: String? = null
 )
+

@@ -6,6 +6,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GenericSemanticScreenControlTest {
+    @Test fun privacyOpenRoutesToSemanticTap() {
+        val decision = UnifiedTurnInterpreter.interpret("Privacy kholo", WorkingTaskContext())
+        val structured = UnifiedLyraAgent().toStructuredIntent("Privacy kholo", decision)
+        assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)
+        assertEquals("privacy", structured.textHint)
+        assertTrue(ToolCapability.ACCESSIBILITY_CLICK in structured.requiredCapabilities)
+    }
+
     @Test fun uniqueVisibleSettingsButtonResolves() {
         val target = element("settings", SemanticRole.SETTINGS, "Settings", 800, 40)
         val result = resolver.resolve(SemanticTargetRequest("open settings", roleHint = SemanticRole.SETTINGS), scene(listOf(target)))
@@ -35,6 +43,27 @@ class GenericSemanticScreenControlTest {
             element("two", SemanticRole.LINK, "Second article", 0, 300)
         )))
         assertEquals("two", (result as SemanticTargetResolution.Unique).element.id)
+    }
+
+    @Test fun secondResultExcludesHomeTabsAndNavigationLinks() {
+        val request = SemanticTargetRequestParser.parse("Second result kholo")
+        val result = resolver.resolve(request, scene(listOf(
+            element("home", SemanticRole.LINK, "Home", 0, 20),
+            element("tab", SemanticRole.TAB, "News", 200, 20),
+            element("one", SemanticRole.LINK, "First AI result", 0, 180),
+            element("two", SemanticRole.LINK, "Second AI result", 0, 380)
+        )))
+        assertEquals("two", (result as SemanticTargetResolution.Unique).element.id)
+    }
+
+    @Test fun secondButtonUsesOnlyButtonFamily() {
+        val request = SemanticTargetRequestParser.parse("Second button kholo")
+        val result = resolver.resolve(request, scene(listOf(
+            element("link", SemanticRole.LINK, "First article", 0, 30),
+            element("button-one", SemanticRole.BUTTON, "Open", 0, 150),
+            element("button-two", SemanticRole.BUTTON, "Continue", 0, 350)
+        )))
+        assertEquals("button-two", (result as SemanticTargetResolution.Unique).element.id)
     }
 
     @Test fun deicticTargetWithoutReferenceIsAmbiguous() {
@@ -79,9 +108,9 @@ class GenericSemanticScreenControlTest {
         val step = (runtime.next(before) as PlannerResult.Next).step
         runtime.recordAction(step, GeneralActionResult(true, "settings", metadata = mapOf("fingerprint" to "SETTINGS|settings|CENTER|TOP|")), before)
         val (verification, recovery) = runtime.verify(before.copy(capturedAt = 2))
-        assertEquals(GeneralVerificationStatus.FAILURE, verification.status)
-        assertTrue(recovery is RecoveryDecision.Retry)
-        assertEquals(1, runtime.activeTask()?.recoveryCount)
+        assertEquals(GeneralVerificationStatus.UNKNOWN, verification.status)
+        assertTrue(recovery is RecoveryDecision.Clarify)
+        assertEquals(0, runtime.activeTask()?.recoveryCount)
     }
 
     @Test fun rejectedFirstTargetAllowsOneFreshAlternative() {
@@ -136,6 +165,65 @@ class GenericSemanticScreenControlTest {
         val decision = UnifiedTurnInterpreter.interpret("Settings button ka system aur smart bana sakte hain", null)
         assertEquals(TurnIntent.CONVERSATION, decision.intent)
         assertFalse(decision.authorizesPhoneActions)
+    }
+
+    @Test fun privacyTranscriptArtifactUsesUniqueFreshVisibleTarget() {
+        val privacy = element("privacy", SemanticRole.LINK, "Privacy", 0, 180)
+        val context = CurrentActivityContext("com.android.settings", windowId = 1, generation = 1,
+            visibleElements = listOf(privacy), confidence = .9, timestamp = 1)
+        val decision = UnifiedTurnInterpreter.interpret("privacy {colon}", WorkingTaskContext(), context)
+        assertEquals(TurnIntent.ACTION_REQUEST, decision.intent)
+        val structured = UnifiedLyraAgent().toStructuredIntent("privacy {colon}", decision)
+        assertEquals("privacy", structured.textHint)
+        assertTrue(ToolCapability.ACCESSIBILITY_CLICK in structured.requiredCapabilities)
+    }
+
+    @Test fun transcriptArtifactWithoutUniqueVisibleTargetCannotAuthorize() {
+        val context = CurrentActivityContext("unknown.app", windowId = 1, generation = 1,
+            visibleElements = listOf(element("a", label = "Privacy"), element("b", label = "Privacy", left = 400)),
+            confidence = .9, timestamp = 1)
+        assertEquals(TurnIntent.CONVERSATION,
+            UnifiedTurnInterpreter.interpret("privacy {colon}", WorkingTaskContext(), context).intent)
+    }
+
+    @Test fun spatialTargetModifierRoutesTapWhileMovementPredicateRoutesScroll() {
+        val target = UnifiedTurnInterpreter.interpret("niche wala Privacy kholo", WorkingTaskContext())
+        val movement = UnifiedTurnInterpreter.interpret("niche jao", WorkingTaskContext())
+        assertEquals(SemanticPredicate.OPEN_TARGET, SemanticCapabilityParser.parse("niche wala Privacy kholo").predicate)
+        assertTrue(ToolCapability.ACCESSIBILITY_CLICK in UnifiedLyraAgent().toStructuredIntent("niche wala Privacy kholo", target).requiredCapabilities)
+        assertEquals(SemanticPredicate.MOVE_VIEWPORT, SemanticCapabilityParser.parse("niche jao").predicate)
+        assertTrue(ToolCapability.ACCESSIBILITY_SCROLL in UnifiedLyraAgent().toStructuredIntent("niche jao", movement).requiredCapabilities)
+    }
+
+    @Test fun recoveryPreservesResultFamilyAndOrdinalWhileExcludingRejectedFingerprint() {
+        val request = SemanticTargetRequestParser.parse("Second result kholo")
+        val firstScene = scene(listOf(
+            element("r1", SemanticRole.LINK, "AI result one", 0, 100),
+            element("r2", SemanticRole.LINK, "AI result two", 0, 300),
+            element("home", SemanticRole.LINK, "Home", 0, 500)
+        ))
+        val selected = (resolver.resolve(request, firstScene) as SemanticTargetResolution.Unique).element
+        val rejected = setOf(SemanticTargetFingerprint.of(selected))
+        val refreshed = scene(listOf(
+            element("new-r1", SemanticRole.LINK, "AI result one", 0, 100),
+            element("new-r2", SemanticRole.LINK, "Different second result", 0, 300),
+            element("home-new", SemanticRole.LINK, "Home", 0, 500)
+        ))
+        val recovered = resolver.resolve(request, refreshed, rejected) as SemanticTargetResolution.Unique
+        assertEquals("new-r2", recovered.element.id)
+        assertFalse(recovered.element.label.equals("Home", true))
+    }
+
+    @Test fun ordinaryModelPhysicalClaimRequiresGroundedRuntimeAction() {
+        assertTrue(GroundedActionClaimPolicy.shouldSuppress("Privacy par tap kar diya", GroundedActionResultState.NOT_DISPATCHED))
+        assertFalse(GroundedActionClaimPolicy.shouldSuppress("Privacy par tap kar diya", GroundedActionResultState.VERIFIED_SUCCESS))
+        assertFalse(GroundedActionClaimPolicy.shouldSuppress("Tap system ko improve karna hai", GroundedActionResultState.NOT_DISPATCHED))
+    }
+
+    @Test fun semanticVerificationResamplesWithoutAuthorizingAnotherTap() {
+        assertTrue(SemanticVerificationResamplePolicy.shouldResample(true, GeneralVerificationStatus.UNKNOWN, 0))
+        assertFalse(SemanticVerificationResamplePolicy.shouldResample(true, GeneralVerificationStatus.UNKNOWN, 1))
+        assertFalse(SemanticVerificationResamplePolicy.shouldResample(true, GeneralVerificationStatus.SUCCESS, 0))
     }
 
     private val resolver = GeneralSemanticTargetResolver()

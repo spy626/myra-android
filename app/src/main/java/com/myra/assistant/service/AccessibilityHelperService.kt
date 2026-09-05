@@ -1405,9 +1405,11 @@ class AccessibilityHelperService : AccessibilityService() {
         val foreground = currentForegroundContext()
         if (foreground != null) {
             val semantic = elements.mapIndexed { index, element ->
+                val role = SemanticRoleClassifier.classify(element.label, element.className, element.clickable, element.scrollable)
+                val navigationElement = com.myra.assistant.agent.SemanticElementSemantics.isNavigation(element.label, role)
                 SemanticElement(
                     id = "${foreground.windowId}:${foreground.generation}:$index",
-                    role = SemanticRoleClassifier.classify(element.label, element.className, element.clickable, element.scrollable),
+                    role = role,
                     label = element.label.take(240), left = element.bounds.left, top = element.bounds.top,
                     right = element.bounds.right, bottom = element.bounds.bottom,
                     actionable = element.clickable, sourceNodeId = element.sourceNodeId,
@@ -1418,6 +1420,8 @@ class AccessibilityHelperService : AccessibilityService() {
                     longClickable = element.longClickable, scrollable = element.scrollable,
                     editable = element.editable, enabled = element.enabled,
                     selected = element.selected, checked = element.checked, focused = element.focused,
+                    targetFamily = com.myra.assistant.agent.SemanticElementSemantics.family(role, element.label, navigationElement),
+                    navigationElement = navigationElement,
                     horizontalPosition = when {
                         element.bounds.centerX() < resources.displayMetrics.widthPixels / 3 -> com.myra.assistant.agent.RelativeHorizontalPosition.LEFT
                         element.bounds.centerX() > resources.displayMetrics.widthPixels * 2 / 3 -> com.myra.assistant.agent.RelativeHorizontalPosition.RIGHT

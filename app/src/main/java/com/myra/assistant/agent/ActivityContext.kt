@@ -12,6 +12,11 @@ enum class SemanticRole {
 enum class RelativeHorizontalPosition { LEFT, CENTER, RIGHT }
 enum class RelativeVerticalPosition { TOP, MIDDLE, BOTTOM }
 
+enum class SemanticTargetFamily {
+    RESULT, ARTICLE, CARD, LIST_ITEM, BUTTON, ICON, TAB, NAVIGATION, MENU,
+    SETTINGS, BACK, CLOSE, INPUT, UNKNOWN
+}
+
 data class SemanticElement(
     val id: String,
     val role: SemanticRole,
@@ -41,7 +46,12 @@ data class SemanticElement(
     val horizontalPosition: RelativeHorizontalPosition = RelativeHorizontalPosition.CENTER,
     val verticalPosition: RelativeVerticalPosition = RelativeVerticalPosition.MIDDLE,
     val possibleActions: Set<ToolCapability> = if (actionable) setOf(ToolCapability.ACCESSIBILITY_CLICK) else emptySet(),
-    val confidence: Double = if (label.isBlank()) .5 else .9
+    val confidence: Double = if (label.isBlank()) .5 else .9,
+    val containerId: String? = groupId,
+    val logicalIndex: Int? = null,
+    val parentRole: SemanticRole? = null,
+    val targetFamily: SemanticTargetFamily = SemanticTargetFamily.UNKNOWN,
+    val navigationElement: Boolean = false
 ) {
     val centerX get() = (left + right) / 2
     val centerY get() = (top + bottom) / 2
@@ -119,5 +129,33 @@ object SemanticRoleClassifier {
             clazz.contains("text") -> SemanticRole.TEXT
             else -> SemanticRole.UNKNOWN
         }
+    }
+}
+
+object SemanticElementSemantics {
+    private val navigationLabels = Regex(
+        "^(?:home|menu|back|previous|next|sign in|log in|tabs?|all|images|videos|news|maps|shopping)$",
+        RegexOption.IGNORE_CASE
+    )
+
+    fun isNavigation(label: String, role: SemanticRole): Boolean =
+        role in setOf(SemanticRole.NAVIGATION, SemanticRole.TAB, SemanticRole.BACK, SemanticRole.MENU) ||
+            navigationLabels.matches(label.trim())
+
+    fun family(role: SemanticRole, label: String, navigation: Boolean = isNavigation(label, role)): SemanticTargetFamily = when {
+        navigation -> SemanticTargetFamily.NAVIGATION
+        role == SemanticRole.RESULT || role in setOf(SemanticRole.VIDEO, SemanticRole.VIDEO_CARD) -> SemanticTargetFamily.RESULT
+        role == SemanticRole.CARD -> SemanticTargetFamily.CARD
+        role == SemanticRole.LIST_ITEM -> SemanticTargetFamily.LIST_ITEM
+        role == SemanticRole.SETTINGS -> SemanticTargetFamily.SETTINGS
+        role == SemanticRole.ICON || role == SemanticRole.IMAGE -> SemanticTargetFamily.ICON
+        role == SemanticRole.BUTTON -> SemanticTargetFamily.BUTTON
+        role == SemanticRole.TAB -> SemanticTargetFamily.TAB
+        role == SemanticRole.MENU -> SemanticTargetFamily.MENU
+        role == SemanticRole.BACK -> SemanticTargetFamily.BACK
+        role == SemanticRole.CLOSE -> SemanticTargetFamily.CLOSE
+        role == SemanticRole.TEXT_INPUT -> SemanticTargetFamily.INPUT
+        role == SemanticRole.LINK && label.trim().length >= 4 -> SemanticTargetFamily.RESULT
+        else -> SemanticTargetFamily.UNKNOWN
     }
 }

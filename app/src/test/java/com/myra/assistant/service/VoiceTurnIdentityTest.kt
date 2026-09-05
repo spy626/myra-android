@@ -115,4 +115,25 @@ class VoiceTurnIdentityTest {
         candidates.discardForTurn(5L)
         assertNull(candidates.current())
     }
+
+    @Test fun independentVadCycleCannotReuseAnUnfinalizedTurnIndefinitely() {
+        assertTrue(SpeechCycleBoundaryPolicy.startsNewTurn(
+            activeTurnId = 6L,
+            previousSpeechEndedAt = 1_000L,
+            newSpeechStartedAt = 2_000L,
+            transcriptStarted = false
+        ))
+        assertTrue(!SpeechCycleBoundaryPolicy.startsNewTurn(
+            activeTurnId = 6L,
+            previousSpeechEndedAt = 1_000L,
+            newSpeechStartedAt = 1_200L,
+            transcriptStarted = false
+        ))
+        assertTrue(!SpeechCycleBoundaryPolicy.startsNewTurn(
+            activeTurnId = 6L,
+            previousSpeechEndedAt = 1_000L,
+            newSpeechStartedAt = 2_000L,
+            transcriptStarted = true
+        ))
+    }
 }

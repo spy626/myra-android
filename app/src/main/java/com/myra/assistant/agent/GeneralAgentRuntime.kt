@@ -186,7 +186,13 @@ class GeneralAgentPlanner {
         ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH -> ExpectedOutcome(
             ExpectedOutcomeType.RESULT_SET_CHANGED, "search results visible", intent.relevantApp, intent.textHint
         )
-        ToolCapability.ACCESSIBILITY_CLICK, ToolCapability.GESTURE -> ExpectedOutcome(ExpectedOutcomeType.TARGET_STATE_CHANGED, intent.desiredEndState ?: "target state or navigation changes", role = intent.roleHint)
+        ToolCapability.ACCESSIBILITY_CLICK, ToolCapability.GESTURE -> when (intent.roleHint) {
+            SemanticRole.CLOSE -> ExpectedOutcome(ExpectedOutcomeType.ELEMENT_DISAPPEARED, "dialog or close target disappears", text = intent.textHint, role = SemanticRole.CLOSE)
+            SemanticRole.SETTINGS -> ExpectedOutcome(ExpectedOutcomeType.TARGET_STATE_CHANGED, "settings or menu destination appears", text = intent.textHint, role = SemanticRole.SETTINGS)
+            SemanticRole.RESULT, SemanticRole.LINK, SemanticRole.CARD, SemanticRole.LIST_ITEM ->
+                ExpectedOutcome(ExpectedOutcomeType.TARGET_STATE_CHANGED, "selected result detail or article appears", text = intent.textHint, role = SemanticRole.RESULT)
+            else -> ExpectedOutcome(ExpectedOutcomeType.TARGET_STATE_CHANGED, intent.desiredEndState ?: "target state or navigation changes", text = intent.textHint, role = intent.roleHint)
+        }
         ToolCapability.BACK, ToolCapability.HOME -> ExpectedOutcome(ExpectedOutcomeType.NAVIGATION_OCCURRED, "navigation changes current screen")
         else -> ExpectedOutcome(ExpectedOutcomeType.SCREEN_CHANGED, intent.desiredEndState ?: "screen reflects requested result")
     }
@@ -306,8 +312,23 @@ class GeneralVerifier {
             ExpectedOutcomeType.INPUT_CONTAINS -> expected.text?.let { needle -> after.scene.semanticElements.any { it.role == SemanticRole.TEXT_INPUT && it.label.contains(needle, true) } } == true
             ExpectedOutcomeType.MODAL_APPEARED -> after.scene.modal != ModalKind.NONE
             ExpectedOutcomeType.TARGET_STATE_CHANGED -> {
-                val expectedRolePresent = expected.role?.let { role -> after.scene.semanticElements.any { it.role == role } } ?: true
-                (packageChanged || windowChanged || generationChanged || majorSemanticChange) && expectedRolePresent
+                val navigationEvidence = packageChanged || windowChanged || generationChanged || majorSemanticChange
+                val destinationText = expected.text?.let { needle ->
+                    val tokens = needle.lowercase().split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
+                        .filter { it.length >= 3 }
+                    tokens.isNotEmpty() && after.scene.semanticElements.any { element ->
+                        tokens.any { element.label.lowercase().contains(it) }
+                    }
+                } ?: false
+                val roleEvidence = when (expected.role) {
+                    SemanticRole.SETTINGS -> after.scene.semanticElements.any {
+                        it.role == SemanticRole.SETTINGS || it.label.contains("settings", true) || it.label.contains("preferences", true)
+                    }
+                    SemanticRole.RESULT -> after.scene.screenType.contains("ARTICLE", true) || destinationText
+                    null -> true
+                    else -> after.scene.semanticElements.any { it.role == expected.role }
+                }
+                navigationEvidence && (roleEvidence || destinationText)
             }
             ExpectedOutcomeType.RESULT_SET_CHANGED -> {
                 val packageMatches = expected.packageName == null || after.scene.externalForegroundPackage == expected.packageName
@@ -333,7 +354,7 @@ class GeneralVerifier {
         val unchanged = !packageChanged && !generationChanged && !elementsChanged
         val wrongPackage = expected.packageName != null && after.scene.externalForegroundPackage != expected.packageName
         return GeneralVerificationResult(
-            if (wrongPackage || expected.type == ExpectedOutcomeType.TARGET_STATE_CHANGED) GeneralVerificationStatus.FAILURE
+            if (wrongPackage || (expected.type == ExpectedOutcomeType.TARGET_STATE_CHANGED && !unchanged)) GeneralVerificationStatus.FAILURE
             else GeneralVerificationStatus.UNKNOWN,
             expected.summary,
             if (unchanged) "no observable change" else "screen changed differently",
@@ -398,6 +419,15 @@ object ScrollVerificationResamplePolicy {
 
     fun shouldResample(dispatchAccepted: Boolean, movementProven: Boolean, resampleCount: Int): Boolean =
         dispatchAccepted && !movementProven && resampleCount < MAX_RESAMPLES
+}
+
+/** A settling Accessibility tree is observed again; this never routes a second tap. */
+object SemanticVerificationResamplePolicy {
+    const val MAX_RESAMPLES = 1
+    const val DELAY_MS = 250L
+
+    fun shouldResample(dispatchAccepted: Boolean, status: GeneralVerificationStatus, resampleCount: Int): Boolean =
+        dispatchAccepted && status != GeneralVerificationStatus.SUCCESS && resampleCount < MAX_RESAMPLES
 }
 
 sealed interface RecoveryDecision {

@@ -203,5 +203,4 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
         )
     }
 }
-
 object WorkingTaskRuntime { val store = WorkingTaskContextStore() }
