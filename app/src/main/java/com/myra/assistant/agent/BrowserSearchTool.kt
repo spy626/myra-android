@@ -49,8 +49,8 @@ object SearchDestinationResolver {
         currentPackage: String?,
         activeTaskPackage: String?
     ): SearchResolution {
-        request.explicitDestination?.let {
-            return SearchResolution(it, "explicit_destination")
+        if (request.explicitDestination == SearchDestination.YOUTUBE) {
+            return SearchResolution(SearchDestination.YOUTUBE, "explicit_destination")
         }
         val currentIsAssistantTransition = currentPackage in setOf("com.myra.assistant", "com.android.systemui")
         val contextualPackage = when {
@@ -58,7 +58,7 @@ object SearchDestinationResolver {
             activeTaskPackage == currentPackage -> activeTaskPackage
             else -> currentPackage // Actual external foreground wins over stale task state.
         }
-        if (contextualPackage == "com.google.android.youtube") {
+        if (contextualPackage == "com.google.android.youtube" && request.explicitDestination == null) {
             return SearchResolution(SearchDestination.YOUTUBE, "current_youtube_context", targetPackage = contextualPackage)
         }
         if (contextualPackage == "com.google.android.googlequicksearchbox") {
