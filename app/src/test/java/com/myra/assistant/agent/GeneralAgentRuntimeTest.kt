@@ -55,7 +55,7 @@ class GeneralAgentRuntimeTest {
         runtime.recordAction(step, GeneralActionResult(true), before)
         val completed = runtime.completeFromAdapter(GeneralVerificationStatus.SUCCESS, "search results visible")
         assertEquals(task.id, completed?.id)
-        assertEquals(44, completed?.turnId)
+        assertEquals(44L, completed?.turnId)
         assertEquals(AgentRuntimeStatus.COMPLETED, completed?.status)
         assertNull(runtime.activeTask())
     }
