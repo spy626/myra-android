@@ -49,7 +49,8 @@ class GeneralAgentRuntimeTest {
 
     @Test fun wrong_result_rejects_target_and_recovery_is_bounded() {
         val runtime = GeneralAgentRuntime(recovery = GeneralRecoveryEngine(maxRetries = 0), now = { 5 })
-        val task = runtime.start(5, intent(ToolCapability.ACCESSIBILITY_CLICK))!!
+        val requested = intent(ToolCapability.ACCESSIBILITY_CLICK).copy(roleHint = SemanticRole.VIDEO)
+        val task = runtime.start(5, requested)!!
         val before = perception(task.id, scene("pkg", 1, listOf(element("target"))))
         val step = (runtime.next(before) as PlannerResult.Next).step
         runtime.recordAction(step, GeneralActionResult(true, "target"), before)

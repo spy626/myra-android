@@ -228,7 +228,10 @@ class GeneralVerifier {
             ExpectedOutcomeType.TEXT_PRESENT -> expected.text?.let { needle -> after.scene.semanticElements.any { it.label.contains(needle, true) } } == true
             ExpectedOutcomeType.INPUT_CONTAINS -> expected.text?.let { needle -> after.scene.semanticElements.any { it.role == SemanticRole.TEXT_INPUT && it.label.contains(needle, true) } } == true
             ExpectedOutcomeType.MODAL_APPEARED -> after.scene.modal != ModalKind.NONE
-            ExpectedOutcomeType.TARGET_STATE_CHANGED -> packageChanged || generationChanged || elementsChanged
+            ExpectedOutcomeType.TARGET_STATE_CHANGED -> {
+                val expectedRolePresent = expected.role?.let { role -> after.scene.semanticElements.any { it.role == role } } ?: true
+                (packageChanged || generationChanged || elementsChanged) && expectedRolePresent
+            }
             ExpectedOutcomeType.NAVIGATION_OCCURRED, ExpectedOutcomeType.SCREEN_CHANGED,
             ExpectedOutcomeType.SCREEN_TYPE_CHANGED, ExpectedOutcomeType.RESULT_SET_CHANGED,
             ExpectedOutcomeType.SCROLL_CHANGED -> packageChanged || generationChanged || elementsChanged
