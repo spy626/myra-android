@@ -68,7 +68,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
             requiredCapabilities = capabilities,
             parameters = when (goal) {
                 AgentGoalType.SCROLL -> mapOf("direction" to resolveScrollDirection(request, working))
-                else -> BrowserSearchRequestParser.parse(request)?.let { mapOf("query" to it.query) }.orEmpty()
+                else -> FinalSearchHandoff.parse(request)?.let { mapOf("query" to it.query) }.orEmpty()
             },
             confidence = decision.confidence,
             needsClarification = decision.intent == TurnIntent.CLARIFICATION
@@ -168,7 +168,7 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
         val text = normalize(raw)
         return when {
             decision?.goal == "SCROLL" -> AgentGoalType.SCROLL
-            decision?.authorizesPhoneActions == true && BrowserSearchRequestParser.parse(raw) != null -> AgentGoalType.BROWSER_SEARCH
+            decision?.authorizesPhoneActions == true && FinalSearchHandoff.parse(raw) != null -> AgentGoalType.BROWSER_SEARCH
             decision?.intent == TurnIntent.MULTI_STEP_GOAL -> AgentGoalType.WEB_SEARCH
             Regex("\\b(?:scroll|niche|neeche|upar)\\b").containsMatchIn(text) ||
                 text.split(' ').any { it in setOf("नीचे", "ऊपर") } -> AgentGoalType.SCROLL

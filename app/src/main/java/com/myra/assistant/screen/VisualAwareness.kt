@@ -120,6 +120,7 @@ object AccessibilityVisualCache {
         currentSceneRevision: Long = ScreenSceneAwarenessStore.currentRevision()
     ): AccessibilityScreenshot? {
         val current = entry ?: return null
+        if (ScreenSceneAwarenessStore.hasPendingMutation()) return null
         val frame = current.screenshot
         return frame.takeIf {
             it.packageName == packageName && it.windowId == windowId &&

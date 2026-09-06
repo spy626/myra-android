@@ -32,6 +32,11 @@
                 android:text="RESUME" android:enabled="false" android:backgroundTint="#242124" android:textColor="#FFFFFF" />
         </LinearLayout>
         <TextView style="@style/MyraLabel" android:text="VISION &amp; PRIVACY" />
+        <Switch android:id="@+id/eyesSwitch" android:layout_width="match_parent" android:layout_height="52dp"
+            android:text="Eyes / Visual Awareness" android:textColor="#EEEEEE" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="See the current screen when needed. Share Screen separately starts continuous screen sharing."
+            android:textColor="#9B949B" />
         <Switch android:id="@+id/visionSwitch" android:layout_width="match_parent" android:layout_height="52dp"
             android:text="Screen Vision" android:textColor="#EEEEEE" />
         <Switch android:id="@+id/learningSwitch" android:layout_width="match_parent" android:layout_height="52dp"

@@ -296,6 +296,7 @@ class MyraVoiceService : Service() {
     private var speechActivityEndedAt = 0L
     private var speechTimingTurnId = 0L
     private val turnLatency = TurnLatencyTelemetry(::voiceLog)
+    private val scrollContinuationTelemetry = com.myra.assistant.diagnostics.ScrollContinuationTelemetry(::voiceLog)
     private val voiceTurnIdentities = VoiceTurnIdentityStore()
     private val pendingScrollCandidates = PendingScrollCandidateStore()
     private var inputTurnStartedAt = 0L
@@ -606,8 +607,8 @@ class MyraVoiceService : Service() {
                             audio?.queueAudio(pcm, modelGenerationId, "MODEL")
                             voiceLog(
                                 "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL " +
-                                    "route=ordinary_model accepted=true firstModelAudioAcceptedAt=$audioReceivedAt " +
-                                    "speechEndToFirstAcceptedModelAudioMs=${if (speechActivityEndedAt > 0L) audioReceivedAt - speechActivityEndedAt else -1L} bytes=${pcm.size}"
+                                    "route=ordinary_model accepted=true firstModelAudioAcceptedAt=${turnLatency.firstAcceptedAudioAt(activeTurnId, modelGenerationId)} " +
+                                    "speechEndToFirstAcceptedModelAudioMs=${turnLatency.firstAcceptedAudioAt(activeTurnId, modelGenerationId)?.let { if (speechActivityEndedAt > 0 && it >= speechActivityEndedAt) (it - speechActivityEndedAt).toString() else "NA" } ?: "NA"} bytes=${pcm.size}"
                             )
                         }
                         ModelAudioDecision.BUFFER_UNTIL_SPEECH_END -> {
@@ -1285,10 +1286,16 @@ class MyraVoiceService : Service() {
                         "authoritativeTurnToTranscriptMs=${if (speechActivityEndedAt > 0L) latestTurnAcceptedAt - speechActivityEndedAt else -1L}"
                 )
                 latestActionDispatchedAt = 0L
+                val previousScrollContext = WorkingTaskRuntime.store.snapshot().lastCompletedTask
                 val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
                     normalizedFinalUserText, activityContext, visualAwarenessPreferences.enabled, activeTurnId
                 )
                 latestIntentDecidedAt = android.os.SystemClock.elapsedRealtime()
+                scrollContinuationTelemetry.resolution(activeTurnId, normalizedFinalUserText, latestIntentDecidedAt,
+                    activityContext?.packageName, activityContext?.windowId,
+                    previousScrollContext?.action == ToolCapability.ACCESSIBILITY_SCROLL.name &&
+                        previousScrollContext.completionState == TaskCompletionState.SUCCESS,
+                    turnDecision.intent.name)
                 turnLatency.record(activeTurnId, Field.INTENT_RESOLVED, latestIntentDecidedAt)
                 voiceLog(
                     "turnIntentResolved turnId=$activeTurnId intent=${turnDecision.intent} at=$latestIntentDecidedAt " +
@@ -2026,36 +2033,16 @@ class MyraVoiceService : Service() {
         }
         val target = args.optString("target").trim()
         val query = args.optString("query").trim()
-        val pendingSearch = BrowserSearchRequestParser.parse(guardedText)
-        if (pendingSearch != null && action in setOf("YOUTUBE_SEARCH", "PLAY_YOUTUBE", "OPEN_APP")) {
-            // Gemini's streaming tool proposal is not a search destination owner. The
-            // final transcript is resolved once by executeUnifiedBrowserSearch().
-            voiceLog(
-                "SEARCH_EXECUTOR_ENTRY class=MyraVoiceService method=handleSemanticToolCall " +
-                    "turnId=$activeTurnId finalTranscript=false query=${pendingSearch.query.take(120)} " +
-                    "destination=CANDIDATE foregroundPackage=${AccessibilityHelperService.instance?.currentForegroundContext()?.packageName} " +
-                    "decision=REJECT_PRE_FINAL"
-            )
+        val pendingSearch = com.myra.assistant.agent.FinalSearchHandoff.parse(guardedText)
+        if (action in setOf("YOUTUBE_SEARCH", "WEB_SEARCH", "BROWSER_SEARCH") ||
+            pendingSearch != null && action in setOf("PLAY_YOUTUBE", "OPEN_APP")
+        ) {
+            voiceLog("SEARCH_PROPOSAL_HELD_FOR_FINAL turnId=$activeTurnId candidateCapability=$action " +
+                "queryLength=${pendingSearch?.query?.length ?: query.length} decision=WAIT_FOR_FINAL executed=false")
+            // Reserve only this turn's response; no failure, speech, reset or physical action.
             suppressModelForTurn = true
             output.clear()
-            live?.sendToolResponse(
-                id, functionName, false,
-                "Search execution is owned by the final unified search task"
-            )
-            return
-        }
-        if (action == "YOUTUBE_SEARCH" && !SearchExecutionPolicy.mayExecute(authoritativeFinalTranscript = false)) {
-            // Search destination is authorized only from the complete final transcript.
-            // A speculative Live tool call may arrive while ASR is still partial and must
-            // never choose YouTube before SearchDestinationResolver sees current context.
-            voiceLog(
-                "search_execution_failed turnId=$activeTurnId reason=model_tool_before_final_authorization " +
-                    "candidate=YOUTUBE_SEARCH queryLength=${query.length}"
-            )
-            live?.sendToolResponse(
-                id, functionName, false,
-                "Search waits for the final authoritative transcript and contextual destination resolution"
-            )
+            live?.sendToolHeld(id, functionName)
             return
         }
         val command: AppCommand? = when (action) {
@@ -2449,7 +2436,10 @@ class MyraVoiceService : Service() {
             }
         }, VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         val accepted = accessibility.requestFreshVisualScreenshot(
-            ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS,
+            if (com.myra.assistant.screen.ScreenStateFollowUpClassifier.isCurrentScreenFollowUp(question)) 0L
+                else ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS,
+            fallbackMaxAgeMs = if (com.myra.assistant.screen.ScreenStateFollowUpClassifier.isCurrentScreenFollowUp(question)) 0L
+                else VisualScreenshotTimeoutPolicy.SAFE_FALLBACK_MAX_AGE_MS,
             requestToken = queryId,
             isCurrentRequest = {
                 acquisitionGate.mayDispatch(fastVisualTurns.current()?.id, android.os.SystemClock.elapsedRealtime())
@@ -3643,6 +3633,11 @@ class MyraVoiceService : Service() {
         turnLatency.record(task.turnId, Field.ACTION_STARTED, actionStartedAt)
         val result = adapter.execute(step, actionBefore)
         val actionReturnedAt = android.os.SystemClock.elapsedRealtime()
+        if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
+            scrollContinuationTelemetry.dispatched(task.turnId, task.id, task.intent.parameters["direction"],
+                result.accepted, actionReturnedAt, actionBefore.scene.externalForegroundPackage,
+                actionBefore.scene.windowId, actionBefore.scene.generation)
+        }
         turnLatency.record(task.turnId, Field.ACTION_RETURNED, actionReturnedAt)
         turnLatency.record(task.turnId, Field.OBSERVATION_SCHEDULED, actionReturnedAt)
         runtime.recordAction(step, result, actionBefore)
@@ -3725,6 +3720,7 @@ class MyraVoiceService : Service() {
             }
             val (verification, recovery) = runtime.verify(after)
             val verificationAt = android.os.SystemClock.elapsedRealtime()
+            if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) scrollContinuationTelemetry.verified(task.id, verification.status.name)
             turnLatency.record(task.turnId, Field.VERIFICATION_COMPLETED, verificationAt)
             turnLatency.logBreakdown(task.turnId, step.capability.name)
             (runtime.activeTask() ?: runtime.lastCompletedTask())?.let { WorkingTaskRuntime.store.syncRuntime(it, after.scene) }
@@ -3814,7 +3810,23 @@ class MyraVoiceService : Service() {
     }
 
     private fun executeUnifiedBrowserSearch(raw: String): Boolean {
-        val request = BrowserSearchRequestParser.parse(raw) ?: return false
+        val request = com.myra.assistant.agent.FinalSearchHandoff.parse(raw) ?: run {
+            val task = UnifiedLyraAgentRuntime.agent.currentTask()
+            if (task?.interpretedGoal !in setOf(com.myra.assistant.agent.AgentGoalType.BROWSER_SEARCH,
+                    com.myra.assistant.agent.AgentGoalType.WEB_SEARCH)) return false
+            suppressModelForTurn = true
+            output.clear()
+            voiceLog("SEARCH_FINAL_HANDOFF turnId=$activeTurnId decision=CLARIFY reason=missing_query noExecution=true")
+            queueLocalSpeech("Kya search karna hai?", allowUntranscribedAudio = false)
+            return true
+        }
+        val authorizedTask = GeneralAgentRuntimeStore.runtime.activeTask()
+        if (authorizedTask?.turnId != activeTurnId || ToolCapability.BROWSER_SEARCH !in authorizedTask.intent.requiredCapabilities) {
+            voiceLog("SEARCH_FINAL_HANDOFF turnId=$activeTurnId decision=BLOCK reason=runtime_identity_or_capability")
+            suppressModelForTurn = true
+            output.clear()
+            return true
+        }
         val accessibility = AccessibilityHelperService.instance
         val freshForeground = accessibility?.currentForegroundContext()
         val working = WorkingTaskRuntime.store.snapshot()
@@ -3938,6 +3950,12 @@ class MyraVoiceService : Service() {
                 voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=true result=UNKNOWN")
             }
             SearchVerification.FAILURE -> {
+                val evidence = GeneralAgentRuntimeStore.runtime.lastCompletedTask()
+                if (evidence?.turnId != turnId || evidence.actionHistory.none { it.capability == ToolCapability.BROWSER_SEARCH }) {
+                    voiceLog("SEARCH_FAILURE_CLAIM_BLOCKED turnId=$turnId reason=no_same_turn_executor_attempt")
+                    emitState("Sun rahi hoon…")
+                    return
+                }
                 check(SearchTaskResultPolicy.maySpeakFailure(verification))
                 val destination = if (completed.destination == SearchDestination.YOUTUBE) "YouTube" else "Browser"
                 val message = "$destination search start nahi ho paayi."
@@ -4601,7 +4619,7 @@ class MyraVoiceService : Service() {
         turnLatency.record(activeTurnId, Field.FIRST_ACCEPTED_MODEL_AUDIO, acceptedAt, generationId)
         voiceLog(
             "early_model_audio_released turnId=$activeTurnId modelGenerationId=$generationId " +
-                "firstModelAudioAcceptedAt=$acceptedAt firstPlaybackAt=$acceptedAt " +
+                "firstModelAudioAcceptedAt=${turnLatency.firstAcceptedAudioAt(activeTurnId, generationId)} firstPlaybackAt=$acceptedAt " +
                 "userTurnCompleteToFirstPlaybackMs=${acceptedAt - speechActivityEndedAt} chunks=${chunks.size}"
         )
     }

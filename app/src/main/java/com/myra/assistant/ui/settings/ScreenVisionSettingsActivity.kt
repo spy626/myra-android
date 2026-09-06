@@ -12,6 +12,8 @@ import com.myra.assistant.databinding.ActivityScreenVisionSettingsBinding
 import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenShareState
 import com.myra.assistant.screen.ScreenVisionPreferences
+import com.myra.assistant.screen.VisualAwarenessPreferences
+import com.myra.assistant.screen.AccessibilityVisualCache
 
 class ScreenVisionSettingsActivity : AppCompatActivity() {
     private lateinit var binding: ActivityScreenVisionSettingsBinding
@@ -41,6 +43,12 @@ class ScreenVisionSettingsActivity : AppCompatActivity() {
         binding = ActivityScreenVisionSettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)
         preferences = ScreenVisionPreferences(this)
+        val eyes = VisualAwarenessPreferences(this)
+        binding.eyesSwitch.isChecked = eyes.enabled
+        binding.eyesSwitch.setOnCheckedChangeListener { _, checked ->
+            eyes.enabled = checked
+            if (!checked) AccessibilityVisualCache.invalidate()
+        }
         binding.backButton.setOnClickListener { finish() }
         binding.visionSwitch.isChecked = preferences.visionEnabled
         binding.learningSwitch.isChecked = preferences.automaticLearning

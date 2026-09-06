@@ -29,7 +29,9 @@ data class TurnLatencySnapshot(
 /** Passive, per-turn timing only. It never authorizes or delays a turn. */
 class TurnLatencyTelemetry(private val log: (String) -> Unit) {
     private val turns = LinkedHashMap<Long, TurnLatencySnapshot>()
-    private val acceptedAudioGenerations = mutableSetOf<Pair<Long, Long>>()
+    private val acceptedAudioGenerations = mutableMapOf<Pair<Long, Long>, Long>()
+    @Synchronized fun firstAcceptedAudioAt(turnId: Long, generationId: Long): Long? =
+        acceptedAudioGenerations[turnId to generationId]
 
     @Synchronized fun begin(turnId: Long, at: Long): TurnLatencySnapshot =
         turns.getOrPut(turnId) { TurnLatencySnapshot(turnId) }.also { it.speechActivityStartedAt = at }
@@ -46,7 +48,7 @@ class TurnLatencyTelemetry(private val log: (String) -> Unit) {
             Field.FIRST_TOOL_PROPOSAL -> value.firstToolProposalAt = value.firstToolProposalAt ?: at
             Field.FIRST_MODEL_AUDIO_PACKET -> value.firstModelAudioPacketAt = value.firstModelAudioPacketAt ?: at
             Field.FIRST_ACCEPTED_MODEL_AUDIO -> {
-                if (acceptedAudioGenerations.add(turnId to generationId)) {
+                if (acceptedAudioGenerations.putIfAbsent(turnId to generationId, at) == null) {
                     value.firstAcceptedModelAudioAt = value.firstAcceptedModelAudioAt ?: at
                     log("FIRST_ACCEPTED_MODEL_AUDIO_AT turnId=$turnId generationId=$generationId timestamp=$at")
                 }
@@ -101,4 +103,3 @@ class TurnLatencyTelemetry(private val log: (String) -> Unit) {
         VERIFICATION_STARTED, VERIFICATION_COMPLETED
     }
 }
-

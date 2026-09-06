@@ -83,6 +83,8 @@ data class YouTubeSemanticActionResult(
 
 class AccessibilityHelperService : AccessibilityService() {
     private val activityObservationCoalescer = ActivityObservationCoalescer()
+    private val screenRefreshGate = com.myra.assistant.screen.ScreenRefreshGate()
+    private val pendingScreenRefresh = Runnable { refreshScreenContext() }
     private val screenContextLoad = ScreenContextLoadTelemetry(
         clock = { android.os.SystemClock.elapsedRealtime() },
         log = VoicePipelineLogger::debug
@@ -113,9 +115,9 @@ class AccessibilityHelperService : AccessibilityService() {
         override fun run() {
             // Accessibility context is the normal always-lightweight observation path.
             // MediaProjection state must not gate foreground/window awareness.
-            refreshScreenContext()
             val now = android.os.SystemClock.elapsedRealtime()
             val scrolling = now - com.myra.assistant.screen.ScreenContextStore.snapshot().lastScrollAt <= 1_000L
+            if (screenRefreshGate.watcherNeeded(now, if (scrolling) 300L else 1_000L)) refreshScreenContext()
             screenWatcherHandler.postDelayed(this, if (scrolling) 300L else 1_000L)
         }
     }
@@ -140,12 +142,14 @@ class AccessibilityHelperService : AccessibilityService() {
                 com.myra.assistant.screen.ScreenContextStore.markScrolling(accessibilitySnapshotAt)
             }
             ScreenCaptureService.markScreenDirty(reason)
-            refreshScreenContext(accessibilitySnapshotAt)
+            val delay = screenRefreshGate.requestEvent(accessibilitySnapshotAt)
+            if (delay != null) screenWatcherHandler.postDelayed(pendingScreenRefresh, delay)
         }
     }
     override fun onInterrupt() = Unit
     override fun onDestroy() {
         screenWatcherHandler.removeCallbacks(screenWatcher)
+        screenWatcherHandler.removeCallbacks(pendingScreenRefresh)
         visualTimeoutExecutor.shutdownNow()
         visualProcessingExecutor.shutdownNow()
         AccessibilityVisualCache.invalidate()
@@ -1085,7 +1089,7 @@ class AccessibilityHelperService : AccessibilityService() {
         "${it.label.lowercase(Locale.ROOT)}:${it.bounds.centerX()}:${it.bounds.centerY()}"
     }
 
-    fun detectContentType(): com.myra.assistant.screen.ScreenContentType {
+    fun detectContentType(observedElements: List<VisibleScreenElement>? = null): com.myra.assistant.screen.ScreenContentType {
         val root = rootInActiveWindow ?: return com.myra.assistant.screen.ScreenContentType.OTHER
         val packageName = root.packageName?.toString().orEmpty().lowercase(Locale.ROOT)
         if (packageName == YOUTUBE_PACKAGE || packageName.contains("youtube")) {
@@ -1095,7 +1099,7 @@ class AccessibilityHelperService : AccessibilityService() {
             packageName.contains("twitter") || packageName.contains("tiktok") || packageName.contains("reddit")
         ) return com.myra.assistant.screen.ScreenContentType.SOCIAL_FEED
 
-        val elements = visibleElements(160)
+        val elements = observedElements ?: visibleElements(160)
         val text = elements.joinToString(" ") { it.label }.lowercase(Locale.ROOT)
         val articleSignals = listOf("article", "published", "updated", "minute read", "read time", "by ")
             .count(text::contains)
@@ -1296,9 +1300,14 @@ class AccessibilityHelperService : AccessibilityService() {
         observedAt: Long = android.os.SystemClock.elapsedRealtime(),
         force: Boolean = false
     ) {
+        screenWatcherHandler.removeCallbacks(pendingScreenRefresh)
+        screenRefreshGate.started()
         screenContextLoad.refreshRequested()
         val refreshStartedAt = android.os.SystemClock.elapsedRealtime()
-        val root = rootInActiveWindow ?: return
+        val root = rootInActiveWindow ?: run {
+            screenRefreshGate.completed(android.os.SystemClock.elapsedRealtime())
+            return
+        }
         val packageName = root.packageName?.toString()
         val appName = packageName?.let { value ->
             runCatching {
@@ -1307,7 +1316,8 @@ class AccessibilityHelperService : AccessibilityService() {
             }.getOrNull()
         }
         val treeStartedAt = android.os.SystemClock.elapsedRealtime()
-        val elements = visibleElements(120)
+        val observedElements = visibleElements(160)
+        val elements = observedElements.take(120)
         val treeDurationMs = android.os.SystemClock.elapsedRealtime() - treeStartedAt
         val foreground = currentForegroundContext()
         if (foreground != null) {
@@ -1322,14 +1332,15 @@ class AccessibilityHelperService : AccessibilityService() {
             }
             val observation = CurrentActivityContext(
                 packageName = foreground.packageName, appLabel = foreground.appName,
-                screenType = detectContentType().name, windowId = foreground.windowId,
+                screenType = detectContentType(observedElements).name, windowId = foreground.windowId,
                 generation = foreground.generation, visibleElements = semantic,
                 confidence = if (semantic.isEmpty()) 0.25 else 0.9, timestamp = observedAt
             )
             val scene = ScreenSceneAwarenessStore.publish(
                 observation,
                 dialogVisible = root.className?.toString().orEmpty().contains("dialog", true),
-                scrollObservedAt = com.myra.assistant.screen.ScreenContextStore.snapshot().lastScrollAt.takeIf { it > 0L }
+                scrollObservedAt = com.myra.assistant.screen.ScreenContextStore.snapshot().lastScrollAt.takeIf { it > 0L },
+                density = resources.displayMetrics.density
             )
             com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
                 "SCREEN_SCENE_READY package=${scene.foregroundPackage} windowId=${scene.windowId} " +
@@ -1337,6 +1348,7 @@ class AccessibilityHelperService : AccessibilityService() {
                     "elementCount=${scene.visibleElements.size} delta=${ScreenSceneAwarenessStore.lastDelta()?.changes?.joinToString(",") { it.type.name }.orEmpty()}"
             )
             if (!activityObservationCoalescer.shouldPublish(observation, force)) {
+                screenRefreshGate.completed(android.os.SystemClock.elapsedRealtime())
                 screenContextLoad.refreshExecuted(
                     android.os.SystemClock.elapsedRealtime() - refreshStartedAt, treeDurationMs, true
                 )
@@ -1365,6 +1377,7 @@ class AccessibilityHelperService : AccessibilityService() {
         screenContextLoad.refreshExecuted(
             android.os.SystemClock.elapsedRealtime() - refreshStartedAt, treeDurationMs, false
         )
+        screenRefreshGate.completed(android.os.SystemClock.elapsedRealtime())
     }
 
     fun tapVisibleTarget(

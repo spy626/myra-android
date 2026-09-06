@@ -260,6 +260,16 @@ class GeminiLiveClient(
         )
     }
 
+    /** A held proposal is neither execution success nor failure. */
+    fun sendToolHeld(id: String, name: String) {
+        val response = JSONObject().put("result", "pending_authorization")
+            .put("decision", "WAIT_FOR_FINAL").put("executed", false)
+            .put("message", "No action attempted. Wait for Android final-turn owner. Do not report success or failure.")
+        val call = JSONObject().put("id", id).put("name", name).put("response", response)
+        sendWhenReady(JSONObject().put("toolResponse", JSONObject()
+            .put("functionResponses", JSONArray().put(call))).toString())
+    }
+
     private fun sendWhenReady(payload: String): Boolean {
         val active = socket
         if (!ready.get() || active == null) {

@@ -48,7 +48,8 @@ data class ScreenSceneSnapshot(
     val visualFrameGeneration: Long? = null,
     val sceneRevision: Long,
     val dialogVisible: Boolean = false,
-    val scrollObservedAt: Long? = null
+    val scrollObservedAt: Long? = null,
+    val density: Float = 1f
 )
 
 enum class SceneDeltaType {
@@ -116,12 +117,22 @@ object ScreenSceneDeltaAnalyzer {
         (oldGroups.keys + newGroups.keys).forEach { key ->
             val old = oldGroups[key].orEmpty().sortedWith(compareBy({ it.top }, { it.left }))
             val new = newGroups[key].orEmpty().sortedWith(compareBy({ it.top }, { it.left }))
-            val paired = minOf(old.size, new.size)
+            val remaining = new.toMutableList()
+            val matched = old.mapNotNull { before ->
+                // Duplicate labels are paired by nearest geometry, never enumeration index.
+                val after = remaining.minByOrNull {
+                    kotlin.math.abs(it.centerX - before.centerX).toLong() + kotlin.math.abs(it.centerY - before.centerY)
+                } ?: return@mapNotNull null
+                remaining.remove(after)
+                before to after
+            }
+            val paired = matched.size
             repeat(paired) { index ->
-                val before = old[index]
-                val after = new[index]
-                if (before.left != after.left || before.top != after.top ||
-                    before.right != after.right || before.bottom != after.bottom
+                val (before, after) = matched[index]
+                // Four dp (at least four pixels) ignores 1–2 px accessibility jitter.
+                val threshold = maxOf(4, (4 * current.density).toInt())
+                if (maxOf(kotlin.math.abs(before.left - after.left), kotlin.math.abs(before.top - after.top),
+                    kotlin.math.abs(before.right - after.right), kotlin.math.abs(before.bottom - after.bottom)) >= threshold
                 ) changes += SceneDeltaEvent(
                     SceneDeltaType.ELEMENT_MOVED, after.elementId,
                     before.horizontalPosition, after.horizontalPosition,
@@ -132,10 +143,7 @@ object ScreenSceneDeltaAnalyzer {
                 }
             }
             old.drop(paired).forEach { changes += SceneDeltaEvent(SceneDeltaType.ELEMENT_DISAPPEARED, it.elementId) }
-            new.drop(paired).forEach { changes += SceneDeltaEvent(SceneDeltaType.ELEMENT_APPEARED, it.elementId) }
-        }
-        if (changes.isEmpty() && previous.semanticSignature != current.semanticSignature) {
-            changes += SceneDeltaEvent(SceneDeltaType.UNKNOWN_CHANGE)
+            remaining.forEach { changes += SceneDeltaEvent(SceneDeltaType.ELEMENT_APPEARED, it.elementId) }
         }
         return SceneDelta(previous.sceneRevision, current.sceneRevision, changes)
     }
@@ -147,9 +155,12 @@ object ScreenSceneAwarenessStore {
     @Volatile private var delta: SceneDelta? = null
     @Volatile private var mutationRevision: Long = 0L
     @Volatile private var lastMutationReason: String = "initial"
+    @Volatile private var dirty = false
 
     @Synchronized fun markMutation(reason: String): Long {
-        mutationRevision += 1L
+        // Content events are hints, not proof. Keep frames unavailable until observed.
+        if (!dirty && !reason.startsWith("accessibility_")) mutationRevision += 1L
+        dirty = true
         lastMutationReason = reason
         return mutationRevision
     }
@@ -157,7 +168,8 @@ object ScreenSceneAwarenessStore {
     @Synchronized fun publish(
         context: CurrentActivityContext,
         dialogVisible: Boolean = false,
-        scrollObservedAt: Long? = null
+        scrollObservedAt: Long? = null,
+        density: Float = 1f
     ): ScreenSceneSnapshot {
         val old = current
         val elements = context.visibleElements.map(SemanticElement::toSceneElement)
@@ -168,17 +180,16 @@ object ScreenSceneAwarenessStore {
             context.timestamp, context.packageName, context.windowId, context.generation,
             signature, elements, context.screenshotReference?.capturedAt,
             context.screenshotReference?.let { context.generation }, mutationRevision,
-            dialogVisible, scrollObservedAt
+            dialogVisible, scrollObservedAt, density
         )
-        val structuralChange = old != null && (
-            old.foregroundPackage != draft.foregroundPackage || old.windowId != draft.windowId ||
-                old.semanticSignature != draft.semanticSignature || old.dialogVisible != draft.dialogVisible
-            )
+        val analysis = ScreenSceneDeltaAnalyzer.analyze(old, draft)
+        val structuralChange = analysis.changes.isNotEmpty()
         if (old == null || structuralChange && mutationRevision <= old.sceneRevision) mutationRevision += 1L
         val next = draft.copy(sceneRevision = mutationRevision)
         previous = old
         current = next
         delta = ScreenSceneDeltaAnalyzer.analyze(old, next)
+        dirty = false
         return next
     }
 
@@ -186,6 +197,7 @@ object ScreenSceneAwarenessStore {
     fun previous(): ScreenSceneSnapshot? = previous
     fun lastDelta(): SceneDelta? = delta
     fun currentRevision(): Long = mutationRevision
+    fun hasPendingMutation(): Boolean = dirty
     fun lastMutationReason(): String = lastMutationReason
 
     @Synchronized fun attachVisualFrame(capturedAt: Long, packageName: String, windowId: Int, generation: Long): Boolean {
@@ -203,6 +215,7 @@ object ScreenSceneAwarenessStore {
         delta = null
         mutationRevision = 0L
         lastMutationReason = "reset"
+        dirty = false
     }
 }
 
