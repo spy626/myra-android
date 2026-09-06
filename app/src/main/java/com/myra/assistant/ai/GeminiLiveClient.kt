@@ -30,6 +30,7 @@ class GeminiLiveClient(
     var onToolCall: ((String, String, JSONObject) -> Unit)? = null
     var onState: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
+    var onServerEvent: ((String, Long) -> Unit)? = null
 
     private val manualClose = AtomicBoolean(false)
     private val connectionState = GeminiConnectionStateMachine()
@@ -316,6 +317,7 @@ class GeminiLiveClient(
                 return
             }
             root.optJSONObject("toolCall")?.optJSONArray("functionCalls")?.let { calls ->
+                onServerEvent?.invoke("tool_call", modelGenerationId.get())
                 for (i in 0 until calls.length()) {
                     val call = calls.optJSONObject(i) ?: continue
                     val id = call.optString("id")
@@ -327,6 +329,7 @@ class GeminiLiveClient(
                 return
             }
             val content = root.optJSONObject("serverContent") ?: return
+            onServerEvent?.invoke("server_content", modelGenerationId.get())
             val parts = content.optJSONObject("modelTurn")?.optJSONArray("parts")
             if (parts != null) for (i in 0 until parts.length()) {
                 val data = parts.optJSONObject(i)?.optJSONObject("inlineData")?.optString("data")

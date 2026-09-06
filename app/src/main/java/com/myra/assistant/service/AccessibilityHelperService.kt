@@ -10,28 +10,18 @@ import android.net.Uri
 import android.graphics.Rect
 import android.graphics.Bitmap
 import android.graphics.Path
-import android.graphics.Color
-import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.os.Bundle
 import android.os.Build
 import android.provider.Settings
 import android.view.KeyEvent
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
 import android.view.Display
-import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.LinearLayout
-import android.widget.TextView
 import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.screen.VisibleScreenElement
 import com.myra.assistant.screen.ScreenCaptureService
-import com.myra.assistant.screen.ScreenShareState
 import com.myra.assistant.screen.ScreenTargetCandidate
 import com.myra.assistant.screen.ScreenTargetResolution
 import com.myra.assistant.screen.ScreenTargetResolver
@@ -51,6 +41,7 @@ import com.myra.assistant.screen.AccessibilityScreenshot
 import com.myra.assistant.screen.AccessibilityVisualCache
 import com.myra.assistant.screen.VisualFrameSource
 import com.myra.assistant.screen.VisualScreenshotSelection
+import com.myra.assistant.screen.ScreenSceneAwarenessStore
 import com.myra.assistant.agent.ActivityContextStore
 import com.myra.assistant.agent.ActivityObservationCoalescer
 import com.myra.assistant.agent.CurrentActivityContext
@@ -59,6 +50,7 @@ import com.myra.assistant.agent.SemanticRoleClassifier
 import com.myra.assistant.agent.ScreenshotReference
 import com.myra.assistant.agent.UnifiedLyraAgentRuntime
 import com.myra.assistant.diagnostics.VoicePipelineLogger
+import com.myra.assistant.diagnostics.ScreenContextLoadTelemetry
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.Locale
@@ -91,13 +83,14 @@ data class YouTubeSemanticActionResult(
 
 class AccessibilityHelperService : AccessibilityService() {
     private val activityObservationCoalescer = ActivityObservationCoalescer()
+    private val screenContextLoad = ScreenContextLoadTelemetry(
+        clock = { android.os.SystemClock.elapsedRealtime() },
+        log = VoicePipelineLogger::debug
+    )
     private var currentVideoQuery: String? = null
     private var previousVideoQuery: String? = null
     private var pendingHistoryRestoreQuery: String? = null
     private var lastScrollDown = true
-    private var screenOverlay: View? = null
-    private var overlayPanel: View? = null
-    private var overlayState: ScreenShareState = ScreenShareState.IDLE
     private val visualAwareness by lazy { VisualAwarenessPreferences(this) }
     @Volatile private var accessibilitySnapshotAt: Long = 0L
     private var foregroundPackage: String? = null
@@ -129,12 +122,11 @@ class AccessibilityHelperService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         super.onServiceConnected()
-        updateScreenVisionOverlay(ScreenCaptureService.currentState)
-        if (screenOverlay == null) showScreenVisionOverlay()
         screenWatcherHandler.removeCallbacks(screenWatcher)
         screenWatcherHandler.post(screenWatcher)
     }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        screenContextLoad.eventReceived()
         val reason = when (event?.eventType) {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> "accessibility_scroll"
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "accessibility_window_state"
@@ -157,91 +149,10 @@ class AccessibilityHelperService : AccessibilityService() {
         visualTimeoutExecutor.shutdownNow()
         visualProcessingExecutor.shutdownNow()
         AccessibilityVisualCache.invalidate()
-        hideScreenVisionOverlay()
         if (instance === this) instance = null
         super.onDestroy()
     }
 
-    fun updateScreenVisionOverlay(state: ScreenShareState) {
-        Handler(Looper.getMainLooper()).post {
-            overlayState = state
-            if (screenOverlay == null) showScreenVisionOverlay()
-            (screenOverlay as? TextView)?.text = if (visualAwareness.enabled) "◉" else "○"
-        }
-    }
-
-    private fun showScreenVisionOverlay() {
-        if (screenOverlay != null) return
-        val window = getSystemService(WINDOW_SERVICE) as WindowManager
-        val bubble = TextView(this).apply {
-            text = "◉"; textSize = 22f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(31, 108, 63)); setStroke(2, Color.rgb(157, 234, 170)) }
-        }
-        val size = (52 * resources.displayMetrics.density).toInt()
-        val params = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT).apply {
-            gravity = Gravity.TOP or Gravity.START; x = resources.displayMetrics.widthPixels - size - 18; y = resources.displayMetrics.heightPixels / 3
-        }
-        var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
-        bubble.setOnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downX = event.rawX; downY = event.rawY; startX = params.x; startY = params.y; moved = false; true }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - downX).toInt(); val dy = (event.rawY - downY).toInt(); moved = moved || kotlin.math.abs(dx) + kotlin.math.abs(dy) > 12
-                    params.x = (startX + dx).coerceIn(0, resources.displayMetrics.widthPixels - size)
-                    params.y = (startY + dy).coerceIn(0, resources.displayMetrics.heightPixels - size)
-                    runCatching { window.updateViewLayout(bubble, params) }; true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!moved) {
-                        visualAwareness.enabled = !visualAwareness.enabled
-                        if (!visualAwareness.enabled) AccessibilityVisualCache.invalidate()
-                        bubble.text = if (visualAwareness.enabled) "◉" else "○"
-                        com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
-                            "visual_awareness_changed enabled=${visualAwareness.enabled} mediaProjectionState=$overlayState"
-                        )
-                    }
-                    true
-                }
-                else -> false
-            }
-        }
-        runCatching { window.addView(bubble, params); screenOverlay = bubble }
-    }
-
-    private fun toggleOverlayPanel(bubbleParams: WindowManager.LayoutParams) {
-        if (overlayPanel != null) { hideOverlayPanel(); return }
-        val window = getSystemService(WINDOW_SERVICE) as WindowManager
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(12, 10, 12, 10)
-            background = GradientDrawable().apply { cornerRadius = 18f; setColor(Color.rgb(16, 31, 22)); setStroke(2, Color.rgb(109, 201, 125)) }
-        }
-        fun action(label: String, run: () -> Unit) = TextView(this).apply {
-            text = label; textSize = 15f; setTextColor(Color.WHITE); setPadding(20, 14, 20, 14); setOnClickListener { run(); hideOverlayPanel() }
-        }
-        panel.addView(action(if (overlayState == ScreenShareState.PAUSED) "Resume" else "Pause") {
-            startService(Intent(this, ScreenCaptureService::class.java).setAction(if (overlayState == ScreenShareState.PAUSED) ScreenCaptureService.ACTION_RESUME else ScreenCaptureService.ACTION_PAUSE))
-        })
-        panel.addView(action("Open LYRA") { returnToMyra() })
-        panel.addView(action("Stop") { startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_STOP)) })
-        val width = (138 * resources.displayMetrics.density).toInt()
-        val params = WindowManager.LayoutParams(width, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
-            gravity = Gravity.TOP or Gravity.START; x = (bubbleParams.x - width).coerceAtLeast(0); y = bubbleParams.y
-        }
-        runCatching { window.addView(panel, params); overlayPanel = panel }
-    }
-
-    private fun hideOverlayPanel() {
-        overlayPanel?.let { runCatching { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) } }
-        overlayPanel = null
-    }
-
-    fun hideScreenVisionOverlay() {
-        hideOverlayPanel()
-        screenOverlay?.let { runCatching { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) } }
-        screenOverlay = null
-    }
     fun returnToMyra(): Boolean {
         // Put the foreground app in the background first. Starting MYRA directly can be
         // blocked by Android's background-activity rules on some phones; an enabled
@@ -351,12 +262,17 @@ class AccessibilityHelperService : AccessibilityService() {
                 val screenshot = AccessibilityScreenshot(bytes, bitmap.width, bitmap.height, capturedAt,
                     current.packageName, current.windowId, current.generation)
                 bitmap.recycle()
-                AccessibilityVisualCache.put(screenshot, semanticSignature)
+                AccessibilityVisualCache.put(
+                    screenshot, semanticSignature, ScreenSceneAwarenessStore.currentRevision()
+                )
                 val sceneStartedAt = android.os.SystemClock.elapsedRealtime()
                 VoicePipelineLogger.debug("semanticSceneSnapshotStarted requestToken=$requestToken timestamp=$sceneStartedAt")
                 ActivityContextStore.attachScreenshot(
                     ScreenshotReference(UUID.randomUUID().toString(), capturedAt, screenshot.width, screenshot.height),
                     current.packageName, current.windowId
+                )
+                ScreenSceneAwarenessStore.attachVisualFrame(
+                    capturedAt, current.packageName, current.windowId, current.generation
                 )
                 val sceneCompletedAt = android.os.SystemClock.elapsedRealtime()
                 VoicePipelineLogger.debug(
@@ -1380,6 +1296,8 @@ class AccessibilityHelperService : AccessibilityService() {
         observedAt: Long = android.os.SystemClock.elapsedRealtime(),
         force: Boolean = false
     ) {
+        screenContextLoad.refreshRequested()
+        val refreshStartedAt = android.os.SystemClock.elapsedRealtime()
         val root = rootInActiveWindow ?: return
         val packageName = root.packageName?.toString()
         val appName = packageName?.let { value ->
@@ -1388,7 +1306,9 @@ class AccessibilityHelperService : AccessibilityService() {
                 packageManager.getApplicationLabel(info).toString()
             }.getOrNull()
         }
+        val treeStartedAt = android.os.SystemClock.elapsedRealtime()
         val elements = visibleElements(120)
+        val treeDurationMs = android.os.SystemClock.elapsedRealtime() - treeStartedAt
         val foreground = currentForegroundContext()
         if (foreground != null) {
             val semantic = elements.mapIndexed { index, element ->
@@ -1406,7 +1326,20 @@ class AccessibilityHelperService : AccessibilityService() {
                 generation = foreground.generation, visibleElements = semantic,
                 confidence = if (semantic.isEmpty()) 0.25 else 0.9, timestamp = observedAt
             )
+            val scene = ScreenSceneAwarenessStore.publish(
+                observation,
+                dialogVisible = root.className?.toString().orEmpty().contains("dialog", true),
+                scrollObservedAt = com.myra.assistant.screen.ScreenContextStore.snapshot().lastScrollAt.takeIf { it > 0L }
+            )
+            com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
+                "SCREEN_SCENE_READY package=${scene.foregroundPackage} windowId=${scene.windowId} " +
+                    "generation=${scene.screenGeneration} sceneRevision=${scene.sceneRevision} " +
+                    "elementCount=${scene.visibleElements.size} delta=${ScreenSceneAwarenessStore.lastDelta()?.changes?.joinToString(",") { it.type.name }.orEmpty()}"
+            )
             if (!activityObservationCoalescer.shouldPublish(observation, force)) {
+                screenContextLoad.refreshExecuted(
+                    android.os.SystemClock.elapsedRealtime() - refreshStartedAt, treeDurationMs, true
+                )
                 com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
                     "SCREEN_CONTEXT_COALESCED package=${observation.packageName} windowId=${observation.windowId} semanticElements=${semantic.size}"
                 )
@@ -1428,6 +1361,9 @@ class AccessibilityHelperService : AccessibilityService() {
         com.myra.assistant.diagnostics.VoicePipelineLogger.debug(
             "SCREEN_CONTEXT_UPDATED screen_session_id=${ScreenCaptureService.session.sessionId} " +
                 "timestamp=$observedAt package=$packageName visibleElements=${elements.size}"
+        )
+        screenContextLoad.refreshExecuted(
+            android.os.SystemClock.elapsedRealtime() - refreshStartedAt, treeDurationMs, false
         )
     }
 

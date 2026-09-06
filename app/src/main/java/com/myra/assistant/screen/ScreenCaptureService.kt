@@ -214,7 +214,6 @@ class ScreenCaptureService : Service() {
         }
         currentState = state
         session.setState(state)
-        AccessibilityHelperService.instance?.updateScreenVisionOverlay(state)
         listeners.forEach { it(state, latestFrame) }
         Log.d(TAG, "screen_share_state=$state frameAvailable=${latestFrame != null}")
         val stateEvent = when (state) {
@@ -337,6 +336,7 @@ class ScreenCaptureService : Service() {
         }
         fun currentFrame(): ScreenFrame? = session.latestFrame
         fun markScreenDirty(reason: String) {
+            ScreenSceneAwarenessStore.markMutation(reason)
             serviceInstance?.let {
                 it.adaptiveRoutePolicy.markDirty()
                 VoicePipelineLogger.debug("screen_dirty_reason=$reason screen_session_id=${session.sessionId}")

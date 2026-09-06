@@ -96,13 +96,18 @@ object SemanticScreenFallbackPolicy {
 object AccessibilityVisualCache {
     private data class Entry(
         val screenshot: AccessibilityScreenshot,
-        val semanticSignature: String
+        val semanticSignature: String,
+        val sceneRevision: Long
     )
 
     @Volatile private var entry: Entry? = null
 
-    @Synchronized fun put(screenshot: AccessibilityScreenshot, semanticSignature: String) {
-        entry = Entry(screenshot, semanticSignature)
+    @Synchronized fun put(
+        screenshot: AccessibilityScreenshot,
+        semanticSignature: String,
+        sceneRevision: Long = ScreenSceneAwarenessStore.currentRevision()
+    ) {
+        entry = Entry(screenshot, semanticSignature, sceneRevision)
     }
 
     fun fresh(
@@ -111,13 +116,15 @@ object AccessibilityVisualCache {
         generation: Long,
         semanticSignature: String,
         now: Long,
-        maxAgeMs: Long
+        maxAgeMs: Long,
+        currentSceneRevision: Long = ScreenSceneAwarenessStore.currentRevision()
     ): AccessibilityScreenshot? {
         val current = entry ?: return null
         val frame = current.screenshot
         return frame.takeIf {
             it.packageName == packageName && it.windowId == windowId &&
                 it.generation == generation && current.semanticSignature == semanticSignature &&
+                current.sceneRevision >= currentSceneRevision &&
                 (now - it.capturedAt).coerceAtLeast(0L) <= maxAgeMs
         }
     }
@@ -128,9 +135,10 @@ object AccessibilityVisualCache {
         generation: Long,
         semanticSignature: String,
         now: Long,
-        maxAgeMs: Long
+        maxAgeMs: Long,
+        currentSceneRevision: Long = ScreenSceneAwarenessStore.currentRevision()
     ): VisualScreenshotSelection? = fresh(
-        packageName, windowId, generation, semanticSignature, now, maxAgeMs
+        packageName, windowId, generation, semanticSignature, now, maxAgeMs, currentSceneRevision
     )?.let { VisualScreenshotSelection(it, VisualFrameSource.ACCESSIBILITY_CACHE) }
 
     @Synchronized fun invalidate() { entry = null }

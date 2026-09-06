@@ -20,6 +20,9 @@ object FastVisualRequestClassifier {
     fun classify(text: String): FastVisualRequest? {
         val tokens = tokens(text)
         if (tokens.isEmpty()) return null
+        if (ScreenStateFollowUpClassifier.isCurrentScreenFollowUp(tokens, text.trim().endsWith("?"))) {
+            return FastVisualRequest(FastVisualKind.QUESTION, "current_screen_follow_up")
+        }
         val hasDeicticQuestion = tokens.any { it in setOf("ye", "yeh", "this", "isme", "इसमें", "यह", "ये") } &&
             tokens.any { it in setOf("kya", "what", "क्या") }
         val hasQuestion = tokens.any { token -> questionConcepts.any { similar(token, it) } } &&
@@ -50,6 +53,35 @@ object FastVisualRequestClassifier {
 
     private fun exactOrSafePrefix(value: String, concept: String): Boolean =
         value == concept || (concept.length >= 4 && value.startsWith(concept))
+}
+
+/** Meaning-level routing for questions whose answer can only come from the screen now. */
+object ScreenStateFollowUpClassifier {
+    private val currentTime = setOf("now", "currently", "still", "ab", "abhi", "अभी", "अब")
+    private val stateInquiry = setOf(
+        "where", "what", "which", "visible", "showing", "changed", "moved", "left", "right", "side",
+        "kahan", "kaha", "kya", "kidhar", "dikh", "dikha", "badla", "hila",
+        "कहाँ", "कहा", "क्या", "किधर", "दिख", "बदला", "हिला"
+    )
+    private val reference = setOf("it", "this", "that", "same", "wahi", "ye", "yeh", "wo", "woh", "hai", "है", "वही", "यह", "वो")
+
+    fun isCurrentScreenFollowUp(text: String): Boolean {
+        val normalized = Normalizer.normalize(text, Normalizer.Form.NFC)
+            .lowercase(Locale.ROOT)
+        val parsed = normalized.split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
+            .filter(String::isNotBlank)
+        return isCurrentScreenFollowUp(parsed, normalized.trim().endsWith("?"))
+    }
+
+    internal fun isCurrentScreenFollowUp(tokens: List<String>, questionMark: Boolean): Boolean {
+        val current = tokens.any(currentTime::contains)
+        val inquiry = tokens.any { token -> stateInquiry.any { token == it || token.startsWith(it) && it.length >= 4 } }
+        val referential = tokens.any(reference::contains)
+        // Temporal/deictic state questions are read-only. Ambiguous bare follow-ups
+        // become current-screen questions only when they still ask about state.
+        return (current && (inquiry || referential || tokens.size <= 3)) ||
+            (questionMark && current && tokens.size <= 6)
+    }
 }
 
 data class FastVisualTurn(
