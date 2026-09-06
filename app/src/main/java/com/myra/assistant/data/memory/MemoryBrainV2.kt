@@ -72,8 +72,8 @@ object MemoryIntentClassifier {
 
 /** Bounded extraction helpers; persistence authority remains MemoryBrainCoordinator. */
 object NaturalMemoryExtractor {
-    private val friend = Regex("(?:mera|meri|my)\s+(?:friend|dost)\s+([\\p{L}][\\p{L} .'-]{1,40}?)(?:\s+hai|$)", RegexOption.IGNORE_CASE)
-    private val travel = Regex("(?:main|i)\s+([\\p{L}][\\p{L} .'-]{1,40}?)\s+ke\s+saath\s+(.+?)\s+(?:gaya|gayi|travel(?:led)?)(?:\s+tha|\s+thi|$)", RegexOption.IGNORE_CASE)
+    private val friend = Regex("""(?:mera|meri|my)\s+(?:friend|dost)\s+([\p{L}][\p{L} .'-]{1,40}?)(?:\s+hai|$)""", RegexOption.IGNORE_CASE)
+    private val travel = Regex("""(?:main|i)\s+([\p{L}][\p{L} .'-]{1,40}?)\s+ke\s+saath\s+(.+?)\s+(?:gaya|gayi|travel(?:led)?)(?:\s+tha|\s+thi|$)""", RegexOption.IGNORE_CASE)
 
     fun extract(text: String): List<MemoryCandidate> {
         val clean = text.trim().replace(Regex("\\s+"), " ")
