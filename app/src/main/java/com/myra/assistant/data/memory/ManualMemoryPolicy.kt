@@ -20,7 +20,8 @@ object ManualMemoryPolicy {
             sensitivity = MemorySensitivity.PERSONAL,
             confidence = 1.0,
             explicitlyRequested = true,
-            source = SOURCE
+            source = SOURCE,
+            provenance = MemoryProvenance.MANUAL_UI_SEED
         )
     }
 }

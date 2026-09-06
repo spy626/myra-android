@@ -140,7 +140,7 @@ class GeminiLiveClient(
                 .put("temperature", 0.9))
             .put("tools", JSONArray().put(JSONObject().put(
                 "functionDeclarations",
-                JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration())
+                JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration()).put(memoryQueryDeclaration())
                     .put(screenActionDeclaration()).put(screenMemoryProposalDeclaration())
             )))
             .put("realtimeInputConfig", JSONObject()
@@ -188,6 +188,13 @@ class GeminiLiveClient(
                 .put("evidence", JSONObject().put("type", "STRING").put("description", "The supporting words the user actually said."))
                 .put("confidence", JSONObject().put("type", "NUMBER")))
             .put("required", JSONArray(listOf("fact", "category", "memory_key", "evidence", "confidence"))))
+
+    private fun memoryQueryDeclaration() = JSONObject()
+        .put("name", "query_user_memory")
+        .put("description", "Read a small relevant set of active grounded memories when the user asks about their people, preferences, projects, habits, or prior facts. This tool never mutates memory and never performs a phone action.")
+        .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("query", JSONObject().put("type", "STRING")))
+            .put("required", JSONArray().put("query")))
 
     private fun screenActionDeclaration() = JSONObject()
         .put("name", "perform_screen_action")

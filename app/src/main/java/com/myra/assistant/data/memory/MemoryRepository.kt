@@ -49,9 +49,9 @@ class MemoryRepository(private val dao: MemoryDao) {
     ): MemoryWriteResult {
         val existing = dao.recent(200).firstOrNull { it.id == id && it.active }
             ?: return MemoryWriteResult.Rejected("Memory no longer exists.")
-        if (existing.source != ManualMemoryPolicy.SOURCE || !existing.stableKey.startsWith("manual:")) {
+        if (existing.entityId != null || existing.category == MemoryCategory.PERSON.name) {
             return MemoryWriteResult.Rejected(
-                "Learned memories must be corrected through LYRA so linked facts stay consistent."
+                "Person names must be edited through the linked person rename flow."
             )
         }
         val candidate = ManualMemoryPolicy.candidate(fact, category, existing.stableKey)
@@ -74,13 +74,20 @@ class MemoryRepository(private val dao: MemoryDao) {
                 confidence = candidate.confidence,
                 updatedAt = now,
                 lastConfirmedAt = now,
-                active = true
+                active = true,
+                provenance = MemoryProvenance.MANUAL_UI_EDIT.name,
+                lifecycleStatus = MemoryLifecycleStatus.ACTIVE.name
             )
         )
+        MemorySessionIndex.invalidate()
         return MemoryWriteResult.Saved(existing.id)
     }
 
     suspend fun forgetFromSettings(memory: MemoryEntity): Boolean {
+        if (memory.category == MemoryCategory.PERSON.name && memory.entityId != null) {
+            return (dao.deactivateEntity(memory.entityId, System.currentTimeMillis()) > 0)
+                .also { if (it) MemorySessionIndex.invalidate() }
+        }
         val personName = memory.takeIf(MemoryRelationshipPolicy::isBestFriend)
             ?.let { MemoryRelationshipPolicy.personName(it.fact) }
         return if (personName != null) forgetMatching(personName) else forget(memory.id)
@@ -104,6 +111,18 @@ class MemoryRepository(private val dao: MemoryDao) {
         }
     }
 
+    /** The single Memory Brain V2 persistence gate. It never creates a pending voice turn. */
+    suspend fun saveGrounded(candidate: MemoryCandidate, explicit: Boolean = false): MemoryWriteResult {
+        val grounded = candidate.copy(explicitlyRequested = explicit || candidate.explicitlyRequested)
+        return when (MemorySafetyPolicy.decide(grounded)) {
+            MemorySaveDecision.REJECT -> MemoryWriteResult.Rejected("This information is unsafe or insufficiently grounded.")
+            MemorySaveDecision.ASK_PERMISSION -> MemoryWriteResult.Rejected("Sensitive or uncertain information is not learned automatically.")
+            MemorySaveDecision.AUTO_SAVE -> if (MemoryRelationshipPolicy.isBestFriend(grounded)) {
+                saveAdditionalBestFriend(grounded)
+            } else persist(grounded)
+        }
+    }
+
     suspend fun relevant(query: String, limit: Int = 5): List<MemoryEntity> {
         val active = dao.recent(100)
         val selected = MemoryRelevanceSelector.select(query, active, limit)
@@ -111,6 +130,7 @@ class MemoryRepository(private val dao: MemoryDao) {
             val now = System.currentTimeMillis()
             selected.forEach { dao.markUsed(it.id, now) }
         }
+        MemorySessionIndex.publish(selected)
         return selected
     }
 
@@ -244,10 +264,11 @@ class MemoryRepository(private val dao: MemoryDao) {
     }
 
     suspend fun forget(id: String): Boolean =
-        dao.deactivate(id, System.currentTimeMillis()) > 0
+        (dao.deactivate(id, System.currentTimeMillis()) > 0).also { if (it) MemorySessionIndex.invalidate() }
 
     suspend fun forgetStableKey(stableKey: String): Boolean =
-        dao.deactivateByStableKey(stableKey.trim(), System.currentTimeMillis()) > 0
+        (dao.deactivateByStableKey(stableKey.trim(), System.currentTimeMillis()) > 0)
+            .also { if (it) MemorySessionIndex.invalidate() }
 
     suspend fun forgetMatching(query: String): Boolean {
         val activeMemories = dao.recent(50)
@@ -285,12 +306,37 @@ class MemoryRepository(private val dao: MemoryDao) {
      * renamed the best-friend row; person:<old-name>:gaming_channel therefore retained
      * the first ASR spelling and made conversation and persistent recall diverge.
      */
-    suspend fun renameBestFriend(oldName: String, correctedName: String): Boolean {
-        val allMemories = dao.recent(50)
+    suspend fun renameBestFriend(oldName: String, correctedName: String): Boolean =
+        renamePerson(oldName, correctedName)
+
+    suspend fun renamePerson(oldName: String, correctedName: String): Boolean {
+        val allMemories = dao.recent(200)
+        val linkedRows = allMemories.filter { PersonLinkedMemoryIdentity.belongsTo(it, listOf(oldName)) }
         val memories = allMemories.filter(MemoryRelationshipPolicy::isBestFriend)
-        val oldRows = BestFriendDeleteMatcher.findAll(oldName, memories)
+        val oldRows = linkedRows.ifEmpty { BestFriendDeleteMatcher.findAll(oldName, memories) }
         val old = oldRows.firstOrNull() ?: return false
         val canonicalName = BestFriendNameCanonicalizer.canonicalize(correctedName)
+        if (oldRows.none(MemoryRelationshipPolicy::isBestFriend)) {
+            val now = System.currentTimeMillis()
+            val stableEntityId = old.entityId ?: NaturalMemoryExtractor.stablePersonId(oldName)
+            oldRows.forEach { row ->
+                val renamed = PersonLinkedMemoryIdentity.rename(row, listOf(oldName), canonicalName)
+                val fact = renamed?.fact ?: row.fact.replace(oldName, canonicalName, ignoreCase = true)
+                val key = renamed?.stableKey ?: row.stableKey.replace(
+                    PersonLinkedMemoryIdentity.stableToken(oldName),
+                    PersonLinkedMemoryIdentity.stableToken(canonicalName)
+                )
+                dao.upsert(row.copy(stableKey = key, fact = fact, normalizedFact = normalize(fact),
+                    entityId = stableEntityId, entityName = canonicalName,
+                    provenance = MemoryProvenance.VERIFIED_MEMORY_CORRECTION.name,
+                    updatedAt = now, lastConfirmedAt = now))
+            }
+            val active = dao.recent(200)
+            val verified = active.any { it.entityId == stableEntityId && it.entityName == canonicalName } &&
+                active.none { it.entityId == stableEntityId && it.entityName.equals(oldName, true) }
+            if (verified) MemorySessionIndex.invalidate()
+            return verified
+        }
         // Include every row already resolving to the corrected identity. In the
         // failing phone path "Named Karim" and "Kareem" were separate stable keys;
         // renaming only Karima left that alias active and recall listed two people.
@@ -303,7 +349,10 @@ class MemoryRepository(private val dao: MemoryDao) {
                 stableKey = MemoryRelationshipPolicy.BEST_FRIEND_KEY,
                 sensitivity = MemorySensitivity.valueOf(old.sensitivity),
                 confidence = old.confidence,
-                source = old.source
+                source = old.source,
+                provenance = MemoryProvenance.VERIFIED_MEMORY_CORRECTION,
+                entityId = old.entityId ?: NaturalMemoryExtractor.stablePersonId(oldName),
+                entityName = canonicalName
             )
         )
         val now = System.currentTimeMillis()
@@ -311,7 +360,9 @@ class MemoryRepository(private val dao: MemoryDao) {
             ?: return false
         identityRows.filter { it.id != saved.id }.forEach { dao.deactivate(it.id, now) }
         renameLinkedPersonRows(allMemories, identityRows, oldName, canonicalName, now)
-        return verifyRenameCommitted(oldName, canonicalName)
+        val verified = verifyRenameCommitted(oldName, canonicalName)
+        if (verified) MemorySessionIndex.invalidate()
+        return verified
     }
 
     /** Never report success until Room contains the target and no exact stale alias. */
@@ -368,7 +419,11 @@ class MemoryRepository(private val dao: MemoryDao) {
         runCatching { Log.d(MEMORY_LOG_TAG, message) }
     }
 
-    suspend fun clearAll() = dao.deleteAll()
+    suspend fun clearAll() { dao.deleteAll(); dao.deleteAllBehavior(); MemorySessionIndex.invalidate() }
+
+    suspend fun recordBehavior(value: BehaviorObservationEntity) = dao.upsertBehavior(value)
+    suspend fun behavior(stableKey: String) = dao.findBehavior(stableKey)
+    suspend fun recentBehavior(limit: Int = 100) = dao.recentBehavior(limit)
 
     private suspend fun canonicalizeAgainstExistingBestFriends(candidate: MemoryCandidate): MemoryCandidate {
         val proposed = MemoryRelationshipPolicy.canonicalizeAdditional(candidate)
@@ -415,7 +470,17 @@ class MemoryRepository(private val dao: MemoryDao) {
                 .forEach { dao.deactivate(it.id, now) }
         }
         val existing = dao.findByStableKey(canonical.stableKey)
-        val id = existing?.id ?: UUID.randomUUID().toString()
+        var id = existing?.id ?: UUID.randomUUID().toString()
+        if (existing != null && existing.active && normalize(existing.fact) != normalize(canonical.fact)) {
+            id = UUID.randomUUID().toString()
+            dao.upsert(existing.copy(
+                stableKey = "superseded:${existing.id}:${existing.stableKey}",
+                active = false,
+                lifecycleStatus = MemoryLifecycleStatus.SUPERSEDED.name,
+                supersededById = id,
+                updatedAt = now
+            ))
+        }
         dao.upsert(
             MemoryEntity(
                 id = id,
@@ -431,9 +496,16 @@ class MemoryRepository(private val dao: MemoryDao) {
                 lastConfirmedAt = now,
                 active = true,
                 useCount = existing?.useCount ?: 0,
-                lastUsedAt = existing?.lastUsedAt ?: 0
+                lastUsedAt = existing?.lastUsedAt ?: 0,
+                provenance = canonical.provenance.name,
+                lifecycleStatus = MemoryLifecycleStatus.ACTIVE.name,
+                entityId = canonical.entityId,
+                entityName = canonical.entityName,
+                lastRecalledAt = existing?.lastRecalledAt ?: 0,
+                observationMetadata = canonical.observationMetadata
             )
         )
+        MemorySessionIndex.invalidate()
         return MemoryWriteResult.Saved(id)
     }
 

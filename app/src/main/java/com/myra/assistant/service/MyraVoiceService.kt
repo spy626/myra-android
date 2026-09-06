@@ -39,15 +39,14 @@ import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommand
 import com.myra.assistant.data.memory.MemoryCommandParser
 import com.myra.assistant.data.memory.MemoryCommandReplyFormatter
-import com.myra.assistant.data.memory.MemoryConfirmationDecision
-import com.myra.assistant.data.memory.MemoryConfirmationParser
 import com.myra.assistant.data.memory.MemoryCandidate
 import com.myra.assistant.data.memory.PersonalMemoryExtractor
 import com.myra.assistant.data.memory.PersonLinkedMemoryExtractor
-import com.myra.assistant.data.memory.PersonalMemoryContextCorrection
-import com.myra.assistant.data.memory.PersonalMemoryPermissionPrompt
 import com.myra.assistant.data.memory.PersonalMemoryRecallFormatter
 import com.myra.assistant.data.memory.MemoryRepository
+import com.myra.assistant.data.memory.MemoryBrainCoordinator
+import com.myra.assistant.data.memory.MemoryIntentClassifier
+import com.myra.assistant.data.memory.MemoryBrainOutcome
 import com.myra.assistant.data.memory.MemoryRelationshipPolicy
 import com.myra.assistant.data.memory.SavedMemoryContextFormatter
 import com.myra.assistant.data.memory.MemoryWriteResult
@@ -253,21 +252,6 @@ class MyraVoiceService : Service() {
             handleMemoryCommand(command)
         }
     }
-    private var pendingDetectedPersonalMemory: MemoryCandidate? = null
-    private val personalMemoryPauseRunnable = Runnable {
-        val candidate = pendingDetectedPersonalMemory
-        pendingDetectedPersonalMemory = null
-        if (candidate != null && pendingPersonalMemory == null && !localCommandExecutedThisTurn) {
-            val spoken = commandProbe.toString().trim()
-            if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                commitFinalUserMessage(spoken, "PERSONAL_MEMORY_PAUSE")
-                commandUserTextEmitted = true
-            }
-            requestPersonalMemoryPermission(candidate)
-            resetTurnBuffers()
-            waitingForFreshInputAfterCommand = true
-        }
-    }
     private var microphoneMuted = false
     private var deepResearchActive = false
     private var idleNudgeCount = 0
@@ -339,9 +323,6 @@ class MyraVoiceService : Service() {
     private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
     private var pendingConfirmedCommand: AppCommand? = null
     private var pendingConfirmationExpiresAt = 0L
-    private var pendingPersonalMemory: MemoryCandidate? = null
-    private var pendingPersonalMemoryExpiresAt = 0L
-    private val pendingPersonalMemoryConfirmationInput = StringBuilder()
     private var lastLocalSpeechKey = ""
     private var lastLocalSpeechAt = 0L
     private var lastAnnouncementKey = ""
@@ -377,6 +358,7 @@ class MyraVoiceService : Service() {
         ))
     }
     private val memoryRepository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
+    private val memoryBrain by lazy { MemoryBrainCoordinator(memoryRepository) }
     private val assistantController by lazy { (application as MyApplication).assistantController }
     private val screenVisionPreferences by lazy { ScreenVisionPreferences(this) }
     private val visualAwarenessPreferences by lazy { VisualAwarenessPreferences(this) }
@@ -703,7 +685,6 @@ class MyraVoiceService : Service() {
                         )
                     }
                 }
-                if (handlePendingPersonalMemoryPermission(part)) return@inputTranscript
                 if (handlePendingConfirmation(part)) return@inputTranscript
                 if (isPhantomTranscript(part)) {
                     // Short echo/noise fragments must never become chat bubbles or
@@ -870,35 +851,8 @@ class MyraVoiceService : Service() {
                     // delete, command, or permission parsers.
                     return@inputTranscript
                 }
-                val detectedPersonalMemory =
-                    PersonalMemoryExtractor.extract(romanDisplayText(currentTranscript))
-                if (detectedPersonalMemory != null) {
-                    if (MemoryRelationshipPolicy.isBestFriend(detectedPersonalMemory) ||
-                        MemorySafetyPolicy.decide(detectedPersonalMemory) == MemorySaveDecision.AUTO_SAVE
-                    ) {
-                        // Clear, ordinary personal facts are learned silently at turn
-                        // completion so LYRA's natural conversational reply continues.
-                        pendingDetectedPersonalMemory = null
-                        mainHandler.removeCallbacks(personalMemoryPauseRunnable)
-                        return@inputTranscript
-                    }
-                    // A short pause lets streamed ASR finish the fact, then Android can
-                    // ask permission without waiting for Gemini's full turn boundary.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    pendingDetectedPersonalMemory = detectedPersonalMemory
-                    mainHandler.removeCallbacks(personalMemoryPauseRunnable)
-                    mainHandler.postDelayed(
-                        personalMemoryPauseRunnable,
-                        PERSONAL_MEMORY_PAUSE_MS
-                    )
-                } else if (pendingDetectedPersonalMemory != null) {
-                    // A later chunk changed the sentence into something that is no
-                    // longer a complete durable fact. Do not prompt from stale text.
-                    pendingDetectedPersonalMemory = null
-                    mainHandler.removeCallbacks(personalMemoryPauseRunnable)
-                }
+                // Memory Brain V2 never mutates or interrupts from partial ASR. Natural
+                // facts are evaluated silently only at the authoritative final turn.
                 if (CommandParser.isLikelyIncompleteActionFragment(currentTranscript)) {
                     incompleteActionFragmentTurn = true
                     suppressModelForTurn = true
@@ -1152,8 +1106,6 @@ class MyraVoiceService : Service() {
                 }
                 mainHandler.removeCallbacks(memoryCommandRunnable)
                 pendingMemoryCommand = null
-                mainHandler.removeCallbacks(personalMemoryPauseRunnable)
-                pendingDetectedPersonalMemory = null
                 val accumulatorBeforeFinal = input.toString().trim()
                 val duplicateResult = FinalTranscriptDuplicateGuard.collapse(accumulatorBeforeFinal)
                 val userText = duplicateResult.text
@@ -1668,6 +1620,7 @@ class MyraVoiceService : Service() {
                         recentName
                     )
                     val nameCorrection = correctionDecision.correction
+                        ?.takeUnless { MemoryIntentClassifier.isMemoryQuestion(displayUserText) }
                     voiceLog(
                         "name_correction_gate raw=${displayUserText.take(100)} " +
                             "correctionIntentDetected=${correctionDecision.correctionIntentDetected} " +
@@ -1708,21 +1661,17 @@ class MyraVoiceService : Service() {
                             rememberBestFriendForCorrection(personalCandidate)
                         } else if (MemorySafetyPolicy.decide(personalCandidate) == MemorySaveDecision.AUTO_SAVE) {
                             serviceScope.launch { memoryRepository.save(personalCandidate) }
-                        } else {
-                            requestPersonalMemoryPermission(personalCandidate)
-                            resetTurnBuffers()
-                            waitingForFreshInputAfterCommand = true
-                            return@turnComplete
                         }
                     }
                     // One natural sentence can contain more than the relationship.
                     // Persist only additional durable, grounded person facts; temporary
                     // claims such as playing without sleep never enter this list.
-                    linkedPersonCandidates
-                        .filterNot(MemoryRelationshipPolicy::isBestFriend)
-                        .forEach { linkedFact ->
-                            serviceScope.launch { memoryRepository.save(linkedFact) }
-                        }
+                    linkedPersonCandidates.filterNot(MemoryRelationshipPolicy::isBestFriend).forEach { linkedFact ->
+                        serviceScope.launch { memoryRepository.saveGrounded(linkedFact) }
+                    }
+                    // One final-turn coordinator evaluates all other low-risk durable
+                    // facts. It has no response ownership for natural conversation.
+                    serviceScope.launch { memoryBrain.processFinalTurn(displayUserText) }
                     rememberRecentRelationshipTurn(displayUserText)
                     learnSafePreferenceFromCompletedTurn(userText)
                 }
@@ -1822,18 +1771,11 @@ class MyraVoiceService : Service() {
             val rememberResult = if (command is MemoryCommand.Remember) {
                 memoryRepository.save(command.candidate)
             } else null
-            if (command is MemoryCommand.Remember && rememberResult == MemoryWriteResult.NeedsPermission) {
-                // An explicit remember command can still conflict with a unique
-                // relationship. Enter the real confirmation flow so "haan" replaces
-                // the old person instead of returning a dead-end generic question.
-                mainHandler.post { requestPersonalMemoryPermission(command.candidate) }
-                return@launch
-            }
             val response = when (command) {
                 is MemoryCommand.Remember -> when (rememberResult) {
                     is MemoryWriteResult.Saved -> MemoryCommandReplyFormatter.rememberSaved()
                     is MemoryWriteResult.Rejected -> MemoryCommandReplyFormatter.rememberRejected()
-                    MemoryWriteResult.NeedsPermission, null -> "Save karne ki permission clear nahi hui."
+                    MemoryWriteResult.NeedsPermission, null -> MemoryCommandReplyFormatter.rememberRejected()
                 }
                 is MemoryCommand.Read -> {
                     // Recall must not race a correction write from the previous turn.
@@ -1860,138 +1802,23 @@ class MyraVoiceService : Service() {
         }
     }
 
-    private fun requestPersonalMemoryPermission(candidate: MemoryCandidate) {
-        pendingPersonalMemory = null
-        pendingPersonalMemoryConfirmationInput.clear()
-        pendingPersonalMemoryExpiresAt = 0L
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        output.clear()
-        // A correction can arrive while the previous memory prompt is still being
-        // validated. Replace that prompt instead of leaving the new one queued behind
-        // an interrupted Gemini turn that may never emit another turnComplete.
-        cancelSpeechForNewAction()
-        live?.interrupt()
-        serviceScope.launch {
-            val alreadySaved = memoryRepository.isAlreadySaved(candidate)
-            val conflict = memoryRepository.uniqueRelationshipConflict(candidate)
-            mainHandler.post {
-                val message = if (alreadySaved) {
-                    "Haan, mujhe yaad hai."
-                } else if (conflict != null && MemoryRelationshipPolicy.isBestFriend(candidate)) {
-                    val oldName = MemoryRelationshipPolicy.personName(conflict.fact) ?: "koi aur"
-                    val newName = MemoryRelationshipPolicy.personName(candidate.fact) ?: "ye person"
-                    pendingPersonalMemory = candidate
-                    pendingPersonalMemoryExpiresAt =
-                        android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
-                    "Abhi ${oldName} tumhari best friend saved hai. ${newName} ko replace karun, ya dono ko save karun?"
-                } else {
-                    pendingPersonalMemory = candidate
-                    pendingPersonalMemoryExpiresAt =
-                        android.os.SystemClock.elapsedRealtime() + PERSONAL_MEMORY_CONFIRMATION_MS
-                    PersonalMemoryPermissionPrompt.format(candidate)
-                }
-                listener?.onMyraText(message)
-                emitState(message)
-                queueLocalSpeech(
-                    message,
-                    allowUntranscribedAudio = true,
-                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                )
-            }
-        }
-    }
-
-    private fun handlePendingPersonalMemoryPermission(raw: String): Boolean {
-        val candidate = pendingPersonalMemory ?: return false
-        if (android.os.SystemClock.elapsedRealtime() > pendingPersonalMemoryExpiresAt) {
-            pendingPersonalMemory = null
-            pendingPersonalMemoryExpiresAt = 0L
-            pendingPersonalMemoryConfirmationInput.clear()
-            return false
-        }
-        val romanRaw = romanDisplayText(raw)
-        PersonalMemoryContextCorrection.resolve(romanRaw, candidate)?.let { replacement ->
-            markUserInteraction()
-            suppressModelForTurn = true
-            localCommandExecutedThisTurn = true
-            waitingForFreshInputAfterCommand = true
-            commandUserTextEmitted = true
-            output.clear()
-            commitFinalUserMessage(raw, "PERSONAL_MEMORY_CONTEXT_CORRECTION", romanRaw, romanRaw)
-            requestPersonalMemoryPermission(replacement)
-            resetTurnBuffers()
-            return true
-        }
-        appendTranscript(pendingPersonalMemoryConfirmationInput, romanRaw)
-        val combined = pendingPersonalMemoryConfirmationInput.toString()
-        val decision = MemoryConfirmationParser.parse(romanRaw)
-            ?: MemoryConfirmationParser.parse(raw)
-            ?: MemoryConfirmationParser.parse(combined)
-            ?: MemoryConfirmationParser.parse(combined.replace(" ", ""))
-        if (decision == null) return false
-
-        pendingPersonalMemory = null
-        pendingPersonalMemoryExpiresAt = 0L
-        pendingPersonalMemoryConfirmationInput.clear()
-        markUserInteraction()
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        commandUserTextEmitted = true
-        output.clear()
-        // "Haan"/"nahi" commonly interrupts the permission prompt. Clear its local
-        // validation state so the result confirmation starts immediately.
-        cancelSpeechForNewAction()
-        live?.interrupt()
-        commitFinalUserMessage(raw.trim(), "PERSONAL_MEMORY_CONFIRMATION")
-
-        if (decision == MemoryConfirmationDecision.NO) {
-            val message = "Theek hai, save nahi karungi."
-            listener?.onMyraText(message)
-            emitState(message)
-            queueLocalSpeech(
-                message,
-                allowUntranscribedAudio = true,
-                validationPolicy = LocalSpeechValidationPolicy.MEMORY
-            )
-            resetTurnBuffers()
-            return true
-        }
-
-        serviceScope.launch {
-            val result = if (decision == MemoryConfirmationDecision.ADD) {
-                memoryRepository.saveAdditionalBestFriend(candidate)
-            } else {
-                memoryRepository.save(candidate, permissionGranted = true)
-            }
-            val message = when (result) {
-                is MemoryWriteResult.Saved -> if (decision == MemoryConfirmationDecision.ADD) {
-                    "Theek hai, dono ko yaad rakhungi."
-                } else {
-                    "Theek hai, yaad rakhungi."
-                }
-                is MemoryWriteResult.NeedsPermission -> "Save karne ki permission clear nahi hui."
-                is MemoryWriteResult.Rejected -> "Ye memory safely save nahi kar sakti."
-            }
-            mainHandler.post {
-                listener?.onMyraText(message)
-                emitState(message)
-                queueLocalSpeech(
-                    message,
-                    allowUntranscribedAudio = true,
-                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                )
-                resetTurnBuffers()
-            }
-        }
-        return true
-    }
-
     private fun handleSemanticToolCall(id: String, functionName: String, args: org.json.JSONObject) {
         when (functionName) {
             "propose_user_memory" -> {
                 handleSemanticMemoryProposal(id, args)
+                return
+            }
+            "query_user_memory" -> {
+                val query = args.optString("query").trim()
+                serviceScope.launch {
+                    val rows = memoryRepository.relevant(query, 8)
+                    val payload = org.json.JSONArray().apply {
+                        rows.forEach { row -> put(org.json.JSONObject()
+                            .put("id", row.id).put("category", row.category).put("fact", row.fact)
+                            .put("source", row.provenance).put("confidence", row.confidence)) }
+                    }
+                    live?.sendToolResponse(id, "query_user_memory", true, payload.toString())
+                }
                 return
             }
             "perform_screen_action" -> {
@@ -2885,8 +2712,7 @@ class MyraVoiceService : Service() {
             live?.sendToolResponse(id, "propose_user_memory", false, "Explicit memory commands are handled locally")
             return
         }
-        if (pendingPersonalMemory != null || pendingDetectedPersonalMemory != null ||
-            PersonalMemoryExtractor.extract(romanDisplayText(guardedText)) != null ||
+        if (PersonalMemoryExtractor.extract(romanDisplayText(guardedText)) != null ||
             PersonLinkedMemoryExtractor.extractAll(romanDisplayText(guardedText)).isNotEmpty() ||
             AutomaticMemoryChangeParser.parse(romanDisplayText(guardedText)) is AutomaticMemoryChange.Save
         ) {
@@ -2925,15 +2751,8 @@ class MyraVoiceService : Service() {
                     memoryRepository.save(candidate)
                     live?.sendToolResponse(id, "propose_user_memory", true, "Saved silently; continue the conversation naturally without mentioning memory")
                 }
-                else -> mainHandler.post {
-                    // Stop Gemini from speaking its own confirmation. Android asks one
-                    // deterministic question and saves only after the user's answer.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    live?.sendToolResponse(id, "propose_user_memory", true, "Android will ask permission; produce no spoken confirmation")
-                    requestPersonalMemoryPermission(candidate)
-                }
+                else -> live?.sendToolResponse(id, "propose_user_memory", false,
+                    "Sensitive or uncertain proposals are not learned automatically")
             }
         }
     }
@@ -5099,7 +4918,7 @@ class MyraVoiceService : Service() {
             val reply = if (successAcknowledgementAllowed) {
                 "Theek hai, ab ${correction.newName} naam save hai."
             } else {
-                "Naam update nahi ho paya. Ek baar phir try karo."
+                "Memory update verify nahi hui. Correct naam ek baar clearly batao."
             }
             mainHandler.post {
                 if (successAcknowledgementAllowed) {
@@ -5262,7 +5081,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); mainHandler.removeCallbacks(personalMemoryPauseRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; pendingDetectedPersonalMemory = null; pendingPersonalMemory = null; pendingPersonalMemoryExpiresAt = 0L; pendingPersonalMemoryConfirmationInput.clear(); recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() {
         ScreenCaptureService.listeners -= screenCaptureListener
         fastVisualTurns.cancel()

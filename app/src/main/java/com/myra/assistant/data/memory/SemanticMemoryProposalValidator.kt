@@ -73,7 +73,8 @@ object SemanticMemoryProposalValidator {
             stableKey = "semantic:${category.name.lowercase(Locale.ROOT)}:$key",
             sensitivity = sensitivity,
             confidence = confidence.coerceIn(0.0, 0.95),
-            source = "gemini_grounded_conversation"
+            source = "gemini_grounded_conversation",
+            provenance = MemoryProvenance.GEMINI_GROUNDED_PROPOSAL
         )))
     }
 

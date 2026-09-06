@@ -7,7 +7,8 @@ object PersonLinkedMemoryIdentity {
     data class Rename(val stableKey: String, val fact: String)
 
     fun belongsTo(memory: MemoryEntity, names: Collection<String>): Boolean {
-        if (memory.category != MemoryCategory.PERSON.name) return false
+        if (memory.entityName != null && names.any { sameName(memory.entityName, it) }) return true
+        if (memory.category !in setOf(MemoryCategory.PERSON.name, MemoryCategory.LIFE_EVENT.name)) return false
         val storedLinkedName = linkedFactPersonName(memory.fact)
         return names.any { name ->
             val canonical = BestFriendNameCanonicalizer.canonicalize(name)
@@ -26,9 +27,9 @@ object PersonLinkedMemoryIdentity {
         val storedName = linkedFactPersonName(memory.fact)
             ?.takeIf { actual -> oldNames.any { sameName(actual, it) } }
             ?: oldNames.firstOrNull { startsWithName(memory.fact, it) }
-        val fact = if (storedName == null) memory.fact else memory.fact.replaceFirst(
-            Regex("^${Regex.escape(storedName)}\\b", RegexOption.IGNORE_CASE),
-            canonicalName
+        val replaceName = storedName ?: memory.entityName?.takeIf { actual -> oldNames.any { sameName(actual, it) } }
+        val fact = if (replaceName == null) memory.fact else memory.fact.replace(
+            Regex("\\b${Regex.escape(replaceName)}\\b", RegexOption.IGNORE_CASE), canonicalName
         )
         var key = memory.stableKey
         (oldNames + listOfNotNull(storedName)).forEach { old ->

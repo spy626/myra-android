@@ -265,8 +265,9 @@ class MemoryRepositoryLinkedPersonTest {
     )
 }
 
-private class FakeMemoryDao : MemoryDao {
+internal class FakeMemoryDao : MemoryDao {
     private val rows = linkedMapOf<String, MemoryEntity>()
+    private val behaviorRows = linkedMapOf<String, BehaviorObservationEntity>()
     fun all() = rows.values.toList()
 
     override suspend fun upsert(memory: MemoryEntity) {
@@ -277,6 +278,8 @@ private class FakeMemoryDao : MemoryDao {
 
     override suspend fun findByStableKey(stableKey: String) =
         rows.values.firstOrNull { it.stableKey == stableKey }
+    override suspend fun findById(id: String) = rows[id]
+    override suspend fun findByEntityId(entityId: String) = rows.values.filter { it.active && it.entityId == entityId }
 
     override suspend fun recent(limit: Int) = rows.values.filter { it.active }
         .sortedByDescending { it.updatedAt }.take(limit)
@@ -294,10 +297,15 @@ private class FakeMemoryDao : MemoryDao {
         val row = rows.values.firstOrNull { it.stableKey == stableKey && it.active } ?: return 0
         return deactivate(row.id, updatedAt)
     }
+    override suspend fun deactivateEntity(entityId: String, updatedAt: Long): Int {
+        val ids = rows.values.filter { it.active && it.entityId == entityId }.map { it.id }
+        ids.forEach { deactivate(it, updatedAt) }
+        return ids.size
+    }
 
     override suspend fun markUsed(id: String, usedAt: Long): Int {
         val row = rows[id]?.takeIf { it.active } ?: return 0
-        rows[id] = row.copy(useCount = row.useCount + 1, lastUsedAt = usedAt)
+        rows[id] = row.copy(useCount = row.useCount + 1, lastUsedAt = usedAt, lastRecalledAt = usedAt)
         return 1
     }
 
@@ -320,4 +328,8 @@ private class FakeMemoryDao : MemoryDao {
     }
 
     override suspend fun deleteAll() = rows.clear()
+    override suspend fun upsertBehavior(observation: BehaviorObservationEntity) { behaviorRows[observation.stableKey] = observation }
+    override suspend fun findBehavior(stableKey: String) = behaviorRows[stableKey]
+    override suspend fun recentBehavior(limit: Int) = behaviorRows.values.sortedByDescending { it.lastObservedAt }.take(limit)
+    override suspend fun deleteAllBehavior() = behaviorRows.clear()
 }

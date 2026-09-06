@@ -21,4 +21,6 @@ object MemorySafetyPolicy {
         return if (candidate.confidence >= 0.85) MemorySaveDecision.AUTO_SAVE
         else MemorySaveDecision.ASK_PERMISSION
     }
+
+    fun containsProhibited(value: String): Boolean = prohibited.containsMatchIn(value)
 }

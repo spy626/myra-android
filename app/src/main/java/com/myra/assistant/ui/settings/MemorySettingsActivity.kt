@@ -23,11 +23,14 @@ import com.myra.assistant.data.memory.MemoryRepository
 import com.myra.assistant.data.memory.MemoryWriteResult
 import com.myra.assistant.databinding.ActivityMemorySettingsBinding
 import kotlinx.coroutines.launch
+import java.text.DateFormat
+import java.util.Date
 
 /** User-controlled view of the same Room memory store used by LYRA voice. */
 class MemorySettingsActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMemorySettingsBinding
     private val repository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
+    private var activeFilter = "ALL"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +39,7 @@ class MemorySettingsActivity : AppCompatActivity() {
         binding.backButton.setOnClickListener { finish() }
         binding.addMemoryButton.setOnClickListener { showMemoryEditor() }
         binding.deleteAllButton.setOnClickListener { confirmDeleteAll() }
+        setupFilters()
     }
 
     override fun onResume() {
@@ -45,12 +49,32 @@ class MemorySettingsActivity : AppCompatActivity() {
 
     private fun refreshMemories() {
         lifecycleScope.launch {
-            val memories = repository.allActive()
+            val memories = repository.allActive().filter(::matchesFilter)
             binding.memoryList.removeAllViews()
             binding.emptyText.visibility = if (memories.isEmpty()) View.VISIBLE else View.GONE
             binding.deleteAllButton.isEnabled = memories.isNotEmpty()
             memories.forEach { binding.memoryList.addView(memoryCard(it)) }
         }
+    }
+
+    private fun setupFilters() {
+        listOf("ALL", "IDENTITY", "PEOPLE", "PREFERENCES", "PROJECTS", "HABITS", "ACTIVITY").forEach { filter ->
+            binding.memoryFilters.addView(Button(this).apply {
+                text = filter
+                textSize = 10f
+                setOnClickListener { activeFilter = filter; refreshMemories() }
+            })
+        }
+    }
+
+    private fun matchesFilter(memory: MemoryEntity): Boolean = when (activeFilter) {
+        "ALL" -> true
+        "PEOPLE" -> memory.category in setOf(MemoryCategory.PERSON.name, MemoryCategory.LIFE_EVENT.name)
+        "PREFERENCES" -> memory.category in setOf(MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name)
+        "PROJECTS" -> memory.category in setOf(MemoryCategory.PROJECT.name, MemoryCategory.GOAL.name, MemoryCategory.WORKFLOW.name)
+        "HABITS" -> memory.category == MemoryCategory.HABIT.name
+        "ACTIVITY" -> memory.category in setOf(MemoryCategory.APP_USAGE.name, MemoryCategory.CONTENT_INTEREST.name, MemoryCategory.CURRENT_INTEREST.name)
+        else -> memory.category == activeFilter
     }
 
     private fun memoryCard(memory: MemoryEntity): View {
@@ -64,29 +88,66 @@ class MemorySettingsActivity : AppCompatActivity() {
             ).apply { bottomMargin = dp(10) }
         }
         card.addView(TextView(this).apply {
+            text = memory.category.replace('_', ' ')
+            setTextColor(Color.rgb(108, 194, 145))
+            textSize = 11f
+        })
+        card.addView(TextView(this).apply {
             text = memory.fact
             setTextColor(Color.rgb(238, 238, 238))
             textSize = 15f
         })
         card.addView(TextView(this).apply {
-            text = "${memory.category.lowercase().replaceFirstChar { it.uppercase() }} · " +
-                when (memory.source) {
-                    ManualMemoryPolicy.SOURCE -> "Added in Settings"
-                    "screen_observation" -> "Observed on screen"
-                    else -> "Learned by LYRA"
-                }
+            text = "Recalled: " + if (memory.lastRecalledAt > 0L) {
+                DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(memory.lastRecalledAt))
+            } else "Never"
             setTextColor(Color.rgb(119, 112, 119))
             textSize = 11f
             setPadding(0, dp(6), 0, dp(6))
         })
-        card.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            if (memory.source == ManualMemoryPolicy.SOURCE && memory.stableKey.startsWith("manual:")) {
-                addView(actionButton("EDIT") { showMemoryEditor(memory) })
-            }
-            addView(actionButton("DELETE") { confirmDelete(memory) })
-        })
+        card.setOnClickListener { showMemoryDetails(memory) }
         return card
+    }
+
+    private fun showMemoryDetails(memory: MemoryEntity) {
+        val details = buildString {
+            append(memory.fact).append("\n\n")
+            append("Category: ").append(memory.category.replace('_', ' ')).append('\n')
+            append("Created: ").append(DateFormat.getDateInstance().format(Date(memory.createdAt))).append('\n')
+            append("Updated: ").append(DateFormat.getDateInstance().format(Date(memory.updatedAt))).append('\n')
+            append("Recalled: ").append(if (memory.lastRecalledAt > 0) DateFormat.getDateInstance().format(Date(memory.lastRecalledAt)) else "Never").append('\n')
+            append("Source: ").append(memory.provenance.replace('_', ' '))
+        }
+        val builder = AlertDialog.Builder(this).setTitle("Memory details").setMessage(details)
+            .setNegativeButton("Close", null)
+            .setNeutralButton("Delete") { _, _ -> confirmDelete(memory) }
+        builder.setPositiveButton("Edit") { _, _ ->
+            if (memory.category == MemoryCategory.PERSON.name || memory.entityId != null) showPersonRename(memory)
+            else showMemoryEditor(memory)
+        }
+        builder.show()
+    }
+
+    private fun showPersonRename(memory: MemoryEntity) {
+        val oldName = memory.entityName ?: com.myra.assistant.data.memory.MemoryRelationshipPolicy.personName(memory.fact)
+        if (oldName.isNullOrBlank()) {
+            Toast.makeText(this, "This linked identity cannot be edited safely here", Toast.LENGTH_LONG).show()
+            return
+        }
+        val input = EditText(this).apply { setText(oldName); selectAll() }
+        val dialog = AlertDialog.Builder(this).setTitle("Rename person")
+            .setMessage("Linked memories stay attached to the same person.")
+            .setView(input).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                lifecycleScope.launch {
+                    val renamed = repository.renamePerson(oldName, input.text.toString())
+                    if (renamed) { dialog.dismiss(); refreshMemories() }
+                    else Toast.makeText(this@MemorySettingsActivity, "Rename was not verified", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun actionButton(label: String, click: () -> Unit) = Button(this).apply {

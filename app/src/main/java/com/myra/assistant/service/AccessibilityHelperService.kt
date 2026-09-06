@@ -1358,6 +1358,7 @@ class AccessibilityHelperService : AccessibilityService() {
                 return
             }
             val updated = ActivityContextStore.update(observation)
+            com.myra.assistant.data.memory.PassiveMemoryObserver.onActivityContext(this, updated)
             UnifiedLyraAgentRuntime.agent.invalidateForContext(updated)
             com.myra.assistant.agent.WorkingTaskRuntime.store.invalidateIfExternalAppChanged(
                 updated.packageName, updated.generation
