@@ -49,7 +49,7 @@ sealed class MemoryBrainOutcome {
 
 object MemoryIntentClassifier {
     private val questionStart = Regex("^(?:kya|kaun|kaunsa|kaunsi|kiska|kis|kab|where|what|who|which|when|do you remember|tumhe).+", RegexOption.IGNORE_CASE)
-    private val questionSubject = Regex("\b(?:yaad|memory|remember|update|delete|naam|project|friend)\b", RegexOption.IGNORE_CASE)
+    private val questionSubject = Regex("""\b(?:yaad|memory|remember|update|delete|naam|project|friend)\b""", RegexOption.IGNORE_CASE)
 
     fun isMemoryQuestion(text: String): Boolean {
         val clean = text.trim()

@@ -313,10 +313,11 @@ class MemoryRepository(private val dao: MemoryDao) {
         val allMemories = dao.recent(200)
         val linkedRows = allMemories.filter { PersonLinkedMemoryIdentity.belongsTo(it, listOf(oldName)) }
         val memories = allMemories.filter(MemoryRelationshipPolicy::isBestFriend)
-        val oldRows = linkedRows.ifEmpty { BestFriendDeleteMatcher.findAll(oldName, memories) }
+        val bestFriendRows = BestFriendDeleteMatcher.findAll(oldName, memories)
+        val oldRows = bestFriendRows.ifEmpty { linkedRows }
         val old = oldRows.firstOrNull() ?: return false
         val canonicalName = BestFriendNameCanonicalizer.canonicalize(correctedName)
-        if (oldRows.none(MemoryRelationshipPolicy::isBestFriend)) {
+        if (bestFriendRows.isEmpty()) {
             val now = System.currentTimeMillis()
             val stableEntityId = old.entityId ?: NaturalMemoryExtractor.stablePersonId(oldName)
             oldRows.forEach { row ->
@@ -340,7 +341,7 @@ class MemoryRepository(private val dao: MemoryDao) {
         // Include every row already resolving to the corrected identity. In the
         // failing phone path "Named Karim" and "Kareem" were separate stable keys;
         // renaming only Karima left that alias active and recall listed two people.
-        val identityRows = (oldRows + BestFriendDeleteMatcher.findAll(canonicalName, memories))
+        val identityRows = (bestFriendRows + BestFriendDeleteMatcher.findAll(canonicalName, memories))
             .distinctBy { it.id }
         val replacement = MemoryRelationshipPolicy.canonicalizeAdditional(
             MemoryCandidate(
