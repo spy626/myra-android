@@ -66,7 +66,6 @@ class AppActionExecutor(private val context: Context) {
         AppCommand.GoBack -> navigateBack()
         AppCommand.CurrentTime -> currentTime()
         AppCommand.BatteryLevel -> batteryLevel()
-        AppCommand.ListFeatures -> listFeatures()
         is AppCommand.SetFlashlight -> setFlashlight(command.enabled)
         is AppCommand.ControlMedia -> controlMedia(command.action)
         is AppCommand.ScrollYouTube -> scrollYouTube(command.direction)
@@ -90,11 +89,6 @@ class AppActionExecutor(private val context: Context) {
             shouldResumeListening = true
         )
     }
-
-    private fun listFeatures(): Result = Result(
-        "Haan jaan, main YouTube open aur band kar sakti hoon, YouTube par videos search kar sakti hoon, first, next aur pichhla video chala sakti hoon, aur play-pause bhi control kar sakti hoon. Main available YouTube ads skip kar sakti hoon, flashlight on-off aur screenshot le sakti hoon, Home aur Back control kar sakti hoon, time aur battery bata sakti hoon, WhatsApp messages check karke reply de sakti hoon, Deep Research kar sakti hoon, aur tumse English ya Hinglish mein normally baat bhi kar sakti hoon.",
-        true
-    )
 
     private fun navigateHome(): Result {
         val service = AccessibilityHelperService.instance

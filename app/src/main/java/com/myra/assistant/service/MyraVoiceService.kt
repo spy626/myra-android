@@ -2066,7 +2066,6 @@ class MyraVoiceService : Service() {
             "TIME" -> AppCommand.CurrentTime
             "BATTERY" -> AppCommand.BatteryLevel
             "TAKE_SCREENSHOT" -> AppCommand.TakeScreenshot
-            "LIST_FEATURES" -> AppCommand.ListFeatures
             "QUERY_WHATSAPP" -> AppCommand.QueryWhatsAppMessages
             else -> null
         }
@@ -2974,7 +2973,7 @@ class MyraVoiceService : Service() {
         is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
+        AppCommand.BatteryLevel, is AppCommand.SetFlashlight,
         is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
         else -> false
     }
@@ -2998,7 +2997,6 @@ class MyraVoiceService : Service() {
             AppCommand.GoBack -> "go-back"
             AppCommand.CurrentTime -> "current-time"
             AppCommand.BatteryLevel -> "battery-level"
-            AppCommand.ListFeatures -> "list-features"
             is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
             is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
             is AppCommand.ScrollYouTube -> "youtube-scroll:${command.direction?.name?.lowercase(Locale.ROOT) ?: "repeat"}"
@@ -4524,7 +4522,7 @@ class MyraVoiceService : Service() {
         AppCommand.RequestInstagramReels, AppCommand.OpenInstagramReels, AppCommand.TakeScreenshot,
         AppCommand.RepeatYouTubeSearch,
         AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, AppCommand.ListFeatures, is AppCommand.SetFlashlight,
+        AppCommand.BatteryLevel, is AppCommand.SetFlashlight,
         is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
         is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
         is AppCommand.DeepResearch -> false

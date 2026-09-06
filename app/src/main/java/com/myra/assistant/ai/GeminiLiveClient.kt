@@ -167,7 +167,7 @@ class GeminiLiveClient(
                     "OPEN_YOUTUBE_SHORTS", "REQUEST_INSTAGRAM_REELS", "SCROLL_DOWN", "SCROLL_UP",
                     "SCROLL_REPEAT", "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS",
                     "MEDIA_FIRST", "FLASHLIGHT_ON", "FLASHLIGHT_OFF", "HOME", "BACK", "TIME",
-                    "BATTERY", "TAKE_SCREENSHOT", "LIST_FEATURES", "QUERY_WHATSAPP"
+                    "BATTERY", "TAKE_SCREENSHOT", "QUERY_WHATSAPP"
                 ))))
                 .put("target", JSONObject().put("type", "STRING"))
                 .put("query", JSONObject().put("type", "STRING")))

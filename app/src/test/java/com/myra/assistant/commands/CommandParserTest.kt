@@ -20,24 +20,34 @@ class CommandParserTest {
         assertEquals(false, com.myra.assistant.ai.CommandParser.isExplicitOpenCommand("YouTube"))
         assertEquals(true, com.myra.assistant.ai.CommandParser.isExplicitOpenCommand("YouTube open karo"))
     }
-    @Test fun listsOnlyImplementedFeatures() {
+    @Test fun featureQuestionsRemainConversationInsteadOfPhoneActions() {
         listOf(
-            "kon kon se features hai",
-            "kaun sa kaun sa feature hai",
-            "kauna kauna si phicara hai abhi",
-            "kauna si phicara hai",
-            "कौन सी फीचर है",
-            "अभी कौन कौन से फीचर्स हैं",
-            "phicara kauna kauna se haim",
-            "features konsi hai",
             "tum kya kya kar sakti ho",
-            "tum kya kya kar sakte ho",
-            "तुम क्या-क्या कर सकते हो",
-            "apne saare features batao",
-            "what can you do"
+            "what can you do",
+            "features improve karne hain",
+            "LYRA ke features ke bare mein baat karte hain"
         ).forEach { phrase ->
-            assertEquals(CommandType.LIST_FEATURES, CommandParser.parse(phrase).type)
+            assertEquals(CommandType.UNKNOWN, CommandParser.parse(phrase).type)
         }
+    }
+
+    @Test fun removingFeatureListDoesNotAffectRealDeviceCommands() {
+        assertEquals(CommandType.FLASHLIGHT_ON, CommandParser.parse("flashlight on").type)
+        assertEquals(CommandType.BATTERY_LEVEL, CommandParser.parse("battery batao").type)
+        assertEquals(CommandType.GO_HOME, CommandParser.parse("home jao").type)
+    }
+
+    @Test fun obsoleteFeatureCapabilityAndFixedSpeechAreAbsentFromRepository() {
+        val appRoot = java.io.File("src").takeIf { it.exists() } ?: java.io.File("app/src")
+        val source = appRoot.walkTopDown()
+            .filter { it.isFile && it.extension in setOf("kt", "java", "xml") }
+            .joinToString("\n") { it.readText() }
+        val toolName = "LIST_" + "FEATURES"
+        val commandName = "List" + "Features"
+        val fixedSpeech = "Haan jaan, main YouTube " + "open aur band"
+        assertFalse(source.contains(toolName))
+        assertFalse(source.contains(commandName))
+        assertFalse(source.contains(fixedSpeech))
     }
 
     @Test fun contextFreeSearchIsNotOwnedByLegacyYouTubeParserAndScrollingRemainsSupported() {

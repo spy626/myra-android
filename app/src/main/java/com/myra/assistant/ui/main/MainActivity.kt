@@ -479,7 +479,6 @@ class MainActivity : AppCompatActivity() {
             AppCommand.GoBack -> "go-back"
             AppCommand.CurrentTime -> "current-time"
             AppCommand.BatteryLevel -> "battery-level"
-            AppCommand.ListFeatures -> "list-features"
             is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
             is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
             is AppCommand.ScrollYouTube -> "youtube-scroll:${command.direction?.name?.lowercase(Locale.ROOT) ?: "repeat"}"

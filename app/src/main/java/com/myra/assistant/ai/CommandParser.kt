@@ -31,21 +31,6 @@ object CommandParser {
     fun parse(raw: String): AppCommand? {
         val text = normalize(raw)
         if (text.isBlank()) return null
-        val asksForFeatures = listOf(
-            Regex("^(?:(?:lyra|laira)\\s+)?(?:(?:tumhare|aapke|abhi)\\s+)?(?:kaun|kon|kya)(?:\\s+sa)?\\s+(?:kaun|kon|kya)(?:\\s+sa)?\\s+(?:se\\s+)?features?\\s+(?:hain|hai|he)$"),
-            Regex("^(?:(?:lyra|laira)\\s+)?(?:tum\\s+)?kya\\s+kya\\s+kar\\s+(?:sakti|sakte)\\s+ho$"),
-            Regex("^(?:(?:lyra|laira)\\s+)?(?:apne\\s+)?(?:(?:saare|all)\\s+)?features?\\s+(?:batao|bata\\s+do|dikhao)$"),
-            Regex("^(?:what\\s+can\\s+you\\s+do|list\\s+(?:all\\s+)?features?|show\\s+(?:all\\s+)?features?)$"),
-            Regex("^(?:तुम\\s+)?क्या\\s+क्या\\s+कर\\s+सक(?:ती|ते)\\s+हो$"),
-            Regex("^(?:अपने\\s+)?(?:सारे\\s+)?फीचर्स?\\s+(?:बताओ|बता\\s+दो)$"),
-            Regex("^(?:अभी\\s+)?(?:(?:कौन|कोन)(?:\\s+(?:सा|सी|से))?\\s+){1,2}(?:फीचर्स?|फिचर्स?)(?:\\s+(?:है|हैं))?(?:\\s+अभी)?$"),
-            Regex("^kauna\\s+si\\s+phicara\\s+hai$"),
-            Regex("^कौन\\s+सी\\s+फीचर\\s+है$"),
-            Regex("^अभी\\s+कौन\\s+कौन\\s+से\\s+फीचर्स\\s+हैं$"),
-            Regex("^(?:(?:kaun|kon|kauna)(?:\\s+(?:sa|si|se))?\\s+){1,2}(?:features?|phicara|phichara|fichara?|phichar)(?:\\s+(?:hai|hain|haim|he))?(?:\\s+abhi)?$"),
-            Regex("^(?:features?|phicara|phichara|fichara?|phichar)\\s+(?:(?:kaun|kon|kauna|konsi|kaunsi)(?:\\s+(?:sa|si|se))?\\s*){1,2}(?:hai|hain|haim|he)?(?:\\s+abhi)?$")
-        ).any { it.matches(text) }
-        if (asksForFeatures) return AppCommand.ListFeatures
         if (Regex("^(?:go )?home(?: screen)?$|^home (?:jao|chalo|karo)$|^होम").containsMatchIn(text)) return AppCommand.GoHome
         if (Regex("^(?:go )?back$|^back (?:jao|karo)$|^peeche (?:jao|chalo)$|^पीछे").containsMatchIn(text)) return AppCommand.GoBack
         if (isCurrentTimeQuery(text)) return AppCommand.CurrentTime

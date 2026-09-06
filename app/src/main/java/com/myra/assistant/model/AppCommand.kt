@@ -17,7 +17,6 @@ sealed interface AppCommand {
     data object GoBack : AppCommand
     data object CurrentTime : AppCommand
     data object BatteryLevel : AppCommand
-    data object ListFeatures : AppCommand
     data class SetFlashlight(val enabled: Boolean) : AppCommand
     data class ControlMedia(val action: MediaAction) : AppCommand
     data class ScrollYouTube(
