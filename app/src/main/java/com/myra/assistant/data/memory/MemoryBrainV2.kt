@@ -63,10 +63,17 @@ object MemoryIntentClassifier {
             is MemoryCommand.Remember -> MemoryDecision.SAVE
             is MemoryCommand.Read -> MemoryDecision.RECALL
             is MemoryCommand.Forget -> MemoryDecision.DELETE
-            null -> if (BestFriendNameCorrectionParser.parse(text, MemoryWorkingContext.recentPerson) != null) {
+            null -> if (isEntityCorrection(text)) {
                 MemoryDecision.UPDATE
             } else if (NaturalMemoryExtractor.extract(text).isNotEmpty()) MemoryDecision.SAVE else MemoryDecision.IGNORE
         }
+    }
+
+    private fun isEntityCorrection(text: String): Boolean {
+        val correction = BestFriendNameCorrectionParser.parse(text, MemoryWorkingContext.recentPerson) ?: return false
+        val operationWords = Regex("""\b(?:feature|update|memory|delete|failed|fail|paya|payi|hua|hui|problem|system)\b""", RegexOption.IGNORE_CASE)
+        return !operationWords.containsMatchIn(correction.oldName) &&
+            !operationWords.containsMatchIn(correction.newName)
     }
 }
 

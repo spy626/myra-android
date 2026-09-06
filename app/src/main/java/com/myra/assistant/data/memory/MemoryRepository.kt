@@ -316,7 +316,11 @@ class MemoryRepository(private val dao: MemoryDao) {
         val bestFriendRows = BestFriendDeleteMatcher.findAll(oldName, memories)
         val oldRows = bestFriendRows.ifEmpty { linkedRows }
         val old = oldRows.firstOrNull() ?: return false
-        val canonicalName = BestFriendNameCanonicalizer.canonicalize(correctedName)
+        // A verified user correction is authoritative. Do not map "Karim" back to
+        // the older ASR alias "Kareem" through the observational canonicalizer.
+        val canonicalName = correctedName.trim().replace(Regex("\\s+"), " ").replaceFirstChar {
+            if (it.isLowerCase()) it.uppercaseChar().toString() else it.toString()
+        }
         if (bestFriendRows.isEmpty()) {
             val now = System.currentTimeMillis()
             val stableEntityId = old.entityId ?: NaturalMemoryExtractor.stablePersonId(oldName)
