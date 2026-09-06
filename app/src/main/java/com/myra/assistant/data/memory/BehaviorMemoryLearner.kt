@@ -1,6 +1,7 @@
 package com.myra.assistant.data.memory
 
 import android.content.Context
+import android.util.Log
 import com.myra.assistant.agent.CurrentActivityContext
 import com.myra.assistant.agent.SemanticRole
 import com.myra.assistant.screen.ScreenPrivacyPolicy
@@ -38,6 +39,7 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
             lastDayBucket = day, metadata = signal.safeMetadata, promotedMemoryId = old?.promotedMemoryId
         )
         repository.recordBehavior(updated)
+        Log.d("LyraMemoryBrainV2", "BEHAVIOR_OBSERVATION kind=${signal.kind} key=$key observations=${updated.observationCount} sessions=${updated.sessionCount} days=${updated.dayCount}")
         if (!eligible(updated)) return null
         val category = if (signal.kind == BehaviorObservationKind.CONTENT_TOPIC) MemoryCategory.CURRENT_INTEREST else MemoryCategory.HABIT
         val fact = when (signal.kind) {
@@ -48,6 +50,7 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
         return repository.saveGrounded(MemoryCandidate(category, fact, key, MemorySensitivity.LOW,
             confidence = .86, source = "behavior_aggregate", provenance = MemoryProvenance.BEHAVIOR_PATTERN,
             observationMetadata = "observations=${updated.observationCount};sessions=${updated.sessionCount};days=${updated.dayCount}"))
+            .also { Log.d("LyraMemoryBrainV2", "BEHAVIOR_PATTERN_PROMOTED kind=${signal.kind} key=$key status=${it::class.simpleName}") }
     }
 
     suspend fun decay(now: Long) {
@@ -56,6 +59,7 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
             // Raw aggregates are retained for bounded historical evidence. The linked
             // durable memory is made inactive through its stable key.
             repository.forgetStableKey(observation.stableKey)
+            Log.d("LyraMemoryBrainV2", "BEHAVIOR_PATTERN_DECAYED kind=${observation.kind} key=${observation.stableKey}")
         }
     }
 
@@ -75,7 +79,7 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
 object PassiveMemoryObserver {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lastObserved = mutableMapOf<String, Long>()
-    private val sessionId = UUID.randomUUID().toString()
+    private var lastDecayDay = -1L
 
     fun onActivityContext(context: Context, activity: CurrentActivityContext) {
         if (activity.packageName == context.packageName) return
@@ -83,6 +87,9 @@ object PassiveMemoryObserver {
             it.length in 3..100 && ScreenPrivacyPolicy.sensitiveCategory(it) == null &&
                 !ScreenPrivacyPolicy.blocksLongTermMemory(it)
         }
+        // A bounded activity window represents a usage session. This avoids treating
+        // repeated refreshes as sessions while still allowing later visits to count.
+        val sessionId = "${activity.packageName}:${activity.timestamp / SESSION_WINDOW_MS}"
         val signals = mutableListOf(BehaviorSignal(BehaviorObservationKind.APP_USAGE,
             activity.appLabel ?: activity.packageName.substringAfterLast('.'), sessionId, activity.timestamp))
         if (activity.packageName.contains("youtube", true)) {
@@ -103,8 +110,14 @@ object PassiveMemoryObserver {
         scope.launch {
             val learner = BehaviorMemoryLearner(MemoryRepository(LyraMemoryDatabase.get(context).memoryDao()))
             accepted.forEach { learner.observe(it) }
+            val day = activity.timestamp / BehaviorMemoryLearner.DAY_MS
+            if (day != lastDecayDay) {
+                lastDecayDay = day
+                learner.decay(activity.timestamp)
+            }
         }
     }
 
     private const val OBSERVATION_COOLDOWN_MS = 120_000L
+    private const val SESSION_WINDOW_MS = 30L * 60_000L
 }

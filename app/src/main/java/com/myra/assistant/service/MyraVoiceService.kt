@@ -47,6 +47,7 @@ import com.myra.assistant.data.memory.MemoryRepository
 import com.myra.assistant.data.memory.MemoryBrainCoordinator
 import com.myra.assistant.data.memory.MemoryIntentClassifier
 import com.myra.assistant.data.memory.MemoryBrainOutcome
+import com.myra.assistant.data.memory.MemoryWorkingContext
 import com.myra.assistant.data.memory.MemoryRelationshipPolicy
 import com.myra.assistant.data.memory.SavedMemoryContextFormatter
 import com.myra.assistant.data.memory.MemoryWriteResult
@@ -1611,7 +1612,7 @@ class MyraVoiceService : Service() {
                     val recentName = lastSavedBestFriendName?.takeIf {
                         android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
                             BEST_FRIEND_CORRECTION_CONTEXT_MS
-                    }
+                    } ?: MemoryWorkingContext.recentPerson
                     // Parse explicit old->new corrections before the ordinary extractor;
                     // otherwise "Karima nahi, Kareem" becomes a new Kareem row while
                     // the stale Karima row remains active.
@@ -1652,28 +1653,17 @@ class MyraVoiceService : Service() {
                         resetTurnBuffers("semantic_name_mismatch")
                         waitingForFreshInputAfterCommand = true
                         return@turnComplete
-                    } else if (personalCandidate != null) {
-                        recentRelationshipTurns.clear()
-                        if (MemoryRelationshipPolicy.isBestFriend(personalCandidate)) {
-                            // Explicit completed best-friend statements add that person to
-                            // the set silently. They never replace another person implicitly.
-                            serviceScope.launch { memoryRepository.saveAdditionalBestFriend(personalCandidate) }
-                            rememberBestFriendForCorrection(personalCandidate)
-                        } else if (MemorySafetyPolicy.decide(personalCandidate) == MemorySaveDecision.AUTO_SAVE) {
-                            serviceScope.launch { memoryRepository.save(personalCandidate) }
-                        }
+                    } else if (nameCorrection == null) {
+                        // One final-turn coordinator owns natural persistence. Legacy
+                        // extractors provide bounded candidates but cannot steal response
+                        // ownership or write independently.
+                        val supplemental = buildList {
+                            addAll(linkedPersonCandidates)
+                            if (personalCandidate != null) add(personalCandidate)
+                        }.distinctBy { it.stableKey to it.fact }
+                        serviceScope.launch { memoryBrain.processFinalTurn(displayUserText, supplemental) }
                     }
-                    // One natural sentence can contain more than the relationship.
-                    // Persist only additional durable, grounded person facts; temporary
-                    // claims such as playing without sleep never enter this list.
-                    linkedPersonCandidates.filterNot(MemoryRelationshipPolicy::isBestFriend).forEach { linkedFact ->
-                        serviceScope.launch { memoryRepository.saveGrounded(linkedFact) }
-                    }
-                    // One final-turn coordinator evaluates all other low-risk durable
-                    // facts. It has no response ownership for natural conversation.
-                    serviceScope.launch { memoryBrain.processFinalTurn(displayUserText) }
                     rememberRecentRelationshipTurn(displayUserText)
-                    learnSafePreferenceFromCompletedTurn(userText)
                 }
                 if (myraText.isNotBlank() && !suppressModelForTurn && responseArbiter.acceptsOrdinaryModel()) {
                     listener?.onMyraText(romanDisplayText(myraText))
@@ -1769,7 +1759,9 @@ class MyraVoiceService : Service() {
         output.clear()
         serviceScope.launch {
             val rememberResult = if (command is MemoryCommand.Remember) {
-                memoryRepository.save(command.candidate)
+                memoryBrain.processGroundedProposal(command.candidate.copy(
+                    provenance = com.myra.assistant.data.memory.MemoryProvenance.USER_EXPLICIT_MEMORY_COMMAND
+                ))
             } else null
             val response = when (command) {
                 is MemoryCommand.Remember -> when (rememberResult) {
@@ -2691,11 +2683,12 @@ class MyraVoiceService : Service() {
         serviceScope.launch {
             val candidate = MemoryCandidate(
                 category, fact, "screen:$stableKey", MemorySensitivity.LOW,
-                confidence, source = "screen_observation"
+                confidence, source = "screen_observation",
+                provenance = com.myra.assistant.data.memory.MemoryProvenance.SCREEN_OBSERVATION
             )
             val result = if (memoryRepository.isAlreadySaved(candidate)) {
                 MemoryWriteResult.Saved("existing")
-            } else memoryRepository.save(candidate)
+            } else memoryBrain.processGroundedProposal(candidate)
             val saved = result is MemoryWriteResult.Saved
             voiceLog("screen_memory_write fact=${fact.take(80)} source=screen_observation saved=$saved")
             live?.sendToolResponse(
@@ -2740,19 +2733,11 @@ class MyraVoiceService : Service() {
                 live?.sendToolResponse(id, "propose_user_memory", true, "Already remembered; continue naturally without mentioning memory")
                 return@launch
             }
-            when {
-                MemoryRelationshipPolicy.isBestFriend(candidate) -> {
-                    memoryRepository.saveAdditionalBestFriend(candidate)
-                    live?.sendToolResponse(id, "propose_user_memory", true, "Saved silently; continue the conversation naturally without mentioning memory")
-                }
-                MemorySafetyPolicy.decide(candidate) == MemorySaveDecision.REJECT ->
-                    live?.sendToolResponse(id, "propose_user_memory", false, "Android rejected this memory")
-                MemorySafetyPolicy.decide(candidate) == MemorySaveDecision.AUTO_SAVE -> {
-                    memoryRepository.save(candidate)
-                    live?.sendToolResponse(id, "propose_user_memory", true, "Saved silently; continue the conversation naturally without mentioning memory")
-                }
+            when (memoryBrain.processGroundedProposal(candidate)) {
+                is MemoryWriteResult.Saved -> live?.sendToolResponse(id, "propose_user_memory", true,
+                    "Saved silently; continue the conversation naturally without mentioning memory")
                 else -> live?.sendToolResponse(id, "propose_user_memory", false,
-                    "Sensitive or uncertain proposals are not learned automatically")
+                    "Android rejected an unsafe, sensitive, uncertain, or ungrounded proposal")
             }
         }
     }

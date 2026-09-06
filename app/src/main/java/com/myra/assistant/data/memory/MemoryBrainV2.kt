@@ -122,8 +122,16 @@ object NaturalMemoryExtractor {
 }
 
 class MemoryBrainCoordinator(private val repository: MemoryRepository) {
-    suspend fun processFinalTurn(text: String): MemoryBrainOutcome {
-        val decision = MemoryIntentClassifier.decision(text)
+    suspend fun processGroundedProposal(candidate: MemoryCandidate): MemoryWriteResult {
+        log("MEMORY_CANDIDATE category=${candidate.category} key=${candidate.stableKey} source=${candidate.provenance} confidence=${candidate.confidence}")
+        val result = repository.saveGrounded(candidate)
+        log("MEMORY_TRANSACTION decision=SAVE status=${result::class.simpleName}")
+        return result
+    }
+
+    suspend fun processFinalTurn(text: String, supplemental: List<MemoryCandidate> = emptyList()): MemoryBrainOutcome {
+        val classified = MemoryIntentClassifier.decision(text)
+        val decision = if (classified == MemoryDecision.IGNORE && supplemental.isNotEmpty()) MemoryDecision.SAVE else classified
         log("MEMORY_DECISION decision=$decision")
         return when (decision) {
             MemoryDecision.IGNORE -> MemoryBrainOutcome.Ignored
@@ -156,12 +164,13 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
             }
             MemoryDecision.SAVE -> {
                 val explicit = MemoryCommandParser.parse(text) as? MemoryCommand.Remember
-                val candidates = explicit?.let { listOf(it.candidate.copy(
+                val candidates = (explicit?.let { listOf(it.candidate.copy(
                     explicitlyRequested = true,
                     provenance = MemoryProvenance.USER_EXPLICIT_MEMORY_COMMAND
-                )) } ?: NaturalMemoryExtractor.extract(text)
+                )) } ?: NaturalMemoryExtractor.extract(text)) + supplemental
+                val uniqueCandidates = candidates.distinctBy { it.stableKey to it.fact }
                 var result: MemoryWriteResult = MemoryWriteResult.Rejected("No grounded durable fact")
-                for (candidate in candidates) {
+                for (candidate in uniqueCandidates) {
                     log("MEMORY_CANDIDATE category=${candidate.category} key=${candidate.stableKey} source=${candidate.provenance} confidence=${candidate.confidence}")
                     result = repository.saveGrounded(candidate, explicit != null)
                     if (result is MemoryWriteResult.Saved) MemoryWorkingContext.person(candidate.entityName)

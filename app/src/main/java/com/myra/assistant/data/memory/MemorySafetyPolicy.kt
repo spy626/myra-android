@@ -11,6 +11,9 @@ object MemorySafetyPolicy {
         if (candidate.sensitivity == MemorySensitivity.PROHIBITED || prohibited.containsMatchIn(candidate.fact)) {
             return MemorySaveDecision.REJECT
         }
+        if (!candidate.explicitlyRequested && candidate.provenance == MemoryProvenance.SCREEN_OBSERVATION) {
+            return MemorySaveDecision.ASK_PERMISSION
+        }
         if (candidate.explicitlyRequested) return MemorySaveDecision.AUTO_SAVE
         if (candidate.confidence < 0.70) return MemorySaveDecision.REJECT
         // The extractor accepts only an explicit, completed best-friend statement.
