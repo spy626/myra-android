@@ -85,4 +85,55 @@ class MemoryBrainV2Test {
         assertTrue((outcome as MemoryBrainOutcome.Mutated).result is MemoryWriteResult.Saved)
         assertTrue(outcome.explicit)
     }
+
+    @Test fun legacyRenameFailureFeedsDeterministicLastTransactionRecall() = runBlocking {
+        MemoryWorkingContext.clear()
+        val repository = MemoryRepository(FakeMemoryDao())
+
+        assertFalse(repository.renameBestFriend("Kareem", "Karim"))
+        val parsed = MemoryCommandParser.parse("Kiska naam update nahi ho paya?")
+        assertTrue(parsed is MemoryCommand.Read)
+        assertEquals(MemoryWorkingContext.LAST_TRANSACTION_QUERY, (parsed as MemoryCommand.Read).query)
+
+        val recalled = repository.relevant(parsed.query, 5)
+        assertEquals(1, recalled.size)
+        assertTrue(recalled.single().fact.contains("Kareem"))
+        assertTrue(recalled.single().fact.contains("Karim"))
+        MemoryWorkingContext.clear()
+    }
+
+    @Test fun failedDeleteFeedsDeterministicLastTransactionRecall() = runBlocking {
+        MemoryWorkingContext.clear()
+        val repository = MemoryRepository(FakeMemoryDao())
+
+        assertFalse(repository.forgetMatching("Kareem"))
+        val recalled = repository.relevant(MemoryWorkingContext.LAST_TRANSACTION_QUERY, 5)
+        assertEquals(1, recalled.size)
+        assertTrue(recalled.single().fact.contains("deletion", ignoreCase = true))
+        assertTrue(recalled.single().fact.contains("Kareem", ignoreCase = true))
+        MemoryWorkingContext.clear()
+    }
+
+    @Test fun relevantRecallCanFindMemoryOlderThanNewestHundred() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        repository.saveGrounded(MemoryCandidate(
+            MemoryCategory.PROJECT,
+            "Zopy's archive project codename is NebulaQuartz",
+            "project:archive:nebulaquartz",
+            MemorySensitivity.LOW,
+            .95
+        ))
+        repeat(130) { index ->
+            repository.saveGrounded(MemoryCandidate(
+                MemoryCategory.LIFE_EVENT,
+                "Unrelated durable fact number $index",
+                "life:unrelated:$index",
+                MemorySensitivity.LOW,
+                .95
+            ))
+        }
+
+        val recalled = repository.relevant("NebulaQuartz archive project", 5)
+        assertTrue(recalled.any { it.fact.contains("NebulaQuartz") })
+    }
 }
