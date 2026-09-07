@@ -74,11 +74,11 @@ sealed class MemoryBrainOutcome {
 
 object NaturalMemoryRequestResolver {
     private val forgetIntent = Regex(
-        "\\b(?:forget|delete|remove|bhool\\s*(?:jao|do|dena)?|bhul\\s*(?:jao|do|dena)?|hata\\s*(?:do|dena|o))\\b",
+        "\\b(?:forget|delete|remove|bh(?:oo|u)l(?:e|na)?|hata(?:o|na)?)\\b(?:\\s+(?:jao|jaao|do|dena))?",
         RegexOption.IGNORE_CASE
     )
     private val protectedNegation = Regex(
-        "\\b(?:mat|dont|don't|do\\s+not|nahi|nahin)\\s+(?:bhool|bhul|forget|delete|remove|hata)\\b",
+        "\\b(?:mat|dont|don't|do\\s+not|nahi|nahin)\\s+(?:bh(?:oo|u)l(?:e|na)?|forget|delete|remove|hata(?:o|na)?)\\b",
         RegexOption.IGNORE_CASE
     )
     private val pronounReference = Regex(
