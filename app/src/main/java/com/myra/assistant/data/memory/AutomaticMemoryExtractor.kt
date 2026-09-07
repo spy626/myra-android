@@ -2,27 +2,36 @@ package com.myra.assistant.data.memory
 
 import java.util.Locale
 
-/**
- * Extracts only explicit, concrete, low-risk preferences from completed user turns.
- * Automatic memory must prefer missing a fact over saving a wrong inference.
- */
 object AutomaticMemoryExtractor {
     private val prohibitedOrPersonal = Regex(
         """\b(?:otp|passwords?|passcode|pin|cvv|security\s*code|verification\s*code|recovery\s*code|authentication\s*token|auth\s*token|api\s*key|private\s*key|seed\s*phrase|bank|account|address|health|disease|diagnosis|religion|sexual|trauma|fear|afraid|friend|dost|girlfriend|boyfriend|wife|husband|mother|father|brother|sister|relationship|age|years?\s+old|saal)\b""",
         RegexOption.IGNORE_CASE
     )
     private val ambiguousSubject = Regex(
-        """^(?:it|this|that|these|those|ye|yeh|vo|woh|wo|isko|usko|ise|use|something|kuch)$""",
+        """^(?:it|this|that|these|those|ye|yeh|vo|woh|wo|isko|usko|ise|use|something|kuch|same|wahi)$""",
         RegexOption.IGNORE_CASE
     )
-    private val negation = Regex(
-        """\b(?:do\s+not|don't|dont|not|never|na|nahi|nahin|pasand\s+nahi)\b""",
+    private val uncertain = Regex(
+        """\b(?:shayad|maybe|probably|perhaps|possibly|guess|i\s+think|i\s+guess|i\s+suppose|ho\s+sakta|ho\s+sakti|ho\s+sakte)\b|\b(?:mujhe|mereko|merko|main|mai)\s+(?:aisa\s+)?lagta\s+(?:hai|he)(?:\s+ki)?\b|\b(?:pasand|like|love|enjoy).{0,30}\b(?:hogi|hoga|honge|might|could)\b""",
         RegexOption.IGNORE_CASE
     )
+    private val temporary = Regex(
+        """\b(?:aaj|today|abhi|currently|filhaal|filhal|right\s+now|is\s+waqt|iss\s+waqt|tonight|for\s+now)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val questionStart = Regex(
+        """^(?:kya|kaun|kaunsa|kaunsi|kiska|kis|kab|what|who|which|when|where|do\s+you|does\s+he|does\s+she|is\s+it)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val questionEnd = Regex("""\b(?:kya|right|hai\s+na|he\s+na)$""", RegexOption.IGNORE_CASE)
+
+    private data class PersonPreference(val name: String, val subject: String, val likes: Boolean)
 
     fun extract(raw: String): MemoryCandidate? {
-        val text = raw.trim().trimEnd('.', '!', '?').replace(Regex("\\s+"), " ")
-        if (text.length !in 4..160 || negation.containsMatchIn(text) ||
+        val rawTrimmed = raw.trim()
+        val text = rawTrimmed.trimEnd('.', '!', '?').replace(Regex("\\s+"), " ")
+        if (text.length !in 4..180 || rawTrimmed.endsWith('?') || questionStart.containsMatchIn(text) ||
+            questionEnd.containsMatchIn(text) || uncertain.containsMatchIn(text) || temporary.containsMatchIn(text) ||
             prohibitedOrPersonal.containsMatchIn(text)
         ) return null
 
@@ -50,8 +59,11 @@ object AutomaticMemoryExtractor {
                 0.91
             )
         }
+        namedPersonPreference(text)?.let { value -> return personPreference(value) }
+        negativeSelfPreference(text)?.let { subject -> return preference(subject, likes = false) }
         englishPreference(text)?.let { subject -> return preference(subject) }
         hinglishPreference(text)?.let { subject -> return preference(subject) }
+        colloquialPreference(text)?.let { subject -> return preference(subject) }
         favoritePreference(text)?.let { (kind, value) ->
             val cleanKind = cleanSubject(kind) ?: return null
             val cleanValue = cleanSubject(value) ?: return null
@@ -161,22 +173,105 @@ object AutomaticMemoryExtractor {
     )
 
     private fun englishPreference(text: String): String? =
-        Regex(
-            """^(?:i|i\s+(?:really|always))\s+(?:like|love|prefer|enjoy)\s+(.+)$""",
-            RegexOption.IGNORE_CASE
-        ).matchEntire(text)?.groupValues?.get(1)
+        listOf(
+            Regex("""^i\s+(?:(?:really|always)\s+)?(?:like|love|prefer|enjoy)\s+(.+)$""", RegexOption.IGNORE_CASE),
+            Regex("""^i(?:'m|\s+am)\s+into\s+(.+)$""", RegexOption.IGNORE_CASE),
+            Regex("""^(.+?)\s+is\s+fun\s+for\s+me$""", RegexOption.IGNORE_CASE)
+        ).firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1) }
 
     private fun hinglishPreference(text: String): String? =
         listOf(
             Regex(
-                """^mujhe\s+(.+?)\s+(?:(?:bahut|bahuta|bohot|bohat|kaafi)\s+)?pasand[ae]?\s+(?:hai|hain|he)$""",
+                """^(?:mujhe|mereko|merko)(?:\s+na)?\s+(.+?)\s+(?:(?:bahut|bahuta|bohot|bohat|kaafi)\s+)?pasand[ae]?\s+(?:hai|hain|he)$""",
                 RegexOption.IGNORE_CASE
             ),
             Regex(
-                """^main\s+(.+?)\s+(?:pasand\s+karta|pasand\s+karti)\s+(?:hun|hoon|hu)$""",
+                """^(?:main|mai|mein)\s+(.+?)\s+(?:pasand\s+karta|pasand\s+karti)\s+(?:hun|hoon|hu)$""",
                 RegexOption.IGNORE_CASE
             )
         ).firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1) }
+
+    private fun colloquialPreference(text: String): String? =
+        listOf(
+            Regex(
+                """^(?:mujhe|mereko|merko)(?:\s+na)?\s+(.+?)\s+(?:accha|achha|acha|aacha|achcha|acchi|achhi|achi)\s+lag(?:ta|ti|ata|ati)\s+(?:hai|he)$""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """^(.+?)\s+(?:mein|me)\s+(?:maza|mazza)\s+(?:aata|ata)\s+(?:hai|he)\s+(?:mujhe|mereko|merko)$""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """^(?:mujhe|mereko|merko)(?:\s+na)?\s+(.+?)\s+(?:mein|me)\s+(?:maza|mazza)\s+(?:aata|ata)\s+(?:hai|he)$""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """^(?:main|mai|mein)\s+(.+?)\s+(?:enjoy\s+karta|enjoy\s+karti)\s+(?:hun|hoon|hu)$""",
+                RegexOption.IGNORE_CASE
+            )
+        ).firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1) }
+
+    private fun negativeSelfPreference(text: String): String? =
+        listOf(
+            Regex(
+                """^i\s+(?:(?:do\s+not|don't|dont)\s+(?:like|love|enjoy)|no\s+longer\s+(?:like|love|enjoy))\s+(.+?)(?:\s+anymore)?$""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """^(?:mujhe|mereko|merko)(?:\s+na)?\s+(.+?)\s+(?:ab\s+)?pasand[ae]?\s+nahi\s+(?:hai|hain|he)$""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """^(?:mujhe|mereko|merko)(?:\s+na)?\s+(.+?)\s+(?:accha|achha|acha|aacha|achcha|acchi|achhi|achi)\s+nahi\s+lag(?:ta|ti|ata|ati)\s+(?:hai|he)$""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """^(.+?)\s+(?:mujhe|mereko|merko)\s+(?:(?:utna|itna|zyada|jyada)\s+)?pasand[ae]?\s+nahi\s+(?:hai|he)$""",
+                RegexOption.IGNORE_CASE
+            )
+        ).firstNotNullOfOrNull { it.matchEntire(text)?.groupValues?.get(1) }
+
+    private fun namedPersonPreference(text: String): PersonPreference? {
+        val namePattern = "([\\p{L}][\\p{L}'-]{1,29}(?:\\s+[\\p{L}][\\p{L}'-]{1,29}){0,2})"
+        val positive = listOf(
+            Regex("^$namePattern\\s+ko(?:\\s+bhi)?\\s+(.+?)(?:\\s+bhi)?\\s+pasand[ae]?\\s+(?:hai|hain|he)$", RegexOption.IGNORE_CASE),
+            Regex("^$namePattern\\s+ko(?:\\s+bhi)?\\s+(.+?)(?:\\s+bhi)?\\s+(?:accha|achha|acha|aacha|achcha|acchi|achhi|achi)\\s+lag(?:ta|ti|ata|ati)\\s+(?:hai|he)$", RegexOption.IGNORE_CASE),
+            Regex("^$namePattern\\s+(.+?)\\s+(?:pasand\\s+karta|pasand\\s+karti|enjoy\\s+karta|enjoy\\s+karti)\\s+(?:hai|he)$", RegexOption.IGNORE_CASE),
+            Regex("^$namePattern\\s+(?:likes|loves|enjoys|prefers)\\s+(.+)$", RegexOption.IGNORE_CASE)
+        )
+        positive.firstNotNullOfOrNull { pattern ->
+            pattern.matchEntire(text)?.let { match ->
+                PersonPreference(match.groupValues[1], match.groupValues[2], true)
+            }
+        }?.let { return it }
+
+        val negative = listOf(
+            Regex("^$namePattern\\s+ko(?:\\s+bhi)?\\s+(.+?)(?:\\s+(?:utna|itna|zyada|jyada))?\\s+pasand[ae]?\\s+nahi\\s+(?:hai|he)$", RegexOption.IGNORE_CASE),
+            Regex("^$namePattern\\s+ko(?:\\s+bhi)?\\s+(.+?)\\s+(?:accha|achha|acha|aacha|achcha|acchi|achhi|achi)\\s+nahi\\s+lag(?:ta|ti|ata|ati)\\s+(?:hai|he)$", RegexOption.IGNORE_CASE),
+            Regex("^$namePattern\\s+(?:does\\s+not|doesn't|doesnt)\\s+(?:like|love|enjoy)\\s+(.+)$", RegexOption.IGNORE_CASE)
+        )
+        return negative.firstNotNullOfOrNull { pattern ->
+            pattern.matchEntire(text)?.let { match ->
+                PersonPreference(match.groupValues[1], match.groupValues[2], false)
+            }
+        }
+    }
+
+    private fun personPreference(value: PersonPreference): MemoryCandidate? {
+        val name = cleanPersonName(value.name) ?: return null
+        val subject = cleanSubject(value.subject)?.let(::canonicalSubject) ?: return null
+        val keySubject = normalize(subject)
+        return MemoryCandidate(
+            category = MemoryCategory.PERSON,
+            fact = if (value.likes) "$name likes $subject" else "$name does not like $subject",
+            stableKey = "person:${personToken(name)}:preference:$keySubject",
+            sensitivity = MemorySensitivity.PERSONAL,
+            confidence = 0.94,
+            source = "automatic_conversation",
+            entityId = NaturalMemoryExtractor.stablePersonId(name),
+            entityName = name
+        )
+    }
 
     private fun favoritePreference(text: String): Pair<String, String>? =
         Regex(
@@ -184,7 +279,7 @@ object AutomaticMemoryExtractor {
             RegexOption.IGNORE_CASE
         ).matchEntire(text)?.let { it.groupValues[1] to it.groupValues[2] }
 
-    private fun preference(rawSubject: String): MemoryCandidate? {
+    private fun preference(rawSubject: String, likes: Boolean = true): MemoryCandidate? {
         val subject = cleanSubject(rawSubject)?.let(::canonicalSubject) ?: return null
         val responseStyle = Regex(
             """^(?:short|concise|brief|detailed|long)\s+(?:answer|answers|reply|replies|response|responses)$""",
@@ -192,10 +287,14 @@ object AutomaticMemoryExtractor {
         ).matches(subject)
         return MemoryCandidate(
             category = MemoryCategory.PREFERENCE,
-            fact = if (responseStyle) "Zopy prefers $subject" else "Zopy likes $subject",
+            fact = when {
+                responseStyle -> "Zopy prefers $subject"
+                likes -> "Zopy likes $subject"
+                else -> "Zopy does not like $subject"
+            },
             stableKey = if (responseStyle) RESPONSE_STYLE_KEY else "preference:likes:${normalize(subject)}",
             sensitivity = MemorySensitivity.LOW,
-            confidence = 0.93,
+            confidence = if (likes) 0.93 else 0.94,
             source = "automatic_conversation"
         )
     }
@@ -203,22 +302,37 @@ object AutomaticMemoryExtractor {
     private fun cleanSubject(value: String): String? {
         val clean = value.trim().trim('"', '\'', '.', ',', '!', '?')
             .replace(Regex("\\s+"), " ")
+            .replace(Regex("^(?:na|toh|to|actually)\\s+", RegexOption.IGNORE_CASE), "")
         val words = clean.split(' ').filter(String::isNotBlank)
         if (clean.length !in 2..80 || words.size !in 1..12 ||
-            ambiguousSubject.matches(clean) || prohibitedOrPersonal.containsMatchIn(clean)
+            ambiguousSubject.matches(clean) || prohibitedOrPersonal.containsMatchIn(clean) ||
+            uncertain.containsMatchIn(clean)
         ) return null
         return clean
     }
 
+    private fun cleanPersonName(value: String): String? {
+        val clean = value.trim().replace(Regex("\\s+"), " ")
+        if (clean.length !in 2..60 || clean.split(' ').size !in 1..3) return null
+        if (clean.lowercase(Locale.ROOT) in setOf("main", "mai", "mein", "mujhe", "mereko", "merko", "i", "me", "you", "tum", "vo", "woh", "wo")) return null
+        return clean.split(' ').joinToString(" ") { word ->
+            word.lowercase(Locale.ROOT).replaceFirstChar { it.uppercase() }
+        }
+    }
+
     private fun canonicalSubject(value: String): String {
-        val normalized = normalize(value)
+        val clean = value.trim().replace(Regex("\\s+"), " ")
+        val normalized = normalize(clean)
         return when {
+            Regex("^(?:code|codes|coding)(?:\\s+(?:karna|karne|karni))?$").matches(normalized) -> "coding"
             Regex("(?:science|sainsa|sains)(?:\\s+(?:science|sainsa|sains))?\\s+(?:fiction|phiksana|phiksan).*?(?:movie|muvi|muvija)").containsMatchIn(normalized) ->
                 "science-fiction movies"
             Regex("(?:horror|horara).*?(?:movie|muvi|muvija)").containsMatchIn(normalized) ->
                 "horror movies"
             Regex("^(?:ghumana|ghoomana|gumāna|ghumna)$").matches(normalized) -> "ghumna"
-            else -> value
+            Regex("^(.+?)\\s+(?:karna|karne|karni)$", RegexOption.IGNORE_CASE).matches(clean) ->
+                clean.replace(Regex("\\s+(?:karna|karne|karni)$", RegexOption.IGNORE_CASE), "").trim()
+            else -> clean
         }
     }
 
@@ -226,6 +340,8 @@ object AutomaticMemoryExtractor {
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
+
+    private fun personToken(value: String): String = normalize(value).replace(' ', '_').take(36)
 
     private const val RESPONSE_STYLE_KEY = PreferenceMemoryIdentity.RESPONSE_VERBOSITY_KEY
 }
