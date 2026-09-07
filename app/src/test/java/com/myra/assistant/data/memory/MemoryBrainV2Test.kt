@@ -13,11 +13,58 @@ class MemoryBrainV2Test {
         assertTrue((preference + project).all { it.provenance == MemoryProvenance.USER_DIRECT_STATEMENT })
     }
 
+    @Test fun everydayYouTubeHabitIsLearnedWithoutRememberCommand() {
+        val rows = NaturalMemoryExtractor.extract("Main roz YouTube dekhta hoon")
+        assertEquals(1, rows.size)
+        val row = rows.single()
+        assertEquals(MemoryCategory.HABIT, row.category)
+        assertEquals(MemoryProvenance.USER_DIRECT_STATEMENT, row.provenance)
+        assertTrue(row.fact.contains("YouTube"))
+        assertTrue(row.fact.contains("every day"))
+    }
+
     @Test fun questionsNeverBecomeMutation() {
         assertEquals(MemoryDecision.RECALL, MemoryIntentClassifier.decision("Kiska naam update nahi ho paya?"))
         assertEquals(MemoryDecision.RECALL, MemoryIntentClassifier.decision("Kaunsa memory delete hua?"))
+        assertEquals(MemoryDecision.RECALL, MemoryIntentClassifier.decision("Kareem ke baare mein kya yaad hai"))
+        assertEquals(MemoryDecision.RECALL, MemoryIntentClassifier.decision("Mere project ke baare mein kya yaad hai"))
         assertNotEquals(MemoryDecision.UPDATE, MemoryIntentClassifier.decision("Feature update nahi ho paya"))
         assertNotEquals(MemoryDecision.UPDATE, MemoryIntentClassifier.decision("Naam update nahi ho paya"))
+    }
+
+    @Test fun naturalForgetIntentDoesNotNeedRigidCommandPhrase() = runBlocking {
+        MemoryWorkingContext.clear()
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        NaturalMemoryExtractor.extract("Mera friend Kareem hai").forEach { repository.saveGrounded(it) }
+        NaturalMemoryExtractor.extract("Main Kareem ke saath Manali aur Kerala travel gaya tha")
+            .forEach { repository.saveGrounded(it) }
+
+        val outcome = brain.processFinalTurn("Kareem ka sab bhool jao")
+        assertTrue(outcome is MemoryBrainOutcome.Deleted)
+        assertTrue((outcome as MemoryBrainOutcome.Deleted).succeeded)
+        assertTrue(repository.relevant("Kareem", 10).isEmpty())
+        assertTrue(repository.allActive().none { it.entityName.equals("Kareem", true) })
+        MemoryWorkingContext.clear()
+    }
+
+    @Test fun pronounForgetUsesRecentVerifiedPersonOnly() = runBlocking {
+        MemoryWorkingContext.clear()
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        NaturalMemoryExtractor.extract("Mera friend Kareem hai").forEach { repository.saveGrounded(it) }
+        MemoryWorkingContext.person("Kareem")
+
+        val outcome = brain.processFinalTurn("Uska sab bhool jao")
+        assertTrue(outcome is MemoryBrainOutcome.Deleted)
+        assertTrue((outcome as MemoryBrainOutcome.Deleted).succeeded)
+        assertTrue(repository.allActive().isEmpty())
+        MemoryWorkingContext.clear()
+    }
+
+    @Test fun doNotForgetSentenceNeverDeletesMemory() {
+        assertFalse(NaturalMemoryRequestResolver.hasForgetIntent("Kareem ko mat bhoolna"))
+        assertNotEquals(MemoryDecision.DELETE, MemoryIntentClassifier.decision("Kareem ko mat bhoolna"))
     }
 
     @Test fun prohibitedSecretCannotPersist() = runBlocking {
