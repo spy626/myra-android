@@ -16,8 +16,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.myra.assistant.data.memory.LyraMemoryDatabase
-import com.myra.assistant.data.memory.ManualMemoryPolicy
 import com.myra.assistant.data.memory.MemoryCategory
+import com.myra.assistant.data.memory.MemoryCoreManualActions
 import com.myra.assistant.data.memory.MemoryEntity
 import com.myra.assistant.data.memory.MemoryRepository
 import com.myra.assistant.data.memory.MemoryWriteResult
@@ -122,7 +122,7 @@ class MemorySettingsActivity : AppCompatActivity() {
             .setNegativeButton("Close", null)
             .setNeutralButton("Delete") { _, _ -> confirmDelete(memory) }
         builder.setPositiveButton("Edit") { _, _ ->
-            if (memory.category == MemoryCategory.PERSON.name || memory.entityId != null) showPersonRename(memory)
+            if (memory.category == MemoryCategory.PERSON.name) showPersonRename(memory)
             else showMemoryEditor(memory)
         }
         builder.show()
@@ -197,9 +197,9 @@ class MemorySettingsActivity : AppCompatActivity() {
                 val category = categories[spinner.selectedItemPosition]
                 lifecycleScope.launch {
                     val result = if (existing == null) {
-                        repository.saveManualFact(fact, category)
+                        MemoryCoreManualActions.add(repository, fact, category)
                     } else {
-                        repository.updateManualFact(existing.id, fact, category)
+                        MemoryCoreManualActions.edit(repository, existing, fact, category)
                     }
                     when (result) {
                         is MemoryWriteResult.Saved -> {
