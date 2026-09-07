@@ -2,8 +2,10 @@ package com.myra.assistant.ui.settings
 
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.InputType
+import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -77,36 +79,78 @@ class MemorySettingsActivity : AppCompatActivity() {
         else -> memory.category == activeFilter
     }
 
+    /**
+     * Compact Memory Core row: left category icon box + category/fact/recalled content.
+     * It follows LYRA's existing dark/green visual language and does not copy reference colors.
+     */
     private fun memoryCard(memory: MemoryEntity): View {
         val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(14), dp(16), dp(12))
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(14), dp(16), dp(14))
             setBackgroundResource(com.myra.assistant.R.drawable.bg_field)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(10) }
         }
+
+        val accent = Color.rgb(108, 194, 145)
         card.addView(TextView(this).apply {
+            text = categoryIcon(memory.category)
+            gravity = Gravity.CENTER
+            textSize = 21f
+            setTextColor(accent)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(13).toFloat()
+                setColor(Color.rgb(12, 17, 15))
+                setStroke(dp(1), Color.rgb(45, 72, 58))
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+        })
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(14)
+            }
+        }
+        content.addView(TextView(this).apply {
             text = memory.category.replace('_', ' ')
-            setTextColor(Color.rgb(108, 194, 145))
+            setTextColor(accent)
             textSize = 11f
         })
-        card.addView(TextView(this).apply {
+        content.addView(TextView(this).apply {
             text = memory.fact
             setTextColor(Color.rgb(238, 238, 238))
             textSize = 15f
+            setPadding(0, dp(4), 0, 0)
         })
-        card.addView(TextView(this).apply {
+        content.addView(TextView(this).apply {
             text = "Recalled: " + if (memory.lastRecalledAt > 0L) {
                 DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(memory.lastRecalledAt))
             } else "Never"
             setTextColor(Color.rgb(119, 112, 119))
             textSize = 11f
-            setPadding(0, dp(6), 0, dp(6))
+            setPadding(0, dp(7), 0, 0)
         })
+        card.addView(content)
         card.setOnClickListener { showMemoryDetails(memory) }
         return card
+    }
+
+    private fun categoryIcon(category: String): String = when (category) {
+        MemoryCategory.IDENTITY.name -> "✦"
+        MemoryCategory.PERSON.name -> "♙"
+        MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name -> "♡"
+        MemoryCategory.PROJECT.name, MemoryCategory.WORKFLOW.name, MemoryCategory.SOLUTION.name -> "▣"
+        MemoryCategory.GOAL.name -> "◎"
+        MemoryCategory.HABIT.name -> "↻"
+        MemoryCategory.LIFE_EVENT.name -> "◇"
+        MemoryCategory.APP_USAGE.name -> "▤"
+        MemoryCategory.CONTENT_INTEREST.name, MemoryCategory.CURRENT_INTEREST.name -> "◉"
+        else -> "✧"
     }
 
     private fun showMemoryDetails(memory: MemoryEntity) {
