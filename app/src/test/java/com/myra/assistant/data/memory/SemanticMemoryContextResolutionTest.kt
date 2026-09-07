@@ -47,7 +47,7 @@ class SemanticMemoryContextResolutionTest {
 
     @Test fun contextualPersonPronounCannotJumpToDifferentPerson() {
         MemoryWorkingContext.clear()
-        MemoryWorkingContext.person("Karim")
+        MemoryWorkingContext.person("Nadia")
         assertNull(SemanticMemoryProposalValidator.validate(
             fact = "Kareem likes coding",
             categoryName = "PERSON",
