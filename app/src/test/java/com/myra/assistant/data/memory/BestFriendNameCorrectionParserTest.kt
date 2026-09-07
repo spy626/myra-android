@@ -39,7 +39,6 @@ class BestFriendNameCorrectionParserTest {
     }
 
     @Test fun shortObservedNaufalCorrectionIsAcceptedButNewPersonIsNot() {
-        // Now Pal canonicalizes to Naufal immediately, so repeating Nauphala is not a rename.
         assertNull(BestFriendNameCorrectionParser.parse("Nauphala", "Now Pal"))
         assertNull(BestFriendNameCorrectionParser.parse("Ayesha", "Karima"))
         assertNull(BestFriendNameCorrectionParser.parse("haan", "Karima"))
@@ -63,6 +62,19 @@ class BestFriendNameCorrectionParserTest {
             assertEquals(transcript, false, decision.correctionIntentDetected)
             assertEquals(transcript, false, decision.databaseMutationAllowed)
             assertEquals(transcript, "no_explicit_correction_intent", decision.rejectionReason)
+        }
+    }
+
+    @Test fun naturalNegativePreferencesNeverBecomeNameCorrections() {
+        listOf(
+            "Web development mujhe utna pasand nahi hai",
+            "Mujhe coding accha nahi lagta hai",
+            "Mujhe horror movies pasand nahi hai",
+            "I do not like coding"
+        ).forEach { transcript ->
+            val decision = BestFriendNameCorrectionParser.analyze(transcript, "Kareem")
+            assertEquals(transcript, false, decision.databaseMutationAllowed)
+            assertNull(transcript, decision.correction)
         }
     }
 
