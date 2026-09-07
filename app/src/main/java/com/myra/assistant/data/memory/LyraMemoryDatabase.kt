@@ -30,22 +30,30 @@ abstract class LyraMemoryDatabase : RoomDatabase() {
             }
         }
 
-        /** Additive only: every v2 memory row remains active and addressable. */
+        /**
+         * Kept as one explicit SQL contract so the exact production migration can also
+         * be exercised against a real SQLite engine in JVM tests.
+         */
+        val MIGRATION_2_3_SQL = listOf(
+            "ALTER TABLE memories ADD COLUMN provenance TEXT NOT NULL DEFAULT 'LEGACY'",
+            "ALTER TABLE memories ADD COLUMN lifecycleStatus TEXT NOT NULL DEFAULT 'ACTIVE'",
+            "ALTER TABLE memories ADD COLUMN supersededById TEXT",
+            "ALTER TABLE memories ADD COLUMN entityId TEXT",
+            "ALTER TABLE memories ADD COLUMN entityName TEXT",
+            "ALTER TABLE memories ADD COLUMN lastRecalledAt INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE memories ADD COLUMN observationMetadata TEXT",
+            "UPDATE memories SET lastRecalledAt = lastUsedAt",
+            "UPDATE memories SET lifecycleStatus = 'INACTIVE' WHERE active = 0",
+            "CREATE INDEX IF NOT EXISTS index_memories_entityId ON memories(entityId)",
+            "CREATE TABLE IF NOT EXISTS behavior_observations (`id` TEXT NOT NULL, `stableKey` TEXT NOT NULL, `kind` TEXT NOT NULL, `label` TEXT NOT NULL, `observationCount` INTEGER NOT NULL, `sessionCount` INTEGER NOT NULL, `dayCount` INTEGER NOT NULL, `firstObservedAt` INTEGER NOT NULL, `lastObservedAt` INTEGER NOT NULL, `lastSessionId` TEXT NOT NULL, `lastDayBucket` INTEGER NOT NULL, `metadata` TEXT, `promotedMemoryId` TEXT, PRIMARY KEY(`id`))",
+            "CREATE UNIQUE INDEX IF NOT EXISTS index_behavior_observations_stableKey ON behavior_observations(stableKey)",
+            "CREATE INDEX IF NOT EXISTS index_behavior_observations_kind_lastObservedAt ON behavior_observations(kind, lastObservedAt)"
+        )
+
+        /** Additive only: every v2 memory row remains addressable. */
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL("ALTER TABLE memories ADD COLUMN provenance TEXT NOT NULL DEFAULT 'LEGACY'")
-                database.execSQL("ALTER TABLE memories ADD COLUMN lifecycleStatus TEXT NOT NULL DEFAULT 'ACTIVE'")
-                database.execSQL("ALTER TABLE memories ADD COLUMN supersededById TEXT")
-                database.execSQL("ALTER TABLE memories ADD COLUMN entityId TEXT")
-                database.execSQL("ALTER TABLE memories ADD COLUMN entityName TEXT")
-                database.execSQL("ALTER TABLE memories ADD COLUMN lastRecalledAt INTEGER NOT NULL DEFAULT 0")
-                database.execSQL("ALTER TABLE memories ADD COLUMN observationMetadata TEXT")
-                database.execSQL("UPDATE memories SET lastRecalledAt = lastUsedAt")
-                database.execSQL("UPDATE memories SET lifecycleStatus = 'INACTIVE' WHERE active = 0")
-                database.execSQL("CREATE INDEX IF NOT EXISTS index_memories_entityId ON memories(entityId)")
-                database.execSQL("CREATE TABLE IF NOT EXISTS behavior_observations (`id` TEXT NOT NULL, `stableKey` TEXT NOT NULL, `kind` TEXT NOT NULL, `label` TEXT NOT NULL, `observationCount` INTEGER NOT NULL, `sessionCount` INTEGER NOT NULL, `dayCount` INTEGER NOT NULL, `firstObservedAt` INTEGER NOT NULL, `lastObservedAt` INTEGER NOT NULL, `lastSessionId` TEXT NOT NULL, `lastDayBucket` INTEGER NOT NULL, `metadata` TEXT, `promotedMemoryId` TEXT, PRIMARY KEY(`id`))")
-                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_behavior_observations_stableKey ON behavior_observations(stableKey)")
-                database.execSQL("CREATE INDEX IF NOT EXISTS index_behavior_observations_kind_lastObservedAt ON behavior_observations(kind, lastObservedAt)")
+                for (statement in MIGRATION_2_3_SQL) database.execSQL(statement)
             }
         }
     }
