@@ -23,14 +23,16 @@ object VoicePipelineLogger {
     fun initialize(context: Context) { appContext = context.applicationContext }
 
     fun debug(message: String) {
-        Log.d(TAG, "$message tMs=${SystemClock.elapsedRealtime()}")
-        append("D", message)
+        val safe = sanitize(message)
+        Log.d(TAG, "$safe tMs=${SystemClock.elapsedRealtime()}")
+        append("D", safe)
     }
 
     fun error(message: String, throwable: Throwable? = null) {
-        Log.e(TAG, message, throwable)
+        val safe = sanitize(message)
+        Log.e(TAG, safe, throwable)
         val detail = throwable?.let { " error=${it.javaClass.simpleName}:${it.message.orEmpty()}" }.orEmpty()
-        append("E", message + detail)
+        append("E", safe + detail)
     }
 
     /** Flushes queued writes before producing a share-safe snapshot. */
@@ -56,7 +58,7 @@ object VoicePipelineLogger {
 
     private fun append(level: String, message: String) {
         val context = appContext ?: return
-        val safe = message.replace('\n', ' ').replace('\r', ' ')
+        val safe = sanitize(message).replace('\n', ' ').replace('\r', ' ')
         writer.execute {
             runCatching {
                 val file = logFile(context)
@@ -65,6 +67,18 @@ object VoicePipelineLogger {
                 file.appendText("${wallClock()} $level $safe tMs=${SystemClock.elapsedRealtime()}\n")
             }.onFailure { Log.e(TAG, "Unable to persist voice diagnostic event", it) }
         }
+    }
+
+    /** Memory diagnostics keep IDs/statuses, never a full remembered fact payload. */
+    internal fun sanitize(message: String): String {
+        val lower = message.lowercase(Locale.ROOT)
+        val memoryRelated = lower.contains("memory") || lower.contains("correction_transaction") ||
+            lower.contains("best_friend") || lower.contains("bestfriend")
+        if (!memoryRelated) return message
+        return message
+            .replace(Regex("\\bfact=.*?(?=\\s(?:source|saved|status|key|id|active|$))", RegexOption.IGNORE_CASE), "fact=[redacted]")
+            .replace(Regex("\\bfinalRows=.*$", RegexOption.IGNORE_CASE), "finalRows=[redacted]")
+            .replace(Regex("\\brecords=\\[.*$", RegexOption.IGNORE_CASE), "records=[redacted]")
     }
 
     private fun rotateIfNeeded(file: File) {
