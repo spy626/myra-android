@@ -312,6 +312,14 @@ class MemoryRepository(private val dao: MemoryDao) {
         val canonicalQuery = BestFriendNameCanonicalizer.canonicalize(query)
         val matches = BestFriendDeleteMatcher.findAll(canonicalQuery, activeMemories)
         if (matches.isEmpty()) {
+            MemoryWorkingContext.transaction(
+                LastMemoryTransaction(
+                    type = MemoryDecision.DELETE,
+                    oldValue = canonicalQuery,
+                    status = MemoryTransactionStatus.FAILED,
+                    failureReason = "target_not_found"
+                )
+            )
             memoryLog("after_delete query=$canonicalQuery matched=0 remaining=0")
             return false
         }
@@ -335,7 +343,16 @@ class MemoryRepository(private val dao: MemoryDao) {
         memoryLog(
             "after_delete query=$canonicalQuery matched=${matches.size} affected=$affected remaining=$remaining"
         )
-        return affected > 0 && remaining == 0
+        val succeeded = affected > 0 && remaining == 0
+        MemoryWorkingContext.transaction(
+            LastMemoryTransaction(
+                type = MemoryDecision.DELETE,
+                oldValue = canonicalQuery,
+                status = if (succeeded) MemoryTransactionStatus.SUCCEEDED else MemoryTransactionStatus.FAILED,
+                failureReason = if (succeeded) null else "delete_not_verified"
+            )
+        )
+        return succeeded
     }
 
     /**
@@ -343,8 +360,20 @@ class MemoryRepository(private val dao: MemoryDao) {
      * renamed the best-friend row; person:<old-name>:gaming_channel therefore retained
      * the first ASR spelling and made conversation and persistent recall diverge.
      */
-    suspend fun renameBestFriend(oldName: String, correctedName: String): Boolean =
-        renamePerson(oldName, correctedName)
+    suspend fun renameBestFriend(oldName: String, correctedName: String): Boolean {
+        val renamed = renamePerson(oldName, correctedName)
+        MemoryWorkingContext.transaction(
+            LastMemoryTransaction(
+                type = MemoryDecision.UPDATE,
+                oldValue = oldName,
+                newValue = correctedName,
+                status = if (renamed) MemoryTransactionStatus.SUCCEEDED else MemoryTransactionStatus.FAILED,
+                failureReason = if (renamed) null else "target_not_found_or_verification_failed"
+            )
+        )
+        if (renamed) MemoryWorkingContext.person(correctedName)
+        return renamed
+    }
 
     suspend fun renamePerson(oldName: String, correctedName: String): Boolean {
         val allMemories = dao.activeAll()
