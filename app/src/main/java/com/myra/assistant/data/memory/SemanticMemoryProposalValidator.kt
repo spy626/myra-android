@@ -33,13 +33,17 @@ object SemanticMemoryProposalValidator {
         RegexOption.IGNORE_CASE
     )
     private val selfPreference = Regex(
-        """\b(?:i\s+(?:like|love|prefer|enjoy)|i(?:'m|\s+am)\s+into|mujhe|mereko|merko|main\s+.+?\s+(?:pasand|enjoy))\b""",
+        """\b(?:i\s+(?:(?:do\s+not|don't|dont|no\s+longer)\s+)?(?:like|love|prefer|enjoy)|i(?:'m|\s+am)\s+into|mujhe|mereko|merko|main\s+.+?\s+(?:pasand|enjoy))\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val contextualPersonPronoun = Regex(
+        """\b(?:usko|use|uska|uski|uske|unka|unki|unke|him|her|that\s+person|that\s+friend)\b""",
         RegexOption.IGNORE_CASE
     )
     private val stopWords = setOf(
         "a", "an", "the", "is", "are", "am", "was", "were", "to", "of", "and", "or",
         "my", "meri", "mera", "mere", "hai", "hain", "he", "hoon", "hun", "ka", "ki", "ke",
-        "ko", "me", "mein", "zopy", "zopy's", "user", "that", "this", "woh", "vo", "uska", "iska",
+        "ko", "me", "mein", "zopy", "zopy's", "user", "it", "that", "this", "woh", "vo", "uska", "iska",
         "mujhe", "mereko", "merko", "main", "mai", "na", "bhi", "bahut", "bohot", "kaafi"
     )
 
@@ -82,9 +86,15 @@ object SemanticMemoryProposalValidator {
             if (preference.personName == null) {
                 if (!selfPreference.containsMatchIn(cleanEvidence)) return null
             } else {
-                if (!mentionsExactName(cleanEvidence, preference.personName) ||
-                    !namedPersonPreferenceEvidence(cleanEvidence, preference.personName)
-                ) return null
+                val namedEvidence = mentionsExactName(cleanEvidence, preference.personName) &&
+                    namedPersonPreferenceEvidence(cleanEvidence, preference.personName)
+                val recentPerson = MemoryWorkingContext.recentPerson
+                val contextualEvidence = !namedEvidence &&
+                    contextualPersonPronoun.containsMatchIn(cleanEvidence) &&
+                    positiveOrNegativePreferenceEvidence(cleanEvidence) &&
+                    recentPerson != null && samePerson(recentPerson, preference.personName) &&
+                    mentionsExactName(conversationContext, preference.personName)
+                if (!namedEvidence && !contextualEvidence) return null
             }
         }
 
@@ -174,6 +184,12 @@ object SemanticMemoryProposalValidator {
             Regex("(?:^|\\s)$escaped\\s+(?:likes|loves|enjoys|prefers|does\\s+not\\s+like|doesn't\\s+like)", RegexOption.IGNORE_CASE)
         ).any { it.containsMatchIn(evidence) }
     }
+
+    private fun positiveOrNegativePreferenceEvidence(value: String): Boolean =
+        positivePreference.containsMatchIn(value) || negativePreference.containsMatchIn(value)
+
+    private fun samePerson(left: String, right: String): Boolean =
+        left.equals(right, ignoreCase = true) || BestFriendNameSimilarity.likelySame(left, right)
 
     private fun mentionsExactName(value: String, name: String): Boolean =
         Regex("(?:^|[^\\p{L}\\p{N}])${Regex.escape(name)}(?:$|[^\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)
