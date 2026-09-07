@@ -17,13 +17,19 @@ object MemoryCoreManualActions {
 
         val linked = PersonLinkedMemoryExtractor.extractAll(clean)
         if (linked.isNotEmpty()) {
+            val linkedName = linked.asSequence()
+                .mapNotNull { MemoryRelationshipPolicy.personName(it.fact) }
+                .firstOrNull()
+            val linkedEntityId = linkedName?.let(NaturalMemoryExtractor::stablePersonId)
             var firstSaved: MemoryWriteResult.Saved? = null
             for (candidate in linked) {
                 val result = repository.saveGrounded(
                     candidate.copy(
                         explicitlyRequested = true,
                         source = ManualMemoryPolicy.SOURCE,
-                        provenance = MemoryProvenance.MANUAL_UI_SEED
+                        provenance = MemoryProvenance.MANUAL_UI_SEED,
+                        entityId = linkedEntityId ?: candidate.entityId,
+                        entityName = linkedName ?: candidate.entityName
                     ),
                     explicit = true
                 )
@@ -34,11 +40,15 @@ object MemoryCoreManualActions {
         }
 
         PersonalMemoryExtractor.extract(clean)?.let { extracted ->
+            val personName = extracted.takeIf { it.category == MemoryCategory.PERSON }
+                ?.let { MemoryRelationshipPolicy.personName(it.fact) }
             return repository.saveGrounded(
                 extracted.copy(
                     explicitlyRequested = true,
                     source = ManualMemoryPolicy.SOURCE,
-                    provenance = MemoryProvenance.MANUAL_UI_SEED
+                    provenance = MemoryProvenance.MANUAL_UI_SEED,
+                    entityId = extracted.entityId ?: personName?.let(NaturalMemoryExtractor::stablePersonId),
+                    entityName = extracted.entityName ?: personName
                 ),
                 explicit = true
             )
