@@ -1,6 +1,7 @@
 package com.myra.assistant.data.memory
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,6 +34,97 @@ class SemanticMemoryProposalValidatorTest {
         assertTrue(MemorySafetyPolicy.decide(candidate) == MemorySaveDecision.AUTO_SAVE)
     }
 
+    @Test fun colloquialHinglishPreferenceGroundsToSameCanonicalMeaning() {
+        val candidate = SemanticMemoryProposalValidator.validate(
+            fact = "Zopy likes coding",
+            categoryName = "PREFERENCE",
+            memoryKey = "coding_interest",
+            evidence = "mujhe na codes karne accha lagta hai",
+            confidence = 0.94,
+            conversationContext = "Mujhe na codes karne accha lagta hai"
+        )!!
+        assertEquals("Zopy likes coding", candidate.fact)
+        assertEquals("preference:likes:coding", candidate.stableKey)
+        assertEquals(MemoryProvenance.GEMINI_GROUNDED_PROPOSAL, candidate.provenance)
+    }
+
+    @Test fun personPreferenceIsAttributedToNamedPersonNotUser() {
+        val candidate = SemanticMemoryProposalValidator.validate(
+            fact = "Kareem likes coding",
+            categoryName = "PERSON",
+            memoryKey = "kareem_coding",
+            evidence = "Kareem ko coding bhi pasand hai",
+            confidence = 0.94,
+            conversationContext = "Kareem ko coding bhi pasand hai"
+        )!!
+        assertEquals("Kareem likes coding", candidate.fact)
+        assertEquals("person:kareem:preference:coding", candidate.stableKey)
+        assertEquals("Kareem", candidate.entityName)
+        assertEquals(NaturalMemoryExtractor.stablePersonId("Kareem"), candidate.entityId)
+        assertFalse(candidate.fact.startsWith("Zopy likes"))
+    }
+
+    @Test fun wrongSubjectAttributionIsRejectedEvenWhenTopicMatches() {
+        assertNull(SemanticMemoryProposalValidator.validate(
+            fact = "Zopy likes coding",
+            categoryName = "PREFERENCE",
+            memoryKey = "coding_interest",
+            evidence = "Kareem ko coding pasand hai",
+            confidence = 0.96,
+            conversationContext = "Kareem ko coding pasand hai"
+        ))
+    }
+
+    @Test fun uncertaintyAndSpeculationNeverBecomePersonMemory() {
+        assertNull(SemanticMemoryProposalValidator.validate(
+            fact = "Kareem likes coding",
+            categoryName = "PERSON",
+            memoryKey = "kareem_coding",
+            evidence = "Mereko lagta hai Kareem ko coding pasand hogi",
+            confidence = 0.96,
+            conversationContext = "Mereko lagta hai Kareem ko coding pasand hogi"
+        ))
+    }
+
+    @Test fun preferencePolarityMustMatchActualUserEvidence() {
+        assertNull(SemanticMemoryProposalValidator.validate(
+            fact = "Zopy likes coding",
+            categoryName = "PREFERENCE",
+            memoryKey = "coding_interest",
+            evidence = "Mujhe coding accha nahi lagta hai",
+            confidence = 0.96,
+            conversationContext = "Mujhe coding accha nahi lagta hai"
+        ))
+        assertNull(SemanticMemoryProposalValidator.validate(
+            fact = "Zopy does not like coding",
+            categoryName = "PREFERENCE",
+            memoryKey = "coding_interest",
+            evidence = "Mujhe coding accha lagta hai",
+            confidence = 0.96,
+            conversationContext = "Mujhe coding accha lagta hai"
+        ))
+        val negative = SemanticMemoryProposalValidator.validate(
+            fact = "Zopy does not like web development",
+            categoryName = "PREFERENCE",
+            memoryKey = "web_development",
+            evidence = "Web development mujhe utna pasand nahi hai",
+            confidence = 0.94,
+            conversationContext = "Web development mujhe utna pasand nahi hai"
+        )!!
+        assertEquals("Zopy does not like web development", negative.fact)
+    }
+
+    @Test fun temporaryPreferenceIsNotPromotedToLongTermMemory() {
+        assertNull(SemanticMemoryProposalValidator.validate(
+            fact = "Zopy likes coding",
+            categoryName = "PREFERENCE",
+            memoryKey = "coding_interest",
+            evidence = "Aaj mujhe coding accha lagta hai",
+            confidence = 0.94,
+            conversationContext = "Aaj mujhe coding accha lagta hai"
+        ))
+    }
+
     @Test fun acceptsGroundedWorkflowForSilentLearning() {
         val candidate = SemanticMemoryProposalValidator.validate(
             fact = "Zopy tests Android releases on his phone",
@@ -46,6 +138,18 @@ class SemanticMemoryProposalValidatorTest {
         assertEquals(MemoryCategory.WORKFLOW, candidate.category)
         assertEquals(MemorySensitivity.LOW, candidate.sensitivity)
         assertEquals(MemorySaveDecision.AUTO_SAVE, MemorySafetyPolicy.decide(candidate))
+    }
+
+    @Test fun groundedHinglishRecurringActivityCanBecomeWorkflow() {
+        val candidate = SemanticMemoryProposalValidator.validate(
+            fact = "Zopy usually builds Android apps",
+            categoryName = "WORKFLOW",
+            memoryKey = "android_app_building",
+            evidence = "Main mostly Android apps banata hoon",
+            confidence = 0.91,
+            conversationContext = "Main mostly Android apps banata hoon"
+        )
+        assertEquals(MemoryCategory.WORKFLOW, candidate?.category)
     }
 
     @Test fun rejectsHallucinatedOrWeaklyGroundedFact() {
