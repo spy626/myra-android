@@ -44,6 +44,13 @@ object BestFriendNameCorrectionParser {
     )
     private val rejected = setOf("haan", "han", "yes", "nahi", "no", "okay", "ok", "thanks", "thank you")
     private val hindiParticles = setOf("ne", "ko", "se", "ka", "ki", "ke", "mein", "me", "par")
+    private val nonNamePredicateWords = setOf(
+        "hai", "he", "hain", "hun", "hoon", "ho", "tha", "thi", "the",
+        "hoga", "hogi", "honge", "lagta", "lagti", "lagte", "pasand",
+        "karta", "karti", "karte", "jaata", "jata", "jaati", "jati", "jaate", "jate",
+        "like", "likes", "love", "loves", "enjoy", "enjoys", "prefer", "prefers",
+        "good", "bad", "fun", "problem", "failed", "failure", "update", "delete", "memory"
+    )
     private val validNameShape = Regex("[\\p{L}][\\p{L}'-]*(?: [\\p{L}][\\p{L}'-]*){0,2}")
 
     fun parse(raw: String, lastSavedName: String?): BestFriendNameCorrection? =
@@ -88,6 +95,7 @@ object BestFriendNameCorrectionParser {
         if (!validNameShape.matches(clean)) return "invalid_name_shape"
         val words = clean.lowercase(Locale.ROOT).split(' ')
         if (words.any { it in hindiParticles }) return "contains_hindi_particle"
+        if (words.any { it in nonNamePredicateWords }) return "contains_non_name_predicate"
         if (words.joinToString(" ") in rejected) return "not_a_person_name"
         return null
     }
