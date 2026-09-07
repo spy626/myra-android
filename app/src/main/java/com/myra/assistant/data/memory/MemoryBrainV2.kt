@@ -27,31 +27,90 @@ object MemoryWorkingContext {
 
     fun transaction(value: LastMemoryTransaction) { lastTransaction = value }
     fun person(value: String?) { if (!value.isNullOrBlank()) recentPerson = value.trim() }
+    fun clearPersonIfMatches(value: String) {
+        val current = recentPerson ?: return
+        if (normalize(current) == normalize(value) || BestFriendNameSimilarity.likelySame(current, value)) {
+            recentPerson = null
+        }
+    }
     fun clear() { lastTransaction = null; recentPerson = null }
 
-    fun failedTransactionFact(): String? {
+    /** Human-readable short working memory for natural questions about the last memory operation. */
+    fun transactionFact(): String? {
         val value = lastTransaction ?: return null
-        if (value.status != MemoryTransactionStatus.FAILED) return null
-        return when (value.type) {
-            MemoryDecision.UPDATE -> when {
-                !value.oldValue.isNullOrBlank() && !value.newValue.isNullOrBlank() ->
-                    "The last memory update that failed was changing ${value.oldValue} to ${value.newValue}."
-                !value.newValue.isNullOrBlank() ->
-                    "The last memory update that failed was for ${value.newValue}."
-                !value.oldValue.isNullOrBlank() ->
-                    "The last memory update that failed was for ${value.oldValue}."
-                else -> "The last memory update failed before a target could be verified."
+        return when (value.status) {
+            MemoryTransactionStatus.SUCCEEDED -> when (value.type) {
+                MemoryDecision.UPDATE -> when {
+                    !value.oldValue.isNullOrBlank() && !value.newValue.isNullOrBlank() ->
+                        "The last memory update changed ${value.oldValue} to ${value.newValue}."
+                    !value.newValue.isNullOrBlank() -> "The last memory update was for ${value.newValue}."
+                    else -> "The last memory update was completed and verified."
+                }
+                MemoryDecision.DELETE -> value.oldValue?.takeIf { it.isNotBlank() }
+                    ?.let { "The last memory deletion was for $it." }
+                    ?: "The last memory deletion was completed and verified."
+                MemoryDecision.SAVE -> value.newValue?.takeIf { it.isNotBlank() }
+                    ?.let { "The last memory saved was: $it" }
+                    ?: "The last memory save was completed and verified."
+                else -> "The last memory operation completed successfully."
             }
-            MemoryDecision.DELETE -> value.oldValue?.takeIf { it.isNotBlank() }
-                ?.let { "The last memory deletion that failed was for $it." }
-                ?: "The last memory deletion failed because its target could not be verified."
-            MemoryDecision.SAVE -> value.newValue?.takeIf { it.isNotBlank() }
-                ?.let { "The last memory save that failed was for $it." }
-                ?: "The last memory save failed before it could be verified."
-            else -> value.failureReason?.takeIf { it.isNotBlank() }
-                ?.let { "The last memory operation failed: $it." }
-                ?: "The last memory operation failed before it could be verified."
+            MemoryTransactionStatus.FAILED -> when (value.type) {
+                MemoryDecision.UPDATE -> when {
+                    !value.oldValue.isNullOrBlank() && !value.newValue.isNullOrBlank() ->
+                        "The last memory update that failed was changing ${value.oldValue} to ${value.newValue}."
+                    !value.newValue.isNullOrBlank() ->
+                        "The last memory update that failed was for ${value.newValue}."
+                    !value.oldValue.isNullOrBlank() ->
+                        "The last memory update that failed was for ${value.oldValue}."
+                    else -> "The last memory update failed before a target could be verified."
+                }
+                MemoryDecision.DELETE -> value.oldValue?.takeIf { it.isNotBlank() }
+                    ?.let { "The last memory deletion that failed was for $it." }
+                    ?: "The last memory deletion failed because its target could not be verified."
+                MemoryDecision.SAVE -> value.newValue?.takeIf { it.isNotBlank() }
+                    ?.let { "The last memory save that failed was for $it." }
+                    ?: "The last memory save failed before it could be verified."
+                else -> value.failureReason?.takeIf { it.isNotBlank() }
+                    ?.let { "The last memory operation failed: $it." }
+                    ?: "The last memory operation failed before it could be verified."
+            }
+            MemoryTransactionStatus.REJECTED -> value.failureReason?.takeIf { it.isNotBlank() }
+                ?.let { "The last memory operation was not saved: $it." }
+                ?: "The last memory operation was rejected by the memory safety gate."
         }
+    }
+
+    /** Kept for repository compatibility; the synthetic working-memory row represents the last transaction. */
+    fun failedTransactionFact(): String? = transactionFact()
+
+    private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .replace(Regex("\\s+"), " ").trim()
+}
+
+/** Recognizes natural questions about a past memory operation; it does not create a mutation command. */
+object MemoryTransactionQueryDetector {
+    private val operation = Regex(
+        "\\b(?:update|updated|change|changed|rename|renamed|delete|deleted|remove|removed|save|saved|remember|remembered)\\b",
+        RegexOption.IGNORE_CASE
+    )
+    private val question = Regex(
+        "\\b(?:kya|kaun|kaunsa|kaunsi|kiska|kis|kab|what|which|who|when)\\b",
+        RegexOption.IGNORE_CASE
+    )
+    private val failure = Regex(
+        "\\b(?:fail|failed|failure|nahi\\s+(?:ho\\s+)?(?:paya|payi|hua|hui)|didn'?t|did\\s+not|wasn'?t|was\\s+not)\\b",
+        RegexOption.IGNORE_CASE
+    )
+    private val past = Regex(
+        "\\b(?:maine|last|pichla|pichli|pichle|tha|thi|hua|hui|kiya|ki|did\\s+i|had\\s+i|was|were)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    fun isTransactionQuestion(text: String): Boolean {
+        val clean = text.trim()
+        return operation.containsMatchIn(clean) && question.containsMatchIn(clean) &&
+            (failure.containsMatchIn(clean) || past.containsMatchIn(clean))
     }
 }
 
@@ -248,7 +307,7 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
         MemoryWorkingContext.transaction(
             LastMemoryTransaction(
                 type = MemoryDecision.SAVE,
-                newValue = candidate.stableKey,
+                newValue = candidate.fact,
                 status = if (result is MemoryWriteResult.Saved) MemoryTransactionStatus.SUCCEEDED else MemoryTransactionStatus.REJECTED,
                 failureReason = (result as? MemoryWriteResult.Rejected)?.reason
             )
@@ -281,6 +340,10 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
                 val target = commandTarget ?: naturalTarget
                     ?: return MemoryBrainOutcome.Rejected("Memory delete target is ambiguous")
                 val ok = repository.forgetMatching(target)
+                if (ok) {
+                    MemoryWorkingContext.clearPersonIfMatches(target)
+                    MemorySessionIndex.invalidate()
+                }
                 MemoryWorkingContext.transaction(
                     LastMemoryTransaction(
                         decision,
@@ -331,7 +394,7 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
                 MemoryWorkingContext.transaction(
                     LastMemoryTransaction(
                         decision,
-                        newValue = uniqueCandidates.lastOrNull()?.stableKey,
+                        newValue = uniqueCandidates.lastOrNull()?.fact,
                         status = if (result is MemoryWriteResult.Saved) MemoryTransactionStatus.SUCCEEDED else MemoryTransactionStatus.REJECTED,
                         failureReason = (result as? MemoryWriteResult.Rejected)?.reason
                     )
@@ -344,8 +407,8 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
     }
 
     private fun workingContextAnswer(text: String): String? {
-        if (!Regex("\\b(?:fail|failed|nahi\\s+ho|not\\s+update)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)) return null
-        return MemoryWorkingContext.failedTransactionFact()
+        if (!MemoryTransactionQueryDetector.isTransactionQuestion(text)) return null
+        return MemoryWorkingContext.transactionFact()
     }
 
     private fun log(message: String) = runCatching { Log.d("LyraMemoryBrainV2", message) }
