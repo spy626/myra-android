@@ -59,23 +59,32 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
                 .also { safeLog("BEHAVIOR_PATTERN_PROMOTED kind=${signal.kind} key=$key status=${it::class.simpleName}") }
         }
 
-        if (signal.kind == BehaviorObservationKind.APP_USAGE) updateMostUsedApp()
+        if (signal.kind == BehaviorObservationKind.APP_USAGE) updateMostUsedApp(signal.observedAt)
         return result
     }
 
     /**
      * Most-used is a comparative inference, so it uses a stricter threshold than a
-     * normal frequent-app memory and requires a clear lead over the runner-up.
+     * normal frequent-app memory and requires a clear lead over the runner-up. When
+     * there is no longer a clear/recent leader, the summary is retired instead of
+     * leaving a stale "most-used" claim active.
      */
-    private suspend fun updateMostUsedApp(): MemoryWriteResult? {
+    private suspend fun updateMostUsedApp(now: Long): MemoryWriteResult? {
         val ranked = repository.behaviorByKind(BehaviorObservationKind.APP_USAGE)
-            .filter(::eligibleForMostUsed)
-        val top = ranked.firstOrNull() ?: return null
+            .filter { (now - it.lastObservedAt).coerceAtLeast(0L) < HISTORICAL_MS }
+        val top = ranked.firstOrNull()?.takeIf(::eligibleForMostUsed)
+        if (top == null) {
+            retireMostUsedSummary("no_recent_eligible_leader")
+            return null
+        }
         val second = ranked.drop(1).firstOrNull()
         val clearlyAhead = second == null ||
             (top.observationCount >= second.observationCount + 3 &&
                 top.observationCount * 100 >= second.observationCount * 125)
-        if (!clearlyAhead) return null
+        if (!clearlyAhead) {
+            retireMostUsedSummary("lead_not_clear")
+            return null
+        }
 
         val candidate = MemoryCandidate(
             category = MemoryCategory.APP_USAGE,
@@ -89,6 +98,12 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
         )
         return repository.saveGrounded(candidate).also {
             safeLog("BEHAVIOR_MOST_USED_APP label=${top.label.take(40)} status=${it::class.simpleName}")
+        }
+    }
+
+    private suspend fun retireMostUsedSummary(reason: String) {
+        if (repository.forgetStableKey(MOST_USED_APP_KEY)) {
+            safeLog("BEHAVIOR_MOST_USED_APP_RETIRED reason=$reason")
         }
     }
 
@@ -110,6 +125,7 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
                 }
             }
         }
+        updateMostUsedApp(now)
     }
 
     private fun eligible(value: BehaviorObservationEntity) =
