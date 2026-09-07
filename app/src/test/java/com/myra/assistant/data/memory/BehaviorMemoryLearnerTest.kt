@@ -81,7 +81,7 @@ class BehaviorMemoryLearnerTest {
                 BehaviorObservationKind.APP_USAGE,
                 "Chrome",
                 "ch-$index",
-                index * BehaviorMemoryLearner.DAY_MS
+                (index + 10L) * BehaviorMemoryLearner.DAY_MS
             ))
         }
 
@@ -89,5 +89,32 @@ class BehaviorMemoryLearnerTest {
         assertEquals("Usually uses YouTube the most", mostUsed.fact)
         assertEquals(MemoryCategory.APP_USAGE.name, mostUsed.category)
         assertEquals(MemoryProvenance.BEHAVIOR_PATTERN.name, mostUsed.provenance)
+    }
+
+    @Test fun staleMostUsedSummaryIsRetiredWhenAnotherAppCatchesUp() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val learner = BehaviorMemoryLearner(repository)
+
+        repeat(10) { index ->
+            learner.observe(BehaviorSignal(
+                BehaviorObservationKind.APP_USAGE,
+                "YouTube",
+                "yt-$index",
+                index * BehaviorMemoryLearner.DAY_MS
+            ))
+        }
+        assertTrue(repository.allActive().any {
+            it.stableKey == BehaviorMemoryLearner.MOST_USED_APP_KEY && it.fact.contains("YouTube")
+        })
+
+        repeat(10) { index ->
+            learner.observe(BehaviorSignal(
+                BehaviorObservationKind.APP_USAGE,
+                "Chrome",
+                "ch-$index",
+                (index + 10L) * BehaviorMemoryLearner.DAY_MS
+            ))
+        }
+        assertFalse(repository.allActive().any { it.stableKey == BehaviorMemoryLearner.MOST_USED_APP_KEY })
     }
 }
