@@ -32,12 +32,62 @@ class BehaviorMemoryLearnerTest {
         assertFalse(row.fact.contains("favorite", true))
     }
 
-    @Test fun repeatedTopicsBecomeCurrentInterestAndDecay() = runBlocking {
+    @Test fun repeatedTopicsBecomeCurrentInterestAndFollowLifecycleDecay() = runBlocking {
         val repository = MemoryRepository(FakeMemoryDao()); val learner = BehaviorMemoryLearner(repository)
         repeat(6) { index -> learner.observe(BehaviorSignal(BehaviorObservationKind.CONTENT_TOPIC,
             "AI", "s$index", index * BehaviorMemoryLearner.DAY_MS)) }
         assertEquals(MemoryCategory.CURRENT_INTEREST.name, repository.allActive().single().category)
-        learner.decay(60 * BehaviorMemoryLearner.DAY_MS)
+
+        // Last observation above is day 5. At day 40 the pattern is 35 days old,
+        // so it should remain active but move into WEAKENING.
+        learner.decay(40 * BehaviorMemoryLearner.DAY_MS)
+        assertEquals(MemoryLifecycleStatus.WEAKENING.name, repository.allActive().single().lifecycleStatus)
+
+        // At day 55 it is 50 days old and should remain stored as HISTORICAL.
+        learner.decay(55 * BehaviorMemoryLearner.DAY_MS)
+        assertEquals(MemoryLifecycleStatus.HISTORICAL.name, repository.allActive().single().lifecycleStatus)
+
+        // At day 66 it is 61 days old and crosses the 60-day inactive threshold.
+        learner.decay(66 * BehaviorMemoryLearner.DAY_MS)
         assertTrue(repository.allActive().isEmpty())
+    }
+
+    @Test fun contentTopicExtractorDiscoversNonHardcodedTopics() {
+        val topics = ContentTopicExtractor.extract(listOf(
+            "Kubernetes deployment tutorial for beginners",
+            "Kubernetes operators explained",
+            "Building reliable Kubernetes clusters"
+        ))
+        assertTrue(topics.any { it.equals("Kubernetes", ignoreCase = true) })
+    }
+
+    @Test fun mostUsedAppRequiresClearComparativeLead() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val learner = BehaviorMemoryLearner(repository)
+
+        // YouTube has strong multi-day/session evidence.
+        repeat(10) { index ->
+            learner.observe(BehaviorSignal(
+                BehaviorObservationKind.APP_USAGE,
+                "YouTube",
+                "yt-$index",
+                index * BehaviorMemoryLearner.DAY_MS
+            ))
+        }
+
+        // Chrome is used too, but with materially less evidence.
+        repeat(5) { index ->
+            learner.observe(BehaviorSignal(
+                BehaviorObservationKind.APP_USAGE,
+                "Chrome",
+                "ch-$index",
+                index * BehaviorMemoryLearner.DAY_MS
+            ))
+        }
+
+        val mostUsed = repository.allActive().single { it.stableKey == BehaviorMemoryLearner.MOST_USED_APP_KEY }
+        assertEquals("Usually uses YouTube the most", mostUsed.fact)
+        assertEquals(MemoryCategory.APP_USAGE.name, mostUsed.category)
+        assertEquals(MemoryProvenance.BEHAVIOR_PATTERN.name, mostUsed.provenance)
     }
 }
