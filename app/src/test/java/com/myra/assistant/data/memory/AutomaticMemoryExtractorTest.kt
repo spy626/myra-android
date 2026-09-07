@@ -1,6 +1,7 @@
 package com.myra.assistant.data.memory
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,11 +17,56 @@ class AutomaticMemoryExtractorTest {
     }
 
     @Test fun learnsClearRomanHinglishPreference() {
-        val candidate = AutomaticMemoryExtractor.extract(
-            "mujhe horror movies bohot pasand hain"
-        )
+        val candidate = AutomaticMemoryExtractor.extract("mujhe horror movies bohot pasand hain")
         assertEquals("Zopy likes horror movies", candidate?.fact)
         assertEquals("automatic_conversation", candidate?.source)
+    }
+
+    @Test fun understandsColloquialCodingPreferenceAsOneSemanticMemory() {
+        listOf(
+            "mujhe na codes karne accha lagta hai",
+            "Coding mein maza aata hai mujhe",
+            "Main coding enjoy karta hoon",
+            "I'm into coding"
+        ).forEach { phrase ->
+            val candidate = AutomaticMemoryExtractor.extract(phrase)
+            assertEquals(phrase, MemoryCategory.PREFERENCE, candidate?.category)
+            assertEquals(phrase, "Zopy likes coding", candidate?.fact)
+            assertEquals(phrase, "preference:likes:coding", candidate?.stableKey)
+        }
+    }
+
+    @Test fun namedPersonPreferenceBelongsToThatPersonNotZopy() {
+        val candidate = AutomaticMemoryExtractor.extract("Kareem ko coding bhi pasand hai")
+        assertEquals(MemoryCategory.PERSON, candidate?.category)
+        assertEquals("Kareem likes coding", candidate?.fact)
+        assertEquals("person:kareem:preference:coding", candidate?.stableKey)
+        assertEquals("Kareem", candidate?.entityName)
+        assertEquals(NaturalMemoryExtractor.stablePersonId("Kareem"), candidate?.entityId)
+        assertFalse(candidate?.fact?.startsWith("Zopy likes") == true)
+    }
+
+    @Test fun uncertainPersonInferenceIsNeverDurableMemory() {
+        assertNull(AutomaticMemoryExtractor.extract("Mereko lagta hai Kareem ko coding pasand hogi"))
+        assertNull(AutomaticMemoryExtractor.extract("Maybe I like coding"))
+        assertNull(AutomaticMemoryExtractor.extract("Shayad Kareem ko coding pasand hai"))
+    }
+
+    @Test fun questionsAndTemporaryPreferencesAreNotSavedAsDurableFacts() {
+        assertNull(AutomaticMemoryExtractor.extract("Kareem ko coding pasand hai?"))
+        assertNull(AutomaticMemoryExtractor.extract("Mujhe coding accha lagta hai kya?"))
+        assertNull(AutomaticMemoryExtractor.extract("Aaj mujhe coding accha lagta hai"))
+        assertNull(AutomaticMemoryExtractor.extract("Right now I'm into coding"))
+    }
+
+    @Test fun explicitDislikeIsDurableOppositePolarityInSameSlot() {
+        val english = AutomaticMemoryExtractor.extract("I don't like horror movies anymore")
+        assertEquals("Zopy does not like horror movies", english?.fact)
+        assertEquals("preference:likes:horror movies", english?.stableKey)
+
+        val hinglish = AutomaticMemoryExtractor.extract("Web development mujhe utna pasand nahi hai")
+        assertEquals("Zopy does not like Web development", hinglish?.fact)
+        assertEquals("preference:likes:web development", hinglish?.stableKey)
     }
 
     @Test fun favoriteCategoryUsesReplaceableStableKey() {
@@ -32,14 +78,13 @@ class AutomaticMemoryExtractorTest {
     @Test fun rejectsAmbiguousPronounPreference() {
         assertNull(AutomaticMemoryExtractor.extract("mujhe woh pasand hai"))
         assertNull(AutomaticMemoryExtractor.extract("I like that"))
+        assertNull(AutomaticMemoryExtractor.extract("mujhe wahi accha lagta hai"))
     }
 
-    @Test fun rejectsNegativePersonalAndSecretStatements() {
-        assertNull(AutomaticMemoryExtractor.extract("I don't like horror movies"))
+    @Test fun rejectsPersonalSecretsAndSensitiveStatements() {
         assertNull(AutomaticMemoryExtractor.extract("mujhe meri dost pasand hai"))
         assertNull(AutomaticMemoryExtractor.extract("I like password secret123"))
         assertNull(AutomaticMemoryExtractor.extract("mujhe health advice pasand hai"))
-        assertNull(AutomaticMemoryExtractor.extract("mujhe na ghumana pasand hai"))
     }
 
     @Test fun ignoresOrdinaryConversationAndCommands() {
@@ -51,15 +96,11 @@ class AutomaticMemoryExtractorTest {
     @Test fun normalizesObservedRomanizedMovieTranscripts() {
         assertEquals(
             "Zopy likes science-fiction movies",
-            AutomaticMemoryExtractor.extract(
-                "mujhe sainsa sainsa phiksana muvi bahuta pasanda hai"
-            )?.fact
+            AutomaticMemoryExtractor.extract("mujhe sainsa sainsa phiksana muvi bahuta pasanda hai")?.fact
         )
         assertEquals(
             "Zopy likes horror movies",
-            AutomaticMemoryExtractor.extract(
-                "mujhe horara muvi bahuta pasanda hai"
-            )?.fact
+            AutomaticMemoryExtractor.extract("mujhe horara muvi bahuta pasanda hai")?.fact
         )
     }
 
