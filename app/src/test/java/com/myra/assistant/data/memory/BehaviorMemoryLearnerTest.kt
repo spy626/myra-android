@@ -1,5 +1,8 @@
 package com.myra.assistant.data.memory
 
+import com.myra.assistant.agent.CurrentActivityContext
+import com.myra.assistant.agent.SemanticElement
+import com.myra.assistant.agent.SemanticRole
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -16,10 +19,10 @@ class BehaviorMemoryLearnerTest {
         val repository = MemoryRepository(FakeMemoryDao()); val learner = BehaviorMemoryLearner(repository)
         repeat(6) { index -> learner.observe(BehaviorSignal(BehaviorObservationKind.APP_USAGE,
             "YouTube", "s$index", index * BehaviorMemoryLearner.DAY_MS)) }
-        val row = repository.allActive().single()
-        assertEquals(MemoryCategory.APP_USAGE.name, row.category)
-        assertEquals(MemoryProvenance.BEHAVIOR_PATTERN.name, row.provenance)
-        assertEquals("Uses YouTube frequently", row.fact)
+        val frequent = repository.allActive().single { it.stableKey == "behavior:app_usage:youtube" }
+        assertEquals(MemoryCategory.APP_USAGE.name, frequent.category)
+        assertEquals(MemoryProvenance.BEHAVIOR_PATTERN.name, frequent.provenance)
+        assertEquals("Uses YouTube frequently", frequent.fact)
     }
 
     @Test fun repeatedCrossSessionCrossDayEvidencePromotesConservativePattern() = runBlocking {
@@ -38,17 +41,72 @@ class BehaviorMemoryLearnerTest {
             "AI", "s$index", index * BehaviorMemoryLearner.DAY_MS)) }
         assertEquals(MemoryCategory.CURRENT_INTEREST.name, repository.allActive().single().category)
 
-        // Last observation above is day 5. At day 40 the pattern is 35 days old,
-        // so it should remain active but move into WEAKENING.
         learner.decay(40 * BehaviorMemoryLearner.DAY_MS)
         assertEquals(MemoryLifecycleStatus.WEAKENING.name, repository.allActive().single().lifecycleStatus)
 
-        // At day 55 it is 50 days old and should remain stored as HISTORICAL.
         learner.decay(55 * BehaviorMemoryLearner.DAY_MS)
         assertEquals(MemoryLifecycleStatus.HISTORICAL.name, repository.allActive().single().lifecycleStatus)
 
-        // At day 66 it is 61 days old and crosses the 60-day inactive threshold.
         learner.decay(66 * BehaviorMemoryLearner.DAY_MS)
+        assertTrue(repository.allActive().isEmpty())
+    }
+
+    @Test fun staleObservationEvidenceResetsBeforePatternCanReturn() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val learner = BehaviorMemoryLearner(repository)
+        repeat(6) { index ->
+            learner.observe(BehaviorSignal(
+                BehaviorObservationKind.CONTENT_TOPIC,
+                "AI",
+                "old-$index",
+                index * BehaviorMemoryLearner.DAY_MS
+            ))
+        }
+        assertTrue(repository.allActive().any { it.stableKey == "behavior:content_topic:ai" })
+
+        learner.observe(BehaviorSignal(
+            BehaviorObservationKind.CONTENT_TOPIC,
+            "AI",
+            "fresh-session",
+            66 * BehaviorMemoryLearner.DAY_MS
+        ))
+
+        assertFalse(repository.allActive().any { it.stableKey == "behavior:content_topic:ai" })
+        val observation = repository.behavior("behavior:content_topic:ai")!!
+        assertEquals(1, observation.observationCount)
+        assertEquals(1, observation.sessionCount)
+        assertEquals(1, observation.dayCount)
+    }
+
+    @Test fun decayCoversMoreThanOneHundredBehaviorKeys() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val learner = BehaviorMemoryLearner(repository)
+        repeat(130) { index ->
+            val key = "behavior:content_topic:topic_$index"
+            repository.recordBehavior(BehaviorObservationEntity(
+                id = "b-$index",
+                stableKey = key,
+                kind = BehaviorObservationKind.CONTENT_TOPIC.name,
+                label = "Topic $index",
+                observationCount = 6,
+                sessionCount = 3,
+                dayCount = 2,
+                firstObservedAt = 0L,
+                lastObservedAt = 0L,
+                lastSessionId = "s-$index",
+                lastDayBucket = 0L
+            ))
+            repository.saveGrounded(MemoryCandidate(
+                MemoryCategory.CURRENT_INTEREST,
+                "Recently follows Topic $index-related content",
+                key,
+                MemorySensitivity.LOW,
+                .86,
+                provenance = MemoryProvenance.BEHAVIOR_PATTERN
+            ))
+        }
+        assertEquals(130, repository.allActive().size)
+        learner.decay(61 * BehaviorMemoryLearner.DAY_MS)
         assertTrue(repository.allActive().isEmpty())
     }
 
@@ -65,7 +123,6 @@ class BehaviorMemoryLearnerTest {
         val repository = MemoryRepository(FakeMemoryDao())
         val learner = BehaviorMemoryLearner(repository)
 
-        // YouTube has strong multi-day/session evidence.
         repeat(10) { index ->
             learner.observe(BehaviorSignal(
                 BehaviorObservationKind.APP_USAGE,
@@ -75,7 +132,6 @@ class BehaviorMemoryLearnerTest {
             ))
         }
 
-        // Chrome is used too, but with materially less evidence.
         repeat(5) { index ->
             learner.observe(BehaviorSignal(
                 BehaviorObservationKind.APP_USAGE,
@@ -117,4 +173,55 @@ class BehaviorMemoryLearnerTest {
         }
         assertFalse(repository.allActive().any { it.stableKey == BehaviorMemoryLearner.MOST_USED_APP_KEY })
     }
+
+    @Test fun passivePrivacyBlocksSensitiveAppsAndPrivateBrowsing() {
+        assertTrue(PassiveMemoryPrivacyPolicy.blocksApp("com.example.mobilebanking", "My Bank"))
+        assertTrue(PassiveMemoryPrivacyPolicy.blocksApp("com.example.authenticator", "Authenticator"))
+        assertFalse(PassiveMemoryPrivacyPolicy.blocksApp("com.google.android.youtube", "YouTube"))
+        assertTrue(PassiveMemoryPrivacyPolicy.privateContext(listOf("New incognito tab")))
+        assertTrue(PassiveMemoryPrivacyPolicy.privateContext(listOf("Private browsing")))
+    }
+
+    @Test fun youtubeContentLearningRequiresActiveVideoEvidence() {
+        val home = activity(
+            screenType = "LIST",
+            elements = listOf(
+                element(SemanticRole.VIDEO_CARD, "AI agents explained"),
+                element(SemanticRole.CHANNEL_NAME, "Jonathan Gaming")
+            )
+        )
+        assertFalse(PassiveMemoryObserver.isActiveYouTubeVideoContext(home))
+
+        val player = activity(
+            screenType = "VIDEO",
+            elements = listOf(
+                element(SemanticRole.VIDEO, "AI agents explained"),
+                element(SemanticRole.CHANNEL_NAME, "Jonathan Gaming"),
+                element(SemanticRole.BUTTON, "Pause")
+            )
+        )
+        assertTrue(PassiveMemoryObserver.isActiveYouTubeVideoContext(player))
+    }
+
+    private fun activity(screenType: String, elements: List<SemanticElement>) = CurrentActivityContext(
+        packageName = "com.google.android.youtube",
+        appLabel = "YouTube",
+        screenType = screenType,
+        windowId = 1,
+        generation = 1L,
+        visibleElements = elements,
+        confidence = .9,
+        timestamp = 1L
+    )
+
+    private fun element(role: SemanticRole, label: String) = SemanticElement(
+        id = label,
+        role = role,
+        label = label,
+        left = 0,
+        top = 0,
+        right = 100,
+        bottom = 100,
+        actionable = true
+    )
 }
