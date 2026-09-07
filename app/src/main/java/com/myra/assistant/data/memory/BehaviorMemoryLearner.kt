@@ -39,7 +39,7 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
             lastDayBucket = day, metadata = signal.safeMetadata, promotedMemoryId = old?.promotedMemoryId
         )
         repository.recordBehavior(updated)
-        Log.d("LyraMemoryBrainV2", "BEHAVIOR_OBSERVATION kind=${signal.kind} key=$key observations=${updated.observationCount} sessions=${updated.sessionCount} days=${updated.dayCount}")
+        safeLog("BEHAVIOR_OBSERVATION kind=${signal.kind} key=$key observations=${updated.observationCount} sessions=${updated.sessionCount} days=${updated.dayCount}")
         if (!eligible(updated)) return null
         val category = if (signal.kind == BehaviorObservationKind.CONTENT_TOPIC) MemoryCategory.CURRENT_INTEREST else MemoryCategory.HABIT
         val fact = when (signal.kind) {
@@ -50,7 +50,7 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
         return repository.saveGrounded(MemoryCandidate(category, fact, key, MemorySensitivity.LOW,
             confidence = .86, source = "behavior_aggregate", provenance = MemoryProvenance.BEHAVIOR_PATTERN,
             observationMetadata = "observations=${updated.observationCount};sessions=${updated.sessionCount};days=${updated.dayCount}"))
-            .also { Log.d("LyraMemoryBrainV2", "BEHAVIOR_PATTERN_PROMOTED kind=${signal.kind} key=$key status=${it::class.simpleName}") }
+            .also { safeLog("BEHAVIOR_PATTERN_PROMOTED kind=${signal.kind} key=$key status=${it::class.simpleName}") }
     }
 
     suspend fun decay(now: Long) {
@@ -59,7 +59,7 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
             // Raw aggregates are retained for bounded historical evidence. The linked
             // durable memory is made inactive through its stable key.
             repository.forgetStableKey(observation.stableKey)
-            Log.d("LyraMemoryBrainV2", "BEHAVIOR_PATTERN_DECAYED kind=${observation.kind} key=${observation.stableKey}")
+            safeLog("BEHAVIOR_PATTERN_DECAYED kind=${observation.kind} key=${observation.stableKey}")
         }
     }
 
@@ -68,6 +68,10 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
 
     private fun token(value: String) = value.lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}]+"), "_").trim('_').take(64)
+
+    private fun safeLog(message: String) {
+        runCatching { Log.d("LyraMemoryBrainV2", message) }
+    }
 
     companion object {
         const val DAY_MS = 86_400_000L
