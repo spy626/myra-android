@@ -8,7 +8,6 @@ object PersonLinkedMemoryIdentity {
 
     fun belongsTo(memory: MemoryEntity, names: Collection<String>): Boolean {
         if (memory.entityName != null && names.any { sameName(memory.entityName, it) }) return true
-        if (memory.category !in setOf(MemoryCategory.PERSON.name, MemoryCategory.LIFE_EVENT.name)) return false
         val storedLinkedName = linkedFactPersonName(memory.fact)
         return names.any { name ->
             val canonical = BestFriendNameCanonicalizer.canonicalize(name)
@@ -16,7 +15,7 @@ object PersonLinkedMemoryIdentity {
             (storedFriend != null && sameName(storedFriend, canonical)) ||
                 (storedLinkedName != null && sameName(storedLinkedName, canonical)) ||
                 memory.stableKey.startsWith("person:${stableToken(canonical)}:") ||
-                startsWithName(memory.fact, canonical)
+                mentionsName(memory.fact, canonical)
         }
     }
 
@@ -26,7 +25,7 @@ object PersonLinkedMemoryIdentity {
         // correction alias. This is the Naufara(row) vs Nauphara(command) failure.
         val storedName = linkedFactPersonName(memory.fact)
             ?.takeIf { actual -> oldNames.any { sameName(actual, it) } }
-            ?: oldNames.firstOrNull { startsWithName(memory.fact, it) }
+            ?: oldNames.firstOrNull { mentionsName(memory.fact, it) }
         val replaceName = storedName ?: memory.entityName?.takeIf { actual -> oldNames.any { sameName(actual, it) } }
         val fact = if (replaceName == null) memory.fact else memory.fact.replace(
             Regex("\\b${Regex.escape(replaceName)}\\b", RegexOption.IGNORE_CASE), canonicalName
@@ -39,8 +38,13 @@ object PersonLinkedMemoryIdentity {
         return Rename(key, fact)
     }
 
-    private fun startsWithName(fact: String, name: String): Boolean =
-        Regex("^${Regex.escape(name.trim())}\\b", RegexOption.IGNORE_CASE).containsMatchIn(fact)
+    /** Exact word/phrase matching keeps whole-person forget conservative across every memory category. */
+    fun mentionsName(fact: String, name: String): Boolean {
+        val clean = name.trim()
+        if (clean.length < 2) return false
+        return Regex("(?:^|[^\\p{L}\\p{N}])${Regex.escape(clean)}(?:$|[^\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)
+            .containsMatchIn(fact)
+    }
 
     private fun sameName(left: String, right: String): Boolean =
         left.equals(right, ignoreCase = true) ||
