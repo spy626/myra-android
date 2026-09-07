@@ -86,9 +86,15 @@ class MemoryRepository(private val dao: MemoryDao) {
     }
 
     suspend fun forgetFromSettings(memory: MemoryEntity): Boolean {
-        if (memory.category == MemoryCategory.PERSON.name && memory.entityId != null) {
-            return (dao.deactivateEntity(memory.entityId, System.currentTimeMillis()) > 0)
-                .also { if (it) MemorySessionIndex.invalidate() }
+        if (memory.category == MemoryCategory.PERSON.name) {
+            val personName = memory.entityName
+                ?: MemoryRelationshipPolicy.personName(memory.fact)
+                ?: memory.fact.substringBefore(" is Zopy's ").takeIf { it != memory.fact }
+            if (!personName.isNullOrBlank()) return forgetMatching(personName)
+            if (memory.entityId != null) {
+                return (dao.deactivateEntity(memory.entityId, System.currentTimeMillis()) > 0)
+                    .also { if (it) MemorySessionIndex.invalidate() }
+            }
         }
         val personName = memory.takeIf(MemoryRelationshipPolicy::isBestFriend)
             ?.let { MemoryRelationshipPolicy.personName(it.fact) }
@@ -149,7 +155,7 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     private fun workingTransactionMemory(): MemoryEntity? {
         val transaction = MemoryWorkingContext.lastTransaction ?: return null
-        val fact = MemoryWorkingContext.failedTransactionFact() ?: return null
+        val fact = MemoryWorkingContext.transactionFact() ?: return null
         return MemoryEntity(
             id = "working:last_memory_transaction",
             stableKey = MemoryWorkingContext.LAST_TRANSACTION_QUERY,
@@ -181,9 +187,9 @@ class MemoryRepository(private val dao: MemoryDao) {
             PersonLinkedMemoryIdentity.belongsTo(it, names.toList())
         }
         memoryLog(
-            "$stage names=${names.toList()} rowCount=${rows.size} records=" +
+            "$stage rowCount=${rows.size} records=" +
                 rows.joinToString(prefix = "[", postfix = "]") {
-                    "{id=${it.id}, key=${it.stableKey}, fact=${it.fact}, active=${it.active}}"
+                    "{id=${it.id}, key=${it.stableKey}, category=${it.category}, entityId=${it.entityId}, active=${it.active}}"
                 }
         )
         return rows
@@ -225,15 +231,15 @@ class MemoryRepository(private val dao: MemoryDao) {
         for (memory in dao.activeAll().filter(MemoryRelationshipPolicy::isBestFriend)) {
             val name = MemoryRelationshipPolicy.personName(memory.fact) ?: continue
             val candidate = canonicalizeAgainstExistingBestFriends(
-                    MemoryCandidate(
-                        category = MemoryCategory.PERSON,
-                        fact = "Zopy's best friend is $name",
-                        stableKey = MemoryRelationshipPolicy.BEST_FRIEND_KEY,
-                        sensitivity = MemorySensitivity.valueOf(memory.sensitivity),
-                        confidence = memory.confidence,
-                        source = memory.source
-                    )
+                MemoryCandidate(
+                    category = MemoryCategory.PERSON,
+                    fact = "Zopy's best friend is $name",
+                    stableKey = MemoryRelationshipPolicy.BEST_FRIEND_KEY,
+                    sensitivity = MemorySensitivity.valueOf(memory.sensitivity),
+                    confidence = memory.confidence,
+                    source = memory.source
                 )
+            )
             canonicalRows += memory to candidate
         }
         canonicalRows.groupBy { it.second.stableKey }.values.forEach { samePerson ->
@@ -320,30 +326,33 @@ class MemoryRepository(private val dao: MemoryDao) {
                     failureReason = "target_not_found"
                 )
             )
-            memoryLog("after_delete query=$canonicalQuery matched=0 remaining=0")
+            memoryLog("after_delete matched=0 remaining=0")
             return false
         }
         val now = System.currentTimeMillis()
         var affected = 0
         val matchedNames = matches.mapNotNull { MemoryRelationshipPolicy.personName(it.fact) }
-        // Delete the identity as one unit. Previously only the best-friend row was
-        // removed, so a linked channel fact could keep the deleted person in recall.
         val identityRows = activeMemories.filter {
             PersonLinkedMemoryIdentity.belongsTo(it, matchedNames + canonicalQuery)
         }
-        for (match in identityRows) affected += dao.deactivate(match.id, now)
-        val remaining = dao.activeAll().count { memory ->
-            val storedName = MemoryRelationshipPolicy.personName(memory.fact)
-                ?.let(BestFriendNameCanonicalizer::canonicalize)
-            storedName != null && (
-                storedName.equals(canonicalQuery, ignoreCase = true) ||
-                    BestFriendNameSimilarity.likelySame(storedName, canonicalQuery)
-                )
+        for (match in identityRows.distinctBy { it.id }) affected += dao.deactivate(match.id, now)
+
+        // A deliberate whole-person forget also removes passive evidence that could otherwise
+        // recreate the forgotten channel/person pattern on the next observation.
+        val behaviorRows = BehaviorObservationKind.entries
+            .flatMap { dao.behaviorByKind(it.name) }
+            .distinctBy { it.stableKey }
+            .filter { PersonLinkedMemoryIdentity.mentionsName(it.label, canonicalQuery) }
+        var behaviorAffected = 0
+        behaviorRows.forEach { behaviorAffected += dao.deleteBehavior(it.stableKey) }
+
+        val remaining = dao.activeAll().count {
+            PersonLinkedMemoryIdentity.belongsTo(it, matchedNames + canonicalQuery)
         }
-        memoryLog(
-            "after_delete query=$canonicalQuery matched=${matches.size} affected=$affected remaining=$remaining"
-        )
         val succeeded = affected > 0 && remaining == 0
+        memoryLog(
+            "after_delete matched=${matches.size} affected=$affected behaviorAffected=$behaviorAffected remaining=$remaining"
+        )
         MemoryWorkingContext.transaction(
             LastMemoryTransaction(
                 type = MemoryDecision.DELETE,
@@ -352,6 +361,10 @@ class MemoryRepository(private val dao: MemoryDao) {
                 failureReason = if (succeeded) null else "delete_not_verified"
             )
         )
+        if (succeeded) {
+            MemoryWorkingContext.clearPersonIfMatches(canonicalQuery)
+            MemorySessionIndex.invalidate()
+        }
         return succeeded
     }
 
@@ -382,8 +395,6 @@ class MemoryRepository(private val dao: MemoryDao) {
         val bestFriendRows = BestFriendDeleteMatcher.findAll(oldName, memories)
         val oldRows = bestFriendRows.ifEmpty { linkedRows }
         val old = oldRows.firstOrNull() ?: return false
-        // A verified user correction is authoritative. Do not map "Karim" back to
-        // the older ASR alias "Kareem" through the observational canonicalizer.
         val canonicalName = correctedName.trim().replace(Regex("\\s+"), " ").replaceFirstChar {
             if (it.isLowerCase()) it.uppercaseChar().toString() else it.toString()
         }
@@ -397,10 +408,16 @@ class MemoryRepository(private val dao: MemoryDao) {
                     PersonLinkedMemoryIdentity.stableToken(oldName),
                     PersonLinkedMemoryIdentity.stableToken(canonicalName)
                 )
-                dao.upsert(row.copy(stableKey = key, fact = fact, normalizedFact = normalize(fact),
-                    entityId = stableEntityId, entityName = canonicalName,
+                dao.upsert(row.copy(
+                    stableKey = key,
+                    fact = fact,
+                    normalizedFact = normalize(fact),
+                    entityId = stableEntityId,
+                    entityName = canonicalName,
                     provenance = MemoryProvenance.VERIFIED_MEMORY_CORRECTION.name,
-                    updatedAt = now, lastConfirmedAt = now))
+                    updatedAt = now,
+                    lastConfirmedAt = now
+                ))
             }
             val active = dao.activeAll()
             val verified = active.any { it.entityId == stableEntityId && it.entityName == canonicalName } &&
@@ -408,9 +425,6 @@ class MemoryRepository(private val dao: MemoryDao) {
             if (verified) MemorySessionIndex.invalidate()
             return verified
         }
-        // Include every row already resolving to the corrected identity. In the
-        // failing phone path "Named Karim" and "Kareem" were separate stable keys;
-        // renaming only Karima left that alias active and recall listed two people.
         val identityRows = (bestFriendRows + BestFriendDeleteMatcher.findAll(canonicalName, memories))
             .distinctBy { it.id }
         val replacement = MemoryRelationshipPolicy.canonicalizeAdditional(
@@ -446,11 +460,9 @@ class MemoryRepository(private val dao: MemoryDao) {
         }
         val oldToken = PersonLinkedMemoryIdentity.stableToken(oldName)
         val staleOldIdentity = active.any { row ->
-            MemoryRelationshipPolicy.personName(row.fact)
-                ?.equals(oldName, ignoreCase = true) == true ||
+            row.entityName?.equals(oldName, ignoreCase = true) == true ||
                 row.stableKey.startsWith("person:$oldToken:") ||
-                Regex("^${Regex.escape(oldName)}\\b", RegexOption.IGNORE_CASE)
-                    .containsMatchIn(row.fact)
+                PersonLinkedMemoryIdentity.mentionsName(row.fact, oldName)
         }
         val staleTargetAlias = active.any { row ->
             val stored = MemoryRelationshipPolicy.personName(row.fact) ?: return@any false
@@ -459,9 +471,8 @@ class MemoryRepository(private val dao: MemoryDao) {
                 !stored.equals(canonicalName, ignoreCase = true)
         }
         memoryLog(
-            "verify_rename old=$oldName new=$canonicalName canonical=$hasCanonicalPerson " +
-                "staleOld=$staleOldIdentity staleTargetAlias=$staleTargetAlias " +
-                "active=${active.map { it.stableKey to it.fact }}"
+            "verify_rename canonical=$hasCanonicalPerson staleOld=$staleOldIdentity " +
+                "staleTargetAlias=$staleTargetAlias activeKeys=${active.map { it.stableKey }}"
         )
         return hasCanonicalPerson && !staleOldIdentity && !staleTargetAlias
     }
@@ -535,8 +546,6 @@ class MemoryRepository(private val dao: MemoryDao) {
                 .forEach { dao.deactivate(it.id, now) }
         }
         if (replaceBestFriends && MemoryRelationshipPolicy.isBestFriend(canonical)) {
-            // A confirmed replacement must deactivate old semantic keys as well as the
-            // canonical key, otherwise both people leak into recall context.
             dao.activeAll()
                 .filter { MemoryRelationshipPolicy.isBestFriend(it) }
                 .forEach { dao.deactivate(it.id, now) }
