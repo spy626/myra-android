@@ -6,18 +6,18 @@ import java.util.Locale
 object MemoryRelevanceSelector {
     fun select(query: String, memories: List<MemoryEntity>, limit: Int = 5): List<MemoryEntity> {
         val boundedLimit = limit.coerceIn(1, 10)
+        val recallable = memories.filter(::isNormallyRecallable)
         val queryTokens = tokens(query).filterNot(STOP_WORDS::contains).toSet()
-        if (queryTokens.isEmpty()) return memories
-            .filter(MemoryEntity::active)
-            .sortedWith(compareByDescending<MemoryEntity> { it.useCount }
+        if (queryTokens.isEmpty()) return recallable
+            .sortedWith(compareByDescending<MemoryEntity> { lifecycleRank(it.lifecycleStatus) }
+                .thenByDescending { it.useCount }
                 .thenByDescending { it.lastUsedAt }
                 .thenByDescending { it.updatedAt })
             .take(boundedLimit)
 
         val contextualReference = CONTEXTUAL_REFERENCE.containsMatchIn(normalize(query))
 
-        return memories.asSequence()
-            .filter(MemoryEntity::active)
+        return recallable.asSequence()
             .map { memory ->
                 val factTokens = tokens(memory.fact).toSet()
                 val keyTokens = tokens(memory.stableKey).toSet()
@@ -30,11 +30,16 @@ object MemoryRelevanceSelector {
                     normalize(query).contains(normalize(memory.fact))
                 val categoryBoost = if (contextualReference) contextBoost(memory.category) else 0
                 val usageBoost = memory.useCount.coerceAtMost(5) * 2
+                val lifecycleBoost = when (memory.lifecycleStatus) {
+                    MemoryLifecycleStatus.ACTIVE.name -> 4
+                    MemoryLifecycleStatus.WEAKENING.name -> 0
+                    else -> -20
+                }
                 val semanticScore = factOverlap * 10 + conceptualKeyOverlap * 4 + categoryBoost +
                     if (exactPhrase) 25 else 0
                 // Frequency ranks relevant memories; it must never make an unrelated
                 // memory relevant or resurrect an old person alias.
-                val score = if (semanticScore > 0) semanticScore + usageBoost else 0
+                val score = if (semanticScore > 0) semanticScore + usageBoost + lifecycleBoost else 0
                 memory to score
             }
             .filter { it.second > 0 }
@@ -44,6 +49,19 @@ object MemoryRelevanceSelector {
             .map { it.first }
             .take(boundedLimit)
             .toList()
+    }
+
+    private fun isNormallyRecallable(memory: MemoryEntity): Boolean =
+        memory.active && memory.lifecycleStatus !in setOf(
+            MemoryLifecycleStatus.HISTORICAL.name,
+            MemoryLifecycleStatus.INACTIVE.name,
+            MemoryLifecycleStatus.SUPERSEDED.name
+        )
+
+    private fun lifecycleRank(status: String): Int = when (status) {
+        MemoryLifecycleStatus.ACTIVE.name -> 2
+        MemoryLifecycleStatus.WEAKENING.name -> 1
+        else -> 0
     }
 
     private fun tokens(value: String): List<String> = normalize(value)
