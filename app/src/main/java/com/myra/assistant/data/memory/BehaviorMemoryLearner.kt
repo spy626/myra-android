@@ -22,24 +22,35 @@ data class BehaviorSignal(
     val safeMetadata: String? = null
 )
 
-/** Aggregates bounded evidence; a single observation is never durable memory. */
 class BehaviorMemoryLearner(private val repository: MemoryRepository) {
     suspend fun observe(signal: BehaviorSignal): MemoryWriteResult? {
         val key = "behavior:${signal.kind.name.lowercase()}:${token(signal.label)}"
         val old = repository.behavior(key)
+        val stale = old != null &&
+            (signal.observedAt - old.lastObservedAt).coerceAtLeast(0L) >= INACTIVE_MS
+        if (stale) repository.forgetStableKey(key)
+        val prior = old?.takeUnless { stale }
         val day = signal.observedAt / DAY_MS
         val updated = BehaviorObservationEntity(
-            id = old?.id ?: UUID.randomUUID().toString(), stableKey = key,
-            kind = signal.kind.name, label = signal.label.take(80),
-            observationCount = (old?.observationCount ?: 0) + 1,
-            sessionCount = (old?.sessionCount ?: 0) + if (old?.lastSessionId != signal.sessionId) 1 else 0,
-            dayCount = (old?.dayCount ?: 0) + if (old?.lastDayBucket != day) 1 else 0,
-            firstObservedAt = old?.firstObservedAt ?: signal.observedAt,
-            lastObservedAt = signal.observedAt, lastSessionId = signal.sessionId,
-            lastDayBucket = day, metadata = signal.safeMetadata, promotedMemoryId = old?.promotedMemoryId
+            id = prior?.id ?: old?.id ?: UUID.randomUUID().toString(),
+            stableKey = key,
+            kind = signal.kind.name,
+            label = signal.label.take(80),
+            observationCount = (prior?.observationCount ?: 0) + 1,
+            sessionCount = (prior?.sessionCount ?: 0) + if (prior?.lastSessionId != signal.sessionId) 1 else 0,
+            dayCount = (prior?.dayCount ?: 0) + if (prior?.lastDayBucket != day) 1 else 0,
+            firstObservedAt = prior?.firstObservedAt ?: signal.observedAt,
+            lastObservedAt = signal.observedAt,
+            lastSessionId = signal.sessionId,
+            lastDayBucket = day,
+            metadata = signal.safeMetadata,
+            promotedMemoryId = prior?.promotedMemoryId
         )
         repository.recordBehavior(updated)
-        safeLog("BEHAVIOR_OBSERVATION kind=${signal.kind} key=$key observations=${updated.observationCount} sessions=${updated.sessionCount} days=${updated.dayCount}")
+        safeLog(
+            "BEHAVIOR_OBSERVATION kind=${signal.kind} key=$key observations=${updated.observationCount} " +
+                "sessions=${updated.sessionCount} days=${updated.dayCount} reset=$stale"
+        )
 
         var result: MemoryWriteResult? = null
         if (eligible(updated)) {
@@ -53,22 +64,27 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
                 BehaviorObservationKind.YOUTUBE_CHANNEL -> "Frequently watches ${signal.label}"
                 BehaviorObservationKind.CONTENT_TOPIC -> "Recently follows ${signal.label}-related content"
             }
-            result = repository.saveGrounded(MemoryCandidate(category, fact, key, MemorySensitivity.LOW,
-                confidence = .86, source = "behavior_aggregate", provenance = MemoryProvenance.BEHAVIOR_PATTERN,
-                observationMetadata = "observations=${updated.observationCount};sessions=${updated.sessionCount};days=${updated.dayCount}"))
-                .also { safeLog("BEHAVIOR_PATTERN_PROMOTED kind=${signal.kind} key=$key status=${it::class.simpleName}") }
+            result = repository.saveGrounded(
+                MemoryCandidate(
+                    category,
+                    fact,
+                    key,
+                    MemorySensitivity.LOW,
+                    confidence = .86,
+                    source = "behavior_aggregate",
+                    provenance = MemoryProvenance.BEHAVIOR_PATTERN,
+                    observationMetadata =
+                        "observations=${updated.observationCount};sessions=${updated.sessionCount};days=${updated.dayCount}"
+                )
+            ).also {
+                safeLog("BEHAVIOR_PATTERN_PROMOTED kind=${signal.kind} key=$key status=${it::class.simpleName}")
+            }
         }
 
         if (signal.kind == BehaviorObservationKind.APP_USAGE) updateMostUsedApp(signal.observedAt)
         return result
     }
 
-    /**
-     * Most-used is a comparative inference, so it uses a stricter threshold than a
-     * normal frequent-app memory and requires a clear lead over the runner-up. When
-     * there is no longer a clear/recent leader, the summary is retired instead of
-     * leaving a stale "most-used" claim active.
-     */
     private suspend fun updateMostUsedApp(now: Long): MemoryWriteResult? {
         val ranked = repository.behaviorByKind(BehaviorObservationKind.APP_USAGE)
             .filter { (now - it.lastObservedAt).coerceAtLeast(0L) < HISTORICAL_MS }
@@ -94,7 +110,8 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
             confidence = .91,
             source = "behavior_rank",
             provenance = MemoryProvenance.BEHAVIOR_PATTERN,
-            observationMetadata = "observations=${top.observationCount};sessions=${top.sessionCount};days=${top.dayCount}"
+            observationMetadata =
+                "observations=${top.observationCount};sessions=${top.sessionCount};days=${top.dayCount}"
         )
         return repository.saveGrounded(candidate).also {
             safeLog("BEHAVIOR_MOST_USED_APP label=${top.label.take(40)} status=${it::class.simpleName}")
@@ -108,20 +125,29 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
     }
 
     suspend fun decay(now: Long) {
-        repository.recentBehavior().forEach { observation ->
-            val age = now - observation.lastObservedAt
+        val observations = BehaviorObservationKind.entries
+            .flatMap { repository.behaviorByKind(it) }
+            .distinctBy { it.stableKey }
+        observations.forEach { observation ->
+            val age = (now - observation.lastObservedAt).coerceAtLeast(0L)
             when {
                 age >= INACTIVE_MS -> {
                     repository.forgetStableKey(observation.stableKey)
-                    safeLog("BEHAVIOR_PATTERN_DECAYED kind=${observation.kind} key=${observation.stableKey} state=INACTIVE")
+                    safeLog(
+                        "BEHAVIOR_PATTERN_DECAYED kind=${observation.kind} key=${observation.stableKey} state=INACTIVE"
+                    )
                 }
                 age >= HISTORICAL_MS -> {
                     repository.setLifecycle(observation.stableKey, MemoryLifecycleStatus.HISTORICAL)
-                    safeLog("BEHAVIOR_PATTERN_DECAYED kind=${observation.kind} key=${observation.stableKey} state=HISTORICAL")
+                    safeLog(
+                        "BEHAVIOR_PATTERN_DECAYED kind=${observation.kind} key=${observation.stableKey} state=HISTORICAL"
+                    )
                 }
                 age >= WEAKENING_MS -> {
                     repository.setLifecycle(observation.stableKey, MemoryLifecycleStatus.WEAKENING)
-                    safeLog("BEHAVIOR_PATTERN_DECAYED kind=${observation.kind} key=${observation.stableKey} state=WEAKENING")
+                    safeLog(
+                        "BEHAVIOR_PATTERN_DECAYED kind=${observation.kind} key=${observation.stableKey} state=WEAKENING"
+                    )
                 }
             }
         }
@@ -150,7 +176,6 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
     }
 }
 
-/** General topic extraction from safe visible YouTube text; no fixed four-topic list. */
 object ContentTopicExtractor {
     private val stopWords = setOf(
         "the", "and", "for", "with", "from", "this", "that", "your", "you", "are", "was", "how",
@@ -170,7 +195,8 @@ object ContentTopicExtractor {
 
     fun extract(labels: List<String>, maxTopics: Int = 4): List<String> {
         if (labels.isEmpty()) return emptyList()
-        val safe = labels.asSequence().map { it.replace(Regex("\\s+"), " ").trim() }
+        val safe = labels.asSequence()
+            .map { it.replace(Regex("\\s+"), " ").trim() }
             .filter { it.length in 3..120 }
             .toList()
         val joined = safe.joinToString(" ")
@@ -201,26 +227,49 @@ object ContentTopicExtractor {
                     if (seenInLabel.add(canonical)) counts[canonical] = (counts[canonical] ?: 0) + 1
                 }
         }
-        counts.entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }
-            .thenBy { it.key }).forEach { topics += it.key }
+        counts.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .forEach { topics += it.key }
         return topics.take(maxTopics)
     }
 }
 
-/** Piggybacks on already-coalesced ActivityContext publications; no watcher or screenshot. */
+object PassiveMemoryPrivacyPolicy {
+    private val sensitivePackageTokens = setOf(
+        "bank", "banking", "wallet", "payment", "payments", "paytm", "phonepe", "gpay", "googlepay",
+        "upi", "finance", "financial", "credit", "debit", "broker", "trading", "stocks", "crypto",
+        "authenticator", "password", "bitwarden", "keepass", "1password", "onepassword", "vault",
+        "medical", "health", "hospital", "therapy"
+    )
+    private val privateMode = Regex(
+        "\\b(?:incognito|private\\s+browsing|private\\s+tab|secret\\s+mode)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    fun blocksApp(packageName: String, appLabel: String?): Boolean {
+        val value = "$packageName ${appLabel.orEmpty()}".lowercase(Locale.ROOT)
+        return sensitivePackageTokens.any(value::contains)
+    }
+
+    fun privateContext(labels: List<String>): Boolean = labels.any(privateMode::containsMatchIn)
+}
+
 object PassiveMemoryObserver {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lastObserved = mutableMapOf<String, Long>()
     private var lastDecayDay = -1L
 
     fun onActivityContext(context: Context, activity: CurrentActivityContext) {
-        if (activity.packageName == context.packageName || sensitivePackage(activity.packageName, activity.appLabel)) return
-        val labels = activity.visibleElements.map { it.label }.filter {
-            it.length in 3..100 && ScreenPrivacyPolicy.sensitiveCategory(it) == null &&
-                !ScreenPrivacyPolicy.blocksLongTermMemory(it)
+        if (activity.packageName == context.packageName ||
+            PassiveMemoryPrivacyPolicy.blocksApp(activity.packageName, activity.appLabel)
+        ) return
+
+        val rawLabels = activity.visibleElements.map { it.label }.filter { it.length in 2..120 }
+        if (PassiveMemoryPrivacyPolicy.privateContext(rawLabels)) return
+
+        val safeLabels = rawLabels.filter {
+            ScreenPrivacyPolicy.sensitiveCategory(it) == null && !ScreenPrivacyPolicy.blocksLongTermMemory(it)
         }
-        // A bounded activity window represents a usage session. This avoids treating
-        // repeated refreshes as sessions while still allowing later visits to count.
         val sessionId = "${activity.packageName}:${activity.timestamp / SESSION_WINDOW_MS}"
         val signals = mutableListOf(
             BehaviorSignal(
@@ -230,34 +279,59 @@ object PassiveMemoryObserver {
                 activity.timestamp
             )
         )
-        if (activity.packageName.contains("youtube", true)) {
+
+        if (activity.packageName.contains("youtube", true) && isActiveYouTubeVideoContext(activity, safeLabels)) {
             activity.visibleElements.asSequence()
                 .filter { it.role == SemanticRole.CHANNEL_NAME }
                 .map { it.label.trim() }
-                .filter { it.length in 2..80 }
+                .filter { it.length in 2..80 && it in safeLabels }
                 .distinctBy { it.lowercase(Locale.ROOT) }
-                .take(2)
-                .forEach { signals += BehaviorSignal(BehaviorObservationKind.YOUTUBE_CHANNEL, it, sessionId, activity.timestamp) }
+                .take(1)
+                .forEach {
+                    signals += BehaviorSignal(
+                        BehaviorObservationKind.YOUTUBE_CHANNEL,
+                        it,
+                        sessionId,
+                        activity.timestamp
+                    )
+                }
 
             val topicLabels = activity.visibleElements.asSequence()
-                .filter { it.role in setOf(SemanticRole.TEXT, SemanticRole.VIDEO, SemanticRole.VIDEO_CARD, SemanticRole.LIST_ITEM) }
+                .filter {
+                    it.role in setOf(
+                        SemanticRole.TEXT,
+                        SemanticRole.VIDEO,
+                        SemanticRole.VIDEO_CARD,
+                        SemanticRole.LIST_ITEM
+                    )
+                }
                 .map { it.label }
-                .filter { it in labels }
+                .filter { it in safeLabels }
                 .take(20)
                 .toList()
             ContentTopicExtractor.extract(topicLabels).forEach { topic ->
-                signals += BehaviorSignal(BehaviorObservationKind.CONTENT_TOPIC, topic, sessionId, activity.timestamp)
+                signals += BehaviorSignal(
+                    BehaviorObservationKind.CONTENT_TOPIC,
+                    topic,
+                    sessionId,
+                    activity.timestamp
+                )
             }
         }
+
         val accepted = synchronized(lastObserved) {
             signals.filter { signal ->
-                val key = "${signal.kind}:${signal.label.lowercase()}"
+                val key = "${signal.kind}:${signal.label.lowercase(Locale.ROOT)}"
                 val last = lastObserved[key] ?: 0L
                 if (signal.observedAt - last < OBSERVATION_COOLDOWN_MS) false
-                else { lastObserved[key] = signal.observedAt; true }
+                else {
+                    lastObserved[key] = signal.observedAt
+                    true
+                }
             }
         }
         if (accepted.isEmpty()) return
+
         scope.launch {
             val learner = BehaviorMemoryLearner(MemoryRepository(LyraMemoryDatabase.get(context).memoryDao()))
             accepted.forEach { learner.observe(it) }
@@ -269,15 +343,24 @@ object PassiveMemoryObserver {
         }
     }
 
-    private fun sensitivePackage(packageName: String, appLabel: String?): Boolean {
-        val value = "$packageName ${appLabel.orEmpty()}".lowercase(Locale.ROOT)
-        return SENSITIVE_PACKAGE_TOKENS.any(value::contains)
+    internal fun isActiveYouTubeVideoContext(
+        activity: CurrentActivityContext,
+        safeLabels: List<String> = activity.visibleElements.map { it.label }
+    ): Boolean {
+        if (!activity.packageName.contains("youtube", true)) return false
+        val screenLooksLikeVideo = activity.screenType.contains("VIDEO", true)
+        val hasVideoElement = activity.visibleElements.any {
+            it.role == SemanticRole.VIDEO || it.role == SemanticRole.VIDEO_CARD
+        }
+        val playbackEvidence = safeLabels.any {
+            Regex(
+                "\\b(?:pause|play\\s+video|seek|progress|elapsed|fullscreen|full\\s+screen|quality|captions)\\b",
+                RegexOption.IGNORE_CASE
+            ).containsMatchIn(it)
+        }
+        return screenLooksLikeVideo || (hasVideoElement && playbackEvidence)
     }
 
     private const val OBSERVATION_COOLDOWN_MS = 120_000L
     private const val SESSION_WINDOW_MS = 30L * 60_000L
-    private val SENSITIVE_PACKAGE_TOKENS = setOf(
-        "bank", "banking", "wallet", "paytm", "phonepe", "gpay", "googlepay",
-        "authenticator", "password", "bitwarden", "keepass", "1password", "onepassword"
-    )
 }
