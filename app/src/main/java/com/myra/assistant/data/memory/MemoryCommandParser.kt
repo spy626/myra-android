@@ -35,14 +35,10 @@ object MemoryCommandParser {
         "^(?:(?:who|kon|koun|kaun|kauna)\\s+(?:is\\s+)?(?:my|mera|meri|mere|morei)|(?:my|mera|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)\\s+(?:kon|koun|kaun|kauna))\\s+(?:best|besti|besta)?\\s*(?:friend|friends|frend|frends|phrend|phrenda)?\\s*(?:hai|he|is)?[?]?$",
         RegexOption.IGNORE_CASE
     )
-    private val lastTransactionRead = Regex(
-        "^(?=.*\\b(?:naam|name|memory|yaad)\\b)(?=.*\\b(?:update|change|rename|delete|remove|save|saved|remember)\\b)(?=.*(?:nahi\\s+(?:ho\\s+)?(?:paya|payi|hua|hui)|fail(?:ed|ure)?|did\\s+not|didn't|wasn't|was\\s+not)).+$",
-        setOf(RegexOption.IGNORE_CASE)
-    )
 
     fun looksLikeIntent(raw: String): Boolean {
         val clean = raw.trim().trimEnd('.', '?', '!')
-        if (lastTransactionRead.matches(clean)) return true
+        if (MemoryTransactionQueryDetector.isTransactionQuestion(clean)) return true
         return Regex(
             "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^(?:delete|remove)\\s+(?:karo|kar\\s+do)\\s+[\\p{L}][\\p{L}'-]{1,30}\\s+ko$|^[\\p{L}][\\p{L}'-]{1,30}\\s+ko\\s+(?:delete|remove)\\s+(?:karo|kar\\s+do|kero)$|^.{2,120}\\s+(?:ko\\s+)?(?:meri\\s+)?memor(?:y|ies)(?:\\s+se)?\\s+(?:hata|delete|remove)\\b|^[\\p{L}][\\p{L}'-]{1,30}\\s+(?:ko\\s+(?:meri\\s+)?memory\\s+se|mera\\s+(?:best\\s+)?(?:friend|frend|dost)\\s+nahi)|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate|janti|jaanti|janati)|^(?:who|kon|koun|kaun|kauna)\\s+(?:is\\s+)?(?:my|mera|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)|^(?:my|mera|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)\\s+(?:kon|koun|kaun|kauna)",
             RegexOption.IGNORE_CASE
@@ -51,7 +47,7 @@ object MemoryCommandParser {
 
     fun parse(raw: String): MemoryCommand? {
         val text = raw.trim().trimEnd('.', '?', '!')
-        lastTransactionRead.matchEntire(text)?.let {
+        if (MemoryTransactionQueryDetector.isTransactionQuestion(text)) {
             return MemoryCommand.Read(MemoryWorkingContext.LAST_TRANSACTION_QUERY)
         }
         read.matchEntire(text)?.let { return MemoryCommand.Read() }
