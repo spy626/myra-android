@@ -12,10 +12,10 @@ class HumanLikeMemoryContextTest {
         val brain = MemoryBrainCoordinator(repository)
 
         val outcome = brain.processFinalTurn("Mujhe na codes karne accha lagta hai")
+        val mutated = outcome as MemoryBrainOutcome.Mutated
 
-        assertTrue(outcome is MemoryBrainOutcome.Mutated)
-        assertTrue((outcome as MemoryBrainOutcome.Mutated).result is MemoryWriteResult.Saved)
-        assertTrue(!outcome.explicit)
+        assertTrue(mutated.result is MemoryWriteResult.Saved)
+        assertTrue(!mutated.explicit)
         val active = repository.allActive()
         assertEquals(1, active.size)
         assertEquals("Zopy likes coding", active.single().fact)
@@ -25,6 +25,7 @@ class HumanLikeMemoryContextTest {
     }
 
     @Test fun differentNaturalWordingReusesSameMemoryInsteadOfDuplicatingIt() = runBlocking {
+        MemoryWorkingContext.clear()
         val repository = MemoryRepository(FakeMemoryDao())
         val brain = MemoryBrainCoordinator(repository)
 
@@ -34,9 +35,21 @@ class HumanLikeMemoryContextTest {
         val active = repository.allActive().filter { it.stableKey == "preference:likes:coding" }
         assertEquals(1, active.size)
         assertEquals("Zopy likes coding", active.single().fact)
+        MemoryWorkingContext.clear()
+    }
+
+    @Test fun implicitPriorTopicQueryCanRetrieveTheSameSemanticMemory() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        brain.processFinalTurn("Mujhe coding accha lagta hai")
+
+        val recalled = repository.relevant("wahi jo kal coding ke baare mein bola tha", 5)
+
+        assertTrue(recalled.any { it.stableKey == "preference:likes:coding" })
     }
 
     @Test fun explicitDislikeSupersedesOldPreferenceWithoutForgettingContext() = runBlocking {
+        MemoryWorkingContext.clear()
         val dao = FakeMemoryDao()
         val repository = MemoryRepository(dao)
         val brain = MemoryBrainCoordinator(repository)
@@ -51,9 +64,11 @@ class HumanLikeMemoryContextTest {
             it.lifecycleStatus == MemoryLifecycleStatus.SUPERSEDED.name &&
                 it.fact.equals("Zopy likes web development", ignoreCase = true)
         })
+        MemoryWorkingContext.clear()
     }
 
     @Test fun namedPersonPreferenceLinksToExistingPersonNotToZopy() = runBlocking {
+        MemoryWorkingContext.clear()
         val repository = MemoryRepository(FakeMemoryDao())
         val brain = MemoryBrainCoordinator(repository)
 
@@ -67,9 +82,11 @@ class HumanLikeMemoryContextTest {
         assertEquals("Kareem", preference.entityName)
         assertEquals("Kareem likes coding", preference.fact)
         assertTrue(active.none { it.fact == "Zopy likes coding" })
+        MemoryWorkingContext.clear()
     }
 
     @Test fun uncertainInferenceAboutPersonIsIgnoredInsteadOfBecomingMemory() = runBlocking {
+        MemoryWorkingContext.clear()
         val repository = MemoryRepository(FakeMemoryDao())
         val brain = MemoryBrainCoordinator(repository)
         brain.processFinalTurn("Mera friend Kareem hai")
@@ -80,5 +97,6 @@ class HumanLikeMemoryContextTest {
         assertTrue(outcome is MemoryBrainOutcome.Ignored)
         assertEquals(before, repository.allActive().size)
         assertTrue(repository.allActive().none { it.fact.contains("coding", ignoreCase = true) })
+        MemoryWorkingContext.clear()
     }
 }
