@@ -8,12 +8,7 @@ sealed class AutomaticMemoryChange {
 object AutomaticMemoryChangeParser {
     fun parse(raw: String): AutomaticMemoryChange? {
         val text = raw.trim().trimEnd('.', '!', '?').replace(Regex("\\s+"), " ")
-        negativeEnglishSubject(text)?.let { subject ->
-            return forgetPreference(subject)
-        }
-        negativeHinglishSubject(text)?.let { subject ->
-            return forgetPreference(subject)
-        }
+        AutomaticMemoryExtractor.extract(raw)?.let { return AutomaticMemoryChange.Save(it) }
 
         val corrected = text.replace(
             Regex(
@@ -24,23 +19,5 @@ object AutomaticMemoryChangeParser {
         )
         return AutomaticMemoryExtractor.extract(corrected)
             ?.let(AutomaticMemoryChange::Save)
-    }
-
-    private fun negativeEnglishSubject(text: String): String? =
-        Regex(
-            """^i\s+(?:(?:do\s+not|don't|dont)\s+(?:like|love|enjoy)|no\s+longer\s+(?:like|love|enjoy))\s+(.+?)(?:\s+anymore)?$""",
-            RegexOption.IGNORE_CASE
-        ).matchEntire(text)?.groupValues?.get(1)
-
-    private fun negativeHinglishSubject(text: String): String? =
-        Regex(
-            """^mujhe\s+(.+?)\s+(?:ab\s+)?pasand[ae]?\s+nahi\s+(?:hai|hain|he)$""",
-            RegexOption.IGNORE_CASE
-        ).matchEntire(text)?.groupValues?.get(1)
-
-    private fun forgetPreference(rawSubject: String): AutomaticMemoryChange? {
-        val positive = AutomaticMemoryExtractor.extract("I like ${rawSubject.trim()}")
-            ?: return null
-        return AutomaticMemoryChange.Forget(positive.stableKey)
     }
 }
