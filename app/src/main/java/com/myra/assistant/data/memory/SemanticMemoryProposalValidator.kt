@@ -25,7 +25,7 @@ object SemanticMemoryProposalValidator {
         RegexOption.IGNORE_CASE
     )
     private val positivePreference = Regex(
-        """\b(?:like|likes|liked|love|loves|prefer|prefers|favorite|favourite|enjoy|enjoys|pasand)\b|\b(?:accha|achha|acha|aacha|achcha|acchi|achhi|achi)\s+lag(?:ta|ti|ata|ati)\b|\b(?:maza|mazza)\s+(?:aata|ata)\b|\b(?:i(?:'m|\s+am)\s+into)\b""",
+        """\b(?:like|likes|liked|love|loves|prefer|prefers|favorite|favourite|enjoy|enjoys|pasand)\b|\b(?:accha|achha|acha|aacha|achcha|acchi|achhi|achi)\s+lag(?:ta|ti|ata|ati)\b|\b(?:maza|mazza)\s+(?:aata|ata)\b|\bi(?:'m|\s+am)\s+into\b""",
         RegexOption.IGNORE_CASE
     )
     private val negativePreference = Regex(
@@ -108,11 +108,12 @@ object SemanticMemoryProposalValidator {
 
         val base = if (preference != null) {
             val subject = canonicalPreferenceSubject(preference.subject) ?: return null
+            val subjectKey = normalize(subject)
             if (preference.personName == null) {
                 MemoryCandidate(
                     category = MemoryCategory.PREFERENCE,
                     fact = if (preference.positive) "Zopy likes $subject" else "Zopy does not like $subject",
-                    stableKey = "preference:likes:${stableToken(subject)}",
+                    stableKey = "preference:likes:$subjectKey",
                     sensitivity = MemorySensitivity.LOW,
                     confidence = confidence.coerceIn(0.0, 0.95),
                     source = "gemini_grounded_conversation",
@@ -123,7 +124,7 @@ object SemanticMemoryProposalValidator {
                 MemoryCandidate(
                     category = MemoryCategory.PERSON,
                     fact = if (preference.positive) "$name likes $subject" else "$name does not like $subject",
-                    stableKey = "person:${stableToken(name)}:preference:${stableToken(subject)}",
+                    stableKey = "person:${personToken(name)}:preference:$subjectKey",
                     sensitivity = MemorySensitivity.PERSONAL,
                     confidence = confidence.coerceIn(0.0, 0.95),
                     source = "gemini_grounded_conversation",
@@ -148,16 +149,14 @@ object SemanticMemoryProposalValidator {
     }
 
     private fun parsePreferenceFact(fact: String): PreferenceFact? {
-        val selfPositive = Regex(
+        Regex(
             "^(?:Zopy|The user) (?:likes|loves|enjoys|prefers) (.+)$",
             RegexOption.IGNORE_CASE
-        )
-        selfPositive.matchEntire(fact)?.let { return PreferenceFact(null, it.groupValues[1], true) }
-        val selfNegative = Regex(
+        ).matchEntire(fact)?.let { return PreferenceFact(null, it.groupValues[1], true) }
+        Regex(
             "^(?:Zopy|The user) (?:does not|doesn't|doesnt) (?:like|love|enjoy|prefer) (.+)$",
             RegexOption.IGNORE_CASE
-        )
-        selfNegative.matchEntire(fact)?.let { return PreferenceFact(null, it.groupValues[1], false) }
+        ).matchEntire(fact)?.let { return PreferenceFact(null, it.groupValues[1], false) }
 
         val person = "([\\p{L}][\\p{L}'-]{1,29}(?:\\s+[\\p{L}][\\p{L}'-]{1,29}){0,2})"
         Regex("^$person (?:likes|loves|enjoys|prefers) (.+)$", RegexOption.IGNORE_CASE)
@@ -207,14 +206,14 @@ object SemanticMemoryProposalValidator {
             .replace(Regex("\\b(?:accha|achha|acha|aacha|achcha|acchi|achhi|achi)\\s+lag(?:ta|ti|ata|ati)\\b"), " like ")
             .replace(Regex("\\bpasand[ae]?\\b"), " like ")
             .replace(Regex("\\b(?:maza|mazza)\\s+(?:aata|ata)\\b"), " enjoy ")
-            .replace(Regex("\\b(?:likes|liked|loves|prefers|enjoys)\\b"), { match ->
+            .replace(Regex("\\b(?:likes|liked|loves|prefers|enjoys)\\b")) { match ->
                 when (match.value) {
                     "likes", "liked" -> "like"
                     "loves" -> "love"
                     "prefers" -> "prefer"
                     else -> "enjoy"
                 }
-            })
+            }
             .replace(Regex("\\b(?:code|codes)\\s+(?:karna|karne|karni)\\b"), " coding ")
             .replace(Regex("\\bcodes?\\b"), " coding ")
         normalized = normalized.replace(Regex("[^\\p{L}\\p{N}]+"), " ")
@@ -228,16 +227,16 @@ object SemanticMemoryProposalValidator {
         .map {
             when {
                 it in setOf("likes", "liked") -> "like"
-                it in setOf("loves") -> "love"
-                it in setOf("prefers") -> "prefer"
-                it in setOf("enjoys") -> "enjoy"
+                it == "loves" -> "love"
+                it == "prefers" -> "prefer"
+                it == "enjoys" -> "enjoy"
                 it.endsWith('s') && it.length > 4 -> it.dropLast(1)
                 else -> it
             }
         }
         .toSet()
 
-    private fun stableToken(value: String): String = normalize(value).replace(' ', '_').take(48)
+    private fun personToken(value: String): String = normalize(value).replace(' ', '_').take(36)
 
     private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}:_-]+"), " ")
