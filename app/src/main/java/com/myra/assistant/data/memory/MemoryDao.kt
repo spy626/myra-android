@@ -67,6 +67,9 @@ interface MemoryDao {
                 .thenByDescending { it.sessionCount }
                 .thenByDescending { it.dayCount })
 
+    @Query("DELETE FROM behavior_observations WHERE stableKey = :stableKey")
+    suspend fun deleteBehavior(stableKey: String): Int
+
     @Query("DELETE FROM behavior_observations")
     suspend fun deleteAllBehavior()
 }
