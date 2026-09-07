@@ -41,7 +41,11 @@ class BehaviorMemoryLearner(private val repository: MemoryRepository) {
         repository.recordBehavior(updated)
         safeLog("BEHAVIOR_OBSERVATION kind=${signal.kind} key=$key observations=${updated.observationCount} sessions=${updated.sessionCount} days=${updated.dayCount}")
         if (!eligible(updated)) return null
-        val category = if (signal.kind == BehaviorObservationKind.CONTENT_TOPIC) MemoryCategory.CURRENT_INTEREST else MemoryCategory.HABIT
+        val category = when (signal.kind) {
+            BehaviorObservationKind.APP_USAGE -> MemoryCategory.APP_USAGE
+            BehaviorObservationKind.YOUTUBE_CHANNEL -> MemoryCategory.CONTENT_INTEREST
+            BehaviorObservationKind.CONTENT_TOPIC -> MemoryCategory.CURRENT_INTEREST
+        }
         val fact = when (signal.kind) {
             BehaviorObservationKind.APP_USAGE -> "Uses ${signal.label} frequently"
             BehaviorObservationKind.YOUTUBE_CHANNEL -> "Frequently watches ${signal.label}"
