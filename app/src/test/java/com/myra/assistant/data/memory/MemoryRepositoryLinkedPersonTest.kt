@@ -10,8 +10,6 @@ class MemoryRepositoryLinkedPersonTest {
     @Test fun linkedFactMovesToNewNameAndOldNameReturnsNothing() = runBlocking {
         val dao = FakeMemoryDao()
         val repository = MemoryRepository(dao)
-        // Reproduce the video: ASR froze "Now Farah". The correction parser
-        // resolves spoken "Nowar" back to this persisted identity.
         repository.saveAdditionalBestFriend(bestFriend("Now Farah"))
         repository.save(gamingChannel("Now Farah"))
 
@@ -168,6 +166,7 @@ class MemoryRepositoryLinkedPersonTest {
                 .toSet()
         )
     }
+
     @Test fun stablePreferenceKeyUpdatesInsteadOfDuplicating() = runBlocking {
         val dao = FakeMemoryDao()
         val repository = MemoryRepository(dao)
@@ -177,7 +176,6 @@ class MemoryRepositoryLinkedPersonTest {
         ) as AutomaticMemoryChange.Save).candidate
 
         repository.save(short)
-        // Reproduce data written by the temporary Phase 3A alias as well.
         dao.upsert(dao.recent(10).single().copy(
             id = "legacy-style",
             stableKey = "communication:response_style",
@@ -297,6 +295,7 @@ internal class FakeMemoryDao : MemoryDao {
         val row = rows.values.firstOrNull { it.stableKey == stableKey && it.active } ?: return 0
         return deactivate(row.id, updatedAt)
     }
+
     override suspend fun deactivateEntity(entityId: String, updatedAt: Long): Int {
         val ids = rows.values.filter { it.active && it.entityId == entityId }.map { it.id }
         ids.forEach { deactivate(it, updatedAt) }
@@ -331,5 +330,6 @@ internal class FakeMemoryDao : MemoryDao {
     override suspend fun upsertBehavior(observation: BehaviorObservationEntity) { behaviorRows[observation.stableKey] = observation }
     override suspend fun findBehavior(stableKey: String) = behaviorRows[stableKey]
     override suspend fun recentBehavior(limit: Int) = behaviorRows.values.sortedByDescending { it.lastObservedAt }.take(limit)
+    override suspend fun deleteBehavior(stableKey: String): Int = if (behaviorRows.remove(stableKey) != null) 1 else 0
     override suspend fun deleteAllBehavior() = behaviorRows.clear()
 }
