@@ -11,7 +11,7 @@ enum class MemoryProvenance {
     BEHAVIOR_PATTERN, SCREEN_OBSERVATION, GEMINI_GROUNDED_PROPOSAL,
     MANUAL_UI_EDIT, MANUAL_UI_SEED, LEGACY
 }
-enum class MemoryLifecycleStatus { ACTIVE, SUPERSEDED, HISTORICAL, INACTIVE }
+enum class MemoryLifecycleStatus { ACTIVE, WEAKENING, SUPERSEDED, HISTORICAL, INACTIVE }
 
 data class MemoryCandidate(
     val category: MemoryCategory,
