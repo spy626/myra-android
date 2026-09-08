@@ -228,7 +228,6 @@ class MyraVoiceService : Service() {
             }
         }
     )
-    private var pendingMemoryCommand: MemoryCommand? = null
     private var pendingDeleteClarificationUntil = 0L
     private var pendingBestFriendCorrectionOldName: String? = null
     private var pendingBestFriendCorrectionUntil = 0L
@@ -241,18 +240,6 @@ class MyraVoiceService : Service() {
     private val transcriptSessionId = java.util.UUID.randomUUID().toString()
     private val transcriptPlausibilityGate = FinalTranscriptPlausibilityGate()
     private val finalUserMessageCommitter = FinalUserMessageCommitter()
-    private val memoryCommandRunnable = Runnable {
-        val command = pendingMemoryCommand
-        pendingMemoryCommand = null
-        if (command != null && !localCommandExecutedThisTurn) {
-            val spoken = commandProbe.toString().trim()
-            if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                commitFinalUserMessage(spoken, "MEMORY_COMMAND_RUNNABLE")
-                commandUserTextEmitted = true
-            }
-            handleMemoryCommand(command)
-        }
-    }
     private var microphoneMuted = false
     private var deepResearchActive = false
     private var idleNudgeCount = 0
@@ -881,14 +868,13 @@ class MyraVoiceService : Service() {
                     audio?.interrupt()
                 }
                 if (MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {
+                    // Memory-looking partial speech may reserve response ownership, but it
+                    // can never execute or persist. The authoritative final turn owns the
+                    // actual recall/mutation decision.
                     suppressModelForTurn = true
                     output.clear()
                     audio?.interrupt()
-                    MemoryCommandParser.parse(romanMemoryTranscript)?.let { memoryCommand ->
-                        pendingMemoryCommand = memoryCommand
-                        mainHandler.removeCallbacks(memoryCommandRunnable)
-                        mainHandler.postDelayed(memoryCommandRunnable, MEMORY_COMMAND_PAUSE_MS)
-                    }
+                    voiceLog("memory_intent_held_for_final turnId=$activeTurnId decision=WAIT_FOR_FINAL executed=false")
                 }
                 val ambiguousMessage = CommandParser.isAmbiguousMessageReference(commandProbe.toString())
                 if (ambiguousMessage) {
@@ -1105,8 +1091,6 @@ class MyraVoiceService : Service() {
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
-                mainHandler.removeCallbacks(memoryCommandRunnable)
-                pendingMemoryCommand = null
                 val accumulatorBeforeFinal = input.toString().trim()
                 val duplicateResult = FinalTranscriptDuplicateGuard.collapse(accumulatorBeforeFinal)
                 val userText = duplicateResult.text
@@ -1731,19 +1715,6 @@ class MyraVoiceService : Service() {
         )
     }
 
-    private fun learnSafePreferenceFromCompletedTurn(userText: String) {
-        val romanUserText = romanDisplayText(userText)
-        val change = AutomaticMemoryChangeParser.parse(romanUserText) ?: return
-        serviceScope.launch {
-            // Automatic learning stays silent. Only explicit remember/forget
-            // commands produce a confirmation in the conversation.
-            when (change) {
-                is AutomaticMemoryChange.Save -> memoryRepository.save(change.candidate)
-                is AutomaticMemoryChange.Forget -> memoryRepository.forgetStableKey(change.stableKey)
-            }
-        }
-    }
-
     private fun handleExplicitMemoryText(text: String): Boolean {
         val command = MemoryCommandParser.parse(text) ?: return false
         handleMemoryCommand(command)
@@ -1751,35 +1722,36 @@ class MyraVoiceService : Service() {
     }
 
     private fun handleMemoryCommand(command: MemoryCommand) {
-        // Stop any ordinary model audio queued before the final transcript became a
-        // deterministic memory command. The local memory reply must be the only voice.
+        // This is called only from a completed typed/final user turn. MemoryBrainCoordinator
+        // owns every Room recall/mutation; this service only owns response arbitration.
         cancelSpeechForNewAction()
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
         output.clear()
         serviceScope.launch {
-            val rememberResult = if (command is MemoryCommand.Remember) {
-                memoryBrain.processGroundedProposal(command.candidate.copy(
-                    provenance = com.myra.assistant.data.memory.MemoryProvenance.USER_EXPLICIT_MEMORY_COMMAND
-                ))
-            } else null
+            if (command is MemoryCommand.Read) pendingCanonicalRename?.join()
+            val outcome = memoryBrain.processCommand(command, 5)
             val response = when (command) {
-                is MemoryCommand.Remember -> when (rememberResult) {
-                    is MemoryWriteResult.Saved -> MemoryCommandReplyFormatter.rememberSaved()
-                    is MemoryWriteResult.Rejected -> MemoryCommandReplyFormatter.rememberRejected()
-                    MemoryWriteResult.NeedsPermission, null -> MemoryCommandReplyFormatter.rememberRejected()
+                is MemoryCommand.Remember -> {
+                    val result = (outcome as? MemoryBrainOutcome.Mutated)?.result
+                    if (result is MemoryWriteResult.Saved) MemoryCommandReplyFormatter.rememberSaved()
+                    else MemoryCommandReplyFormatter.rememberRejected()
                 }
-                is MemoryCommand.Read -> {
-                    // Recall must not race a correction write from the previous turn.
-                    pendingCanonicalRename?.join()
-                    memoryRepository.logActiveBestFriends("before_recall query=${command.query}")
-                    val memories = memoryRepository.relevant(command.query, 5)
-                    PersonalMemoryRecallFormatter.format(memories.map { it.fact })
+                is MemoryCommand.Read -> when (outcome) {
+                    is MemoryBrainOutcome.Recalled -> outcome.workingAnswer
+                        ?: PersonalMemoryRecallFormatter.format(outcome.rows.map { it.fact })
+                    is MemoryBrainOutcome.Rejected -> outcome.reason
+                    else -> PersonalMemoryRecallFormatter.format(emptyList())
                 }
-                is MemoryCommand.Forget -> {
-                    MemoryCommandReplyFormatter.forgotten(
-                        memoryRepository.forgetMatching(command.query)
-                    )
+                is MemoryCommand.Forget -> MemoryCommandReplyFormatter.forgotten(
+                    (outcome as? MemoryBrainOutcome.Deleted)?.succeeded == true
+                )
+                is MemoryCommand.Edit -> when {
+                    (outcome as? MemoryBrainOutcome.Mutated)?.result is MemoryWriteResult.Saved ->
+                        MemoryCommandReplyFormatter.editSaved()
+                    outcome is MemoryBrainOutcome.Rejected && outcome.reason.contains("ambiguous", true) ->
+                        "Kaunsi memory update karni hai? Pehle us memory ko recall ya clearly name karo."
+                    else -> MemoryCommandReplyFormatter.editRejected()
                 }
             }
             mainHandler.post {
@@ -1803,7 +1775,7 @@ class MyraVoiceService : Service() {
             "query_user_memory" -> {
                 val query = args.optString("query").trim()
                 serviceScope.launch {
-                    val rows = memoryRepository.relevant(query, 8)
+                    val rows = memoryBrain.recall(query, 8).rows
                     val payload = org.json.JSONArray().apply {
                         rows.forEach { row -> put(org.json.JSONObject()
                             .put("id", row.id).put("category", row.category).put("fact", row.fact)
@@ -4880,7 +4852,8 @@ class MyraVoiceService : Service() {
                 "correction_transaction old=${correction.oldName} new=${correction.newName} " +
                     "matchingRowIds=${before.map { it.id }}"
             )
-            val renamed = memoryRepository.renameBestFriend(correction.oldName, correction.newName)
+            val renameOutcome = memoryBrain.processPersonRename(correction)
+            val renamed = (renameOutcome as? MemoryBrainOutcome.Mutated)?.result is MemoryWriteResult.Saved
             val rows = memoryRepository.logPersonIdentity(
                 "after_correction renamed=$renamed", correction.oldName, correction.newName
             )
@@ -5066,7 +5039,7 @@ class MyraVoiceService : Service() {
             .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
     }
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); pendingDeleteClarificationUntil = 0L; recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() {
         ScreenCaptureService.listeners -= screenCaptureListener
         fastVisualTurns.cancel()
@@ -5091,10 +5064,7 @@ class MyraVoiceService : Service() {
         }
         private const val CHANNEL_ID = "myra_voice"
         private const val NOTIFICATION_ID = 1001
-        private const val MEMORY_COMMAND_PAUSE_MS = 450L
         private const val DELETE_CLARIFICATION_TIMEOUT_MS = 30_000L
-        private const val PERSONAL_MEMORY_PAUSE_MS = 450L
-        private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L
         private const val LOCAL_SPEECH_AUDIO_DRAIN_MS = 800L
         private const val SCREEN_QUERY_DIAGNOSTIC_TIMEOUT_MS = 8_000L
         private const val ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS = 900L

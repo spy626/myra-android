@@ -21,6 +21,7 @@ import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCategory
 import com.myra.assistant.data.memory.MemoryCoreManualActions
 import com.myra.assistant.data.memory.MemoryEntity
+import com.myra.assistant.data.memory.MemoryPrivacyPreferences
 import com.myra.assistant.data.memory.MemoryRepository
 import com.myra.assistant.data.memory.MemoryWriteResult
 import com.myra.assistant.databinding.ActivityMemorySettingsBinding
@@ -32,6 +33,7 @@ import java.util.Date
 class MemorySettingsActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMemorySettingsBinding
     private val repository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
+    private val privacyPreferences by lazy { MemoryPrivacyPreferences(this) }
     private var activeFilter = "ALL"
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,12 +43,24 @@ class MemorySettingsActivity : AppCompatActivity() {
         binding.backButton.setOnClickListener { finish() }
         binding.addMemoryButton.setOnClickListener { showMemoryEditor() }
         binding.deleteAllButton.setOnClickListener { confirmDeleteAll() }
+        setupPrivacyControls()
         setupFilters()
     }
 
     override fun onResume() {
         super.onResume()
         refreshMemories()
+    }
+
+    private fun setupPrivacyControls() {
+        binding.passiveAppLearningSwitch.isChecked = privacyPreferences.passiveAppLearningEnabled
+        binding.passiveContentLearningSwitch.isChecked = privacyPreferences.passiveContentLearningEnabled
+        binding.passiveAppLearningSwitch.setOnCheckedChangeListener { _, checked ->
+            privacyPreferences.passiveAppLearningEnabled = checked
+        }
+        binding.passiveContentLearningSwitch.setOnCheckedChangeListener { _, checked ->
+            privacyPreferences.passiveContentLearningEnabled = checked
+        }
     }
 
     private fun refreshMemories() {

@@ -264,6 +264,11 @@ object PassiveMemoryObserver {
             PassiveMemoryPrivacyPolicy.blocksApp(activity.packageName, activity.appLabel)
         ) return
 
+        val learning = MemoryPrivacyPreferences(context)
+        val appLearningEnabled = learning.passiveAppLearningEnabled
+        val contentLearningEnabled = learning.passiveContentLearningEnabled
+        if (!appLearningEnabled && !contentLearningEnabled) return
+
         val rawLabels = activity.visibleElements.map { it.label }.filter { it.length in 2..120 }
         if (PassiveMemoryPrivacyPolicy.privateContext(rawLabels)) return
 
@@ -271,16 +276,28 @@ object PassiveMemoryObserver {
             ScreenPrivacyPolicy.sensitiveCategory(it) == null && !ScreenPrivacyPolicy.blocksLongTermMemory(it)
         }
         val sessionId = "${activity.packageName}:${activity.timestamp / SESSION_WINDOW_MS}"
-        val signals = mutableListOf(
-            BehaviorSignal(
+        val signals = mutableListOf<BehaviorSignal>()
+
+        if (PassiveMemoryLearningPolicy.allows(
+                BehaviorObservationKind.APP_USAGE,
+                appLearningEnabled,
+                contentLearningEnabled
+            )) {
+            signals += BehaviorSignal(
                 BehaviorObservationKind.APP_USAGE,
                 activity.appLabel ?: activity.packageName.substringAfterLast('.'),
                 sessionId,
                 activity.timestamp
             )
-        )
+        }
 
-        if (activity.packageName.contains("youtube", true) && isActiveYouTubeVideoContext(activity, safeLabels)) {
+        if (PassiveMemoryLearningPolicy.allows(
+                BehaviorObservationKind.YOUTUBE_CHANNEL,
+                appLearningEnabled,
+                contentLearningEnabled
+            ) && activity.packageName.contains("youtube", true) &&
+            isActiveYouTubeVideoContext(activity, safeLabels)
+        ) {
             activity.visibleElements.asSequence()
                 .filter { it.role == SemanticRole.CHANNEL_NAME }
                 .map { it.label.trim() }

@@ -11,4 +11,7 @@ object MemoryCommandReplyFormatter {
     } else {
         "Woh memory saved nahi mili."
     }
+
+    fun editSaved(): String = "Theek hai, memory update ho gayi."
+    fun editRejected(): String = "Memory update verify nahi hui."
 }

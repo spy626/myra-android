@@ -57,6 +57,43 @@
             android:textColor="#FFFFFF"
             android:textStyle="bold" />
 
+        <TextView
+            style="@style/MyraLabel"
+            android:text="PASSIVE LEARNING" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_field"
+            android:orientation="vertical"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp">
+
+            <Switch
+                android:id="@+id/passiveAppLearningSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="Learn app-use patterns"
+                android:textColor="#EEEEEE"
+                android:textSize="14sp" />
+
+            <Switch
+                android:id="@+id/passiveContentLearningSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="Learn YouTube/content patterns"
+                android:textColor="#EEEEEE"
+                android:textSize="14sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="6dp"
+                android:text="Private, banking, authenticator and sensitive screens stay blocked even when learning is on."
+                android:textColor="#777077"
+                android:textSize="11sp" />
+        </LinearLayout>
+
         <TextView style="@style/MyraLabel" android:text="ACTIVE MEMORIES" />
         <HorizontalScrollView
             android:layout_width="match_parent"

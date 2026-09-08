@@ -6,6 +6,11 @@ sealed class MemoryCommand {
     data class Remember(val candidate: MemoryCandidate, val displayFact: String) : MemoryCommand()
     data class Read(val query: String = "") : MemoryCommand()
     data class Forget(val query: String) : MemoryCommand()
+    /**
+     * Explicit edit intent. A null target means "this/that/last memory" and must be
+     * resolved from verified MemoryWorkingContext by MemoryBrainCoordinator.
+     */
+    data class Edit(val targetQuery: String?, val replacement: String) : MemoryCommand()
 }
 
 object MemoryCommandParser {
@@ -15,6 +20,18 @@ object MemoryCommandParser {
     )
     private val forget = Regex(
         "^(?:(?:please|just)\\s+)*(?:forget|bhool\\s+jao|bhoolna)(?:\\s+(?:that|ki))?\\s+(.+)$",
+        RegexOption.IGNORE_CASE
+    )
+    private val editCurrent = Regex(
+        "^(?:(?:please|just)\\s+)*(?:update|edit|change)\\s+(?:this|that|last)\\s+memory(?:\\s+(?:to|as))?\\s*(.*)$",
+        RegexOption.IGNORE_CASE
+    )
+    private val editCurrentHinglish = Regex(
+        "^(?:(?:is|iss|ye|yeh|us|uss|woh)\\s+memory\\s+ko\\s+)(?:update|edit|change)\\s+(?:karo|kar\\s+do)(?:\\s+(?:to|as|aise|ki))?\\s*(.*)$",
+        RegexOption.IGNORE_CASE
+    )
+    private val editNamed = Regex(
+        "^(?:(?:please|just)\\s+)*(?:update|edit|change)\\s+(?:memory\\s+)?(.{2,80}?)\\s+(?:to|as)\\s+(.{2,200})$",
         RegexOption.IGNORE_CASE
     )
     private val relationshipForget = listOf(
@@ -39,6 +56,7 @@ object MemoryCommandParser {
     fun looksLikeIntent(raw: String): Boolean {
         val clean = raw.trim().trimEnd('.', '?', '!')
         if (MemoryTransactionQueryDetector.isTransactionQuestion(clean)) return true
+        if (editCurrent.matches(clean) || editCurrentHinglish.matches(clean) || editNamed.matches(clean)) return true
         return Regex(
             "^(?:(?:lyra|laira)\\s+)?(?:(?:please|just)\\s+)*(?:remember|forget|yaad\\s+rakhna|yaad\\s+ra(?:kh|k)?o|yaad\\s+rakh\\s+lo|bhool\\s+jao|bhoolna)\\b|^(?:delete|remove)\\s+(?:karo|kar\\s+do)\\s+[\\p{L}][\\p{L}'-]{1,30}\\s+ko$|^[\\p{L}][\\p{L}'-]{1,30}\\s+ko\\s+(?:delete|remove)\\s+(?:karo|kar\\s+do|kero)$|^.{2,120}\\s+(?:ko\\s+)?(?:meri\\s+)?memor(?:y|ies)(?:\\s+se)?\\s+(?:hata|delete|remove)\\b|^[\\p{L}][\\p{L}'-]{1,30}\\s+(?:ko\\s+(?:meri\\s+)?memory\\s+se|mera\\s+(?:best\\s+)?(?:friend|frend|dost)\\s+nahi)|^what(?:\\s+all)?(?:\\s+do)?(?:\\s+you)?\\s+remember\\b|^(?:tumhe|tumhen|tumhem|tumko)\\s+mere\\s+(?:baare|bare)|^(?:abhi\\s+)?mere\\s+(?:baare|bare)\\s+(?:mein|me|mem)\\s+(?:tum\\s+)?kya\\s+(?:pata|yaad|yada|jante|jaante|janate|janti|jaanti|janati)|^(?:who|kon|koun|kaun|kauna)\\s+(?:is\\s+)?(?:my|mera|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)|^(?:my|mera|meri|mere|morei)\\s+(?:best|besti|besta)\\s+(?:friend|friends|frend|frends|phrend|phrenda)\\s+(?:kon|koun|kaun|kauna)",
             RegexOption.IGNORE_CASE
@@ -52,6 +70,17 @@ object MemoryCommandParser {
         }
         read.matchEntire(text)?.let { return MemoryCommand.Read() }
         bestFriendRead.matchEntire(text)?.let { return MemoryCommand.Read("best friend") }
+        editCurrent.matchEntire(text)?.let { match ->
+            return MemoryCommand.Edit(null, cleanReplacement(match.groupValues[1]))
+        }
+        editCurrentHinglish.matchEntire(text)?.let { match ->
+            return MemoryCommand.Edit(null, cleanReplacement(match.groupValues[1]))
+        }
+        editNamed.matchEntire(text)?.let { match ->
+            val target = normalize(match.groupValues[1])
+                .takeUnless { it in setOf("this memory", "that memory", "last memory") }
+            return MemoryCommand.Edit(target, cleanReplacement(match.groupValues[2]))
+        }
         relationshipForget.firstNotNullOfOrNull { it.matchEntire(text) }?.let {
             return MemoryCommand.Forget(normalize(it.groupValues[1]))
         }
@@ -114,5 +143,9 @@ object MemoryCommandParser {
 
     private fun cleanForgetTarget(value: String): String = normalize(value)
         .replace(Regex("^(?:tumhara|tumhare|tumhari|mera|mere|meri)\\s+(?:like|likes|pasand)\\s+"), "")
+        .trim()
+
+    private fun cleanReplacement(value: String): String = value.trim()
+        .replace(Regex("^(?:to|as|ki|aise)\\s+", RegexOption.IGNORE_CASE), "")
         .trim()
 }
