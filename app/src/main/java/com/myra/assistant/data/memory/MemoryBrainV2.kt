@@ -616,13 +616,14 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
             SemanticMemoryProposalValidator.validateGenericFrame(frame, finalText) ?: return null
         } else null
         if (frame.intent in setOf(MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT)) {
-            val exact = repository.activeByStableKey(candidate!!.stableKey)
+            val validated = candidate ?: return null
+            val exact = repository.activeByStableKey(validated.stableKey)
             val recentHint = frame.stableKey?.lowercase(Locale.ROOT) in setOf("this_memory", "recent_memory", "last_memory")
             val recent = MemoryWorkingContext.recentMemoryId?.takeIf { recentHint }
                 ?.let { repository.activeById(it) }
-                ?.takeIf { it.category == candidate.category.name }
+                ?.takeIf { it.category == validated.category.name }
             val target = exact ?: recent ?: return frame.copy(intent = MemorySemanticIntent.CLARIFY)
-            candidate = candidate.copy(stableKey = target.stableKey)
+            candidate = validated.copy(stableKey = target.stableKey)
         }
         val knownPeople = active.mapNotNull { it.entityName }.distinctBy { MemorySemanticIdentity.token(it) }
         val resolvedPerson = frame.person?.takeIf { it.isNotBlank() }?.let { proposed ->
