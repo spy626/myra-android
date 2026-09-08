@@ -84,7 +84,9 @@ object PersonalMemoryExtractor {
                 MemoryCategory.PERSON,
                 "Zopy's best friend is ${name}",
                 "person:best_friend",
-                0.96
+                0.96,
+                entityId = NaturalMemoryExtractor.stablePersonId(name),
+                entityName = name
             )
         }
 
@@ -115,13 +117,17 @@ object PersonalMemoryExtractor {
         category: MemoryCategory,
         fact: String,
         stableKey: String,
-        confidence: Double
+        confidence: Double,
+        entityId: String? = null,
+        entityName: String? = null
     ) = MemoryCandidate(
         category = category,
         fact = fact,
         stableKey = stableKey,
         sensitivity = MemorySensitivity.PERSONAL,
-        confidence = confidence
+        confidence = confidence,
+        entityId = entityId,
+        entityName = entityName
     )
 
     private fun cleanValue(value: String): String? {

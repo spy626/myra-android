@@ -110,11 +110,12 @@ class MemorySettingsActivity : AppCompatActivity() {
         }
 
         val accent = Color.rgb(108, 194, 145)
-        card.addView(TextView(this).apply {
-            text = categoryIcon(memory.category)
-            gravity = Gravity.CENTER
-            textSize = 21f
-            setTextColor(accent)
+        card.addView(android.widget.ImageView(this).apply {
+            setImageResource(categoryIconResource(memory.category))
+            setColorFilter(accent)
+            contentDescription = "${memory.category.replace('_', ' ')} memory"
+            scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(12), dp(12), dp(12), dp(12))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dp(13).toFloat()
@@ -154,17 +155,17 @@ class MemorySettingsActivity : AppCompatActivity() {
         return card
     }
 
-    private fun categoryIcon(category: String): String = when (category) {
-        MemoryCategory.IDENTITY.name -> "✦"
-        MemoryCategory.PERSON.name -> "♙"
-        MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name -> "♡"
-        MemoryCategory.PROJECT.name, MemoryCategory.WORKFLOW.name, MemoryCategory.SOLUTION.name -> "▣"
-        MemoryCategory.GOAL.name -> "◎"
-        MemoryCategory.HABIT.name -> "↻"
-        MemoryCategory.LIFE_EVENT.name -> "◇"
-        MemoryCategory.APP_USAGE.name -> "▤"
-        MemoryCategory.CONTENT_INTEREST.name, MemoryCategory.CURRENT_INTEREST.name -> "◉"
-        else -> "✧"
+    internal fun categoryIconResource(category: String): Int = when (category) {
+        MemoryCategory.IDENTITY.name -> android.R.drawable.ic_menu_info_details
+        MemoryCategory.PERSON.name -> android.R.drawable.ic_menu_myplaces
+        MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name -> android.R.drawable.btn_star
+        MemoryCategory.PROJECT.name, MemoryCategory.WORKFLOW.name, MemoryCategory.SOLUTION.name -> android.R.drawable.ic_menu_agenda
+        MemoryCategory.GOAL.name -> android.R.drawable.ic_menu_compass
+        MemoryCategory.HABIT.name -> android.R.drawable.ic_menu_recent_history
+        MemoryCategory.LIFE_EVENT.name -> android.R.drawable.ic_menu_mapmode
+        MemoryCategory.APP_USAGE.name -> android.R.drawable.ic_menu_manage
+        MemoryCategory.CONTENT_INTEREST.name, MemoryCategory.CURRENT_INTEREST.name -> android.R.drawable.ic_menu_search
+        else -> com.myra.assistant.R.drawable.ic_lyra_sparkle
     }
 
     private fun showMemoryDetails(memory: MemoryEntity) {

@@ -121,7 +121,9 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     /** The single Memory Brain V2 persistence gate. It never creates a pending voice turn. */
     suspend fun saveGrounded(candidate: MemoryCandidate, explicit: Boolean = false): MemoryWriteResult {
-        val grounded = candidate.copy(explicitlyRequested = explicit || candidate.explicitlyRequested)
+        val grounded = resolveExistingPersonIdentity(
+            candidate.copy(explicitlyRequested = explicit || candidate.explicitlyRequested)
+        )
         return when (MemorySafetyPolicy.decide(grounded)) {
             MemorySaveDecision.REJECT -> MemoryWriteResult.Rejected("This information is unsafe or insufficiently grounded.")
             MemorySaveDecision.ASK_PERMISSION -> MemoryWriteResult.Rejected("Sensitive or uncertain information is not learned automatically.")
@@ -129,6 +131,16 @@ class MemoryRepository(private val dao: MemoryDao) {
                 saveAdditionalBestFriend(grounded)
             } else persist(grounded)
         }
+    }
+
+    /** Reuses an existing stable entity identity instead of minting one ID per producer. */
+    private suspend fun resolveExistingPersonIdentity(candidate: MemoryCandidate): MemoryCandidate {
+        val name = candidate.entityName?.trim()?.takeIf { it.isNotEmpty() } ?: return candidate
+        val existing = dao.activeAll().filter {
+            it.entityId != null && PersonLinkedMemoryIdentity.belongsTo(it, listOf(name))
+        }.distinctBy { it.entityId }
+        val identity = existing.singleOrNull() ?: return candidate
+        return candidate.copy(entityId = identity.entityId, entityName = identity.entityName ?: name)
     }
 
     /**
@@ -237,7 +249,9 @@ class MemoryRepository(private val dao: MemoryDao) {
                     stableKey = MemoryRelationshipPolicy.BEST_FRIEND_KEY,
                     sensitivity = MemorySensitivity.valueOf(memory.sensitivity),
                     confidence = memory.confidence,
-                    source = memory.source
+                    source = memory.source,
+                    entityId = memory.entityId ?: NaturalMemoryExtractor.stablePersonId(name),
+                    entityName = memory.entityName ?: name
                 )
             )
             canonicalRows += memory to candidate
@@ -444,7 +458,14 @@ class MemoryRepository(private val dao: MemoryDao) {
         val saved = persist(replacement, replaceBestFriends = false) as? MemoryWriteResult.Saved
             ?: return false
         identityRows.filter { it.id != saved.id }.forEach { dao.deactivate(it.id, now) }
-        renameLinkedPersonRows(allMemories, identityRows, oldName, canonicalName, now)
+        renameLinkedPersonRows(
+            allMemories,
+            identityRows,
+            oldName,
+            canonicalName,
+            replacement.entityId ?: NaturalMemoryExtractor.stablePersonId(oldName),
+            now
+        )
         val verified = verifyRenameCommitted(oldName, canonicalName)
         if (verified) MemorySessionIndex.invalidate()
         return verified
@@ -482,6 +503,7 @@ class MemoryRepository(private val dao: MemoryDao) {
         bestFriendRows: List<MemoryEntity>,
         oldName: String,
         canonicalName: String,
+        stableEntityId: String,
         now: Long
     ) {
         val aliases = (bestFriendRows.mapNotNull { MemoryRelationshipPolicy.personName(it.fact) } + oldName)
@@ -491,8 +513,21 @@ class MemoryRepository(private val dao: MemoryDao) {
             val target = dao.findByStableKey(renamed.stableKey)
             if (target != null && target.id != row.id) {
                 dao.deactivate(row.id, now)
-            } else if (renamed.stableKey != row.stableKey || renamed.fact != row.fact) {
-                dao.rename(row.id, renamed.stableKey, renamed.fact, normalize(renamed.fact), now)
+            } else if (renamed.stableKey != row.stableKey || renamed.fact != row.fact ||
+                row.entityId != stableEntityId || row.entityName != canonicalName
+            ) {
+                dao.upsert(
+                    row.copy(
+                        stableKey = renamed.stableKey,
+                        fact = renamed.fact,
+                        normalizedFact = normalize(renamed.fact),
+                        entityId = stableEntityId,
+                        entityName = canonicalName,
+                        provenance = MemoryProvenance.VERIFIED_MEMORY_CORRECTION.name,
+                        updatedAt = now,
+                        lastConfirmedAt = now
+                    )
+                )
             }
         }
     }

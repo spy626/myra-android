@@ -55,38 +55,45 @@ object PersonLinkedMemoryExtractor {
         } ?: return emptyList()
         val name = BestFriendNameCanonicalizer.canonicalize(observedName)
         if (name.lowercase(Locale.ROOT) in ambiguousNames) return emptyList()
+        val entityId = NaturalMemoryExtractor.stablePersonId(name)
 
-        val facts = mutableListOf(bestFriend(name))
-        if (gamingChannelSignal.containsMatchIn(text)) facts += gamingChannel(name)
-        if (gamingCreatorSignal.containsMatchIn(text)) facts += gamingCreator(name)
+        val facts = mutableListOf(bestFriend(name, entityId))
+        if (gamingChannelSignal.containsMatchIn(text)) facts += gamingChannel(name, entityId)
+        if (gamingCreatorSignal.containsMatchIn(text)) facts += gamingCreator(name, entityId)
         return facts
     }
 
-    private fun bestFriend(name: String) = MemoryCandidate(
+    private fun bestFriend(name: String, entityId: String) = MemoryCandidate(
         category = MemoryCategory.PERSON,
         fact = "Zopy's best friend is $name",
         stableKey = MemoryRelationshipPolicy.BEST_FRIEND_KEY,
         sensitivity = MemorySensitivity.PERSONAL,
         confidence = 0.96,
-        source = "automatic_person_facts"
+        source = "automatic_person_facts",
+        entityId = entityId,
+        entityName = name
     )
 
-    private fun gamingChannel(name: String) = MemoryCandidate(
+    private fun gamingChannel(name: String, entityId: String) = MemoryCandidate(
         category = MemoryCategory.PERSON,
         fact = "$name has a gaming channel",
         stableKey = "person:${stableToken(name)}:gaming_channel",
         sensitivity = MemorySensitivity.PERSONAL,
         confidence = 0.94,
-        source = "automatic_person_facts"
+        source = "automatic_person_facts",
+        entityId = entityId,
+        entityName = name
     )
 
-    private fun gamingCreator(name: String) = MemoryCandidate(
+    private fun gamingCreator(name: String, entityId: String) = MemoryCandidate(
         category = MemoryCategory.PERSON,
         fact = "$name creates gaming videos",
         stableKey = "person:${stableToken(name)}:gaming_creator",
         sensitivity = MemorySensitivity.PERSONAL,
         confidence = 0.92,
-        source = "automatic_person_facts"
+        source = "automatic_person_facts",
+        entityId = entityId,
+        entityName = name
     )
 
     private fun stableToken(value: String): String = value.lowercase(Locale.ROOT)

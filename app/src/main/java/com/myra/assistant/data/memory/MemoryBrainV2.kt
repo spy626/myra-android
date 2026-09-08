@@ -353,6 +353,57 @@ object NaturalMemoryExtractor {
 }
 
 class MemoryBrainCoordinator(private val repository: MemoryRepository) {
+    data class FinalTurnAssessment(
+        val decision: MemoryDecision,
+        val correction: BestFriendNameCorrection? = null,
+        val correctionIntentDetected: Boolean = false,
+        val requiresClarification: Boolean = false,
+        val rejectionReason: String? = null,
+        val databaseMutationAllowed: Boolean = correction != null
+    )
+
+    /** Pure final-turn semantic assessment used by the voice layer only for response ownership. */
+    fun assessFinalTurn(
+        text: String,
+        supplemental: List<MemoryCandidate> = emptyList(),
+        semanticConsistent: Boolean = true
+    ): FinalTurnAssessment {
+        val classified = MemoryIntentClassifier.decision(text)
+        val decision = if (classified == MemoryDecision.IGNORE && supplemental.isNotEmpty()) {
+            MemoryDecision.SAVE
+        } else classified
+        if (decision != MemoryDecision.UPDATE || MemoryCommandParser.parse(text) is MemoryCommand.Edit) {
+            return FinalTurnAssessment(decision)
+        }
+        val analysis = BestFriendNameCorrectionParser.analyze(text, MemoryWorkingContext.recentPerson)
+        val authorized = analysis.correction != null && semanticConsistent
+        return FinalTurnAssessment(
+            decision = decision,
+            correction = analysis.correction?.takeIf { authorized },
+            correctionIntentDetected = analysis.correctionIntentDetected,
+            requiresClarification = analysis.correctionIntentDetected && !authorized,
+            rejectionReason = analysis.rejectionReason ?: if (!semanticConsistent) "semantic_name_mismatch" else null,
+            databaseMutationAllowed = authorized
+        )
+    }
+
+    fun needsCorrectionClarification(text: String): Boolean =
+        BestFriendNameCorrectionParser.needsClearCorrectedName(text)
+
+    fun ambiguousCorrectionTarget(text: String, recentName: String?): String? =
+        BestFriendNameCorrectionParser.ambiguousOldName(text, recentName)
+
+    fun resolveCorrectionAnswer(text: String): ClarifiedNameResult =
+        ClarifiedPersonNameResolver.resolve(text)
+
+    fun explicitCommandDecision(text: String): MemoryDecision? = when (MemoryCommandParser.parse(text)) {
+        is MemoryCommand.Remember -> MemoryDecision.SAVE
+        is MemoryCommand.Read -> MemoryDecision.RECALL
+        is MemoryCommand.Forget -> MemoryDecision.DELETE
+        is MemoryCommand.Edit -> MemoryDecision.UPDATE
+        null -> null
+    }
+
     suspend fun processGroundedProposal(candidate: MemoryCandidate): MemoryWriteResult {
         log("MEMORY_CANDIDATE category=${candidate.category} key=${candidate.stableKey} source=${candidate.provenance} confidence=${candidate.confidence}")
         val result = repository.saveGrounded(candidate)
@@ -442,8 +493,7 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
 
     suspend fun processFinalTurn(text: String, supplemental: List<MemoryCandidate> = emptyList()): MemoryBrainOutcome {
         val parsedCommand = MemoryCommandParser.parse(text)
-        val classified = MemoryIntentClassifier.decision(text)
-        val decision = if (classified == MemoryDecision.IGNORE && supplemental.isNotEmpty()) MemoryDecision.SAVE else classified
+        val decision = assessFinalTurn(text, supplemental).decision
         log("MEMORY_DECISION decision=$decision")
         return when (decision) {
             MemoryDecision.IGNORE -> MemoryBrainOutcome.Ignored

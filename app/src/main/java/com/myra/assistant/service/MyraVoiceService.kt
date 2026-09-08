@@ -1,5125 +1,1487 @@
-package com.myra.assistant.service
-
-import android.app.*
-import android.content.Intent
-import android.graphics.Color
-import android.os.IBinder
-import android.os.Handler
-import android.os.Looper
-import android.os.PowerManager
-import android.os.Build
-import android.icu.text.Transliterator
-import com.myra.assistant.diagnostics.VoicePipelineLogger
-import com.myra.assistant.diagnostics.TurnLatencyTelemetry
-import com.myra.assistant.diagnostics.TurnLatencyTelemetry.Field
-import androidx.core.app.NotificationCompat
-import com.myra.assistant.ai.AudioEngine
-import com.myra.assistant.ai.CommandParser
-import com.myra.assistant.ai.GeminiLiveClient
-import com.myra.assistant.ai.ApiKeyStore
-import com.myra.assistant.ai.DeepResearchClient
-import com.myra.assistant.ai.HandsFreeMediaGuard
-import com.myra.assistant.ai.LyraPlaybackCapturePolicy
-import com.myra.assistant.ai.LiveTranscriptAssembler
-import com.myra.assistant.ai.MediaSpeechCoherencePolicy
-import com.myra.assistant.brain.BrainDecision
-import com.myra.assistant.brain.LyraBrainCoordinator
-import com.myra.assistant.brain.ScreenTargetReference
-import com.myra.assistant.brain.ScrollDirection as BrainScrollDirection
-import com.myra.assistant.data.memory.AutomaticMemoryChange
-import com.myra.assistant.data.memory.AutomaticMemoryChangeParser
-import com.myra.assistant.data.memory.BestFriendNameCorrectionParser
-import com.myra.assistant.data.memory.BestFriendNameCanonicalizer
-import com.myra.assistant.data.memory.BestFriendNameCorrection
-import com.myra.assistant.data.memory.ClarifiedPersonNameResolver
-import com.myra.assistant.data.memory.ClarifiedNameResult
-import com.myra.assistant.data.memory.ContextualRelationshipMemoryExtractor
-import com.myra.assistant.data.memory.CorrectionSuccessPolicy
-import com.myra.assistant.data.memory.LyraMemoryDatabase
-import com.myra.assistant.data.memory.MemoryCommand
-import com.myra.assistant.data.memory.MemoryCommandParser
-import com.myra.assistant.data.memory.MemoryCommandReplyFormatter
-import com.myra.assistant.data.memory.MemoryCandidate
-import com.myra.assistant.data.memory.PersonalMemoryExtractor
-import com.myra.assistant.data.memory.PersonLinkedMemoryExtractor
-import com.myra.assistant.data.memory.PersonalMemoryRecallFormatter
-import com.myra.assistant.data.memory.MemoryRepository
-import com.myra.assistant.data.memory.MemoryBrainCoordinator
-import com.myra.assistant.data.memory.MemoryIntentClassifier
-import com.myra.assistant.data.memory.MemoryBrainOutcome
-import com.myra.assistant.data.memory.MemoryWorkingContext
-import com.myra.assistant.data.memory.MemoryRelationshipPolicy
-import com.myra.assistant.data.memory.SavedMemoryContextFormatter
-import com.myra.assistant.data.memory.MemoryWriteResult
-import com.myra.assistant.data.memory.MemorySafetyPolicy
-import com.myra.assistant.data.memory.MemorySaveDecision
-import com.myra.assistant.data.memory.MemoryCategory
-import com.myra.assistant.data.memory.MemorySensitivity
-import com.myra.assistant.data.memory.SemanticMemoryProposalValidator
-import com.myra.assistant.data.memory.UnclearDeleteIntentGuard
-import com.myra.assistant.data.memory.PendingDeleteClarification
-import com.myra.assistant.model.AppCommand
-import com.myra.assistant.phone.AppActionExecutor
-import com.myra.assistant.MyApplication
-import com.myra.assistant.commands.CommandParser as StructuredCommandParser
-import com.myra.assistant.ui.main.MainActivity
-import com.myra.assistant.screen.ScreenCaptureService
-import com.myra.assistant.screen.ScreenPrivacyPolicy
-import com.myra.assistant.screen.ScreenFramePrivacyFilter
-import com.myra.assistant.screen.ScreenPrivacyResult
-import com.myra.assistant.screen.ScreenQueryDispatchPolicy
-import com.myra.assistant.screen.ScreenQueryTimingPolicy
-import com.myra.assistant.screen.ScreenShareState
-import com.myra.assistant.screen.ScreenModeCommand
-import com.myra.assistant.screen.ScreenModeCommandParser
-import com.myra.assistant.screen.ScreenVisionIntentParser
-import com.myra.assistant.screen.InstantScreenQuery
-import com.myra.assistant.screen.ScreenCacheUse
-import com.myra.assistant.screen.ScreenContextStore
-import com.myra.assistant.screen.HotScreenCachePolicy
-import com.myra.assistant.screen.ScreenVisionPreferences
-import com.myra.assistant.screen.VisualAwarenessPreferences
-import com.myra.assistant.screen.FastVisualKind
-import com.myra.assistant.screen.FastVisualRequest
-import com.myra.assistant.screen.FastVisualRequestClassifier
-import com.myra.assistant.screen.FastVisualTurnCoordinator
-import com.myra.assistant.screen.VisualAcquisitionGate
-import com.myra.assistant.screen.VisualScreenshotTimeoutPolicy
-import com.myra.assistant.screen.SemanticScreenFallbackPolicy
-import com.myra.assistant.screen.VisibleScreenElement
-import com.myra.assistant.agent.ActivityContextStore
-import com.myra.assistant.agent.UnifiedLyraAgentRuntime
-import com.myra.assistant.agent.TurnIntent
-import com.myra.assistant.agent.WorkingTaskRuntime
-import com.myra.assistant.agent.BrowserSearchRequestParser
-import com.myra.assistant.agent.BrowserSearchTool
-import com.myra.assistant.agent.SearchExecutionPolicy
-import com.myra.assistant.agent.SearchDestination
-import com.myra.assistant.agent.SearchDestinationResolver
-import com.myra.assistant.agent.BrowserSearchVerificationPolicy
-import com.myra.assistant.agent.YouTubeSearchVerificationPolicy
-import com.myra.assistant.agent.SearchTaskResultPolicy
-import com.myra.assistant.agent.SearchVerification
-import com.myra.assistant.agent.TaskCompletionState
-import com.myra.assistant.agent.AgentToolRegistry
-import com.myra.assistant.agent.GeneralActionResult
-import com.myra.assistant.agent.GeneralActionRouter
-import com.myra.assistant.agent.GeneralAgentRuntimeStore
-import com.myra.assistant.agent.GeneralRuntimeTask
-import com.myra.assistant.agent.GeneralToolAdapter
-import com.myra.assistant.agent.GeneralVerificationStatus
-import com.myra.assistant.agent.PerceptionSnapshot
-import com.myra.assistant.agent.PlannerResult
-import com.myra.assistant.agent.ProductionAdapterExecutors
-import com.myra.assistant.agent.ProductionGeneralAdapters
-import com.myra.assistant.agent.RecoveryDecision
-import com.myra.assistant.agent.ScreenSceneFactory
-import com.myra.assistant.agent.ScrollMovementAnalyzer
-import com.myra.assistant.agent.ScrollVerificationResamplePolicy
-import com.myra.assistant.agent.ToolCapability
-import com.myra.assistant.screen.FreshFrameResult
-import com.myra.assistant.screen.ScreenResponseBinding
-import com.myra.assistant.screen.ReadingCommand
-import com.myra.assistant.screen.ReadingIntentParser
-import com.myra.assistant.screen.ReadingState
-import com.myra.assistant.screen.ReadingTracker
-import com.myra.assistant.screen.ScreenCommandTurnGuard
-import com.myra.assistant.screen.ScreenContentType
-import com.myra.assistant.screen.ScreenActionIntent
-import com.myra.assistant.screen.ScreenActionIntentRegistry
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import com.myra.assistant.agent.TextComposeSession
-import com.myra.assistant.screen.YouTubeSemanticCommand
-import com.myra.assistant.screen.YouTubeSemanticCommandParser
-import com.myra.assistant.voice.LocalSpeechGate
-import com.myra.assistant.voice.FinalTranscriptDisplayFormatter
-import com.myra.assistant.voice.FinalTranscriptDuplicateGuard
-import com.myra.assistant.voice.FinalSemanticUserUtterance
-import com.myra.assistant.voice.FinalTranscriptPlausibilityGate
-import com.myra.assistant.voice.PhantomTranscriptFilter
-import com.myra.assistant.voice.RomanHinglishFormatter
-import com.myra.assistant.voice.VoiceResponseFormatter
-import java.text.SimpleDateFormat
-import java.util.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-
-internal object FriendConversationPolicy {
-    const val REPLY_DISCIPLINE =
-        "Default to one short natural sentence for ordinary conversation; use a second only when needed. " +
-            "Use more only when Zopy explicitly asks for detail or the topic requires a safety explanation. " +
-            "Answer complete questions directly and stopâ€”never append a closing question, topic prompt, or 'aur sunao'. " +
-            "Ask no follow-up unless missing information prevents a useful answer; " +
-            "if you ask one, it must be the only question in the entire reply. " +
-            "Never use customer-support wording such as 'help kar sakti hoon', and never sound dismissive with " +
-            "phrases such as 'isse zyada main kya boloon' or pressure the user to give a specific topic."
-
-    const val BOSS_ASSISTANT_STYLE =
-        "Use a subtle confident personal-assistant tone. You may occasionally say 'boss', 'on it', " +
-            "'got it', or 'done' when it naturally fits a verified action, but never in every reply, " +
-            "never more than once in a response, and never claim an action is done before Android verifies it."
-
-    const val MALE_USER_GRAMMAR =
-        "Zopy is male, so when addressing him use masculine forms such as sakte ho, karoge, and gaye; " +
-            "never address him as sakti ho or karogi."
-}
-
-class MyraVoiceService : Service() {
-    interface Listener {
-        fun onState(text: String)
-        fun onReady()
-        fun onAmplitude(value: Float)
-        fun onSpeaking(speaking: Boolean)
-        fun onUserText(text: String)
-        fun onMyraText(text: String, error: Boolean = false)
-    }
-
-    private var audio: AudioEngine? = null
-    private var live: GeminiLiveClient? = null
-    private var connectionPreparing = false
-    private val input = StringBuilder()
-    private val output = StringBuilder()
-    private val commandProbe = StringBuilder()
-    private val brain = LyraBrainCoordinator()
-    private val readingTracker = ReadingTracker()
-    private val screenCommandTurnGuard = ScreenCommandTurnGuard()
-    private val screenActionRegistry = ScreenActionIntentRegistry()
-    private val textComposeSession = TextComposeSession()
-    private var lastUserIntentText = ""
-    private val recentRelationshipTurns = mutableListOf<Pair<Long, String>>()
-    private var lastSavedBestFriendName: String? = null
-    private var lastSavedBestFriendAt = 0L
-    private var suppressModelForTurn = false
-    private var waitingForFreshInputAfterCommand = false
-    private var commandUserTextEmitted = false
-    private var localCommandExecutedThisTurn = false
-    private var ambiguousMessageTurn = false
-    private var incompleteActionFragmentTurn = false
-    private var lastCommandKey = ""
-    private var hasAcknowledgedScrollDirection = false
-    private var lastScrollDirection = AppCommand.ScrollDirection.DOWN
-    private var lastCommandAt = 0L
-    private var hideNextModelTranscript = false
-    private var mediaBlockedTurn = false
-    private var probableActionTurn = false
-    private var pendingLocalSpeech: String? = null
-    private var pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
-    private var pendingLocalSpeechAllowsSilence = false
-    private var validatingLocalSpeech: String? = null
-    private var localSpeechValidationToken = 0L
-    private var localSpeechValidationAttempt = 0
-    private var localSpeechValidationPolicy = LocalSpeechValidationPolicy.DEFAULT
-    private var localSpeechHasContent = false
-    private var allowUntranscribedLocalSpeech = false
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val visualDeadlineExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "lyra-visual-deadline").apply { isDaemon = true }
-    }
-    private val visualFrameDeliveryExecutor = java.util.concurrent.ThreadPoolExecutor(
-        1, 1, 0L, TimeUnit.MILLISECONDS, java.util.concurrent.LinkedBlockingQueue(),
-        java.util.concurrent.ThreadFactory { runnable ->
-            Thread(runnable, "lyra-current-visual-delivery").apply {
-                isDaemon = true
-                priority = Thread.MAX_PRIORITY
-            }
-        }
-    )
-    private var pendingDeleteClarificationUntil = 0L
-    private var pendingBestFriendCorrectionOldName: String? = null
-    private var pendingBestFriendCorrectionUntil = 0L
-    private var pendingSpellingConfirmationName: String? = null
-    private var turnSequence = 0L
-    private var activeTurnId = 0L
-    private var controlledGenerationId = 0L
-    private val responseArbiter = TurnResponseArbiter()
-    private val ordinaryModelAudioGate = OrdinaryModelAudioGate()
-    private val transcriptSessionId = java.util.UUID.randomUUID().toString()
-    private val transcriptPlausibilityGate = FinalTranscriptPlausibilityGate()
-    private val finalUserMessageCommitter = FinalUserMessageCommitter()
-    private var microphoneMuted = false
-    private var deepResearchActive = false
-    private var idleNudgeCount = 0
-    private val idleNudgeRunnable = Runnable { handleIdleNudge() }
-    private val localSpeechAudio = mutableListOf<ByteArray>()
-    private val localSpeechTranscript = StringBuilder()
-    private var localPlaybackActive = false
-    private var localSpeechStreamedDirectly = false
-    private var localSpeechGenerationComplete = false
-    private var localSpeechTimeoutRunnable: Runnable? = null
-    private var localSpeechTimeoutToken = 0L
-    private val localSpeechTimeoutGate = ControlledSpeechTimeoutGate()
-    private var localSpeechQueuedAt = 0L
-    private var localSpeechRequestSentAt = 0L
-    private var localSpeechFirstAudioReceivedAt = 0L
-    private var localSpeechFirstAudioAcceptedAt = 0L
-    private var localSpeechFirstPlaybackWriteAt = 0L
-    private var localSpeechLastAudioReceivedAt = 0L
-    private var instantScreenQueryId = ""
-    private var instantScreenQueryStartedAt = 0L
-    private var instantScreenCacheAgeMs = 0L
-    private var modelAudioDroppedBeforeTurnCompleteCount = 0
-    private var modelAudioDroppedBeforeTurnCompleteBytes = 0L
-    private var acceptedModelGenerationForTurn = 0L
-    private var speechActivityStartedAt = 0L
-    private var speechActivityEndedAt = 0L
-    private var speechTimingTurnId = 0L
-    private val turnLatency = TurnLatencyTelemetry(::voiceLog)
-    private val scrollContinuationTelemetry = com.myra.assistant.diagnostics.ScrollContinuationTelemetry(::voiceLog)
-    private val voiceTurnIdentities = VoiceTurnIdentityStore()
-    private val pendingScrollCandidates = PendingScrollCandidateStore()
-    private var inputTurnStartedAt = 0L
-    private var latestTurnAcceptedAt = 0L
-    private var latestIntentDecidedAt = 0L
-    private var latestIntentTimingTurnId = 0L
-    private var latestActionDispatchedAt = 0L
-    private var latestObservedModelGenerationId = 0L
-    private var earlyModelAudioGenerationId = 0L
-    private val earlyModelAudio = mutableListOf<ByteArray>()
-    private var earlyModelAudioBytes = 0L
-    private var localAudioSpeaking = false
-    private var screenResponseActive = false
-    private var screenResponseHasContent = false
-    private var screenResponseStartedLogged = false
-    private var screenResponseGenerationComplete = false
-    private var screenResponseTextCommitted = false
-    private var screenResponseUserTurnId = 0L
-    private var screenResponseAfterGenerationId = 0L
-    private var screenResponseGenerationId = 0L
-    private var screenResponseBinding: ScreenResponseBinding? = null
-    private var screenResponseSessionId = ""
-    private var screenResponseAccessibilityPackage = ""
-    private var screenResponseAccessibilityGeneration = 0L
-    private var screenResponseQueryId = ""
-    private var screenQuestionDetectedAt = 0L
-    private var screenFreshFrameCapturedAt = 0L
-    private var screenFrameSentAt = 0L
-    private var screenResponseSpeechEndedAt = 0L
-    private var screenQuerySpeechTurnConsistency = false
-    private val fastVisualTurns = FastVisualTurnCoordinator()
-    private var armedScreenQuestion = ""
-    private var armedScreenQuestionTurnId = 0L
-    private var armedScreenQuestionDetectedAt = 0L
-    private var armedScreenQuestionFinalCommitted = false
-    private var earlyScreenQuestionText = ""
-    private var earlyScreenQueryAwaitingFinalTranscript = false
-    private var earlyScreenQueryDispatchedTurnId = 0L
-    private var pendingCanonicalRename: kotlinx.coroutines.Job? = null
-    private var pendingActionAfterLocalSpeech: (() -> Unit)? = null
-    private var pendingConfirmedCommand: AppCommand? = null
-    private var pendingConfirmationExpiresAt = 0L
-    private var lastLocalSpeechKey = ""
-    private var lastLocalSpeechAt = 0L
-    private var lastAnnouncementKey = ""
-    private var lastAnnouncementAt = 0L
-    private var hasGreeted = false
-    private var wakeLock: PowerManager.WakeLock? = null
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val mediaGuard by lazy { HandsFreeMediaGuard(this) }
-    private val romanTransliterator by lazy {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Keep pronunciation marks long enough for RomanHinglishFormatter to
-            // distinguish names such as à¤•à¤°à¥€à¤® instead of flattening them to "karima".
-            runCatching { Transliterator.getInstance("Any-Latin") }.getOrNull()
-        } else null
-    }
-    private val appActions by lazy { AppActionExecutor(this) }
-    private val generalToolRegistry = AgentToolRegistry()
-    private val generalActionRouter by lazy {
-        GeneralActionRouter(ProductionGeneralAdapters.create(
-            generalToolRegistry,
-            ProductionAdapterExecutors(
-                scroll = { step, _ -> executeGeneralScrollAdapter(step.parameters) },
-                browserSearch = { step, _ -> executeGeneralBrowserSearchAdapter(step.parameters) },
-                observeScreen = { _, _ -> GeneralActionResult(ActivityContextStore.snapshot() != null) },
-                verifyScreen = { _, _ -> GeneralActionResult(ActivityContextStore.snapshot() != null) },
-                back = { _, _ ->
-                    val accepted = AccessibilityHelperService.instance?.performGlobalAction(
-                        android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK
-                    ) == true
-                    GeneralActionResult(accepted, failureReason = "back_dispatch_rejected".takeIf { !accepted })
-                }
-            )
-        ))
-    }
-    private val memoryRepository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
-    private val memoryBrain by lazy { MemoryBrainCoordinator(memoryRepository) }
-    private val assistantController by lazy { (application as MyApplication).assistantController }
-    private val screenVisionPreferences by lazy { ScreenVisionPreferences(this) }
-    private val visualAwarenessPreferences by lazy { VisualAwarenessPreferences(this) }
-    private val screenCaptureListener: (ScreenShareState, ByteArray?) -> Unit = { state, frame ->
-        if (state == ScreenShareState.ACTIVE && readingTracker.snapshot() != null) {
-            val packageName = AccessibilityHelperService.instance?.currentPackageName().orEmpty()
-            if (packageName.isNotBlank() && readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, packageName)) {
-                pendingActionAfterLocalSpeech = null
-                voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${readingTracker.snapshot()?.readingSessionId} reason=foreground_context_changed package=$packageName")
-            }
-        }
-        if (state != ScreenShareState.ACTIVE && readingTracker.snapshot()?.state in setOf(
-                ReadingState.READING, ReadingState.WAITING_FOR_SCROLL,
-                ReadingState.SCROLLING, ReadingState.VERIFYING_NEW_CONTENT
-            )) {
-            stopArticleReading("media_projection_disconnected", "Screen sharing stopped, isliye reading rok di.")
-        }
-        if (state != ScreenShareState.ACTIVE) {
-            screenActionRegistry.cancel()?.let {
-                voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=screen_session_inactive")
-            }
-        }
-        if (state != ScreenShareState.ACTIVE && screenResponseActive && !screenResponseSessionId.startsWith("accessibility:")) {
-            voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId state=$state")
-            screenResponseActive = false
-            screenResponseSessionId = ""
-            screenResponseQueryId = ""
-            output.clear()
-            audio?.interrupt()
-        }
-        if (state == ScreenShareState.ACTIVE && frame != null &&
-            screenVisionPreferences.visionEnabled && isNaturalVoiceReady
-        ) {
-            val record = ScreenCaptureService.currentFrame()
-            if (record?.source != "explicit_query") {
-                live?.sendScreenFrame(frame)
-                voiceLog("screen_frame_routed bytes=${frame.size} source=media_projection frame_id=${record?.frameId ?: 0L} temporary=true")
-            }
-        }
-    }
-
-    override fun onCreate() {
-        super.onCreate()
-        instance = this
-        createChannel()
-        startForeground(NOTIFICATION_ID, notification("Starting LYRAâ€¦"))
-        wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LYRA:BackgroundVoice")
-            .apply { setReferenceCounted(false); acquire() }
-        isRunning = true
-        ScreenCaptureService.listeners += screenCaptureListener
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> stopSession()
-            ACTION_MUTE -> {
-                microphoneMuted = intent.getBooleanExtra(EXTRA_MUTED, false)
-                audio?.setMuted(microphoneMuted)
-                if (microphoneMuted) mainHandler.removeCallbacks(idleNudgeRunnable) else markUserInteraction()
-            }
-            else -> if (live == null) connect()
-        }
-        return START_STICKY
-    }
-
-    private fun connect() {
-        if (connectionPreparing || live != null) return
-        connectionPreparing = true
-        if (hasGreeted) voiceLog(
-            "GEMINI_RECONNECTING timestamp=${android.os.SystemClock.elapsedRealtime()} media_projection_state=${ScreenCaptureService.currentState}"
-        )
-        serviceScope.launch {
-            val savedMemoryContext = runCatching { buildSavedMemoryContext() }.getOrDefault("")
-            mainHandler.post {
-                connectionPreparing = false
-                if (isRunning && live == null) connectLive(savedMemoryContext)
-            }
-        }
-    }
-
-    private fun connectLive(savedMemoryContext: String) {
-        val p = getSharedPreferences("myra", MODE_PRIVATE)
-        val key = ApiKeyStore(this).get(ApiKeyStore.GEMINI)
-        val name = configuredUserName(p.getString("user_name", null))
-        if (key.isBlank()) { emitState("Add your Gemini API key in Settings"); stopSelf(); return }
-        audio = AudioEngine(this)
-        val selectedVoice = p.getString("voice", "Aoede") ?: "Aoede"
-        live = GeminiLiveClient(
-            key, p.getString("model", "gemini-3.1-flash-live-preview")!!,
-            selectedVoice,
-            systemPrompt(name, p.getString("personality", "GF") ?: "GF", selectedVoice) +
-                savedMemoryContext
-        ).also { client ->
-            client.onState = { emitState(it) }
-            client.onReady = {
-                voiceLog("GEMINI_CONNECTED timestamp=${android.os.SystemClock.elapsedRealtime()} media_projection_state=${ScreenCaptureService.currentState}")
-                isNaturalVoiceReady = true
-                audio?.start()
-                if (screenVisionPreferences.visionEnabled && ScreenCaptureService.hasFreshFrame()) {
-                    ScreenCaptureService.latestFrame?.let(client::sendScreenFrame)
-                }
-                listener?.onReady()
-                if (!hasGreeted) {
-                    hasGreeted = true
-                    client.sendText("Greet $name briefly and naturally.")
-                } else {
-                    emitState("LYRA reconnected â€” listening")
-                }
-                markUserInteraction()
-            }
-            client.onToolCall = { id, functionName, args ->
-                turnLatency.record(activeTurnId, Field.FIRST_TOOL_PROPOSAL, android.os.SystemClock.elapsedRealtime())
-                mainHandler.post { handleSemanticToolCall(id, functionName, args) }
-            }
-            client.onServerEvent = { _, _ ->
-                turnLatency.record(activeTurnId, Field.FIRST_SERVER_EVENT, android.os.SystemClock.elapsedRealtime())
-            }
-            client.onAudio = { pcm, modelGenerationId ->
-                val audioReceivedAt = android.os.SystemClock.elapsedRealtime()
-                turnLatency.record(activeTurnId, Field.FIRST_MODEL_AUDIO_PACKET, audioReceivedAt, modelGenerationId)
-                latestObservedModelGenerationId = maxOf(latestObservedModelGenerationId, modelGenerationId)
-                voiceLog(
-                    "service_audio_received bytes=${pcm.size} modelGenerationId=$modelGenerationId validating=${validatingLocalSpeech != null} " +
-                        "streaming=$localSpeechStreamedDirectly suppressed=$suppressModelForTurn " +
-                        "localSpeaking=$localAudioSpeaking"
-                )
-                if (validatingLocalSpeech != null) {
-                    localSpeechHasContent = true
-                    if (localSpeechFirstAudioReceivedAt == 0L) {
-                        localSpeechFirstAudioReceivedAt = audioReceivedAt
-                        voiceLog(
-                            "controlled_first_audio_received turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                                "firstAudioReceivedAt=$audioReceivedAt requestToFirstAudioMs=${audioReceivedAt - localSpeechRequestSentAt}"
-                        )
-                        if (instantScreenQueryId.isNotBlank()) {
-                            voiceLog(
-                                "TOTAL_SCREEN_RESPONSE screenQueryId=$instantScreenQueryId route=HOT_SCREEN_CACHE " +
-                                    "voice_ms=-1 capture_ms=0 accessibility_ms=0 vision_ms=0 gemini_ms=${audioReceivedAt - localSpeechRequestSentAt} " +
-                                    "tts_ms=${audioReceivedAt - localSpeechRequestSentAt} total_ms=${audioReceivedAt - instantScreenQueryStartedAt} " +
-                                    "frame_age_ms=$instantScreenCacheAgeMs"
-                            )
-                            instantScreenQueryId = ""
-                        }
-                    }
-                    localSpeechLastAudioReceivedAt = audioReceivedAt
-                    if (localSpeechStreamedDirectly) {
-                        // The transcript prefix already matched the prepared response.
-                        // Continue streaming the remaining natural voice without waiting
-                        // for the complete sentence.
-                        audio?.queueAudio(pcm, controlledGenerationId, "CONTROLLED_LOCAL")
-                        voiceLog("service_audio_routed route=direct_playback bytes=${pcm.size}")
-                    } else {
-                        localSpeechAudio += pcm.copyOf()
-                        voiceLog(
-                            "service_audio_routed route=validation_buffer bytes=${pcm.size} " +
-                                "bufferChunks=${localSpeechAudio.size}"
-                        )
-                        startLocalSpeechWhenPrefixMatches()
-                    }
-                }
-                else if (screenResponseActive && isScreenResponseContextCurrent()) {
-                    val generationAccepted = screenResponseBinding?.acceptsGeneration(modelGenerationId) == true
-                    screenResponseGenerationId = screenResponseBinding?.screenGenerationId ?: 0L
-                    if (!generationAccepted) {
-                        voiceLog(
-                            "SCREEN_RESPONSE_DECISION visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} " +
-                                "currentTurn=$screenResponseUserTurnId generationId=$modelGenerationId owner=CONTROLLED_SCREEN " +
-                                "decision=DROP reason=stale_generation"
-                        )
-                        voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId expectedAfter=$screenResponseAfterGenerationId boundGenerationId=$screenResponseGenerationId")
-                    } else {
-                        if (!screenResponseStartedLogged) {
-                            screenResponseStartedLogged = true
-                            voiceLog("screen_query_state screenQueryId=$screenResponseQueryId state=RESPONSE_STARTED source=AUDIO modelGenerationId=$modelGenerationId")
-                            fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId }?.let {
-                                it.firstModelResponseAt = audioReceivedAt
-                                it.firstAudioAt = audioReceivedAt
-                                it.replyQueuedAt = audioReceivedAt
-                                voiceLog(
-                                    "visual_model_first_response visualTurnId=${it.id} source=AUDIO " +
-                                        "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L) audioReceivedAt - it.modelRequestAt else -1L}"
-                                )
-                                voiceLog("visualModelFirstStructuredResult visualTurnId=${it.id} source=AUDIO at=$audioReceivedAt")
-                                voiceLog("replyQueued visualTurnId=${it.id} at=$audioReceivedAt owner=CONTROLLED_SCREEN")
-                                voiceLog(
-                                    "visual_reply_audio_started visualTurnId=${it.id} " +
-                                        "speechEndToFirstAudioMs=${if (it.speechEndedAt > 0L) audioReceivedAt - it.speechEndedAt else -1L}"
-                                )
-                            }
-                        }
-                        screenResponseHasContent = true
-                        mediaGuard.beginAssistantTurn()
-                        audio?.setPlaybackContext(modelGenerationId, screenResponseQueryId, "CONTROLLED_SCREEN")
-                        audio?.setBargeInEnabled(true)
-                        audio?.queueAudio(pcm, modelGenerationId, "CONTROLLED_SCREEN")
-                        voiceLog(
-                            "SCREEN_RESPONSE_DECISION visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} " +
-                                "currentTurn=$screenResponseUserTurnId generationId=$modelGenerationId owner=CONTROLLED_SCREEN " +
-                                "decision=PLAY reason=current_bound_generation"
-                        )
-                        voiceLog(
-                            "route_decision turnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId responseOwner=CONTROLLED_SCREEN " +
-                                "screen_query_id=$screenResponseQueryId route=screen_response accepted=true firstResponseAudioAt=$audioReceivedAt " +
-                                "geminiSendToFirstResponseMs=${if (screenFrameSentAt > 0L) audioReceivedAt - screenFrameSentAt else -1L} " +
-                                "speechEndToFirstAudibleMs=${if (screenQuerySpeechTurnConsistency) audioReceivedAt - screenResponseSpeechEndedAt else -1L} " +
-                                "screen_response_turn_consistency=${screenResponseUserTurnId != 0L} " +
-                                "screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency"
-                        )
-                    }
-                }
-                else if (responseArbiter.acceptsOrdinaryModel() && LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
-                        suppressed = suppressModelForTurn,
-                        assistantAlreadySpeaking = localAudioSpeaking,
-                        mediaGuardAllowsResponse = mediaGuard.allowModelResponse()
-                    )
-                ) {
-                    // Capturable LYRA speech uses USAGE_MEDIA. Once the first valid
-                    // chunk is accepted, keep Media Guard awake so LYRA never mistakes
-                    // her own active AudioTrack for external YouTube playback.
-                    when (val decision = ordinaryModelAudioGate.decide(modelGenerationId)) {
-                        ModelAudioDecision.ACCEPT -> {
-                            turnLatency.record(activeTurnId, Field.FIRST_ACCEPTED_MODEL_AUDIO, audioReceivedAt, modelGenerationId)
-                            acceptedModelGenerationForTurn = modelGenerationId
-                            mediaGuard.beginAssistantTurn()
-                            audio?.setPlaybackContext(modelGenerationId, responseOwner = "MODEL")
-                            audio?.setBargeInEnabled(true)
-                            audio?.queueAudio(pcm, modelGenerationId, "MODEL")
-                            voiceLog(
-                                "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL " +
-                                    "route=ordinary_model accepted=true firstModelAudioAcceptedAt=${turnLatency.firstAcceptedAudioAt(activeTurnId, modelGenerationId)} " +
-                                    "speechEndToFirstAcceptedModelAudioMs=${turnLatency.firstAcceptedAudioAt(activeTurnId, modelGenerationId)?.let { if (speechActivityEndedAt > 0 && it >= speechActivityEndedAt) (it - speechActivityEndedAt).toString() else "NA" } ?: "NA"} bytes=${pcm.size}"
-                            )
-                        }
-                        ModelAudioDecision.BUFFER_UNTIL_SPEECH_END -> {
-                            if (earlyModelAudioGenerationId != 0L && earlyModelAudioGenerationId != modelGenerationId) {
-                                modelAudioDroppedBeforeTurnCompleteCount += earlyModelAudio.size
-                                modelAudioDroppedBeforeTurnCompleteBytes += earlyModelAudioBytes
-                                earlyModelAudio.clear()
-                                earlyModelAudioBytes = 0L
-                            }
-                            earlyModelAudioGenerationId = modelGenerationId
-                            earlyModelAudio += pcm.copyOf()
-                            earlyModelAudioBytes += pcm.size
-                            voiceLog(
-                                "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL " +
-                                    "route=ordinary_model accepted=false rejectionReason=user_speech_active userSpeechActive=true " +
-                                    "earlyModelAudioBufferedCount=${earlyModelAudio.size} earlyModelAudioBufferedBytes=$earlyModelAudioBytes"
-                            )
-                        }
-                        else -> {
-                            modelAudioDroppedBeforeTurnCompleteCount++
-                            modelAudioDroppedBeforeTurnCompleteBytes += pcm.size
-                            voiceLog(
-                                "route_decision turnId=$activeTurnId modelGenerationId=$modelGenerationId responseOwner=MODEL " +
-                                    "route=ordinary_model accepted=false rejectionReason=$decision staleGeneration=${decision == ModelAudioDecision.DROP_STALE_GENERATION} " +
-                                    "modelAudioBufferedBeforeTurnCompleteCount=0 modelAudioBufferedBeforeTurnCompleteBytes=0 " +
-                                    "modelAudioDroppedBeforeTurnCompleteCount=$modelAudioDroppedBeforeTurnCompleteCount " +
-                                    "modelAudioDroppedBeforeTurnCompleteBytes=$modelAudioDroppedBeforeTurnCompleteBytes bytes=${pcm.size}"
-                            )
-                        }
-                    }
-                } else {
-                    voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} modelGenerationId=$modelGenerationId responseOwner=${responseArbiter.owner} route=ordinary_model bytes=${pcm.size}")
-                }
-            }
-            client.onInterrupted = { modelGenerationId ->
-                if (validatingLocalSpeech == null && responseArbiter.acceptsOrdinaryModel()) {
-                    ordinaryModelAudioGate.cancelGeneration(modelGenerationId)
-                    audio?.interrupt()
-                    voiceLog(
-                        "playback_cancelled_by_barge_in turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
-                            "playbackCancelledByBargeIn=true cancelledGenerationId=$modelGenerationId speechActivityStartedAt=$speechActivityStartedAt"
-                    )
-                } else voiceLog(
-                    "interrupted_event_ignored turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
-                        "reason=controlled_owner responseOwner=${responseArbiter.owner}"
-                )
-            }
-            client.onGenerationComplete = { modelGenerationId ->
-                val completedAt = android.os.SystemClock.elapsedRealtime()
-                turnLatency.record(activeTurnId, Field.MODEL_GENERATION_COMPLETED, completedAt, modelGenerationId)
-                voiceLog("model_generation_complete turnId=$activeTurnId modelGenerationId=$modelGenerationId at=$completedAt")
-            }
-            client.onInputTranscript = inputTranscript@ { part, latestModelGenerationId ->
-                if (screenResponseActive) {
-                    if (earlyScreenQueryAwaitingFinalTranscript) {
-                        appendTranscript(input, part)
-                        appendTranscript(commandProbe, part)
-                        voiceLog("screen_query_final_transcript_collecting screen_query_id=$screenResponseQueryId userTurnId=$screenResponseUserTurnId textChars=${part.length}")
-                        return@inputTranscript
-                    }
-                    voiceLog(
-                        "screen_response_input_ignored screen_query_id=$screenResponseQueryId " +
-                            "userTurnId=$screenResponseUserTurnId reason=no_confirmed_real_barge_in textChars=${part.length}"
-                    )
-                    return@inputTranscript
-                }
-                if (input.isEmpty()) {
-                    if (activeTurnId == 0L) activeTurnId = ++turnSequence
-                    inputTurnStartedAt = android.os.SystemClock.elapsedRealtime()
-                    turnLatency.record(activeTurnId, Field.INPUT_STARTED, inputTurnStartedAt)
-                    if (speechTimingTurnId == 0L && speechActivityStartedAt > 0L) speechTimingTurnId = activeTurnId
-                    if (responseArbiter.turnId != activeTurnId) responseArbiter.begin(activeTurnId)
-                    acceptedModelGenerationForTurn = 0L
-                    modelAudioDroppedBeforeTurnCompleteCount = 0
-                    modelAudioDroppedBeforeTurnCompleteBytes = 0L
-                    voiceLog(
-                        "input_turn_started turnId=$activeTurnId session=${hashCode()} inputTurnStartedAt=$inputTurnStartedAt " +
-                            "speechActivityStartedAt=$speechActivityStartedAt latestModelGenerationId=$latestModelGenerationId " +
-                            "voiceTurnConsistent=${voiceTurnIdentities.current()?.userTurnId == activeTurnId}"
-                    )
-                    if (pendingBestFriendCorrectionOldName != null &&
-                        android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
-                    ) {
-                        // Reserve a pending clarification turn before Gemini can emit an
-                        // ordinary acknowledgement. Ownership becomes CONTROLLED_LOCAL
-                        // when the validated clarification reply is queued.
-                        suppressModelForTurn = true
-                        output.clear()
-                        voiceLog(
-                            "pending_correction_turn_reserved turnId=$activeTurnId " +
-                                "databaseMutationAllowed=false successAcknowledgementAllowed=false"
-                        )
-                    }
-                }
-                if (handlePendingConfirmation(part)) return@inputTranscript
-                if (isPhantomTranscript(part)) {
-                    // Short echo/noise fragments must never become chat bubbles or
-                    // receive a conversational answer.
-                    suppressModelForTurn = true
-                    output.clear()
-                    return@inputTranscript
-                }
-                markUserInteraction()
-                when (mediaGuard.inspect(part)) {
-                    HandsFreeMediaGuard.Gate.BLOCK -> {
-                        appendTranscript(commandProbe, part)
-                        val earlyScreenText = romanDisplayText(commandProbe.toString())
-                        if (ScreenVisionIntentParser.parseStableQuery(earlyScreenText) != null) {
-                            audio?.confirmMediaSpeechFromTranscript(earlyScreenText)
-                            mediaBlockedTurn = false
-                            suppressModelForTurn = true
-                            output.clear()
-                            input.clear(); input.append(commandProbe)
-                            armScreenQuestion(earlyScreenText, activeTurnId, "MEDIA_PARTIAL_COMMAND")
-                            return@inputTranscript
-                        }
-                        var directCommand = CommandParser.parseDirectMediaControl(commandProbe.toString())
-                            ?: CommandParser.parseDirectMediaControl(part)
-                            ?: CommandParser.parse(commandProbe.toString())?.takeIf(::isSafeDirectMediaCommand)
-                            ?: CommandParser.parse(part)?.takeIf(::isSafeDirectMediaCommand)
-                        if (directCommand is AppCommand.OpenApp &&
-                            !CommandParser.isExplicitOpenCommand(commandProbe.toString()) &&
-                            !CommandParser.isExplicitOpenCommand(part)
-                        ) {
-                            directCommand = null
-                        }
-                        if (directCommand != null) {
-                            audio?.confirmMediaSpeechFromTranscript(commandProbe.toString())
-                            // Media Guard runs before the normal fresh-input reset below.
-                            // A genuine direct command heard during playback starts a new
-                            // user turn, so release the completed previous command here.
-                            // shouldExecute() still blocks duplicate transcript chunks.
-                            if (waitingForFreshInputAfterCommand) {
-                                waitingForFreshInputAfterCommand = false
-                                localCommandExecutedThisTurn = false
-                                commandUserTextEmitted = false
-                            }
-                            val spoken = commandProbe.toString().trim()
-                            val ownerDecision = com.myra.assistant.agent.UnifiedTurnInterpreter.interpret(
-                                spoken, WorkingTaskRuntime.store.snapshot()
-                            )
-                            if (!ownerDecision.authorizesPhoneActions) {
-                                voiceLog("direct_media_action_rejected_by_unified_owner turnId=$activeTurnId intent=${ownerDecision.intent}")
-                                return@inputTranscript
-                            }
-                            if (directCommand is AppCommand.ScrollYouTube) {
-                                handleScrollProposal(
-                                    directCommand, "media_pre_final", ScrollProposalAuthorization.PRE_FINAL
-                                )
-                                mediaBlockedTurn = false
-                                return@inputTranscript
-                            }
-                            if (spoken.isNotBlank() && !commandUserTextEmitted) {
-                                commitFinalUserMessage(spoken, "DIRECT_MEDIA_COMMAND")
-                                commandUserTextEmitted = true
-                            }
-                            mediaBlockedTurn = false
-                            executeCommand(directCommand)
-                            return@inputTranscript
-                        }
-                        val coherentMediaSpeech = romanDisplayText(commandProbe.toString())
-                        if (MediaSpeechCoherencePolicy.isCoherent(coherentMediaSpeech) &&
-                            audio?.confirmMediaSpeechFromTranscript(coherentMediaSpeech) == true
-                        ) {
-                            // A coherent ASR result backed by the active near-field VAD
-                            // candidate is real user speech, even when it is ordinary
-                            // conversation rather than a screen/device command.
-                            mediaGuard.confirmUserSpeech()
-                            mediaBlockedTurn = false
-                            suppressModelForTurn = false
-                            input.clear()
-                            input.append(commandProbe)
-                            voiceLog(
-                                "media_candidate_promoted reason=coherent_conversation candidateTextChars=${coherentMediaSpeech.length} " +
-                                    "userTurnId=$activeTurnId responseOwner=MODEL"
-                            )
-                        } else {
-                            if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
-                                probableActionTurn = true
-                                suppressModelForTurn = true
-                                output.clear()
-                            }
-                            if (!mediaBlockedTurn) emitState("Media Guard active â€” listening for your voice")
-                            mediaBlockedTurn = true
-                            output.clear()
-                            return@inputTranscript
-                        }
-                    }
-                    HandsFreeMediaGuard.Gate.WAKE_DETECTED -> {
-                        audio?.confirmMediaSpeechFromTranscript(part)
-                        mediaBlockedTurn = false
-                        suppressModelForTurn = false
-                        waitingForFreshInputAfterCommand = false
-                        emitState("Listening â€” media lowered for 10 seconds")
-                    }
-                    HandsFreeMediaGuard.Gate.OPEN -> mediaBlockedTurn = false
-                }
-                // After a local phone command, delayed Gemini packets are discarded until
-                // the server has completed that command turn and the user actually starts
-                // speaking again. The first transcript of that new turn safely re-enables
-                // normal model output.
-                if (waitingForFreshInputAfterCommand) {
-                    waitingForFreshInputAfterCommand = false
-                    // Fresh mic input must not steal a turn still owned by a controlled
-                    // Gemini generation; its late model text/audio remains suppressed.
-                    suppressModelForTurn = !responseArbiter.acceptsOrdinaryModel()
-                    localCommandExecutedThisTurn = false
-                }
-                if (pendingBestFriendCorrectionOldName != null &&
-                    android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
-                ) {
-                    // Media-guard and fresh-input state transitions above may normally
-                    // re-enable MODEL output. A pending correction must remain reserved.
-                    suppressModelForTurn = true
-                    output.clear()
-                }
-                appendTranscript(input, part); appendTranscript(commandProbe, part)
-                lastUserIntentText = input.toString().trim()
-                val currentTranscript = commandProbe.toString().trim()
-                val currentScreenText = romanDisplayText(currentTranscript)
-                if (BrowserSearchRequestParser.parse(currentTranscript) != null) {
-                    // Search is resolved only at FINAL, but speculative conversational
-                    // audio must not ask for a destination after a contextual action has
-                    // already been authorized and executed.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    voiceLog("search_turn_reserved turnId=$activeTurnId source=PARTIAL_FINAL_REQUIRED")
-                }
-                if (ScreenVisionIntentParser.parse(currentScreenText) != null ||
-                    FastVisualRequestClassifier.classify(currentTranscript) != null
-                ) {
-                    // A screen turn is answered only after an explicitly bound fresh
-                    // capture. Stop speculative ordinary output from becoming a second
-                    // answer before the FINAL turn boundary arrives.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    if (ScreenVisionIntentParser.parseStableQuery(currentScreenText) != null) {
-                        armScreenQuestion(currentScreenText, activeTurnId, "PARTIAL_SCREEN_QUERY")
-                    }
-                }
-                val plausibilityPreview = transcriptPlausibilityGate.preview(currentTranscript)
-                if (!plausibilityPreview.semanticProcessingAllowed) {
-                    // Stop speculative MODEL output as soon as an unrelated dominant
-                    // script appears. The immutable FINAL transcript makes the decision.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    voiceLog(
-                        "input_transcript_plausibility_preview raw=${currentTranscript.take(120)} " +
-                            "dominantScript=${plausibilityPreview.dominantScript} " +
-                            "transcriptPlausibility=${plausibilityPreview.transcriptPlausibility} " +
-                            "anomalyReason=${plausibilityPreview.anomalyReason}"
-                    )
-                    // Keep collecting raw chunks for the authoritative FINAL decision,
-                    // but do not let partial foreign-script text reach memory, correction,
-                    // delete, command, or permission parsers.
-                    return@inputTranscript
-                }
-                // Memory Brain V2 never mutates or interrupts from partial ASR. Natural
-                // facts are evaluated silently only at the authoritative final turn.
-                if (CommandParser.isLikelyIncompleteActionFragment(currentTranscript)) {
-                    incompleteActionFragmentTurn = true
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    return@inputTranscript
-                } else if (incompleteActionFragmentTurn) {
-                    // A later chunk completed the same thought, so resume the normal
-                    // parser. If Gemini finalized the fragment as its own turn, the
-                    // turn-complete guard below discards it without a chat bubble.
-                    incompleteActionFragmentTurn = false
-                    suppressModelForTurn = false
-                }
-                val romanMemoryTranscript = romanDisplayText(commandProbe.toString())
-                if (BestFriendNameCorrectionParser.needsClearCorrectedName(romanMemoryTranscript)) {
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                }
-                if (UnclearDeleteIntentGuard.needsClarification(romanMemoryTranscript)) {
-                    // Never let a garbled delete phrase reach Gemini as an invitation
-                    // to guess that the user wants an app uninstalled.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                }
-                if (MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {
-                    // Memory-looking partial speech may reserve response ownership, but it
-                    // can never execute or persist. The authoritative final turn owns the
-                    // actual recall/mutation decision.
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                    voiceLog("memory_intent_held_for_final turnId=$activeTurnId decision=WAIT_FOR_FINAL executed=false")
-                }
-                val ambiguousMessage = CommandParser.isAmbiguousMessageReference(commandProbe.toString())
-                if (ambiguousMessage) {
-                    ambiguousMessageTurn = true
-                    suppressModelForTurn = true
-                    output.clear()
-                    audio?.interrupt()
-                } else if (ambiguousMessageTurn && !MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {
-                    // A later transcript chunk completed the thought. Gemini already
-                    // received the audio, so allow its contextual response again.
-                    ambiguousMessageTurn = false
-                    suppressModelForTurn = false
-                }
-                val command = (CommandParser.parse(part) ?: CommandParser.parse(commandProbe.toString()))
-                    ?.takeUnless { it is AppCommand.SearchYouTube }
-                if (CommandParser.isProbableDeviceAction(part) || CommandParser.isProbableDeviceAction(commandProbe.toString())) {
-                    probableActionTurn = true
-                    suppressModelForTurn = true
-                    output.clear()
-                }
-                // A streamed transcript may first contain only "YouTube" and later add
-                // "mein search karo Lols Gaming". Never execute a plain open-app command
-                // from an incomplete chunk; confirm it from the complete turn below.
-                val explicitOpen = command is AppCommand.OpenApp && CommandParser.isExplicitOpenCommand(part)
-                // Never execute an ordinary phone action from a partial transcript. A later
-                // chunk can turn "open Chrome" into a discussion about opening Chrome. The
-                // complete FINAL utterance must pass UnifiedTurnInterpreter first.
-                if (command != null && (command !is AppCommand.OpenApp || explicitOpen) && command !is AppCommand.DeepResearch) {
-                    probableActionTurn = true
-                    suppressModelForTurn = true
-                    output.clear()
-                    val candidateName = if (command is AppCommand.ScrollYouTube && command.explicitlyRequestedApp == null) {
-                        "GenericScroll"
-                    } else command.javaClass.simpleName
-                    voiceLog("partial_action_held_for_unified_owner turnId=$activeTurnId candidate=$candidateName")
-                    if (command is AppCommand.ScrollYouTube) {
-                        handleScrollProposal(command, "partial_transcript", ScrollProposalAuthorization.PRE_FINAL)
-                    }
-                }
-            }
-            client.onOutputTranscript = { transcript, modelGenerationId ->
-                if (validatingLocalSpeech != null) {
-                    localSpeechHasContent = true
-                    appendTranscript(localSpeechTranscript, transcript)
-                    startLocalSpeechWhenPrefixMatches()
-                }
-                else if (screenResponseActive && isScreenResponseContextCurrent()) {
-                    if (screenResponseBinding?.acceptsGeneration(modelGenerationId) == true) {
-                        screenResponseGenerationId = screenResponseBinding?.screenGenerationId ?: 0L
-                        if (!screenResponseStartedLogged) {
-                            screenResponseStartedLogged = true
-                            voiceLog("screen_query_state screenQueryId=$screenResponseQueryId state=RESPONSE_STARTED source=TEXT modelGenerationId=$modelGenerationId")
-                            val now = android.os.SystemClock.elapsedRealtime()
-                            fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId }?.let {
-                                it.firstModelResponseAt = now
-                                it.replyQueuedAt = now
-                                voiceLog(
-                                    "visual_model_first_response visualTurnId=${it.id} source=TEXT " +
-                                        "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L) now - it.modelRequestAt else -1L}"
-                                )
-                                voiceLog("visualModelFirstStructuredResult visualTurnId=${it.id} source=TEXT at=$now")
-                                voiceLog("replyQueued visualTurnId=${it.id} at=$now owner=CONTROLLED_SCREEN")
-                            }
-                        }
-                        screenResponseHasContent = true
-                        appendTranscript(output, transcript)
-                        voiceLog("screen_query_result_received screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId userTurnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId firstResponseTextAt=${android.os.SystemClock.elapsedRealtime()} screen_response_turn_consistency=true")
-                    } else voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId reason=wrong_generation")
-                }
-                else if (responseArbiter.acceptsOrdinaryModel() && !suppressModelForTurn &&
-                    !hideNextModelTranscript && mediaGuard.allowModelResponse()
-                ) appendTranscript(output, transcript)
-                else voiceLog("duplicate_response_prevented turnId=${responseArbiter.turnId} responseOwner=${responseArbiter.owner} route=ordinary_model_text")
-            }
-            client.onTurnComplete = turnComplete@ {
-                turnLatency.record(activeTurnId, Field.INPUT_COMPLETED, android.os.SystemClock.elapsedRealtime())
-                if (validatingLocalSpeech != null) {
-                    // Sending clientContent interrupts the previous Gemini generation.
-                    // Its interrupted turnComplete can arrive before the new confirmation.
-                    // Ignore that empty boundary, and briefly allow the independently
-                    // streamed output transcript to arrive after the audio turn completes.
-                    if (localSpeechHasContent) {
-                        val token = localSpeechValidationToken
-                        mainHandler.postDelayed({
-                            if (token == localSpeechValidationToken && validatingLocalSpeech != null) {
-                                finishValidatedLocalSpeech()
-                                resetTurnBuffers()
-                                waitingForFreshInputAfterCommand = true
-                            }
-                        }, LOCAL_SPEECH_AUDIO_DRAIN_MS)
-                    }
-                    responseArbiter.controlledGenerationComplete()
-                    val turnCompleteAt = android.os.SystemClock.elapsedRealtime()
-                    voiceLog("turn_complete_received turnId=${responseArbiter.turnId} generationId=$controlledGenerationId responseOwner=${responseArbiter.owner} turnCompleteAt=$turnCompleteAt lastAudioReceivedAt=$localSpeechLastAudioReceivedAt")
-                    resetTurnBuffers("controlled_generation_complete")
-                    return@turnComplete
-                }
-                if (screenResponseActive) {
-                    if (earlyScreenQueryAwaitingFinalTranscript && input.isNotBlank()) {
-                        val rawFinal = input.toString().trim()
-                        if (com.myra.assistant.screen.EarlyScreenQuestionPolicy.reconcile(
-                                earlyScreenQuestionText, rawFinal
-                            ) == com.myra.assistant.screen.ScreenQuestionReconciliation.MATERIAL_CHANGE
-                        ) {
-                            voiceLog(
-                                "screen_query_reconciled screenQueryId=$screenResponseQueryId " +
-                                    "result=cancelled_material_change userTurnId=$screenResponseUserTurnId"
-                            )
-                            audio?.interrupt(); live?.interrupt()
-                            finishScreenResponse("final_transcript_materially_changed")
-                            return@turnComplete
-                        }
-                        val finalDisplay = finalTranscriptDisplay(rawFinal)
-                        val semantic = FinalSemanticUserUtterance.from(
-                            transcriptSessionId, screenResponseUserTurnId, rawFinal, finalDisplay
-                        )
-                        commitFinalUserMessage(rawFinal, "TURN_COMPLETE_EARLY_SCREEN_QUERY", semantic.canonicalSemanticText, semantic.displayText)
-                        earlyScreenQueryAwaitingFinalTranscript = false
-                        input.clear(); commandProbe.clear()
-                        voiceLog("screen_query_final_transcript_committed screen_query_id=$screenResponseQueryId userTurnId=$screenResponseUserTurnId")
-                        voiceLog("screen_query_reconciled screenQueryId=$screenResponseQueryId result=matched_same_turn userTurnId=$screenResponseUserTurnId")
-                        if (!screenResponseHasContent) return@turnComplete
-                    }
-                    if (!screenResponseHasContent) {
-                        voiceLog("screen_response_empty_boundary_ignored screen_query_id=$screenResponseQueryId")
-                        return@turnComplete
-                    }
-                    val current = isScreenResponseContextCurrent()
-                    val text = output.toString().trim()
-                    if (current && text.isNotBlank() && !screenResponseTextCommitted) {
-                        fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId && it.replyQueuedAt == 0L }?.apply {
-                            replyQueuedAt = android.os.SystemClock.elapsedRealtime()
-                            voiceLog("replyQueued visualTurnId=$id at=$replyQueuedAt")
-                        }
-                        listener?.onMyraText(romanDisplayText(text))
-                        com.myra.assistant.screen.ScreenContextStore.onAnalysis(
-                            text, android.os.SystemClock.elapsedRealtime()
-                        )
-                        screenResponseTextCommitted = true
-                    }
-                    else voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId reason=${if (!current) "stopped_session" else "empty_result"}")
-                    voiceLog("screen_response_generation_complete screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId current=$current")
-                    voiceLog(
-                        "VISION_REQUEST_COMPLETED screenQueryId=$screenResponseQueryId screen_session_id=$screenResponseSessionId " +
-                            "timestamp=${android.os.SystemClock.elapsedRealtime()} visionLatencyMs=${(android.os.SystemClock.elapsedRealtime() - screenFrameSentAt).coerceAtLeast(0L)} " +
-                            "totalLatencyMs=${if (screenQuerySpeechTurnConsistency) (android.os.SystemClock.elapsedRealtime() - screenResponseSpeechEndedAt).coerceAtLeast(0L) else -1L}"
-                    )
-                    screenResponseGenerationComplete = true
-                    if (!localAudioSpeaking) {
-                        voiceLog(
-                            "SCREEN_RESPONSE_DECISION visualTurnId=${fastVisualTurns.current()?.id.orEmpty()} " +
-                                "currentTurn=$screenResponseUserTurnId generationId=$screenResponseGenerationId owner=CONTROLLED_SCREEN " +
-                                "decision=${if ((fastVisualTurns.current()?.firstAudioAt ?: 0L) > 0L) "PLAY" else "DROP"} " +
-                                "reason=generation_complete_no_active_playback"
-                        )
-                        finishScreenResponse("generation_complete_no_playback")
-                    }
-                    else output.clear()
-                    return@turnComplete
-                }
-                pendingLocalSpeech?.let { message ->
-                    pendingLocalSpeech = null
-                    resetTurnBuffers()
-                    localSpeechValidationPolicy = pendingLocalSpeechPolicy
-                    allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
-                    beginValidatedLocalSpeech(message)
-                    return@turnComplete
-                }
-                if (mediaBlockedTurn && !mediaGuard.isAwake()) {
-                    val blockedText = romanDisplayText(commandProbe.toString().trim())
-                    if (ScreenVisionIntentParser.parseStableQuery(blockedText) != null) {
-                        mediaBlockedTurn = false
-                        audio?.confirmMediaSpeechFromTranscript(blockedText)
-                        if (blockedText.isNotBlank() && !commandUserTextEmitted) {
-                            commitFinalUserMessage(blockedText, "MEDIA_CONFIRMED_SCREEN_QUERY")
-                            commandUserTextEmitted = true
-                        }
-                        voiceLog("media_candidate_promoted reason=validated_screen_query commandChars=${commandProbe.length} userTurnId=$activeTurnId")
-                        beginFreshScreenQuery(blockedText, activeTurnId)
-                        resetTurnBuffers("media_confirmed_screen_query")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    if (MediaSpeechCoherencePolicy.isCoherent(blockedText) &&
-                        audio?.confirmMediaSpeechFromTranscript(blockedText) == true
-                    ) {
-                        val promotedTurnId = activeTurnId
-                        mediaBlockedTurn = false
-                        mediaGuard.confirmUserSpeech()
-                        suppressModelForTurn = false
-                        if (!commandUserTextEmitted) {
-                            commitFinalUserMessage(blockedText, "MEDIA_CONFIRMED_CONVERSATION")
-                            commandUserTextEmitted = true
-                        }
-                        voiceLog(
-                            "media_candidate_promoted reason=coherent_conversation_at_boundary " +
-                                "commandChars=${commandProbe.length} userTurnId=$promotedTurnId responseOwner=MODEL"
-                        )
-                        resetTurnBuffers("media_confirmed_conversation")
-                        // The speculative reply may already have been suppressed while
-                        // classification was pending. Ask the same Live session for one
-                        // ordinary natural response; do not create a local/TTS path.
-                        responseArbiter.begin(promotedTurnId)
-                        live?.sendText(blockedText)
-                        return@turnComplete
-                    }
-                    mediaBlockedTurn = false
-                    resetTurnBuffers("media_blocked_turn_complete")
-                    return@turnComplete
-                }
-                if (hideNextModelTranscript) {
-                    hideNextModelTranscript = false
-                    resetTurnBuffers("hidden_model_turn_complete")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                val accumulatorBeforeFinal = input.toString().trim()
-                val duplicateResult = FinalTranscriptDuplicateGuard.collapse(accumulatorBeforeFinal)
-                val userText = duplicateResult.text
-                val myraText = output.toString().trim()
-                voiceLog(
-                    "final_transcript_duplicate_guard mediaCandidateId=${audio?.currentMediaCandidateId() ?: 0L} " +
-                        "candidateTranscript=${commandProbe.toString().trim().take(160)} " +
-                        "finalGeminiTranscript=${accumulatorBeforeFinal.take(160)} " +
-                        "accumulatorBeforeFinal=${accumulatorBeforeFinal.take(160)} " +
-                        "duplicateFinalDetected=${duplicateResult.duplicateDetected} " +
-                        "duplicateCollapseApplied=${duplicateResult.collapseApplied} " +
-                        "collapseReason=${duplicateResult.reason} finalDisplayText=${userText.take(160)}"
-                )
-                val finalInputTranscriptAt = android.os.SystemClock.elapsedRealtime()
-                val plausibility = transcriptPlausibilityGate.assessFinal(userText)
-                val plausibilityTurnId = activeTurnId.takeIf { it != 0L }
-                    ?: responseArbiter.turnId.takeIf { it != 0L }
-                    ?: ++turnSequence
-                val plausibilityUtteranceId = "$transcriptSessionId:$plausibilityTurnId"
-                voiceLog(
-                    "final_transcript_plausibility utteranceId=$plausibilityUtteranceId " +
-                        "rawGeminiTranscript=${userText.take(160)} " +
-                        "detectedScripts=${plausibility.detectedScripts} " +
-                        "dominantScript=${plausibility.dominantScript} " +
-                        "recentSessionLanguageProfile=${plausibility.recentSessionLanguageProfile} " +
-                        "transcriptPlausibility=${plausibility.transcriptPlausibility} " +
-                        "anomalyReason=${plausibility.anomalyReason} " +
-                        "semanticProcessingAllowed=${plausibility.semanticProcessingAllowed} " +
-                        "userBubbleCommitAllowed=${plausibility.userBubbleCommitAllowed} " +
-                        "memoryMutationAllowed=${plausibility.memoryMutationAllowed}"
-                )
-                if (!plausibility.semanticProcessingAllowed) {
-                    suppressModelForTurn = true
-                    localCommandExecutedThisTurn = true
-                    output.clear(); audio?.interrupt()
-                    listener?.onMyraText(FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY)
-                    emitState(FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY)
-                    queueLocalSpeech(
-                        FinalTranscriptPlausibilityGate.CLARIFICATION_REPLY,
-                        allowUntranscribedAudio = true
-                    )
-                    resetTurnBuffers("suspicious_final_transcript")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                val finalDisplay = finalTranscriptDisplay(userText)
-                val finalUtterance = FinalSemanticUserUtterance.from(
-                    sessionId = transcriptSessionId,
-                    turnId = plausibilityTurnId,
-                    rawGeminiTranscript = userText,
-                    formatted = finalDisplay
-                )
-                val normalizedFinalUserText = finalUtterance.canonicalSemanticText
-                val displayedFinalUserText = finalUtterance.displayText
-                turnLatency.record(activeTurnId, Field.FINAL_TRANSCRIPT_RECEIVED, finalInputTranscriptAt)
-                voiceTurnIdentities.finalTranscript(activeTurnId, finalUtterance.utteranceId)
-                voiceLog(
-                    "final_input_transcript raw=${userText.take(160)} " +
-                        "normalized=${normalizedFinalUserText.take(160)} " +
-                        "display=${displayedFinalUserText.take(160)} finalInputTranscriptAt=$finalInputTranscriptAt"
-                )
-                voiceLog(
-                    "final_transcript_display turnId=$activeTurnId utteranceId=${transcriptSessionId}:$activeTurnId " +
-                        "raw=${userText.take(160)} transliterated=${finalDisplay.transliterated.take(160)} " +
-                        "display=${displayedFinalUserText.take(160)} " +
-                        "latinWordsPreserved=${finalDisplay.latinWordsPreserved} " +
-                        "properNameProtected=${finalDisplay.properNameProtected} " +
-                        "ruleIds=${finalDisplay.appliedRuleIds.joinToString(",")}"
-                )
-                voiceLog(
-                    "final_semantic_utterance utteranceId=${finalUtterance.utteranceId} " +
-                        "rawGeminiTranscript=${userText.take(160)} " +
-                        "canonicalSemanticText=${normalizedFinalUserText.take(160)} " +
-                        "displayText=${displayedFinalUserText.take(160)} " +
-                        "canonicalNameTokens=${finalUtterance.canonicalNameTokens} " +
-                        "displayNameTokens=${finalUtterance.displayNameTokens} " +
-                        "memoryExtractorInput=${finalUtterance.memoryExtractorInput.take(160)} " +
-                        "correctionParserInput=${finalUtterance.correctionParserInput.take(160)} " +
-                        "deleteParserInput=${finalUtterance.deleteParserInput.take(160)} " +
-                        "clarificationResolverInput=${finalUtterance.clarificationResolverInput.take(160)} " +
-                        "semanticConsistency=${finalUtterance.semanticConsistency}"
-                )
-                if (earlyScreenQueryDispatchedTurnId == activeTurnId && earlyScreenQuestionText.isNotBlank()) {
-                    val reconciliation = com.myra.assistant.screen.EarlyScreenQuestionPolicy.reconcile(
-                        earlyScreenQuestionText, userText
-                    )
-                    voiceLog(
-                        "screen_query_reconciled userTurnId=$activeTurnId result=$reconciliation " +
-                            "visualTurnId=${fastVisualTurns.current()?.id.orEmpty()}"
-                    )
-                    if (reconciliation == com.myra.assistant.screen.ScreenQuestionReconciliation.MATERIAL_CHANGE) {
-                        fastVisualTurns.cancel()
-                        live?.interrupt()
-                        suppressModelForTurn = true
-                        output.clear()
-                        resetTurnBuffers("early_screen_query_material_change")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                }
-                if (incompleteActionFragmentTurn &&
-                    CommandParser.isLikelyIncompleteActionFragment(userText)
-                ) {
-                    // Do not expose or answer partial ASR words such as "Tem",
-                    // "tain", or "meses". The next completed utterance starts fresh.
-                    audio?.interrupt()
-                    resetTurnBuffers()
-                    suppressModelForTurn = true
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                if (userText.isNotBlank() && !commandUserTextEmitted) {
-                    commitFinalUserMessage(
-                        raw = userText,
-                        source = "TURN_COMPLETE",
-                        normalized = normalizedFinalUserText,
-                        display = displayedFinalUserText
-                    )
-                }
-                AccessibilityHelperService.instance?.currentForegroundContext()?.let {
-                    brain.observeForegroundApp(it.packageName)
-                    voiceLog("foreground_context_propagated turnId=$activeTurnId package=${it.packageName} windowId=${it.windowId} generation=${it.generation}")
-                }
-                val activityContext = ActivityContextStore.snapshot()
-                latestTurnAcceptedAt = android.os.SystemClock.elapsedRealtime()
-                turnLatency.record(activeTurnId, Field.FINAL_TRANSCRIPT_ACCEPTED, latestTurnAcceptedAt)
-                latestIntentTimingTurnId = activeTurnId
-                voiceLog(
-                    "finalTranscriptReady turnId=$activeTurnId at=$latestTurnAcceptedAt " +
-                        "authoritativeTurnToTranscriptMs=${if (speechActivityEndedAt > 0L) latestTurnAcceptedAt - speechActivityEndedAt else -1L}"
-                )
-                latestActionDispatchedAt = 0L
-                val previousScrollContext = WorkingTaskRuntime.store.snapshot().lastCompletedTask
-                val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
-                    normalizedFinalUserText, activityContext, visualAwarenessPreferences.enabled, activeTurnId
-                )
-                latestIntentDecidedAt = android.os.SystemClock.elapsedRealtime()
-                scrollContinuationTelemetry.resolution(activeTurnId, normalizedFinalUserText, latestIntentDecidedAt,
-                    activityContext?.packageName, activityContext?.windowId,
-                    previousScrollContext?.action == ToolCapability.ACCESSIBILITY_SCROLL.name &&
-                        previousScrollContext.completionState == TaskCompletionState.SUCCESS,
-                    turnDecision.intent.name)
-                turnLatency.record(activeTurnId, Field.INTENT_RESOLVED, latestIntentDecidedAt)
-                voiceLog(
-                    "turnIntentResolved turnId=$activeTurnId intent=${turnDecision.intent} at=$latestIntentDecidedAt " +
-                        "transcriptToIntentMs=${latestIntentDecidedAt - latestTurnAcceptedAt}"
-                )
-                val unifiedTask = UnifiedLyraAgentRuntime.agent.currentTask()
-                val stagedCapabilities = buildList {
-                    if (pendingScrollCandidates.current()?.turnId == activeTurnId) add(ToolCapability.ACCESSIBILITY_SCROLL.name)
-                }
-                val selectedCapability = when (unifiedTask?.interpretedGoal) {
-                    com.myra.assistant.agent.AgentGoalType.SCROLL -> ToolCapability.ACCESSIBILITY_SCROLL.name
-                    com.myra.assistant.agent.AgentGoalType.BROWSER_SEARCH,
-                    com.myra.assistant.agent.AgentGoalType.WEB_SEARCH -> ToolCapability.BROWSER_SEARCH.name
-                    else -> "NONE"
-                }
-                val discardedCapabilities = stagedCapabilities.filter { it != selectedCapability }
-                if (selectedCapability != ToolCapability.ACCESSIBILITY_SCROLL.name) pendingScrollCandidates.discardForTurn(activeTurnId)
-                voiceLog(
-                    "FINAL_INTENT_CAPABILITY_RESOLUTION turnId=$activeTurnId finalIntent=${turnDecision.intent} " +
-                        "selectedCapability=$selectedCapability stagedCapabilities=${stagedCapabilities.joinToString(",")} " +
-                        "discardedCapabilities=${discardedCapabilities.joinToString(",")} reason=final_unified_intent_authoritative"
-                )
-                voiceLog(
-                    "agent_turn_owned turnId=$activeTurnId intent=${turnDecision.intent} " +
-                        "phoneActions=${turnDecision.authorizesPhoneActions} memoryMutation=${turnDecision.authorizesMemoryMutation} " +
-                        "requiresPerception=${turnDecision.requiresPerception} taskId=${unifiedTask?.id}"
-                )
-                voiceLog(
-                    "turn_latency turnId=$activeTurnId speechEndToTurnAcceptedMs=${if (speechActivityEndedAt > 0L) latestTurnAcceptedAt - speechActivityEndedAt else -1L} " +
-                        "turnAcceptedToIntentMs=${latestIntentDecidedAt - latestTurnAcceptedAt}"
-                )
-                if (unifiedTask != null && turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
-                    turnLatency.record(activeTurnId, Field.TASK_CREATED, android.os.SystemClock.elapsedRealtime())
-                    voiceLog(
-                        "AGENT_TASK_CREATED taskId=${unifiedTask.id} turnId=$activeTurnId goal=${unifiedTask.interpretedGoal} " +
-                            "foregroundPackage=${activityContext?.packageName} screenGeneration=${activityContext?.generation ?: 0L}"
-                    )
-                    voiceLog(
-                        "agent_task_created taskId=${unifiedTask.id} goal=${unifiedTask.interpretedGoal} package=${activityContext?.packageName} " +
-                            "planSteps=${unifiedTask.plan.size} confidence=${unifiedTask.confidence}"
-                    )
-                    voiceLog("agent_plan_created taskId=${unifiedTask.id} steps=${unifiedTask.plan.joinToString(",") { it.id }}")
-                }
-                if (turnDecision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION)) {
-                    // A complete conversational turn hard-locks all phone executors. Partial
-                    // keyword guesses are discarded and Gemini retains the sole response.
-                    probableActionTurn = false
-                    suppressModelForTurn = false
-                    voiceLog("agent_phone_tools_locked turnId=$activeTurnId reason=${turnDecision.intent}")
-                    pendingScrollCandidates.discardForTurn(activeTurnId)
-                }
-                if (turnDecision.intent == TurnIntent.FOLLOW_UP) {
-                    handleUnifiedActionFollowUp()
-                    resetTurnBuffers("unified_action_follow_up")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
-                    unifiedTask?.interpretedGoal == com.myra.assistant.agent.AgentGoalType.SCROLL
-                ) {
-                    val runtimeTask = GeneralAgentRuntimeStore.runtime.activeTask()
-                    val directionName = runtimeTask?.intent?.parameters?.get("direction")
-                        ?: lastScrollDirection.name
-                    val direction = runCatching { AppCommand.ScrollDirection.valueOf(directionName) }
-                        .getOrDefault(lastScrollDirection)
-                    handleScrollProposal(
-                        AppCommand.ScrollYouTube(direction), "final_unified_turn",
-                        ScrollProposalAuthorization.FINAL_AUTHORIZED,
-                        requestedTaskId = runtimeTask?.id
-                    )
-                    resetTurnBuffers("unified_runtime_scroll")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
-                    executeUnifiedBrowserSearch(normalizedFinalUserText)
-                ) {
-                    resetTurnBuffers("unified_browser_search")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                val screenMode = ScreenModeCommandParser.parse(userText)
-                    ?: ScreenModeCommandParser.parse(normalizedFinalUserText)
-                if (turnDecision.authorizesPhoneActions && screenMode != null) {
-                    executeScreenModeCommand(screenMode)
-                    resetTurnBuffers("screen_mode_command")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                // Keep the original transcript for local semantic commands. The display/brain
-                // normalization can transliterate Devanagari (for example, "à¤•à¤®à¥‡à¤‚à¤Ÿ" into an
-                // unrecognisable spelling), but accessibility actions must be decided first.
-                val youtubeSemantic = YouTubeSemanticCommandParser.parse(userText)
-                    ?: YouTubeSemanticCommandParser.parse(normalizedFinalUserText)
-                if (turnDecision.authorizesPhoneActions && youtubeSemantic != null && executeYouTubeSemanticAction(youtubeSemantic)) {
-                    resetTurnBuffers("youtube_semantic_action")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                val fastVisualRequest = FastVisualRequestClassifier.classify(userText)
-                    ?: FastVisualRequestClassifier.classify(normalizedFinalUserText)
-                    ?: ScreenVisionIntentParser.parse(normalizedFinalUserText)?.let {
-                        FastVisualRequest(
-                            if (it == com.myra.assistant.screen.ScreenVisionIntent.CONTROL_TARGET) FastVisualKind.ACTION else FastVisualKind.QUESTION,
-                            it.name.lowercase(Locale.ROOT)
-                        )
-                    }
-                if (fastVisualRequest != null &&
-                    (turnDecision.intent == TurnIntent.SCREEN_QUESTION || turnDecision.authorizesPhoneActions)) {
-                    if (turnDecision.intent == TurnIntent.SCREEN_QUESTION && ordinaryModelAudioGate.isSpeechActive()) {
-                        armScreenQuestion(userText, activeTurnId, "FINAL_SCREEN_QUERY_WAITING_FOR_SPEECH_END", true)
-                        suppressModelForTurn = true
-                        output.clear()
-                        return@turnComplete
-                    }
-                    if (ScreenQueryDispatchPolicy.shouldDispatch(
-                            screenResponseActive, earlyScreenQueryDispatchedTurnId, activeTurnId
-                        )) {
-                        beginFreshScreenQuery(userText, activeTurnId, fastVisualRequest)
-                    }
-                    resetTurnBuffers("fast_visual_turn")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                if (turnDecision.authorizesPhoneActions && executeUnifiedReferenceIfApplicable(userText)) {
-                    resetTurnBuffers("unified_agent_reference")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                val brainDecision = if (turnDecision.authorizesPhoneActions) brain.interpret(normalizedFinalUserText)
-                    else BrainDecision.PassThrough
-                voiceLog(
-                    "brain_decision turnId=$activeTurnId intent=${LyraBrainCoordinator.classify(normalizedFinalUserText)} " +
-                        "decision=${brainDecision.javaClass.simpleName} state=${brain.snapshot()}"
-                )
-                val readingCommand = ReadingIntentParser.parse(normalizedFinalUserText)
-                if (turnDecision.authorizesPhoneActions && readingCommand != null && handleReadingCommand(readingCommand, activeTurnId)) {
-                    resetTurnBuffers("reading_command")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                when (brainDecision) {
-                    is BrainDecision.Cancel -> {
-                        handleBrainCancellation(brainDecision.taskToken)
-                        resetTurnBuffers("brain_task_cancelled")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    is BrainDecision.ScrollThenOpenVideo -> {
-                        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-                            voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId decision=ScrollThenOpenVideo")
-                            resetTurnBuffers("duplicate_screen_command")
-                            return@turnComplete
-                        }
-                        screenActionRegistry.cancel()?.let {
-                            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=new_multi_step_command")
-                        }
-                        executeBrainMultiStep(brainDecision)
-                        resetTurnBuffers("brain_multi_step_started")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    is BrainDecision.ScreenAction -> {
-                        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-                            voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId decision=ScreenAction")
-                            resetTurnBuffers("duplicate_screen_command")
-                            return@turnComplete
-                        }
-                        screenActionRegistry.cancel()?.let {
-                            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=new_contextual_command")
-                        }
-                        executeContextualScreenAction(brainDecision.target)
-                        resetTurnBuffers("brain_contextual_screen_action")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    is BrainDecision.Clarify -> {
-                        suppressModelForTurn = true
-                        localCommandExecutedThisTurn = true
-                        cancelSpeechForNewAction()
-                        listener?.onMyraText(brainDecision.message)
-                        emitState(brainDecision.message)
-                        queueLocalSpeech(brainDecision.message, allowUntranscribedAudio = true)
-                        resetTurnBuffers("brain_reference_clarification")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    BrainDecision.PassThrough -> Unit
-                }
-                val screenIntent = ScreenVisionIntentParser.parse(normalizedFinalUserText)
-                if (screenIntent != null && turnDecision.intent == TurnIntent.SCREEN_QUESTION) {
-                    if (ScreenQueryDispatchPolicy.shouldDispatch(
-                            screenResponseActive, earlyScreenQueryDispatchedTurnId, activeTurnId
-                        )) {
-                        beginFreshScreenQuery(normalizedFinalUserText, activeTurnId)
-                    }
-                    resetTurnBuffers("screen_query_fresh_capture_requested")
-                    waitingForFreshInputAfterCommand = true
-                    return@turnComplete
-                }
-                // Run one final parse over the complete transcript. Partial Live transcript
-                // chunks can omit or mistranscribe the action word even when the final text
-                // contains enough context to identify the device command.
-                if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
-                    if (CommandParser.isAmbiguousMessageReference(userText)) {
-                        val clarification = "Message ke baare mein baat kar rahe ho, ya kisi ko bhejna hai?"
-                        localCommandExecutedThisTurn = true
-                        listener?.onMyraText(clarification)
-                        emitState(clarification)
-                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                        resetTurnBuffers()
-                        ambiguousMessageTurn = false
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    val displayText = normalizedFinalUserText
-                    val pendingCorrectionOld = pendingBestFriendCorrectionOldName?.takeIf {
-                        android.os.SystemClock.elapsedRealtime() <= pendingBestFriendCorrectionUntil
-                    }
-                    if (pendingCorrectionOld != null) {
-                        val confirmationName = pendingSpellingConfirmationName
-                        if (confirmationName != null && normalizeSpeech(displayText) in setOf("haan", "han", "yes")) {
-                            pendingSpellingConfirmationName = null
-                            pendingBestFriendCorrectionOldName = null
-                            pendingBestFriendCorrectionUntil = 0L
-                            startCanonicalRename(BestFriendNameCorrection(pendingCorrectionOld, confirmationName))
-                            resetTurnBuffers("spelling_confirmed")
-                            waitingForFreshInputAfterCommand = true
-                            return@turnComplete
-                        }
-                        val resolved = ClarifiedPersonNameResolver.resolve(displayText)
-                        voiceLog(
-                            "correction_clarification pendingType=BEST_FRIEND_RENAME " +
-                                "target=$pendingCorrectionOld raw=${userText.take(100)} " +
-                                "normalized=${displayText.take(100)} resolved=$resolved"
-                        )
-                        when (resolved) {
-                            is ClarifiedNameResult.Accepted -> {
-                                pendingSpellingConfirmationName = null
-                                pendingBestFriendCorrectionOldName = null
-                                pendingBestFriendCorrectionUntil = 0L
-                                startCanonicalRename(BestFriendNameCorrection(pendingCorrectionOld, resolved.name))
-                                resetTurnBuffers("clarified_name_accepted")
-                                waitingForFreshInputAfterCommand = true
-                                return@turnComplete
-                            }
-                            is ClarifiedNameResult.NeedsConfirmation -> {
-                                pendingSpellingConfirmationName = resolved.proposedName
-                                val clarification = "Maine ${resolved.heardLetters} suna. Kya naam ${resolved.proposedName} hai?"
-                                suppressModelForTurn = true
-                                localCommandExecutedThisTurn = true
-                                output.clear(); audio?.interrupt()
-                                listener?.onMyraText(clarification)
-                                emitState(clarification)
-                                queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                                resetTurnBuffers("incomplete_spelling_confirmation")
-                                waitingForFreshInputAfterCommand = true
-                                return@turnComplete
-                            }
-                            ClarifiedNameResult.Unclear -> {
-                                // A pending correction owns this turn. Never let Gemini
-                                // improvise a success acknowledgement when no validated
-                                // name or verified database transaction exists.
-                                val clarification = CorrectionSuccessPolicy.UNRESOLVED_CLARIFICATION_REPLY
-                                suppressModelForTurn = true
-                                localCommandExecutedThisTurn = true
-                                output.clear(); audio?.interrupt()
-                                voiceLog(
-                                    "correction_clarification_unresolved target=$pendingCorrectionOld " +
-                                        "databaseMutationAllowed=false successAcknowledgementAllowed=false"
-                                )
-                                listener?.onMyraText(clarification)
-                                emitState(clarification)
-                                queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                                resetTurnBuffers("clarification_unresolved")
-                                waitingForFreshInputAfterCommand = true
-                                return@turnComplete
-                            }
-                        }
-                    }
-                    val pendingDelete = android.os.SystemClock.elapsedRealtime() <=
-                        pendingDeleteClarificationUntil
-                    val memoryCommand = if (pendingDelete) {
-                        PendingDeleteClarification.resolve(displayText)
-                            ?: MemoryCommandParser.parse(displayText)
-                    } else MemoryCommandParser.parse(displayText)
-                    if (memoryCommand != null) {
-                        pendingDeleteClarificationUntil = 0L
-                        handleMemoryCommand(memoryCommand)
-                        resetTurnBuffers()
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    if (BestFriendNameCorrectionParser.needsClearCorrectedName(finalUtterance.correctionParserInput)) {
-                        val clarification = "Correct naam clear nahi hua. Ek baar spelling ya naam clearly repeat karo."
-                        localCommandExecutedThisTurn = true
-                        suppressModelForTurn = true
-                        output.clear()
-                        audio?.interrupt()
-                        val recentName = lastSavedBestFriendName?.takeIf {
-                            android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
-                                BEST_FRIEND_CORRECTION_CONTEXT_MS
-                        }
-                        pendingBestFriendCorrectionOldName =
-                            BestFriendNameCorrectionParser.ambiguousOldName(displayText, recentName)
-                        pendingBestFriendCorrectionUntil = android.os.SystemClock.elapsedRealtime() +
-                            BEST_FRIEND_CORRECTION_CONTEXT_MS
-                        voiceLog(
-                            "correction_clarification_set type=BEST_FRIEND_RENAME " +
-                                "target=${pendingBestFriendCorrectionOldName} raw=${userText.take(100)} " +
-                                "normalized=${displayText.take(100)}"
-                        )
-                        listener?.onMyraText(clarification)
-                        emitState(clarification)
-                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                        resetTurnBuffers()
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    if (UnclearDeleteIntentGuard.needsClarification(finalUtterance.deleteParserInput)) {
-                        val clarification = "Kis memory ko delete karna hai? Naam ek baar saaf bol do."
-                        localCommandExecutedThisTurn = true
-                        suppressModelForTurn = true
-                        output.clear()
-                        audio?.interrupt()
-                        // Keep the question actionable. Previously a one-word reply such
-                        // as "Kareem" went to Gemini, which spoke a false success without
-                        // ever calling MemoryRepository.forgetMatching().
-                        pendingDeleteClarificationUntil = android.os.SystemClock.elapsedRealtime() +
-                            DELETE_CLARIFICATION_TIMEOUT_MS
-                        listener?.onMyraText(clarification)
-                        emitState(clarification)
-                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                        resetTurnBuffers()
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    }
-                    val parsed = CommandParser.parse(userText)
-                    if (turnDecision.authorizesPhoneActions && parsed != null) {
-                        executeCommand(parsed)
-                    } else if (turnDecision.authorizesPhoneActions &&
-                        (probableActionTurn || CommandParser.isProbableDeviceAction(userText))) {
-                        suppressModelForTurn = true
-                        val error = if (CommandParser.isAmbiguousFlashlightCommand(userText)) {
-                            "Zopy, torch on karun ya off?"
-                        } else {
-                            "Zopy, command samajh aayi, lekin action clear nahi hua. Ek baar seedha bolkar try karo."
-                        }
-                        listener?.onMyraText(error, true)
-                        emitState(error)
-                        queueLocalSpeech(error)
-                    }
-                }
-                if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
-                    val displayUserText = finalUtterance.memoryExtractorInput
-                    val linkedPersonCandidates = PersonLinkedMemoryExtractor.extractAll(displayUserText)
-                    val personalCandidate = linkedPersonCandidates.firstOrNull {
-                        MemoryRelationshipPolicy.isBestFriend(it)
-                    } ?: PersonalMemoryExtractor.extract(displayUserText)
-                        ?: contextualRelationshipCandidate(displayUserText)
-                    val recentName = lastSavedBestFriendName?.takeIf {
-                        android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
-                            BEST_FRIEND_CORRECTION_CONTEXT_MS
-                    } ?: MemoryWorkingContext.recentPerson
-                    // Parse explicit old->new corrections before the ordinary extractor;
-                    // otherwise "Karima nahi, Kareem" becomes a new Kareem row while
-                    // the stale Karima row remains active.
-                    val correctionDecision = BestFriendNameCorrectionParser.analyze(
-                        displayUserText,
-                        recentName
-                    )
-                    val nameCorrection = correctionDecision.correction
-                        ?.takeUnless { MemoryIntentClassifier.isMemoryQuestion(displayUserText) }
-                    voiceLog(
-                        "name_correction_gate raw=${displayUserText.take(100)} " +
-                            "correctionIntentDetected=${correctionDecision.correctionIntentDetected} " +
-                            "correctionIntentPattern=${correctionDecision.correctionIntentPattern} " +
-                            "oldNameCandidate=${correctionDecision.oldNameCandidate} " +
-                            "newNameCandidate=${correctionDecision.newNameCandidate} " +
-                            "newNameValidation=${correctionDecision.newNameValidation} " +
-                            "rejectionReason=${correctionDecision.rejectionReason} " +
-                            "databaseMutationAllowed=${correctionDecision.databaseMutationAllowed}"
-                    )
-                    if (nameCorrection != null && finalUtterance.semanticConsistency) {
-                        // Gemini can conversationally acknowledge a correction even when
-                        // Room did not change. Hide that unverified answer and confirm only
-                        // after the repository returns and its rows have been read back.
-                        startCanonicalRename(nameCorrection)
-                    } else if (nameCorrection != null) {
-                        val clarification = CorrectionSuccessPolicy.UNRESOLVED_CLARIFICATION_REPLY
-                        voiceLog(
-                            "name_correction_rejected utteranceId=${finalUtterance.utteranceId} " +
-                                "reason=semantic_name_mismatch databaseMutationAllowed=false " +
-                                "successAcknowledgementAllowed=false"
-                        )
-                        suppressModelForTurn = true
-                        localCommandExecutedThisTurn = true
-                        output.clear(); audio?.interrupt()
-                        listener?.onMyraText(clarification)
-                        emitState(clarification)
-                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                        resetTurnBuffers("semantic_name_mismatch")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    } else if (nameCorrection == null) {
-                        // One final-turn coordinator owns natural persistence. Legacy
-                        // extractors provide bounded candidates but cannot steal response
-                        // ownership or write independently.
-                        val supplemental = buildList {
-                            addAll(linkedPersonCandidates)
-                            if (personalCandidate != null) add(personalCandidate)
-                        }.distinctBy { it.stableKey to it.fact }
-                        serviceScope.launch { memoryBrain.processFinalTurn(displayUserText, supplemental) }
-                    }
-                    rememberRecentRelationshipTurn(displayUserText)
-                }
-                if (myraText.isNotBlank() && !suppressModelForTurn && responseArbiter.acceptsOrdinaryModel()) {
-                    listener?.onMyraText(romanDisplayText(myraText))
-                }
-                resetTurnBuffers("normal_turn_complete")
-                if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
-                if (mediaGuard.isAwake()) mediaGuard.finishInteraction()
-                pendingLocalSpeech?.let { message ->
-                    pendingLocalSpeech = null
-                    localSpeechValidationPolicy = pendingLocalSpeechPolicy
-                    allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
-                    beginValidatedLocalSpeech(message)
-                }
-            }
-            client.onError = {
-                voiceLog("GEMINI_DISCONNECTED timestamp=${android.os.SystemClock.elapsedRealtime()} reason=${it.take(160)} media_projection_state=${ScreenCaptureService.currentState}")
-                emitState(it)
-            }
-            audio?.onMicChunk = { client.sendAudio(it) }
-            audio?.onAmplitude = { listener?.onAmplitude(it) }
-            audio?.onSpeechActivityChanged = { active ->
-                if (active && screenResponseActive) {
-                    voiceLog("playback_cancelled_by_real_user responseOwner=CONTROLLED_SCREEN screen_query_id=$screenResponseQueryId vad_trigger_source=local_vad")
-                    audio?.interrupt(); live?.interrupt(); finishScreenResponse("real_user_barge_in")
-                    // The interruption is also the beginning of the replacement user
-                    // utterance. Allocate its identity now; waiting for ASR recreated
-                    // the old turnId=0 / new transcript-turn mismatch.
-                    beginOrdinarySpeechActivity(latestObservedModelGenerationId, "local_vad_after_screen_replacement")
-                } else if (active) beginOrdinarySpeechActivity(latestObservedModelGenerationId, "local_vad")
-                else {
-                    finishOrdinarySpeechActivity()
-                    dispatchArmedScreenQuestionAtSpeechEnd()
-                }
-            }
-            audio?.onSpeakingChanged = { speaking ->
-                voiceLog(
-                    "service_playback_state speaking=$speaking active=$localPlaybackActive " +
-                        "generationComplete=$localSpeechGenerationComplete"
-                )
-                localAudioSpeaking = speaking
-                if (speaking && screenResponseActive) {
-                    fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId && it.firstPlaybackAt == 0L }?.apply {
-                        firstPlaybackAt = android.os.SystemClock.elapsedRealtime()
-                        voiceLog("firstPlayback visualTurnId=$id at=$firstPlaybackAt speechEndToFirstPlaybackMs=${if (speechEndedAt > 0L) firstPlaybackAt - speechEndedAt else -1L}")
-                    }
-                }
-                listener?.onSpeaking(speaking)
-                updateNotification(if (speaking) "LYRA is speaking" else "LYRA is listening")
-                if (!speaking && localPlaybackActive && localSpeechGenerationComplete) {
-                    finishLocalPlayback()
-                }
-                if (!speaking && screenResponseActive && screenResponseGenerationComplete) {
-                    finishScreenResponse("playback_end")
-                }
-            }
-            client.connect()
-        }
-    }
-
-    private suspend fun buildSavedMemoryContext(): String {
-        memoryRepository.reconcileUniqueRelationships()
-        memoryRepository.reconcilePreferenceDimensions()
-        return SavedMemoryContextFormatter.format(
-            memoryRepository.relevant("", 8).map { it.fact }
-        )
-    }
-
-    private fun handleExplicitMemoryText(text: String): Boolean {
-        val command = MemoryCommandParser.parse(text) ?: return false
-        handleMemoryCommand(command)
-        return true
-    }
-
-    private fun handleMemoryCommand(command: MemoryCommand) {
-        // This is called only from a completed typed/final user turn. MemoryBrainCoordinator
-        // owns every Room recall/mutation; this service only owns response arbitration.
-        cancelSpeechForNewAction()
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        output.clear()
-        serviceScope.launch {
-            if (command is MemoryCommand.Read) pendingCanonicalRename?.join()
-            val outcome = memoryBrain.processCommand(command, 5)
-            val response = when (command) {
-                is MemoryCommand.Remember -> {
-                    val result = (outcome as? MemoryBrainOutcome.Mutated)?.result
-                    if (result is MemoryWriteResult.Saved) MemoryCommandReplyFormatter.rememberSaved()
-                    else MemoryCommandReplyFormatter.rememberRejected()
-                }
-                is MemoryCommand.Read -> when (outcome) {
-                    is MemoryBrainOutcome.Recalled -> outcome.workingAnswer
-                        ?: PersonalMemoryRecallFormatter.format(outcome.rows.map { it.fact })
-                    is MemoryBrainOutcome.Rejected -> outcome.reason
-                    else -> PersonalMemoryRecallFormatter.format(emptyList())
-                }
-                is MemoryCommand.Forget -> MemoryCommandReplyFormatter.forgotten(
-                    (outcome as? MemoryBrainOutcome.Deleted)?.succeeded == true
-                )
-                is MemoryCommand.Edit -> when {
-                    (outcome as? MemoryBrainOutcome.Mutated)?.result is MemoryWriteResult.Saved ->
-                        MemoryCommandReplyFormatter.editSaved()
-                    outcome is MemoryBrainOutcome.Rejected && outcome.reason.contains("ambiguous", true) ->
-                        "Kaunsi memory update karni hai? Pehle us memory ko recall ya clearly name karo."
-                    else -> MemoryCommandReplyFormatter.editRejected()
-                }
-            }
-            mainHandler.post {
-                listener?.onMyraText(response)
-                emitState(response)
-                queueLocalSpeech(
-                    response,
-                    allowUntranscribedAudio = true,
-                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                )
-            }
-        }
-    }
-
-    private fun handleSemanticToolCall(id: String, functionName: String, args: org.json.JSONObject) {
-        when (functionName) {
-            "propose_user_memory" -> {
-                handleSemanticMemoryProposal(id, args)
-                return
-            }
-            "query_user_memory" -> {
-                val query = args.optString("query").trim()
-                serviceScope.launch {
-                    val rows = memoryBrain.recall(query, 8).rows
-                    val payload = org.json.JSONArray().apply {
-                        rows.forEach { row -> put(org.json.JSONObject()
-                            .put("id", row.id).put("category", row.category).put("fact", row.fact)
-                            .put("source", row.provenance).put("confidence", row.confidence)) }
-                    }
-                    live?.sendToolResponse(id, "query_user_memory", true, payload.toString())
-                }
-                return
-            }
-            "perform_screen_action" -> {
-                handleScreenActionTool(id, args)
-                return
-            }
-            "propose_screen_memory" -> {
-                handleScreenMemoryProposal(id, args)
-                return
-            }
-            "perform_phone_action" -> Unit
-            else -> {
-                live?.sendToolResponse(id, functionName, false, "Unsupported tool")
-                return
-            }
-        }
-        if (localCommandExecutedThisTurn) {
-            // The deterministic parser already handled this same streamed utterance.
-            // A later Gemini tool call is an acknowledgement, not a second action.
-            live?.sendToolResponse(id, functionName, true, "Action was already handled locally")
-            return
-        }
-        val action = args.optString("action").uppercase(Locale.ROOT)
-        val guardedText = lastUserIntentText.ifBlank { input.toString().trim() }
-        if (CommandParser.isMemoryIntent(guardedText)) {
-            suppressModelForTurn = false
-            live?.sendToolResponse(id, functionName, false, "This is a memory request, not a phone action")
-            return
-        }
-        if (action == "TIME" && CommandParser.parse(guardedText) !is AppCommand.CurrentTime) {
-            suppressModelForTurn = false
-            live?.sendToolResponse(id, functionName, false, "The user mentioned time conversationally; no clock query was made")
-            return
-        }
-        if (action == "QUERY_WHATSAPP" && !CommandParser.isExplicitWhatsAppMessageQuery(guardedText)) {
-            suppressModelForTurn = false
-            live?.sendToolResponse(id, functionName, false, "No explicit WhatsApp notification query was made")
-            return
-        }
-        val target = args.optString("target").trim()
-        val query = args.optString("query").trim()
-        val pendingSearch = com.myra.assistant.agent.FinalSearchHandoff.parse(guardedText)
-        if (action in setOf("YOUTUBE_SEARCH", "WEB_SEARCH", "BROWSER_SEARCH") ||
-            pendingSearch != null && action in setOf("PLAY_YOUTUBE", "OPEN_APP")
-        ) {
-            voiceLog("SEARCH_PROPOSAL_HELD_FOR_FINAL turnId=$activeTurnId candidateCapability=$action " +
-                "queryLength=${pendingSearch?.query?.length ?: query.length} decision=WAIT_FOR_FINAL executed=false")
-            // Reserve only this turn's response; no failure, speech, reset or physical action.
-            suppressModelForTurn = true
-            output.clear()
-            live?.sendToolHeld(id, functionName)
-            return
-        }
-        val command: AppCommand? = when (action) {
-            "OPEN_APP" -> target.takeIf { it.length in 2..40 }?.let(AppCommand::OpenApp)
-            "CLOSE_APP" -> AppCommand.CloseCurrentApp(target.ifBlank { null })
-            "PLAY_YOUTUBE" -> AppCommand.PlayYouTube(query.ifBlank { null })
-            "OPEN_YOUTUBE_SHORTS" -> AppCommand.OpenYouTubeShorts
-            "REQUEST_INSTAGRAM_REELS" -> AppCommand.RequestInstagramReels
-            "SCROLL_DOWN" -> AppCommand.ScrollYouTube(AppCommand.ScrollDirection.DOWN)
-            "SCROLL_UP" -> AppCommand.ScrollYouTube(AppCommand.ScrollDirection.UP)
-            "SCROLL_REPEAT" -> AppCommand.ScrollYouTube(null)
-            "MEDIA_PAUSE" -> AppCommand.ControlMedia(AppCommand.MediaAction.PAUSE)
-            "MEDIA_PLAY" -> AppCommand.ControlMedia(AppCommand.MediaAction.PLAY)
-            "MEDIA_NEXT" -> AppCommand.ControlMedia(AppCommand.MediaAction.NEXT)
-            "MEDIA_PREVIOUS" -> AppCommand.ControlMedia(AppCommand.MediaAction.PREVIOUS)
-            "MEDIA_FIRST" -> AppCommand.ControlMedia(AppCommand.MediaAction.FIRST)
-            "FLASHLIGHT_ON" -> AppCommand.SetFlashlight(true)
-            "FLASHLIGHT_OFF" -> AppCommand.SetFlashlight(false)
-            "HOME" -> AppCommand.GoHome
-            "BACK" -> AppCommand.GoBack
-            "TIME" -> AppCommand.CurrentTime
-            "BATTERY" -> AppCommand.BatteryLevel
-            "TAKE_SCREENSHOT" -> AppCommand.TakeScreenshot
-            "QUERY_WHATSAPP" -> AppCommand.QueryWhatsAppMessages
-            else -> null
-        }
-        if (command == null) {
-            live?.sendToolResponse(id, functionName, false, "Missing or unsupported action details")
-            return
-        }
-        if (command is AppCommand.ScrollYouTube) {
-            handleScrollProposal(command, "gemini_phone_tool", ScrollProposalAuthorization.PRE_FINAL)
-            live?.sendToolResponse(
-                id, functionName, true,
-                "Scroll proposal staged; final Android turn authorization is pending"
-            )
-            return
-        }
-        // A semantic tool call is a new action turn. Android remains the authority:
-        // Gemini chooses only from the allowlist, while the existing executor verifies
-        // accessibility, installed apps, and actual device capabilities.
-        localCommandExecutedThisTurn = false
-        waitingForFreshInputAfterCommand = false
-        executeCommand(command)
-        live?.sendToolResponse(id, functionName, true, "Android accepted the validated action")
-    }
-
-    private fun handleScreenActionTool(id: String, args: org.json.JSONObject) {
-        val intentText = lastUserIntentText.ifBlank { input.toString().trim() }
-        screenActionRegistry.cancel()?.let {
-            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=new_explicit_screen_command")
-        }
-        if (ScreenVisionIntentParser.parse(intentText) == null &&
-            UnifiedLyraAgentRuntime.agent.currentTask()?.interpretedGoal != com.myra.assistant.agent.AgentGoalType.TAP &&
-            fastVisualTurns.current()?.kind != FastVisualKind.ACTION
-        ) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "No explicit visible-screen action was requested")
-            return
-        }
-        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-            voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId source=perform_screen_action")
-            live?.sendToolResponse(id, "perform_screen_action", false, "This screen command was already committed for the current voice turn")
-            return
-        }
-        val toolTarget = args.optString("target_text").trim()
-        val toolPosition = args.optString("position").trim().takeIf { it.isNotBlank() && it != "unspecified" }
-            ?: when {
-                Regex("\\b(?:center|middle|beech)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "center"
-                Regex("\\b(?:left|baaye|baye)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "left"
-                Regex("\\b(?:right|daaye|daye)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "right"
-                Regex("\\b(?:top|upar)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "top"
-                Regex("\\b(?:bottom|neeche)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "bottom"
-                else -> null
-            }
-        val explicitTitle = toolTarget.ifBlank {
-            intentText.takeIf {
-                toolPosition == null && Regex("\\b(?:video|à¤µà¥€à¤¡à¤¿à¤¯à¥‹)\\b", RegexOption.IGNORE_CASE).containsMatchIn(it)
-            }.orEmpty()
-        }
-        val resolvedTarget = brain.resolveScreenTarget(
-            explicitTitle,
-            toolPosition,
-            args.optInt("ordinal", 0)
-        )
-        if (resolvedTarget == null) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "Visible target is ambiguous; ask the user to choose")
-            return
-        }
-        val target = resolvedTarget.targetText
-        val position = resolvedTarget.position
-        val ordinal = resolvedTarget.ordinal
-        val accessibility = AccessibilityHelperService.instance
-        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "LYRA Accessibility is disabled")
-            return
-        }
-        val foreground = accessibility.currentForegroundContext()
-        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
-        if (actionScope == null) {
-            live?.sendToolResponse(id, "perform_screen_action", false, "Current Accessibility window is unavailable")
-            return
-        }
-        val beforeAccessibility = accessibility.visibleScreenSignature()
-        fastVisualTurns.current()?.let {
-            it.actionResolvedAt = android.os.SystemClock.elapsedRealtime()
-            voiceLog("visual_action_resolved visualTurnId=${it.id} target=${target.orEmpty().take(80)} position=${position.orEmpty()} ordinal=${ordinal ?: 0}")
-        }
-        val semanticHint = fastVisualTurns.current()?.semanticHint.orEmpty().lowercase(Locale.ROOT)
-        val direct = accessibility.resolveAndTapVisibleTarget(target, position, ordinal, actionScope) { candidate, _ ->
-            when {
-                semanticHint.contains("like") -> candidate.role == "like_control"
-                semanticHint.contains("subscribe") -> candidate.role == "subscribe_control" &&
-                    !candidate.label.lowercase(Locale.ROOT).contains("subscribed")
-                semanticHint.contains("comment") -> candidate.role == "comments_control"
-                else -> true
-            }
-        }
-        if (direct.accepted) {
-            fastVisualTurns.current()?.let {
-                it.actionExecutedAt = android.os.SystemClock.elapsedRealtime()
-                voiceLog(
-                    "visual_action_executed visualTurnId=${it.id} accepted=true " +
-                        "responseToActionMs=${if (it.firstModelResponseAt > 0L) it.actionExecutedAt - it.firstModelResponseAt else -1L} " +
-                        "speechEndToActionMs=${if (it.speechEndedAt > 0L) it.actionExecutedAt - it.speechEndedAt else -1L}"
-                )
-            }
-            voiceLog(
-                "agent_tool_selected tool=accessibility_click package=${actionScope.expectedPackage} " +
-                    "windowGeneration=${actionScope.expectedGeneration} targetResolution=${direct.resolution}"
-            )
-            mainHandler.postDelayed({
-                val stillOwned = com.myra.assistant.screen.ForegroundActionPolicy.canExecute(
-                    actionScope, accessibility.currentForegroundContext()
-                )
-                val changed = stillOwned && beforeAccessibility.isNotBlank() &&
-                    accessibility.visibleScreenSignature() != beforeAccessibility
-                fastVisualTurns.current()?.let {
-                    it.verificationAt = android.os.SystemClock.elapsedRealtime()
-                    voiceLog("visual_verification_complete visualTurnId=${it.id} verified=$changed totalVisualTurnMs=${it.verificationAt - it.startedAt}")
-                    fastVisualTurns.finish(it.id)
-                }
-                voiceLog("agent_verification tool=accessibility_click accepted=true verified=$changed")
-                live?.sendToolResponse(
-                    id, "perform_screen_action", changed,
-                    if (changed) "Accessibility action verified" else "Action was accepted but the expected screen change was not verified"
-                )
-            }, 350L)
-            return
-        }
-        // Normal visual actions never request MediaProjection. The model already
-        // received a fresh Accessibility screenshot when visual fallback was used.
-        live?.sendToolResponse(
-            id, "perform_screen_action", false,
-            if (direct.resolution == "ambiguous") "Visible target is ambiguous; ask the user to choose"
-            else "No current Accessibility target matched; ask a short clarification"
-        )
-        return
-    }
-
-    private fun beginFreshScreenQuery(
-        question: String,
-        userTurnId: Long,
-        visualRequest: FastVisualRequest = FastVisualRequestClassifier.classify(question)
-            ?: FastVisualRequest(FastVisualKind.QUESTION, "screen_question")
-    ) {
-        screenQuestionDetectedAt = android.os.SystemClock.elapsedRealtime()
-        val currentScreenFollowUp = com.myra.assistant.screen.ScreenStateFollowUpClassifier
-            .isCurrentScreenFollowUp(question)
-        if (currentScreenFollowUp) {
-            // A follow-up about "now" must first rewalk Accessibility. This remains
-            // read-only and does not change final action ownership.
-            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
-            val scene = com.myra.assistant.screen.ScreenSceneAwarenessStore.current()
-            voiceLog(
-                "CURRENT_SCREEN_FOLLOW_UP turnId=$userTurnId sceneRevision=${scene?.sceneRevision ?: 0L} " +
-                    "freshObservationRequested=true"
-            )
-        }
-        val identity = voiceTurnIdentities.current()?.takeIf { it.userTurnId == userTurnId }
-        val boundSpeechTurnId = identity?.transcriptTurnId ?: speechTimingTurnId
-        val boundSpeechEndAt = identity?.speechEndAt?.takeIf { it > 0L } ?: speechActivityEndedAt
-        val speechTiming = ScreenQueryTimingPolicy.bind(userTurnId, boundSpeechTurnId, boundSpeechEndAt)
-        screenQuerySpeechTurnConsistency = speechTiming.consistent
-        screenResponseSpeechEndedAt = speechTiming.speechEndAt
-        voiceLog(
-            "screen_query_timing_bound userTurnId=$userTurnId speechTimingTurnId=$boundSpeechTurnId " +
-                "speechStartAt=${identity?.speechStartAt ?: speechActivityStartedAt} speechEndAt=$screenResponseSpeechEndedAt " +
-                "transcriptTurnId=${identity?.transcriptTurnId ?: 0L} finalTranscriptId=${identity?.finalTranscriptId.orEmpty()} " +
-                "intentDetectedAt=$screenQuestionDetectedAt screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency"
-        )
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        output.clear()
-        val foreground = AccessibilityHelperService.instance?.currentForegroundContext()
-        val visualTurn = foreground?.let {
-            fastVisualTurns.begin(userTurnId, visualRequest, it.packageName, it.windowId, it.generation,
-                screenResponseSpeechEndedAt, screenQuestionDetectedAt)
-        }
-        visualTurn?.apply {
-            authoritativeTurnCompleteAt = screenResponseSpeechEndedAt
-            finalTranscriptAt = latestTurnAcceptedAt.takeIf { latestIntentTimingTurnId == userTurnId } ?: 0L
-            intentResolvedAt = latestIntentDecidedAt.takeIf { latestIntentTimingTurnId == userTurnId } ?: screenQuestionDetectedAt
-        }
-        voiceLog(
-            "visual_turn_started visualTurnId=${visualTurn?.id.orEmpty()} userTurnId=$userTurnId " +
-                "kind=${visualRequest.kind} package=${foreground?.packageName.orEmpty()} " +
-                "windowId=${foreground?.windowId ?: -1} generation=${foreground?.generation ?: -1}"
-        )
-        voiceLog(
-            "visualTurnAccepted visualTurnId=${visualTurn?.id.orEmpty()} at=$screenQuestionDetectedAt " +
-                "intentToVisualTurnMs=${if (latestIntentDecidedAt > 0L) screenQuestionDetectedAt - latestIntentDecidedAt else -1L}"
-        )
-        // Preserve an active media-speech candidate when LYRA is already silent;
-        // interrupt/reset is only needed for a genuine barge-in on LYRA playback.
-        if (localAudioSpeaking) audio?.interrupt()
-        if (!currentScreenFollowUp && visualRequest.kind == FastVisualKind.QUESTION &&
-            tryInstantAccessibilityAnswer(question, userTurnId)
-        ) {
-            visualTurn?.let { fastVisualTurns.finish(it.id) }
-            return
-        }
-        if (visualAwarenessPreferences.enabled && beginAccessibilityScreenQuery(question, userTurnId, visualRequest)) return
-        if (!visualAwarenessPreferences.enabled) {
-            voiceLog("screen_query_terminal state=REJECTED_VISUAL_AWARENESS_OFF userTurnId=$userTurnId")
-            visualTurn?.let {
-                voiceLog("TOTAL_VISUAL_TURN visualTurnId=${it.id} route=EYE_OFF_LOCAL totalVisualTurnMs=${android.os.SystemClock.elapsedRealtime() - it.startedAt}")
-                fastVisualTurns.finish(it.id)
-            }
-            speakScreenUnavailable("Visual awareness off hai. Eye button on karo.")
-            return
-        }
-        // Android 10 and older do not expose AccessibilityService.takeScreenshot.
-        // A user-started continuous projection is the explicit legacy fallback.
-        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-            voiceLog("screen_query_terminal state=REJECTED_SCREEN_INACTIVE userTurnId=$userTurnId")
-            speakScreenUnavailable(
-                if (ScreenCaptureService.currentState == ScreenShareState.PAUSED) "Screen Vision paused hai. LYRA app se resume karo."
-                else "Screen Vision abhi active nahi hai."
-            )
-            return
-        }
-        if (tryInstantScreenAnswer(question, userTurnId)) return
-        val query = ScreenCaptureService.requestFreshFrame(userTurnId) { result ->
-            mainHandler.post {
-                when (result) {
-                    is FreshFrameResult.Unavailable -> {
-                        voiceLog("screen_frame_unavailable reason=${result.reason} screen_query_id=${result.query.queryId} screen_session_id=${result.query.sessionId}")
-                        voiceLog("screen_query_terminal screenQueryId=${result.query.queryId} state=CAPTURE_FAILED reason=${result.reason}")
-                        speakScreenUnavailable("Fresh screen frame nahi mili. Ek baar phir try karo.")
-                    }
-                    is FreshFrameResult.Ready -> {
-                        val frame = result.frame
-                        if (!ScreenCaptureService.session.isCurrent(result.query.sessionId)) {
-                            voiceLog("screen_query_result_dropped_stale screen_query_id=${result.query.queryId} screen_session_id=${result.query.sessionId} reason=session_invalid_before_send")
-                            return@post
-                        }
-                        voiceLog("screen_query_state screenQueryId=${result.query.queryId} state=FRAME_SELECTED frameId=${frame.frameId}")
-                        val accessibility = AccessibilityHelperService.instance
-                        val elements = accessibility?.visibleElements(100).orEmpty()
-                        val privacyResult = ScreenFramePrivacyFilter.apply(
-                            jpeg = frame.bytes,
-                            elements = elements,
-                            screenWidth = resources.displayMetrics.widthPixels,
-                            screenHeight = resources.displayMetrics.heightPixels,
-                            enabled = screenVisionPreferences.sensitiveContentProtection
-                        )
-                        if (privacyResult is ScreenPrivacyResult.Blocked) {
-                            voiceLog(
-                                "screen_privacy_filter screenQueryId=${result.query.queryId} frameId=${frame.frameId} " +
-                                    "sensitiveProtectionEnabled=true sensitiveScanResult=SENSITIVE sensitiveCategoryDetected=${privacyResult.categories} " +
-                                    "sensitiveRegionCount=0 redactionApplied=false fullFrameBlocked=true blockReason=${privacyResult.reason} safePixelsPreserved=false"
-                            )
-                            voiceLog("screen_query_terminal screenQueryId=${result.query.queryId} state=REJECTED_PRIVACY")
-                            speakScreenPrivacyBlocked()
-                            return@post
-                        }
-                        val allowed = privacyResult as ScreenPrivacyResult.Allowed
-                        voiceLog(
-                            "screen_privacy_filter screenQueryId=${result.query.queryId} frameId=${frame.frameId} " +
-                                "sensitiveProtectionEnabled=${screenVisionPreferences.sensitiveContentProtection} " +
-                                "sensitiveScanResult=${if (allowed.regionCount > 0) "REDACTED" else "SAFE"} " +
-                                "sensitiveCategoryDetected=${allowed.categories} sensitiveRegionCount=${allowed.regionCount} " +
-                                "redactionApplied=${allowed.redactionApplied} fullFrameBlocked=false blockReason=none safePixelsPreserved=true"
-                        )
-                        screenResponseActive = true
-                        screenResponseHasContent = false
-                        screenResponseStartedLogged = false
-                        screenResponseGenerationComplete = false
-                        screenResponseTextCommitted = false
-                        screenResponseUserTurnId = result.query.userTurnId
-                        screenResponseAfterGenerationId = latestObservedModelGenerationId
-                        screenResponseGenerationId = 0L
-                        screenResponseBinding = ScreenResponseBinding(
-                            result.query.userTurnId, result.query.queryId, result.query.sessionId,
-                            latestObservedModelGenerationId
-                        )
-                        screenResponseSessionId = result.query.sessionId
-                        screenResponseQueryId = result.query.queryId
-                        screenFreshFrameCapturedAt = frame.capturedAt
-                        val now = android.os.SystemClock.elapsedRealtime()
-                        val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }.joinToString("\n") {
-                            "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]${if (it.clickable) " clickable" else ""}"
-                        }.take(12_000)
-                        screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
-                        voiceLog(
-                            "frame_used_for_query screen_query_id=${result.query.queryId} userTurnId=${result.query.userTurnId} " +
-                                "screen_session_id=${frame.sessionId} frame_id=${frame.frameId} frame_age_ms=${now - frame.capturedAt} " +
-                                "frame_hash=${frame.hash} speechEndAt=$screenResponseSpeechEndedAt screenQuestionDetectedAt=$screenQuestionDetectedAt " +
-                                "freshCaptureRequestedAt=${result.query.requestedAt} freshFrameCapturedAt=${frame.capturedAt} frameEncodedAt=${frame.encodedAt} " +
-                                "frameSource=${frame.source} frameAgeAtQueryMs=${(now - frame.capturedAt).coerceAtLeast(0L)} " +
-                                "intentToFrameMs=${(now - screenQuestionDetectedAt).coerceAtLeast(0L)} captureToEncodeMs=${frame.encodedAt - frame.capturedAt} " +
-                                "frameToGeminiSendMs=${(screenFrameSentAt - frame.encodedAt).coerceAtLeast(0L)} frameSentToGeminiAt=$screenFrameSentAt " +
-                                "screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency " +
-                                "speechEndToIntentMs=${if (screenQuerySpeechTurnConsistency) (screenQuestionDetectedAt - screenResponseSpeechEndedAt).coerceAtLeast(0L) else -1L}"
-                        )
-                        voiceLog("screen_query_state screenQueryId=${result.query.queryId} state=SENT frameId=${frame.frameId}")
-                        voiceLog(
-                            "VISION_REQUEST_STARTED screenQueryId=${result.query.queryId} screen_session_id=${result.query.sessionId} " +
-                                "frame_id=${frame.frameId} timestamp=$screenFrameSentAt frameWaitMs=${(now - result.query.requestedAt).coerceAtLeast(0L)}"
-                        )
-                        live?.sendImage(
-                            allowed.bytes, "image/jpeg",
-                            "$question\nDescribe only the newest supplied screen frame for query ${result.query.queryId}. " +
-                                "Do not answer from older visual context. If text is readable, summarize only the visible page; never invent hidden or offscreen content. " +
-                                "Screen sharing is ACTIVE. Current safe accessibility elements:\n$ui\n" +
-                                "If uncertain, say exactly what is uncertain. Keep the spoken answer to one or two complete sentences."
-                        )
-                        mainHandler.postDelayed({
-                            if (screenResponseActive && screenResponseQueryId == result.query.queryId && !screenResponseHasContent) {
-                                voiceLog("screen_query_orphaned screenQueryId=${result.query.queryId} lastState=SENT userTurnId=${result.query.userTurnId}")
-                            }
-                        }, SCREEN_QUERY_DIAGNOSTIC_TIMEOUT_MS)
-                    }
-                }
-            }
-        }
-        if (query == null) speakScreenUnavailable("Screen Vision initialize ho raha hai. Ek baar phir try karo.")
-        else voiceLog("screen_query_created screen_query_id=${query.queryId} screen_session_id=${query.sessionId} userTurnId=$userTurnId state=CREATED")
-    }
-
-    private fun tryInstantAccessibilityAnswer(question: String, userTurnId: Long): Boolean {
-        val queryType = ScreenVisionIntentParser.parseInstantQuery(question) ?: return false
-        if (queryType != InstantScreenQuery.CURRENT_APP) return false
-        val context = ActivityContextStore.snapshot() ?: return false
-        val now = android.os.SystemClock.elapsedRealtime()
-        if ((now - context.timestamp).coerceAtLeast(0L) > 1_500L) return false
-        val safe = context.visibleElements.asSequence().map { it.label }
-            .filter { it.length >= 3 && ScreenPrivacyPolicy.sensitiveCategory(it) == null }
-            .distinct().take(3).toList()
-        val answer = when (queryType) {
-            InstantScreenQuery.CURRENT_APP -> context.appLabel?.let { "$it open hai." }
-                ?: "${context.packageName.substringAfterLast('.')} open hai."
-            InstantScreenQuery.OVERVIEW -> when {
-                safe.isNotEmpty() -> "${context.appLabel ?: context.packageName.substringAfterLast('.')} open hai. Screen par ${safe.joinToString(", ")} dikh raha hai."
-                else -> null
-            }
-        } ?: return false
-        voiceLog("TOTAL_SCREEN_RESPONSE screenQueryId=a11y-cache-$userTurnId route=ACCESSIBILITY_CONTEXT total_ms=0 screenshotUsed=false")
-        emitState(answer)
-        queueLocalSpeech(answer, allowUntranscribedAudio = true)
-        return true
-    }
-
-    private fun beginAccessibilityScreenQuery(
-        question: String,
-        userTurnId: Long,
-        visualRequest: FastVisualRequest = FastVisualRequest(FastVisualKind.QUESTION, "screen_question")
-    ): Boolean {
-        val accessibility = AccessibilityHelperService.instance ?: return false
-        val foreground = accessibility.currentForegroundContext() ?: return false
-        val requestedAt = android.os.SystemClock.elapsedRealtime()
-        val queryId = "a11y-$userTurnId-${requestedAt.toString(16)}"
-        val visualTurnId = fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.id
-        fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameRequestedAt = requestedAt
-        voiceLog("visualFrameRequested visualTurnId=${visualTurnId.orEmpty()} screenQueryId=$queryId at=$requestedAt")
-        if (visualTurnId == null) return false
-        val acquisitionGate = VisualAcquisitionGate(visualTurnId, requestedAt)
-        val outerTimeout = visualDeadlineExecutor.schedule({
-            val now = android.os.SystemClock.elapsedRealtime()
-            if (!acquisitionGate.tryTimeout(now)) return@schedule
-            voiceLog(
-                "visual_frame_outer_timeout visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                    "elapsedMs=${now - requestedAt} timeoutMs=${VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS}"
-            )
-            // Deadline fallback must not queue behind the very image worker it is
-            // timing out. This executor owns only deadlines and can terminate the turn
-            // even if frame delivery is blocked.
-            if (fastVisualTurns.owns(visualTurnId)) {
-                completeScreenQuestionFromSemanticScene(question, userTurnId, visualTurnId, queryId, foreground)
-            }
-        }, VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        val accepted = accessibility.requestFreshVisualScreenshot(
-            if (com.myra.assistant.screen.ScreenStateFollowUpClassifier.isCurrentScreenFollowUp(question)) 0L
-                else ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS,
-            fallbackMaxAgeMs = if (com.myra.assistant.screen.ScreenStateFollowUpClassifier.isCurrentScreenFollowUp(question)) 0L
-                else VisualScreenshotTimeoutPolicy.SAFE_FALLBACK_MAX_AGE_MS,
-            requestToken = queryId,
-            isCurrentRequest = {
-                acquisitionGate.mayDispatch(fastVisualTurns.current()?.id, android.os.SystemClock.elapsedRealtime())
-            }
-        ) { result ->
-            val scheduledAt = android.os.SystemClock.elapsedRealtime()
-            if (!acquisitionGate.onPlatformCallback(fastVisualTurns.current()?.id, scheduledAt)) {
-                voiceLog(
-                    "visualFrameDeliveryScheduled visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "accepted=false reason=callback_after_outer_deadline_or_replacement taskAgeMs=${scheduledAt - requestedAt}"
-                )
-                return@requestFreshVisualScreenshot
-            }
-            val queueDepth = visualFrameDeliveryExecutor.queue.size
-            voiceLog(
-                "visualFrameDeliveryScheduled visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                    "timestamp=$scheduledAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
-                    "queueDepth=$queueDepth taskAgeMs=${scheduledAt - requestedAt}"
-            )
-            visualFrameDeliveryExecutor.execute {
-                val deliveryStartedAt = android.os.SystemClock.elapsedRealtime()
-                voiceLog(
-                    "visualFrameDeliveryStarted visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "timestamp=$deliveryStartedAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
-                        "queueDepth=${visualFrameDeliveryExecutor.queue.size} taskAgeMs=${deliveryStartedAt - requestedAt} lockWaitMs=0"
-                )
-                // The outer deadline owns the complete operation through usable-frame
-                // delivery. Android callback success alone must not complete this gate.
-                if (!acquisitionGate.tryComplete(fastVisualTurns.current()?.id, deliveryStartedAt)) {
-                    result.getOrNull()?.screenshot?.let {
-                        voiceLog(
-                            "visualFrameDelivered visualTurnId=$visualTurnId screenQueryId=$queryId accepted=false " +
-                                "reason=outer_deadline_or_replaced cacheWarmOnly=true taskAgeMs=${deliveryStartedAt - requestedAt}"
-                        )
-                    }
-                    voiceLog(
-                        "screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=$visualTurnId " +
-                            "reason=outer_deadline_or_replaced"
-                    )
-                    return@execute
-                }
-                outerTimeout.cancel(false)
-                if (visualTurnId == null || !fastVisualTurns.owns(visualTurnId)) {
-                    voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=${visualTurnId.orEmpty()} reason=visual_turn_replaced")
-                    return@execute
-                }
-                val selection = result.getOrNull()
-                if (selection == null) {
-                    val reason = result.exceptionOrNull()?.message ?: "accessibility_screenshot_failed"
-                    voiceLog("screenshot_failure_reason screenQueryId=$queryId reason=$reason")
-                    voiceLog("agent_observation package=${foreground.packageName} screenshotUsed=false reason=$reason")
-                    completeScreenQuestionFromSemanticScene(
-                        question, userTurnId, visualTurnId, queryId, foreground
-                    )
-                    return@execute
-                }
-                val screenshot = selection.screenshot
-                val current = accessibility.currentForegroundContext()
-                if (current == null || current.packageName != screenshot.packageName ||
-                    current.windowId != screenshot.windowId || current.generation != screenshot.generation
-                ) {
-                    voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId reason=accessibility_context_changed")
-                    fastVisualTurns.finish(visualTurnId)
-                    return@execute
-                }
-                val frameReadyAt = android.os.SystemClock.elapsedRealtime()
-                fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameReadyAt = frameReadyAt
-                voiceLog(
-                    "visual_frame_ready visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "visualFrameSource=${selection.source} selectionReason=${if (selection.source == com.myra.assistant.screen.VisualFrameSource.ACCESSIBILITY_CACHE) "fresh_matching_cache" else "cache_stale_or_changed"} " +
-                        "frameAgeMs=${(frameReadyAt - screenshot.capturedAt).coerceAtLeast(0L)} " +
-                        "visualFrameAcquisitionMs=${(frameReadyAt - requestedAt).coerceAtLeast(0L)} " +
-                        "speechEndToFrameReadyMs=${if (screenResponseSpeechEndedAt > 0L) frameReadyAt - screenResponseSpeechEndedAt else -1L}"
-                )
-                voiceLog(
-                    "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "at=$frameReadyAt visualFrameSource=${selection.source}"
-                )
-                voiceLog(
-                    "visualFrameDelivered visualTurnId=$visualTurnId screenQueryId=$queryId accepted=true " +
-                        "timestamp=$frameReadyAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
-                        "queueDepth=${visualFrameDeliveryExecutor.queue.size} taskAgeMs=${frameReadyAt - requestedAt}"
-                )
-                // Reuse the already-published semantic scene. Rewalking a large
-                // Accessibility tree here previously delayed the visual model request.
-                val elements = ActivityContextStore.snapshot()?.takeIf {
-                    it.packageName == current.packageName && it.windowId == current.windowId &&
-                        it.generation == current.generation
-                }?.visibleElements?.take(60)?.map {
-                    VisibleScreenElement(
-                        it.label,
-                        android.graphics.Rect(it.left, it.top, it.right, it.bottom),
-                        it.actionable,
-                        it.role.name
-                    )
-                }.orEmpty()
-                val privacyResult = ScreenFramePrivacyFilter.apply(
-                    screenshot.bytes, elements, screenshot.width, screenshot.height,
-                    screenVisionPreferences.sensitiveContentProtection
-                )
-                if (privacyResult is ScreenPrivacyResult.Blocked) {
-                    voiceLog("screen_query_terminal screenQueryId=$queryId state=REJECTED_PRIVACY source=ACCESSIBILITY_SCREENSHOT")
-                    fastVisualTurns.finish(visualTurnId)
-                    speakScreenPrivacyBlocked()
-                    return@execute
-                }
-                val allowed = privacyResult as ScreenPrivacyResult.Allowed
-                screenResponseActive = true
-                screenResponseHasContent = false
-                screenResponseStartedLogged = false
-                screenResponseGenerationComplete = false
-                screenResponseTextCommitted = false
-                screenResponseUserTurnId = userTurnId
-                screenResponseAfterGenerationId = latestObservedModelGenerationId
-                screenResponseGenerationId = 0L
-                val sessionId = "accessibility:${current.packageName}:${current.generation}"
-                screenResponseBinding = ScreenResponseBinding(userTurnId, queryId, sessionId, latestObservedModelGenerationId)
-                screenResponseSessionId = sessionId
-                screenResponseQueryId = queryId
-                screenResponseAccessibilityPackage = current.packageName
-                screenResponseAccessibilityGeneration = current.generation
-                screenFreshFrameCapturedAt = screenshot.capturedAt
-                screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
-                fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.modelRequestAt = screenFrameSentAt
-                val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
-                    .joinToString("\n") { "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]" }
-                    .take(4_000)
-                voiceLog(
-                    "agent_observation package=${current.packageName} windowGeneration=${current.generation} " +
-                        "semanticElements=${ActivityContextStore.snapshot()?.visibleElements?.size ?: 0} screenshotUsed=true"
-                )
-                voiceLog(
-                    "VISION_REQUEST_STARTED screenQueryId=$queryId source=ACCESSIBILITY_SCREENSHOT " +
-                        "captureMs=${screenFrameSentAt - requestedAt} bytes=${allowed.bytes.size}"
-                )
-                voiceLog(
-                    "visual_model_request_sent visualTurnId=$visualTurnId screenQueryId=$queryId " +
-                        "frameReadyToModelRequestMs=${(screenFrameSentAt - frameReadyAt).coerceAtLeast(0L)}"
-                )
-                voiceLog(
-                    "visual_model_payload visualTurnId=$visualTurnId imageEncodedBytes=${allowed.bytes.size} " +
-                        "imageDimensions=${screenshot.width}x${screenshot.height} semanticContextChars=${ui.length} " +
-                        "semanticElementCount=${elements.size} requestPayloadBytes=${allowed.bytes.size + ui.toByteArray().size + question.toByteArray().size} " +
-                        "networkSendAt=$screenFrameSentAt"
-                )
-                voiceLog("visualModelRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt")
-                voiceLog("ttsRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt owner=CONTROLLED_SCREEN")
-                val visualInstruction = if (visualRequest.kind == FastVisualKind.ACTION) {
-                    "This is a visual action. Identify exactly one safe current-screen target. " +
-                        "Call perform_screen_action with its semantic label or position. Do not answer conversationally or claim success."
-                } else {
-                    "Answer the user's current-screen question directly in one or two complete sentences."
-                }
-                live?.sendImage(
-                    allowed.bytes, "image/jpeg",
-                    "$question\nUse only this fresh Accessibility screenshot and current safe UI elements. " +
-                        "Do not infer hidden content. $visualInstruction\n$ui"
-                )
-            }
-        }
-        if (accepted) {
-            voiceLog("screen_query_created screen_query_id=$queryId source=ACCESSIBILITY_SCREENSHOT userTurnId=$userTurnId")
-        } else {
-            outerTimeout.cancel(false)
-        }
-        return accepted
-    }
-
-    private fun completeScreenQuestionFromSemanticScene(
-        question: String,
-        userTurnId: Long,
-        visualTurnId: String,
-        queryId: String,
-        expected: com.myra.assistant.screen.ForegroundAppContext
-    ) {
-        val scene = ActivityContextStore.snapshot()?.takeIf {
-            SemanticScreenFallbackPolicy.mayAnswer(
-                expected.packageName, expected.windowId, expected.generation,
-                it.packageName, it.windowId, it.generation, it.visibleElements.size,
-                android.os.SystemClock.elapsedRealtime() - it.timestamp
-            )
-        }
-        val labels = scene?.visibleElements.orEmpty().asSequence()
-            .map { it.label.trim() }
-            .filter { it.length >= 3 && ScreenPrivacyPolicy.sensitiveCategory(it) == null }
-            .distinct().take(4).toList()
-        if (scene == null || labels.isEmpty()) {
-            fastVisualTurns.finish(visualTurnId)
-            voiceLog("screen_query_terminal screenQueryId=$queryId state=CAPTURE_FAILED visualSource=NONE")
-            speakScreenUnavailable("Current screen image nahi mili.")
-            return
-        }
-        val app = scene.appLabel ?: scene.packageName.substringAfterLast('.')
-        val answer = "$app open hai. Screen par ${labels.joinToString(", ")} dikh raha hai."
-        val now = android.os.SystemClock.elapsedRealtime()
-        voiceLog(
-            "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId at=$now " +
-                "visualFrameSource=SEMANTIC_SCREEN semanticElements=${scene.visibleElements.size}"
-        )
-        voiceLog(
-            "TOTAL_VISUAL_TURN visualTurnId=$visualTurnId route=SEMANTIC_SCREEN " +
-                "visualFrameAcquisitionMs=${now - (fastVisualTurns.current()?.frameRequestedAt ?: now)}"
-        )
-        fastVisualTurns.finish(visualTurnId)
-        emitState(answer)
-        queueLocalSpeech(answer, allowUntranscribedAudio = true)
-    }
-
-    private fun isScreenResponseContextCurrent(): Boolean {
-        if (!screenResponseSessionId.startsWith("accessibility:")) {
-            return ScreenCaptureService.session.isCurrent(screenResponseSessionId)
-        }
-        val current = AccessibilityHelperService.instance?.currentForegroundContext() ?: return false
-        return current.packageName == screenResponseAccessibilityPackage &&
-            current.generation == screenResponseAccessibilityGeneration
-    }
-
-    private fun tryInstantScreenAnswer(question: String, userTurnId: Long): Boolean {
-        val queryType = ScreenVisionIntentParser.parseInstantQuery(question) ?: return false
-        val now = android.os.SystemClock.elapsedRealtime()
-        val context = ScreenContextStore.freshSnapshot(
-            ScreenCaptureService.session.sessionId, now, ScreenCacheUse.QUESTION
-        ) ?: run {
-            voiceLog("FRAME_STALE userTurnId=$userTurnId route=HOT_SCREEN_CACHE fallback=VISION")
-            return false
-        }
-        val safeText = context.summary.visibleText.filter {
-            ScreenPrivacyPolicy.sensitiveCategory(it) == null
-        }
-        val app = context.summary.appName ?: context.summary.packageName?.substringAfterLast('.')
-        val answer = when (queryType) {
-            InstantScreenQuery.CURRENT_APP -> app?.let { "$it open hai." }
-            InstantScreenQuery.OVERVIEW -> {
-                val useful = safeText.filter { it.length >= 3 }.distinct().take(3)
-                when {
-                    useful.isNotEmpty() && app != null -> "$app open hai. Screen par ${useful.joinToString(", ")} dikh raha hai."
-                    useful.isNotEmpty() -> "Screen par ${useful.joinToString(", ")} dikh raha hai."
-                    app != null -> "$app open hai, lekin readable text clear nahi hai."
-                    else -> null
-                }
-            }
-        } ?: return false
-        val newestAt = maxOf(context.frameTimestamp, context.accessibilityTimestamp)
-        instantScreenQueryId = "hot-$userTurnId-${now.toString(16)}"
-        instantScreenQueryStartedAt = screenResponseSpeechEndedAt.takeIf {
-            screenQuerySpeechTurnConsistency && it > 0L
-        } ?: now
-        instantScreenCacheAgeMs = (now - newestAt).coerceAtLeast(0L)
-        voiceLog(
-            "FRAME_SELECTED screenQueryId=$instantScreenQueryId userTurnId=$userTurnId source=HOT_SCREEN_CACHE " +
-                "screen_session_id=${context.screenSessionId} frame_id=${context.frameId} frame_age_ms=$instantScreenCacheAgeMs"
-        )
-        voiceLog(
-            "TOTAL_SCREEN_RESPONSE screenQueryId=$instantScreenQueryId route=HOT_SCREEN_CACHE stage=ANSWER_READY " +
-                "voice_ms=-1 capture_ms=0 accessibility_ms=0 vision_ms=0 gemini_ms=0 tts_ms=-1 " +
-                "total_ms=${(now - instantScreenQueryStartedAt).coerceAtLeast(0L)}"
-        )
-        emitState(answer)
-        queueLocalSpeech(answer, allowUntranscribedAudio = true)
-        return true
-    }
-
-    private fun armScreenQuestion(
-        question: String,
-        userTurnId: Long,
-        source: String,
-        finalTranscriptCommitted: Boolean = false
-    ) {
-        if (question.isBlank() || userTurnId == 0L) return
-        armedScreenQuestion = question
-        armedScreenQuestionTurnId = userTurnId
-        armedScreenQuestionDetectedAt = android.os.SystemClock.elapsedRealtime()
-        armedScreenQuestionFinalCommitted = finalTranscriptCommitted
-        voiceLog(
-            "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt userTurnId=$userTurnId source=$source " +
-                "speechEndAt=$speechActivityEndedAt finalTranscriptAt=0 stableFinalBubbleCommitted=false"
-        )
-        // ASR chunks and local VAD are independent streams. The stable read-only screen
-        // question often arrives after VAD has already ended, so it must not wait for a
-        // second speech edge or Gemini's delayed final transcript.
-        if (com.myra.assistant.screen.EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd(
-                question, ordinaryModelAudioGate.isSpeechActive()
-            ) && speechActivityEndedAt > 0L
-        ) {
-            mainHandler.postDelayed(
-                { dispatchArmedScreenQuestionAtSpeechEnd() },
-                com.myra.assistant.screen.EarlyScreenQuestionPolicy.STABILIZATION_MS
-            )
-        }
-    }
-
-    private fun dispatchArmedScreenQuestionAtSpeechEnd() {
-        val question = armedScreenQuestion.takeIf { it.isNotBlank() } ?: return
-        val turnId = armedScreenQuestionTurnId.takeIf { it != 0L } ?: return
-        if (screenResponseActive) return
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (!com.myra.assistant.screen.ArmedScreenQuestionPolicy.mayDispatchForIdentity(
-                turnId, voiceTurnIdentities.current()?.userTurnId
-            )) {
-            voiceLog(
-                "screen_query_armed_cancelled userTurnId=$turnId reason=replaced_voice_identity " +
-                    "ageMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
-            )
-            armedScreenQuestion = ""
-            armedScreenQuestionTurnId = 0L
-            armedScreenQuestionDetectedAt = 0L
-            armedScreenQuestionFinalCommitted = false
-            return
-        }
-        val stabilizationRemaining = com.myra.assistant.screen.EarlyScreenQuestionPolicy.STABILIZATION_MS -
-            (now - armedScreenQuestionDetectedAt)
-        if (stabilizationRemaining > 0L) {
-            mainHandler.postDelayed({ dispatchArmedScreenQuestionAtSpeechEnd() }, stabilizationRemaining)
-            return
-        }
-        voiceLog(
-            "screen_query_early_dispatch userTurnId=$turnId speech_end_at=$speechActivityEndedAt " +
-                "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt speechEndToIntentMs=${(armedScreenQuestionDetectedAt - speechActivityEndedAt).coerceAtLeast(0L)} " +
-                "intentToDispatchMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
-        )
-        earlyScreenQueryAwaitingFinalTranscript = !armedScreenQuestionFinalCommitted
-        earlyScreenQuestionText = question
-        earlyScreenQueryDispatchedTurnId = turnId
-        beginFreshScreenQuery(question, turnId)
-        armedScreenQuestion = ""
-        armedScreenQuestionTurnId = 0L
-        armedScreenQuestionDetectedAt = 0L
-        armedScreenQuestionFinalCommitted = false
-    }
-
-    private fun speakScreenUnavailable(message: String) {
-        screenResponseActive = false
-        screenResponseHasContent = false
-        screenResponseStartedLogged = false
-        screenResponseGenerationComplete = false
-        screenResponseTextCommitted = false
-        screenResponseUserTurnId = 0L
-        screenResponseAfterGenerationId = 0L
-        screenResponseGenerationId = 0L
-        screenResponseBinding = null
-        screenResponseSessionId = ""
-        screenResponseAccessibilityPackage = ""
-        screenResponseAccessibilityGeneration = 0L
-        screenResponseQueryId = ""
-        listener?.onMyraText(message, true)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-    }
-
-    private fun speakScreenPrivacyBlocked() {
-        val message = "Sensitive information visible hai, isliye main screen details read nahi kar rahi."
-        listener?.onMyraText(message, true)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-    }
-
-    private fun finishScreenResponse(reason: String) {
-        fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId }?.let {
-            val now = android.os.SystemClock.elapsedRealtime()
-            voiceLog(
-                "TOTAL_VISUAL_TURN visualTurnId=${it.id} reason=$reason " +
-                    "speechEndToAuthoritativeTurnMs=${if (it.speechEndedAt > 0L && it.authoritativeTurnCompleteAt > 0L) it.authoritativeTurnCompleteAt - it.speechEndedAt else -1L} " +
-                    "authoritativeTurnToTranscriptMs=${if (it.authoritativeTurnCompleteAt > 0L && it.finalTranscriptAt > 0L) it.finalTranscriptAt - it.authoritativeTurnCompleteAt else -1L} " +
-                    "transcriptToIntentMs=${if (it.finalTranscriptAt > 0L && it.intentResolvedAt > 0L) it.intentResolvedAt - it.finalTranscriptAt else -1L} " +
-                    "intentToVisualFrameMs=${if (it.intentResolvedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.intentResolvedAt else -1L} " +
-                    "visualFrameAcquisitionMs=${if (it.frameRequestedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.frameRequestedAt else -1L} " +
-                    "speechEndToFrameReadyMs=${if (it.speechEndedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.speechEndedAt else -1L} " +
-                    "frameReadyToModelRequestMs=${if (it.frameReadyAt > 0L && it.modelRequestAt > 0L) it.modelRequestAt - it.frameReadyAt else -1L} " +
-                    "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L && it.firstModelResponseAt > 0L) it.firstModelResponseAt - it.modelRequestAt else -1L} " +
-                    "responseToActionMs=${if (it.firstModelResponseAt > 0L && it.actionExecutedAt > 0L) it.actionExecutedAt - it.firstModelResponseAt else -1L} " +
-                    "speechEndToActionMs=${if (it.speechEndedAt > 0L && it.actionExecutedAt > 0L) it.actionExecutedAt - it.speechEndedAt else -1L} " +
-                    "speechEndToFirstAudioMs=${if (it.speechEndedAt > 0L && it.firstAudioAt > 0L) it.firstAudioAt - it.speechEndedAt else -1L} " +
-                    "visualResultToReplyQueuedMs=${if (it.firstModelResponseAt > 0L && it.replyQueuedAt > 0L) it.replyQueuedAt - it.firstModelResponseAt else -1L} " +
-                    "replyQueuedToFirstAudioMs=${if (it.replyQueuedAt > 0L && it.firstAudioAt > 0L) it.firstAudioAt - it.replyQueuedAt else -1L} " +
-                    "speechEndToFirstPlaybackMs=${if (it.speechEndedAt > 0L && it.firstPlaybackAt > 0L) it.firstPlaybackAt - it.speechEndedAt else -1L} " +
-                    "totalVisualTurnMs=${now - it.startedAt}"
-            )
-            fastVisualTurns.finish(it.id)
-        }
-        voiceLog("screen_query_terminal screenQueryId=$screenResponseQueryId state=${if (reason == "real_user_barge_in") "CANCELLED_REAL_BARGE_IN" else "COMPLETED"} reason=$reason")
-        voiceLog("screen_response_playback_end screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId reason=$reason")
-        screenResponseActive = false
-        screenResponseHasContent = false
-        screenResponseStartedLogged = false
-        screenResponseGenerationComplete = false
-        screenResponseTextCommitted = false
-        screenResponseUserTurnId = 0L
-        screenResponseAfterGenerationId = 0L
-        screenResponseGenerationId = 0L
-        screenResponseBinding = null
-        screenResponseSessionId = ""
-        screenResponseAccessibilityPackage = ""
-        screenResponseAccessibilityGeneration = 0L
-        screenResponseQueryId = ""
-        resetTurnBuffers("screen_response_$reason")
-    }
-
-    private fun handleScreenMemoryProposal(id: String, args: org.json.JSONObject) {
-        val prefs = screenVisionPreferences
-        if (!prefs.visionEnabled || !prefs.automaticLearning || !prefs.saveScreenMemories ||
-            !ScreenCaptureService.hasFreshFrame()
-        ) {
-            live?.sendToolResponse(id, "propose_screen_memory", false, "Automatic screen memory is disabled")
-            return
-        }
-        val fact = args.optString("fact").trim().replace(Regex("\\s+"), " ")
-        val categoryName = args.optString("category").uppercase(Locale.ROOT)
-        val confidence = args.optDouble("confidence", 0.0)
-        val stableKey = args.optString("memory_key").lowercase(Locale.ROOT)
-            .replace(Regex("[^a-z0-9_:]+"), "_").trim('_').take(80)
-        if (fact.length !in 5..200 || stableKey.isBlank() ||
-            !ScreenPrivacyPolicy.isMemoryWorthy(categoryName, confidence) ||
-            (prefs.sensitiveContentProtection && ScreenPrivacyPolicy.blocksLongTermMemory(fact))
-        ) {
-            live?.sendToolResponse(id, "propose_screen_memory", false, "Screen observation was not safe and durable enough to save")
-            return
-        }
-        val category = runCatching { MemoryCategory.valueOf(categoryName) }.getOrNull()
-        if (category == null) {
-            live?.sendToolResponse(id, "propose_screen_memory", false, "Unsupported memory category")
-            return
-        }
-        serviceScope.launch {
-            val candidate = MemoryCandidate(
-                category, fact, "screen:$stableKey", MemorySensitivity.LOW,
-                confidence, source = "screen_observation",
-                provenance = com.myra.assistant.data.memory.MemoryProvenance.SCREEN_OBSERVATION
-            )
-            val result = if (memoryRepository.isAlreadySaved(candidate)) {
-                MemoryWriteResult.Saved("existing")
-            } else memoryBrain.processGroundedProposal(candidate)
-            val saved = result is MemoryWriteResult.Saved
-            voiceLog("screen_memory_write fact=${fact.take(80)} source=screen_observation saved=$saved")
-            live?.sendToolResponse(
-                id, "propose_screen_memory", saved,
-                if (saved) "Structured screen observation saved in the existing Memory Brain"
-                else "Screen observation was not saved"
-            )
-        }
-    }
-
-    private fun handleSemanticMemoryProposal(id: String, args: org.json.JSONObject) {
-        val guardedText = lastUserIntentText.ifBlank { input.toString().trim() }
-        if (guardedText.isBlank() || MemoryCommandParser.looksLikeIntent(romanDisplayText(guardedText))) {
-            live?.sendToolResponse(id, "propose_user_memory", false, "Explicit memory commands are handled locally")
-            return
-        }
-        if (PersonalMemoryExtractor.extract(romanDisplayText(guardedText)) != null ||
-            PersonLinkedMemoryExtractor.extractAll(romanDisplayText(guardedText)).isNotEmpty() ||
-            AutomaticMemoryChangeParser.parse(romanDisplayText(guardedText)) is AutomaticMemoryChange.Save
-        ) {
-            live?.sendToolResponse(id, "propose_user_memory", true, "This fact is already being handled by Android")
-            return
-        }
-        val recentContext = (recentRelationshipTurns.map { it.second } + guardedText)
-            .takeLast(MAX_RELATIONSHIP_CONTEXT_TURNS + 1)
-            .joinToString(" ")
-        val candidate = SemanticMemoryProposalValidator.validate(
-            fact = args.optString("fact"),
-            categoryName = args.optString("category"),
-            memoryKey = args.optString("memory_key"),
-            evidence = args.optString("evidence"),
-            confidence = args.optDouble("confidence", 0.0),
-            conversationContext = romanDisplayText(recentContext)
-        )
-        if (candidate == null) {
-            live?.sendToolResponse(id, "propose_user_memory", false, "Proposal was not grounded or safe enough")
-            return
-        }
-
-        serviceScope.launch {
-            if (memoryRepository.isAlreadySaved(candidate)) {
-                live?.sendToolResponse(id, "propose_user_memory", true, "Already remembered; continue naturally without mentioning memory")
-                return@launch
-            }
-            when (memoryBrain.processGroundedProposal(candidate)) {
-                is MemoryWriteResult.Saved -> live?.sendToolResponse(id, "propose_user_memory", true,
-                    "Saved silently; continue the conversation naturally without mentioning memory")
-                else -> live?.sendToolResponse(id, "propose_user_memory", false,
-                    "Android rejected an unsafe, sensitive, uncertain, or ungrounded proposal")
-            }
-        }
-    }
-
-    private fun handlePendingConfirmation(raw: String): Boolean {
-        val pending = pendingConfirmedCommand ?: return false
-        if (android.os.SystemClock.elapsedRealtime() > pendingConfirmationExpiresAt) {
-            pendingConfirmedCommand = null
-            return false
-        }
-        val text = raw.lowercase(Locale.ROOT)
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
-        val yes = Regex("^(?:haan|ha|han|yes|yeah|yep|kar\\s+do|karo|open\\s+kar\\s+do|bilkul|theek\\s+hai)$").matches(text)
-        val no = Regex("^(?:nahi|nahin|no|nope|cancel|rehne\\s+do|mat\\s+karo)$").matches(text)
-        if (!yes && !no) return false
-        pendingConfirmedCommand = null
-        pendingConfirmationExpiresAt = 0L
-        waitingForFreshInputAfterCommand = false
-        localCommandExecutedThisTurn = false
-        commandUserTextEmitted = true
-        commitFinalUserMessage(raw.trim(), "PHONE_ACTION_CONFIRMATION")
-        if (yes) {
-            executeCommand(pending)
-        } else {
-            suppressModelForTurn = true
-            val message = "Theek hai yaar, nahi kholungi."
-            listener?.onMyraText(message)
-            emitState(message)
-            queueLocalSpeech(message, allowUntranscribedAudio = true)
-        }
-        return true
-    }
-
-    private fun isSafeDirectMediaCommand(command: AppCommand): Boolean = when (command) {
-        is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
-        AppCommand.OpenInstagramReels, AppCommand.TakeScreenshot, AppCommand.RepeatYouTubeSearch,
-        is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
-        is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
-        AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, is AppCommand.SetFlashlight,
-        is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
-        else -> false
-    }
-
-    private fun shouldExecute(command: AppCommand): Boolean {
-        val now = android.os.SystemClock.elapsedRealtime()
-        val key = when (command) {
-            is AppCommand.OpenApp -> "open:${command.appName.lowercase(Locale.ROOT)}"
-            is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
-            is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
-            is AppCommand.PlayYouTube -> "youtube-play:${command.query.orEmpty().lowercase(Locale.ROOT)}"
-            AppCommand.OpenYouTubeShorts -> "youtube-shorts"
-            AppCommand.RequestInstagramReels -> "request-instagram-reels"
-            AppCommand.OpenInstagramReels -> "open-instagram-reels"
-            AppCommand.TakeScreenshot -> "take-screenshot"
-            AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
-            is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
-            is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
-            AppCommand.QueryWhatsAppMessages -> "whatsapp-message-query"
-            AppCommand.GoHome -> "go-home"
-            AppCommand.GoBack -> "go-back"
-            AppCommand.CurrentTime -> "current-time"
-            AppCommand.BatteryLevel -> "battery-level"
-            is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
-            is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
-            is AppCommand.ScrollYouTube -> "youtube-scroll:${command.direction?.name?.lowercase(Locale.ROOT) ?: "repeat"}"
-        }
-        // Scroll is intentionally repeatable hands-free, so only suppress near-identical
-        // transcript fragments from the same utterance. Other actions keep the longer
-        // safety window that prevents accidental duplicate execution.
-        val dedupeWindowMs = if (command is AppCommand.ScrollYouTube) 700L else 4_000L
-        if (key == lastCommandKey && now - lastCommandAt < dedupeWindowMs) return false
-        lastCommandKey = key; lastCommandAt = now; return true
-    }
-
-    private fun executeCommand(command: AppCommand) {
-        if (command is AppCommand.ScrollYouTube) {
-            // Every non-final caller is reduced to a proposal here. Physical scroll is
-            // reachable only from handleScrollProposal(FINAL_AUTHORIZED).
-            handleScrollProposal(command, "legacy_command_boundary", ScrollProposalAuthorization.PRE_FINAL)
-            return
-        }
-        if (localCommandExecutedThisTurn || !shouldExecute(command)) return
-        if (command is AppCommand.SearchYouTube) {
-            voiceLog(
-                "SEARCH_EXECUTOR_ENTRY class=MyraVoiceService method=executeCommand turnId=$activeTurnId " +
-                    "finalTranscript=legacy query=${command.query.take(120)} destination=YOUTUBE " +
-                    "foregroundPackage=${AccessibilityHelperService.instance?.currentForegroundContext()?.packageName}"
-            )
-        }
-        localCommandExecutedThisTurn = true
-        latestActionDispatchedAt = android.os.SystemClock.elapsedRealtime()
-        if (command == AppCommand.RequestInstagramReels) {
-            pendingConfirmedCommand = AppCommand.OpenInstagramReels
-            pendingConfirmationExpiresAt = android.os.SystemClock.elapsedRealtime() + 30_000L
-            suppressModelForTurn = true
-            waitingForFreshInputAfterCommand = true
-            commandProbe.clear()
-            output.clear()
-            val message = "Instagram open kar dun tumhare liye?"
-            listener?.onMyraText(message)
-            emitState(message)
-            queueLocalSpeech(message, allowUntranscribedAudio = true)
-            return
-        }
-        if (command is AppCommand.DeepResearch) { executeDeepResearch(command); return }
-        cancelSpeechForNewAction()
-        suppressModelForTurn = true
-        waitingForFreshInputAfterCommand = true
-        commandProbe.clear()
-        output.clear()
-        live?.interrupt()
-        mediaGuard.finishInteraction()
-        val result = assistantController.processCommand(
-            StructuredCommandParser.fromLegacy(command, command.toString()),
-            speak = false,
-            notifyListeners = false
-        )
-        brain.recordPhoneAction(
-            app = (command as? AppCommand.OpenApp)?.appName,
-            action = command.toString(),
-            success = result.success && result.verified
-        )
-        listener?.onMyraText(result.spokenMessage, !result.success)
-        emitState(result.spokenMessage)
-        queueLocalSpeech(
-            result.spokenMessage,
-            allowUntranscribedAudio = result.success && isSafeUntranscribedConfirmation(command)
-        )
-    }
-
-    private fun handleBrainCancellation(taskToken: Long) {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        pendingActionAfterLocalSpeech = null
-        pendingConfirmedCommand = null
-        pendingConfirmationExpiresAt = 0L
-        output.clear(); commandProbe.clear()
-        cancelSpeechForNewAction()
-        screenActionRegistry.cancel()?.let {
-            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=user_cancelled")
-        }
-        brain.finishTask(taskToken, true)
-        val message = "Theek hai, rok diya."
-        listener?.onMyraText(message)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-        voiceLog("brain_task_cancelled taskToken=$taskToken")
-    }
-
-    private fun handleReadingCommand(command: ReadingCommand, turnId: Long): Boolean {
-        val current = readingTracker.snapshot()
-        if (command !is ReadingCommand.Start && current == null) return false
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        when (command) {
-            ReadingCommand.Start -> {
-                if (!screenCommandTurnGuard.tryCommit(turnId)) {
-                    voiceLog("screen_command_duplicate_dropped turnId=$turnId source=reading_start")
-                    return true
-                }
-                startArticleReading(turnId)
-            }
-            ReadingCommand.Stop -> stopArticleReading("user_stop", "Theek hai, reading rok di.")
-            ReadingCommand.Pause -> {
-                readingTracker.pause()
-                pendingActionAfterLocalSpeech = null
-                audio?.interrupt(); live?.interrupt()
-                speakReadingStatus("Reading pause kar di.")
-                voiceLog("READING_SESSION_PAUSED reading_session_id=${current?.readingSessionId} timestamp=${android.os.SystemClock.elapsedRealtime()}")
-            }
-            ReadingCommand.Resume, ReadingCommand.Continue -> {
-                if (current?.screenSessionId != ScreenCaptureService.session.sessionId ||
-                    ScreenCaptureService.currentState != ScreenShareState.ACTIVE
-                ) {
-                    stopArticleReading("screen_session_changed", "Screen sharing active nahi hai.")
-                } else {
-                    readingTracker.resume()
-                    readCurrentArticleContent(turnId, allowAutoScroll = true)
-                }
-            }
-            ReadingCommand.StartAgain -> {
-                readingTracker.resetProgress()
-                val accessibility = AccessibilityHelperService.instance
-                val active = readingTracker.snapshot()
-                val accepted = if (accessibility != null && active?.scrollContainerId != null) {
-                    accessibility.scrollArticleToBeginning(
-                        active.scrollContainerId, active.foregroundPackage, active.screenSessionId
-                    ) { _ -> mainHandler.post { readCurrentArticleContent(turnId, allowAutoScroll = true) } }
-                } else false
-                if (!accepted) readCurrentArticleContent(turnId, allowAutoScroll = true)
-            }
-            ReadingCommand.ReadAgain -> readCurrentArticleContent(turnId, allowAutoScroll = false, forceRepeat = true)
-            ReadingCommand.ReadNewOnly -> {
-                readingTracker.resume()
-                readCurrentArticleContent(turnId, allowAutoScroll = false)
-            }
-            ReadingCommand.Forget -> {
-                pendingActionAfterLocalSpeech = null
-                readingTracker.forget()
-                speakReadingStatus("Reading position bhool gayi.")
-            }
-        }
-        return true
-    }
-
-    private fun startArticleReading(turnId: Long) {
-        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-            speakReadingStatus("Screen sharing is off.", error = true)
-            return
-        }
-        val accessibility = AccessibilityHelperService.instance
-        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
-            speakReadingStatus("Article reading ke liye LYRA Accessibility enable karo.", error = true)
-            return
-        }
-        val contentType = accessibility.detectContentType()
-        if (contentType != ScreenContentType.ARTICLE) {
-            val message = when (contentType) {
-                ScreenContentType.VIDEO_PLATFORM -> "Ye YouTube hai, article nahi. Auto-scroll start nahi karungi."
-                ScreenContentType.SOCIAL_FEED -> "Ye social feed hai, article nahi. Auto-scroll start nahi karungi."
-                else -> "Current page ko article ke roop mein safely confirm nahi kar pa rahi. Auto-scroll start nahi karungi."
-            }
-            voiceLog("READING_START_REJECTED contentType=$contentType turnId=$turnId")
-            speakReadingStatus(message, error = true)
-            return
-        }
-        val context = com.myra.assistant.screen.ScreenContextStore.snapshot()
-        val identity = listOfNotNull(context.currentPackage, accessibility.visibleArticleText().firstOrNull())
-            .joinToString(":").take(300)
-        val containerId = accessibility.currentArticleScrollContainerId() ?: run {
-            voiceLog("READING_START_REJECTED contentType=$contentType turnId=$turnId reason=no_article_scroll_container")
-            speakReadingStatus("Article ka safe scroll area nahi mila. Auto-scroll start nahi karungi.", error = true)
-            return
-        }
-        val session = readingTracker.start(
-            ScreenCaptureService.session.sessionId, identity,
-            accessibility.currentPackageName().orEmpty(), contentType, explicitlyRequested = true,
-            scrollContainerId = containerId
-        ) ?: run {
-            speakReadingStatus("Article reading start nahi hui.", error = true)
-            return
-        }
-        voiceLog(
-            "READING_SESSION_STARTED reading_session_id=${session.readingSessionId} " +
-                "screen_session_id=${session.screenSessionId} container_id=${session.scrollContainerId} " +
-                "timestamp=${android.os.SystemClock.elapsedRealtime()} contentType=$contentType"
-        )
-        readCurrentArticleContent(turnId, allowAutoScroll = true)
-    }
-
-    private fun readCurrentArticleContent(
-        turnId: Long,
-        allowAutoScroll: Boolean,
-        forceRepeat: Boolean = false
-    ) {
-        val session = readingTracker.snapshot() ?: return
-        val foregroundPackage = accessibilityPackage()
-        if (readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, foregroundPackage)) {
-            pendingActionAfterLocalSpeech = null
-            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=context_changed package=$foregroundPackage")
-            return
-        }
-        if (session.state !in setOf(ReadingState.READING, ReadingState.VERIFYING_NEW_CONTENT) ||
-            !ScreenCaptureService.session.isCurrent(session.screenSessionId)
-        ) return
-        val accessibility = AccessibilityHelperService.instance ?: return
-        if (accessibility.detectContentType() != ScreenContentType.ARTICLE) {
-            stopArticleReading("article_boundary", "Article complete.")
-            return
-        }
-        val frameLookupAt = android.os.SystemClock.elapsedRealtime()
-        val query = ScreenCaptureService.requestFreshFrame(turnId) { result ->
-            mainHandler.post {
-                val frame = (result as? FreshFrameResult.Ready)?.frame
-                if (frame == null || !ScreenCaptureService.session.isCurrent(session.screenSessionId)) {
-                    stopArticleReading("fresh_frame_unavailable", "Fresh article screen nahi mili.", error = true)
-                    return@post
-                }
-                accessibility.refreshScreenContext()
-                readingTracker.recordObservation(frame.frameId, accessibility.lastSnapshotAt())
-                val lines = accessibility.visibleArticleText()
-                val fresh = if (forceRepeat) {
-                    lines.map { com.myra.assistant.screen.ReadingSegment(it, ReadingTracker.fingerprint(it)) }
-                } else readingTracker.acceptVisibleText(lines, android.os.SystemClock.elapsedRealtime())
-                val currentSession = readingTracker.snapshot() ?: return@post
-                voiceLog(
-                    "READING_NEW_CONTENT_FOUND reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} " +
-                        "timestamp=${android.os.SystemClock.elapsedRealtime()} newSegments=${fresh.size} frameWaitMs=${android.os.SystemClock.elapsedRealtime() - frameLookupAt}"
-                )
-                if (fresh.isEmpty()) {
-                    voiceLog("READING_DUPLICATE_SKIPPED reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} visibleSegments=${lines.size}")
-                    if (allowAutoScroll && readingTracker.canAutoScroll()) autoScrollArticle(turnId)
-                    else finishArticleAtEnd()
-                    return@post
-                }
-                val spoken = fresh.joinToString(" ") { it.text }.take(MAX_READING_CHARS_PER_SCREEN)
-                voiceLog(
-                    "READING_CONTENT_READ reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} " +
-                        "timestamp=${android.os.SystemClock.elapsedRealtime()} chars=${spoken.length} segments=${fresh.size}"
-                )
-                listener?.onMyraText(spoken)
-                emitState("Article padh rahi hoonâ€¦")
-                if (allowAutoScroll) readingTracker.markWaitingForScroll()
-                pendingActionAfterLocalSpeech = if (allowAutoScroll) ({ autoScrollArticle(turnId) }) else null
-                queueLocalSpeech(spoken, allowUntranscribedAudio = false)
-            }
-        }
-        if (query == null) stopArticleReading("screen_inactive", "Screen sharing is off.", error = true)
-    }
-
-    private fun autoScrollArticle(turnId: Long) {
-        val session = readingTracker.snapshot() ?: return
-        val foregroundPackage = accessibilityPackage()
-        if (readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, foregroundPackage) ||
-            foregroundPackage == "com.google.android.youtube"
-        ) {
-            pendingActionAfterLocalSpeech = null
-            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=package_changed package=$foregroundPackage")
-            return
-        }
-        val accessibility = AccessibilityHelperService.instance ?: run { finishArticleAtEnd(); return }
-        val containerId = session.scrollContainerId ?: run {
-            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=unbound_container")
-            finishArticleAtEnd()
-            return
-        }
-        if (!readingTracker.shouldAutoScroll(containerId, session.screenSessionId, foregroundPackage) ||
-            !readingTracker.recordAutoScroll()
-        ) {
-            finishArticleAtEnd()
-            return
-        }
-        voiceLog(
-            "READING_AUTO_SCROLL_STARTED reading_session_id=${session.readingSessionId} " +
-                "timestamp=${android.os.SystemClock.elapsedRealtime()} count=${readingTracker.snapshot()?.consecutiveAutoScrollCount}"
-        )
-        val accepted = accessibility.scrollArticleVerified(
-            containerId, session.foregroundPackage, session.screenSessionId
-        ) { changed ->
-            mainHandler.post {
-                val active = readingTracker.snapshot()
-                if (active?.state != ReadingState.SCROLLING) return@post
-                voiceLog(
-                    "READING_AUTO_SCROLL_COMPLETED reading_session_id=${active.readingSessionId} " +
-                        "timestamp=${android.os.SystemClock.elapsedRealtime()} changed=$changed"
-                )
-                if (!changed) finishArticleAtEnd()
-                else {
-                    ScreenCaptureService.requestFreshFrame(turnId) { fresh ->
-                        mainHandler.post {
-                            val frame = (fresh as? FreshFrameResult.Ready)?.frame
-                            val current = readingTracker.snapshot() ?: return@post
-                            if (frame == null || frame.sessionId != current.screenSessionId ||
-                                frame.frameId <= current.lastFrameId
-                            ) {
-                                voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${current.readingSessionId} reason=no_fresh_post_scroll_frame")
-                                finishArticleAtEnd()
-                                return@post
-                            }
-                            readingTracker.markVerifyingNewContent(frame.frameId, accessibility.lastSnapshotAt())
-                            voiceLog("ARTICLE_SCROLL_VERIFIED reading_session_id=${current.readingSessionId} preFrameId=${current.lastFrameId} postFrameId=${frame.frameId}")
-                            readCurrentArticleContent(turnId, allowAutoScroll = true)
-                        }
-                    }
-                }
-            }
-        }
-        if (!accepted) finishArticleAtEnd()
-    }
-
-    private fun finishArticleAtEnd() {
-        val id = readingTracker.snapshot()?.readingSessionId
-        readingTracker.complete()
-        pendingActionAfterLocalSpeech = null
-        voiceLog("READING_END_DETECTED reading_session_id=$id timestamp=${android.os.SystemClock.elapsedRealtime()}")
-        speakReadingStatus("Article complete.")
-    }
-
-    private fun stopArticleReading(reason: String, message: String, error: Boolean = false) {
-        val id = readingTracker.snapshot()?.readingSessionId
-        readingTracker.stop()
-        pendingActionAfterLocalSpeech = null
-        audio?.interrupt(); live?.interrupt()
-        voiceLog("READING_SESSION_STOPPED reading_session_id=$id timestamp=${android.os.SystemClock.elapsedRealtime()} reason=$reason")
-        speakReadingStatus(message, error)
-    }
-
-    private fun speakReadingStatus(message: String, error: Boolean = false) {
-        listener?.onMyraText(message, error)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-    }
-
-    private fun accessibilityPackage(): String =
-        AccessibilityHelperService.instance?.currentPackageName().orEmpty()
-
-    private fun executeBrainMultiStep(plan: BrainDecision.ScrollThenOpenVideo) {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        cancelSpeechForNewAction()
-        val accessibility = AccessibilityHelperService.instance
-        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-            finishBrainTask(plan.taskToken, false, "Screen Vision active nahi hai.")
-            return
-        }
-        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
-            finishBrainTask(plan.taskToken, false, "LYRA Accessibility enable karo.")
-            return
-        }
-        val down = plan.direction == BrainScrollDirection.DOWN
-        voiceLog("brain_plan_started taskToken=${plan.taskToken} plan=scroll_then_open ordinal=${plan.ordinal} direction=${plan.direction}")
-        val accepted = accessibility.scrollYouTubeVerified(down) { scrolled ->
-            mainHandler.post {
-                if (!brain.isTaskCurrent(plan.taskToken)) return@post
-                if (!scrolled) {
-                    finishBrainTask(plan.taskToken, false, "Screen scroll nahi hua.")
-                    return@post
-                }
-                ScreenCaptureService.requestFreshFrame(activeTurnId) { fresh ->
-                    mainHandler.post {
-                        if (!brain.isTaskCurrent(plan.taskToken)) return@post
-                        val beforeFrame = (fresh as? FreshFrameResult.Ready)?.frame
-                        if (beforeFrame == null || !ScreenCaptureService.session.isCurrent(beforeFrame.sessionId)) {
-                            finishBrainTask(plan.taskToken, false, "Scroll ke baad fresh screen nahi mili.")
-                            return@post
-                        }
-                        val beforeSignature = accessibility.visibleScreenSignature()
-                        val actionIntent = screenActionRegistry.create(
-                            activeTurnId, beforeFrame.sessionId,
-                            lastUserIntentText, "video", null, plan.ordinal,
-                            accessibility.currentPackageName(), android.os.SystemClock.elapsedRealtime(),
-                            beforeFrame.frameId, 1.0
-                        )
-                        voiceLog("SCREEN_ACTION_CREATED actionId=${actionIntent.actionId} turnId=${actionIntent.turnId} screenSessionId=${actionIntent.screenSessionId} frameId=${actionIntent.sourceFrameId} resolverVersion=${actionIntent.resolverVersion}")
-                        val tapped = accessibility.tapVisibleYouTubeVideo(plan.ordinal)
-                        voiceLog("brain_plan_step taskToken=${plan.taskToken} step=tap ordinal=${plan.ordinal} accepted=$tapped")
-                        if (!tapped) {
-                            finishBrainTask(plan.taskToken, false, "Second video clear nahi mila.")
-                            return@post
-                        }
-                        mainHandler.postDelayed({
-                            ScreenCaptureService.requestFreshFrame(activeTurnId) { postResult ->
-                                mainHandler.post {
-                                    if (!brain.isTaskCurrent(plan.taskToken)) return@post
-                                    if (!screenActionRegistry.isCurrent(
-                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId
-                    )) {
-                                        voiceLog("SCREEN_ACTION_CANCELLED actionId=${actionIntent.actionId} reason=replaced_before_verification")
-                                        return@post
-                                    }
-                                    val postFrame = (postResult as? FreshFrameResult.Ready)?.frame
-                                    val accessibilityChanged = beforeSignature.isNotBlank() &&
-                                        accessibility.visibleScreenSignature() != beforeSignature
-                                    val frameChanged = postFrame != null && postFrame.sessionId == beforeFrame.sessionId &&
-                                        postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
-                                    val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
-                                        (accessibilityChanged || frameChanged)
-                                    brain.recordScreenAction(
-                                        ScreenTargetReference(targetText = "video", ordinal = plan.ordinal),
-                                        verified
-                                    )
-                                    screenActionRegistry.cancel(actionIntent.actionId)
-                                    finishBrainTask(
-                                        plan.taskToken,
-                                        verified,
-                                        if (verified) "Video open ho gaya."
-                                        else "Tap hua, lekin video open hona verify nahi hua."
-                                    )
-                                }
-                            }
-                        }, 400L)
-                    }
-                }
-            }
-        }
-        if (!accepted) finishBrainTask(plan.taskToken, false, "YouTube scroll start nahi hua.")
-    }
-
-    private fun executeYouTubeSemanticAction(command: YouTubeSemanticCommand): Boolean {
-        val accessibility = AccessibilityHelperService.instance ?: return false
-        val foreground = accessibility.currentForegroundContext() ?: return false
-        val isYouTube = foreground.packageName.equals("com.google.android.youtube", true)
-        if (!isYouTube) {
-            textComposeSession.cancel()
-            return false
-        }
-        textComposeSession.invalidateUnless(foreground.packageName, foreground.windowId, foreground.generation)
-        if (command == YouTubeSemanticCommand.CancelComment && textComposeSession.snapshot() == null) return false
-        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground) ?: return false
-        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-            voiceLog("youtube_semantic_duplicate_dropped turnId=$activeTurnId command=${command.javaClass.simpleName}")
-            return true
-        }
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        val startedAt = android.os.SystemClock.elapsedRealtime()
-        latestActionDispatchedAt = startedAt
-        val before = accessibility.visibleScreenSignature()
-
-        if (command == YouTubeSemanticCommand.SendComment &&
-            !textComposeSession.canSend(foreground.packageName, foreground.windowId, foreground.generation)
-        ) {
-            finishYouTubeSemantic(false, "Pehle comment type karo.", command, startedAt, "no_owned_draft")
-            return true
-        }
-        if (command is YouTubeSemanticCommand.TypeText && textComposeSession.snapshot() == null) {
-            finishYouTubeSemantic(false, "Pehle comments kholo.", command, startedAt, "comment_context_missing")
-            return true
-        }
-        if (command == YouTubeSemanticCommand.CancelComment) {
-            textComposeSession.cancel()
-            finishYouTubeSemantic(true, "Theek hai, comment send nahi kiya.", command, startedAt, "cancelled")
-            return true
-        }
-
-        val result = accessibility.performYouTubeSemanticAction(command, scope)
-        voiceLog(
-            "youtube_semantic_resolution turnId=$activeTurnId normalizedIntent=${command.javaClass.simpleName} " +
-                "package=${foreground.packageName} role=${result.role} resolution=${result.resolution} " +
-                "payloadLength=${(command as? YouTubeSemanticCommand.TypeText)?.payload?.length ?: 0} " +
-                "dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-        )
-        if (!result.accepted) {
-            if (canUseVisualFallback(command) && visualAwarenessPreferences.enabled &&
-                requestAccessibilityVisualRetry(command, foreground, activeTurnId, startedAt)
-            ) {
-                return true
-            }
-            val message = when (result.resolution) {
-                "ambiguous" -> "Kaunsa wala?"
-                "stale_foreground", "stale_candidate" -> "Screen badal gayi. Dobara target batao."
-                "not_found" -> when (command) {
-                    is YouTubeSemanticCommand.OpenChannel -> "Channel target clear nahi mila."
-                    is YouTubeSemanticCommand.TypeText -> "Comment field clear nahi mila."
-                    YouTubeSemanticCommand.SendComment -> "Comment ka send button nahi mila."
-                    else -> "Ye control current YouTube screen par clear nahi mila."
-                }
-                else -> "YouTube action accept nahi hua."
-            }
-            finishYouTubeSemantic(false, message, command, startedAt, result.resolution)
-            return true
-        }
-
-        when (command) {
-            YouTubeSemanticCommand.OpenComments -> mainHandler.postDelayed({
-                val current = accessibility.currentForegroundContext()
-                if (current != null && current.packageName.equals("com.google.android.youtube", true)) {
-                    textComposeSession.open(current.packageName, current.windowId, current.generation)
-                }
-            }, 450L)
-            is YouTubeSemanticCommand.TypeText -> {
-                val field = result.fieldIdentity
-                if (field == null || !textComposeSession.setDraft(
-                        foreground.packageName, foreground.windowId, foreground.generation, field, command.payload
-                    )) {
-                    finishYouTubeSemantic(false, "Comment context badal gaya. Dobara comments kholo.", command, startedAt, "field_ownership_rejected")
-                    return true
-                }
-            }
-            YouTubeSemanticCommand.SendComment -> textComposeSession.cancel()
-            else -> Unit
-        }
-        val message = when {
-            result.resolution == "already_active" && command == YouTubeSemanticCommand.Like -> "Video pehle se liked hai."
-            result.resolution == "already_active" && command == YouTubeSemanticCommand.Subscribe -> "Channel pehle se subscribed hai."
-            command is YouTubeSemanticCommand.TypeText -> "Comment type ho gaya."
-            command == YouTubeSemanticCommand.SendComment -> "Comment post ho gaya."
-            command == YouTubeSemanticCommand.OpenComments -> "Comments open ho gaye."
-            command == YouTubeSemanticCommand.Like -> "Video like ho gaya."
-            command == YouTubeSemanticCommand.Subscribe -> "Subscribe ho gaya."
-            command is YouTubeSemanticCommand.OpenChannel -> "Channel open ho gaya."
-            else -> "Open ho gaya."
-        }
-        mainHandler.postDelayed({
-            val stillOwned = com.myra.assistant.screen.ForegroundActionPolicy.canExecute(scope, accessibility.currentForegroundContext())
-            val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
-            voiceLog("youtube_semantic_verification command=${command.javaClass.simpleName} stillOwned=$stillOwned changed=$changed")
-            finishYouTubeSemantic(true, message, command, startedAt, if (changed) "verified_change" else "accepted_no_repeat")
-        }, if (command is YouTubeSemanticCommand.TypeText) 120L else 380L)
-        return true
-    }
-
-    private fun handleUnifiedActionFollowUp() {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        AccessibilityHelperService.instance?.refreshScreenContext()
-        val working = WorkingTaskRuntime.store.snapshot()
-        val message = when (working.lastVerifiedSuccess) {
-            true -> "Haan, pichhla action verify ho gaya tha."
-            false -> "Haan, abhi result verify nahi hua."
-            null -> "Abhi result verify nahi hua; current screen dobara check karni hogi."
-        }
-        listener?.onMyraText(message, working.lastVerifiedSuccess != true)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = false)
-        voiceLog(
-            "agent_verification_follow_up taskId=${working.taskId} lastAction=${working.lastRequestedAction} " +
-                "verified=${working.lastVerifiedSuccess}"
-        )
-    }
-
-    private fun runtimePerception(taskId: String): PerceptionSnapshot? {
-        val context = ActivityContextStore.snapshot() ?: return null
-        val scene = ScreenSceneFactory.from(context, WorkingTaskRuntime.store.snapshot().activeExternalApp)
-        return PerceptionSnapshot(scene, taskId, android.os.SystemClock.elapsedRealtime())
-    }
-
-    /** Production owner for migrated capabilities. Planner output is the only path to an
-     * adapter; the service schedules observation but never calls the low-level executor twice. */
-    private fun executeGeneralRuntimeCapability(
-        expectedCapability: ToolCapability,
-        requestedTurnId: Long,
-        requestedTaskId: String,
-        onTerminal: (GeneralVerificationStatus, String) -> Unit
-    ): Boolean {
-        val runtime = GeneralAgentRuntimeStore.runtime
-        val task = runtime.activeTask() ?: return false
-        if (!RuntimeActionBindingGuard.matches(requestedTurnId, requestedTaskId, task.turnId, task.id)) {
-            voiceLog(
-                "AGENT_RUNTIME_TURN_MISMATCH requestedTurnId=$requestedTurnId taskTurnId=${task.turnId} " +
-                    "requestedTaskId=$requestedTaskId activeTaskId=${task.id} action=$expectedCapability decision=blocked"
-            )
-            voiceLog(
-                "VOICE_ACTION_IDENTITY_INVALID speechTurnId=$requestedTurnId runtimeTurnId=${task.turnId} " +
-                    "reason=runtime_task_identity_mismatch"
-            )
-            return false
-        }
-        val enteredAt = android.os.SystemClock.elapsedRealtime()
-        turnLatency.record(task.turnId, Field.RUNTIME_ENTERED, enteredAt)
-        voiceLog("AGENT_RUNTIME_ENTER taskId=${task.id} turnId=${task.turnId} capability=$expectedCapability recoveryCount=${task.recoveryCount}")
-        var before = runtimePerception(task.id)
-        if (before == null) {
-            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
-            before = runtimePerception(task.id)
-        }
-        voiceLog("PLANNER_STARTED taskId=${task.id} turnId=${task.turnId} status=${task.status} recoveryCount=${task.recoveryCount}")
-        val planned = runtime.next(before)
-        runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, before?.scene) }
-        voiceLog("PLANNER_RESULT taskId=${task.id} turnId=${task.turnId} result=${planned.javaClass.simpleName}")
-        if (planned is PlannerResult.NeedObservation) {
-            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
-            val observed = runtimePerception(task.id)
-            if (observed == null) {
-                runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN, "screen unavailable")
-                onTerminal(GeneralVerificationStatus.UNKNOWN, "screen unavailable")
-                return true
-            }
-            return executeGeneralRuntimeCapability(expectedCapability, requestedTurnId, requestedTaskId, onTerminal)
-        }
-        if (planned is PlannerResult.NeedClarification || planned is PlannerResult.Fail || planned is PlannerResult.Complete) {
-            val observed = when (planned) {
-                is PlannerResult.NeedClarification -> planned.message
-                is PlannerResult.Fail -> planned.reason
-                is PlannerResult.Complete -> planned.reason
-                else -> "planner stopped"
-            }
-            val status = if (planned is PlannerResult.Fail) GeneralVerificationStatus.FAILURE else GeneralVerificationStatus.UNKNOWN
-            runtime.completeFromAdapter(status, observed)
-            onTerminal(status, observed)
-            return true
-        }
-        val step = when (planned) {
-            is PlannerResult.Next -> planned.step
-            is PlannerResult.Recover -> planned.step
-            is PlannerResult.VerifyPrevious -> planned.step
-            else -> return false
-        }
-        val actionBefore = before
-        if (step.capability != expectedCapability || actionBefore == null) {
-            runtime.completeFromAdapter(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
-            onTerminal(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
-            return true
-        }
-        val adapter = generalActionRouter.select(step, actionBefore)
-        if (adapter == null) {
-            voiceLog("LEGACY_FALLBACK_USED taskId=${task.id} turnId=${task.turnId} capability=${step.capability} reason=no_registered_adapter")
-            runtime.completeFromAdapter(GeneralVerificationStatus.FAILURE, "no registered adapter")
-            onTerminal(GeneralVerificationStatus.FAILURE, "no registered adapter")
-            return true
-        }
-        voiceLog(
-            "ACTION_ROUTER_SELECTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} " +
-                "adapter=${adapter.adapterId} foregroundPackage=${actionBefore.scene.externalForegroundPackage} screenGeneration=${actionBefore.scene.generation}"
-        )
-        voiceLog("ACTION_ADAPTER_ENTER taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} adapter=${adapter.adapterId}")
-        voiceLog("ACTION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability}")
-        val actionStartedAt = android.os.SystemClock.elapsedRealtime()
-        turnLatency.record(task.turnId, Field.ACTION_STARTED, actionStartedAt)
-        val result = adapter.execute(step, actionBefore)
-        val actionReturnedAt = android.os.SystemClock.elapsedRealtime()
-        if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
-            scrollContinuationTelemetry.dispatched(task.turnId, task.id, task.intent.parameters["direction"],
-                result.accepted, actionReturnedAt, actionBefore.scene.externalForegroundPackage,
-                actionBefore.scene.windowId, actionBefore.scene.generation)
-        }
-        turnLatency.record(task.turnId, Field.ACTION_RETURNED, actionReturnedAt)
-        turnLatency.record(task.turnId, Field.OBSERVATION_SCHEDULED, actionReturnedAt)
-        runtime.recordAction(step, result, actionBefore)
-        runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, actionBefore.scene) }
-        voiceLog(
-            "ACTION_RETURNED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} " +
-                "adapter=${adapter.adapterId} accepted=${result.accepted} elapsedMs=${android.os.SystemClock.elapsedRealtime() - enteredAt}"
-        )
-        lateinit var observeAndVerify: (Int) -> Unit
-        observeAndVerify = observe@ { resampleCount ->
-            val current = runtime.activeTask()
-            if (current?.id != task.id || current.turnId != task.turnId) return@observe
-            val observationStartedAt = android.os.SystemClock.elapsedRealtime()
-            turnLatency.record(task.turnId, Field.OBSERVATION_STARTED, observationStartedAt)
-            voiceLog(
-                "POST_ACTION_OBSERVATION_STARTED taskId=${task.id} turnId=${task.turnId} " +
-                    "stepId=${step.id} capability=${step.capability} resampleCount=$resampleCount"
-            )
-            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
-            val after = runtimePerception(task.id)
-            if (after == null) {
-                if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL &&
-                    ScrollVerificationResamplePolicy.shouldResample(result.accepted, false, resampleCount)
-                ) {
-                    voiceLog(
-                        "SCROLL_VERIFY_RESAMPLE_SCHEDULED taskId=${task.id} turnId=${task.turnId} " +
-                            "resample=${resampleCount + 1} reason=fresh_scene_unavailable delayMs=${ScrollVerificationResamplePolicy.DELAY_MS}"
-                    )
-                    mainHandler.postDelayed({
-                        voiceLog("SCROLL_VERIFY_RESAMPLE_READY taskId=${task.id} turnId=${task.turnId} resample=${resampleCount + 1}")
-                        observeAndVerify(resampleCount + 1)
-                    }, ScrollVerificationResamplePolicy.DELAY_MS)
-                    return@observe
-                }
-                runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN, "fresh screen unavailable")
-                onTerminal(GeneralVerificationStatus.UNKNOWN, "fresh screen unavailable")
-                return@observe
-            }
-            voiceLog(
-                "POST_ACTION_OBSERVATION_READY taskId=${task.id} turnId=${task.turnId} stepId=${step.id} " +
-                    "foregroundPackage=${after.scene.externalForegroundPackage} screenGeneration=${after.scene.generation}"
-            )
-            turnLatency.record(task.turnId, Field.OBSERVATION_READY, android.os.SystemClock.elapsedRealtime())
-            turnLatency.record(task.turnId, Field.VERIFICATION_STARTED, android.os.SystemClock.elapsedRealtime())
-            voiceLog("VERIFICATION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} expected=${step.expectedOutcome.summary}")
-            val scrollEvidence = if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
-                ScrollMovementAnalyzer.analyze(actionBefore.scene, after.scene).also { evidence ->
-                voiceLog(
-                    "SCROLL_VERIFICATION_EVIDENCE taskId=${task.id} turnId=${task.turnId} " +
-                        "preGeneration=${actionBefore.scene.generation} postGeneration=${after.scene.generation} " +
-                        "stableAnchorCount=${evidence.stableAnchorCount} movedAnchorCount=${evidence.movedAnchorCount} " +
-                        "medianDeltaY=${evidence.medianDeltaY} newVisibleElements=${evidence.newVisibleElements} " +
-                        "lostVisibleElements=${evidence.lostVisibleElements} scrollStateBefore=unavailable " +
-                        "scrollStateAfter=unavailable accessibilityScrollEvent=unavailable decision=${if (evidence.proven) "SUCCESS" else "UNKNOWN"}"
-                )
-                }
-            } else null
-            if (scrollEvidence != null && ScrollVerificationResamplePolicy.shouldResample(
-                    result.accepted, scrollEvidence.proven, resampleCount
-                )
-            ) {
-                voiceLog(
-                    "SCROLL_VERIFY_RESAMPLE_SCHEDULED taskId=${task.id} turnId=${task.turnId} " +
-                        "resample=${resampleCount + 1} reason=unstable_or_insufficient_semantic_evidence " +
-                        "delayMs=${ScrollVerificationResamplePolicy.DELAY_MS}"
-                )
-                mainHandler.postDelayed({
-                    voiceLog("SCROLL_VERIFY_RESAMPLE_READY taskId=${task.id} turnId=${task.turnId} resample=${resampleCount + 1}")
-                    observeAndVerify(resampleCount + 1)
-                }, ScrollVerificationResamplePolicy.DELAY_MS)
-                return@observe
-            }
-            if (scrollEvidence != null) {
-                voiceLog(
-                    "SCROLL_VERIFY_FINAL_EVIDENCE taskId=${task.id} turnId=${task.turnId} samples=${resampleCount + 1} " +
-                        "stableAnchorCount=${scrollEvidence.stableAnchorCount} movedAnchorCount=${scrollEvidence.movedAnchorCount} " +
-                        "medianDeltaY=${scrollEvidence.medianDeltaY} newVisibleElements=${scrollEvidence.newVisibleElements} " +
-                        "lostVisibleElements=${scrollEvidence.lostVisibleElements} decision=${if (scrollEvidence.proven) "SUCCESS" else "UNKNOWN"}"
-                )
-            }
-            val (verification, recovery) = runtime.verify(after)
-            val verificationAt = android.os.SystemClock.elapsedRealtime()
-            if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) scrollContinuationTelemetry.verified(task.id, verification.status.name)
-            turnLatency.record(task.turnId, Field.VERIFICATION_COMPLETED, verificationAt)
-            turnLatency.logBreakdown(task.turnId, step.capability.name)
-            (runtime.activeTask() ?: runtime.lastCompletedTask())?.let { WorkingTaskRuntime.store.syncRuntime(it, after.scene) }
-            voiceLog(
-                "VERIFICATION_RESULT taskId=${task.id} turnId=${task.turnId} stepId=${step.id} status=${verification.status} " +
-                    "expected=${verification.expected} observed=${verification.observed} recoveryCount=${runtime.activeTask()?.recoveryCount ?: task.recoveryCount}"
-            )
-            voiceLog(
-                "ACTION_LATENCY_BREAKDOWN turnId=${task.turnId} capability=${step.capability} " +
-                    "speechEndToAuthorizationMs=${if (speechActivityEndedAt > 0L) latestIntentDecidedAt - speechActivityEndedAt else -1L} " +
-                    "taskToRuntimeMs=${if (latestIntentDecidedAt > 0L) enteredAt - latestIntentDecidedAt else -1L} " +
-                    "runtimeToActionStartedMs=${actionStartedAt - enteredAt} actionElapsedMs=${actionReturnedAt - actionStartedAt} " +
-                    "actionReturnToObservationMs=${observationStartedAt - actionReturnedAt} " +
-                    "observationToVerificationMs=${verificationAt - observationStartedAt} " +
-                    "speechEndToVisibleActionEstimateMs=${if (speechActivityEndedAt > 0L) actionReturnedAt - speechActivityEndedAt else -1L}"
-            )
-            WorkingTaskRuntime.store.recordOutcome(
-                verification.observed,
-                verification.status == GeneralVerificationStatus.SUCCESS,
-                result.targetId,
-                runtimeOwnsRecoveryCount = true
-            )
-            if (verification.status == GeneralVerificationStatus.SUCCESS) {
-                runtime.lastCompletedTask()?.takeIf { expectedCapability != ToolCapability.BROWSER_SEARCH }?.let {
-                    WorkingTaskRuntime.store.completeRuntime(it, verification.observed, TaskCompletionState.SUCCESS)
-                }
-                voiceLog("AGENT_TASK_TERMINAL taskId=${task.id} turnId=${task.turnId} status=SUCCESS elapsedMs=${android.os.SystemClock.elapsedRealtime() - enteredAt}")
-                onTerminal(verification.status, verification.observed)
-            } else if (recovery is RecoveryDecision.Retry) {
-                voiceLog("RECOVERY_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} recoveryCount=${runtime.activeTask()?.recoveryCount}")
-                voiceLog("RECOVERY_DECISION taskId=${task.id} turnId=${task.turnId} decision=RETRY rejected=${recovery.rejectedTarget}")
-                executeGeneralRuntimeCapability(expectedCapability, requestedTurnId, requestedTaskId, onTerminal)
-            } else {
-                voiceLog("RECOVERY_DECISION taskId=${task.id} turnId=${task.turnId} decision=${recovery?.javaClass?.simpleName ?: "NONE"}")
-                runtime.completeFromAdapter(verification.status, verification.observed)
-                runtime.lastCompletedTask()?.takeIf { expectedCapability != ToolCapability.BROWSER_SEARCH }?.let {
-                    WorkingTaskRuntime.store.completeRuntime(
-                        it, verification.observed,
-                        if (verification.status == GeneralVerificationStatus.FAILURE) TaskCompletionState.FAILURE else TaskCompletionState.UNKNOWN
-                    )
-                }
-                voiceLog("AGENT_TASK_TERMINAL taskId=${task.id} turnId=${task.turnId} status=${verification.status} elapsedMs=${android.os.SystemClock.elapsedRealtime() - enteredAt}")
-                onTerminal(verification.status, verification.observed)
-            }
-        }
-        mainHandler.postDelayed({ observeAndVerify(0) }, adapter.observationDelayMs)
-        return true
-    }
-
-    private fun executeGeneralScrollAdapter(parameters: Map<String, String>): GeneralActionResult {
-        val accessibility = AccessibilityHelperService.instance
-            ?: return GeneralActionResult(false, failureReason = "accessibility_unavailable")
-        val explicitYouTube = parameters["explicitApp"].equals("YouTube", true)
-        val direction = parameters["direction"] ?: "DOWN"
-        val down = direction != "UP"
-        val foreground = accessibility.currentForegroundContext()
-        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
-        val accepted = when {
-            explicitYouTube -> accessibility.scrollYouTubeVerified(down) { }
-            scope == null -> false
-            scope.expectedPackage.equals("com.google.android.youtube", true) ->
-                accessibility.scrollYouTubeForegroundVerified(scope, down) { }
-            else -> accessibility.scrollCurrentForegroundVerified(scope, down) { }
-        }
-        return GeneralActionResult(accepted, failureReason = "scroll_dispatch_rejected".takeIf { !accepted }, metadata = mapOf("direction" to direction))
-    }
-
-    private fun executeGeneralBrowserSearchAdapter(parameters: Map<String, String>): GeneralActionResult {
-        val query = parameters["query"].orEmpty()
-        if (query.isBlank()) return GeneralActionResult(false, failureReason = "missing_search_query")
-        val destination = runCatching { SearchDestination.valueOf(parameters["destination"].orEmpty()) }.getOrDefault(SearchDestination.BROWSER)
-        if (destination == SearchDestination.YOUTUBE) {
-            val command = AppCommand.SearchYouTube(query)
-            val result = assistantController.processCommand(
-                StructuredCommandParser.fromLegacy(command, command.toString()), speak = false, notifyListeners = false
-            )
-            return GeneralActionResult(result.success, failureReason = "youtube_search_dispatch_failed".takeIf { !result.success })
-        }
-        val selected = parameters["executor"]?.takeIf { it.isNotBlank() }?.let {
-            runCatching { com.myra.assistant.agent.BrowserSearchExecutor.valueOf(it) }.getOrNull()
-        }
-        val resolution = com.myra.assistant.agent.SearchResolution(
-            destination, parameters["reason"].orEmpty(), selected, parameters["targetPackage"]?.takeIf { it.isNotBlank() }
-        )
-        val dispatch = BrowserSearchTool(this).execute(com.myra.assistant.agent.BrowserSearchRequest(query, destination), resolution)
-        return GeneralActionResult(dispatch.accepted, failureReason = dispatch.reason.takeIf { !dispatch.accepted })
-    }
-
-    private fun executeUnifiedBrowserSearch(raw: String): Boolean {
-        val request = com.myra.assistant.agent.FinalSearchHandoff.parse(raw) ?: run {
-            val task = UnifiedLyraAgentRuntime.agent.currentTask()
-            if (task?.interpretedGoal !in setOf(com.myra.assistant.agent.AgentGoalType.BROWSER_SEARCH,
-                    com.myra.assistant.agent.AgentGoalType.WEB_SEARCH)) return false
-            suppressModelForTurn = true
-            output.clear()
-            voiceLog("SEARCH_FINAL_HANDOFF turnId=$activeTurnId decision=CLARIFY reason=missing_query noExecution=true")
-            queueLocalSpeech("Kya search karna hai?", allowUntranscribedAudio = false)
-            return true
-        }
-        val authorizedTask = GeneralAgentRuntimeStore.runtime.activeTask()
-        if (authorizedTask?.turnId != activeTurnId || ToolCapability.BROWSER_SEARCH !in authorizedTask.intent.requiredCapabilities) {
-            voiceLog("SEARCH_FINAL_HANDOFF turnId=$activeTurnId decision=BLOCK reason=runtime_identity_or_capability")
-            suppressModelForTurn = true
-            output.clear()
-            return true
-        }
-        val accessibility = AccessibilityHelperService.instance
-        val freshForeground = accessibility?.currentForegroundContext()
-        val working = WorkingTaskRuntime.store.snapshot()
-        val resolution = SearchDestinationResolver.resolveDetailed(
-            request,
-            freshForeground?.packageName,
-            working.activeExternalApp
-        )
-        voiceLog(
-            "search_intent_resolved turnId=$activeTurnId finalTranscript=${raw.take(160)} query=${request.query.take(120)} " +
-                "explicitDestination=${request.explicitDestination} workingContextDestination=${working.activeExternalApp} " +
-                "foregroundPackage=${freshForeground?.packageName} resolvedDestination=${resolution.destination} " +
-                "resolutionReason=${resolution.reason} selectedExecutor=${resolution.selectedExecutor}"
-        )
-        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) return true
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        val startedAt = android.os.SystemClock.elapsedRealtime()
-        latestActionDispatchedAt = startedAt
-        val taskTurnId = activeTurnId
-        val executorName = if (resolution.destination == SearchDestination.YOUTUBE) {
-            "YOUTUBE"
-        } else resolution.selectedExecutor?.name ?: "GENERIC_WEB"
-        WorkingTaskRuntime.store.beginSearch(
-            request.query, resolution.destination, executorName, "search_results_visible"
-        )
-        responseArbiter.claimControlled(taskTurnId)
-        voiceLog(
-            "SEARCH_TASK_CREATED turnId=$taskTurnId taskId=${WorkingTaskRuntime.store.snapshot().taskId} " +
-                "queryLength=${request.query.length} destination=${resolution.destination}"
-        )
-        voiceLog(
-            "SEARCH_RUNTIME_BOUND turnId=$taskTurnId taskId=${GeneralAgentRuntimeStore.runtime.activeTask()?.id} " +
-                "destination=${resolution.destination} executor=$executorName"
-        )
-        voiceLog(
-            "SEARCH_EXECUTOR_SELECTED turnId=$taskTurnId executor=$executorName " +
-                "reason=${resolution.reason} targetPackage=${resolution.targetPackage}"
-        )
-        voiceLog(
-            "SEARCH_EXECUTOR_ENTRY class=MyraVoiceService method=executeUnifiedBrowserSearch " +
-                "turnId=$taskTurnId finalTranscript=${raw.take(160)} query=${request.query.take(120)} " +
-                "destination=${resolution.destination} foregroundPackage=${freshForeground?.packageName}"
-        )
-        voiceLog(
-            "task_result_owner turnId=$taskTurnId owner=CONTROLLED_AGENT taskId=${WorkingTaskRuntime.store.snapshot().taskId} " +
-                "destination=${resolution.destination}"
-        )
-        voiceLog(
-            "search_execution_started turnId=$taskTurnId destination=${resolution.destination} " +
-                "reason=${resolution.reason} executor=$executorName"
-        )
-        val expectedPackage = resolution.targetPackage ?: when (resolution.destination) {
-            SearchDestination.YOUTUBE -> "com.google.android.youtube"
-            SearchDestination.BROWSER -> "com.android.chrome".takeIf {
-                packageManager.getLaunchIntentForPackage(it) != null
-            }
-        }
-        GeneralAgentRuntimeStore.runtime.enrich(
-            mapOf(
-                "query" to request.query,
-                "destination" to resolution.destination.name,
-                "executor" to resolution.selectedExecutor?.name.orEmpty(),
-                "reason" to resolution.reason,
-                "targetPackage" to expectedPackage.orEmpty()
-            ),
-            relevantApp = expectedPackage,
-            textHint = request.query
-        )
-        val runtimeTaskId = GeneralAgentRuntimeStore.runtime.activeTask()?.id ?: return false
-        return executeGeneralRuntimeCapability(ToolCapability.BROWSER_SEARCH, taskTurnId, runtimeTaskId) { status, observed ->
-            val verification = when (status) {
-                GeneralVerificationStatus.SUCCESS -> SearchVerification.SUCCESS
-                GeneralVerificationStatus.FAILURE -> SearchVerification.FAILURE
-                GeneralVerificationStatus.UNKNOWN -> SearchVerification.UNKNOWN
-            }
-            finishSearchTaskResult(taskTurnId, verification, observed)
-        }
-    }
-
-    private fun finishSearchTaskResult(turnId: Long, verification: SearchVerification, observed: String) {
-        val completion = when (verification) {
-            SearchVerification.SUCCESS -> TaskCompletionState.SUCCESS
-            SearchVerification.FAILURE -> TaskCompletionState.FAILURE
-            SearchVerification.UNKNOWN -> TaskCompletionState.UNKNOWN
-        }
-        val completed = WorkingTaskRuntime.store.completeSearch(observed, completion)
-        val task = WorkingTaskRuntime.store.snapshot()
-        // Search is terminal here. Keep it only as completed history; do not write it
-        // into BrainTaskState.lastAction where it could bias unrelated later turns.
-        brain.clearTransientState()
-        voiceLog(
-            "task_verification_completed turnId=$turnId taskId=${completed.taskId} verification=$verification " +
-                "destination=${completed.destination} observed=$observed activeTaskCleared=${task.completionState == null}"
-        )
-        voiceLog(
-            "SEARCH_VERIFICATION_RESULT turnId=$turnId taskId=${completed.taskId} verification=$verification " +
-                "destination=${completed.destination}"
-        )
-        voiceLog(
-            "SEARCH_TASK_TERMINAL turnId=$turnId taskId=${completed.taskId} completionState=$completion " +
-                "ordinaryModelMayReport=false activeTaskCleared=true"
-        )
-        responseArbiter.controlledGenerationComplete()
-        responseArbiter.controlledPlaybackComplete()
-        // Keep CONTROLLED_LOCAL ownership latched until the next real user turn begins.
-        // Late packets from the interrupted ordinary model must never report this task.
-        voiceLog("SEARCH_RESULT_OWNER turnId=$turnId owner=CONTROLLED_AGENT release=NEXT_USER_TURN")
-        when (verification) {
-            SearchVerification.SUCCESS -> {
-                emitState("Sun rahi hoonâ€¦")
-                voiceLog("task_result_spoken turnId=$turnId spoken=false result=SUCCESS")
-                voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=false result=SUCCESS")
-            }
-            SearchVerification.UNKNOWN -> {
-                val message = "Search open hui, lekin results verify nahi hue."
-                listener?.onMyraText(message, true)
-                queueLocalSpeech(message, allowUntranscribedAudio = false)
-                voiceLog("task_result_spoken turnId=$turnId spoken=true result=UNKNOWN destination=${completed.destination}")
-                voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=true result=UNKNOWN")
-            }
-            SearchVerification.FAILURE -> {
-                val evidence = GeneralAgentRuntimeStore.runtime.lastCompletedTask()
-                if (evidence?.turnId != turnId || evidence.actionHistory.none { it.capability == ToolCapability.BROWSER_SEARCH }) {
-                    voiceLog("SEARCH_FAILURE_CLAIM_BLOCKED turnId=$turnId reason=no_same_turn_executor_attempt")
-                    emitState("Sun rahi hoonâ€¦")
-                    return
-                }
-                check(SearchTaskResultPolicy.maySpeakFailure(verification))
-                val destination = if (completed.destination == SearchDestination.YOUTUBE) "YouTube" else "Browser"
-                val message = "$destination search start nahi ho paayi."
-                listener?.onMyraText(message, true)
-                queueLocalSpeech(message, allowUntranscribedAudio = false)
-                voiceLog("task_result_spoken turnId=$turnId spoken=true result=FAILURE destination=${completed.destination}")
-                voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=true result=FAILURE")
-            }
-        }
-    }
-
-    private fun executeUnifiedReferenceIfApplicable(raw: String): Boolean {
-        val normalized = raw.lowercase(Locale.ROOT)
-            .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
-        val isReference = listOf("hand wala", "thumb wala", "second wala", "doosra wala", "dusra wala",
-            "ye wala", "isko kholo", "click this", "click that", "ye wala dabao", "woh nahi", "wo nahi")
-            .any(normalized::contains)
-        if (!isReference) return false
-        val context = ActivityContextStore.snapshot() ?: return false
-        val decision = UnifiedLyraAgentRuntime.agent.resolveReference(raw, context)
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        when (decision) {
-            is com.myra.assistant.agent.AgentDecision.Clarify -> {
-                listener?.onMyraText(decision.message)
-                emitState(decision.message)
-                queueLocalSpeech(decision.message, allowUntranscribedAudio = true)
-                voiceLog("agent_clarification taskId=${UnifiedLyraAgentRuntime.agent.currentTask()?.id} reason=ambiguous_reference")
-            }
-            is com.myra.assistant.agent.AgentDecision.Execute -> {
-                val target = decision.target ?: return false
-                val accessibility = AccessibilityHelperService.instance
-                val foreground = accessibility?.currentForegroundContext()
-                val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
-                if (accessibility == null || scope == null || context.packageName != scope.expectedPackage ||
-                    context.windowId != scope.expectedWindowId || context.generation != ActivityContextStore.snapshot()?.generation
-                ) {
-                    val message = "Screen badal gayi. Dobara target batao."
-                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
-                    return true
-                }
-                val before = accessibility.visibleScreenSignature()
-                val result = accessibility.resolveAndTapVisibleTarget(target.label, null, null, scope) { _, _ -> true }
-                val taskId = UnifiedLyraAgentRuntime.agent.currentTask()?.id
-                voiceLog("agent_action_dispatched taskId=$taskId tool=accessibility_click targetRole=${target.role} accepted=${result.accepted}")
-                if (!result.accepted) {
-                    UnifiedLyraAgentRuntime.agent.recordAction(
-                        com.myra.assistant.agent.AgentActionRecord("accessibility_click", target.id, false, false, android.os.SystemClock.elapsedRealtime()),
-                        ActivityContextStore.snapshot()
-                    )
-                    WorkingTaskRuntime.store.recordOutcome(result.resolution, false, target.id)
-                    val message = if (result.resolution == "ambiguous") "Kaunsa wala?" else "Ye target clear nahi mila."
-                    listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
-                } else mainHandler.postDelayed({
-                    accessibility.refreshScreenContext(force = true)
-                    val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
-                    UnifiedLyraAgentRuntime.agent.recordAction(
-                        com.myra.assistant.agent.AgentActionRecord("accessibility_click", target.id, true, changed, android.os.SystemClock.elapsedRealtime()),
-                        ActivityContextStore.snapshot()
-                    )
-                    WorkingTaskRuntime.store.recordOutcome(if (changed) "screen_changed" else "no_verified_change", changed, target.id.takeIf { !changed })
-                    voiceLog("agent_verification taskId=$taskId accepted=true verified=$changed")
-                    if (!changed) {
-                        val message = "Tap hua, lekin result verify nahi hua."
-                        listener?.onMyraText(message, true); queueLocalSpeech(message, allowUntranscribedAudio = false)
-                    }
-                }, 350L)
-            }
-            is com.myra.assistant.agent.AgentDecision.ObserveMore -> {
-                val accessibility = AccessibilityHelperService.instance
-                if (!visualAwarenessPreferences.enabled || accessibility == null ||
-                    !accessibility.requestVisualScreenshot { result ->
-                        mainHandler.post {
-                            val message = if (result.isSuccess) "Kaunsa wala?" else "Current screen clear nahi mili."
-                            listener?.onMyraText(message, result.isFailure)
-                            queueLocalSpeech(message, allowUntranscribedAudio = result.isSuccess)
-                        }
-                    }
-                ) {
-                    val message = "Kaunsa wala?"
-                    listener?.onMyraText(message); queueLocalSpeech(message, allowUntranscribedAudio = true)
-                }
-            }
-            else -> return false
-        }
-        return true
-    }
-
-    private fun finishYouTubeSemantic(
-        success: Boolean,
-        message: String,
-        command: YouTubeSemanticCommand,
-        startedAt: Long,
-        resolution: String
-    ) {
-        if (!success) {
-            listener?.onMyraText(message, true)
-            emitState(message)
-            queueLocalSpeech(message, allowUntranscribedAudio = false)
-        }
-        voiceLog(
-            "youtube_semantic_finished command=${command.javaClass.simpleName} success=$success " +
-                "resolution=$resolution spokenFeedbackSuppressed=$success totalMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-        )
-    }
-
-    private fun canUseVisualFallback(command: YouTubeSemanticCommand): Boolean = command in setOf(
-        YouTubeSemanticCommand.Like, YouTubeSemanticCommand.OpenComments,
-        YouTubeSemanticCommand.Subscribe, YouTubeSemanticCommand.Share, YouTubeSemanticCommand.More
-    ) || command is YouTubeSemanticCommand.OpenChannel
-
-    private fun executeScreenModeCommand(command: ScreenModeCommand) {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        cancelSpeechForNewAction()
-        when (command) {
-            ScreenModeCommand.ON -> {
-                if (ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
-                    requestProjectionPermissionFromOwner()
-                } else voiceLog("screen_mode_command mode=ON result=already_active spokenFeedbackSuppressed=true")
-            }
-            ScreenModeCommand.OFF -> {
-                startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_STOP))
-                voiceLog("screen_mode_command mode=OFF result=stop_requested spokenFeedbackSuppressed=true")
-            }
-        }
-    }
-
-    private fun requestProjectionPermissionFromOwner() {
-        if (ScreenCaptureService.currentState == ScreenShareState.ACTIVE) return
-        val request = Intent(this, MainActivity::class.java)
-            .setAction(MainActivity.ACTION_REQUEST_SCREEN_PROJECTION)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        runCatching { startActivity(request) }
-            .onSuccess { voiceLog("screen_projection_permission_owner_requested owner=MainActivity") }
-            .onFailure {
-                voiceLog("continuous_screen_permission_failed error=${it.javaClass.simpleName}")
-                listener?.onMyraText("Screen sharing permission open nahi hui.", true)
-                queueLocalSpeech("Screen sharing permission open nahi hui.", allowUntranscribedAudio = false)
-            }
-    }
-
-    private fun requestAccessibilityVisualRetry(
-        command: YouTubeSemanticCommand,
-        expected: com.myra.assistant.screen.ForegroundAppContext,
-        turnId: Long,
-        startedAt: Long
-    ): Boolean {
-        val current = AccessibilityHelperService.instance?.currentForegroundContext() ?: return false
-        if (current.packageName != expected.packageName || current.windowId != expected.windowId ||
-            current.generation != expected.generation
-        ) return false
-        voiceLog(
-            "youtube_semantic_fallback route=FAST_VISUAL_TURN turnId=$turnId " +
-                "role=${command.javaClass.simpleName} accessibilityElapsedMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-        )
-        // The deterministic attempt already owned the action guard. Visual fallback is
-        // the same turn and becomes its sole response owner, not a competing action.
-        screenCommandTurnGuard.clear()
-        beginFreshScreenQuery(
-            lastUserIntentText,
-            turnId,
-            FastVisualRequest(FastVisualKind.ACTION, command.javaClass.simpleName)
-        )
-        return true
-    }
-
-    private fun executeAccessibilityFirstScreenAction(
-        target: ScreenTargetReference,
-        ownedTarget: ScreenTargetReference,
-        actionScope: com.myra.assistant.screen.ForegroundActionScope,
-        taskToken: Long,
-        accessibility: AccessibilityHelperService
-    ): Boolean {
-        val startedAt = android.os.SystemClock.elapsedRealtime()
-        val before = accessibility.visibleScreenSignature()
-        val actionSessionId = ScreenCaptureService.session.sessionId.takeIf(String::isNotBlank)
-            ?: "accessibility:${actionScope.expectedPackage}:${actionScope.expectedGeneration}"
-        var actionIntent: ScreenActionIntent? = null
-        var resolution = "not_found"
-        var candidateCount = 0
-        var selectedLabel: String? = null
-        val accepted = if (
-            actionScope.expectedPackage.equals("com.google.android.youtube", true) &&
-            target.ordinal != null &&
-            target.targetText.orEmpty().contains("video", true)
-        ) {
-            actionIntent = screenActionRegistry.create(
-                activeTurnId, actionSessionId, lastUserIntentText,
-                target.targetText, target.position, target.ordinal,
-                actionScope.expectedPackage, startedAt, 0L, 1.0,
-                actionScope.expectedWindowId, actionScope.expectedGeneration
-            )
-            val result = accessibility.resolveAndTapYouTubeVideo(target.ordinal, actionScope)
-            resolution = result.resolution
-            candidateCount = result.candidateCount
-            selectedLabel = result.selectedLabel
-            result.accepted
-        } else {
-            val result = accessibility.resolveAndTapVisibleTarget(
-                target.targetText, target.position, target.ordinal, actionScope
-            ) { _, confidence ->
-                actionIntent = screenActionRegistry.create(
-                    activeTurnId, actionSessionId, lastUserIntentText,
-                    target.targetText, target.position, target.ordinal,
-                    actionScope.expectedPackage, startedAt, 0L, confidence,
-                    actionScope.expectedWindowId, actionScope.expectedGeneration
-                )
-                true
-            }
-            resolution = result.resolution
-            selectedLabel = result.candidate?.label
-            result.accepted
-        }
-        voiceLog(
-            "screen_action_path turnId=$activeTurnId path=ACCESSIBILITY_FAST_PATH " +
-                "package=${actionScope.expectedPackage} ordinal=${target.ordinal} " +
-                "candidateCount=$candidateCount resolution=$resolution " +
-                "selected=${selectedLabel?.take(80)} dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-        )
-        if (!accepted) {
-            actionIntent?.let { screenActionRegistry.cancel(it.actionId) }
-            return when (resolution) {
-                "ambiguous" -> {
-                    finishBrainTask(taskToken, false, "Kaunsa wala?")
-                    true
-                }
-                "stale_foreground", "stale_candidate" -> {
-                    finishBrainTask(taskToken, false, "Screen badal gayi, target use nahi kiya.")
-                    true
-                }
-                "ordinal_out_of_range" -> {
-                    finishBrainTask(taskToken, false, "Itne videos current screen par nahi mile.")
-                    true
-                }
-                "no_video_candidates", "click_rejected" -> {
-                    finishBrainTask(taskToken, false, "Current YouTube screen par real video target nahi mila.")
-                    true
-                }
-                else -> false
-            }
-        }
-        val intent = actionIntent ?: return false
-        mainHandler.postDelayed({
-            if (!brain.isTaskCurrent(taskToken) ||
-                !screenActionRegistry.isCurrent(intent.actionId, intent.turnId, intent.screenSessionId)
-            ) return@postDelayed
-            val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
-            brain.recordScreenAction(ownedTarget, changed)
-            screenActionRegistry.cancel(intent.actionId)
-            finishBrainTask(
-                taskToken,
-                changed,
-                if (changed) "Open ho gaya." else "Tap hua, lekin screen change verify nahi hua."
-            )
-            voiceLog(
-                "screen_action_fast_result actionId=${intent.actionId} verified=$changed " +
-                    "totalMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
-            )
-        }, 420L)
-        return true
-    }
-
-    private fun executeContextualScreenAction(target: ScreenTargetReference) {
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        waitingForFreshInputAfterCommand = true
-        cancelSpeechForNewAction()
-        val accessibility = AccessibilityHelperService.instance
-        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
-            finishBrainTask(brain.snapshot().taskToken, false, "LYRA Accessibility enable karo.")
-            return
-        }
-        val taskToken = brain.snapshot().taskToken
-        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(
-            accessibility.currentForegroundContext()
-        )
-        if (actionScope == null) {
-            finishBrainTask(taskToken, false, "Current app clear nahi mila.")
-            return
-        }
-        if (target.appPackage != null &&
-            (target.appPackage != actionScope.expectedPackage ||
-                target.activeWindowId != actionScope.expectedWindowId ||
-                target.screenContextGeneration != actionScope.expectedGeneration)
-        ) {
-            finishBrainTask(taskToken, false, "Screen badal gayi hai. Kaunsa item?")
-            return
-        }
-        val ownedTarget = target.copy(
-            appPackage = actionScope.expectedPackage,
-            activeWindowId = actionScope.expectedWindowId,
-            screenContextGeneration = actionScope.expectedGeneration
-        )
-        if (executeAccessibilityFirstScreenAction(
-                target, ownedTarget, actionScope, taskToken, accessibility
-            )
-        ) return
-        if (!screenVisionPreferences.visionEnabled ||
-            ScreenCaptureService.currentState != ScreenShareState.ACTIVE
-        ) {
-            finishBrainTask(taskToken, false, "Target Accessibility se clear nahi mila.")
-            return
-        }
-        voiceLog(
-            "screen_action_path turnId=$activeTurnId path=SCREEN_VISION_FALLBACK " +
-                "package=${actionScope.expectedPackage}"
-        )
-        val query = ScreenCaptureService.requestFreshFrame(activeTurnId) { freshResult ->
-            mainHandler.post {
-                if (!brain.isTaskCurrent(taskToken)) return@post
-                val beforeFrame = (freshResult as? FreshFrameResult.Ready)?.frame
-                if (beforeFrame == null || !ScreenCaptureService.session.isCurrent(beforeFrame.sessionId)) {
-                    finishBrainTask(taskToken, false, "Fresh screen context nahi mila.")
-                    return@post
-                }
-                val beforeSignature = accessibility.visibleScreenSignature()
-                var actionIntent: ScreenActionIntent? = null
-                if (beforeFrame.packageName != null &&
-                    beforeFrame.packageName != actionScope.expectedPackage
-                ) {
-                    finishBrainTask(taskToken, false, "App change ho gaya; old target use nahi kiya.")
-                    return@post
-                }
-                val tapResult = accessibility.resolveAndTapVisibleTarget(
-                    target.targetText, target.position, target.ordinal, actionScope
-                ) { _, confidence ->
-                    actionIntent = screenActionRegistry.create(
-                        activeTurnId, beforeFrame.sessionId, lastUserIntentText,
-                        target.targetText, target.position, target.ordinal,
-                        accessibility.currentPackageName(), android.os.SystemClock.elapsedRealtime(),
-                        beforeFrame.frameId, confidence,
-                        actionScope.expectedWindowId, actionScope.expectedGeneration
-                    )
-                    true
-                }
-                val ownedAction = actionIntent
-                val accepted = tapResult.accepted && ownedAction != null
-                if (!accepted) {
-                    ownedAction?.let { screenActionRegistry.cancel(it.actionId) }
-                    brain.recordScreenAction(ownedTarget, false)
-                    finishBrainTask(taskToken, false, "Doosra target clear nahi mila.")
-                    return@post
-                }
-                mainHandler.postDelayed({
-                    ScreenCaptureService.requestFreshFrame(activeTurnId) { result ->
-                        mainHandler.post {
-                            if (!brain.isTaskCurrent(taskToken)) return@post
-                            val action = ownedAction ?: return@post
-                            if (!screenActionRegistry.isCurrent(
-                                action.actionId, action.turnId, action.screenSessionId
-                            )) {
-                                voiceLog("SCREEN_ACTION_CANCELLED actionId=${action.actionId} reason=replaced_before_verification")
-                                return@post
-                            }
-                            val postFrame = (result as? FreshFrameResult.Ready)?.frame
-                            val accessibilityChanged = beforeSignature.isNotBlank() &&
-                                accessibility.visibleScreenSignature() != beforeSignature
-                            val frameChanged = postFrame != null && postFrame.sessionId == beforeFrame.sessionId &&
-                                postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
-                            val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
-                                (accessibilityChanged || frameChanged)
-                            brain.recordScreenAction(ownedTarget, verified)
-                            screenActionRegistry.cancel(action.actionId)
-                            finishBrainTask(
-                                taskToken,
-                                verified,
-                                if (verified) "Doosra wala open ho gaya."
-                                else "Tap hua, lekin screen change verify nahi hua."
-                            )
-                        }
-                    }
-                }, 400L)
-            }
-        }
-        if (query == null) finishBrainTask(taskToken, false, "Screen Vision active nahi hai.")
-    }
-
-    private fun finishBrainTask(taskToken: Long, success: Boolean, message: String) {
-        if (!brain.isTaskCurrent(taskToken)) return
-        brain.finishTask(taskToken, success)
-        listener?.onMyraText(message, !success)
-        emitState(message)
-        queueLocalSpeech(message, allowUntranscribedAudio = success)
-        voiceLog("brain_task_finished taskToken=$taskToken success=$success message=${message.take(100)}")
-    }
-
-    private fun handleScrollProposal(
-        command: AppCommand.ScrollYouTube,
-        source: String,
-        authorization: ScrollProposalAuthorization,
-        requestedTaskId: String? = null
-    ): Boolean {
-        val turnId = activeTurnId
-        val direction = command.direction ?: lastScrollDirection
-        val foreground = AccessibilityHelperService.instance?.currentForegroundContext()
-        if (authorization == ScrollProposalAuthorization.PRE_FINAL) {
-            if (turnId <= 0L) {
-                voiceLog(
-                    "SCROLL_CANDIDATE_REJECTED turnId=$turnId direction=$direction source=$source " +
-                        "authorization=PRE_FINAL decision=REJECTED reason=missing_voice_turn"
-                )
-                return false
-            }
-            pendingScrollCandidates.stage(
-                turnId = turnId,
-                direction = direction.name,
-                detectedAt = android.os.SystemClock.elapsedRealtime(),
-                source = source,
-                foregroundPackage = foreground?.packageName,
-                windowId = foreground?.windowId,
-                observedGeneration = foreground?.generation ?: 0L
-            )
-            voiceLog(
-                "SCROLL_CANDIDATE_DETECTED turnId=$turnId direction=$direction source=$source " +
-                    "foregroundPackage=${foreground?.packageName} observedGeneration=${foreground?.generation ?: 0L} " +
-                    "authorization=PRE_FINAL decision=STAGED"
-            )
-            return false
-        }
-
-        val runtimeTask = GeneralAgentRuntimeStore.runtime.activeTask()
-        if (runtimeTask == null || requestedTaskId.isNullOrBlank()) {
-            voiceLog(
-                "SCROLL_RUNTIME_MISSING turnId=$turnId reason=post_final_authoritative_task_missing " +
-                    "authorization=FINAL_AUTHORIZED"
-            )
-            executeVerifiedScroll(command, requestedTurnId = turnId, requestedTaskId = requestedTaskId.orEmpty())
-            return false
-        }
-        val candidate = pendingScrollCandidates.consume(turnId)
-        val now = android.os.SystemClock.elapsedRealtime()
-        val candidateCompatible = candidate?.let {
-            ScrollCandidatePolicy.compatible(it, turnId, foreground?.packageName, foreground?.windowId, now) &&
-                it.direction == direction.name
-        } ?: false
-        if (candidate != null && !candidateCompatible) {
-            voiceLog(
-                "SCROLL_CANDIDATE_REJECTED turnId=$turnId candidateTurnId=${candidate.turnId} " +
-                    "candidateDirection=${candidate.direction} finalDirection=$direction source=${candidate.source} " +
-                    "foregroundPackage=${foreground?.packageName} observedGeneration=${foreground?.generation ?: 0L} " +
-                    "reason=stale_or_incompatible_final_intent"
-            )
-        }
-        if (!screenCommandTurnGuard.tryCommit(turnId)) {
-            voiceLog("SCROLL_RUNTIME_DUPLICATE_BLOCKED turnId=$turnId taskId=${runtimeTask.id} source=$source")
-            return false
-        }
-        voiceLog(
-            "SCROLL_RUNTIME_BOUND turnId=$turnId taskId=${runtimeTask.id} direction=$direction " +
-                "source=$source stagedCandidateCompatible=$candidateCompatible"
-        )
-        voiceLog("SCROLL_FINAL_DISPATCH turnId=$turnId taskId=${runtimeTask.id} direction=$direction owner=FINAL_UNIFIED_TURN")
-        executeVerifiedScroll(command, requestedTurnId = turnId, requestedTaskId = runtimeTask.id)
-        return true
-    }
-
-    private fun executeVerifiedScroll(
-        command: AppCommand.ScrollYouTube,
-        requestedTurnId: Long = activeTurnId,
-        requestedTaskId: String = GeneralAgentRuntimeStore.runtime.activeTask()?.id.orEmpty()
-    ) {
-        cancelSpeechForNewAction()
-        suppressModelForTurn = true
-        waitingForFreshInputAfterCommand = true
-        commandProbe.clear()
-        output.clear()
-        mediaGuard.finishInteraction()
-
-        val resolvedDirection = command.direction ?: lastScrollDirection
-        val explicitYouTube = command.explicitlyRequestedApp.equals("YouTube", true)
-        val liveForeground = AccessibilityHelperService.instance?.currentForegroundContext()
-        brain.observeForegroundApp(liveForeground?.packageName)
-        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(liveForeground)
-        val foregroundPackage = actionScope?.expectedPackage ?: ActivityContextStore.snapshot()?.packageName
-        val path = when {
-            explicitYouTube -> "ACCESSIBILITY_EXPLICIT_YOUTUBE"
-            foregroundPackage.equals("com.google.android.youtube", true) -> "ACCESSIBILITY_YOUTUBE_FOREGROUND"
-            else -> "ACCESSIBILITY_CURRENT_APP"
-        }
-        voiceLog(
-            "screen_action_runtime_path turnId=$activeTurnId action=scroll path=$path " +
-                "package=$foregroundPackage direction=$resolvedDirection"
-        )
-        GeneralAgentRuntimeStore.runtime.enrich(mapOf(
-            "direction" to resolvedDirection.name,
-            "explicitApp" to command.explicitlyRequestedApp.orEmpty(),
-            "path" to path
-        ), relevantApp = foregroundPackage)
-        val owned = executeGeneralRuntimeCapability(
-            ToolCapability.ACCESSIBILITY_SCROLL, requestedTurnId, requestedTaskId
-        ) { status, _ ->
-            when (status) {
-                GeneralVerificationStatus.SUCCESS -> {
-                    lastScrollDirection = resolvedDirection
-                    hasAcknowledgedScrollDirection = true
-                    audio?.setMuted(false)
-                    emitState("Sun rahi hoonâ€¦")
-                    voiceLog("screen_action_feedback_suppressed turnId=$activeTurnId action=scroll success=true owner=GENERAL_RUNTIME")
-                }
-                GeneralVerificationStatus.UNKNOWN -> {
-                    val dispatchAccepted = GeneralAgentRuntimeStore.runtime.lastCompletedTask()
-                        ?.actionHistory?.lastOrNull()?.accepted == true
-                    if (dispatchAccepted) {
-                        audio?.setMuted(false)
-                        emitState("Sun rahi hoonâ€¦")
-                        voiceLog(
-                            "screen_action_feedback_suppressed turnId=$activeTurnId action=scroll " +
-                                "success=unknown accepted=true owner=GENERAL_RUNTIME reason=insufficient_movement_evidence"
-                        )
-                    }
-                }
-                GeneralVerificationStatus.FAILURE -> {
-                    val message = if (explicitYouTube) "YouTube ka current feed move nahi hua."
-                    else "Current app ka scrollable area move nahi hua."
-                    listener?.onMyraText(message, true); emitState(message); queueLocalSpeech(message)
-                }
-            }
-        }
-        if (!owned) {
-            val reason = if (GeneralAgentRuntimeStore.runtime.activeTask() == null) "no_active_runtime_task" else "runtime_turn_mismatch"
-            voiceLog("SCROLL_RUNTIME_MISSING turnId=$requestedTurnId reason=$reason")
-            voiceLog("LEGACY_FALLBACK_USED turnId=$requestedTurnId capability=ACCESSIBILITY_SCROLL reason=$reason execution=blocked")
-            val message = "Scroll task active nahi hai, isliye action nahi kiya."
-            listener?.onMyraText(message, true); emitState(message); queueLocalSpeech(message)
-        }
-    }
-
-    private fun prepareCloseAfterSpeech(command: AppCommand.CloseCurrentApp) {
-        val preferences = getSharedPreferences("myra", MODE_PRIVATE)
-        val name = configuredUserName(preferences.getString("user_name", null))
-        val personality = preferences.getString("personality", "GF") ?: "GF"
-        val message = VoiceResponseFormatter.closeStarting(command.requestedName, personality, name)
-        pendingActionAfterLocalSpeech = {
-            val result = assistantController.processCommand(
-                StructuredCommandParser.fromLegacy(command, command.toString()),
-                speak = false,
-                notifyListeners = false
-            )
-            if (result.success) {
-                audio?.setMuted(false)
-                emitState("Sun rahi hoonâ€¦")
-            } else {
-                listener?.onMyraText(result.spokenMessage, true)
-                emitState(result.spokenMessage)
-                queueLocalSpeech(result.spokenMessage)
-            }
-        }
-        listener?.onMyraText(message)
-        emitState(message)
-        mediaGuard.beginAssistantTurn()
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-    }
-
-    private fun runPendingActionAfterSpeech(): Boolean {
-        val action = pendingActionAfterLocalSpeech ?: return false
-        pendingActionAfterLocalSpeech = null
-        mainHandler.post { action() }
-        return true
-    }
-
-    private fun isSafeUntranscribedConfirmation(command: AppCommand): Boolean = when (command) {
-        is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
-        is AppCommand.SearchYouTube, is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
-        AppCommand.RequestInstagramReels, AppCommand.OpenInstagramReels, AppCommand.TakeScreenshot,
-        AppCommand.RepeatYouTubeSearch,
-        AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
-        AppCommand.BatteryLevel, is AppCommand.SetFlashlight,
-        is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
-        is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
-        is AppCommand.DeepResearch -> false
-    }
-
-    private fun appendTranscript(builder: StringBuilder, part: String) {
-        LiveTranscriptAssembler.append(builder, part)
-    }
-
-    private fun beginOrdinarySpeechActivity(latestGenerationId: Long, source: String) {
-        if (validatingLocalSpeech != null) return
-        // A completed controlled response deliberately stays latched until genuine new
-        // speech. Release it here before allocating the new identity; the previous order
-        // returned early and left real VAD speech with speechTimingTurnId=0.
-        if (!responseArbiter.acceptsOrdinaryModel() && responseArbiter.released()) {
-            responseArbiter.releaseIfComplete()
-        }
-        if (!responseArbiter.acceptsOrdinaryModel()) return
-        if (ordinaryModelAudioGate.isSpeechActive()) return
-        speechActivityStartedAt = android.os.SystemClock.elapsedRealtime()
-        speechActivityEndedAt = 0L
-        if (activeTurnId == 0L) activeTurnId = ++turnSequence
-        turnLatency.begin(activeTurnId, speechActivityStartedAt)
-        speechTimingTurnId = activeTurnId
-        voiceTurnIdentities.begin(activeTurnId, speechActivityStartedAt)
-        responseArbiter.begin(activeTurnId)
-        val cancelledGeneration = ordinaryModelAudioGate.onSpeechActivityStarted(latestGenerationId)
-        acceptedModelGenerationForTurn = 0L
-        if (earlyModelAudio.isNotEmpty()) {
-            modelAudioDroppedBeforeTurnCompleteCount += earlyModelAudio.size
-            modelAudioDroppedBeforeTurnCompleteBytes += earlyModelAudioBytes
-            earlyModelAudio.clear()
-            earlyModelAudioBytes = 0L
-            earlyModelAudioGenerationId = 0L
-        }
-        // If LYRA is silent, do not reset the media candidate that was just
-        // confirmed from coherent ASR; real playback barge-in still interrupts.
-        if (localAudioSpeaking) audio?.interrupt()
-        voiceLog(
-            "speech_activity_started turnId=$activeTurnId modelGenerationId=$latestGenerationId " +
-                "speechActivityStartedAt=$speechActivityStartedAt source=$source " +
-                "playbackCancelledByBargeIn=${cancelledGeneration != null} cancelledGenerationId=${cancelledGeneration ?: 0L}"
-        )
-    }
-
-    private fun finishOrdinarySpeechActivity() {
-        if (!ordinaryModelAudioGate.isSpeechActive()) return
-        speechActivityEndedAt = android.os.SystemClock.elapsedRealtime()
-        val endingTurnId = speechTimingTurnId.takeIf { it > 0L }
-            ?: voiceTurnIdentities.current()?.userTurnId
-            ?: 0L
-        if (endingTurnId == 0L) {
-            voiceLog("VOICE_ACTION_IDENTITY_INVALID speechTurnId=0 runtimeTurnId=${GeneralAgentRuntimeStore.runtime.activeTask()?.turnId ?: 0L} reason=speech_end_without_identity")
-        } else {
-            speechTimingTurnId = endingTurnId
-            voiceTurnIdentities.speechEnded(endingTurnId, speechActivityEndedAt)
-        }
-        voiceLog("speechActivityEnd turnId=$endingTurnId at=$speechActivityEndedAt")
-        turnLatency.record(endingTurnId, Field.SPEECH_END, speechActivityEndedAt)
-        turnLatency.record(endingTurnId, Field.AUTHORITATIVE_COMPLETE, speechActivityEndedAt)
-        ordinaryModelAudioGate.onSpeechActivityEnded()
-        voiceLog(
-            "authoritative_user_turn_complete turnId=$activeTurnId modelGenerationId=$earlyModelAudioGenerationId " +
-                "speechActivityEndedAt=$speechActivityEndedAt authoritativeUserTurnCompleteAt=$speechActivityEndedAt " +
-                "speechTimingTurnId=$speechTimingTurnId speechDurationMs=${(speechActivityEndedAt - speechActivityStartedAt).coerceAtLeast(0L)} " +
-                "source=local_vad userSpeechActive=false earlyModelAudioBufferedCount=${earlyModelAudio.size} " +
-                "earlyModelAudioBufferedBytes=$earlyModelAudioBytes"
-        )
-        voiceLog("authoritativeTurnComplete turnId=$speechTimingTurnId at=$speechActivityEndedAt speechEndToAuthoritativeTurnMs=0")
-        if (earlyModelAudio.isEmpty()) return
-        val generationId = earlyModelAudioGenerationId
-        val chunks = earlyModelAudio.toList()
-        earlyModelAudio.clear()
-        earlyModelAudioBytes = 0L
-        earlyModelAudioGenerationId = 0L
-        val decision = ordinaryModelAudioGate.decide(generationId)
-        if (decision != ModelAudioDecision.ACCEPT) {
-            modelAudioDroppedBeforeTurnCompleteCount += chunks.size
-            modelAudioDroppedBeforeTurnCompleteBytes += chunks.sumOf { it.size.toLong() }
-            voiceLog(
-                "early_model_audio_dropped turnId=$activeTurnId modelGenerationId=$generationId " +
-                    "rejectionReason=$decision staleAudioDropped=true chunks=${chunks.size}"
-            )
-            return
-        }
-        acceptedModelGenerationForTurn = generationId
-        mediaGuard.beginAssistantTurn()
-        audio?.setPlaybackContext(generationId, responseOwner = "MODEL")
-        audio?.setBargeInEnabled(true)
-        chunks.forEach { audio?.queueAudio(it, generationId, "MODEL") }
-        val acceptedAt = android.os.SystemClock.elapsedRealtime()
-        turnLatency.record(activeTurnId, Field.FIRST_ACCEPTED_MODEL_AUDIO, acceptedAt, generationId)
-        voiceLog(
-            "early_model_audio_released turnId=$activeTurnId modelGenerationId=$generationId " +
-                "firstModelAudioAcceptedAt=${turnLatency.firstAcceptedAudioAt(activeTurnId, generationId)} firstPlaybackAt=$acceptedAt " +
-                "userTurnCompleteToFirstPlaybackMs=${acceptedAt - speechActivityEndedAt} chunks=${chunks.size}"
-        )
-    }
-
-    private fun cancelSpeechForNewAction() {
-        // Clear validation/playback state before AudioEngine emits its interruption
-        // callback. Otherwise finishLocalPlayback() can revive an expired model turn.
-        localSpeechValidationToken++
-        cancelLocalSpeechTimeout("speech_cancelled")
-        validatingLocalSpeech = null
-        pendingLocalSpeech = null
-        pendingLocalSpeechPolicy = LocalSpeechValidationPolicy.DEFAULT
-        pendingLocalSpeechAllowsSilence = false
-        localSpeechAudio.clear()
-        localSpeechTranscript.clear()
-        localSpeechHasContent = false
-        localSpeechStreamedDirectly = false
-        localSpeechGenerationComplete = false
-        localPlaybackActive = false
-        allowUntranscribedLocalSpeech = false
-        pendingActionAfterLocalSpeech = null
-        audio?.interrupt()
-        audio?.setMuted(false)
-    }
-
-    private fun queueLocalSpeech(
-        message: String,
-        allowUntranscribedAudio: Boolean = false,
-        validationPolicy: LocalSpeechValidationPolicy = LocalSpeechValidationPolicy.DEFAULT
-    ) {
-        val now = android.os.SystemClock.elapsedRealtime()
-        val key = normalizeSpeech(message)
-        val speechBusy = validatingLocalSpeech != null ||
-            pendingLocalSpeech != null || localPlaybackActive || localAudioSpeaking
-        if (LocalSpeechDuplicateGuard.shouldDrop(key == lastLocalSpeechKey, speechBusy)) {
-            voiceLog("local_speech_dropped reason=duplicate ageMs=${now - lastLocalSpeechAt}")
-            return
-        }
-        lastLocalSpeechKey = key
-        lastLocalSpeechAt = now
-        suppressModelForTurn = true
-        val ownerTurnId = activeTurnId.takeIf { it != 0L }
-            ?: responseArbiter.turnId.takeIf { it != 0L }
-            ?: ++turnSequence
-        responseArbiter.claimControlled(ownerTurnId)
-        audio?.setBargeInEnabled(false)
-        ordinaryModelAudioGate.onSpeechActivityEnded()
-        earlyModelAudio.clear()
-        earlyModelAudioBytes = 0L
-        earlyModelAudioGenerationId = 0L
-        voiceLog("suppression_start turnId=$ownerTurnId responseOwner=CONTROLLED_LOCAL reason=controlled_reply")
-        // Remove any ordinary-model PCM already queued before the deterministic
-        // correction/delete/recall response takes ownership.
-        audio?.interrupt()
-        localSpeechQueuedAt = now
-        voiceLog(
-            "local_speech_queued chars=${message.length} policy=${policyName(validationPolicy)} " +
-                "alreadyValidating=${validatingLocalSpeech != null} allowNoTranscript=$allowUntranscribedAudio " +
-                "turnId=$ownerTurnId responseOwner=CONTROLLED_LOCAL localSpeechQueuedAt=$localSpeechQueuedAt " +
-                "actionToReplyQueuedMs=${if (latestActionDispatchedAt > 0L) localSpeechQueuedAt - latestActionDispatchedAt else -1L}"
-        )
-        // Keep the echo-cancelled microphone open so the user can interrupt or issue
-        // the next short command without waiting for LYRA's acknowledgement to finish.
-        audio?.setMuted(false)
-        if (validatingLocalSpeech == null) {
-            allowUntranscribedLocalSpeech = allowUntranscribedAudio
-            localSpeechValidationPolicy = validationPolicy
-            // The turn owner suppresses ordinary output, and the existing transcript
-            // validation gate will not release unmatched late PCM as controlled speech.
-            // The former MEMORY quarantine added a fixed 2-second delay even after the
-            // database-backed reply was ready, without adding another playback check.
-            beginValidatedLocalSpeech(message)
-        }
-        else {
-            pendingLocalSpeech = message
-            pendingLocalSpeechPolicy = validationPolicy
-            pendingLocalSpeechAllowsSilence = allowUntranscribedAudio
-        }
-    }
-
-    private fun beginValidatedLocalSpeech(message: String, retry: Boolean = false) {
-        val client = live
-        if (client == null) {
-            voiceLog("local_speech_unavailable reason=no_live_client chars=${message.length}")
-            finishUnavailableNaturalLocalSpeech(message)
-            return
-        }
-        if (!retry) localSpeechValidationAttempt = 0
-        localSpeechValidationAttempt++
-        localSpeechValidationToken++
-        val token = localSpeechValidationToken
-        controlledGenerationId++
-        audio?.setPlaybackContext(controlledGenerationId, responseOwner = "CONTROLLED_LOCAL")
-        validatingLocalSpeech = message
-        localSpeechHasContent = false
-        localSpeechStreamedDirectly = false
-        localSpeechGenerationComplete = false
-        localSpeechAudio.clear()
-        localSpeechTranscript.clear()
-        localSpeechFirstAudioReceivedAt = 0L
-        localSpeechFirstAudioAcceptedAt = 0L
-        localSpeechFirstPlaybackWriteAt = 0L
-        localSpeechLastAudioReceivedAt = 0L
-        suppressModelForTurn = true
-        val generationStartAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog(
-            "local_speech_generation_start turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token attempt=$localSpeechValidationAttempt " +
-                "chars=${message.length} policy=${policyName(localSpeechValidationPolicy)} generationStartAt=$generationStartAt " +
-                "queuedToGenerationStartMs=${generationStartAt - localSpeechQueuedAt}"
-        )
-        // Continuous mic packets can race with clientContent and cancel this short
-        // deterministic memory utterance before Gemini returns audio. Listening is
-        // restored by every playback-complete and unavailable-audio path below.
-        if (localSpeechValidationPolicy.isolateFromMicDuringGeneration) {
-            audio?.setMuted(true)
-        }
-        localSpeechRequestSentAt = android.os.SystemClock.elapsedRealtime()
-        client.sendText("Say exactly these words once, with the selected natural voice. Do not add, remove, translate, explain, or introduce them: ${org.json.JSONObject.quote(message)}")
-        voiceLog(
-            "controlled_request_sent turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token " +
-                "controlledRequestSentAt=$localSpeechRequestSentAt queuedToRequestSentMs=${localSpeechRequestSentAt - localSpeechQueuedAt}"
-        )
-        cancelLocalSpeechTimeout("new_generation")
-        localSpeechTimeoutToken = token
-        localSpeechTimeoutGate.start(token)
-        val timeoutRunnable = Runnable {
-            val timeoutFiredAt = android.os.SystemClock.elapsedRealtime()
-            if (token == localSpeechValidationToken && validatingLocalSpeech != null &&
-                localSpeechTimeoutGate.shouldFire(token)
-            ) {
-                voiceLog(
-                    "local_speech_timeout turnId=${responseArbiter.turnId} generationId=$controlledGenerationId token=$token timeoutFiredAt=$timeoutFiredAt audioChunks=${localSpeechAudio.size} " +
-                        "audioBytes=${localSpeechAudio.sumOf { it.size }} transcriptChars=${localSpeechTranscript.length}"
-                )
-                finishValidatedLocalSpeech()
-            } else {
-                voiceLog("local_speech_timeout_ignored token=$token activeToken=$localSpeechValidationToken reason=stale_generation")
-            }
-        }
-        localSpeechTimeoutRunnable = timeoutRunnable
-        val timeoutScheduledAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog("local_speech_timeout_scheduled generationId=$controlledGenerationId timeoutToken=$token timeoutScheduledAt=$timeoutScheduledAt")
-        mainHandler.postDelayed(timeoutRunnable, localSpeechValidationPolicy.timeoutMs)
-    }
-
-    private fun startLocalSpeechWhenPrefixMatches() {
-        val expected = validatingLocalSpeech ?: return
-        if (localSpeechStreamedDirectly || localSpeechAudio.isEmpty()) return
-        val actualForValidation = romanDisplayText(localSpeechTranscript.toString())
-        val expectedForValidation = romanDisplayText(expected)
-        if (!LocalSpeechGate.shouldReleaseBeforeTurnComplete(
-                localSpeechValidationPolicy.bufferUntilValidated,
-                actualForValidation,
-                expectedForValidation
-            )) {
-            voiceLog(
-                "local_speech_waiting_for_validation audioChunks=${localSpeechAudio.size} " +
-                    "transcriptChars=${localSpeechTranscript.length}"
-            )
-            return
-        }
-
-        localSpeechStreamedDirectly = true
-        localPlaybackActive = true
-        localSpeechFirstAudioAcceptedAt = android.os.SystemClock.elapsedRealtime()
-        if (localSpeechTimeoutGate.acceptFirstAudio(localSpeechValidationToken)) {
-            cancelLocalSpeechTimeout("first_audio_accepted")
-        }
-        voiceLog(
-            "local_speech_released_early turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                "audioChunks=${localSpeechAudio.size} firstAudioAcceptedAt=$localSpeechFirstAudioAcceptedAt"
-        )
-        localSpeechAudio.forEach { audio?.queueAudio(it, controlledGenerationId, "CONTROLLED_LOCAL") }
-        localSpeechFirstPlaybackWriteAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog(
-            "controlled_first_playback_write turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt} " +
-                "speechEndToFirstPlaybackMs=${if (speechActivityEndedAt > 0L) localSpeechFirstPlaybackWriteAt - speechActivityEndedAt else -1L} " +
-                "firstAudioToPlaybackMs=${if (localSpeechFirstAudioReceivedAt > 0L) localSpeechFirstPlaybackWriteAt - localSpeechFirstAudioReceivedAt else -1L}"
-        )
-        localSpeechAudio.clear()
-    }
-
-    private fun cancelLocalSpeechTimeout(reason: String) {
-        val runnable = localSpeechTimeoutRunnable ?: return
-        mainHandler.removeCallbacks(runnable)
-        localSpeechTimeoutRunnable = null
-        localSpeechTimeoutGate.clear(localSpeechTimeoutToken)
-        voiceLog(
-            "local_speech_timeout_cancelled turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                "timeoutToken=$localSpeechTimeoutToken timeoutCancelledAt=${android.os.SystemClock.elapsedRealtime()} reason=$reason"
-        )
-    }
-
-    private fun finishValidatedLocalSpeech() {
-        val expected = validatingLocalSpeech ?: return
-        val actual = localSpeechTranscript.toString()
-        validatingLocalSpeech = null
-        if (localSpeechStreamedDirectly) {
-            // The first verified words matched the deterministic response, so playback
-            // was safely released early. Wait for queued audio to finish before resuming
-            // listening or running any deferred action.
-            localSpeechGenerationComplete = true
-            localSpeechAudio.clear()
-            localSpeechTranscript.clear()
-            if (!localAudioSpeaking && localPlaybackActive) finishLocalPlayback()
-            return
-        }
-        val normalizedActual = romanDisplayText(actual)
-        val normalizedExpected = romanDisplayText(expected)
-        val transcriptMatches = LocalSpeechGate.matchesExpectedExactly(normalizedActual, normalizedExpected)
-        // Memory prompts are low-risk and already have their exact text on screen. Live
-        // sometimes streams the selected natural voice before its output transcript. In
-        // that narrow case, keep the buffered Gemini audio instead of discarding it and
-        // switching to robotic Android TTS. Phone actions retain strict transcript gating.
-        val bufferedAudioBytes = localSpeechAudio.sumOf { it.size }
-        val trustedNaturalAudio =
-            localSpeechValidationPolicy.trustBufferedNaturalAudio &&
-                localSpeechHasContent &&
-                LocalSpeechGate.hasEnoughBufferedNaturalAudio(bufferedAudioBytes, expected)
-        voiceLog(
-            "local_speech_validation_result transcriptMatch=$transcriptMatches " +
-                "trustedAudio=$trustedNaturalAudio hasContent=$localSpeechHasContent " +
-                "audioBytes=$bufferedAudioBytes actualChars=${actual.length} expectedChars=${expected.length} " +
-                "normalizedActual=${normalizedActual.take(120)} normalizedExpected=${normalizedExpected.take(120)}"
-        )
-        if ((transcriptMatches || trustedNaturalAudio) && localSpeechAudio.isNotEmpty()) {
-            if (localSpeechTimeoutGate.acceptFirstAudio(localSpeechValidationToken)) {
-                cancelLocalSpeechTimeout("validated_audio_accepted")
-            }
-            localSpeechGenerationComplete = true
-            localPlaybackActive = true
-            voiceLog("local_speech_released_after_validation audioChunks=${localSpeechAudio.size}")
-            localSpeechAudio.forEach { audio?.queueAudio(it, controlledGenerationId, "CONTROLLED_LOCAL") }
-            localSpeechFirstPlaybackWriteAt = android.os.SystemClock.elapsedRealtime()
-            voiceLog(
-                "controlled_first_playback_write turnId=${responseArbiter.turnId} generationId=$controlledGenerationId " +
-                    "firstPlaybackWriteAt=$localSpeechFirstPlaybackWriteAt queuedToFirstPlaybackMs=${localSpeechFirstPlaybackWriteAt - localSpeechQueuedAt} " +
-                    "speechEndToFirstPlaybackMs=${if (speechActivityEndedAt > 0L) localSpeechFirstPlaybackWriteAt - speechActivityEndedAt else -1L} " +
-                    "firstAudioToPlaybackMs=${if (localSpeechFirstAudioReceivedAt > 0L) localSpeechFirstPlaybackWriteAt - localSpeechFirstAudioReceivedAt else -1L}"
-            )
-            localSpeechAudio.clear()
-            localSpeechTranscript.clear()
-        } else {
-            localSpeechAudio.clear()
-            localSpeechTranscript.clear()
-            if (localSpeechValidationAttempt < localSpeechValidationPolicy.maxAttempts && live != null) {
-                voiceLog("local_speech_retry nextAttempt=${localSpeechValidationAttempt + 1}")
-                beginValidatedLocalSpeech(expected, retry = true)
-            } else {
-                voiceLog("local_speech_dropped reason=validation_failed attempts=$localSpeechValidationAttempt")
-                finishUnavailableNaturalLocalSpeech(expected)
-            }
-        }
-    }
-
-    private fun finishUnavailableNaturalLocalSpeech(message: String) {
-        cancelLocalSpeechTimeout("natural_audio_unavailable")
-        voiceLog(
-            "local_speech_unavailable chars=${message.length} fallback=${localSpeechValidationPolicy.speakFallback} " +
-                "allowNoTranscript=$allowUntranscribedLocalSpeech"
-        )
-        // Never switch to Android TTS. If validated natural Gemini audio is
-        // unavailable, preserve the already-visible deterministic text, complete
-        // any deferred verified action, and resume listening silently.
-        allowUntranscribedLocalSpeech = false
-        localPlaybackActive = false
-        localSpeechStreamedDirectly = false
-        localSpeechGenerationComplete = false
-        responseArbiter.controlledGenerationComplete()
-        responseArbiter.controlledPlaybackComplete()
-        if (responseArbiter.releaseIfComplete()) voiceLog("suppression_end turnId=${responseArbiter.turnId} reason=unavailable_natural_audio")
-        if (!runPendingActionAfterSpeech()) {
-            audio?.setMuted(false)
-            emitState("Sun rahi hoonâ€¦")
-        }
-    }
-
-    private fun finishLocalPlayback() {
-        val playbackEndAt = android.os.SystemClock.elapsedRealtime()
-        voiceLog("local_speech_playback_finished turnId=${responseArbiter.turnId} generationId=$controlledGenerationId playbackEndAt=$playbackEndAt")
-        val resumeMicImmediately =
-            localSpeechValidationPolicy.resumeMicImmediatelyAfterPlayback
-        allowUntranscribedLocalSpeech = false
-        localPlaybackActive = false
-        localSpeechStreamedDirectly = false
-        localSpeechGenerationComplete = false
-        responseArbiter.controlledPlaybackComplete()
-        if (responseArbiter.releaseIfComplete()) {
-            voiceLog("suppression_end turnId=${responseArbiter.turnId} generationId=$controlledGenerationId reason=matching_generation_and_playback_complete")
-        }
-        if (!runPendingActionAfterSpeech()) {
-            if (resumeMicImmediately) audio?.resumeListeningNow()
-            else audio?.setMuted(false)
-            emitState("Sun rahi hoonâ€¦")
-        }
-    }
-
-    private fun policyName(policy: LocalSpeechValidationPolicy): String = when (policy) {
-        LocalSpeechValidationPolicy.MEMORY -> "MEMORY"
-        LocalSpeechValidationPolicy.DEFAULT -> "DEFAULT"
-        else -> "CUSTOM"
-    }
-
-    private fun voiceLog(message: String) {
-        if (VOICE_AUDIO_DEBUG_LOGGING) {
-            VoicePipelineLogger.debug(message)
-        }
-    }
-
-    private fun commitFinalUserMessage(
-        raw: String,
-        source: String,
-        normalized: String = romanDisplayText(raw),
-        display: String = normalized
-    ) {
-        val turnId = activeTurnId.takeIf { it != 0L }
-            ?: responseArbiter.turnId.takeIf { it != 0L }
-            ?: ++turnSequence
-        val utteranceId = "$transcriptSessionId:$turnId"
-        voiceLog(
-            "user_message_commit_attempt sessionId=$transcriptSessionId turnId=$turnId " +
-                "utteranceId=$utteranceId source=$source raw=${raw.take(160)} " +
-                "normalized=${normalized.take(160)} display=${display.take(160)}"
-        )
-        when (val result = finalUserMessageCommitter.commit(
-            FinalUserMessage(transcriptSessionId, turnId, utteranceId, raw, normalized, display)
-        )) {
-            is UserMessageCommitResult.Accepted -> {
-                voiceLog(
-                    "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
-                        "utteranceId=$utteranceId source=$source accepted=true messageId=${result.messageId}"
-                )
-                listener?.onUserText(result.message.display)
-            }
-            is UserMessageCommitResult.AlreadyCommitted -> voiceLog(
-                "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
-                    "utteranceId=$utteranceId source=$source accepted=false " +
-                    "reason=already_committed existingMessageId=${result.existingMessageId}"
-            )
-        }
-    }
-
-    private fun resetTurnBuffers(reason: String = "turn_committed") {
-        voiceLog(
-            "transcript_accumulator_reset turnId=$activeTurnId session=${hashCode()} " +
-                "reason=$reason inputChars=${input.length} commandChars=${commandProbe.length}"
-        )
-        input.clear()
-        output.clear()
-        commandProbe.clear()
-        commandUserTextEmitted = false
-        probableActionTurn = false
-        mediaBlockedTurn = false
-        ambiguousMessageTurn = false
-        incompleteActionFragmentTurn = false
-        activeTurnId = 0L
-        if (!screenResponseActive && !ordinaryModelAudioGate.isSpeechActive()) {
-            speechTimingTurnId = 0L
-            speechActivityStartedAt = 0L
-            speechActivityEndedAt = 0L
-        }
-        if (!screenResponseActive) {
-            armedScreenQuestion = ""
-            armedScreenQuestionTurnId = 0L
-            armedScreenQuestionDetectedAt = 0L
-            armedScreenQuestionFinalCommitted = false
-            earlyScreenQuestionText = ""
-            earlyScreenQueryAwaitingFinalTranscript = false
-            earlyScreenQueryDispatchedTurnId = 0L
-        }
-    }
-
-    private fun romanDisplayText(value: String): String {
-        if (Regex("[\\u3400-\\u4DBF\\u4E00-\\u9FFF]").containsMatchIn(value)) {
-            return "Voice input unclear - please repeat."
-        }
-        val transliterated = romanTransliterator?.transliterate(value)?.trim().orEmpty()
-            .ifBlank { value.trim() }
-        return RomanHinglishFormatter.format(transliterated)
-    }
-
-    private fun finalTranscriptDisplay(value: String): FinalTranscriptDisplayFormatter.Result {
-        return FinalTranscriptDisplayFormatter.format(value) { token ->
-            romanTransliterator?.transliterate(token)?.trim().orEmpty().ifBlank { token }
-        }
-    }
-
-    private fun contextualRelationshipCandidate(currentTurn: String): MemoryCandidate? {
-        val now = android.os.SystemClock.elapsedRealtime()
-        recentRelationshipTurns.removeAll { now - it.first > RELATIONSHIP_CONTEXT_MS }
-        return ContextualRelationshipMemoryExtractor.extract(
-            recentRelationshipTurns.map { it.second } + currentTurn
-        )
-    }
-
-    private fun rememberRecentRelationshipTurn(turn: String) {
-        if (turn.isBlank()) return
-        recentRelationshipTurns += android.os.SystemClock.elapsedRealtime() to turn
-        while (recentRelationshipTurns.size > MAX_RELATIONSHIP_CONTEXT_TURNS) {
-            recentRelationshipTurns.removeAt(0)
-        }
-    }
-
-    private fun rememberBestFriendForCorrection(candidate: MemoryCandidate) {
-        lastSavedBestFriendName = MemoryRelationshipPolicy.personName(candidate.fact)
-            ?.let(BestFriendNameCanonicalizer::canonicalize)
-        lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
-    }
-
-    private fun replaceRecentRelationshipName(oldName: String, newName: String) {
-        for (index in recentRelationshipTurns.indices) {
-            val (time, text) = recentRelationshipTurns[index]
-            recentRelationshipTurns[index] = time to text.replace(
-                Regex("\\b${Regex.escape(oldName)}\\b", RegexOption.IGNORE_CASE),
-                newName
-            )
-        }
-    }
-
-    private fun startCanonicalRename(correction: BestFriendNameCorrection) {
-        val validationFailure = BestFriendNameCorrectionParser.validateNewName(correction.newName)
-        if (validationFailure != null || correction.oldName.equals(correction.newName, ignoreCase = true)) {
-            voiceLog(
-                "name_correction_rejected oldNameCandidate=${correction.oldName} " +
-                    "newNameCandidate=${correction.newName} newNameValidation=rejected " +
-                    "rejectionReason=${validationFailure ?: "old_and_new_names_are_identical"} " +
-                    "databaseMutationAllowed=false"
-            )
-            val clarification = "Correct naam clear nahi hua. Ek baar naam clearly repeat karo."
-            suppressModelForTurn = true
-            localCommandExecutedThisTurn = true
-            output.clear()
-            audio?.interrupt()
-            listener?.onMyraText(clarification)
-            emitState(clarification)
-            queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-            return
-        }
-        suppressModelForTurn = true
-        localCommandExecutedThisTurn = true
-        output.clear()
-        audio?.interrupt()
-        voiceLog(
-            "name_correction_mutation oldNameCandidate=${correction.oldName} " +
-                "newNameCandidate=${correction.newName} newNameValidation=valid " +
-                "databaseMutationAllowed=true"
-        )
-        // Do not trust Gemini's conversational acknowledgement. Only this verified
-        // repository result is allowed to produce a success bubble or spoken reply.
-        pendingCanonicalRename = serviceScope.launch {
-            val before = memoryRepository.logPersonIdentity(
-                "before_correction", correction.oldName, correction.newName
-            )
-            voiceLog(
-                "correction_transaction old=${correction.oldName} new=${correction.newName} " +
-                    "matchingRowIds=${before.map { it.id }}"
-            )
-            val renameOutcome = memoryBrain.processPersonRename(correction)
-            val renamed = (renameOutcome as? MemoryBrainOutcome.Mutated)?.result is MemoryWriteResult.Saved
-            val rows = memoryRepository.logPersonIdentity(
-                "after_correction renamed=$renamed", correction.oldName, correction.newName
-            )
-            val verified = renamed && rows.any {
-                MemoryRelationshipPolicy.personName(it.fact)
-                    ?.equals(correction.newName, ignoreCase = true) == true
-            } && rows.none {
-                MemoryRelationshipPolicy.personName(it.fact)
-                    ?.equals(correction.oldName, ignoreCase = true) == true
-            }
-            voiceLog(
-                "correction_transaction_result writeSuccess=$renamed verified=$verified " +
-                    "successAcknowledgementAllowed=$verified " +
-                    "finalRows=${rows.joinToString { "${it.id}:${it.stableKey}:${it.fact}" }}"
-            )
-            val successAcknowledgementAllowed = CorrectionSuccessPolicy.acknowledgementAllowed(
-                writeSuccess = renamed,
-                verified = verified
-            )
-            val reply = if (successAcknowledgementAllowed) {
-                "Theek hai, ab ${correction.newName} naam save hai."
-            } else {
-                "Memory update verify nahi hui. Correct naam ek baar clearly batao."
-            }
-            mainHandler.post {
-                if (successAcknowledgementAllowed) {
-                    replaceRecentRelationshipName(correction.oldName, correction.newName)
-                    lastSavedBestFriendName = correction.newName
-                    lastSavedBestFriendAt = android.os.SystemClock.elapsedRealtime()
-                    voiceLog("correction_cache_invalidated old=${correction.oldName} new=${correction.newName}")
-                }
-                listener?.onMyraText(reply)
-                emitState(reply)
-                queueLocalSpeech(
-                    reply,
-                    allowUntranscribedAudio = true,
-                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                )
-            }
-        }
-    }
-
-    private fun isPhantomTranscript(value: String): Boolean {
-        return PhantomTranscriptFilter.shouldIgnore(value)
-    }
-
-    private fun normalizeSpeech(value: String): String = value.lowercase(Locale.ROOT)
-        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
-        .trim()
-
-    private fun executeDeepResearch(command: AppCommand.DeepResearch) {
-        val query = command.query?.trim().orEmpty()
-        suppressModelForTurn = true; waitingForFreshInputAfterCommand = false; output.clear(); commandProbe.clear()
-        deepResearchActive = true
-        mainHandler.removeCallbacks(idleNudgeRunnable)
-        audio?.interrupt(); live?.interrupt()
-        if (query.isBlank()) {
-            deepResearchActive = false
-            val prompt = "Haan, deep research kar sakti hoon. Kis topic par research chahiye?"
-            listener?.onMyraText(prompt); emitState("Waiting for a research topic")
-            speakResearchSummary(prompt)
-            return
-        }
-        listener?.onMyraText("Researching â€œ$queryâ€â€¦")
-        emitState("Deep Research in progressâ€¦")
-        val prefs = getSharedPreferences("myra", MODE_PRIVATE)
-        val apiKey = ApiKeyStore(this).get(ApiKeyStore.TAVILY)
-        val endpoint = prefs.getString("tavily_api_url", "https://api.tavily.com/search").orEmpty()
-        val depth = prefs.getString("research_depth", "basic").orEmpty()
-        serviceScope.launch {
-            val result = DeepResearchClient().search(query, apiKey, endpoint, depth)
-            deepResearchActive = false
-            listener?.onMyraText(result.report, !result.success)
-            emitState(if (result.success) "Deep Research complete" else "Deep Research failed")
-            if (result.success) speakResearchSummary(result.spokenSummary)
-            else { suppressModelForTurn = false; waitingForFreshInputAfterCommand = true }
-        }
-    }
-
-    private fun speakResearchSummary(summary: String) {
-        hideNextModelTranscript = true
-        suppressModelForTurn = false
-        live?.sendText("Speak this research result aloud naturally and briefly. Do not add facts or mention URLs: $summary")
-    }
-
-    private fun systemPrompt(name: String, mode: String, voice: String): String {
-        val style = when (mode) { "Professional" -> "Formal English, precise, no emoji, at most two sentences."; "Assistant" -> "Friendly Hinglish or English, balanced and helpful, at most three sentences."; else -> "Speak like Zopy's close human friend in natural Roman-script Hinglish, never like a girlfriend, romantic partner, customer-support bot, or obedient servant. Use Latin letters only in every reply. Never output Devanagari, Chinese, or any other non-Latin script. If the user speaks another script, understand it but answer in Roman Hinglish. Completely avoid romantic pet names including jaan, meri jaan, dear, baby, babu, sweetheart, and love. You may occasionally use natural friendship words such as yaar, dost, bhai, acha, arre, or haan, but do not force them into every response. Notice the user's mood and respond with genuine interest, friendly reassurance, honest opinions, humor, and occasional playful teasing. ${FriendConversationPolicy.REPLY_DISCIPLINE} Do not address the user by name or nickname in every response. Use yaar or dost rarely, never in consecutive replies, and never as punctuation at the end of every sentence. Do not repeatedly begin with Haan, Acha, Of course, or Okay. Never end ordinary conversation with Aur kuch, Aur kya karun, How can I help, or another service-style closing unless the situation genuinely requires a question. Do not agree automatically: politely disagree or express uncertainty when that is more honest. Truth rule: you are an AI without a body or real-world experiences. Never say or imply that you personally travelled, went sightseeing, ate, smelled rain, watched weather, saw stars, visited a place, or performed any physical activity. Never say 'mujhe travel karna pasand hai', 'mujhe ghumna pasand hai', or claim a personal preference that depends on physical experience. Say the activity sounds interesting or that many people enjoy it, then stop unless one useful question genuinely helps. Do not manufacture memories, needs, jealousy, loneliness, consciousness, or emotions. Sometimes a short acknowledgement or quiet listening is more human than a full answer. Never sound possessive, controlling, dependent, manipulative, overly agreeable, or overly dramatic." }
-        val femaleVoice = voice.lowercase(Locale.ROOT) in setOf("aoede", "kore", "leda", "zephyr")
-        val baseGenderStyle = if (femaleVoice) {
-            "You have a female identity and the selected female voice is $voice. Use feminine grammar only when referring to yourself: karungi, sakti hoon, sun rahi hoon, and gayi. ${FriendConversationPolicy.MALE_USER_GRAMMAR} Never say karunga, sakta hoon, sun raha hoon, or gaya about yourself."
-        } else {
-            "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
-        }
-        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} When natural conversation clearly reveals one durable fact about the user, call propose_user_memory once with the user's actual supporting words. Never call it for guesses, temporary feelings, secrets, or information already present in saved memory; never claim it was saved or ask permission yourself. The user may have multiple best friends. When an explicit completed statement names another best friend, accept it naturally and never ask which name is correct, whether to replace someone, or whether the user is sure; Android adds each named person silently. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action so Android accessibility selects and verifies the existing UI target; never invent coordinates or claim success before verification. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
-        val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
-        return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Express emotion through the natural voice, not by announcing emotion or writing stage directions. Match vocal delivery to both the user's mood and the meaning of the conversation: sound brighter, warmer, and slightly more energetic for happiness or exciting news; softer, slower, and gently reassuring for sadness, worry, or vulnerability; calm, steady, and patient for frustration or anger; lightly teasing and playful during mutual joking; naturally surprised when something is genuinely unexpected; and focused with less playfulness for serious topics. Emotional changes must be subtle and human, never theatrical. Never fake sobbing, crying sounds, panic, jealousy, guilt, or emotional dependence. Do not mirror intense anger back at the user. When uncertain about mood, use a warm neutral voice. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Remember, forget, and what-do-you-remember requests are memory intent, never phone actions. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
-    }
-
-    private fun markUserInteraction() {
-        idleNudgeCount = 0
-        mainHandler.removeCallbacks(idleNudgeRunnable)
-        // Silence is normal. Do not schedule an unsolicited conversation starter.
-    }
-
-    private fun handleIdleNudge() {
-        mainHandler.removeCallbacks(idleNudgeRunnable)
-        val screenOn = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
-        val busy = microphoneMuted || deepResearchActive || localPlaybackActive || localAudioSpeaking ||
-            validatingLocalSpeech != null || pendingLocalSpeech != null
-        if (!isRunning || !isNaturalVoiceReady || !uiVisible || !screenOn || busy) {
-            if (isRunning && idleNudgeCount < MAX_IDLE_NUDGES) {
-                mainHandler.postDelayed(idleNudgeRunnable, IDLE_RECHECK_MS)
-            }
-            return
-        }
-        val message = if (idleNudgeCount == 0) {
-            listOf(
-                "Kya hua, aaj mujhse baat nahi karoge?",
-                "Itne chup kyun ho, sab theek hai?",
-                "Hmm... kis soch mein kho gaye?"
-            ).random()
-        } else {
-            listOf(
-                "Main yahin hoon, jab mann ho baat kar lena.",
-                "Aaj bade shaant lag rahe ho... kya hua?",
-                "Theek hai, main yahin hoon. Jab chaho baat kar lena."
-            ).random()
-        }
-        idleNudgeCount++
-        listener?.onMyraText(message)
-        emitState(message)
-        mediaGuard.beginAssistantTurn()
-        queueLocalSpeech(message, allowUntranscribedAudio = true)
-        if (idleNudgeCount < MAX_IDLE_NUDGES) {
-            mainHandler.postDelayed(idleNudgeRunnable, SECOND_IDLE_NUDGE_MS)
-        }
-    }
-
-    private fun configuredUserName(saved: String?): String =
-        saved?.trim()?.takeIf { it.isNotBlank() && !it.equals("Friend", ignoreCase = true) } ?: "Zopy"
-
-    private fun executeTypedLocalCommand(text: String): Boolean {
-        markUserInteraction()
-        val command = CommandParser.parse(text) ?: return false
-        localCommandExecutedThisTurn = false
-        waitingForFreshInputAfterCommand = false
-        executeCommand(command)
-        pendingLocalSpeech?.let { message ->
-            pendingLocalSpeech = null
-            localSpeechValidationPolicy = pendingLocalSpeechPolicy
-            allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
-            beginValidatedLocalSpeech(message)
-        }
-        return true
-    }
-
-    private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }
-
-    private fun speakWhatsAppAnnouncement(sender: String, message: String?) {
-        if (live == null) return
-        val now = android.os.SystemClock.elapsedRealtime()
-        val key = "${sender.lowercase(Locale.ROOT)}|${message.orEmpty().lowercase(Locale.ROOT)}"
-        if (key == lastAnnouncementKey && now - lastAnnouncementAt < 30_000L) return
-        lastAnnouncementKey = key
-        lastAnnouncementAt = now
-        audio?.interrupt()
-        mediaGuard.beginAssistantTurn()
-        val name = configuredUserName(getSharedPreferences("myra", MODE_PRIVATE).getString("user_name", null))
-        val announcement = if (message == null) {
-            "$name, WhatsApp mein $sender ka private message aaya hai. Content sensitive hai, main aloud nahi padhungi. Kya reply doon?"
-        } else {
-            "$name, WhatsApp mein $sender ka message aaya hai: $message. Kya reply doon?"
-        }
-        live?.sendText("Speak this notification announcement naturally in Hinglish. Do not add anything: $announcement")
-        emitState("WhatsApp message from $sender")
-    }
-    private fun createChannel() { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel(CHANNEL_ID, "LYRA background voice", NotificationManager.IMPORTANCE_LOW)) }
-    private fun notification(text: String): Notification {
-        val open = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val stop = PendingIntent.getService(this, 2, Intent(this, MyraVoiceService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        return NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setColor(Color.rgb(255, 23, 68)).setContentTitle("LYRA background voice").setContentText(text)
-            .setContentIntent(open).setOngoing(true).addAction(0, "Stop", stop).build()
-    }
-    private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
-    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); pendingDeleteClarificationUntil = 0L; recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
-    override fun onDestroy() {
-        ScreenCaptureService.listeners -= screenCaptureListener
-        fastVisualTurns.cancel()
-        visualDeadlineExecutor.shutdownNow()
-        visualFrameDeliveryExecutor.shutdownNow()
-        instance = null
-        if (isRunning) stopSession()
-        super.onDestroy()
-    }
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    companion object {
-        const val ACTION_START = "com.myra.START_VOICE"
-        const val ACTION_STOP = "com.myra.STOP_VOICE"
-        const val ACTION_MUTE = "com.myra.MUTE_VOICE"
-        const val EXTRA_MUTED = "muted"
-        fun notifyScreenProjectionPermissionResult(granted: Boolean) {
-            if (!granted) instance?.mainHandler?.post {
-                instance?.voiceLog("continuous_screen_permission_denied")
-                instance?.queueLocalSpeech("Screen sharing permission allow nahi hui.", allowUntranscribedAudio = false)
-            }
-        }
-        private const val CHANNEL_ID = "myra_voice"
-        private const val NOTIFICATION_ID = 1001
-        private const val DELETE_CLARIFICATION_TIMEOUT_MS = 30_000L
-        private const val LOCAL_SPEECH_AUDIO_DRAIN_MS = 800L
-        private const val SCREEN_QUERY_DIAGNOSTIC_TIMEOUT_MS = 8_000L
-        private const val ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS = 900L
-        private const val MAX_READING_CHARS_PER_SCREEN = 1_200
-        private const val RELATIONSHIP_CONTEXT_MS = 45_000L
-        private const val MAX_RELATIONSHIP_CONTEXT_TURNS = 3
-        private const val BEST_FRIEND_CORRECTION_CONTEXT_MS = 45_000L
-        private const val FIRST_IDLE_NUDGE_MS = 2 * 60 * 1000L
-        private const val SECOND_IDLE_NUDGE_MS = 5 * 60 * 1000L
-        private const val IDLE_RECHECK_MS = 30 * 1000L
-        private const val MAX_IDLE_NUDGES = 2
-        private const val VOICE_AUDIO_DEBUG_LOGGING = true
-        private const val VOICE_AUDIO_LOG_TAG = "LyraVoicePipeline"
-        @Volatile var isRunning = false
-        @Volatile var isNaturalVoiceReady = false
-        @Volatile var listener: Listener? = null
-        @Volatile private var uiVisible = false
-        @Volatile private var instance: MyraVoiceService? = null
-        fun sendText(text: String) {
-            instance?.let {
-                it.markUserInteraction()
-                it.lastUserIntentText = text.trim()
-                val reading = ReadingIntentParser.parse(text)
-                val typedTurnId = ++it.turnSequence
-                val screenIntent = ScreenVisionIntentParser.parse(text)
-                if (reading != null && it.handleReadingCommand(reading, typedTurnId)) {
-                    Unit
-                } else if (screenIntent != null) {
-                    it.beginFreshScreenQuery(text, typedTurnId)
-                } else if (!it.handleExplicitMemoryText(text)) {
-                    it.live?.sendText(text)
-                }
-                Unit
-            }
-        }
-        fun sendImage(image: ByteArray, mimeType: String, prompt: String) { instance?.live?.sendImage(image, mimeType, prompt) }
-        fun executeLocalText(text: String): Boolean = instance?.executeTypedLocalCommand(text) == true
-        fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
-        fun announceWhatsApp(sender: String, message: String?) { instance?.speakWhatsAppAnnouncement(sender, message) }
-        fun speakLocal(message: String) {
-            if (!isNaturalVoiceReady) return
-            instance?.let { service ->
-                service.markUserInteraction()
-                service.mediaGuard.beginAssistantTurn()
-                service.queueLocalSpeech(message, allowUntranscribedAudio = true)
-            }
-        }
-        fun setUiVisible(visible: Boolean) {
-            uiVisible = visible
-            instance?.let { service ->
-                service.voiceLog("ui_visibility visible=$visible")
-                service.mainHandler.removeCallbacks(service.idleNudgeRunnable)
-                if (visible) service.markUserInteraction()
-            }
-        }
-        fun interrupt() { instance?.audio?.interrupt(); instance?.live?.interrupt() }
-    }
-}
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×NtÓDèµ©hºÚn¶X§zÍ\XÚØYÙHÛÛK›^\˜K˜\ÜÚ\Ý[œÙ\šXÙB‚š[\Ü[™›ÚY˜\Š‚š[\Ü[™›ÚY˜ÛÛ[’[[š[\Ü[™›ÚY™Ü˜\XÜËÛÛÜ‚š[\Ü[™›ÚY›ÜË’Pš[™\‚š[\Ü[™›ÚY›ÜË’[™\‚š[\Ü[™›ÚY›ÜË“ÛÜ\‚š[\Ü[™›ÚY›ÜË”ÝÙ\“X[˜YÙ\‚š[\Ü[™›ÚY›ÜËZ[š[\Ü[™›ÚYšXÝK^•˜[œÛ]\˜]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™XYÛ›ÜÝXÜË•›ÚXÙT\[[™SÙÙÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™XYÛ›ÜÝXÜË•\›“][˜ÞU[[Y]žBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™XYÛ›ÜÝXÜË•\›“][˜ÞU[[Y]žK‘šY[š[\Ü[™›ÚY˜ÛÜ™K˜\“›ÝYšXØ][ÛÛÛ\]š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK]Y[Ñ[™Ú[™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZKÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK‘Ù[Z[šS]™PÛY[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK\RÙ^TÝÜ™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK‘Y\™\ÙX\˜ÚÛY[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK’[™Ñœ™YSYYXQÝX\™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK“\˜T^X˜XÚÐØ\\™TÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK“]™U˜[œØÜš\\ÜÙ[X›\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ZK“YYXTÜYXÚÛÚ\™[˜ÙTÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜œ˜Z[‹œ˜Z[‘XÚ\Ú[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜œ˜Z[‹“\˜Pœ˜Z[ÛÛÜ™[˜]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜œ˜Z[‹”ØÜ™Y[•\™Ù]™Y™\™[˜ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜œ˜Z[‹”ØÜ›Û\™XÝ[Ûˆ\Èœ˜Z[”ØÜ›Û\™XÝ[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK]]ÛX]XÓY[[ÜžPÚ[™ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK]]ÛX]XÓY[[ÜžPÚ[™ÙT\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK™\ÝœšY[™˜[YPØ[›ÛšXØ[^™\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK™\ÝœšY[™˜[YPÛÜœ™XÝ[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžKÛ\šYšYY˜[YT™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžKÛÛ^X[™[][ÛœÚ\Y[[ÜžQ^˜XÝÜ‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžKÛÜœ™XÝ[Û”ÝXØÙ\ÜÔÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“\˜SY[[ÜžQ]X˜\ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPÛÛ[X[™™\Q›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPØ[™Y]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”\œÛÛ˜[Y[[ÜžQ^˜XÝÜ‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”\œÛÛ“[šÙYY[[ÜžQ^˜XÝÜ‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”\œÛÛ˜[Y[[ÜžT™XØ[›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžT™\ÜÚ]ÜžBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPœ˜Z[ÛÛÜ™[˜]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPœ˜Z[“Ý]ÛÛYBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžUÛÜšÚ[™ÐÛÛ^š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžT™[][ÛœÚ\ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”Ø]™YY[[ÜžPÛÛ^›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžUÜš]T™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžTØY™]TÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžTØ]™QXÚ\Ú[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžPØ]YÛÜžBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK“Y[[ÜžTÙ[œÚ]]š]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”Ù[X[XÓY[[ÜžT›ÜÜØ[˜[Y]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK•[˜ÛX\‘[]R[[ÝX\™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[™]K›Y[[ÜžK”[™[™Ñ[]PÛ\šYšXØ][Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›[Ù[\ÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œÛ™K\XÝ[Û‘^XÝ]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[“^P\XØ][Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜ÛÛ[X[™ËÛÛ[X[™\œÙ\ˆ\ÈÝXÝ\™YÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[ZK›XZ[‹“XZ[XÝ]š]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[Ø\\™TÙ\šXÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”š]˜XÞTÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[‘œ˜[YTš]˜XÞQš[\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”š]˜XÞT™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”]Y\žQ\Ü]ÚÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”]Y\žU[Z[™ÔÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”Ú\™TÝ]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[“[ÙPÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[“[ÙPÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[•š\Ú[Û’[[\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹’[œÝ[ØÜ™Y[”]Y\žBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ØXÚU\ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ÛÛ^ÝÜ™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹’ÝØÜ™Y[ØXÚTÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Âš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹•š\ÝX[]Ø\™[™\ÜÔ™Y™\™[˜Ù\Âš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘˜\Ýš\ÝX[Ú[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘˜\Ýš\ÝX[™\]Y\Ýš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘˜\Ýš\ÝX[™\]Y\ÝÛ\ÜÚYšY\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘˜\Ýš\ÝX[\›ÛÛÜ™[˜]Ü‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹•š\ÝX[XÜ]Z\Ú][Û‘Ø]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹•š\ÝX[ØÜ™Y[œÚÝ[Y[Ý]ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”Ù[X[XÔØÜ™Y[‘˜[˜XÚÔÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹•š\ÚX›TØÜ™Y[‘[[Y[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[XÝ]š]PÛÛ^ÝÜ™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•[šYšYY\˜PYÙ[[[YBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•\›’[[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•ÛÜšÚ[™Õ\ÚÔ[[YBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[œ›ÝÜÙ\”ÙX\˜Ú™\]Y\Ý\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[œ›ÝÜÙ\”ÙX\˜ÚÛÛš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú^XÝ][Û”ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú\Ý[˜][Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú\Ý[˜][Û”™\ÛÛ™\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[œ›ÝÜÙ\”ÙX\˜Ú™\šYšXØ][Û”ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[–[ÝUX™TÙX\˜Ú™\šYšXØ][Û”ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú\ÚÔ™\Ý[ÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ÙX\˜Ú™\šYšXØ][Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•\ÚÐÛÛ\][Û”Ý]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[YÙ[ÛÛ™YÚ\ÝžBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[‘Ù[™\˜[XÝ[Û”™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[‘Ù[™\˜[XÝ[Û”›Ý]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[‘Ù[™\˜[YÙ[[[YTÝÜ™Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[‘Ù[™\˜[[[YU\ÚÂš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[‘Ù[™\˜[ÛÛY\\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[‘Ù[™\˜[™\šYšXØ][Û”Ý]\Âš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”\˜Ù\[Û”Û˜\ÚÝš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”[›™\”™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”›ÙXÝ[ÛY\\‘^XÝ]ÜœÂš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”›ÙXÝ[Û‘Ù[™\˜[Y\\œÂš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”™XÛÝ™\žQXÚ\Ú[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ØÜ™Y[”ØÙ[™Q˜XÝÜžBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ØÜ›Û[Ý™[Y[[˜[^™\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[”ØÜ›Û™\šYšXØ][Û”™\Ø[\TÛXÞBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•ÛÛØ\Xš[]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘œ™\Úœ˜[YT™\Ý[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”™\ÜÛœÙPš[™[™Âš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”™XY[™ÐÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”™XY[™Ò[[\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”™XY[™ÔÝ]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”™XY[™Õ˜XÚÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ÛÛ[X[™\›‘ÝX\™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ÛÛ[\Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[XÝ[Û’[[š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[XÝ[Û’[[™YÚ\ÝžBš[\Ü˜]˜K][˜ÛÛ˜Ý\œ™[‘^XÝ]ÜœÂš[\Ü˜]˜K][˜ÛÛ˜Ý\œ™[•[YU[š]š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•^ÛÛ\ÜÙTÙ\ÜÚ[Û‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹–[ÝUX™TÙ[X[XÐÛÛ[X[™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹–[ÝUX™TÙ[X[XÐÛÛ[X[™\œÙ\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK“ØØ[ÜYXÚØ]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK‘š[˜[˜[œØÜš\\Ü^Q›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK‘š[˜[˜[œØÜš\\XØ]QÝX\™š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK‘š[˜[Ù[X[XÕ\Ù\•]\˜[˜ÙBš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK‘š[˜[˜[œØÜš\]\ÚXš[]QØ]Bš[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK”[ÛU˜[œØÜš\š[\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK”›ÛX[’[™Û\Ú›Ü›X]\‚š[\ÜÛÛK›^\˜K˜\ÜÚ\Ý[›ÚXÙK•›ÚXÙT™\ÜÛœÙQ›Ü›X]\‚š[\Ü˜]˜K^”Ú[\Q]Q›Ü›X]š[\Ü˜]˜K][Š‚š[\ÜÛÝ[ž˜ÛÜ›Ý][™\ËÛÜ›Ý][™TØÛÜBš[\ÜÛÝ[ž˜ÛÜ›Ý][™\Ë‘\Ü]Ú\œÂš[\ÜÛÝ[ž˜ÛÜ›Ý][™\Ë”Ý\\š\ÛÜ’›Ø‚š[\ÜÛÝ[ž˜ÛÜ›Ý][™\Ë˜Ø[˜Ù[š[\ÜÛÝ[ž˜ÛÜ›Ý][™\Ë›][˜Ú‚š[\›˜[Øš™XÝœšY[™ÛÛ™\œØ][Û”ÛXÞHÂˆÛÛœÝ˜[‘TWÑTÐÒTS‘HBˆ‘Y˜][ÈÛ™HÚÜ˜]\˜[Ù[[˜ÙH›ÜˆÜ™[˜\žHÛÛ™\œØ][ÛŽÈ\ÙHHÙXÛÛ™Û›HÚ[ˆ™YYYˆˆ
+Âˆ•\ÙH[Ü™HÛ›HÚ[ˆ›ÜH^XÚ]H\ÚÜÈ›Üˆ]Z[ÜˆHÜXÈ™\]Z\™\ÈHØY™]H^[˜][Û‹ˆˆ
+Âˆ[œÝÙ\ˆÛÛ\]H]Y\Ý[ÛœÈ\™XÝH[™ÝÜ8 %™]™\ˆ\[™HÛÜÚ[™È]Y\Ý[Û‹ÜXÈ›Û\Üˆ	Ø]\ˆÝ[˜[ÉËˆˆ
+Âˆ\ÚÈ›È›ÛÝË]\[›\ÜÈZ\ÜÚ[™È[™›Ü›X][Ûˆ™]™[ÈH\ÙY[[œÝÙ\ŽÈˆ
+ÂˆšYˆ[ÝH\ÚÈÛ™K]]\Ý™HHÛ›H]Y\Ý[Ûˆ[ˆH[\™H™\Kˆˆ
+Âˆ“™]™\ˆ\ÙHÝ\ÝÛY\‹\Ý\ÜÛÜ™[™ÈÝXÚ\È	Ú[Ø\ˆØZÝHÛÛ‰Ë[™™]™\ˆÛÝ[™\ÛZ\ÜÚ]™HÚ]ˆ
+Âˆœ˜\Ù\ÈÝXÚ\È	Ú\ÜÙHžXYHXZ[ˆÞXH›ÛÛÛ‰ÈÜˆ™\ÜÝ\™HH\Ù\ˆÈÚ]™HHÜXÚYšXÈÜXËˆ‚‚ˆÛÛœÝ˜[“ÔÔ×ÐTÔÒTÕS•ÔÕSHBˆ•\ÙHHÝXHÛÛ™šY[\œÛÛ˜[X\ÜÚ\Ý[Û™Kˆ[ÝHX^HØØØ\Ú[Û˜[HØ^H	Ø›ÜÜÉË	ÛÛˆ]	Ëˆ
+Âˆ‰ÙÛÝ]	ËÜˆ	ÙÛ™IÈÚ[ˆ]˜]\˜[Hš]ÈH™\šYšYYXÝ[Û‹]™]™\ˆ[ˆ]™\žH™\Kˆ
+Âˆ›™]™\ˆ[Ü™H[ˆÛ˜ÙH[ˆH™\ÜÛœÙK[™™]™\ˆÛZ[H[ˆXÝ[Ûˆ\ÈÛ™H™Y›Ü™H[™›ÚY™\šYšY\È]ˆ‚‚ˆÛÛœÝ˜[PSWÕTÑT—ÑÔSSPTˆBˆ–›ÜH\ÈX[KÛÈÚ[ˆY™\ÜÚ[™È[H\ÙHX\ØÝ[[™H›Ü›\ÈÝXÚ\ÈØZÝHËØ\›ÙÙK[™Ø^YNÈˆ
+Âˆ›™]™\ˆY™\ÜÈ[H\ÈØZÝHÈÜˆØ\›ÙÚKˆ‚ŸB‚˜Û\ÜÈ^\˜U›ÚXÙTÙ\šXÙHˆÙ\šXÙJ
+HÂˆ[\™˜XÙH\Ý[™\ˆÂˆ[ˆÛ”Ý]J^ˆÝš[™ÊBˆ[ˆÛ”™XYJ
+Bˆ[ˆÛ[\]YJ˜[YNˆ›Ø]
+Bˆ[ˆÛ”ÜXZÚ[™ÊÜXZÚ[™Îˆ›ÛÛX[ŠBˆ[ˆÛ•\Ù\•^
+^ˆÝš[™ÊBˆ[ˆÛ“^\˜U^
+^ˆÝš[™Ë\œ›ÜŽˆ›ÛÛX[ˆH˜[ÙJBˆB‚ˆš]˜]H˜\ˆ]Y[Îˆ]Y[Ñ[™Ú[™OÈH[ˆš]˜]H˜\ˆ]™NˆÙ[Z[šS]™PÛY[ÈH[ˆš]˜]H˜\ˆÛÛ›™XÝ[Û”™\\š[™ÈH˜[ÙBˆš]˜]H˜[[œ]HÝš[™ÐZ[\Š
+Bˆš]˜]H˜[Ý]]HÝš[™ÐZ[\Š
+Bˆš]˜]H˜[ÛÛ[X[™›Ø™HHÝš[™ÐZ[\Š
+Bˆš]˜]H˜[œ˜Z[ˆH\˜Pœ˜Z[ÛÛÜ™[˜]ÜŠ
+Bˆš]˜]H˜[™XY[™Õ˜XÚÙ\ˆH™XY[™Õ˜XÚÙ\Š
+Bˆš]˜]H˜[ØÜ™Y[ÛÛ[X[™\›‘ÝX\™HØÜ™Y[ÛÛ[X[™\›‘ÝX\™
+
+Bˆš]˜]H˜[ØÜ™Y[XÝ[Û”™YÚ\ÝžHHØÜ™Y[XÝ[Û’[[™YÚ\ÝžJ
+Bˆš]˜]H˜[^ÛÛ\ÜÙTÙ\ÜÚ[ÛˆH^ÛÛ\ÜÙTÙ\ÜÚ[ÛŠ
+Bˆš]˜]H˜\ˆ\Ý\Ù\’[[^Hˆ‚ˆš]˜]H˜[™XÙ[™[][ÛœÚ\\›œÈH]]X›S\ÝÙZ\Û™ËÝš[™ÏŠ
+Bˆš]˜]H˜\ˆ\ÝØ]™Y™\ÝœšY[™˜[YNˆÝš[™ÏÈH[ˆš]˜]H˜\ˆ\ÝØ]™Y™\ÝœšY[™]Hˆš]˜]H˜\ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆš]˜]H˜\ˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆš]˜]H˜\ˆÛÛ[X[™\Ù\•^[Z]YH˜[ÙBˆš]˜]H˜\ˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆH˜[ÙBˆš]˜]H˜\ˆ[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆH˜[ÙBˆš]˜]H˜\ˆ[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ˆH˜[ÙBˆš]˜]H˜\ˆ\ÝÛÛ[X[™Ù^HHˆ‚ˆš]˜]H˜\ˆ\ÐXÚÛ›ÝÛYÙYØÜ›Û\™XÝ[ÛˆH˜[ÙBˆš]˜]H˜\ˆ\ÝØÜ›Û\™XÝ[ÛˆH\ÛÛ[X[™”ØÜ›Û\™XÝ[Û‹‘ÕÓ‚ˆš]˜]H˜\ˆ\ÝÛÛ[X[™]Hˆš]˜]H˜\ˆYS™^[Ù[˜[œØÜš\H˜[ÙBˆš]˜]H˜\ˆYYXP›ØÚÙY\›ˆH˜[ÙBˆš]˜]H˜\ˆ›Ø˜X›PXÝ[Û•\›ˆH˜[ÙBˆš]˜]H˜\ˆ[™[™ÓØØ[ÜYXÚˆÝš[™ÏÈH[ˆš]˜]H˜\ˆ[™[™ÓØØ[ÜYXÚÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK‘QUSˆš]˜]H˜\ˆ[™[™ÓØØ[ÜYXÚ[ÝÜÔÚ[[˜ÙHH˜[ÙBˆš]˜]H˜\ˆ˜[Y][™ÓØØ[ÜYXÚˆÝš[™ÏÈH[ˆš]˜]H˜\ˆØØ[ÜYXÚ˜[Y][Û•ÚÙ[ˆHˆš]˜]H˜\ˆØØ[ÜYXÚ˜[Y][Û][\Hˆš]˜]H˜\ˆØØ[ÜYXÚ˜[Y][Û”ÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK‘QUSˆš]˜]H˜\ˆØØ[ÜYXÚ\ÐÛÛ[H˜[ÙBˆš]˜]H˜\ˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH˜[ÙBˆš]˜]H˜[XZ[’[™\ˆH[™\ŠÛÜ\‹™Ù]XZ[“ÛÜ\Š
+JBˆš]˜]H˜[š\ÝX[XY[™Q^XÝ]ÜˆH^XÝ]ÜœË›™]ÔÚ[™ÛU™XYØÚY[Y^XÝ]ÜˆÈ[›˜X›HO‚ˆ™XY
+[›˜X›K›\˜K]š\ÝX[YXY[™HŠK˜\HÈ\ÑY[[ÛˆHYHBˆBˆš]˜]H˜[š\ÝX[œ˜[YQ[]™\žQ^XÝ]ÜˆH˜]˜K][˜ÛÛ˜Ý\œ™[•™XYÛÛ^XÝ]ÜŠˆKK[YU[š]“RSTÑPÓÓ‘Ë˜]˜K][˜ÛÛ˜Ý\œ™[“[šÙY›ØÚÚ[™Ô]Y]YJ
+Kˆ˜]˜K][˜ÛÛ˜Ý\œ™[•™XY˜XÝÜžHÈ[›˜X›HO‚ˆ™XY
+[›˜X›K›\˜KXÝ\œ™[]š\ÝX[Y[]™\žHŠK˜\HÂˆ\ÑY[[ÛˆHYBˆš[Üš]HH™XY“PVÔ’SÔ’UBˆBˆBˆ
+Bˆš]˜]H˜\ˆ[™[™Ñ[]PÛ\šYšXØ][Û•[[Hˆš]˜]H˜\ˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YNˆÝš[™ÏÈH[ˆš]˜]H˜\ˆ[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[Hˆš]˜]H˜\ˆ[™[™ÔÜ[[™ÐÛÛ™š\›X][Û“˜[YNˆÝš[™ÏÈH[ˆš]˜]H˜\ˆ\›”Ù\]Y[˜ÙHHˆš]˜]H˜\ˆXÝ]™U\›’YHˆš]˜]H˜\ˆÛÛ›ÛYÙ[™\˜][Û’YHˆš]˜]H˜[™\ÜÛœÙP\˜š]\ˆH\›”™\ÜÛœÙP\˜š]\Š
+Bˆš]˜]H˜[Ü™[˜\žS[Ù[]Y[ÑØ]HHÜ™[˜\žS[Ù[]Y[ÑØ]J
+Bˆš]˜]H˜[˜[œØÜš\Ù\ÜÚ[Û’YH˜]˜K][•URQœ˜[™ÛUURQ
+
+KÔÝš[™Ê
+Bˆš]˜]H˜[˜[œØÜš\]\ÚXš[]QØ]HHš[˜[˜[œØÜš\]\ÚXš[]QØ]J
+Bˆš]˜]H˜[š[˜[\Ù\“Y\ÜØYÙPÛÛ[Z]\ˆHš[˜[\Ù\“Y\ÜØYÙPÛÛ[Z]\Š
+Bˆš]˜]H˜\ˆZXÜ›ÜÛ™S]]YH˜[ÙBˆš]˜]H˜\ˆY\™\ÙX\˜ÚXÝ]™HH˜[ÙBˆš]˜]H˜\ˆYSYÙPÛÝ[Hˆš]˜]H˜[YSYÙT[›˜X›HH[›˜X›HÈ[™RYSYÙJ
+HBˆš]˜]H˜[ØØ[ÜYXÚ]Y[ÈH]]X›S\ÝÙž]P\œ˜^OŠ
+Bˆš]˜]H˜[ØØ[ÜYXÚ˜[œØÜš\HÝš[™ÐZ[\Š
+Bˆš]˜]H˜\ˆØØ[^X˜XÚÐXÝ]™HH˜[ÙBˆš]˜]H˜\ˆØØ[ÜYXÚÝ™X[YY\™XÝHH˜[ÙBˆš]˜]H˜\ˆØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]HH˜[ÙBˆš]˜]H˜\ˆØØ[ÜYXÚ[Y[Ý][›˜X›Nˆ[›˜X›OÈH[ˆš]˜]H˜\ˆØØ[ÜYXÚ[Y[Ý]ÚÙ[ˆHˆš]˜]H˜[ØØ[ÜYXÚ[Y[Ý]Ø]HHÛÛ›ÛYÜYXÚ[Y[Ý]Ø]J
+Bˆš]˜]H˜\ˆØØ[ÜYXÚ]Y]YY]Hˆš]˜]H˜\ˆØØ[ÜYXÚ™\]Y\ÝÙ[]Hˆš]˜]H˜\ˆØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y]Hˆš]˜]H˜\ˆØØ[ÜYXÚš\œÝ]Y[ÐXØÙ\Y]Hˆš]˜]H˜\ˆØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]Hˆš]˜]H˜\ˆØØ[ÜYXÚ\Ý]Y[Ô™XÙZ]™Y]Hˆš]˜]H˜\ˆ[œÝ[ØÜ™Y[”]Y\žRYHˆ‚ˆš]˜]H˜\ˆ[œÝ[ØÜ™Y[”]Y\žTÝ\Y]Hˆš]˜]H˜\ˆ[œÝ[ØÜ™Y[ØXÚPYÙS\ÈHˆš]˜]H˜\ˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[Hˆš]˜]H˜\ˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\ÈHˆš]˜]H˜\ˆXØÙ\Y[Ù[Ù[™\˜][Û‘›Ü•\›ˆHˆš]˜]H˜\ˆÜYXÚXÝ]š]TÝ\Y]Hˆš]˜]H˜\ˆÜYXÚXÝ]š]Q[™Y]Hˆš]˜]H˜\ˆÜYXÚ[Z[™Õ\›’YHˆš]˜]H˜[\›“][˜ÞHH\›“][˜ÞU[[Y]žJŽ›ÚXÙSÙÊBˆš]˜]H˜[ØÜ›ÛÛÛ[X][Û•[[Y]žHHÛÛK›^\˜K˜\ÜÚ\Ý[™XYÛ›ÜÝXÜË”ØÜ›ÛÛÛ[X][Û•[[Y]žJŽ›ÚXÙSÙÊBˆš]˜]H˜[›ÚXÙU\›’Y[]Y\ÈH›ÚXÙU\›’Y[]TÝÜ™J
+Bˆš]˜]H˜[[™[™ÔØÜ›ÛØ[™Y]\ÈH[™[™ÔØÜ›ÛØ[™Y]TÝÜ™J
+Bˆš]˜]H˜\ˆ[œ]\›”Ý\Y]Hˆš]˜]H˜\ˆ]\Ý\›XØÙ\Y]Hˆš]˜]H˜\ˆ]\Ý[[XÚYY]Hˆš]˜]H˜\ˆ]\Ý[[[Z[™Õ\›’YHˆš]˜]H˜\ˆ]\ÝXÝ[Û‘\Ü]ÚY]Hˆš]˜]H˜\ˆ]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’YHˆš]˜]H˜\ˆX\›S[Ù[]Y[ÑÙ[™\˜][Û’YHˆš]˜]H˜[X\›S[Ù[]Y[ÈH]]X›S\ÝÙž]P\œ˜^OŠ
+Bˆš]˜]H˜\ˆX\›S[Ù[]Y[Ðž]\ÈHˆš]˜]H˜\ˆØØ[]Y[ÔÜXZÚ[™ÈH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPXÝ]™HH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[H˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙYH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][ÛÛÛ\]HH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙU^ÛÛ[Z]YH˜[ÙBˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YHˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPY\‘Ù[™\˜][Û’YHˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YHˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPš[™[™ÎˆØÜ™Y[”™\ÜÛœÙPš[™[™ÏÈH[ˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YHˆ‚ˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPXØÙ\ÜÚXš[]TXÚØYÙHHˆ‚ˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙPXØÙ\ÜÚXš[]QÙ[™\˜][ÛˆHˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙT]Y\žRYHˆ‚ˆš]˜]H˜\ˆØÜ™Y[”]Y\Ý[Û‘]XÝY]Hˆš]˜]H˜\ˆØÜ™Y[‘œ™\Úœ˜[YPØ\\™Y]Hˆš]˜]H˜\ˆØÜ™Y[‘œ˜[YTÙ[]Hˆš]˜]H˜\ˆØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]Hˆš]˜]H˜\ˆØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞHH˜[ÙBˆš]˜]H˜[˜\Ýš\ÝX[\›œÈH˜\Ýš\ÝX[\›ÛÛÜ™[˜]ÜŠ
+Bˆš]˜]H˜\ˆ\›YYØÜ™Y[”]Y\Ý[ÛˆHˆ‚ˆš]˜]H˜\ˆ\›YYØÜ™Y[”]Y\Ý[Û•\›’YHˆš]˜]H˜\ˆ\›YYØÜ™Y[”]Y\Ý[Û‘]XÝY]Hˆš]˜]H˜\ˆ\›YYØÜ™Y[”]Y\Ý[Û‘š[˜[ÛÛ[Z]YH˜[ÙBˆš]˜]H˜\ˆX\›TØÜ™Y[”]Y\Ý[Û•^Hˆ‚ˆš]˜]H˜\ˆX\›TØÜ™Y[”]Y\žP]ØZ][™Ñš[˜[˜[œØÜš\H˜[ÙBˆš]˜]H˜\ˆX\›TØÜ™Y[”]Y\žQ\Ü]ÚY\›’YHˆš]˜]H˜\ˆ[™[™ÐØ[›ÛšXØ[™[˜[YNˆÛÝ[ž˜ÛÜ›Ý][™\Ë’›ØÈH[ˆš]˜]H˜\ˆ[™[™ÐXÝ[ÛY\“ØØ[ÜYXÚˆ
+
+
+HOˆ[š]
+OÈH[ˆš]˜]H˜\ˆ[™[™ÐÛÛ™š\›YYÛÛ[X[™ˆ\ÛÛ[X[™ÈH[ˆš]˜]H˜\ˆ[™[™ÐÛÛ™š\›X][Û‘^\™\Ð]Hˆš]˜]H˜\ˆ\ÝØØ[ÜYXÚÙ^HHˆ‚ˆš]˜]H˜\ˆ\ÝØØ[ÜYXÚ]Hˆš]˜]H˜\ˆ\Ý[››Ý[˜Ù[Y[Ù^HHˆ‚ˆš]˜]H˜\ˆ\Ý[››Ý[˜Ù[Y[]Hˆš]˜]H˜\ˆ\ÑÜ™Y]YH˜[ÙBˆš]˜]H˜\ˆØZÙSØÚÎˆÝÙ\“X[˜YÙ\‹•ØZÙSØÚÏÈH[ˆš]˜]H˜[Ù\šXÙTØÛÜHHÛÜ›Ý][™TØÛÜJÝ\\š\ÛÜ’›ØŠ
+H
+È\Ü]Ú\œË’SÊBˆš]˜]H˜[YYXQÝX\™žH^žHÈ[™Ñœ™YSYYXQÝX\™
+\ÊHBˆš]˜]H˜[›ÛX[•˜[œÛ]\˜]ÜˆžH^žHÂˆYˆ
+Z[•‘T”ÒSÓ‹”Ñ×ÒS•HZ[•‘T”ÒSÓ—ÐÓÑTË”JHÂˆËÈÙY\›Û[˜ÚX][ÛˆX\šÜÈÛ™È[›ÝYÚ›Üˆ›ÛX[’[™Û\Ú›Ü›X]\ˆÂˆËÈ\Ý[™ÝZ\Ú˜[Y\ÈÝXÚ\È8)%x),8)`8)+ˆ[œÝXYÙˆ›][š[™È[HÈšØ\š[XH‹‚ˆ[Ø]Ú[™ÈÈ˜[œÛ]\˜]Ü‹™Ù][œÝ[˜ÙJ[žKS][ˆŠHK™Ù]Ü“[
+
+BˆH[ÙH[ˆBˆš]˜]H˜[\XÝ[ÛœÈžH^žHÈ\XÝ[Û‘^XÝ]ÜŠ\ÊHBˆš]˜]H˜[Ù[™\˜[ÛÛ™YÚ\ÝžHHYÙ[ÛÛ™YÚ\ÝžJ
+Bˆš]˜]H˜[Ù[™\˜[XÝ[Û”›Ý]\ˆžH^žHÂˆÙ[™\˜[XÝ[Û”›Ý]\Š›ÙXÝ[Û‘Ù[™\˜[Y\\œË˜Ü™X]JˆÙ[™\˜[ÛÛ™YÚ\ÝžKˆ›ÙXÝ[ÛY\\‘^XÝ]ÜœÊˆØÜ›ÛHÈÝ\ÈOˆ^XÝ]QÙ[™\˜[ØÜ›ÛY\\ŠÝ\œ\˜[Y]\œÊHKˆœ›ÝÜÙ\”ÙX\˜ÚHÈÝ\ÈOˆ^XÝ]QÙ[™\˜[œ›ÝÜÙ\”ÙX\˜ÚY\\ŠÝ\œ\˜[Y]\œÊHKˆØœÙ\™TØÜ™Y[ˆHÈËÈOˆÙ[™\˜[XÝ[Û”™\Ý[
+XÝ]š]PÛÛ^ÝÜ™KœÛ˜\ÚÝ
+
+HOH[
+HKˆ™\šYžTØÜ™Y[ˆHÈËÈOˆÙ[™\˜[XÝ[Û”™\Ý[
+XÝ]š]PÛÛ^ÝÜ™KœÛ˜\ÚÝ
+
+HOH[
+HKˆ˜XÚÈHÈËÈO‚ˆ˜[XØÙ\YHXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙOËœ\™›Ü›QÛØ˜[XÝ[ÛŠˆ[™›ÚY˜XØÙ\ÜÚXš[]\Ù\šXÙKXØÙ\ÜÚXš[]TÙ\šXÙK‘ÓÐSÐPÕSÓ—ÐPÒÂˆ
+HOHYBˆÙ[™\˜[XÝ[Û”™\Ý[
+XØÙ\Y˜Z[\™T™X\ÛÛˆH˜˜XÚ×Ù\Ü]ÚÜ™Z™XÝY‹ZÙRYˆÈXXØÙ\YJBˆBˆ
+Bˆ
+JBˆBˆš]˜]H˜[Y[[ÜžT™\ÜÚ]ÜžHžH^žHÈY[[ÜžT™\ÜÚ]ÜžJ\˜SY[[ÜžQ]X˜\ÙK™Ù]
+\ÊK›Y[[ÜžQ[Ê
+JHBˆš]˜]H˜[Y[[ÜžPœ˜Z[ˆžH^žHÈY[[ÜžPœ˜Z[ÛÛÜ™[˜]ÜŠY[[ÜžT™\ÜÚ]ÜžJHBˆš]˜]H˜[\ÜÚ\Ý[ÛÛ›Û\ˆžH^žHÈ
+\XØ][Ûˆ\È^P\XØ][ÛŠK˜\ÜÚ\Ý[ÛÛ›Û\ˆBˆš]˜]H˜[ØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\ÈžH^žHÈØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Ê\ÊHBˆš]˜]H˜[š\ÝX[]Ø\™[™\ÜÔ™Y™\™[˜Ù\ÈžH^žHÈš\ÝX[]Ø\™[™\ÜÔ™Y™\™[˜Ù\Ê\ÊHBˆš]˜]H˜[ØÜ™Y[Ø\\™S\Ý[™\Žˆ
+ØÜ™Y[”Ú\™TÝ]Kž]P\œ˜^OÊHOˆ[š]HÈÝ]Kœ˜[YHO‚ˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘H	‰ˆ™XY[™Õ˜XÚÙ\‹œÛ˜\ÚÝ
+
+HOH[
+HÂˆ˜[XÚØYÙS˜[YHHXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙOË˜Ý\œ™[XÚØYÙS˜[YJ
+K›Ü‘[\J
+BˆYˆ
+XÚØYÙS˜[YKš\Ó›Ý›[šÊ
+H	‰ˆ™XY[™Õ˜XÚÙ\‹œ]\ÙRYÛÛ^Ú[™ÙY
+ØÜ™Y[Ø\\™TÙ\šXÙKœÙ\ÜÚ[Û‹œÙ\ÜÚ[Û’YXÚØYÙS˜[YJJHÂˆ[™[™ÐXÝ[ÛY\“ØØ[ÜYXÚH[ˆ›ÚXÙSÙÊT•PÓWÔÐÔ“ÓÔ‘R‘PÕQ™XY[™×ÜÙ\ÜÚ[Û—ÚYIÜ™XY[™Õ˜XÚÙ\‹œÛ˜\ÚÝ
+
+OËœ™XY[™ÔÙ\ÜÚ[Û’YH™X\ÛÛY›Ü™YÜ›Ý[™ØÛÛ^ØÚ[™ÙYXÚØYÙOIXÚØYÙS˜[YHŠBˆBˆBˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘H	‰ˆ™XY[™Õ˜XÚÙ\‹œÛ˜\ÚÝ
+
+OËœÝ]H[ˆÙ]ÙŠˆ™XY[™ÔÝ]K”‘PQS‘Ë™XY[™ÔÝ]K•ÐRUS‘×Ñ“Ô—ÔÐÔ“Óˆ™XY[™ÔÝ]K”ÐÔ“ÓS‘Ë™XY[™ÔÝ]K•‘T’Q–RS‘×Ó‘U×ÐÓÓ•S•ˆ
+JHÂˆÝÜ\XÛT™XY[™Ê›YYXWÜ›Ú™XÝ[Û—Ù\ØÛÛ›™XÝY‹”ØÜ™Y[ˆÚ\š[™ÈÝÜY\Û^YH™XY[™È›ÚÈKˆŠBˆBˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘JHÂˆØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ø[˜Ù[
+
+OË›]Âˆ›ÚXÙSÙÊ”ÐÔ‘QS—ÐPÕSÓ—ÐÐSÑSQXÝ[Û’YIÚ]˜XÝ[Û’YH\›’YIÚ]\›’YH™X\ÛÛ\ØÜ™Y[—ÜÙ\ÜÚ[Û—Ú[˜XÝ]™HŠBˆBˆBˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘H	‰ˆØÜ™Y[”™\ÜÛœÙPXÝ]™H	‰ˆ\ØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YœÝ\ÕÚ]
+˜XØÙ\ÜÚXš[]NˆŠJHÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YÝ]OIÝ]HŠBˆØÜ™Y[”™\ÜÛœÙPXÝ]™HH˜[ÙBˆØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YHˆ‚ˆØÜ™Y[”™\ÜÛœÙT]Y\žRYHˆ‚ˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆBˆYˆ
+Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘H	‰ˆœ˜[YHOH[	‰‚ˆØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Ëš\Ú[Û‘[˜X›Y	‰ˆ\Ó˜]\˜[›ÚXÙT™XYBˆ
+HÂˆ˜[™XÛÜ™HØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[œ˜[YJ
+BˆYˆ
+™XÛÜ™ËœÛÝ\˜ÙHOH™^XÚ]Ü]Y\žHŠHÂˆ]™OËœÙ[™ØÜ™Y[‘œ˜[YJœ˜[YJBˆ›ÚXÙSÙÊœØÜ™Y[—Ùœ˜[YWÜ›Ý]Yž]\ÏIÙœ˜[YKœÚ^™_HÛÝ\˜ÙO[YYXWÜ›Ú™XÝ[Ûˆœ˜[YWÚYIÜ™XÛÜ™Ë™œ˜[YRYÎˆH[\Ü˜\žO]YHŠBˆBˆBˆB‚ˆÝ™\œšYH[ˆÛÜ™X]J
+HÂˆÝ\\‹›ÛÜ™X]J
+Bˆ[œÝ[˜ÙHH\ÂˆÜ™X]PÚ[›™[
+
+BˆÝ\›Ü™YÜ›Ý[™
+“ÕQ’PÐUSÓ—ÒQ›ÝYšXØ][ÛŠ”Ý\[™ÈTx )ˆŠJBˆØZÙSØÚÈH
+Ù]Þ\Ý[TÙ\šXÙJÕÑT—ÔÑT•’PÑJH\ÈÝÙ\“X[˜YÙ\ŠBˆ›™]ÕØZÙSØÚÊÝÙ\“X[˜YÙ\‹”T•PSÕÐRÑWÓÐÒË“TN˜XÚÙÜ›Ý[™›ÚXÙHŠBˆ˜\HÈÙ]™Y™\™[˜ÙPÛÝ[Y
+˜[ÙJNÈXÜ]Z\™J
+HBˆ\Ô[›š[™ÈHYBˆØÜ™Y[Ø\\™TÙ\šXÙK›\Ý[™\œÈ
+ÏHØÜ™Y[Ø\\™S\Ý[™\‚ˆB‚ˆÝ™\œšYH[ˆÛ”Ý\ÛÛ[X[™
+[[ˆ[[Ë›YÜÎˆ[Ý\Yˆ[
+Nˆ[ÂˆÚ[ˆ
+[[Ë˜XÝ[ÛŠHÂˆPÕSÓ—ÔÕÔOˆÝÜÙ\ÜÚ[ÛŠ
+BˆPÕSÓ—ÓUUHOˆÂˆZXÜ›ÜÛ™S]]YH[[™Ù]›ÛÛX[‘^˜JVWÓUUQ˜[ÙJBˆ]Y[ÏËœÙ]]]Y
+ZXÜ›ÜÛ™S]]Y
+BˆYˆ
+ZXÜ›ÜÛ™S]]Y
+HXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊYSYÙT[›˜X›JH[ÙHX\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆBˆ[ÙHOˆYˆ
+]™HOH[
+HÛÛ›™XÝ
+
+BˆBˆ™]\›ˆÕT•ÔÕPÒÖBˆB‚ˆš]˜]H[ˆÛÛ›™XÝ
+
+HÂˆYˆ
+ÛÛ›™XÝ[Û”™\\š[™È]™HOH[
+H™]\›‚ˆÛÛ›™XÝ[Û”™\\š[™ÈHYBˆYˆ
+\ÑÜ™Y]Y
+H›ÚXÙSÙÊˆ‘ÑSRS’WÔ‘PÓÓ“‘PÕS‘È[Y\Ý[\IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_HYYXWÜ›Ú™XÝ[Û—ÜÝ]OIÔØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]_H‚ˆ
+BˆÙ\šXÙTØÛÜK›][˜ÚÂˆ˜[Ø]™YY[[ÜžPÛÛ^H[Ø]Ú[™ÈÈZ[Ø]™YY[[ÜžPÛÛ^
+
+HK™Ù]Ü‘Y˜][
+ˆŠBˆXZ[’[™\‹œÜÝÂˆÛÛ›™XÝ[Û”™\\š[™ÈH˜[ÙBˆYˆ
+\Ô[›š[™È	‰ˆ]™HOH[
+HÛÛ›™XÝ]™JØ]™YY[[ÜžPÛÛ^
+BˆBˆBˆB‚ˆš]˜]H[ˆÛÛ›™XÝ]™JØ]™YY[[ÜžPÛÛ^ˆÝš[™ÊHÂˆ˜[HÙ]Ú\™Y™Y™\™[˜Ù\Ê›^\˜H‹SÑWÔ’UUJBˆ˜[Ù^HH\RÙ^TÝÜ™J\ÊK™Ù]
+\RÙ^TÝÜ™K‘ÑSRS’JBˆ˜[˜[YHHÛÛ™šYÝ\™Y\Ù\“˜[YJ™Ù]Ýš[™Ê\Ù\—Û˜[YH‹[
+JBˆYˆ
+Ù^Kš\Ð›[šÊ
+JHÈ[Z]Ý]JY[Ý\ˆÙ[Z[šHTHÙ^H[ˆÙ][™ÜÈŠNÈÝÜÙ[Š
+NÈ™]\›ˆBˆ]Y[ÈH]Y[Ñ[™Ú[™J\ÊBˆ˜[Ù[XÝY›ÚXÙHH™Ù]Ýš[™Ê›ÚXÙH‹[ÙYHŠHÎˆ[ÙYH‚ˆ]™HHÙ[Z[šS]™PÛY[
+ˆÙ^K™Ù]Ýš[™Ê›[Ù[‹™Ù[Z[šKLËŒKY›\Ú[]™K\™]šY]ÈŠHHKˆÙ[XÝY›ÚXÙKˆÞ\Ý[T›Û\
+˜[YK™Ù]Ýš[™Êœ\œÛÛ˜[]H‹‘ÑˆŠHÎˆ‘Ñˆ‹Ù[XÝY›ÚXÙJH
+ÂˆØ]™YY[[ÜžPÛÛ^ˆ
+K˜[ÛÈÈÛY[O‚ˆÛY[›Û”Ý]HHÈ[Z]Ý]J]
+HBˆÛY[›Û”™XYHHÂˆ›ÚXÙSÙÊ‘ÑSRS’WÐÓÓ“‘PÕQ[Y\Ý[\IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_HYYXWÜ›Ú™XÝ[Û—ÜÝ]OIÔØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]_HŠBˆ\Ó˜]\˜[›ÚXÙT™XYHHYBˆ]Y[ÏËœÝ\
+
+BˆYˆ
+ØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Ëš\Ú[Û‘[˜X›Y	‰ˆØÜ™Y[Ø\\™TÙ\šXÙKš\Ñœ™\Úœ˜[YJ
+JHÂˆØÜ™Y[Ø\\™TÙ\šXÙK›]\Ýœ˜[YOË›]
+ÛY[ŽœÙ[™ØÜ™Y[‘œ˜[YJBˆBˆ\Ý[™\Ë›Û”™XYJ
+BˆYˆ
+Z\ÑÜ™Y]Y
+HÂˆ\ÑÜ™Y]YHYBˆÛY[œÙ[™^
+‘Ü™Y]	˜[YHœšYY›H[™˜]\˜[KˆŠBˆH[ÙHÂˆ[Z]Ý]J“TH™XÛÛ›™XÝY8 %\Ý[š[™ÈŠBˆBˆX\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆBˆÛY[›Û•ÛÛØ[HÈY[˜Ý[Û“˜[YK\™ÜÈO‚ˆ\›“][˜ÞKœ™XÛÜ™
+XÝ]™U\›’YšY[‘’T”ÕÕÓÓÔ“ÔÔÐS[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+JBˆXZ[’[™\‹œÜÝÈ[™TÙ[X[XÕÛÛØ[
+Y[˜Ý[Û“˜[YK\™ÜÊHBˆBˆÛY[›Û”Ù\™\‘]™[HÈËÈO‚ˆ\›“][˜ÞKœ™XÛÜ™
+XÝ]™U\›’YšY[‘’T”ÕÔÑT•‘T—ÑU‘S•[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+JBˆBˆÛY[›Û]Y[ÈHÈÛK[Ù[Ù[™\˜][Û’YO‚ˆ˜[]Y[Ô™XÙZ]™Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ\›“][˜ÞKœ™XÛÜ™
+XÝ]™U\›’YšY[‘’T”ÕÓSÑSÐUQS×ÔPÒÑU]Y[Ô™XÙZ]™Y][Ù[Ù[™\˜][Û’Y
+Bˆ]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’YHX^ÙŠ]\ÝØœÙ\™Y[Ù[Ù[™\˜][Û’Y[Ù[Ù[™\˜][Û’Y
+Bˆ›ÚXÙSÙÊˆœÙ\šXÙWØ]Y[×Ü™XÙZ]™Yž]\ÏIÜÛKœÚ^™_H[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y˜[Y][™ÏIÝ˜[Y][™ÓØØ[ÜYXÚOH[Hˆ
+ÂˆœÝ™X[Z[™ÏIØØ[ÜYXÚÝ™X[YY\™XÝHÝ\™\ÜÙYIÝ\™\ÜÓ[Ù[›Ü•\›ˆˆ
+Âˆ›ØØ[ÜXZÚ[™ÏIØØ[]Y[ÔÜXZÚ[™È‚ˆ
+BˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[
+HÂˆØØ[ÜYXÚ\ÐÛÛ[HYBˆYˆ
+ØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y]OH
+HÂˆØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y]H]Y[Ô™XÙZ]™Y]ˆ›ÚXÙSÙÊˆ˜ÛÛ›ÛYÙš\œÝØ]Y[×Ü™XÙZ]™Y\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Yˆ
+Âˆ™š\œÝ]Y[Ô™XÙZ]™Y]I]Y[Ô™XÙZ]™Y]™\]Y\ÝÑš\œÝ]Y[Ó\ÏIØ]Y[Ô™XÙZ]™Y]HØØ[ÜYXÚ™\]Y\ÝÙ[]H‚ˆ
+BˆYˆ
+[œÝ[ØÜ™Y[”]Y\žRYš\Ó›Ý›[šÊ
+JHÂˆ›ÚXÙSÙÊˆ•ÕSÔÐÔ‘QS—Ô‘TÔÓ”ÑHØÜ™Y[”]Y\žRYI[œÝ[ØÜ™Y[”]Y\žRY›Ý]ORÕÔÐÔ‘QS—ÐÐPÒHˆ
+Âˆ›ÚXÙWÛ\ÏKLHØ\\™WÛ\ÏLXØÙ\ÜÚXš[]WÛ\ÏLš\Ú[Û—Û\ÏLÙ[Z[šWÛ\ÏIØ]Y[Ô™XÙZ]™Y]HØØ[ÜYXÚ™\]Y\ÝÙ[]Hˆ
+Âˆ×Û\ÏIØ]Y[Ô™XÙZ]™Y]HØØ[ÜYXÚ™\]Y\ÝÙ[]HÝ[Û\ÏIØ]Y[Ô™XÙZ]™Y]H[œÝ[ØÜ™Y[”]Y\žTÝ\Y]Hˆ
+Âˆ™œ˜[YWØYÙWÛ\ÏI[œÝ[ØÜ™Y[ØXÚPYÙS\È‚ˆ
+Bˆ[œÝ[ØÜ™Y[”]Y\žRYHˆ‚ˆBˆBˆØØ[ÜYXÚ\Ý]Y[Ô™XÙZ]™Y]H]Y[Ô™XÙZ]™Y]ˆYˆ
+ØØ[ÜYXÚÝ™X[YY\™XÝJHÂˆËÈH˜[œØÜš\™Yš^[™XYHX]ÚYH™\\™Y™\ÜÛœÙK‚ˆËÈÛÛ[YHÝ™X[Z[™ÈH™[XZ[š[™È˜]\˜[›ÚXÙHÚ]Ý]ØZ][™ÂˆËÈ›ÜˆHÛÛ\]HÙ[[˜ÙK‚ˆ]Y[ÏËœ]Y]YP]Y[ÊÛKÛÛ›ÛYÙ[™\˜][Û’YÓÓ•“ÓQÓÐÐSŠBˆ›ÚXÙSÙÊœÙ\šXÙWØ]Y[×Ü›Ý]Y›Ý]OY\™XÝÜ^X˜XÚÈž]\ÏIÜÛKœÚ^™_HŠBˆH[ÙHÂˆØØ[ÜYXÚ]Y[È
+ÏHÛK˜ÛÜSÙŠ
+Bˆ›ÚXÙSÙÊˆœÙ\šXÙWØ]Y[×Ü›Ý]Y›Ý]O]˜[Y][Û—ØY™™\ˆž]\ÏIÜÛKœÚ^™_Hˆ
+Âˆ˜Y™™\Ú[šÜÏIÛØØ[ÜYXÚ]Y[ËœÚ^™_H‚ˆ
+BˆÝ\ØØ[ÜYXÚÚ[”™Yš^X]Ú\Ê
+BˆBˆBˆ[ÙHYˆ
+ØÜ™Y[”™\ÜÛœÙPXÝ]™H	‰ˆ\ÔØÜ™Y[”™\ÜÛœÙPÛÛ^Ý\œ™[
+
+JHÂˆ˜[Ù[™\˜][ÛXØÙ\YHØÜ™Y[”™\ÜÛœÙPš[™[™ÏË˜XØÙ\ÑÙ[™\˜][ÛŠ[Ù[Ù[™\˜][Û’Y
+HOHYBˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YHØÜ™Y[”™\ÜÛœÙPš[™[™ÏËœØÜ™Y[‘Ù[™\˜][Û’YÎˆˆYˆ
+YÙ[™\˜][ÛXØÙ\Y
+HÂˆ›ÚXÙSÙÊˆ”ÐÔ‘QS—Ô‘TÔÓ”ÑWÑPÒTÒSÓˆš\ÝX[\›’YIÙ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY›Ü‘[\J
+_Hˆ
+Âˆ˜Ý\œ™[\›IØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YÙ[™\˜][Û’YI[Ù[Ù[™\˜][Û’YÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆˆ
+Âˆ™XÚ\Ú[ÛQ“Ô™X\ÛÛ\Ý[WÙÙ[™\˜][Ûˆ‚ˆ
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y^XÝYY\IØÜ™Y[”™\ÜÛœÙPY\‘Ù[™\˜][Û’Y›Ý[™Ù[™\˜][Û’YIØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YŠBˆH[ÙHÂˆYˆ
+\ØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙY
+HÂˆØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙYHYBˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜÝ]HØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRYÝ]OT‘TÔÓ”ÑWÔÕT•QÛÝ\˜ÙOPUQSÈ[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’YŠBˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]\Ù\•\›’YOHØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YOË›]Âˆ]™š\œÝ[Ù[™\ÜÛœÙP]H]Y[Ô™XÙZ]™Y]ˆ]™š\œÝ]Y[Ð]H]Y[Ô™XÙZ]™Y]ˆ]œ™\T]Y]YY]H]Y[Ô™XÙZ]™Y]ˆ›ÚXÙSÙÊˆš\ÝX[Û[Ù[Ùš\œÝÜ™\ÜÛœÙHš\ÝX[\›’YIÚ]šYHÛÝ\˜ÙOPUQSÈˆ
+Âˆ›[Ù[™\]Y\ÝÑš\œÝ™\ÜÛœÙS\ÏIÚYˆ
+]›[Ù[™\]Y\Ý]ˆ
+H]Y[Ô™XÙZ]™Y]H]›[Ù[™\]Y\Ý][ÙHLSH‚ˆ
+Bˆ›ÚXÙSÙÊš\ÝX[[Ù[š\œÝÝXÝ\™Y™\Ý[š\ÝX[\›’YIÚ]šYHÛÝ\˜ÙOPUQSÈ]I]Y[Ô™XÙZ]™Y]ŠBˆ›ÚXÙSÙÊœ™\T]Y]YYš\ÝX[\›’YIÚ]šYH]I]Y[Ô™XÙZ]™Y]ÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆŠBˆ›ÚXÙSÙÊˆš\ÝX[Ü™\WØ]Y[×ÜÝ\Yš\ÝX[\›’YIÚ]šYHˆ
+ÂˆœÜYXÚ[™Ñš\œÝ]Y[Ó\ÏIÚYˆ
+]œÜYXÚ[™Y]ˆ
+H]Y[Ô™XÙZ]™Y]H]œÜYXÚ[™Y][ÙHLSH‚ˆ
+BˆBˆBˆØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[HYBˆYYXQÝX\™˜™YÚ[\ÜÚ\Ý[\›Š
+Bˆ]Y[ÏËœÙ]^X˜XÚÐÛÛ^
+[Ù[Ù[™\˜][Û’YØÜ™Y[”™\ÜÛœÙT]Y\žRYÓÓ•“ÓQÔÐÔ‘QSˆŠBˆ]Y[ÏËœÙ]˜\™ÙR[‘[˜X›Y
+YJBˆ]Y[ÏËœ]Y]YP]Y[ÊÛK[Ù[Ù[™\˜][Û’YÓÓ•“ÓQÔÐÔ‘QSˆŠBˆ›ÚXÙSÙÊˆ”ÐÔ‘QS—Ô‘TÔÓ”ÑWÑPÒTÒSÓˆš\ÝX[\›’YIÙ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY›Ü‘[\J
+_Hˆ
+Âˆ˜Ý\œ™[\›IØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YÙ[™\˜][Û’YI[Ù[Ù[™\˜][Û’YÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆˆ
+Âˆ™XÚ\Ú[ÛTVH™X\ÛÛXÝ\œ™[Ø›Ý[™ÙÙ[™\˜][Ûˆ‚ˆ
+Bˆ›ÚXÙSÙÊˆœ›Ý]WÙXÚ\Ú[Ûˆ\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆˆ
+ÂˆœØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY›Ý]O\ØÜ™Y[—Ü™\ÜÛœÙHXØÙ\Y]YHš\œÝ™\ÜÛœÙP]Y[Ð]I]Y[Ô™XÙZ]™Y]ˆ
+Âˆ™Ù[Z[šTÙ[™Ñš\œÝ™\ÜÛœÙS\ÏIÚYˆ
+ØÜ™Y[‘œ˜[YTÙ[]ˆ
+H]Y[Ô™XÙZ]™Y]HØÜ™Y[‘œ˜[YTÙ[][ÙHLSHˆ
+ÂˆœÜYXÚ[™Ñš\œÝ]YX›S\ÏIÚYˆ
+ØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞJH]Y[Ô™XÙZ]™Y]HØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y][ÙHLSHˆ
+ÂˆœØÜ™Y[—Ü™\ÜÛœÙWÝ\›—ØÛÛœÚ\Ý[˜ÞOIÜØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YOHHˆ
+ÂˆœØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞOIØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞH‚ˆ
+BˆBˆBˆ[ÙHYˆ
+™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+H	‰ˆ\˜T^X˜XÚÐØ\\™TÛXÞKœÚÝ[XØÙ\[Ù[]Y[ÊˆÝ\™\ÜÙYHÝ\™\ÜÓ[Ù[›Ü•\›‹ˆ\ÜÚ\Ý[[™XYTÜXZÚ[™ÈHØØ[]Y[ÔÜXZÚ[™ËˆYYXQÝX\™[ÝÜÔ™\ÜÛœÙHHYYXQÝX\™˜[ÝÓ[Ù[™\ÜÛœÙJ
+Bˆ
+Bˆ
+HÂˆËÈØ\\˜X›HTHÜYXÚ\Ù\ÈTÐQÑWÓQQPKˆÛ˜ÙHHš\œÝ˜[YˆËÈÚ[šÈ\ÈXØÙ\YÙY\YYXHÝX\™]ØZÙHÛÈTH™]™\ˆZ\ÝZÙ\ÂˆËÈ\ˆÝÛˆXÝ]™H]Y[Õ˜XÚÈ›Üˆ^\›˜[[ÝUX™H^X˜XÚË‚ˆÚ[ˆ
+˜[XÚ\Ú[ÛˆHÜ™[˜\žS[Ù[]Y[ÑØ]K™XÚYJ[Ù[Ù[™\˜][Û’Y
+JHÂˆ[Ù[]Y[ÑXÚ\Ú[Û‹PÐÑTOˆÂˆ\›“][˜ÞKœ™XÛÜ™
+XÝ]™U\›’YšY[‘’T”ÕÐPÐÑTQÓSÑSÐUQSË]Y[Ô™XÙZ]™Y][Ù[Ù[™\˜][Û’Y
+BˆXØÙ\Y[Ù[Ù[™\˜][Û‘›Ü•\›ˆH[Ù[Ù[™\˜][Û’YˆYYXQÝX\™˜™YÚ[\ÜÚ\Ý[\›Š
+Bˆ]Y[ÏËœÙ]^X˜XÚÐÛÛ^
+[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\ˆH“SÑSŠBˆ]Y[ÏËœÙ]˜\™ÙR[‘[˜X›Y
+YJBˆ]Y[ÏËœ]Y]YP]Y[ÊÛK[Ù[Ù[™\˜][Û’Y“SÑSŠBˆ›ÚXÙSÙÊˆœ›Ý]WÙXÚ\Ú[Ûˆ\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\SSÑSˆ
+Âˆœ›Ý]O[Ü™[˜\žWÛ[Ù[XØÙ\Y]YHš\œÝ[Ù[]Y[ÐXØÙ\Y]IÝ\›“][˜ÞK™š\œÝXØÙ\Y]Y[Ð]
+XÝ]™U\›’Y[Ù[Ù[™\˜][Û’Y
+_Hˆ
+ÂˆœÜYXÚ[™Ñš\œÝXØÙ\Y[Ù[]Y[Ó\ÏIÝ\›“][˜ÞK™š\œÝXØÙ\Y]Y[Ð]
+XÝ]™U\›’Y[Ù[Ù[™\˜][Û’Y
+OË›]ÈYˆ
+ÜYXÚXÝ]š]Q[™Y]ˆ	‰ˆ]HÜYXÚXÝ]š]Q[™Y]
+H
+]HÜYXÚXÝ]š]Q[™Y]
+KÔÝš[™Ê
+H[ÙH“HˆHÎˆ“HŸHž]\ÏIÜÛKœÚ^™_H‚ˆ
+BˆBˆ[Ù[]Y[ÑXÚ\Ú[Û‹•Q‘‘T—ÕS•SÔÔQPÒÑS‘OˆÂˆYˆ
+X\›S[Ù[]Y[ÑÙ[™\˜][Û’YOH	‰ˆX\›S[Ù[]Y[ÑÙ[™\˜][Û’YOH[Ù[Ù[™\˜][Û’Y
+HÂˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[
+ÏHX\›S[Ù[]Y[ËœÚ^™Bˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\È
+ÏHX\›S[Ù[]Y[Ðž]\ÂˆX\›S[Ù[]Y[Ë˜ÛX\Š
+BˆX\›S[Ù[]Y[Ðž]\ÈHˆBˆX\›S[Ù[]Y[ÑÙ[™\˜][Û’YH[Ù[Ù[™\˜][Û’YˆX\›S[Ù[]Y[È
+ÏHÛK˜ÛÜSÙŠ
+BˆX\›S[Ù[]Y[Ðž]\È
+ÏHÛKœÚ^™Bˆ›ÚXÙSÙÊˆœ›Ý]WÙXÚ\Ú[Ûˆ\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\SSÑSˆ
+Âˆœ›Ý]O[Ü™[˜\žWÛ[Ù[XØÙ\YY˜[ÙH™Z™XÝ[Û”™X\ÛÛ]\Ù\—ÜÜYXÚØXÝ]™H\Ù\”ÜYXÚXÝ]™O]YHˆ
+Âˆ™X\›S[Ù[]Y[ÐY™™\™YÛÝ[IÙX\›S[Ù[]Y[ËœÚ^™_HX\›S[Ù[]Y[ÐY™™\™Yž]\ÏIX\›S[Ù[]Y[Ðž]\È‚ˆ
+BˆBˆ[ÙHOˆÂˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[
+ÊÂˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\È
+ÏHÛKœÚ^™Bˆ›ÚXÙSÙÊˆœ›Ý]WÙXÚ\Ú[Ûˆ\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\SSÑSˆ
+Âˆœ›Ý]O[Ü™[˜\žWÛ[Ù[XØÙ\YY˜[ÙH™Z™XÝ[Û”™X\ÛÛIXÚ\Ú[ÛˆÝ[QÙ[™\˜][ÛIÙXÚ\Ú[ÛˆOH[Ù[]Y[ÑXÚ\Ú[Û‹‘“ÔÔÕSWÑÑS‘TUSÓŸHˆ
+Âˆ›[Ù[]Y[ÐY™™\™Y™Y›Ü™U\›ÛÛ\]PÛÝ[L[Ù[]Y[ÐY™™\™Y™Y›Ü™U\›ÛÛ\]Pž]\ÏLˆ
+Âˆ›[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[I[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[ˆ
+Âˆ›[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\ÏI[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\Èž]\ÏIÜÛKœÚ^™_H‚ˆ
+BˆBˆBˆH[ÙHÂˆ›ÚXÙSÙÊ™\XØ]WÜ™\ÜÛœÙWÜ™]™[Y\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YH[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\IÜ™\ÜÛœÙP\˜š]\‹›ÝÛ™\ŸH›Ý]O[Ü™[˜\žWÛ[Ù[ž]\ÏIÜÛKœÚ^™_HŠBˆBˆBˆÛY[›Û’[\œ\YHÈ[Ù[Ù[™\˜][Û’YO‚ˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[	‰ˆ™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+JHÂˆÜ™[˜\žS[Ù[]Y[ÑØ]K˜Ø[˜Ù[Ù[™\˜][ÛŠ[Ù[Ù[™\˜][Û’Y
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊˆœ^X˜XÚ×ØØ[˜Ù[YØžWØ˜\™ÙWÚ[ˆ\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Yˆ
+Âˆœ^X˜XÚÐØ[˜Ù[YžP˜\™ÙR[]YHØ[˜Ù[YÙ[™\˜][Û’YI[Ù[Ù[™\˜][Û’YÜYXÚXÝ]š]TÝ\Y]IÜYXÚXÝ]š]TÝ\Y]‚ˆ
+BˆH[ÙH›ÚXÙSÙÊˆš[\œ\YÙ]™[ÚYÛ›Ü™Y\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Yˆ
+Âˆœ™X\ÛÛXÛÛ›ÛYÛÝÛ™\ˆ™\ÜÛœÙSÝÛ™\IÜ™\ÜÛœÙP\˜š]\‹›ÝÛ™\ŸH‚ˆ
+BˆBˆÛY[›Û‘Ù[™\˜][ÛÛÛ\]HHÈ[Ù[Ù[™\˜][Û’YO‚ˆ˜[ÛÛ\]Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ\›“][˜ÞKœ™XÛÜ™
+XÝ]™U\›’YšY[“SÑSÑÑS‘TUSÓ—ÐÓÓTUQÛÛ\]Y][Ù[Ù[™\˜][Û’Y
+Bˆ›ÚXÙSÙÊ›[Ù[ÙÙ[™\˜][Û—ØÛÛ\]H\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y]IÛÛ\]Y]ŠBˆBˆÛY[›Û’[œ]˜[œØÜš\H[œ]˜[œØÜš\È\]\Ý[Ù[Ù[™\˜][Û’YO‚ˆYˆ
+ØÜ™Y[”™\ÜÛœÙPXÝ]™JHÂˆYˆ
+X\›TØÜ™Y[”]Y\žP]ØZ][™Ñš[˜[˜[œØÜš\
+HÂˆ\[™˜[œØÜš\
+[œ]\
+Bˆ\[™˜[œØÜš\
+ÛÛ[X[™›Ø™K\
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÙš[˜[Ý˜[œØÜš\ØÛÛXÝ[™ÈØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y^Ú\œÏIÜ\›[™ÝHŠBˆ™]\›[œ]˜[œØÜš\ˆBˆ›ÚXÙSÙÊˆœØÜ™Y[—Ü™\ÜÛœÙWÚ[œ]ÚYÛ›Ü™YØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYˆ
+Âˆ\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y™X\ÛÛ[›×ØÛÛ™š\›YYÜ™X[Ø˜\™ÙWÚ[ˆ^Ú\œÏIÜ\›[™ÝH‚ˆ
+Bˆ™]\›[œ]˜[œØÜš\ˆBˆYˆ
+[œ]š\Ñ[\J
+JHÂˆYˆ
+XÝ]™U\›’YOH
+HXÝ]™U\›’YH
+ÊÝ\›”Ù\]Y[˜ÙBˆ[œ]\›”Ý\Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ\›“][˜ÞKœ™XÛÜ™
+XÝ]™U\›’YšY[’S”UÔÕT•Q[œ]\›”Ý\Y]
+BˆYˆ
+ÜYXÚ[Z[™Õ\›’YOH	‰ˆÜYXÚXÝ]š]TÝ\Y]ˆ
+HÜYXÚ[Z[™Õ\›’YHXÝ]™U\›’YˆYˆ
+™\ÜÛœÙP\˜š]\‹\›’YOHXÝ]™U\›’Y
+H™\ÜÛœÙP\˜š]\‹˜™YÚ[ŠXÝ]™U\›’Y
+BˆXØÙ\Y[Ù[Ù[™\˜][Û‘›Ü•\›ˆHˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[Hˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\ÈHˆ›ÚXÙSÙÊˆš[œ]Ý\›—ÜÝ\Y\›’YIXÝ]™U\›’YÙ\ÜÚ[ÛIÚ\ÚÛÙJ
+_H[œ]\›”Ý\Y]I[œ]\›”Ý\Y]ˆ
+ÂˆœÜYXÚXÝ]š]TÝ\Y]IÜYXÚXÝ]š]TÝ\Y]]\Ý[Ù[Ù[™\˜][Û’YI]\Ý[Ù[Ù[™\˜][Û’Yˆ
+Âˆ›ÚXÙU\›ÛÛœÚ\Ý[IÝ›ÚXÙU\›’Y[]Y\Ë˜Ý\œ™[
+
+OË\Ù\•\›’YOHXÝ]™U\›’YH‚ˆ
+BˆYˆ
+[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YHOH[	‰‚ˆ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HH[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[ˆ
+HÂˆËÈ™\Ù\™HH[™[™ÈÛ\šYšXØ][Ûˆ\›ˆ™Y›Ü™HÙ[Z[šHØ[ˆ[Z][‚ˆËÈÜ™[˜\žHXÚÛ›ÝÛYÙ[Y[ˆÝÛ™\œÚ\™XÛÛY\ÈÓÓ•“ÓQÓÐÐSˆËÈÚ[ˆH˜[Y]YÛ\šYšXØ][Ûˆ™\H\È]Y]YY‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ›ÚXÙSÙÊˆœ[™[™×ØÛÜœ™XÝ[Û—Ý\›—Ü™\Ù\™Y\›’YIXÝ]™U\›’Yˆ
+Âˆ™]X˜\ÙS]]][Û[ÝÙYY˜[ÙHÝXØÙ\ÜÐXÚÛ›ÝÛYÙ[Y[[ÝÙYY˜[ÙH‚ˆ
+BˆBˆBˆYˆ
+[™T[™[™ÐÛÛ™š\›X][ÛŠ\
+JH™]\›[œ]˜[œØÜš\ˆYˆ
+\Ô[ÛU˜[œØÜš\
+\
+JHÂˆËÈÚÜXÚËÛ›Ú\ÙHœ˜YÛY[È]\Ý™]™\ˆ™XÛÛYHÚ]X˜›\ÈÜ‚ˆËÈ™XÙZ]™HHÛÛ™\œØ][Û˜[[œÝÙ\‹‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ™]\›[œ]˜[œØÜš\ˆBˆX\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆÚ[ˆ
+YYXQÝX\™š[œÜXÝ
+\
+JHÂˆ[™Ñœ™YSYYXQÝX\™‘Ø]K“ÐÒÈOˆÂˆ\[™˜[œØÜš\
+ÛÛ[X[™›Ø™K\
+Bˆ˜[X\›TØÜ™Y[•^H›ÛX[‘\Ü^U^
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆYˆ
+ØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙTÝX›T]Y\žJX\›TØÜ™Y[•^
+HOH[
+HÂˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+X\›TØÜ™Y[•^
+BˆYYXP›ØÚÙY\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ[œ]˜ÛX\Š
+NÈ[œ]˜\[™
+ÛÛ[X[™›Ø™JBˆ\›TØÜ™Y[”]Y\Ý[ÛŠX\›TØÜ™Y[•^XÝ]™U\›’Y“QQPWÔT•PSÐÓÓSPS‘ŠBˆ™]\›[œ]˜[œØÜš\ˆBˆ˜\ˆ\™XÝÛÛ[X[™HÛÛ[X[™\œÙ\‹œ\œÙQ\™XÝYYXPÛÛ›Û
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆÎˆÛÛ[X[™\œÙ\‹œ\œÙQ\™XÝYYXPÛÛ›Û
+\
+BˆÎˆÛÛ[X[™\œÙ\‹œ\œÙJÛÛ[X[™›Ø™KÔÝš[™Ê
+JOËZÙRYŠŽš\ÔØY™Q\™XÝYYXPÛÛ[X[™
+BˆÎˆÛÛ[X[™\œÙ\‹œ\œÙJ\
+OËZÙRYŠŽš\ÔØY™Q\™XÝYYXPÛÛ[X[™
+BˆYˆ
+\™XÝÛÛ[X[™\È\ÛÛ[X[™“Ü[\	‰‚ˆPÛÛ[X[™\œÙ\‹š\Ñ^XÚ]Ü[ÛÛ[X[™
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JH	‰‚ˆPÛÛ[X[™\œÙ\‹š\Ñ^XÚ]Ü[ÛÛ[X[™
+\
+Bˆ
+HÂˆ\™XÝÛÛ[X[™H[ˆBˆYˆ
+\™XÝÛÛ[X[™OH[
+HÂˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆËÈYYXHÝX\™[œÈ™Y›Ü™HH›Ü›X[œ™\ÚZ[œ]™\Ù]™[ÝË‚ˆËÈHÙ[Z[™H\™XÝÛÛ[X[™X\™\š[™È^X˜XÚÈÝ\ÈH™]ÂˆËÈ\Ù\ˆ\›‹ÛÈ™[X\ÙHHÛÛ\]Y™]š[Ý\ÈÛÛ[X[™\™K‚ˆËÈÚÝ[^XÝ]J
+HÝ[›ØÚÜÈ\XØ]H˜[œØÜš\Ú[šÜË‚ˆYˆ
+ØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™
+HÂˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆH˜[ÙBˆÛÛ[X[™\Ù\•^[Z]YH˜[ÙBˆBˆ˜[ÜÚÙ[ˆHÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+Bˆ˜[ÝÛ™\‘XÚ\Ú[ÛˆHÛÛK›^\˜K˜\ÜÚ\Ý[˜YÙ[•[šYšYY\›’[\œ™]\‹š[\œ™]
+ˆÜÚÙ[‹ÛÜšÚ[™Õ\ÚÔ[[YKœÝÜ™KœÛ˜\ÚÝ
+
+Bˆ
+BˆYˆ
+[ÝÛ™\‘XÚ\Ú[Û‹˜]]Üš^™\ÔÛ™PXÝ[ÛœÊHÂˆ›ÚXÙSÙÊ™\™XÝÛYYXWØXÝ[Û—Ü™Z™XÝYØžWÝ[šYšYYÛÝÛ™\ˆ\›’YIXÝ]™U\›’Y[[IÛÝÛ™\‘XÚ\Ú[Û‹š[[HŠBˆ™]\›[œ]˜[œØÜš\ˆBˆYˆ
+\™XÝÛÛ[X[™\È\ÛÛ[X[™”ØÜ›Û[ÝUX™JHÂˆ[™TØÜ›Û›ÜÜØ[
+ˆ\™XÝÛÛ[X[™›YYXWÜ™WÙš[˜[‹ØÜ›Û›ÜÜØ[]]Üš^˜][Û‹”‘WÑ’SSˆ
+BˆYYXP›ØÚÙY\›ˆH˜[ÙBˆ™]\›[œ]˜[œØÜš\ˆBˆYˆ
+ÜÚÙ[‹š\Ó›Ý›[šÊ
+H	‰ˆXÛÛ[X[™\Ù\•^[Z]Y
+HÂˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJÜÚÙ[‹‘T‘PÕÓQQPWÐÓÓSPS‘ŠBˆÛÛ[X[™\Ù\•^[Z]YHYBˆBˆYYXP›ØÚÙY\›ˆH˜[ÙBˆ^XÝ]PÛÛ[X[™
+\™XÝÛÛ[X[™
+Bˆ™]\›[œ]˜[œØÜš\ˆBˆ˜[ÛÚ\™[YYXTÜYXÚH›ÛX[‘\Ü^U^
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆYˆ
+YYXTÜYXÚÛÚ\™[˜ÙTÛXÞKš\ÐÛÚ\™[
+ÛÚ\™[YYXTÜYXÚ
+H	‰‚ˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+ÛÚ\™[YYXTÜYXÚ
+HOHYBˆ
+HÂˆËÈHÛÚ\™[TÔˆ™\Ý[˜XÚÙYžHHXÝ]™H™X\‹YšY[QˆËÈØ[™Y]H\È™X[\Ù\ˆÜYXÚ]™[ˆÚ[ˆ]\ÈÜ™[˜\žBˆËÈÛÛ™\œØ][Ûˆ˜]\ˆ[ˆHØÜ™Y[‹Ù]šXÙHÛÛ[X[™‚ˆYYXQÝX\™˜ÛÛ™š\›U\Ù\”ÜYXÚ
+
+BˆYYXP›ØÚÙY\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆ[œ]˜ÛX\Š
+Bˆ[œ]˜\[™
+ÛÛ[X[™›Ø™JBˆ›ÚXÙSÙÊˆ›YYXWØØ[™Y]WÜ›Û[ÝY™X\ÛÛXÛÚ\™[ØÛÛ™\œØ][ÛˆØ[™Y]U^Ú\œÏIØÛÚ\™[YYXTÜYXÚ›[™ÝHˆ
+Âˆ\Ù\•\›’YIXÝ]™U\›’Y™\ÜÛœÙSÝÛ™\SSÑS‚ˆ
+BˆH[ÙHÂˆYˆ
+ÛÛ[X[™\œÙ\‹š\Ô›Ø˜X›Q]šXÙPXÝ[ÛŠ\
+HÛÛ[X[™\œÙ\‹š\Ô›Ø˜X›Q]šXÙPXÝ[ÛŠÛÛ[X[™›Ø™KÔÝš[™Ê
+JJHÂˆ›Ø˜X›PXÝ[Û•\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+BˆBˆYˆ
+[YYXP›ØÚÙY\›ŠH[Z]Ý]J“YYXHÝX\™XÝ]™H8 %\Ý[š[™È›Üˆ[Ý\ˆ›ÚXÙHŠBˆYYXP›ØÚÙY\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ™]\›[œ]˜[œØÜš\ˆBˆBˆ[™Ñœ™YSYYXQÝX\™‘Ø]K•ÐRÑWÑUPÕQOˆÂˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+\
+BˆYYXP›ØÚÙY\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆ[Z]Ý]J“\Ý[š[™È8 %YYXHÝÙ\™Y›ÜˆLÙXÛÛ™ÈŠBˆBˆ[™Ñœ™YSYYXQÝX\™‘Ø]K“ÔSˆOˆYYXP›ØÚÙY\›ˆH˜[ÙBˆBˆËÈY\ˆHØØ[Û™HÛÛ[X[™[^YYÙ[Z[šHXÚÙ]È\™H\ØØ\™Y[[ˆËÈHÙ\™\ˆ\ÈÛÛ\]Y]ÛÛ[X[™\›ˆ[™H\Ù\ˆXÝX[HÝ\ÂˆËÈÜXZÚ[™ÈYØZ[‹ˆHš\œÝ˜[œØÜš\Ùˆ]™]È\›ˆØY™[H™KY[˜X›\ÂˆËÈ›Ü›X[[Ù[Ý]]‚ˆYˆ
+ØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™
+HÂˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆËÈœ™\ÚZXÈ[œ]]\Ý›ÝÝX[H\›ˆÝ[ÝÛ™YžHHÛÛ›ÛYˆËÈÙ[Z[šHÙ[™\˜][ÛŽÈ]È]H[Ù[^Ø]Y[È™[XZ[œÈÝ\™\ÜÙY‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH\™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+BˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆH˜[ÙBˆBˆYˆ
+[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û“Û˜[YHOH[	‰‚ˆ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HH[™[™Ð™\ÝœšY[™ÛÜœ™XÝ[Û•[[ˆ
+HÂˆËÈYYXKYÝX\™[™œ™\ÚZ[œ]Ý]H˜[œÚ][ÛœÈX›Ý™HX^H›Ü›X[BˆËÈ™KY[˜X›HSÑSÝ]]ˆH[™[™ÈÛÜœ™XÝ[Ûˆ]\Ý™[XZ[ˆ™\Ù\™Y‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+BˆBˆ\[™˜[œØÜš\
+[œ]\
+NÈ\[™˜[œØÜš\
+ÛÛ[X[™›Ø™K\
+Bˆ\Ý\Ù\’[[^H[œ]ÔÝš[™Ê
+Kš[J
+Bˆ˜[Ý\œ™[˜[œØÜš\HÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+Bˆ˜[Ý\œ™[ØÜ™Y[•^H›ÛX[‘\Ü^U^
+Ý\œ™[˜[œØÜš\
+BˆYˆ
+œ›ÝÜÙ\”ÙX\˜Ú™\]Y\Ý\œÙ\‹œ\œÙJÝ\œ™[˜[œØÜš\
+HOH[
+HÂˆËÈÙX\˜Ú\È™\ÛÛ™YÛ›H]’SS]ÜXÝ[]]™HÛÛ™\œØ][Û˜[ˆËÈ]Y[È]\Ý›Ý\ÚÈ›ÜˆH\Ý[˜][ÛˆY\ˆHÛÛ^X[XÝ[Ûˆ\ÂˆËÈ[™XYH™Y[ˆ]]Üš^™Y[™^XÝ]Y‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊœÙX\˜ÚÝ\›—Ü™\Ù\™Y\›’YIXÝ]™U\›’YÛÝ\˜ÙOTT•PSÑ’SSÔ‘TURT‘QŠBˆBˆYˆ
+ØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙJÝ\œ™[ØÜ™Y[•^
+HOH[ˆ˜\Ýš\ÝX[™\]Y\ÝÛ\ÜÚYšY\‹˜Û\ÜÚYžJÝ\œ™[˜[œØÜš\
+HOH[ˆ
+HÂˆËÈHØÜ™Y[ˆ\›ˆ\È[œÝÙ\™YÛ›HY\ˆ[ˆ^XÚ]H›Ý[™œ™\ÚˆËÈØ\\™KˆÝÜÜXÝ[]]™HÜ™[˜\žHÝ]]œ›ÛH™XÛÛZ[™ÈHÙXÛÛ™ˆËÈ[œÝÙ\ˆ™Y›Ü™HH’SS\›ˆ›Ý[™\žH\œš]™\Ë‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆYˆ
+ØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙTÝX›T]Y\žJÝ\œ™[ØÜ™Y[•^
+HOH[
+HÂˆ\›TØÜ™Y[”]Y\Ý[ÛŠÝ\œ™[ØÜ™Y[•^XÝ]™U\›’Y”T•PSÔÐÔ‘QS—ÔUQT–HŠBˆBˆBˆ˜[]\ÚXš[]T™]šY]ÈH˜[œØÜš\]\ÚXš[]QØ]Kœ™]šY]ÊÝ\œ™[˜[œØÜš\
+BˆYˆ
+\]\ÚXš[]T™]šY]ËœÙ[X[XÔ›ØÙ\ÜÚ[™Ð[ÝÙY
+HÂˆËÈÝÜÜXÝ[]]™HSÑSÝ]]\ÈÛÛÛˆ\È[ˆ[œ™[]YÛZ[˜[ˆËÈØÜš\\X\œËˆH[[]]X›H’SS˜[œØÜš\XZÙ\ÈHXÚ\Ú[Û‹‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊˆš[œ]Ý˜[œØÜš\Ü]\ÚXš[]WÜ™]šY]È˜]ÏIØÝ\œ™[˜[œØÜš\ZÙJLŒ
+_Hˆ
+Âˆ™ÛZ[˜[ØÜš\IÜ]\ÚXš[]T™]šY]Ë™ÛZ[˜[ØÜš\Hˆ
+Âˆ˜[œØÜš\]\ÚXš[]OIÜ]\ÚXš[]T™]šY]Ë˜[œØÜš\]\ÚXš[]_Hˆ
+Âˆ˜[›ÛX[T™X\ÛÛIÜ]\ÚXš[]T™]šY]Ë˜[›ÛX[T™X\ÛÛŸH‚ˆ
+BˆËÈÙY\ÛÛXÝ[™È˜]ÈÚ[šÜÈ›ÜˆH]]Üš]]]™H’SSXÚ\Ú[Û‹ˆËÈ]È›Ý]\X[›Ü™ZYÛ‹\ØÜš\^™XXÚY[[ÜžKÛÜœ™XÝ[Û‹ˆËÈ[]KÛÛ[X[™Üˆ\›Z\ÜÚ[Ûˆ\œÙ\œË‚ˆ™]\›[œ]˜[œØÜš\ˆBˆËÈY[[ÜžHœ˜Z[ˆŒˆ™]™\ˆ]]]\ÈÜˆ[\œ\Èœ›ÛH\X[TÔ‹ˆ˜]\˜[ˆËÈ˜XÝÈ\™H]˜[X]YÚ[[HÛ›H]H]]Üš]]]™Hš[˜[\›‹‚ˆYˆ
+ÛÛ[X[™\œÙ\‹š\ÓZÙ[R[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[
+Ý\œ™[˜[œØÜš\
+JHÂˆ[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ™]\›[œ]˜[œØÜš\ˆH[ÙHYˆ
+[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ŠHÂˆËÈH]\ˆÚ[šÈÛÛ\]YHØ[YHÝYÚÛÈ™\Ý[YHH›Ü›X[ˆËÈ\œÙ\‹ˆYˆÙ[Z[šHš[˜[^™YHœ˜YÛY[\È]ÈÝÛˆ\›‹BˆËÈ\›‹XÛÛ\]HÝX\™™[ÝÈ\ØØ\™È]Ú]Ý]HÚ]X˜›K‚ˆ[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆBˆ˜[›ÛX[“Y[[ÜžU˜[œØÜš\H›ÛX[‘\Ü^U^
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆYˆ
+Y[[ÜžPœ˜Z[‹›™YYÐÛÜœ™XÝ[ÛÛ\šYšXØ][ÛŠ›ÛX[“Y[[ÜžU˜[œØÜš\
+JHÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆBˆYˆ
+[˜ÛX\‘[]R[[ÝX\™›™YYÐÛ\šYšXØ][ÛŠ›ÛX[“Y[[ÜžU˜[œØÜš\
+JHÂˆËÈ™]™\ˆ]HØ\˜›Y[]H˜\ÙH™XXÚÙ[Z[šH\È[ˆ[š]][Û‚ˆËÈÈÝY\ÜÈ]H\Ù\ˆØ[È[ˆ\[š[œÝ[Y‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆBˆYˆ
+Y[[ÜžPÛÛ[X[™\œÙ\‹›ÛÚÜÓZÙR[[
+›ÛX[“Y[[ÜžU˜[œØÜš\
+JHÂˆËÈY[[ÜžK[ÛÚÚ[™È\X[ÜYXÚX^H™\Ù\™H™\ÜÛœÙHÝÛ™\œÚ\]]ˆËÈØ[ˆ™]™\ˆ^XÝ]HÜˆ\œÚ\ÝˆH]]Üš]]]™Hš[˜[\›ˆÝÛœÈBˆËÈXÝX[™XØ[Û]]][ÛˆXÚ\Ú[Û‹‚ˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊ›Y[[ÜžWÚ[[Ú[Ù›Ü—Ùš[˜[\›’YIXÝ]™U\›’YXÚ\Ú[ÛUÐRUÑ“Ô—Ñ’SS^XÝ]YY˜[ÙHŠBˆBˆ˜[[XšYÝ[Ý\ÓY\ÜØYÙHHÛÛ[X[™\œÙ\‹š\Ð[XšYÝ[Ý\ÓY\ÜØYÙT™Y™\™[˜ÙJÛÛ[X[™›Ø™KÔÝš[™Ê
+JBˆYˆ
+[XšYÝ[Ý\ÓY\ÜØYÙJHÂˆ[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+BˆH[ÙHYˆ
+[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆ	‰ˆSY[[ÜžPÛÛ[X[™\œÙ\‹›ÛÚÜÓZÙR[[
+›ÛX[“Y[[ÜžU˜[œØÜš\
+JHÂˆËÈH]\ˆ˜[œØÜš\Ú[šÈÛÛ\]YHÝYÚˆÙ[Z[šH[™XYBˆËÈ™XÙZ]™YH]Y[ËÛÈ[ÝÈ]ÈÛÛ^X[™\ÜÛœÙHYØZ[‹‚ˆ[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆH˜[ÙBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆBˆ˜[ÛÛ[X[™H
+ÛÛ[X[™\œÙ\‹œ\œÙJ\
+HÎˆÛÛ[X[™\œÙ\‹œ\œÙJÛÛ[X[™›Ø™KÔÝš[™Ê
+JJBˆËZÙU[›\ÜÈÈ]\È\ÛÛ[X[™”ÙX\˜Ú[ÝUX™HBˆYˆ
+ÛÛ[X[™\œÙ\‹š\Ô›Ø˜X›Q]šXÙPXÝ[ÛŠ\
+HÛÛ[X[™\œÙ\‹š\Ô›Ø˜X›Q]šXÙPXÝ[ÛŠÛÛ[X[™›Ø™KÔÝš[™Ê
+JJHÂˆ›Ø˜X›PXÝ[Û•\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+BˆBˆËÈHÝ™X[YY˜[œØÜš\X^Hš\œÝÛÛZ[ˆÛ›H–[ÝUX™Hˆ[™]\ˆYˆËÈ›YZ[ˆÙX\˜ÚØ\›ÈÛÈØ[Z[™È‹ˆ™]™\ˆ^XÝ]HHZ[ˆÜ[‹X\ÛÛ[X[™ˆËÈœ›ÛH[ˆ[˜ÛÛ\]HÚ[šÎÈÛÛ™š\›H]œ›ÛHHÛÛ\]H\›ˆ™[ÝË‚ˆ˜[^XÚ]Ü[ˆHÛÛ[X[™\È\ÛÛ[X[™“Ü[\	‰ˆÛÛ[X[™\œÙ\‹š\Ñ^XÚ]Ü[ÛÛ[X[™
+\
+BˆËÈ™]™\ˆ^XÝ]H[ˆÜ™[˜\žHÛ™HXÝ[Ûˆœ›ÛHH\X[˜[œØÜš\ˆH]\‚ˆËÈÚ[šÈØ[ˆ\›ˆ›Ü[ˆÚ›ÛYHˆ[ÈH\ØÝ\ÜÚ[ÛˆX›Ý]Ü[š[™ÈÚ›ÛYKˆBˆËÈÛÛ\]H’SS]\˜[˜ÙH]\Ý\ÜÈ[šYšYY\›’[\œ™]\ˆš\œÝ‚ˆYˆ
+ÛÛ[X[™OH[	‰ˆ
+ÛÛ[X[™Z\È\ÛÛ[X[™“Ü[\^XÚ]Ü[ŠH	‰ˆÛÛ[X[™Z\È\ÛÛ[X[™‘Y\™\ÙX\˜Ú
+HÂˆ›Ø˜X›PXÝ[Û•\›ˆHYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ˜[Ø[™Y]S˜[YHHYˆ
+ÛÛ[X[™\È\ÛÛ[X[™”ØÜ›Û[ÝUX™H	‰ˆÛÛ[X[™™^XÚ]T™\]Y\ÝY\OH[
+HÂˆ‘Ù[™\šXÔØÜ›Û‚ˆH[ÙHÛÛ[X[™š˜]˜PÛ\ÜËœÚ[\S˜[YBˆ›ÚXÙSÙÊœ\X[ØXÝ[Û—Ú[Ù›Ü—Ý[šYšYYÛÝÛ™\ˆ\›’YIXÝ]™U\›’YØ[™Y]OIØ[™Y]S˜[YHŠBˆYˆ
+ÛÛ[X[™\È\ÛÛ[X[™”ØÜ›Û[ÝUX™JHÂˆ[™TØÜ›Û›ÜÜØ[
+ÛÛ[X[™œ\X[Ý˜[œØÜš\‹ØÜ›Û›ÜÜØ[]]Üš^˜][Û‹”‘WÑ’SS
+BˆBˆBˆBˆÛY[›Û“Ý]]˜[œØÜš\HÈ˜[œØÜš\[Ù[Ù[™\˜][Û’YO‚ˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[
+HÂˆØØ[ÜYXÚ\ÐÛÛ[HYBˆ\[™˜[œØÜš\
+ØØ[ÜYXÚ˜[œØÜš\˜[œØÜš\
+BˆÝ\ØØ[ÜYXÚÚ[”™Yš^X]Ú\Ê
+BˆBˆ[ÙHYˆ
+ØÜ™Y[”™\ÜÛœÙPXÝ]™H	‰ˆ\ÔØÜ™Y[”™\ÜÛœÙPÛÛ^Ý\œ™[
+
+JHÂˆYˆ
+ØÜ™Y[”™\ÜÛœÙPš[™[™ÏË˜XØÙ\ÑÙ[™\˜][ÛŠ[Ù[Ù[™\˜][Û’Y
+HOHYJHÂˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YHØÜ™Y[”™\ÜÛœÙPš[™[™ÏËœØÜ™Y[‘Ù[™\˜][Û’YÎˆˆYˆ
+\ØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙY
+HÂˆØÜ™Y[”™\ÜÛœÙTÝ\YÙÙÙYHYBˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜÝ]HØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRYÝ]OT‘TÔÓ”ÑWÔÕT•QÛÝ\˜ÙOUV[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’YŠBˆ˜[›ÝÈH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]\Ù\•\›’YOHØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YOË›]Âˆ]™š\œÝ[Ù[™\ÜÛœÙP]H›ÝÂˆ]œ™\T]Y]YY]H›ÝÂˆ›ÚXÙSÙÊˆš\ÝX[Û[Ù[Ùš\œÝÜ™\ÜÛœÙHš\ÝX[\›’YIÚ]šYHÛÝ\˜ÙOUVˆ
+Âˆ›[Ù[™\]Y\ÝÑš\œÝ™\ÜÛœÙS\ÏIÚYˆ
+]›[Ù[™\]Y\Ý]ˆ
+H›ÝÈH]›[Ù[™\]Y\Ý][ÙHLSH‚ˆ
+Bˆ›ÚXÙSÙÊš\ÝX[[Ù[š\œÝÝXÝ\™Y™\Ý[š\ÝX[\›’YIÚ]šYHÛÝ\˜ÙOUV]I›ÝÈŠBˆ›ÚXÙSÙÊœ™\T]Y]YYš\ÝX[\›’YIÚ]šYH]I›ÝÈÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆŠBˆBˆBˆØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[HYBˆ\[™˜[œØÜš\
+Ý]]˜[œØÜš\
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ü™XÙZ]™YØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’Y\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Yš\œÝ™\ÜÛœÙU^]IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_HØÜ™Y[—Ü™\ÜÛœÙWÝ\›—ØÛÛœÚ\Ý[˜ÞO]YHŠBˆH[ÙH›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY[Ù[Ù[™\˜][Û’YI[Ù[Ù[™\˜][Û’Y™X\ÛÛ]Ü›Û™×ÙÙ[™\˜][ÛˆŠBˆBˆ[ÙHYˆ
+™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+H	‰ˆ\Ý\™\ÜÓ[Ù[›Ü•\›ˆ	‰‚ˆZYS™^[Ù[˜[œØÜš\	‰ˆYYXQÝX\™˜[ÝÓ[Ù[™\ÜÛœÙJ
+Bˆ
+H\[™˜[œØÜš\
+Ý]]˜[œØÜš\
+Bˆ[ÙH›ÚXÙSÙÊ™\XØ]WÜ™\ÜÛœÙWÜ™]™[Y\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YH™\ÜÛœÙSÝÛ™\IÜ™\ÜÛœÙP\˜š]\‹›ÝÛ™\ŸH›Ý]O[Ü™[˜\žWÛ[Ù[Ý^ŠBˆBˆÛY[›Û•\›ÛÛ\]HH\›ÛÛ\]PÂˆ\›“][˜ÞKœ™XÛÜ™
+XÝ]™U\›’YšY[’S”UÐÓÓTUQ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+JBˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[
+HÂˆËÈÙ[™[™ÈÛY[ÛÛ[[\œ\ÈH™]š[Ý\ÈÙ[Z[šHÙ[™\˜][Û‹‚ˆËÈ]È[\œ\Y\›ÛÛ\]HØ[ˆ\œš]™H™Y›Ü™HH™]ÈÛÛ™š\›X][Û‹‚ˆËÈYÛ›Ü™H][\H›Ý[™\žK[™œšYY›H[ÝÈH[™\[™[BˆËÈÝ™X[YYÝ]]˜[œØÜš\È\œš]™HY\ˆH]Y[È\›ˆÛÛ\]\Ë‚ˆYˆ
+ØØ[ÜYXÚ\ÐÛÛ[
+HÂˆ˜[ÚÙ[ˆHØØ[ÜYXÚ˜[Y][Û•ÚÙ[‚ˆXZ[’[™\‹œÜÝ[^YY
+ÂˆYˆ
+ÚÙ[ˆOHØØ[ÜYXÚ˜[Y][Û•ÚÙ[ˆ	‰ˆ˜[Y][™ÓØØ[ÜYXÚOH[
+HÂˆš[š\Ú˜[Y]YØØ[ÜYXÚ
+
+Bˆ™\Ù]\›Y™™\œÊ
+BˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆBˆKÐÐSÔÔQPÒÐUQS×ÑRS—ÓTÊBˆBˆ™\ÜÛœÙP\˜š]\‹˜ÛÛ›ÛYÙ[™\˜][ÛÛÛ\]J
+Bˆ˜[\›ÛÛ\]P]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊ\›—ØÛÛ\]WÜ™XÙZ]™Y\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Y™\ÜÛœÙSÝÛ™\IÜ™\ÜÛœÙP\˜š]\‹›ÝÛ™\ŸH\›ÛÛ\]P]I\›ÛÛ\]P]\Ý]Y[Ô™XÙZ]™Y]IØØ[ÜYXÚ\Ý]Y[Ô™XÙZ]™Y]ŠBˆ™\Ù]\›Y™™\œÊ˜ÛÛ›ÛYÙÙ[™\˜][Û—ØÛÛ\]HŠBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+ØÜ™Y[”™\ÜÛœÙPXÝ]™JHÂˆYˆ
+X\›TØÜ™Y[”]Y\žP]ØZ][™Ñš[˜[˜[œØÜš\	‰ˆ[œ]š\Ó›Ý›[šÊ
+JHÂˆ˜[˜]Ñš[˜[H[œ]ÔÝš[™Ê
+Kš[J
+BˆYˆ
+ÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘X\›TØÜ™Y[”]Y\Ý[Û”ÛXÞKœ™XÛÛ˜Ú[JˆX\›TØÜ™Y[”]Y\Ý[Û•^˜]Ñš[˜[ˆ
+HOHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”]Y\Ý[Û”™XÛÛ˜Ú[X][Û‹“PUT’PSÐÒS‘ÑBˆ
+HÂˆ›ÚXÙSÙÊˆœØÜ™Y[—Ü]Y\žWÜ™XÛÛ˜Ú[YØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRYˆ
+Âˆœ™\Ý[XØ[˜Ù[YÛX]\šX[ØÚ[™ÙH\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y‚ˆ
+Bˆ]Y[ÏËš[\œ\
+
+NÈ]™OËš[\œ\
+
+Bˆš[š\ÚØÜ™Y[”™\ÜÛœÙJ™š[˜[Ý˜[œØÜš\ÛX]\šX[WØÚ[™ÙYŠBˆ™]\›\›ÛÛ\]BˆBˆ˜[š[˜[\Ü^HHš[˜[˜[œØÜš\\Ü^J˜]Ñš[˜[
+Bˆ˜[Ù[X[XÈHš[˜[Ù[X[XÕ\Ù\•]\˜[˜ÙK™œ›ÛJˆ˜[œØÜš\Ù\ÜÚ[Û’YØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y˜]Ñš[˜[š[˜[\Ü^Bˆ
+BˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJ˜]Ñš[˜[•T“—ÐÓÓTUWÑPT“WÔÐÔ‘QS—ÔUQT–H‹Ù[X[XË˜Ø[›ÛšXØ[Ù[X[XÕ^Ù[X[XË™\Ü^U^
+BˆX\›TØÜ™Y[”]Y\žP]ØZ][™Ñš[˜[˜[œØÜš\H˜[ÙBˆ[œ]˜ÛX\Š
+NÈÛÛ[X[™›Ø™K˜ÛX\Š
+Bˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÙš[˜[Ý˜[œØÜš\ØÛÛ[Z]YØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRY\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YŠBˆ›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™XÛÛ˜Ú[YØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRY™\Ý[[X]ÚYÜØ[YWÝ\›ˆ\Ù\•\›’YIØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YŠBˆYˆ
+\ØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[
+H™]\›\›ÛÛ\]BˆBˆYˆ
+\ØÜ™Y[”™\ÜÛœÙR\ÐÛÛ[
+HÂˆ›ÚXÙSÙÊœØÜ™Y[—Ü™\ÜÛœÙWÙ[\WØ›Ý[™\žWÚYÛ›Ü™YØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYŠBˆ™]\›\›ÛÛ\]BˆBˆ˜[Ý\œ™[H\ÔØÜ™Y[”™\ÜÛœÙPÛÛ^Ý\œ™[
+
+Bˆ˜[^HÝ]]ÔÝš[™Ê
+Kš[J
+BˆYˆ
+Ý\œ™[	‰ˆ^š\Ó›Ý›[šÊ
+H	‰ˆ\ØÜ™Y[”™\ÜÛœÙU^ÛÛ[Z]Y
+HÂˆ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËZÙRYˆÈ]\Ù\•\›’YOHØÜ™Y[”™\ÜÛœÙU\Ù\•\›’Y	‰ˆ]œ™\T]Y]YY]OHOË˜\HÂˆ™\T]Y]YY]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊœ™\T]Y]YYš\ÝX[\›’YIY]I™\T]Y]YY]ŠBˆBˆ\Ý[™\Ë›Û“^\˜U^
+›ÛX[‘\Ü^U^
+^
+JBˆÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[ÛÛ^ÝÜ™K›Û[˜[\Ú\Êˆ^[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ
+BˆØÜ™Y[”™\ÜÛœÙU^ÛÛ[Z]YHYBˆBˆ[ÙH›ÚXÙSÙÊœØÜ™Y[—Ü]Y\žWÜ™\Ý[Ù›ÜYÜÝ[HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’Y™X\ÛÛIÚYˆ
+XÝ\œ™[
+HœÝÜYÜÙ\ÜÚ[Ûˆˆ[ÙH™[\WÜ™\Ý[ŸHŠBˆ›ÚXÙSÙÊœØÜ™Y[—Ü™\ÜÛœÙWÙÙ[™\˜][Û—ØÛÛ\]HØÜ™Y[—Ü]Y\žWÚYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’YÝ\œ™[IÝ\œ™[ŠBˆ›ÚXÙSÙÊˆ•’TÒSÓ—Ô‘TUQTÕÐÓÓTUQØÜ™Y[”]Y\žRYIØÜ™Y[”™\ÜÛœÙT]Y\žRYØÜ™Y[—ÜÙ\ÜÚ[Û—ÚYIØÜ™Y[”™\ÜÛœÙTÙ\ÜÚ[Û’Yˆ
+Âˆ[Y\Ý[\IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_Hš\Ú[Û“][˜ÞS\ÏIÊ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HHØÜ™Y[‘œ˜[YTÙ[]
+K˜ÛÙ\˜ÙP]X\Ý
+
+_Hˆ
+ÂˆÝ[][˜ÞS\ÏIÚYˆ
+ØÜ™Y[”]Y\žTÜYXÚ\›ÛÛœÚ\Ý[˜ÞJH
+[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HHØÜ™Y[”™\ÜÛœÙTÜYXÚ[™Y]
+K˜ÛÙ\˜ÙP]X\Ý
+
+H[ÙHLSH‚ˆ
+BˆØÜ™Y[”™\ÜÛœÙQÙ[™\˜][ÛÛÛ\]HHYBˆYˆ
+[ØØ[]Y[ÔÜXZÚ[™ÊHÂˆ›ÚXÙSÙÊˆ”ÐÔ‘QS—Ô‘TÔÓ”ÑWÑPÒTÒSÓˆš\ÝX[\›’YIÙ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY›Ü‘[\J
+_Hˆ
+Âˆ˜Ý\œ™[\›IØÜ™Y[”™\ÜÛœÙU\Ù\•\›’YÙ[™\˜][Û’YIØÜ™Y[”™\ÜÛœÙQÙ[™\˜][Û’YÝÛ™\PÓÓ•“ÓQÔÐÔ‘QSˆˆ
+Âˆ™XÚ\Ú[ÛIÚYˆ
+
+˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OË™š\œÝ]Y[Ð]Îˆ
+Hˆ
+H”VHˆ[ÙH‘“ÔŸHˆ
+Âˆœ™X\ÛÛYÙ[™\˜][Û—ØÛÛ\]WÛ›×ØXÝ]™WÜ^X˜XÚÈ‚ˆ
+Bˆš[š\ÚØÜ™Y[”™\ÜÛœÙJ™Ù[™\˜][Û—ØÛÛ\]WÛ›×Ü^X˜XÚÈŠBˆBˆ[ÙHÝ]]˜ÛX\Š
+Bˆ™]\›\›ÛÛ\]BˆBˆ[™[™ÓØØ[ÜYXÚË›]ÈY\ÜØYÙHO‚ˆ[™[™ÓØØ[ÜYXÚH[ˆ™\Ù]\›Y™™\œÊ
+BˆØØ[ÜYXÚ˜[Y][Û”ÛXÞHH[™[™ÓØØ[ÜYXÚÛXÞBˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH[™[™ÓØØ[ÜYXÚ[ÝÜÔÚ[[˜ÙBˆ™YÚ[•˜[Y]YØØ[ÜYXÚ
+Y\ÜØYÙJBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+YYXP›ØÚÙY\›ˆ	‰ˆ[YYXQÝX\™š\Ð]ØZÙJ
+JHÂˆ˜[›ØÚÙY^H›ÛX[‘\Ü^U^
+ÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+JBˆYˆ
+ØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙTÝX›T]Y\žJ›ØÚÙY^
+HOH[
+HÂˆYYXP›ØÚÙY\›ˆH˜[ÙBˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+›ØÚÙY^
+BˆYˆ
+›ØÚÙY^š\Ó›Ý›[šÊ
+H	‰ˆXÛÛ[X[™\Ù\•^[Z]Y
+HÂˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJ›ØÚÙY^“QQPWÐÓÓ‘’T“QQÔÐÔ‘QS—ÔUQT–HŠBˆÛÛ[X[™\Ù\•^[Z]YHYBˆBˆ›ÚXÙSÙÊ›YYXWØØ[™Y]WÜ›Û[ÝY™X\ÛÛ]˜[Y]YÜØÜ™Y[—Ü]Y\žHÛÛ[X[™Ú\œÏIØÛÛ[X[™›Ø™K›[™ÝH\Ù\•\›’YIXÝ]™U\›’YŠBˆ™YÚ[‘œ™\ÚØÜ™Y[”]Y\žJ›ØÚÙY^XÝ]™U\›’Y
+Bˆ™\Ù]\›Y™™\œÊ›YYXWØÛÛ™š\›YYÜØÜ™Y[—Ü]Y\žHŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+YYXTÜYXÚÛÚ\™[˜ÙTÛXÞKš\ÐÛÚ\™[
+›ØÚÙY^
+H	‰‚ˆ]Y[ÏË˜ÛÛ™š\›SYYXTÜYXÚœ›ÛU˜[œØÜš\
+›ØÚÙY^
+HOHYBˆ
+HÂˆ˜[›Û[ÝY\›’YHXÝ]™U\›’YˆYYXP›ØÚÙY\›ˆH˜[ÙBˆYYXQÝX\™˜ÛÛ™š\›U\Ù\”ÜYXÚ
+
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆYˆ
+XÛÛ[X[™\Ù\•^[Z]Y
+HÂˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJ›ØÚÙY^“QQPWÐÓÓ‘’T“QQÐÓÓ•‘T”ÐUSÓˆŠBˆÛÛ[X[™\Ù\•^[Z]YHYBˆBˆ›ÚXÙSÙÊˆ›YYXWØØ[™Y]WÜ›Û[ÝY™X\ÛÛXÛÚ\™[ØÛÛ™\œØ][Û—Ø]Ø›Ý[™\žHˆ
+Âˆ˜ÛÛ[X[™Ú\œÏIØÛÛ[X[™›Ø™K›[™ÝH\Ù\•\›’YI›Û[ÝY\›’Y™\ÜÛœÙSÝÛ™\SSÑS‚ˆ
+Bˆ™\Ù]\›Y™™\œÊ›YYXWØÛÛ™š\›YYØÛÛ™\œØ][ÛˆŠBˆËÈHÜXÝ[]]™H™\HX^H[™XYH]™H™Y[ˆÝ\™\ÜÙYÚ[BˆËÈÛ\ÜÚYšXØ][ÛˆØ\È[™[™Ëˆ\ÚÈHØ[YH]™HÙ\ÜÚ[Ûˆ›ÜˆÛ™BˆËÈÜ™[˜\žH˜]\˜[™\ÜÛœÙNÈÈ›ÝÜ™X]HHØØ[ÕÈ]‚ˆ™\ÜÛœÙP\˜š]\‹˜™YÚ[Š›Û[ÝY\›’Y
+Bˆ]™OËœÙ[™^
+›ØÚÙY^
+Bˆ™]\›\›ÛÛ\]BˆBˆYYXP›ØÚÙY\›ˆH˜[ÙBˆ™\Ù]\›Y™™\œÊ›YYXWØ›ØÚÙYÝ\›—ØÛÛ\]HŠBˆ™]\›\›ÛÛ\]BˆBˆYˆ
+YS™^[Ù[˜[œØÜš\
+HÂˆYS™^[Ù[˜[œØÜš\H˜[ÙBˆ™\Ù]\›Y™™\œÊšY[—Û[Ù[Ý\›—ØÛÛ\]HŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ˜[XØÝ[][]Ü™Y›Ü™Qš[˜[H[œ]ÔÝš[™Ê
+Kš[J
+Bˆ˜[\XØ]T™\Ý[Hš[˜[˜[œØÜš\\XØ]QÝX\™˜ÛÛ\ÙJXØÝ[][]Ü™Y›Ü™Qš[˜[
+Bˆ˜[\Ù\•^H\XØ]T™\Ý[^ˆ˜[^\˜U^HÝ]]ÔÝš[™Ê
+Kš[J
+Bˆ›ÚXÙSÙÊˆ™š[˜[Ý˜[œØÜš\Ù\XØ]WÙÝX\™YYXPØ[™Y]RYIØ]Y[ÏË˜Ý\œ™[YYXPØ[™Y]RY
+
+HÎˆHˆ
+Âˆ˜Ø[™Y]U˜[œØÜš\IØÛÛ[X[™›Ø™KÔÝš[™Ê
+Kš[J
+KZÙJMŒ
+_Hˆ
+Âˆ™š[˜[Ù[Z[šU˜[œØÜš\IØXØÝ[][]Ü™Y›Ü™Qš[˜[ZÙJMŒ
+_Hˆ
+Âˆ˜XØÝ[][]Ü™Y›Ü™Qš[˜[IØXØÝ[][]Ü™Y›Ü™Qš[˜[ZÙJMŒ
+_Hˆ
+Âˆ™\XØ]Qš[˜[]XÝYIÙ\XØ]T™\Ý[™\XØ]Q]XÝYHˆ
+Âˆ™\XØ]PÛÛ\ÙP\YYIÙ\XØ]T™\Ý[˜ÛÛ\ÙP\YYHˆ
+Âˆ˜ÛÛ\ÙT™X\ÛÛIÙ\XØ]T™\Ý[œ™X\ÛÛŸHš[˜[\Ü^U^IÝ\Ù\•^ZÙJMŒ
+_H‚ˆ
+Bˆ˜[š[˜[[œ]˜[œØÜš\]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[]\ÚXš[]HH˜[œØÜš\]\ÚXš[]QØ]K˜\ÜÙ\ÜÑš[˜[
+\Ù\•^
+Bˆ˜[]\ÚXš[]U\›’YHXÝ]™U\›’YZÙRYˆÈ]OHBˆÎˆ™\ÜÛœÙP\˜š]\‹\›’YZÙRYˆÈ]OHBˆÎˆ
+ÊÝ\›”Ù\]Y[˜ÙBˆ˜[]\ÚXš[]U]\˜[˜ÙRYH‰˜[œØÜš\Ù\ÜÚ[Û’Y‰]\ÚXš[]U\›’Y‚ˆ›ÚXÙSÙÊˆ™š[˜[Ý˜[œØÜš\Ü]\ÚXš[]H]\˜[˜ÙRYI]\ÚXš[]U]\˜[˜ÙRYˆ
+Âˆœ˜]ÑÙ[Z[šU˜[œØÜš\IÝ\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ™]XÝYØÜš\ÏIÜ]\ÚXš[]K™]XÝYØÜš\ßHˆ
+Âˆ™ÛZ[˜[ØÜš\IÜ]\ÚXš[]K™ÛZ[˜[ØÜš\Hˆ
+Âˆœ™XÙ[Ù\ÜÚ[Û“[™ÝXYÙT›Ùš[OIÜ]\ÚXš[]Kœ™XÙ[Ù\ÜÚ[Û“[™ÝXYÙT›Ùš[_Hˆ
+Âˆ˜[œØÜš\]\ÚXš[]OIÜ]\ÚXš[]K˜[œØÜš\]\ÚXš[]_Hˆ
+Âˆ˜[›ÛX[T™X\ÛÛIÜ]\ÚXš[]K˜[›ÛX[T™X\ÛÛŸHˆ
+ÂˆœÙ[X[XÔ›ØÙ\ÜÚ[™Ð[ÝÙYIÜ]\ÚXš[]KœÙ[X[XÔ›ØÙ\ÜÚ[™Ð[ÝÙYHˆ
+Âˆ\Ù\X˜›PÛÛ[Z][ÝÙYIÜ]\ÚXš[]K\Ù\X˜›PÛÛ[Z][ÝÙYHˆ
+Âˆ›Y[[ÜžS]]][Û[ÝÙYIÜ]\ÚXš[]K›Y[[ÜžS]]][Û[ÝÙYH‚ˆ
+BˆYˆ
+\]\ÚXš[]KœÙ[X[XÔ›ØÙ\ÜÚ[™Ð[ÝÙY
+HÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ]]˜ÛX\Š
+NÈ]Y[ÏËš[\œ\
+
+Bˆ\Ý[™\Ë›Û“^\˜U^
+š[˜[˜[œØÜš\]\ÚXš[]QØ]KÓT’Q’PÐUSÓ—Ô‘TJBˆ[Z]Ý]Jš[˜[˜[œØÜš\]\ÚXš[]QØ]KÓT’Q’PÐUSÓ—Ô‘TJBˆ]Y]YSØØ[ÜYXÚ
+ˆš[˜[˜[œØÜš\]\ÚXš[]QØ]KÓT’Q’PÐUSÓ—Ô‘TKˆ[ÝÕ[˜[œØÜšX™Y]Y[ÈHYBˆ
+Bˆ™\Ù]\›Y™™\œÊœÝ\ÜXÚ[Ý\×Ùš[˜[Ý˜[œØÜš\ŠBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆ™]\›\›ÛÛ\]BˆBˆ˜[š[˜[\Ü^HHš[˜[˜[œØÜš\\Ü^J\Ù\•^
+Bˆ˜[š[˜[]\˜[˜ÙHHš[˜[Ù[X[XÕ\Ù\•]\˜[˜ÙK™œ›ÛJˆÙ\ÜÚ[Û’YH˜[œØÜš\Ù\ÜÚ[Û’Yˆ\›’YH]\ÚXš[]U\›’Yˆ˜]ÑÙ[Z[šU˜[œØÜš\H\Ù\•^ˆ›Ü›X]YHš[˜[\Ü^Bˆ
+Bˆ˜[›Ü›X[^™Yš[˜[\Ù\•^Hš[˜[]\˜[˜ÙK˜Ø[›ÛšXØ[Ù[X[XÕ^ˆ˜[\Ü^YYš[˜[\Ù\•^Hš[˜[]\˜[˜ÙK™\Ü^U^ˆ\›“][˜ÞKœ™XÛÜ™
+XÝ]™U\›’YšY[‘’SSÕS”ÐÔ’TÔ‘PÑRU‘Qš[˜[[œ]˜[œØÜš\]
+Bˆ›ÚXÙU\›’Y[]Y\Ë™š[˜[˜[œØÜš\
+XÝ]™U\›’Yš[˜[]\˜[˜ÙK]\˜[˜ÙRY
+Bˆ›ÚXÙSÙÊˆ™š[˜[Ú[œ]Ý˜[œØÜš\˜]ÏIÝ\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ››Ü›X[^™YIÛ›Ü›X[^™Yš[˜[\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ™\Ü^OIÙ\Ü^YYš[˜[\Ù\•^ZÙJMŒ
+_Hš[˜[[œ]˜[œØÜš\]Iš[˜[[œ]˜[œØÜš\]‚ˆ
+Bˆ›ÚXÙSÙÊˆ™š[˜[Ý˜[œØÜš\Ù\Ü^H\›’YIXÝ]™U\›’Y]\˜[˜ÙRYIÝ˜[œØÜš\Ù\ÜÚ[Û’YN‰XÝ]™U\›’Yˆ
+Âˆœ˜]ÏIÝ\Ù\•^ZÙJMŒ
+_H˜[œÛ]\˜]YIÙš[˜[\Ü^K˜[œÛ]\˜]YZÙJMŒ
+_Hˆ
+Âˆ™\Ü^OIÙ\Ü^YYš[˜[\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ›][•ÛÜ™Ô™\Ù\™YIÙš[˜[\Ü^K›][•ÛÜ™Ô™\Ù\™YHˆ
+Âˆœ›Ü\“˜[YT›ÝXÝYIÙš[˜[\Ü^Kœ›Ü\“˜[YT›ÝXÝYHˆ
+Âˆœ[RYÏIÙš[˜[\Ü^K˜\YY[RYËš›Ú[•ÔÝš[™Ê‹Š_H‚ˆ
+Bˆ›ÚXÙSÙÊˆ™š[˜[ÜÙ[X[X×Ý]\˜[˜ÙH]\˜[˜ÙRYIÙš[˜[]\˜[˜ÙK]\˜[˜ÙRYHˆ
+Âˆœ˜]ÑÙ[Z[šU˜[œØÜš\IÝ\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ˜Ø[›ÛšXØ[Ù[X[XÕ^IÛ›Ü›X[^™Yš[˜[\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ™\Ü^U^IÙ\Ü^YYš[˜[\Ù\•^ZÙJMŒ
+_Hˆ
+Âˆ˜Ø[›ÛšXØ[˜[YUÚÙ[œÏIÙš[˜[]\˜[˜ÙK˜Ø[›ÛšXØ[˜[YUÚÙ[œßHˆ
+Âˆ™\Ü^S˜[YUÚÙ[œÏIÙš[˜[]\˜[˜ÙK™\Ü^S˜[YUÚÙ[œßHˆ
+Âˆ›Y[[ÜžQ^˜XÝÜ’[œ]IÙš[˜[]\˜[˜ÙK›Y[[ÜžQ^˜XÝÜ’[œ]ZÙJMŒ
+_Hˆ
+Âˆ˜ÛÜœ™XÝ[Û”\œÙ\’[œ]IÙš[˜[]\˜[˜ÙK˜ÛÜœ™XÝ[Û”\œÙ\’[œ]ZÙJMŒ
+_Hˆ
+Âˆ™[]T\œÙ\’[œ]IÙš[˜[]\˜[˜ÙK™[]T\œÙ\’[œ]ZÙJMŒ
+_Hˆ
+Âˆ˜Û\šYšXØ][Û”™\ÛÛ™\’[œ]IÙš[˜[]\˜[˜ÙK˜Û\šYšXØ][Û”™\ÛÛ™\’[œ]ZÙJMŒ
+_Hˆ
+ÂˆœÙ[X[XÐÛÛœÚ\Ý[˜ÞOIÙš[˜[]\˜[˜ÙKœÙ[X[XÐÛÛœÚ\Ý[˜Þ_H‚ˆ
+BˆYˆ
+X\›TØÜ™Y[”]Y\žQ\Ü]ÚY\›’YOHXÝ]™U\›’Y	‰ˆX\›TØÜ™Y[”]Y\Ý[Û•^š\Ó›Ý›[šÊ
+JHÂˆ˜[™XÛÛ˜Ú[X][ÛˆHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘X\›TØÜ™Y[”]Y\Ý[Û”ÛXÞKœ™XÛÛ˜Ú[JˆX\›TØÜ™Y[”]Y\Ý[Û•^\Ù\•^ˆ
+Bˆ›ÚXÙSÙÊˆœØÜ™Y[—Ü]Y\žWÜ™XÛÛ˜Ú[Y\Ù\•\›’YIXÝ]™U\›’Y™\Ý[I™XÛÛ˜Ú[X][Ûˆˆ
+Âˆš\ÝX[\›’YIÙ˜\Ýš\ÝX[\›œË˜Ý\œ™[
+
+OËšY›Ü‘[\J
+_H‚ˆ
+BˆYˆ
+™XÛÛ˜Ú[X][ÛˆOHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹”ØÜ™Y[”]Y\Ý[Û”™XÛÛ˜Ú[X][Û‹“PUT’PSÐÒS‘ÑJHÂˆ˜\Ýš\ÝX[\›œË˜Ø[˜Ù[
+
+Bˆ]™OËš[\œ\
+
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆ9çM4¶‰žËkºwµçH
+HÂˆ˜[Y\ÜØYÙHH’Ø][œØHØ[OÈ‚ˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙJNÈ]Y]YSØØ[ÜYXÚ
+Y\ÜØYÙK[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆBˆBˆ[ÙHOˆ™]\›ˆ˜[ÙBˆBˆ™]\›ˆYBˆB‚ˆš]˜]H[ˆš[š\Ú[ÝUX™TÙ[X[XÊˆÝXØÙ\ÜÎˆ›ÛÛX[‹ˆY\ÜØYÙNˆÝš[™ËˆÛÛ[X[™ˆ[ÝUX™TÙ[X[XÐÛÛ[X[™ˆÝ\Y]ˆÛ™Ëˆ™\ÛÛ][ÛŽˆÝš[™Âˆ
+HÂˆYˆ
+\ÝXØÙ\ÜÊHÂˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙKYJBˆ[Z]Ý]JY\ÜØYÙJBˆ]Y]YSØØ[ÜYXÚ
+Y\ÜØYÙK[ÝÕ[˜[œØÜšX™Y]Y[ÈH˜[ÙJBˆBˆ›ÚXÙSÙÊˆž[Ý]X™WÜÙ[X[X×Ùš[š\ÚYÛÛ[X[™IØÛÛ[X[™š˜]˜PÛ\ÜËœÚ[\S˜[Y_HÝXØÙ\ÜÏIÝXØÙ\ÜÈˆ
+Âˆœ™\ÛÛ][ÛI™\ÛÛ][ÛˆÜÚÙ[‘™YY˜XÚÔÝ\™\ÜÙYIÝXØÙ\ÜÈÝ[\ÏIØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HHÝ\Y]H‚ˆ
+BˆB‚ˆš]˜]H[ˆØ[•\ÙUš\ÝX[˜[˜XÚÊÛÛ[X[™ˆ[ÝUX™TÙ[X[XÐÛÛ[X[™
+Nˆ›ÛÛX[ˆHÛÛ[X[™[ˆÙ]ÙŠˆ[ÝUX™TÙ[X[XÐÛÛ[X[™“ZÙK[ÝUX™TÙ[X[XÐÛÛ[X[™“Ü[ÛÛ[Y[Ëˆ[ÝUX™TÙ[X[XÐÛÛ[X[™”ÝXœØÜšX™K[ÝUX™TÙ[X[XÐÛÛ[X[™”Ú\™K[ÝUX™TÙ[X[XÐÛÛ[X[™“[Ü™Bˆ
+HÛÛ[X[™\È[ÝUX™TÙ[X[XÐÛÛ[X[™“Ü[Ú[›™[‚ˆš]˜]H[ˆ^XÝ]TØÜ™Y[“[ÙPÛÛ[X[™
+ÛÛ[X[™ˆØÜ™Y[“[ÙPÛÛ[X[™
+HÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆØ[˜Ù[ÜYXÚ›Ü“™]ÐXÝ[ÛŠ
+BˆÚ[ˆ
+ÛÛ[X[™
+HÂˆØÜ™Y[“[ÙPÛÛ[X[™“ÓˆOˆÂˆYˆ
+ØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘JHÂˆ™\]Y\Ý›Ú™XÝ[Û”\›Z\ÜÚ[Û‘œ›ÛSÝÛ™\Š
+BˆH[ÙH›ÚXÙSÙÊœØÜ™Y[—Û[ÙWØÛÛ[X[™[ÙOSÓˆ™\Ý[X[™XYWØXÝ]™HÜÚÙ[‘™YY˜XÚÔÝ\™\ÜÙY]YHŠBˆBˆØÜ™Y[“[ÙPÛÛ[X[™“Ñ‘ˆOˆÂˆÝ\Ù\šXÙJ[[
+\ËØÜ™Y[Ø\\™TÙ\šXÙNŽ˜Û\ÜËš˜]˜JKœÙ]XÝ[ÛŠØÜ™Y[Ø\\™TÙ\šXÙKPÕSÓ—ÔÕÔ
+JBˆ›ÚXÙSÙÊœØÜ™Y[—Û[ÙWØÛÛ[X[™[ÙOSÑ‘ˆ™\Ý[\ÝÜÜ™\]Y\ÝYÜÚÙ[‘™YY˜XÚÔÝ\™\ÜÙY]YHŠBˆBˆBˆB‚ˆš]˜]H[ˆ™\]Y\Ý›Ú™XÝ[Û”\›Z\ÜÚ[Û‘œ›ÛSÝÛ™\Š
+HÂˆYˆ
+ØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘JH™]\›‚ˆ˜[™\]Y\ÝH[[
+\ËXZ[XÝ]š]NŽ˜Û\ÜËš˜]˜JBˆœÙ]XÝ[ÛŠXZ[XÝ]š]KPÕSÓ—Ô‘TUQTÕÔÐÔ‘QS—Ô“Ò‘PÕSÓŠBˆ˜Y›YÜÊ[[‘“Q×ÐPÕU’UWÓ‘U×ÕTÒÈÜˆ[[‘“Q×ÐPÕU’UWÔÒS‘ÓWÕÔÜˆ[[‘“Q×ÐPÕU’UWÐÓPT—ÕÔ
+Bˆ[Ø]Ú[™ÈÈÝ\XÝ]š]J™\]Y\Ý
+HBˆ›Û”ÝXØÙ\ÜÈÈ›ÚXÙSÙÊœØÜ™Y[—Ü›Ú™XÝ[Û—Ü\›Z\ÜÚ[Û—ÛÝÛ™\—Ü™\]Y\ÝYÝÛ™\SXZ[XÝ]š]HŠHBˆ›Û‘˜Z[\™HÂˆ›ÚXÙSÙÊ˜ÛÛ[[Ý\×ÜØÜ™Y[—Ü\›Z\ÜÚ[Û—Ù˜Z[Y\œ›ÜIÚ]š˜]˜PÛ\ÜËœÚ[\S˜[Y_HŠBˆ\Ý[™\Ë›Û“^\˜U^
+”ØÜ™Y[ˆÚ\š[™È\›Z\ÜÚ[ÛˆÜ[ˆ˜ZHZKˆ‹YJBˆ]Y]YSØØ[ÜYXÚ
+”ØÜ™Y[ˆÚ\š[™È\›Z\ÜÚ[ÛˆÜ[ˆ˜ZHZKˆ‹[ÝÕ[˜[œØÜšX™Y]Y[ÈH˜[ÙJBˆBˆB‚ˆš]˜]H[ˆ™\]Y\ÝXØÙ\ÜÚXš[]Uš\ÝX[™]žJˆÛÛ[X[™ˆ[ÝUX™TÙ[X[XÐÛÛ[X[™ˆ^XÝYˆÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘›Ü™YÜ›Ý[™\ÛÛ^ˆ\›’YˆÛ™ËˆÝ\Y]ˆÛ™Âˆ
+Nˆ›ÛÛX[ˆÂˆ˜[Ý\œ™[HXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙOË˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+HÎˆ™]\›ˆ˜[ÙBˆYˆ
+Ý\œ™[œXÚØYÙS˜[YHOH^XÝYœXÚØYÙS˜[YHÝ\œ™[Ú[™ÝÒYOH^XÝYÚ[™ÝÒYˆÝ\œ™[™Ù[™\˜][ÛˆOH^XÝY™Ù[™\˜][Û‚ˆ
+H™]\›ˆ˜[ÙBˆ›ÚXÙSÙÊˆž[Ý]X™WÜÙ[X[X×Ù˜[˜XÚÈ›Ý]OQTÕÕ’TÕPSÕT“ˆ\›’YI\›’Yˆ
+Âˆœ›ÛOIØÛÛ[X[™š˜]˜PÛ\ÜËœÚ[\S˜[Y_HXØÙ\ÜÚXš[]Q[\ÙY\ÏIØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HHÝ\Y]H‚ˆ
+BˆËÈH]\›Z[š\ÝXÈ][\[™XYHÝÛ™YHXÝ[ÛˆÝX\™ˆš\ÝX[˜[˜XÚÈ\ÂˆËÈHØ[YH\›ˆ[™™XÛÛY\È]ÈÛÛH™\ÜÛœÙHÝÛ™\‹›ÝHÛÛ\][™ÈXÝ[Û‹‚ˆØÜ™Y[ÛÛ[X[™\›‘ÝX\™˜ÛX\Š
+Bˆ™YÚ[‘œ™\ÚØÜ™Y[”]Y\žJˆ\Ý\Ù\’[[^ˆ\›’Yˆ˜\Ýš\ÝX[™\]Y\Ý
+˜\Ýš\ÝX[Ú[™PÕSÓ‹ÛÛ[X[™š˜]˜PÛ\ÜËœÚ[\S˜[YJBˆ
+Bˆ™]\›ˆYBˆB‚ˆš]˜]H[ˆ^XÝ]PXØÙ\ÜÚXš[]Qš\œÝØÜ™Y[XÝ[ÛŠˆ\™Ù]ˆØÜ™Y[•\™Ù]™Y™\™[˜ÙKˆÝÛ™Y\™Ù]ˆØÜ™Y[•\™Ù]™Y™\™[˜ÙKˆXÝ[Û”ØÛÜNˆÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘›Ü™YÜ›Ý[™XÝ[Û”ØÛÜKˆ\ÚÕÚÙ[ŽˆÛ™ËˆXØÙ\ÜÚXš[]NˆXØÙ\ÜÚXš[]R[\”Ù\šXÙBˆ
+Nˆ›ÛÛX[ˆÂˆ˜[Ý\Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[™Y›Ü™HHXØÙ\ÜÚXš[]Kš\ÚX›TØÜ™Y[”ÚYÛ˜]\™J
+Bˆ˜[XÝ[Û”Ù\ÜÚ[Û’YHØÜ™Y[Ø\\™TÙ\šXÙKœÙ\ÜÚ[Û‹œÙ\ÜÚ[Û’YZÙRYŠÝš[™ÎŽš\Ó›Ý›[šÊBˆÎˆ˜XØÙ\ÜÚXš[]N‰ØXÝ[Û”ØÛÜK™^XÝYXÚØYÙ_N‰ØXÝ[Û”ØÛÜK™^XÝYÙ[™\˜][ÛŸH‚ˆ˜\ˆXÝ[Û’[[ˆØÜ™Y[XÝ[Û’[[ÈH[ˆ˜\ˆ™\ÛÛ][ÛˆH››ÝÙ›Ý[™‚ˆ˜\ˆØ[™Y]PÛÝ[Hˆ˜\ˆÙ[XÝYX™[ˆÝš[™ÏÈH[ˆ˜[XØÙ\YHYˆ
+ˆXÝ[Û”ØÛÜK™^XÝYXÚØYÙK™\]X[Ê˜ÛÛK™ÛÛÙÛK˜[™›ÚYž[Ý]X™H‹YJH	‰‚ˆ\™Ù]›Ü™[˜[OH[	‰‚ˆ\™Ù]\™Ù]^›Ü‘[\J
+K˜ÛÛZ[œÊšY[È‹YJBˆ
+HÂˆXÝ[Û’[[HØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ü™X]JˆXÝ]™U\›’YXÝ[Û”Ù\ÜÚ[Û’Y\Ý\Ù\’[[^ˆ\™Ù]\™Ù]^\™Ù]œÜÚ][Û‹\™Ù]›Ü™[˜[ˆXÝ[Û”ØÛÜK™^XÝYXÚØYÙKÝ\Y]KŒˆXÝ[Û”ØÛÜK™^XÝYÚ[™ÝÒYXÝ[Û”ØÛÜK™^XÝYÙ[™\˜][Û‚ˆ
+Bˆ˜[™\Ý[HXØÙ\ÜÚXš[]Kœ™\ÛÛ™P[™\[ÝUX™UšY[Ê\™Ù]›Ü™[˜[XÝ[Û”ØÛÜJBˆ™\ÛÛ][ÛˆH™\Ý[œ™\ÛÛ][Û‚ˆØ[™Y]PÛÝ[H™\Ý[˜Ø[™Y]PÛÝ[ˆÙ[XÝYX™[H™\Ý[œÙ[XÝYX™[ˆ™\Ý[˜XØÙ\YˆH[ÙHÂˆ˜[™\Ý[HXØÙ\ÜÚXš[]Kœ™\ÛÛ™P[™\š\ÚX›U\™Ù]
+ˆ\™Ù]\™Ù]^\™Ù]œÜÚ][Û‹\™Ù]›Ü™[˜[XÝ[Û”ØÛÜBˆ
+HÈËÛÛ™šY[˜ÙHO‚ˆXÝ[Û’[[HØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ü™X]JˆXÝ]™U\›’YXÝ[Û”Ù\ÜÚ[Û’Y\Ý\Ù\’[[^ˆ\™Ù]\™Ù]^\™Ù]œÜÚ][Û‹\™Ù]›Ü™[˜[ˆXÝ[Û”ØÛÜK™^XÝYXÚØYÙKÝ\Y]ÛÛ™šY[˜ÙKˆXÝ[Û”ØÛÜK™^XÝYÚ[™ÝÒYXÝ[Û”ØÛÜK™^XÝYÙ[™\˜][Û‚ˆ
+BˆYBˆBˆ™\ÛÛ][ÛˆH™\Ý[œ™\ÛÛ][Û‚ˆÙ[XÝYX™[H™\Ý[˜Ø[™Y]OË›X™[ˆ™\Ý[˜XØÙ\YˆBˆ›ÚXÙSÙÊˆœØÜ™Y[—ØXÝ[Û—Ü]\›’YIXÝ]™U\›’Y]PPÐÑTÔÒP’SUWÑTÕÔUˆ
+ÂˆœXÚØYÙOIØXÝ[Û”ØÛÜK™^XÝYXÚØYÙ_HÜ™[˜[IÝ\™Ù]›Ü™[˜[Hˆ
+Âˆ˜Ø[™Y]PÛÝ[IØ[™Y]PÛÝ[™\ÛÛ][ÛI™\ÛÛ][Ûˆˆ
+ÂˆœÙ[XÝYIÜÙ[XÝYX™[ËZÙJ
+_H\Ü]Ú\ÏIØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HHÝ\Y]H‚ˆ
+BˆYˆ
+XXØÙ\Y
+HÂˆXÝ[Û’[[Ë›]ÈØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ø[˜Ù[
+]˜XÝ[Û’Y
+HBˆ™]\›ˆÚ[ˆ
+™\ÛÛ][ÛŠHÂˆ˜[XšYÝ[Ý\ÈˆOˆÂˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙK’Ø][œØHØ[OÈŠBˆYBˆBˆœÝ[WÙ›Ü™YÜ›Ý[™‹œÝ[WØØ[™Y]HˆOˆÂˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙK”ØÜ™Y[ˆ˜Y[Ø^ZK\™Ù]\ÙH˜ZHÚ^XKˆŠBˆYBˆBˆ›Ü™[˜[ÛÝ]ÛÙ—Ü˜[™ÙHˆOˆÂˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙK’]™HšY[ÜÈÝ\œ™[ØÜ™Y[ˆ\ˆ˜ZHZ[KˆŠBˆYBˆBˆ››×ÝšY[×ØØ[™Y]\È‹˜ÛXÚ×Ü™Z™XÝYˆOˆÂˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙKÝ\œ™[[ÝUX™HØÜ™Y[ˆ\ˆ™X[šY[È\™Ù]˜ZHZ[KˆŠBˆYBˆBˆ[ÙHOˆ˜[ÙBˆBˆBˆ˜[[[HXÝ[Û’[[Îˆ™]\›ˆ˜[ÙBˆXZ[’[™\‹œÜÝ[^YY
+ÂˆYˆ
+Xœ˜Z[‹š\Õ\ÚÐÝ\œ™[
+\ÚÕÚÙ[ŠHˆ\ØÜ™Y[XÝ[Û”™YÚ\ÝžKš\ÐÝ\œ™[
+[[˜XÝ[Û’Y[[\›’Y[[œØÜ™Y[”Ù\ÜÚ[Û’Y
+Bˆ
+H™]\›ÜÝ[^YYˆ˜[Ú[™ÙYH™Y›Ü™Kš\Ó›Ý›[šÊ
+H	‰ˆXØÙ\ÜÚXš[]Kš\ÚX›TØÜ™Y[”ÚYÛ˜]\™J
+HOH™Y›Ü™Bˆœ˜Z[‹œ™XÛÜ™ØÜ™Y[XÝ[ÛŠÝÛ™Y\™Ù]Ú[™ÙY
+BˆØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ø[˜Ù[
+[[˜XÝ[Û’Y
+Bˆš[š\Úœ˜Z[•\ÚÊˆ\ÚÕÚÙ[‹ˆÚ[™ÙYˆYˆ
+Ú[™ÙY
+H“Ü[ˆÈØ^XKˆˆ[ÙH•\XKZÚ[ˆØÜ™Y[ˆÚ[™ÙH™\šYžH˜ZHXKˆ‚ˆ
+Bˆ›ÚXÙSÙÊˆœØÜ™Y[—ØXÝ[Û—Ù˜\ÝÜ™\Ý[XÝ[Û’YIÚ[[˜XÝ[Û’YH™\šYšYYIÚ[™ÙYˆ
+ÂˆÝ[\ÏIØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HHÝ\Y]H‚ˆ
+BˆKŒ
+Bˆ™]\›ˆYBˆB‚ˆš]˜]H[ˆ^XÝ]PÛÛ^X[ØÜ™Y[XÝ[ÛŠ\™Ù]ˆØÜ™Y[•\™Ù]™Y™\™[˜ÙJHÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆØ[˜Ù[ÜYXÚ›Ü“™]ÐXÝ[ÛŠ
+Bˆ˜[XØÙ\ÜÚXš[]HHXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙBˆYˆ
+XØÙ\ÜÚXš[]HOH[PXØÙ\ÜÚXš[]R[\”Ù\šXÙKš\Ñ[˜X›Y
+\ÊJHÂˆš[š\Úœ˜Z[•\ÚÊœ˜Z[‹œÛ˜\ÚÝ
+
+K\ÚÕÚÙ[‹˜[ÙK“THXØÙ\ÜÚXš[]H[˜X›HØ\›ËˆŠBˆ™]\›‚ˆBˆ˜[\ÚÕÚÙ[ˆHœ˜Z[‹œÛ˜\ÚÝ
+
+K\ÚÕÚÙ[‚ˆ˜[XÝ[Û”ØÛÜHHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘›Ü™YÜ›Ý[™XÝ[Û”ÛXÞKœØÛÜJˆXØÙ\ÜÚXš[]K˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+Bˆ
+BˆYˆ
+XÝ[Û”ØÛÜHOH[
+HÂˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙKÝ\œ™[\ÛX\ˆ˜ZHZ[KˆŠBˆ™]\›‚ˆBˆYˆ
+\™Ù]˜\XÚØYÙHOH[	‰‚ˆ
+\™Ù]˜\XÚØYÙHOHXÝ[Û”ØÛÜK™^XÝYXÚØYÙHˆ\™Ù]˜XÝ]™UÚ[™ÝÒYOHXÝ[Û”ØÛÜK™^XÝYÚ[™ÝÒYˆ\™Ù]œØÜ™Y[ÛÛ^Ù[™\˜][ÛˆOHXÝ[Û”ØÛÜK™^XÝYÙ[™\˜][ÛŠBˆ
+HÂˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙK”ØÜ™Y[ˆ˜Y[Ø^ZHZKˆØ][œØH][OÈŠBˆ™]\›‚ˆBˆ˜[ÝÛ™Y\™Ù]H\™Ù]˜ÛÜJˆ\XÚØYÙHHXÝ[Û”ØÛÜK™^XÝYXÚØYÙKˆXÝ]™UÚ[™ÝÒYHXÝ[Û”ØÛÜK™^XÝYÚ[™ÝÒYˆØÜ™Y[ÛÛ^Ù[™\˜][ÛˆHXÝ[Û”ØÛÜK™^XÝYÙ[™\˜][Û‚ˆ
+BˆYˆ
+^XÝ]PXØÙ\ÜÚXš[]Qš\œÝØÜ™Y[XÝ[ÛŠˆ\™Ù]ÝÛ™Y\™Ù]XÝ[Û”ØÛÜK\ÚÕÚÙ[‹XØÙ\ÜÚXš[]Bˆ
+Bˆ
+H™]\›‚ˆYˆ
+\ØÜ™Y[•š\Ú[Û”™Y™\™[˜Ù\Ëš\Ú[Û‘[˜X›YˆØÜ™Y[Ø\\™TÙ\šXÙK˜Ý\œ™[Ý]HOHØÜ™Y[”Ú\™TÝ]KPÕU‘Bˆ
+HÂˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙK•\™Ù]XØÙ\ÜÚXš[]HÙHÛX\ˆ˜ZHZ[KˆŠBˆ™]\›‚ˆBˆ›ÚXÙSÙÊˆœØÜ™Y[—ØXÝ[Û—Ü]\›’YIXÝ]™U\›’Y]TÐÔ‘QS—Õ’TÒSÓ—ÑSPÒÈˆ
+ÂˆœXÚØYÙOIØXÝ[Û”ØÛÜK™^XÝYXÚØYÙ_H‚ˆ
+Bˆ˜[]Y\žHHØÜ™Y[Ø\\™TÙ\šXÙKœ™\]Y\Ýœ™\Úœ˜[YJXÝ]™U\›’Y
+HÈœ™\Ú™\Ý[O‚ˆXZ[’[™\‹œÜÝÂˆYˆ
+Xœ˜Z[‹š\Õ\ÚÐÝ\œ™[
+\ÚÕÚÙ[ŠJH™]\›ÜÝˆ˜[™Y›Ü™Qœ˜[YHH
+œ™\Ú™\Ý[\ÏÈœ™\Úœ˜[YT™\Ý[”™XYJOË™œ˜[YBˆYˆ
+™Y›Ü™Qœ˜[YHOH[TØÜ™Y[Ø\\™TÙ\šXÙKœÙ\ÜÚ[Û‹š\ÐÝ\œ™[
+™Y›Ü™Qœ˜[YKœÙ\ÜÚ[Û’Y
+JHÂˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙK‘œ™\ÚØÜ™Y[ˆÛÛ^˜ZHZ[KˆŠBˆ™]\›ÜÝˆBˆ˜[™Y›Ü™TÚYÛ˜]\™HHXØÙ\ÜÚXš[]Kš\ÚX›TØÜ™Y[”ÚYÛ˜]\™J
+Bˆ˜\ˆXÝ[Û’[[ˆØÜ™Y[XÝ[Û’[[ÈH[ˆYˆ
+™Y›Ü™Qœ˜[YKœXÚØYÙS˜[YHOH[	‰‚ˆ™Y›Ü™Qœ˜[YKœXÚØYÙS˜[YHOHXÝ[Û”ØÛÜK™^XÝYXÚØYÙBˆ
+HÂˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙK\Ú[™ÙHÈØ^XNÈÛ\™Ù]\ÙH˜ZHÚ^XKˆŠBˆ™]\›ÜÝˆBˆ˜[\™\Ý[HXØÙ\ÜÚXš[]Kœ™\ÛÛ™P[™\š\ÚX›U\™Ù]
+ˆ\™Ù]\™Ù]^\™Ù]œÜÚ][Û‹\™Ù]›Ü™[˜[XÝ[Û”ØÛÜBˆ
+HÈËÛÛ™šY[˜ÙHO‚ˆXÝ[Û’[[HØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ü™X]JˆXÝ]™U\›’Y™Y›Ü™Qœ˜[YKœÙ\ÜÚ[Û’Y\Ý\Ù\’[[^ˆ\™Ù]\™Ù]^\™Ù]œÜÚ][Û‹\™Ù]›Ü™[˜[ˆXØÙ\ÜÚXš[]K˜Ý\œ™[XÚØYÙS˜[YJ
+K[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Kˆ™Y›Ü™Qœ˜[YK™œ˜[YRYÛÛ™šY[˜ÙKˆXÝ[Û”ØÛÜK™^XÝYÚ[™ÝÒYXÝ[Û”ØÛÜK™^XÝYÙ[™\˜][Û‚ˆ
+BˆYBˆBˆ˜[ÝÛ™YXÝ[ÛˆHXÝ[Û’[[ˆ˜[XØÙ\YH\™\Ý[˜XØÙ\Y	‰ˆÝÛ™YXÝ[ÛˆOH[ˆYˆ
+XXØÙ\Y
+HÂˆÝÛ™YXÝ[ÛË›]ÈØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ø[˜Ù[
+]˜XÝ[Û’Y
+HBˆœ˜Z[‹œ™XÛÜ™ØÜ™Y[XÝ[ÛŠÝÛ™Y\™Ù]˜[ÙJBˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙK‘ÛÜÜ˜H\™Ù]ÛX\ˆ˜ZHZ[KˆŠBˆ™]\›ÜÝˆBˆXZ[’[™\‹œÜÝ[^YY
+ÂˆØÜ™Y[Ø\\™TÙ\šXÙKœ™\]Y\Ýœ™\Úœ˜[YJXÝ]™U\›’Y
+HÈ™\Ý[O‚ˆXZ[’[™\‹œÜÝÂˆYˆ
+Xœ˜Z[‹š\Õ\ÚÐÝ\œ™[
+\ÚÕÚÙ[ŠJH™]\›ÜÝˆ˜[XÝ[ÛˆHÝÛ™YXÝ[ÛˆÎˆ™]\›ÜÝˆYˆ
+\ØÜ™Y[XÝ[Û”™YÚ\ÝžKš\ÐÝ\œ™[
+ˆXÝ[Û‹˜XÝ[Û’YXÝ[Û‹\›’YXÝ[Û‹œØÜ™Y[”Ù\ÜÚ[Û’Yˆ
+JHÂˆ›ÚXÙSÙÊ”ÐÔ‘QS—ÐPÕSÓ—ÐÐSÑSQXÝ[Û’YIØXÝ[Û‹˜XÝ[Û’YH™X\ÛÛ\™\XÙYØ™Y›Ü™WÝ™\šYšXØ][ÛˆŠBˆ™]\›ÜÝˆBˆ˜[ÜÝœ˜[YHH
+™\Ý[\ÏÈœ™\Úœ˜[YT™\Ý[”™XYJOË™œ˜[YBˆ˜[XØÙ\ÜÚXš[]PÚ[™ÙYH™Y›Ü™TÚYÛ˜]\™Kš\Ó›Ý›[šÊ
+H	‰‚ˆXØÙ\ÜÚXš[]Kš\ÚX›TØÜ™Y[”ÚYÛ˜]\™J
+HOH™Y›Ü™TÚYÛ˜]\™Bˆ˜[œ˜[YPÚ[™ÙYHÜÝœ˜[YHOH[	‰ˆÜÝœ˜[YKœÙ\ÜÚ[Û’YOH™Y›Ü™Qœ˜[YKœÙ\ÜÚ[Û’Y	‰‚ˆÜÝœ˜[YK™œ˜[YRYˆ™Y›Ü™Qœ˜[YK™œ˜[YRY	‰ˆÜÝœ˜[YKš\ÚOH™Y›Ü™Qœ˜[YKš\Úˆ˜[™\šYšYYHØÜ™Y[Ø\\™TÙ\šXÙKœÙ\ÜÚ[Û‹š\ÐÝ\œ™[
+™Y›Ü™Qœ˜[YKœÙ\ÜÚ[Û’Y
+H	‰‚ˆ
+XØÙ\ÜÚXš[]PÚ[™ÙYœ˜[YPÚ[™ÙY
+Bˆœ˜Z[‹œ™XÛÜ™ØÜ™Y[XÝ[ÛŠÝÛ™Y\™Ù]™\šYšYY
+BˆØÜ™Y[XÝ[Û”™YÚ\ÝžK˜Ø[˜Ù[
+XÝ[Û‹˜XÝ[Û’Y
+Bˆš[š\Úœ˜Z[•\ÚÊˆ\ÚÕÚÙ[‹ˆ™\šYšYYˆYˆ
+™\šYšYY
+H‘ÛÜÜ˜HØ[HÜ[ˆÈØ^XKˆ‚ˆ[ÙH•\XKZÚ[ˆØÜ™Y[ˆÚ[™ÙH™\šYžH˜ZHXKˆ‚ˆ
+BˆBˆBˆK
+BˆBˆBˆYˆ
+]Y\žHOH[
+Hš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[‹˜[ÙK”ØÜ™Y[ˆš\Ú[ÛˆXÝ]™H˜ZHZKˆŠBˆB‚ˆš]˜]H[ˆš[š\Úœ˜Z[•\ÚÊ\ÚÕÚÙ[ŽˆÛ™ËÝXØÙ\ÜÎˆ›ÛÛX[‹Y\ÜØYÙNˆÝš[™ÊHÂˆYˆ
+Xœ˜Z[‹š\Õ\ÚÐÝ\œ™[
+\ÚÕÚÙ[ŠJH™]\›‚ˆœ˜Z[‹™š[š\Ú\ÚÊ\ÚÕÚÙ[‹ÝXØÙ\ÜÊBˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙK\ÝXØÙ\ÜÊBˆ[Z]Ý]JY\ÜØYÙJBˆ]Y]YSØØ[ÜYXÚ
+Y\ÜØYÙK[ÝÕ[˜[œØÜšX™Y]Y[ÈHÝXØÙ\ÜÊBˆ›ÚXÙSÙÊ˜œ˜Z[—Ý\Ú×Ùš[š\ÚY\ÚÕÚÙ[I\ÚÕÚÙ[ˆÝXØÙ\ÜÏIÝXØÙ\ÜÈY\ÜØYÙOIÛY\ÜØYÙKZÙJL
+_HŠBˆB‚ˆš]˜]H[ˆ[™TØÜ›Û›ÜÜØ[
+ˆÛÛ[X[™ˆ\ÛÛ[X[™”ØÜ›Û[ÝUX™KˆÛÝ\˜ÙNˆÝš[™Ëˆ]]Üš^˜][ÛŽˆØÜ›Û›ÜÜØ[]]Üš^˜][Û‹ˆ™\]Y\ÝY\ÚÒYˆÝš[™ÏÈH[ˆ
+Nˆ›ÛÛX[ˆÂˆ˜[\›’YHXÝ]™U\›’Yˆ˜[\™XÝ[ÛˆHÛÛ[X[™™\™XÝ[ÛˆÎˆ\ÝØÜ›Û\™XÝ[Û‚ˆ˜[›Ü™YÜ›Ý[™HXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙOË˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+BˆYˆ
+]]Üš^˜][ÛˆOHØÜ›Û›ÜÜØ[]]Üš^˜][Û‹”‘WÑ’SS
+HÂˆYˆ
+\›’YH
+HÂˆ›ÚXÙSÙÊˆ”ÐÔ“ÓÐÐS‘QUWÔ‘R‘PÕQ\›’YI\›’Y\™XÝ[ÛI\™XÝ[ÛˆÛÝ\˜ÙOIÛÝ\˜ÙHˆ
+Âˆ˜]]Üš^˜][ÛT‘WÑ’SSXÚ\Ú[ÛT‘R‘PÕQ™X\ÛÛ[Z\ÜÚ[™×Ý›ÚXÙWÝ\›ˆ‚ˆ
+Bˆ™]\›ˆ˜[ÙBˆBˆ[™[™ÔØÜ›ÛØ[™Y]\ËœÝYÙJˆ\›’YH\›’Yˆ\™XÝ[ÛˆH\™XÝ[Û‹›˜[YKˆ]XÝY]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+KˆÛÝ\˜ÙHHÛÝ\˜ÙKˆ›Ü™YÜ›Ý[™XÚØYÙHH›Ü™YÜ›Ý[™ËœXÚØYÙS˜[YKˆÚ[™ÝÒYH›Ü™YÜ›Ý[™ËÚ[™ÝÒYˆØœÙ\™YÙ[™\˜][ÛˆH›Ü™YÜ›Ý[™Ë™Ù[™\˜][ÛˆÎˆˆ
+Bˆ›ÚXÙSÙÊˆ”ÐÔ“ÓÐÐS‘QUWÑUPÕQ\›’YI\›’Y\™XÝ[ÛI\™XÝ[ÛˆÛÝ\˜ÙOIÛÝ\˜ÙHˆ
+Âˆ™›Ü™YÜ›Ý[™XÚØYÙOIÙ›Ü™YÜ›Ý[™ËœXÚØYÙS˜[Y_HØœÙ\™YÙ[™\˜][ÛIÙ›Ü™YÜ›Ý[™Ë™Ù[™\˜][ÛˆÎˆHˆ
+Âˆ˜]]Üš^˜][ÛT‘WÑ’SSXÚ\Ú[ÛTÕQÑQ‚ˆ
+Bˆ™]\›ˆ˜[ÙBˆB‚ˆ˜[[[YU\ÚÈHÙ[™\˜[YÙ[[[YTÝÜ™Kœ[[YK˜XÝ]™U\ÚÊ
+BˆYˆ
+[[YU\ÚÈOH[™\]Y\ÝY\ÚÒYš\Ó[Ü›[šÊ
+JHÂˆ›ÚXÙSÙÊˆ”ÐÔ“ÓÔ•S•SQWÓRTÔÒS‘È\›’YI\›’Y™X\ÛÛ\ÜÝÙš[˜[Ø]]Üš]]]™WÝ\Ú×ÛZ\ÜÚ[™Èˆ
+Âˆ˜]]Üš^˜][ÛQ’SSÐUUÔ’V‘Q‚ˆ
+Bˆ^XÝ]U™\šYšYYØÜ›Û
+ÛÛ[X[™™\]Y\ÝY\›’YH\›’Y™\]Y\ÝY\ÚÒYH™\]Y\ÝY\ÚÒY›Ü‘[\J
+JBˆ™]\›ˆ˜[ÙBˆBˆ˜[Ø[™Y]HH[™[™ÔØÜ›ÛØ[™Y]\Ë˜ÛÛœÝ[YJ\›’Y
+Bˆ˜[›ÝÈH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[Ø[™Y]PÛÛ\]X›HHØ[™Y]OË›]ÂˆØÜ›ÛØ[™Y]TÛXÞK˜ÛÛ\]X›J]\›’Y›Ü™YÜ›Ý[™ËœXÚØYÙS˜[YK›Ü™YÜ›Ý[™ËÚ[™ÝÒY›ÝÊH	‰‚ˆ]™\™XÝ[ÛˆOH\™XÝ[Û‹›˜[YBˆHÎˆ˜[ÙBˆYˆ
+Ø[™Y]HOH[	‰ˆXØ[™Y]PÛÛ\]X›JHÂˆ›ÚXÙSÙÊˆ”ÐÔ“ÓÐÐS‘QUWÔ‘R‘PÕQ\›’YI\›’YØ[™Y]U\›’YIØØ[™Y]K\›’YHˆ
+Âˆ˜Ø[™Y]Q\™XÝ[ÛIØØ[™Y]K™\™XÝ[ÛŸHš[˜[\™XÝ[ÛI\™XÝ[ÛˆÛÝ\˜ÙOIØØ[™Y]KœÛÝ\˜Ù_Hˆ
+Âˆ™›Ü™YÜ›Ý[™XÚØYÙOIÙ›Ü™YÜ›Ý[™ËœXÚØYÙS˜[Y_HØœÙ\™YÙ[™\˜][ÛIÙ›Ü™YÜ›Ý[™Ë™Ù[™\˜][ÛˆÎˆHˆ
+Âˆœ™X\ÛÛ\Ý[WÛÜ—Ú[˜ÛÛ\]X›WÙš[˜[Ú[[‚ˆ
+BˆBˆYˆ
+\ØÜ™Y[ÛÛ[X[™\›‘ÝX\™žPÛÛ[Z]
+\›’Y
+JHÂˆ›ÚXÙSÙÊ”ÐÔ“ÓÔ•S•SQWÑTPÐUWÐ“ÐÒÑQ\›’YI\›’Y\ÚÒYIÜ[[YU\ÚËšYHÛÝ\˜ÙOIÛÝ\˜ÙHŠBˆ™]\›ˆ˜[ÙBˆBˆ›ÚXÙSÙÊˆ”ÐÔ“ÓÔ•S•SQWÐ“ÕS‘\›’YI\›’Y\ÚÒYIÜ[[YU\ÚËšYH\™XÝ[ÛI\™XÝ[Ûˆˆ
+ÂˆœÛÝ\˜ÙOIÛÝ\˜ÙHÝYÙYØ[™Y]PÛÛ\]X›OIØ[™Y]PÛÛ\]X›H‚ˆ
+Bˆ›ÚXÙSÙÊ”ÐÔ“ÓÑ’SSÑTÔUÒ\›’YI\›’Y\ÚÒYIÜ[[YU\ÚËšYH\™XÝ[ÛI\™XÝ[ÛˆÝÛ™\Q’SSÕS’Q’QQÕT“ˆŠBˆ^XÝ]U™\šYšYYØÜ›Û
+ÛÛ[X[™™\]Y\ÝY\›’YH\›’Y™\]Y\ÝY\ÚÒYH[[YU\ÚËšY
+Bˆ™]\›ˆYBˆB‚ˆš]˜]H[ˆ^XÝ]U™\šYšYYØÜ›Û
+ˆÛÛ[X[™ˆ\ÛÛ[X[™”ØÜ›Û[ÝUX™Kˆ™\]Y\ÝY\›’YˆÛ™ÈHXÝ]™U\›’Yˆ™\]Y\ÝY\ÚÒYˆÝš[™ÈHÙ[™\˜[YÙ[[[YTÝÜ™Kœ[[YK˜XÝ]™U\ÚÊ
+OËšY›Ü‘[\J
+Bˆ
+HÂˆØ[˜Ù[ÜYXÚ›Ü“™]ÐXÝ[ÛŠ
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYBˆÛÛ[X[™›Ø™K˜ÛX\Š
+BˆÝ]]˜ÛX\Š
+BˆYYXQÝX\™™š[š\Ú[\˜XÝ[ÛŠ
+B‚ˆ˜[™\ÛÛ™Y\™XÝ[ÛˆHÛÛ[X[™™\™XÝ[ÛˆÎˆ\ÝØÜ›Û\™XÝ[Û‚ˆ˜[^XÚ][ÝUX™HHÛÛ[X[™™^XÚ]T™\]Y\ÝY\™\]X[Ê–[ÝUX™H‹YJBˆ˜[]™Q›Ü™YÜ›Ý[™HXØÙ\ÜÚXš[]R[\”Ù\šXÙKš[œÝ[˜ÙOË˜Ý\œ™[›Ü™YÜ›Ý[™ÛÛ^
+
+Bˆœ˜Z[‹›ØœÙ\™Q›Ü™YÜ›Ý[™\
+]™Q›Ü™YÜ›Ý[™ËœXÚØYÙS˜[YJBˆ˜[XÝ[Û”ØÛÜHHÛÛK›^\˜K˜\ÜÚ\Ý[œØÜ™Y[‹‘›Ü™YÜ›Ý[™XÝ[Û”ÛXÞKœØÛÜJ]™Q›Ü™YÜ›Ý[™
+Bˆ˜[›Ü™YÜ›Ý[™XÚØYÙHHXÝ[Û”ØÛÜOË™^XÝYXÚØYÙHÎˆXÝ]š]PÛÛ^ÝÜ™KœÛ˜\ÚÝ
+
+OËœXÚØYÙS˜[YBˆ˜[]HÚ[ˆÂˆ^XÚ][ÝUX™HOˆPÐÑTÔÒP’SUWÑVPÒUÖSÕUP‘H‚ˆ›Ü™YÜ›Ý[™XÚØYÙK™\]X[Ê˜ÛÛK™ÛÛÙÛK˜[™›ÚYž[Ý]X™H‹YJHOˆPÐÑTÔÒP’SUWÖSÕUP‘WÑ“Ô‘QÔ“ÕS‘‚ˆ[ÙHOˆPÐÑTÔÒP’SUWÐÕT”‘S•ÐT‚ˆBˆ›ÚXÙSÙÊˆœØÜ™Y[—ØXÝ[Û—Ü[[YWÜ]\›’YIXÝ]™U\›’YXÝ[Û\ØÜ›Û]I]ˆ
+ÂˆœXÚØYÙOI›Ü™YÜ›Ý[™XÚØYÙH\™XÝ[ÛI™\ÛÛ™Y\™XÝ[Ûˆ‚ˆ
+BˆÙ[™\˜[YÙ[[[YTÝÜ™Kœ[[YK™[œšXÚ
+X\ÙŠˆ™\™XÝ[ÛˆˆÈ™\ÛÛ™Y\™XÝ[Û‹›˜[YKˆ™^XÚ]\ˆÈÛÛ[X[™™^XÚ]T™\]Y\ÝY\›Ü‘[\J
+Kˆœ]ˆÈ]ˆ
+K™[]˜[\H›Ü™YÜ›Ý[™XÚØYÙJBˆ˜[ÝÛ™YH^XÝ]QÙ[™\˜[[[YPØ\Xš[]JˆÛÛØ\Xš[]KPÐÑTÔÒP’SUWÔÐÔ“Ó™\]Y\ÝY\›’Y™\]Y\ÝY\ÚÒYˆ
+HÈÝ]\ËÈO‚ˆÚ[ˆ
+Ý]\ÊHÂˆÙ[™\˜[™\šYšXØ][Û”Ý]\Ë”ÕPÐÑTÔÈOˆÂˆ\ÝØÜ›Û\™XÝ[ÛˆH™\ÛÛ™Y\™XÝ[Û‚ˆ\ÐXÚÛ›ÝÛYÙYØÜ›Û\™XÝ[ÛˆHYBˆ]Y[ÏËœÙ]]]Y
+˜[ÙJBˆ[Z]Ý]J”Ý[ˆ˜ZHÛÛ¸ )ˆŠBˆ›ÚXÙSÙÊœØÜ™Y[—ØXÝ[Û—Ù™YY˜XÚ×ÜÝ\™\ÜÙY\›’YIXÝ]™U\›’YXÝ[Û\ØÜ›ÛÝXØÙ\ÜÏ]YHÝÛ™\QÑS‘TSÔ•S•SQHŠBˆBˆÙ[™\˜[™\šYšXØ][Û”Ý]\Ë•S’Ó“ÕÓˆOˆÂˆ˜[\Ü]ÚXØÙ\YHÙ[™\˜[YÙ[[[YTÝÜ™Kœ[[YK›\ÝÛÛ\]Y\ÚÊ
+BˆË˜XÝ[Û’\ÝÜžOË›\ÝÜ“[
+
+OË˜XØÙ\YOHYBˆYˆ
+\Ü]ÚXØÙ\Y
+HÂˆ]Y[ÏËœÙ]]]Y
+˜[ÙJBˆ[Z]Ý]J”Ý[ˆ˜ZHÛÛ¸ )ˆŠBˆ›ÚXÙSÙÊˆœØÜ™Y[—ØXÝ[Û—Ù™YY˜XÚ×ÜÝ\™\ÜÙY\›’YIXÝ]™U\›’YXÝ[Û\ØÜ›Ûˆ
+ÂˆœÝXØÙ\ÜÏ][šÛ›ÝÛˆXØÙ\Y]YHÝÛ™\QÑS‘TSÔ•S•SQH™X\ÛÛZ[œÝY™šXÚY[Û[Ý™[Y[Ù]šY[˜ÙH‚ˆ
+BˆBˆBˆÙ[™\˜[™\šYšXØ][Û”Ý]\Ë‘RST‘HOˆÂˆ˜[Y\ÜØYÙHHYˆ
+^XÚ][ÝUX™JH–[ÝUX™HØHÝ\œ™[™YY[Ý™H˜ZHXKˆ‚ˆ[ÙHÝ\œ™[\ØHØÜ›ÛX›H\™XH[Ý™H˜ZHXKˆ‚ˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙKYJNÈ[Z]Ý]JY\ÜØYÙJNÈ]Y]YSØØ[ÜYXÚ
+Y\ÜØYÙJBˆBˆBˆBˆYˆ
+[ÝÛ™Y
+HÂˆ˜[™X\ÛÛˆHYˆ
+Ù[™\˜[YÙ[[[YTÝÜ™Kœ[[YK˜XÝ]™U\ÚÊ
+HOH[
+H››×ØXÝ]™WÜ[[YWÝ\ÚÈˆ[ÙHœ[[YWÝ\›—ÛZ\ÛX]Ú‚ˆ›ÚXÙSÙÊ”ÐÔ“ÓÔ•S•SQWÓRTÔÒS‘È\›’YI™\]Y\ÝY\›’Y™X\ÛÛI™X\ÛÛˆŠBˆ›ÚXÙSÙÊ“QÐPÖWÑSPÒ×ÕTÑQ\›’YI™\]Y\ÝY\›’YØ\Xš[]OPPÐÑTÔÒP’SUWÔÐÔ“Ó™X\ÛÛI™X\ÛÛˆ^XÝ][ÛX›ØÚÙYŠBˆ˜[Y\ÜØYÙHH”ØÜ›Û\ÚÈXÝ]™H˜ZHZK\Û^YHXÝ[Ûˆ˜ZHÚ^XKˆ‚ˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙKYJNÈ[Z]Ý]JY\ÜØYÙJNÈ]Y]YSØØ[ÜYXÚ
+Y\ÜØYÙJBˆBˆB‚ˆš]˜]H[ˆ™\\™PÛÜÙPY\”ÜYXÚ
+ÛÛ[X[™ˆ\ÛÛ[X[™ÛÜÙPÝ\œ™[\
+HÂˆ˜[™Y™\™[˜Ù\ÈHÙ]Ú\™Y™Y™\™[˜Ù\Ê›^\˜H‹SÑWÔ’UUJBˆ˜[˜[YHHÛÛ™šYÝ\™Y\Ù\“˜[YJ™Y™\™[˜Ù\Ë™Ù]Ýš[™Ê\Ù\—Û˜[YH‹[
+JBˆ˜[\œÛÛ˜[]HH™Y™\™[˜Ù\Ë™Ù]Ýš[™Êœ\œÛÛ˜[]H‹‘ÑˆŠHÎˆ‘Ñˆ‚ˆ˜[Y\ÜØYÙHH›ÚXÙT™\ÜÛœÙQ›Ü›X]\‹˜ÛÜÙTÝ\[™ÊÛÛ[X[™œ™\]Y\ÝY˜[YK\œÛÛ˜[]K˜[YJBˆ[™[™ÐXÝ[ÛY\“ØØ[ÜYXÚHÂˆ˜[™\Ý[H\ÜÚ\Ý[ÛÛ›Û\‹œ›ØÙ\ÜÐÛÛ[X[™
+ˆÝXÝ\™YÛÛ[X[™\œÙ\‹™œ›ÛSYØXÞJÛÛ[X[™ÛÛ[X[™ÔÝš[™Ê
+JKˆÜXZÈH˜[ÙKˆ›ÝYžS\Ý[™\œÈH˜[ÙBˆ
+BˆYˆ
+™\Ý[œÝXØÙ\ÜÊHÂˆ]Y[ÏËœÙ]]]Y
+˜[ÙJBˆ[Z]Ý]J”Ý[ˆ˜ZHÛÛ¸ )ˆŠBˆH[ÙHÂˆ\Ý[™\Ë›Û“^\˜U^
+™\Ý[œÜÚÙ[“Y\ÜØYÙKYJBˆ[Z]Ý]J™\Ý[œÜÚÙ[“Y\ÜØYÙJBˆ]Y]YSØØ[ÜYXÚ
+™\Ý[œÜÚÙ[“Y\ÜØYÙJBˆBˆBˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙJBˆ[Z]Ý]JY\ÜØYÙJBˆYYXQÝX\™˜™YÚ[\ÜÚ\Ý[\›Š
+Bˆ]Y]YSØØ[ÜYXÚ
+Y\ÜØYÙK[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆB‚ˆš]˜]H[ˆ[”[™[™ÐXÝ[ÛY\”ÜYXÚ
+
+Nˆ›ÛÛX[ˆÂˆ˜[XÝ[ÛˆH[™[™ÐXÝ[ÛY\“ØØ[ÜYXÚÎˆ™]\›ˆ˜[ÙBˆ[™[™ÐXÝ[ÛY\“ØØ[ÜYXÚH[ˆXZ[’[™\‹œÜÝÈXÝ[ÛŠ
+HBˆ™]\›ˆYBˆB‚ˆš]˜]H[ˆ\ÔØY™U[˜[œØÜšX™YÛÛ™š\›X][ÛŠÛÛ[X[™ˆ\ÛÛ[X[™
+Nˆ›ÛÛX[ˆHÚ[ˆ
+ÛÛ[X[™
+HÂˆ\È\ÛÛ[X[™“Ü[\\È\ÛÛ[X[™ÛÜÙPÝ\œ™[\ˆ\È\ÛÛ[X[™”ÙX\˜Ú[ÝUX™K\È\ÛÛ[X[™”^V[ÝUX™K\ÛÛ[X[™“Ü[–[ÝUX™TÚÜËˆ\ÛÛ[X[™”™\]Y\Ý[œÝYÜ˜[T™Y[Ë\ÛÛ[X[™“Ü[’[œÝYÜ˜[T™Y[Ë\ÛÛ[X[™•ZÙTØÜ™Y[œÚÝˆ\ÛÛ[X[™”™\X][ÝUX™TÙX\˜Úˆ\ÛÛ[X[™‘ÛÒÛYK\ÛÛ[X[™‘ÛÐ˜XÚË\ÛÛ[X[™Ý\œ™[[YKˆ\ÛÛ[X[™˜]\žS]™[\È\ÛÛ[X[™”Ù]›\ÚYÚˆ\È\ÛÛ[X[™ÛÛ›ÛYYXK\È\ÛÛ[X[™”ØÜ›Û[ÝUX™HOˆYBˆ\È\ÛÛ[X[™”™\UÚ]Ð\\ÛÛ[X[™”]Y\žUÚ]Ð\Y\ÜØYÙ\Ëˆ\È\ÛÛ[X[™‘Y\™\ÙX\˜ÚOˆ˜[ÙBˆB‚ˆš]˜]H[ˆ\[™˜[œØÜš\
+Z[\ŽˆÝš[™ÐZ[\‹\ˆÝš[™ÊHÂˆ]™U˜[œØÜš\\ÜÙ[X›\‹˜\[™
+Z[\‹\
+BˆB‚ˆš]˜]H[ˆ™YÚ[“Ü™[˜\žTÜYXÚXÝ]š]J]\ÝÙ[™\˜][Û’YˆÛ™ËÛÝ\˜ÙNˆÝš[™ÊHÂˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[
+H™]\›‚ˆËÈHÛÛ\]YÛÛ›ÛY™\ÜÛœÙH[X™\˜][HÝ^\È]ÚY[[Ù[Z[™H™]ÂˆËÈÜYXÚˆ™[X\ÙH]\™H™Y›Ü™H[ØØ][™ÈH™]ÈY[]NÈH™]š[Ý\ÈÜ™\‚ˆËÈ™]\›™YX\›H[™Y™X[QÜYXÚÚ]ÜYXÚ[Z[™Õ\›’YL‚ˆYˆ
+\™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+H	‰ˆ™\ÜÛœÙP\˜š]\‹œ™[X\ÙY
+
+JHÂˆ™\ÜÛœÙP\˜š]\‹œ™[X\ÙRYÛÛ\]J
+BˆBˆYˆ
+\™\ÜÛœÙP\˜š]\‹˜XØÙ\ÓÜ™[˜\žS[Ù[
+
+JH™]\›‚ˆYˆ
+Ü™[˜\žS[Ù[]Y[ÑØ]Kš\ÔÜYXÚXÝ]™J
+JH™]\›‚ˆÜYXÚXÝ]š]TÝ\Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+BˆÜYXÚXÝ]š]Q[™Y]HˆYˆ
+XÝ]™U\›’YOH
+HXÝ]™U\›’YH
+ÊÝ\›”Ù\]Y[˜ÙBˆ\›“][˜ÞK˜™YÚ[ŠXÝ]™U\›’YÜYXÚXÝ]š]TÝ\Y]
+BˆÜYXÚ[Z[™Õ\›’YHXÝ]™U\›’Yˆ›ÚXÙU\›’Y[]Y\Ë˜™YÚ[ŠXÝ]™U\›’YÜYXÚXÝ]š]TÝ\Y]
+Bˆ™\ÜÛœÙP\˜š]\‹˜™YÚ[ŠXÝ]™U\›’Y
+Bˆ˜[Ø[˜Ù[YÙ[™\˜][ÛˆHÜ™[˜\žS[Ù[]Y[ÑØ]K›Û”ÜYXÚXÝ]š]TÝ\Y
+]\ÝÙ[™\˜][Û’Y
+BˆXØÙ\Y[Ù[Ù[™\˜][Û‘›Ü•\›ˆHˆYˆ
+X\›S[Ù[]Y[Ëš\Ó›Ý[\J
+JHÂˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[
+ÏHX\›S[Ù[]Y[ËœÚ^™Bˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\È
+ÏHX\›S[Ù[]Y[Ðž]\ÂˆX\›S[Ù[]Y[Ë˜ÛX\Š
+BˆX\›S[Ù[]Y[Ðž]\ÈHˆX\›S[Ù[]Y[ÑÙ[™\˜][Û’YHˆBˆËÈYˆTH\ÈÚ[[È›Ý™\Ù]HYYXHØ[™Y]H]Ø\È\ÝˆËÈÛÛ™š\›YYœ›ÛHÛÚ\™[TÔŽÈ™X[^X˜XÚÈ˜\™ÙKZ[ˆÝ[[\œ\Ë‚ˆYˆ
+ØØ[]Y[ÔÜXZÚ[™ÊH]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊˆœÜYXÚØXÝ]š]WÜÝ\Y\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YI]\ÝÙ[™\˜][Û’Yˆ
+ÂˆœÜYXÚXÝ]š]TÝ\Y]IÜYXÚXÝ]š]TÝ\Y]ÛÝ\˜ÙOIÛÝ\˜ÙHˆ
+Âˆœ^X˜XÚÐØ[˜Ù[YžP˜\™ÙR[IØØ[˜Ù[YÙ[™\˜][ÛˆOH[HØ[˜Ù[YÙ[™\˜][Û’YIØØ[˜Ù[YÙ[™\˜][ÛˆÎˆH‚ˆ
+BˆB‚ˆš]˜]H[ˆš[š\ÚÜ™[˜\žTÜYXÚXÝ]š]J
+HÂˆYˆ
+[Ü™[˜\žS[Ù[]Y[ÑØ]Kš\ÔÜYXÚXÝ]™J
+JH™]\›‚ˆÜYXÚXÝ]š]Q[™Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[[™[™Õ\›’YHÜYXÚ[Z[™Õ\›’YZÙRYˆÈ]ˆBˆÎˆ›ÚXÙU\›’Y[]Y\Ë˜Ý\œ™[
+
+OË\Ù\•\›’YˆÎˆˆYˆ
+[™[™Õ\›’YOH
+HÂˆ›ÚXÙSÙÊ•“ÒPÑWÐPÕSÓ—ÒQS•UWÒS•SQÜYXÚ\›’YL[[YU\›’YIÑÙ[™\˜[YÙ[[[YTÝÜ™Kœ[[YK˜XÝ]™U\ÚÊ
+OË\›’YÎˆH™X\ÛÛ\ÜYXÚÙ[™ÝÚ]Ý]ÚY[]HŠBˆH[ÙHÂˆÜYXÚ[Z[™Õ\›’YH[™[™Õ\›’Yˆ›ÚXÙU\›’Y[]Y\ËœÜYXÚ[™Y
+[™[™Õ\›’YÜYXÚXÝ]š]Q[™Y]
+BˆBˆ›ÚXÙSÙÊœÜYXÚXÝ]š]Q[™\›’YI[™[™Õ\›’Y]IÜYXÚXÝ]š]Q[™Y]ŠBˆ\›“][˜ÞKœ™XÛÜ™
+[™[™Õ\›’YšY[”ÔQPÒÑS‘ÜYXÚXÝ]š]Q[™Y]
+Bˆ\›“][˜ÞKœ™XÛÜ™
+[™[™Õ\›’YšY[UUÔ’UUU‘WÐÓÓTUKÜYXÚXÝ]š]Q[™Y]
+BˆÜ™[˜\žS[Ù[]Y[ÑØ]K›Û”ÜYXÚXÝ]š]Q[™Y
+
+Bˆ›ÚXÙSÙÊˆ˜]]Üš]]]™WÝ\Ù\—Ý\›—ØÛÛ\]H\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YIX\›S[Ù[]Y[ÑÙ[™\˜][Û’Yˆ
+ÂˆœÜYXÚXÝ]š]Q[™Y]IÜYXÚXÝ]š]Q[™Y]]]Üš]]]™U\Ù\•\›ÛÛ\]P]IÜYXÚXÝ]š]Q[™Y]ˆ
+ÂˆœÜYXÚ[Z[™Õ\›’YIÜYXÚ[Z[™Õ\›’YÜYXÚ\˜][Û“\ÏIÊÜYXÚXÝ]š]Q[™Y]HÜYXÚXÝ]š]TÝ\Y]
+K˜ÛÙ\˜ÙP]X\Ý
+
+_Hˆ
+ÂˆœÛÝ\˜ÙO[ØØ[Ý˜Y\Ù\”ÜYXÚXÝ]™OY˜[ÙHX\›S[Ù[]Y[ÐY™™\™YÛÝ[IÙX\›S[Ù[]Y[ËœÚ^™_Hˆ
+Âˆ™X\›S[Ù[]Y[ÐY™™\™Yž]\ÏIX\›S[Ù[]Y[Ðž]\È‚ˆ
+Bˆ›ÚXÙSÙÊ˜]]Üš]]]™U\›ÛÛ\]H\›’YIÜYXÚ[Z[™Õ\›’Y]IÜYXÚXÝ]š]Q[™Y]ÜYXÚ[™Ð]]Üš]]]™U\›“\ÏLŠBˆYˆ
+X\›S[Ù[]Y[Ëš\Ñ[\J
+JH™]\›‚ˆ˜[Ù[™\˜][Û’YHX\›S[Ù[]Y[ÑÙ[™\˜][Û’Yˆ˜[Ú[šÜÈHX\›S[Ù[]Y[ËÓ\Ý
+
+BˆX\›S[Ù[]Y[Ë˜ÛX\Š
+BˆX\›S[Ù[]Y[Ðž]\ÈHˆX\›S[Ù[]Y[ÑÙ[™\˜][Û’YHˆ˜[XÚ\Ú[ÛˆHÜ™[˜\žS[Ù[]Y[ÑØ]K™XÚYJÙ[™\˜][Û’Y
+BˆYˆ
+XÚ\Ú[ÛˆOH[Ù[]Y[ÑXÚ\Ú[Û‹PÐÑT
+HÂˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]PÛÝ[
+ÏHÚ[šÜËœÚ^™Bˆ[Ù[]Y[Ñ›ÜY™Y›Ü™U\›ÛÛ\]Pž]\È
+ÏHÚ[šÜËœÝ[SÙˆÈ]œÚ^™KÓÛ™Ê
+HBˆ›ÚXÙSÙÊˆ™X\›WÛ[Ù[Ø]Y[×Ù›ÜY\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YIÙ[™\˜][Û’Yˆ
+Âˆœ™Z™XÝ[Û”™X\ÛÛIXÚ\Ú[ÛˆÝ[P]Y[Ñ›ÜY]YHÚ[šÜÏIØÚ[šÜËœÚ^™_H‚ˆ
+Bˆ™]\›‚ˆBˆXØÙ\Y[Ù[Ù[™\˜][Û‘›Ü•\›ˆHÙ[™\˜][Û’YˆYYXQÝX\™˜™YÚ[\ÜÚ\Ý[\›Š
+Bˆ]Y[ÏËœÙ]^X˜XÚÐÛÛ^
+Ù[™\˜][Û’Y™\ÜÛœÙSÝÛ™\ˆH“SÑSŠBˆ]Y[ÏËœÙ]˜\™ÙR[‘[˜X›Y
+YJBˆÚ[šÜË™›Ü‘XXÚÈ]Y[ÏËœ]Y]YP]Y[Ê]Ù[™\˜][Û’Y“SÑSŠHBˆ˜[XØÙ\Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ\›“][˜ÞKœ™XÛÜ™
+XÝ]™U\›’YšY[‘’T”ÕÐPÐÑTQÓSÑSÐUQSËXØÙ\Y]Ù[™\˜][Û’Y
+Bˆ›ÚXÙSÙÊˆ™X\›WÛ[Ù[Ø]Y[×Ü™[X\ÙY\›’YIXÝ]™U\›’Y[Ù[Ù[™\˜][Û’YIÙ[™\˜][Û’Yˆ
+Âˆ™š\œÝ[Ù[]Y[ÐXØÙ\Y]IÝ\›“][˜ÞK™š\œÝXØÙ\Y]Y[Ð]
+XÝ]™U\›’YÙ[™\˜][Û’Y
+_Hš\œÝ^X˜XÚÐ]IXØÙ\Y]ˆ
+Âˆ\Ù\•\›ÛÛ\]UÑš\œÝ^X˜XÚÓ\ÏIØXØÙ\Y]HÜYXÚXÝ]š]Q[™Y]HÚ[šÜÏIØÚ[šÜËœÚ^™_H‚ˆ
+BˆB‚ˆš]˜]H[ˆØ[˜Ù[ÜYXÚ›Ü“™]ÐXÝ[ÛŠ
+HÂˆËÈÛX\ˆ˜[Y][Û‹Ü^X˜XÚÈÝ]H™Y›Ü™H]Y[Ñ[™Ú[™H[Z]È]È[\œ\[Û‚ˆËÈØ[˜XÚËˆÝ\Ú\ÙHš[š\ÚØØ[^X˜XÚÊ
+HØ[ˆ™]š]™H[ˆ^\™Y[Ù[\›‹‚ˆØØ[ÜYXÚ˜[Y][Û•ÚÙ[ŠÊÂˆØ[˜Ù[ØØ[ÜYXÚ[Y[Ý]
+œÜYXÚØØ[˜Ù[YŠBˆ˜[Y][™ÓØØ[ÜYXÚH[ˆ[™[™ÓØØ[ÜYXÚH[ˆ[™[™ÓØØ[ÜYXÚÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK‘QUSˆ[™[™ÓØØ[ÜYXÚ[ÝÜÔÚ[[˜ÙHH˜[ÙBˆØØ[ÜYXÚ]Y[Ë˜ÛX\Š
+BˆØØ[ÜYXÚ˜[œØÜš\˜ÛX\Š
+BˆØØ[ÜYXÚ\ÐÛÛ[H˜[ÙBˆØØ[ÜYXÚÝ™X[YY\™XÝHH˜[ÙBˆØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]HH˜[ÙBˆØØ[^X˜XÚÐXÝ]™HH˜[ÙBˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH˜[ÙBˆ[™[™ÐXÝ[ÛY\“ØØ[ÜYXÚH[ˆ]Y[ÏËš[\œ\
+
+Bˆ]Y[ÏËœÙ]]]Y
+˜[ÙJBˆB‚ˆš]˜]H[ˆ]Y]YSØØ[ÜYXÚ
+ˆY\ÜØYÙNˆÝš[™Ëˆ[ÝÕ[˜[œØÜšX™Y]Y[Îˆ›ÛÛX[ˆH˜[ÙKˆ˜[Y][Û”ÛXÞNˆØØ[ÜYXÚ˜[Y][Û”ÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK‘QUSˆ
+HÂˆ˜[›ÝÈH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[Ù^HH›Ü›X[^™TÜYXÚ
+Y\ÜØYÙJBˆ˜[ÜYXÚ\ÞHH˜[Y][™ÓØØ[ÜYXÚOH[ˆ[™[™ÓØØ[ÜYXÚOH[ØØ[^X˜XÚÐXÝ]™HØØ[]Y[ÔÜXZÚ[™ÂˆYˆ
+ØØ[ÜYXÚ\XØ]QÝX\™œÚÝ[›Ü
+Ù^HOH\ÝØØ[ÜYXÚÙ^KÜYXÚ\ÞJJHÂˆ›ÚXÙSÙÊ›ØØ[ÜÜYXÚÙ›ÜY™X\ÛÛY\XØ]HYÙS\ÏIÛ›ÝÈH\ÝØØ[ÜYXÚ]HŠBˆ™]\›‚ˆBˆ\ÝØØ[ÜYXÚÙ^HHÙ^Bˆ\ÝØØ[ÜYXÚ]H›ÝÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆ˜[ÝÛ™\•\›’YHXÝ]™U\›’YZÙRYˆÈ]OHBˆÎˆ™\ÜÛœÙP\˜š]\‹\›’YZÙRYˆÈ]OHBˆÎˆ
+ÊÝ\›”Ù\]Y[˜ÙBˆ™\ÜÛœÙP\˜š]\‹˜ÛZ[PÛÛ›ÛY
+ÝÛ™\•\›’Y
+Bˆ]Y[ÏËœÙ]˜\™ÙR[‘[˜X›Y
+˜[ÙJBˆÜ™[˜\žS[Ù[]Y[ÑØ]K›Û”ÜYXÚXÝ]š]Q[™Y
+
+BˆX\›S[Ù[]Y[Ë˜ÛX\Š
+BˆX\›S[Ù[]Y[Ðž]\ÈHˆX\›S[Ù[]Y[ÑÙ[™\˜][Û’YHˆ›ÚXÙSÙÊœÝ\™\ÜÚ[Û—ÜÝ\\›’YIÝÛ™\•\›’Y™\ÜÛœÙSÝÛ™\PÓÓ•“ÓQÓÐÐS™X\ÛÛXÛÛ›ÛYÜ™\HŠBˆËÈ™[[Ý™H[žHÜ™[˜\žK[[Ù[ÓH[™XYH]Y]YY™Y›Ü™HH]\›Z[š\ÝXÂˆËÈÛÜœ™XÝ[Û‹Ù[]KÜ™XØ[™\ÜÛœÙHZÙ\ÈÝÛ™\œÚ\‚ˆ]Y[ÏËš[\œ\
+
+BˆØØ[ÜYXÚ]Y]YY]H›ÝÂˆ›ÚXÙSÙÊˆ›ØØ[ÜÜYXÚÜ]Y]YYÚ\œÏIÛY\ÜØYÙK›[™ÝHÛXÞOIÜÛXÞS˜[YJ˜[Y][Û”ÛXÞJ_Hˆ
+Âˆ˜[™XYU˜[Y][™ÏIÝ˜[Y][™ÓØØ[ÜYXÚOH[H[ÝÓ›Õ˜[œØÜš\I[ÝÕ[˜[œØÜšX™Y]Y[Èˆ
+Âˆ\›’YIÝÛ™\•\›’Y™\ÜÛœÙSÝÛ™\PÓÓ•“ÓQÓÐÐSØØ[ÜYXÚ]Y]YY]IØØ[ÜYXÚ]Y]YY]ˆ
+Âˆ˜XÝ[Û•Ô™\T]Y]YY\ÏIÚYˆ
+]\ÝXÝ[Û‘\Ü]ÚY]ˆ
+HØØ[ÜYXÚ]Y]YY]H]\ÝXÝ[Û‘\Ü]ÚY][ÙHLSH‚ˆ
+BˆËÈÙY\HXÚËXØ[˜Ù[YZXÜ›ÜÛ™HÜ[ˆÛÈH\Ù\ˆØ[ˆ[\œ\Üˆ\ÜÝYBˆËÈH™^ÚÜÛÛ[X[™Ú]Ý]ØZ][™È›ÜˆTIÜÈXÚÛ›ÝÛYÙ[Y[Èš[š\Ú‚ˆ]Y[ÏËœÙ]]]Y
+˜[ÙJBˆYˆ
+˜[Y][™ÓØØ[ÜYXÚOH[
+HÂˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH[ÝÕ[˜[œØÜšX™Y]Y[ÂˆØØ[ÜYXÚ˜[Y][Û”ÛXÞHH˜[Y][Û”ÛXÞBˆËÈH\›ˆÝÛ™\ˆÝ\™\ÜÙ\ÈÜ™[˜\žHÝ]][™H^\Ý[™È˜[œØÜš\ˆËÈ˜[Y][ÛˆØ]HÚ[›Ý™[X\ÙH[›X]ÚY]HÓH\ÈÛÛ›ÛYÜYXÚ‚ˆËÈH›Ü›Y\ˆQSSÔ–H]X\˜[[™HYYHš^Y‹\ÙXÛÛ™[^H]™[ˆY\ˆBˆËÈ]X˜\ÙKX˜XÚÙY™\HØ\È™XYKÚ]Ý]Y[™È[›Ý\ˆ^X˜XÚÈÚXÚË‚ˆ™YÚ[•˜[Y]YØØ[ÜYXÚ
+Y\ÜØYÙJBˆBˆ[ÙHÂˆ[™[™ÓØØ[ÜYXÚHY\ÜØYÙBˆ[™[™ÓØØ[ÜYXÚÛXÞHH˜[Y][Û”ÛXÞBˆ[™[™ÓØØ[ÜYXÚ[ÝÜÔÚ[[˜ÙHH[ÝÕ[˜[œØÜšX™Y]Y[ÂˆBˆB‚ˆš]˜]H[ˆ™YÚ[•˜[Y]YØØ[ÜYXÚ
+Y\ÜØYÙNˆÝš[™Ë™]žNˆ›ÛÛX[ˆH˜[ÙJHÂˆ˜[ÛY[H]™BˆYˆ
+ÛY[OH[
+HÂˆ›ÚXÙSÙÊ›ØØ[ÜÜYXÚÝ[˜]˜Z[X›H™X\ÛÛ[›×Û]™WØÛY[Ú\œÏIÛY\ÜØYÙK›[™ÝHŠBˆš[š\Ú[˜]˜Z[X›S˜]\˜[ØØ[ÜYXÚ
+Y\ÜØYÙJBˆ™]\›‚ˆBˆYˆ
+\™]žJHØØ[ÜYXÚ˜[Y][Û][\HˆØØ[ÜYXÚ˜[Y][Û][\
+ÊÂˆØØ[ÜYXÚ˜[Y][Û•ÚÙ[ŠÊÂˆ˜[ÚÙ[ˆHØØ[ÜYXÚ˜[Y][Û•ÚÙ[‚ˆÛÛ›ÛYÙ[™\˜][Û’Y
+ÊÂˆ]Y[ÏËœÙ]^X˜XÚÐÛÛ^
+ÛÛ›ÛYÙ[™\˜][Û’Y™\ÜÛœÙSÝÛ™\ˆHÓÓ•“ÓQÓÐÐSŠBˆ˜[Y][™ÓØØ[ÜYXÚHY\ÜØYÙBˆØØ[ÜYXÚ\ÐÛÛ[H˜[ÙBˆØØ[ÜYXÚÝ™X[YY\™XÝHH˜[ÙBˆØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]HH˜[ÙBˆØØ[ÜYXÚ]Y[Ë˜ÛX\Š
+BˆØØ[ÜYXÚ˜[œØÜš\˜ÛX\Š
+BˆØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y]HˆØØ[ÜYXÚš\œÝ]Y[ÐXØÙ\Y]HˆØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]HˆØØ[ÜYXÚ\Ý]Y[Ô™XÙZ]™Y]HˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆ˜[Ù[™\˜][Û”Ý\]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊˆ›ØØ[ÜÜYXÚÙÙ[™\˜][Û—ÜÝ\\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’YÚÙ[IÚÙ[ˆ][\IØØ[ÜYXÚ˜[Y][Û][\ˆ
+Âˆ˜Ú\œÏIÛY\ÜØYÙK›[™ÝHÛXÞOIÜÛXÞS˜[YJØØ[ÜYXÚ˜[Y][Û”ÛXÞJ_HÙ[™\˜][Û”Ý\]IÙ[™\˜][Û”Ý\]ˆ
+Âˆœ]Y]YYÑÙ[™\˜][Û”Ý\\ÏIÙÙ[™\˜][Û”Ý\]HØØ[ÜYXÚ]Y]YY]H‚ˆ
+BˆËÈÛÛ[[Ý\ÈZXÈXÚÙ]ÈØ[ˆ˜XÙHÚ]ÛY[ÛÛ[[™Ø[˜Ù[\ÈÚÜˆËÈ]\›Z[š\ÝXÈY[[ÜžH]\˜[˜ÙH™Y›Ü™HÙ[Z[šH™]\›œÈ]Y[Ëˆ\Ý[š[™È\ÂˆËÈ™\ÝÜ™YžH]™\žH^X˜XÚËXÛÛ\]H[™[˜]˜Z[X›KX]Y[È]™[ÝË‚ˆYˆ
+ØØ[ÜYXÚ˜[Y][Û”ÛXÞKš\ÛÛ]Qœ›ÛSZXÑ\š[™ÑÙ[™\˜][ÛŠHÂˆ]Y[ÏËœÙ]]]Y
+YJBˆBˆØØ[ÜYXÚ™\]Y\ÝÙ[]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+BˆÛY[œÙ[™^
+”Ø^H^XÝH\ÙHÛÜ™ÈÛ˜ÙKÚ]HÙ[XÝY˜]\˜[›ÚXÙKˆÈ›ÝY™[[Ý™K˜[œÛ]K^Z[‹Üˆ[›ÙXÙH[Nˆ	ÛÜ™ËšœÛÛ‹’”ÓÓ“Øš™XÝœ][ÝJY\ÜØYÙJ_HŠBˆ›ÚXÙSÙÊˆ˜ÛÛ›ÛYÜ™\]Y\ÝÜÙ[\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’YÚÙ[IÚÙ[ˆˆ
+Âˆ˜ÛÛ›ÛY™\]Y\ÝÙ[]IØØ[ÜYXÚ™\]Y\ÝÙ[]]Y]YYÔ™\]Y\ÝÙ[\ÏIÛØØ[ÜYXÚ™\]Y\ÝÙ[]HØØ[ÜYXÚ]Y]YY]H‚ˆ
+BˆØ[˜Ù[ØØ[ÜYXÚ[Y[Ý]
+›™]×ÙÙ[™\˜][ÛˆŠBˆØØ[ÜYXÚ[Y[Ý]ÚÙ[ˆHÚÙ[‚ˆØØ[ÜYXÚ[Y[Ý]Ø]KœÝ\
+ÚÙ[ŠBˆ˜[[Y[Ý][›˜X›HH[›˜X›HÂˆ˜[[Y[Ý]š\™Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+BˆYˆ
+ÚÙ[ˆOHØØ[ÜYXÚ˜[Y][Û•ÚÙ[ˆ	‰ˆ˜[Y][™ÓØØ[ÜYXÚOH[	‰‚ˆØØ[ÜYXÚ[Y[Ý]Ø]KœÚÝ[š\™JÚÙ[ŠBˆ
+HÂˆ›ÚXÙSÙÊˆ›ØØ[ÜÜYXÚÝ[Y[Ý]\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’YÚÙ[IÚÙ[ˆ[Y[Ý]š\™Y]I[Y[Ý]š\™Y]]Y[ÐÚ[šÜÏIÛØØ[ÜYXÚ]Y[ËœÚ^™_Hˆ
+Âˆ˜]Y[Ðž]\ÏIÛØØ[ÜYXÚ]Y[ËœÝ[SÙˆÈ]œÚ^™H_H˜[œØÜš\Ú\œÏIÛØØ[ÜYXÚ˜[œØÜš\›[™ÝH‚ˆ
+Bˆš[š\Ú˜[Y]YØØ[ÜYXÚ
+
+BˆH[ÙHÂˆ›ÚXÙSÙÊ›ØØ[ÜÜYXÚÝ[Y[Ý]ÚYÛ›Ü™YÚÙ[IÚÙ[ˆXÝ]™UÚÙ[IØØ[ÜYXÚ˜[Y][Û•ÚÙ[ˆ™X\ÛÛ\Ý[WÙÙ[™\˜][ÛˆŠBˆBˆBˆØØ[ÜYXÚ[Y[Ý][›˜X›HH[Y[Ý][›˜X›Bˆ˜[[Y[Ý]ØÚY[Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊ›ØØ[ÜÜYXÚÝ[Y[Ý]ÜØÚY[YÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Y[Y[Ý]ÚÙ[IÚÙ[ˆ[Y[Ý]ØÚY[Y]I[Y[Ý]ØÚY[Y]ŠBˆXZ[’[™\‹œÜÝ[^YY
+[Y[Ý][›˜X›KØØ[ÜYXÚ˜[Y][Û”ÛXÞK[Y[Ý]\ÊBˆB‚ˆš]˜]H[ˆÝ\ØØ[ÜYXÚÚ[”™Yš^X]Ú\Ê
+HÂˆ˜[^XÝYH˜[Y][™ÓØØ[ÜYXÚÎˆ™]\›‚ˆYˆ
+ØØ[ÜYXÚÝ™X[YY\™XÝHØØ[ÜYXÚ]Y[Ëš\Ñ[\J
+JH™]\›‚ˆ˜[XÝX[›Ü•˜[Y][ÛˆH›ÛX[‘\Ü^U^
+ØØ[ÜYXÚ˜[œØÜš\ÔÝš[™Ê
+JBˆ˜[^XÝY›Ü•˜[Y][ÛˆH›ÛX[‘\Ü^U^
+^XÝY
+BˆYˆ
+SØØ[ÜYXÚØ]KœÚÝ[™[X\ÙP™Y›Ü™U\›ÛÛ\]JˆØØ[ÜYXÚ˜[Y][Û”ÛXÞK˜Y™™\•[[˜[Y]YˆXÝX[›Ü•˜[Y][Û‹ˆ^XÝY›Ü•˜[Y][Û‚ˆ
+JHÂˆ›ÚXÙSÙÊˆ›ØØ[ÜÜYXÚÝØZ][™×Ù›Ü—Ý˜[Y][Ûˆ]Y[ÐÚ[šÜÏIÛØØ[ÜYXÚ]Y[ËœÚ^™_Hˆ
+Âˆ˜[œØÜš\Ú\œÏIÛØØ[ÜYXÚ˜[œØÜš\›[™ÝH‚ˆ
+Bˆ™]\›‚ˆB‚ˆØØ[ÜYXÚÝ™X[YY\™XÝHHYBˆØØ[^X˜XÚÐXÝ]™HHYBˆØØ[ÜYXÚš\œÝ]Y[ÐXØÙ\Y]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+BˆYˆ
+ØØ[ÜYXÚ[Y[Ý]Ø]K˜XØÙ\š\œÝ]Y[ÊØØ[ÜYXÚ˜[Y][Û•ÚÙ[ŠJHÂˆØ[˜Ù[ØØ[ÜYXÚ[Y[Ý]
+™š\œÝØ]Y[×ØXØÙ\YŠBˆBˆ›ÚXÙSÙÊˆ›ØØ[ÜÜYXÚÜ™[X\ÙYÙX\›H\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Yˆ
+Âˆ˜]Y[ÐÚ[šÜÏIÛØØ[ÜYXÚ]Y[ËœÚ^™_Hš\œÝ]Y[ÐXØÙ\Y]IØØ[ÜYXÚš\œÝ]Y[ÐXØÙ\Y]‚ˆ
+BˆØØ[ÜYXÚ]Y[Ë™›Ü‘XXÚÈ]Y[ÏËœ]Y]YP]Y[Ê]ÛÛ›ÛYÙ[™\˜][Û’YÓÓ•“ÓQÓÐÐSŠHBˆØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊˆ˜ÛÛ›ÛYÙš\œÝÜ^X˜XÚ×ÝÜš]H\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Yˆ
+Âˆ™š\œÝ^X˜XÚÕÜš]P]IØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]]Y]YYÑš\œÝ^X˜XÚÓ\ÏIÛØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]HØØ[ÜYXÚ]Y]YY]Hˆ
+ÂˆœÜYXÚ[™Ñš\œÝ^X˜XÚÓ\ÏIÚYˆ
+ÜYXÚXÝ]š]Q[™Y]ˆ
+HØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]HÜYXÚXÝ]š]Q[™Y][ÙHLSHˆ
+Âˆ™š\œÝ]Y[ÕÔ^X˜XÚÓ\ÏIÚYˆ
+ØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y]ˆ
+HØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]HØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y][ÙHLSH‚ˆ
+BˆØØ[ÜYXÚ]Y[Ë˜ÛX\Š
+BˆB‚ˆš]˜]H[ˆØ[˜Ù[ØØ[ÜYXÚ[Y[Ý]
+™X\ÛÛŽˆÝš[™ÊHÂˆ˜[[›˜X›HHØØ[ÜYXÚ[Y[Ý][›˜X›HÎˆ™]\›‚ˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊ[›˜X›JBˆØØ[ÜYXÚ[Y[Ý][›˜X›HH[ˆØØ[ÜYXÚ[Y[Ý]Ø]K˜ÛX\ŠØØ[ÜYXÚ[Y[Ý]ÚÙ[ŠBˆ›ÚXÙSÙÊˆ›ØØ[ÜÜYXÚÝ[Y[Ý]ØØ[˜Ù[Y\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Yˆ
+Âˆ[Y[Ý]ÚÙ[IØØ[ÜYXÚ[Y[Ý]ÚÙ[ˆ[Y[Ý]Ø[˜Ù[Y]IØ[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+_H™X\ÛÛI™X\ÛÛˆ‚ˆ
+BˆB‚ˆš]˜]H[ˆš[š\Ú˜[Y]YØØ[ÜYXÚ
+
+HÂˆ˜[^XÝYH˜[Y][™ÓØØ[ÜYXÚÎˆ™]\›‚ˆ˜[XÝX[HØØ[ÜYXÚ˜[œØÜš\ÔÝš[™Ê
+Bˆ˜[Y][™ÓØØ[ÜYXÚH[ˆYˆ
+ØØ[ÜYXÚÝ™X[YY\™XÝJHÂˆËÈHš\œÝ™\šYšYYÛÜ™ÈX]ÚYH]\›Z[š\ÝXÈ™\ÜÛœÙKÛÈ^X˜XÚÂˆËÈØ\ÈØY™[H™[X\ÙYX\›KˆØZ]›Üˆ]Y]YY]Y[ÈÈš[š\Ú™Y›Ü™H™\Ý[Z[™ÂˆËÈ\Ý[š[™ÈÜˆ[›š[™È[žHY™\œ™YXÝ[Û‹‚ˆØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]HHYBˆØØ[ÜYXÚ]Y[Ë˜ÛX\Š
+BˆØØ[ÜYXÚ˜[œØÜš\˜ÛX\Š
+BˆYˆ
+[ØØ[]Y[ÔÜXZÚ[™È	‰ˆØØ[^X˜XÚÐXÝ]™JHš[š\ÚØØ[^X˜XÚÊ
+Bˆ™]\›‚ˆBˆ˜[›Ü›X[^™YXÝX[H›ÛX[‘\Ü^U^
+XÝX[
+Bˆ˜[›Ü›X[^™Y^XÝYH›ÛX[‘\Ü^U^
+^XÝY
+Bˆ˜[˜[œØÜš\X]Ú\ÈHØØ[ÜYXÚØ]K›X]Ú\Ñ^XÝY^XÝJ›Ü›X[^™YXÝX[›Ü›X[^™Y^XÝY
+BˆËÈY[[ÜžH›Û\È\™HÝË\š\ÚÈ[™[™XYH]™HZ\ˆ^XÝ^ÛˆØÜ™Y[‹ˆ]™BˆËÈÛÛY][Y\ÈÝ™X[\ÈHÙ[XÝY˜]\˜[›ÚXÙH™Y›Ü™H]ÈÝ]]˜[œØÜš\ˆ[‚ˆËÈ]˜\œ›ÝÈØ\ÙKÙY\HY™™\™YÙ[Z[šH]Y[È[œÝXYÙˆ\ØØ\™[™È][™ˆËÈÝÚ]Ú[™ÈÈ›Ø›ÝXÈ[™›ÚYËˆÛ™HXÝ[ÛœÈ™]Z[ˆÝšXÝ˜[œØÜš\Ø][™Ë‚ˆ˜[Y™™\™Y]Y[Ðž]\ÈHØØ[ÜYXÚ]Y[ËœÝ[SÙˆÈ]œÚ^™HBˆ˜[\ÝY˜]\˜[]Y[ÈBˆØØ[ÜYXÚ˜[Y][Û”ÛXÞK\ÝY™™\™Y˜]\˜[]Y[È	‰‚ˆØØ[ÜYXÚ\ÐÛÛ[	‰‚ˆØØ[ÜYXÚØ]Kš\Ñ[›ÝYÚY™™\™Y˜]\˜[]Y[ÊY™™\™Y]Y[Ðž]\Ë^XÝY
+Bˆ›ÚXÙSÙÊˆ›ØØ[ÜÜYXÚÝ˜[Y][Û—Ü™\Ý[˜[œØÜš\X]ÚI˜[œØÜš\X]Ú\Èˆ
+Âˆ\ÝY]Y[ÏI\ÝY˜]\˜[]Y[È\ÐÛÛ[IØØ[ÜYXÚ\ÐÛÛ[ˆ
+Âˆ˜]Y[Ðž]\ÏIY™™\™Y]Y[Ðž]\ÈXÝX[Ú\œÏIØXÝX[›[™ÝH^XÝYÚ\œÏIÙ^XÝY›[™ÝHˆ
+Âˆ››Ü›X[^™YXÝX[IÛ›Ü›X[^™YXÝX[ZÙJLŒ
+_H›Ü›X[^™Y^XÝYIÛ›Ü›X[^™Y^XÝYZÙJLŒ
+_H‚ˆ
+BˆYˆ
+
+˜[œØÜš\X]Ú\È\ÝY˜]\˜[]Y[ÊH	‰ˆØØ[ÜYXÚ]Y[Ëš\Ó›Ý[\J
+JHÂˆYˆ
+ØØ[ÜYXÚ[Y[Ý]Ø]K˜XØÙ\š\œÝ]Y[ÊØØ[ÜYXÚ˜[Y][Û•ÚÙ[ŠJHÂˆØ[˜Ù[ØØ[ÜYXÚ[Y[Ý]
+˜[Y]YØ]Y[×ØXØÙ\YŠBˆBˆØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]HHYBˆØØ[^X˜XÚÐXÝ]™HHYBˆ›ÚXÙSÙÊ›ØØ[ÜÜYXÚÜ™[X\ÙYØY\—Ý˜[Y][Ûˆ]Y[ÐÚ[šÜÏIÛØØ[ÜYXÚ]Y[ËœÚ^™_HŠBˆØØ[ÜYXÚ]Y[Ë™›Ü‘XXÚÈ]Y[ÏËœ]Y]YP]Y[Ê]ÛÛ›ÛYÙ[™\˜][Û’YÓÓ•“ÓQÓÐÐSŠHBˆØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊˆ˜ÛÛ›ÛYÙš\œÝÜ^X˜XÚ×ÝÜš]H\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Yˆ
+Âˆ™š\œÝ^X˜XÚÕÜš]P]IØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]]Y]YYÑš\œÝ^X˜XÚÓ\ÏIÛØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]HØØ[ÜYXÚ]Y]YY]Hˆ
+ÂˆœÜYXÚ[™Ñš\œÝ^X˜XÚÓ\ÏIÚYˆ
+ÜYXÚXÝ]š]Q[™Y]ˆ
+HØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]HÜYXÚXÝ]š]Q[™Y][ÙHLSHˆ
+Âˆ™š\œÝ]Y[ÕÔ^X˜XÚÓ\ÏIÚYˆ
+ØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y]ˆ
+HØØ[ÜYXÚš\œÝ^X˜XÚÕÜš]P]HØØ[ÜYXÚš\œÝ]Y[Ô™XÙZ]™Y][ÙHLSH‚ˆ
+BˆØØ[ÜYXÚ]Y[Ë˜ÛX\Š
+BˆØØ[ÜYXÚ˜[œØÜš\˜ÛX\Š
+BˆH[ÙHÂˆØØ[ÜYXÚ]Y[Ë˜ÛX\Š
+BˆØØ[ÜYXÚ˜[œØÜš\˜ÛX\Š
+BˆYˆ
+ØØ[ÜYXÚ˜[Y][Û][\ØØ[ÜYXÚ˜[Y][Û”ÛXÞK›X^][\È	‰ˆ]™HOH[
+HÂˆ›ÚXÙSÙÊ›ØØ[ÜÜYXÚÜ™]žH™^][\IÛØØ[ÜYXÚ˜[Y][Û][\
+È_HŠBˆ™YÚ[•˜[Y]YØØ[ÜYXÚ
+^XÝY™]žHHYJBˆH[ÙHÂˆ›ÚXÙSÙÊ›ØØ[ÜÜYXÚÙ›ÜY™X\ÛÛ]˜[Y][Û—Ù˜Z[Y][\ÏIØØ[ÜYXÚ˜[Y][Û][\ŠBˆš[š\Ú[˜]˜Z[X›S˜]\˜[ØØ[ÜYXÚ
+^XÝY
+BˆBˆBˆB‚ˆš]˜]H[ˆš[š\Ú[˜]˜Z[X›S˜]\˜[ØØ[ÜYXÚ
+Y\ÜØYÙNˆÝš[™ÊHÂˆØ[˜Ù[ØØ[ÜYXÚ[Y[Ý]
+›˜]\˜[Ø]Y[×Ý[˜]˜Z[X›HŠBˆ›ÚXÙSÙÊˆ›ØØ[ÜÜYXÚÝ[˜]˜Z[X›HÚ\œÏIÛY\ÜØYÙK›[™ÝH˜[˜XÚÏIÛØØ[ÜYXÚ˜[Y][Û”ÛXÞKœÜXZÑ˜[˜XÚßHˆ
+Âˆ˜[ÝÓ›Õ˜[œØÜš\I[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚ‚ˆ
+BˆËÈ™]™\ˆÝÚ]ÚÈ[™›ÚYËˆYˆ˜[Y]Y˜]\˜[Ù[Z[šH]Y[È\ÂˆËÈ[˜]˜Z[X›K™\Ù\™HH[™XYK]š\ÚX›H]\›Z[š\ÝXÈ^ÛÛ\]BˆËÈ[žHY™\œ™Y™\šYšYYXÝ[Û‹[™™\Ý[YH\Ý[š[™ÈÚ[[K‚ˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH˜[ÙBˆØØ[^X˜XÚÐXÝ]™HH˜[ÙBˆØØ[ÜYXÚÝ™X[YY\™XÝHH˜[ÙBˆØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]HH˜[ÙBˆ™\ÜÛœÙP\˜š]\‹˜ÛÛ›ÛYÙ[™\˜][ÛÛÛ\]J
+Bˆ™\ÜÛœÙP\˜š]\‹˜ÛÛ›ÛY^X˜XÚÐÛÛ\]J
+BˆYˆ
+™\ÜÛœÙP\˜š]\‹œ™[X\ÙRYÛÛ\]J
+JH›ÚXÙSÙÊœÝ\™\ÜÚ[Û—Ù[™\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YH™X\ÛÛ][˜]˜Z[X›WÛ˜]\˜[Ø]Y[ÈŠBˆYˆ
+\[”[™[™ÐXÝ[ÛY\”ÜYXÚ
+
+JHÂˆ]Y[ÏËœÙ]]]Y
+˜[ÙJBˆ[Z]Ý]J”Ý[ˆ˜ZHÛÛ¸ )ˆŠBˆBˆB‚ˆš]˜]H[ˆš[š\ÚØØ[^X˜XÚÊ
+HÂˆ˜[^X˜XÚÑ[™]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊ›ØØ[ÜÜYXÚÜ^X˜XÚ×Ùš[š\ÚY\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Y^X˜XÚÑ[™]I^X˜XÚÑ[™]ŠBˆ˜[™\Ý[YSZXÒ[[YYX][HBˆØØ[ÜYXÚ˜[Y][Û”ÛXÞKœ™\Ý[YSZXÒ[[YYX][PY\”^X˜XÚÂˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH˜[ÙBˆØØ[^X˜XÚÐXÝ]™HH˜[ÙBˆØØ[ÜYXÚÝ™X[YY\™XÝHH˜[ÙBˆØØ[ÜYXÚÙ[™\˜][ÛÛÛ\]HH˜[ÙBˆ™\ÜÛœÙP\˜š]\‹˜ÛÛ›ÛY^X˜XÚÐÛÛ\]J
+BˆYˆ
+™\ÜÛœÙP\˜š]\‹œ™[X\ÙRYÛÛ\]J
+JHÂˆ›ÚXÙSÙÊœÝ\™\ÜÚ[Û—Ù[™\›’YIÜ™\ÜÛœÙP\˜š]\‹\›’YHÙ[™\˜][Û’YIÛÛ›ÛYÙ[™\˜][Û’Y™X\ÛÛ[X]Ú[™×ÙÙ[™\˜][Û—Ø[™Ü^X˜XÚ×ØÛÛ\]HŠBˆBˆYˆ
+\[”[™[™ÐXÝ[ÛY\”ÜYXÚ
+
+JHÂˆYˆ
+™\Ý[YSZXÒ[[YYX][JH]Y[ÏËœ™\Ý[YS\Ý[š[™Ó›ÝÊ
+Bˆ[ÙH]Y[ÏËœÙ]]]Y
+˜[ÙJBˆ[Z]Ý]J”Ý[ˆ˜ZHÛÛ¸ )ˆŠBˆBˆB‚ˆš]˜]H[ˆÛXÞS˜[YJÛXÞNˆØØ[ÜYXÚ˜[Y][Û”ÛXÞJNˆÝš[™ÈHÚ[ˆ
+ÛXÞJHÂˆØØ[ÜYXÚ˜[Y][Û”ÛXÞK“QSSÔ–HOˆ“QSSÔ–H‚ˆØØ[ÜYXÚ˜[Y][Û”ÛXÞK‘QUSOˆ‘QUS‚ˆ[ÙHOˆÕTÕÓH‚ˆB‚ˆš]˜]H[ˆ›ÚXÙSÙÊY\ÜØYÙNˆÝš[™ÊHÂˆYˆ
+“ÒPÑWÐUQS×ÑP•Q×ÓÑÑÒS‘ÊHÂˆ›ÚXÙT\[[™SÙÙÙ\‹™XYÊY\ÜØYÙJBˆBˆB‚ˆš]˜]H[ˆÛÛ[Z]š[˜[\Ù\“Y\ÜØYÙJˆ˜]ÎˆÝš[™ËˆÛÝ\˜ÙNˆÝš[™Ëˆ›Ü›X[^™YˆÝš[™ÈH›ÛX[‘\Ü^U^
+˜]ÊKˆ\Ü^NˆÝš[™ÈH›Ü›X[^™Yˆ
+HÂˆ˜[\›’YHXÝ]™U\›’YZÙRYˆÈ]OHBˆÎˆ™\ÜÛœÙP\˜š]\‹\›’YZÙRYˆÈ]OHBˆÎˆ
+ÊÝ\›”Ù\]Y[˜ÙBˆ˜[]\˜[˜ÙRYH‰˜[œØÜš\Ù\ÜÚ[Û’Y‰\›’Y‚ˆ›ÚXÙSÙÊˆ\Ù\—ÛY\ÜØYÙWØÛÛ[Z]Ø][\Ù\ÜÚ[Û’YI˜[œØÜš\Ù\ÜÚ[Û’Y\›’YI\›’Yˆ
+Âˆ]\˜[˜ÙRYI]\˜[˜ÙRYÛÝ\˜ÙOIÛÝ\˜ÙH˜]ÏIÜ˜]ËZÙJMŒ
+_Hˆ
+Âˆ››Ü›X[^™YIÛ›Ü›X[^™YZÙJMŒ
+_H\Ü^OIÙ\Ü^KZÙJMŒ
+_H‚ˆ
+BˆÚ[ˆ
+˜[™\Ý[Hš[˜[\Ù\“Y\ÜØYÙPÛÛ[Z]\‹˜ÛÛ[Z]
+ˆš[˜[\Ù\“Y\ÜØYÙJ˜[œØÜš\Ù\ÜÚ[Û’Y\›’Y]\˜[˜ÙRY˜]Ë›Ü›X[^™Y\Ü^JBˆ
+JHÂˆ\È\Ù\“Y\ÜØYÙPÛÛ[Z]™\Ý[XØÙ\YOˆÂˆ›ÚXÙSÙÊˆ\Ù\—ÛY\ÜØYÙWØÛÛ[Z]Ü™\Ý[Ù\ÜÚ[Û’YI˜[œØÜš\Ù\ÜÚ[Û’Y\›’YI\›’Yˆ
+Âˆ]\˜[˜ÙRYI]\˜[˜ÙRYÛÝ\˜ÙOIÛÝ\˜ÙHXØÙ\Y]YHY\ÜØYÙRYIÜ™\Ý[›Y\ÜØYÙRYH‚ˆ
+Bˆ\Ý[™\Ë›Û•\Ù\•^
+™\Ý[›Y\ÜØYÙK™\Ü^JBˆBˆ\È\Ù\“Y\ÜØYÙPÛÛ[Z]™\Ý[[™XYPÛÛ[Z]YOˆ›ÚXÙSÙÊˆ\Ù\—ÛY\ÜØYÙWØÛÛ[Z]Ü™\Ý[Ù\ÜÚ[Û’YI˜[œØÜš\Ù\ÜÚ[Û’Y\›’YI\›’Yˆ
+Âˆ]\˜[˜ÙRYI]\˜[˜ÙRYÛÝ\˜ÙOIÛÝ\˜ÙHXØÙ\YY˜[ÙHˆ
+Âˆœ™X\ÛÛX[™XYWØÛÛ[Z]Y^\Ý[™ÓY\ÜØYÙRYIÜ™\Ý[™^\Ý[™ÓY\ÜØYÙRYH‚ˆ
+BˆBˆB‚ˆš]˜]H[ˆ™\Ù]\›Y™™\œÊ™X\ÛÛŽˆÝš[™ÈH\›—ØÛÛ[Z]YŠHÂˆ›ÚXÙSÙÊˆ˜[œØÜš\ØXØÝ[][]Ü—Ü™\Ù]\›’YIXÝ]™U\›’YÙ\ÜÚ[ÛIÚ\ÚÛÙJ
+_Hˆ
+Âˆœ™X\ÛÛI™X\ÛÛˆ[œ]Ú\œÏIÚ[œ]›[™ÝHÛÛ[X[™Ú\œÏIØÛÛ[X[™›Ø™K›[™ÝH‚ˆ
+Bˆ[œ]˜ÛX\Š
+BˆÝ]]˜ÛX\Š
+BˆÛÛ[X[™›Ø™K˜ÛX\Š
+BˆÛÛ[X[™\Ù\•^[Z]YH˜[ÙBˆ›Ø˜X›PXÝ[Û•\›ˆH˜[ÙBˆYYXP›ØÚÙY\›ˆH˜[ÙBˆ[XšYÝ[Ý\ÓY\ÜØYÙU\›ˆH˜[ÙBˆ[˜ÛÛ\]PXÝ[Û‘œ˜YÛY[\›ˆH˜[ÙBˆXÝ]™U\›’YHˆYˆ
+\ØÜ™Y[”™\ÜÛœÙPXÝ]™H	‰ˆ[Ü™[˜\žS[Ù[]Y[ÑØ]Kš\ÔÜYXÚXÝ]™J
+JHÂˆÜYXÚ[Z[™Õ\›’YHˆÜYXÚXÝ]š]TÝ\Y]HˆÜYXÚXÝ]š]Q[™Y]HˆBˆYˆ
+\ØÜ™Y[”™\ÜÛœÙPXÝ]™JHÂˆ\›YYØÜ™Y[”]Y\Ý[ÛˆHˆ‚ˆ\›YYØÜ™Y[”]Y\Ý[Û•\›’YHˆ\›YYØÜ™Y[”]Y\Ý[Û‘]XÝY]Hˆ\›YYØÜ™Y[”]Y\Ý[Û‘š[˜[ÛÛ[Z]YH˜[ÙBˆX\›TØÜ™Y[”]Y\Ý[Û•^Hˆ‚ˆX\›TØÜ™Y[”]Y\žP]ØZ][™Ñš[˜[˜[œØÜš\H˜[ÙBˆX\›TØÜ™Y[”]Y\žQ\Ü]ÚY\›’YHˆBˆB‚ˆš]˜]H[ˆ›ÛX[‘\Ü^U^
+˜[YNˆÝš[™ÊNˆÝš[™ÈÂˆYˆ
+™YÙ^
+–×LÍWM‘—MLWNQ‘‘—HŠK˜ÛÛZ[œÓX]Ú[Š˜[YJJHÂˆ™]\›ˆ•›ÚXÙH[œ][˜ÛX\ˆHX\ÙH™\X]ˆ‚ˆBˆ˜[˜[œÛ]\˜]YH›ÛX[•˜[œÛ]\˜]ÜË˜[œÛ]\˜]J˜[YJOËš[J
+K›Ü‘[\J
+BˆšY›[šÈÈ˜[YKš[J
+HBˆ™]\›ˆ›ÛX[’[™Û\Ú›Ü›X]\‹™›Ü›X]
+˜[œÛ]\˜]Y
+BˆB‚ˆš]˜]H[ˆš[˜[˜[œØÜš\\Ü^J˜[YNˆÝš[™ÊNˆš[˜[˜[œØÜš\\Ü^Q›Ü›X]\‹”™\Ý[Âˆ™]\›ˆš[˜[˜[œØÜš\\Ü^Q›Ü›X]\‹™›Ü›X]
+˜[YJHÈÚÙ[ˆO‚ˆ›ÛX[•˜[œÛ]\˜]ÜË˜[œÛ]\˜]JÚÙ[ŠOËš[J
+K›Ü‘[\J
+KšY›[šÈÈÚÙ[ˆBˆBˆB‚ˆš]˜]H[ˆÛÛ^X[™[][ÛœÚ\Ø[™Y]JÝ\œ™[\›ŽˆÝš[™ÊNˆY[[ÜžPØ[™Y]OÈÂˆ˜[›ÝÈH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ™XÙ[™[][ÛœÚ\\›œËœ™[[Ý™P[È›ÝÈH]™š\œÝˆ‘SUSÓ”ÒTÐÓÓ•VÓTÈBˆ™]\›ˆÛÛ^X[™[][ÛœÚ\Y[[ÜžQ^˜XÝÜ‹™^˜XÝ
+ˆ™XÙ[™[][ÛœÚ\\›œË›X\È]œÙXÛÛ™H
+ÈÝ\œ™[\›‚ˆ
+BˆB‚ˆš]˜]H[ˆ™[Y[X™\”™XÙ[™[][ÛœÚ\\›Š\›ŽˆÝš[™ÊHÂˆYˆ
+\›‹š\Ð›[šÊ
+JH™]\›‚ˆ™XÙ[™[][ÛœÚ\\›œÈ
+ÏH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+HÈ\›‚ˆÚ[H
+™XÙ[™[][ÛœÚ\\›œËœÚ^™HˆPVÔ‘SUSÓ”ÒTÐÓÓ•VÕT“”ÊHÂˆ™XÙ[™[][ÛœÚ\\›œËœ™[[Ý™P]
+
+BˆBˆB‚ˆš]˜]H[ˆ™[Y[X™\™\ÝœšY[™›ÜÛÜœ™XÝ[ÛŠØ[™Y]NˆY[[ÜžPØ[™Y]JHÂˆ\ÝØ]™Y™\ÝœšY[™˜[YHHY[[ÜžT™[][ÛœÚ\ÛXÞKœ\œÛÛ“˜[YJØ[™Y]K™˜XÝ
+BˆË›]
+™\ÝœšY[™˜[YPØ[›ÛšXØ[^™\ŽŽ˜Ø[›ÛšXØ[^™JBˆ\ÝØ]™Y™\ÝœšY[™]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+BˆB‚ˆš]˜]H[ˆ™\XÙT™XÙ[™[][ÛœÚ\˜[YJÛ˜[YNˆÝš[™Ë™]Ó˜[YNˆÝš[™ÊHÂˆ›Üˆ
+[™^[ˆ™XÙ[™[][ÛœÚ\\›œËš[™XÙ\ÊHÂˆ˜[
+[YK^
+HH™XÙ[™[][ÛœÚ\\›œÖÚ[™^Bˆ™XÙ[™[][ÛœÚ\\›œÖÚ[™^HH[YHÈ^œ™\XÙJˆ™YÙ^
+—‰Ô™YÙ^™\ØØ\JÛ˜[YJ_Wˆ‹™YÙ^Ü[Û‹’QÓ“Ô‘WÐÐTÑJKˆ™]Ó˜[YBˆ
+BˆBˆB‚ˆš]˜]H[ˆÝ\Ø[›ÛšXØ[™[˜[YJÛÜœ™XÝ[ÛŽˆ™\ÝœšY[™˜[YPÛÜœ™XÝ[ÛŠHÂˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆHYBˆÝ]]˜ÛX\Š
+Bˆ]Y[ÏËš[\œ\
+
+Bˆ›ÚXÙSÙÊˆ›˜[YWØÛÜœ™XÝ[Û—Û]]][ÛˆÛ˜[YPØ[™Y]OIØÛÜœ™XÝ[Û‹›Û˜[Y_Hˆ
+Âˆ›™]Ó˜[YPØ[™Y]OIØÛÜœ™XÝ[Û‹›™]Ó˜[Y_H™]Ó˜[YU˜[Y][Û]˜[Yˆ
+Âˆ™]X˜\ÙS]]][Û[ÝÙY]YH‚ˆ
+BˆËÈÈ›Ý\ÝÙ[Z[šIÜÈÛÛ™\œØ][Û˜[XÚÛ›ÝÛYÙ[Y[ˆÛ›H\È™\šYšYYˆËÈ™\ÜÚ]ÜžH™\Ý[\È[ÝÙYÈ›ÙXÙHHÝXØÙ\ÜÈX˜›HÜˆÜÚÙ[ˆ™\K‚ˆ[™[™ÐØ[›ÛšXØ[™[˜[YHHÙ\šXÙTØÛÜK›][˜ÚÂˆ˜[™Y›Ü™HHY[[ÜžT™\ÜÚ]ÜžK›ÙÔ\œÛÛ’Y[]Jˆ˜™Y›Ü™WØÛÜœ™XÝ[Ûˆ‹ÛÜœ™XÝ[Û‹›Û˜[YKÛÜœ™XÝ[Û‹›™]Ó˜[YBˆ
+Bˆ›ÚXÙSÙÊˆ˜ÛÜœ™XÝ[Û—Ý˜[œØXÝ[ÛˆÛIØÛÜœ™XÝ[Û‹›Û˜[Y_H™]ÏIØÛÜœ™XÝ[Û‹›™]Ó˜[Y_Hˆ
+Âˆ›X]Ú[™Ô›ÝÒYÏIØ™Y›Ü™K›X\È]šY_H‚ˆ
+Bˆ˜[™[˜[YSÝ]ÛÛYHHY[[ÜžPœ˜Z[‹œ›ØÙ\ÜÔ\œÛÛ”™[˜[YJÛÜœ™XÝ[ÛŠBˆ˜[™[˜[YYH
+™[˜[YSÝ]ÛÛYH\ÏÈY[[ÜžPœ˜Z[“Ý]ÛÛYK“]]]Y
+OËœ™\Ý[\ÈY[[ÜžUÜš]T™\Ý[”Ø]™Yˆ˜[›ÝÜÈHY[[ÜžT™\ÜÚ]ÜžK›ÙÔ\œÛÛ’Y[]Jˆ˜Y\—ØÛÜœ™XÝ[Ûˆ™[˜[YYI™[˜[YY‹ÛÜœ™XÝ[Û‹›Û˜[YKÛÜœ™XÝ[Û‹›™]Ó˜[YBˆ
+Bˆ˜[™\šYšYYH™[˜[YY	‰ˆ›ÝÜË˜[žHÂˆY[[ÜžT™[][ÛœÚ\ÛXÞKœ\œÛÛ“˜[YJ]™˜XÝ
+BˆË™\]X[ÊÛÜœ™XÝ[Û‹›™]Ó˜[YKYÛ›Ü™PØ\ÙHHYJHOHYBˆH	‰ˆ›ÝÜË››Û™HÂˆY[[ÜžT™[][ÛœÚ\ÛXÞKœ\œÛÛ“˜[YJ]™˜XÝ
+BˆË™\]X[ÊÛÜœ™XÝ[Û‹›Û˜[YKYÛ›Ü™PØ\ÙHHYJHOHYBˆBˆ›ÚXÙSÙÊˆ˜ÛÜœ™XÝ[Û—Ý˜[œØXÝ[Û—Ü™\Ý[Üš]TÝXØÙ\ÜÏI™[˜[YY™\šYšYYI™\šYšYYˆ
+ÂˆœÝXØÙ\ÜÐXÚÛ›ÝÛYÙ[Y[[ÝÙYI™\šYšYYˆ
+Âˆ™š[˜[›ÝÜÏIÜ›ÝÜËš›Ú[•ÔÝš[™ÈÈ‰Ú]šYN‰Ú]œÝX›RÙ^_N‰Ú]™˜XÝHˆ_H‚ˆ
+Bˆ˜[ÝXØÙ\ÜÐXÚÛ›ÝÛYÙ[Y[[ÝÙYHÛÜœ™XÝ[Û”ÝXØÙ\ÜÔÛXÞK˜XÚÛ›ÝÛYÙ[Y[[ÝÙY
+ˆÜš]TÝXØÙ\ÜÈH™[˜[YYˆ™\šYšYYH™\šYšYYˆ
+Bˆ˜[™\HHYˆ
+ÝXØÙ\ÜÐXÚÛ›ÝÛYÙ[Y[[ÝÙY
+HÂˆ•YZÈZKXˆ	ØÛÜœ™XÝ[Û‹›™]Ó˜[Y_H˜X[HØ]™HZKˆ‚ˆH[ÙHÂˆ“Y[[ÜžH\]H™\šYžH˜ZHZKˆÛÜœ™XÝ˜X[HZÈ˜X\ˆÛX\›H˜][Ëˆ‚ˆBˆXZ[’[™\‹œÜÝÂˆYˆ
+ÝXØÙ\ÜÐXÚÛ›ÝÛYÙ[Y[[ÝÙY
+HÂˆ™\XÙT™XÙ[™[][ÛœÚ\˜[YJÛÜœ™XÝ[Û‹›Û˜[YKÛÜœ™XÝ[Û‹›™]Ó˜[YJBˆ\ÝØ]™Y™\ÝœšY[™˜[YHHÛÜœ™XÝ[Û‹›™]Ó˜[YBˆ\ÝØ]™Y™\ÝœšY[™]H[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ›ÚXÙSÙÊ˜ÛÜœ™XÝ[Û—ØØXÚWÚ[˜[Y]YÛIØÛÜœ™XÝ[Û‹›Û˜[Y_H™]ÏIØÛÜœ™XÝ[Û‹›™]Ó˜[Y_HŠBˆBˆ\Ý[™\Ë›Û“^\˜U^
+™\JBˆ[Z]Ý]J™\JBˆ]Y]YSØØ[ÜYXÚ
+ˆ™\Kˆ[ÝÕ[˜[œØÜšX™Y]Y[ÈHYKˆ˜[Y][Û”ÛXÞHHØØ[ÜYXÚ˜[Y][Û”ÛXÞK“QSSÔ–Bˆ
+BˆBˆBˆB‚ˆš]˜]H[ˆ\Ô[ÛU˜[œØÜš\
+˜[YNˆÝš[™ÊNˆ›ÛÛX[ˆÂˆ™]\›ˆ[ÛU˜[œØÜš\š[\‹œÚÝ[YÛ›Ü™J˜[YJBˆB‚ˆš]˜]H[ˆ›Ü›X[^™TÜYXÚ
+˜[YNˆÝš[™ÊNˆÝš[™ÈH˜[YK›ÝÙ\˜Ø\ÙJØØ[K”“ÓÕ
+Bˆœ™\XÙJ™YÙ^
+–×—ÓWÓŸWJÈŠKˆŠBˆš[J
+B‚ˆš]˜]H[ˆ^XÝ]QY\™\ÙX\˜Ú
+ÛÛ[X[™ˆ\ÛÛ[X[™‘Y\™\ÙX\˜Ú
+HÂˆ˜[]Y\žHHÛÛ[X[™œ]Y\žOËš[J
+K›Ü‘[\J
+BˆÝ\™\ÜÓ[Ù[›Ü•\›ˆHYNÈØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙNÈÝ]]˜ÛX\Š
+NÈÛÛ[X[™›Ø™K˜ÛX\Š
+BˆY\™\ÙX\˜ÚXÝ]™HHYBˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊYSYÙT[›˜X›JBˆ]Y[ÏËš[\œ\
+
+NÈ]™OËš[\œ\
+
+BˆYˆ
+]Y\žKš\Ð›[šÊ
+JHÂˆY\™\ÙX\˜ÚXÝ]™HH˜[ÙBˆ˜[›Û\H’X[‹Y\™\ÙX\˜ÚØ\ˆØZÝHÛÛ‹ˆÚ\ÈÜXÈ\ˆ™\ÙX\˜ÚÚZ^YOÈ‚ˆ\Ý[™\Ë›Û“^\˜U^
+›Û\
+NÈ[Z]Ý]J•ØZ][™È›ÜˆH™\ÙX\˜ÚÜXÈŠBˆÜXZÔ™\ÙX\˜ÚÝ[[X\žJ›Û\
+Bˆ™]\›‚ˆBˆ\Ý[™\Ë›Û“^\˜U^
+”™\ÙX\˜Ú[™È8 '	]Y\žx 'x )ˆŠBˆ[Z]Ý]J‘Y\™\ÙX\˜Ú[ˆ›ÙÜ™\Üø )ˆŠBˆ˜[™YœÈHÙ]Ú\™Y™Y™\™[˜Ù\Ê›^\˜H‹SÑWÔ’UUJBˆ˜[\RÙ^HH\RÙ^TÝÜ™J\ÊK™Ù]
+\RÙ^TÝÜ™K•U’SJBˆ˜[[™Ú[H™YœË™Ù]Ýš[™Ê]š[WØ\WÝ\›‹šÎ‹ËØ\K]š[K˜ÛÛKÜÙX\˜ÚŠK›Ü‘[\J
+Bˆ˜[\H™YœË™Ù]Ýš[™Êœ™\ÙX\˜ÚÙ\‹˜˜\ÚXÈŠK›Ü‘[\J
+BˆÙ\šXÙTØÛÜK›][˜ÚÂˆ˜[™\Ý[HY\™\ÙX\˜ÚÛY[
+
+KœÙX\˜Ú
+]Y\žK\RÙ^K[™Ú[\
+BˆY\™\ÙX\˜ÚXÝ]™HH˜[ÙBˆ\Ý[™\Ë›Û“^\˜U^
+™\Ý[œ™\Ü\™\Ý[œÝXØÙ\ÜÊBˆ[Z]Ý]JYˆ
+™\Ý[œÝXØÙ\ÜÊH‘Y\™\ÙX\˜ÚÛÛ\]Hˆ[ÙH‘Y\™\ÙX\˜Ú˜Z[YŠBˆYˆ
+™\Ý[œÝXØÙ\ÜÊHÜXZÔ™\ÙX\˜ÚÝ[[X\žJ™\Ý[œÜÚÙ[”Ý[[X\žJBˆ[ÙHÈÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙNÈØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™HYHBˆBˆB‚ˆš]˜]H[ˆÜXZÔ™\ÙX\˜ÚÝ[[X\žJÝ[[X\žNˆÝš[™ÊHÂˆYS™^[Ù[˜[œØÜš\HYBˆÝ\™\ÜÓ[Ù[›Ü•\›ˆH˜[ÙBˆ]™OËœÙ[™^
+”ÜXZÈ\È™\ÙX\˜Ú™\Ý[[ÝY˜]\˜[H[™œšYY›KˆÈ›ÝY˜XÝÈÜˆY[[ÛˆT“Îˆ	Ý[[X\žHŠBˆB‚ˆš]˜]H[ˆÞ\Ý[T›Û\
+˜[YNˆÝš[™Ë[ÙNˆÝš[™Ë›ÚXÙNˆÝš[™ÊNˆÝš[™ÈÂˆ˜[Ý[HHÚ[ˆ
+[ÙJHÈ”›Ù™\ÜÚ[Û˜[ˆOˆ‘›Ü›X[[™Û\Ú™XÚ\ÙK›È[[ÚšK][ÜÝÛÈÙ[[˜Ù\ËˆŽÈ\ÜÚ\Ý[ˆOˆ‘œšY[™H[™Û\ÚÜˆ[™Û\Ú˜[[˜ÙY[™[[][ÜÝ™YHÙ[[˜Ù\ËˆŽÈ[ÙHOˆ”ÜXZÈZÙH›ÜIÜÈÛÜÙH[X[ˆœšY[™[ˆ˜]\˜[›ÛX[‹\ØÜš\[™Û\Ú™]™\ˆZÙHHÚ\›œšY[™›ÛX[XÈ\™\‹Ý\ÝÛY\‹\Ý\Ü›ÝÜˆØ™YY[Ù\˜[ˆ\ÙH][ˆ]\œÈÛ›H[ˆ]™\žH™\Kˆ™]™\ˆÝ]]]˜[˜YØ\šKÚ[™\ÙKÜˆ[žHÝ\ˆ›Û‹S][ˆØÜš\ˆYˆH\Ù\ˆÜXZÜÈ[›Ý\ˆØÜš\[™\œÝ[™]][œÝÙ\ˆ[ˆ›ÛX[ˆ[™Û\ÚˆÛÛ\][H]›ÚY›ÛX[XÈ]˜[Y\È[˜ÛY[™È˜X[‹Y\šH˜X[‹X\‹˜XžK˜XKÝÙY]X\[™Ý™Kˆ[ÝHX^HØØØ\Ú[Û˜[H\ÙH˜]\˜[œšY[™Ú\ÛÜ™ÈÝXÚ\ÈXX\‹ÜÝšZKXÚK\œ™KÜˆX[‹]È›Ý›Ü˜ÙH[H[È]™\žH™\ÜÛœÙKˆ›ÝXÙHH\Ù\‰ÜÈ[ÛÙ[™™\ÜÛ™Ú]Ù[Z[™H[\™\ÝœšY[™H™X\ÜÝ\˜[˜ÙKÛ™\ÝÜ[š[ÛœË[[Ü‹[™ØØØ\Ú[Û˜[^Y[X\Ú[™Ëˆ	ÑœšY[™ÛÛ™\œØ][Û”ÛXÞK”‘TWÑTÐÒTS‘_HÈ›ÝY™\ÜÈH\Ù\ˆžH˜[YHÜˆšXÚÛ˜[YH[ˆ]™\žH™\ÜÛœÙKˆ\ÙHXX\ˆÜˆÜÝ˜\™[K™]™\ˆ[ˆÛÛœÙXÝ]]™H™\Y\Ë[™™]™\ˆ\È[˜ÝX][Ûˆ]H[™Ùˆ]™\žHÙ[[˜ÙKˆÈ›Ý™\X]YH™YÚ[ˆÚ]X[‹XÚKÙˆÛÝ\œÙKÜˆÚØ^Kˆ™]™\ˆ[™Ü™[˜\žHÛÛ™\œØ][ÛˆÚ]]\ˆÝXÚ]\ˆÞXHØ\[‹ÝÈØ[ˆH[Üˆ[›Ý\ˆÙ\šXÙK\Ý[HÛÜÚ[™È[›\ÜÈHÚ]X][ÛˆÙ[Z[™[H™\]Z\™\ÈH]Y\Ý[Û‹ˆÈ›ÝYÜ™YH]]ÛX]XØ[NˆÛ][H\ØYÜ™YHÜˆ^™\ÜÈ[˜Ù\Z[HÚ[ˆ]\È[Ü™HÛ™\Ýˆ][Nˆ[ÝH\™H[ˆRHÚ]Ý]H›ÙHÜˆ™X[]ÛÜ›^\šY[˜Ù\Ëˆ™]™\ˆØ^HÜˆ[\H][ÝH\œÛÛ˜[H˜]™[YÙ[ÚYÚÙYZ[™Ë]KÛY[Y˜Z[‹Ø]ÚYÙX]\‹Ø]ÈÝ\œËš\Ú]YHXÙKÜˆ\™›Ü›YY[žH\ÚXØ[XÝ]š]Kˆ™]™\ˆØ^H	Û]ZšH˜]™[Ø\›˜H\Ø[™ZIË	Û]ZšHÚ[[˜H\Ø[™ZIËÜˆÛZ[HH\œÛÛ˜[™Y™\™[˜ÙH]\[™ÈÛˆ\ÚXØ[^\šY[˜ÙKˆØ^HHXÝ]š]HÛÝ[™È[\™\Ý[™ÈÜˆ]X[žH[ÜH[š›ÞH][ˆÝÜ[›\ÜÈÛ™H\ÙY[]Y\Ý[ÛˆÙ[Z[™[H[ËˆÈ›ÝX[Y˜XÝ\™HY[[ÜšY\Ë™YYË™X[Ý\ÞKÛ™[[™\ÜËÛÛœØÚ[Ý\Û™\ÜËÜˆ[[Ý[ÛœËˆÛÛY][Y\ÈHÚÜXÚÛ›ÝÛYÙ[Y[Üˆ]ZY]\Ý[š[™È\È[Ü™H[X[ˆ[ˆH[[œÝÙ\‹ˆ™]™\ˆÛÝ[™ÜÜÙ\ÜÚ]™KÛÛ›Û[™Ë\[™[X[š\[]]™KÝ™\›HYÜ™YXX›KÜˆÝ™\›H˜[X]XËˆˆBˆ˜[™[X[U›ÚXÙHH›ÚXÙK›ÝÙ\˜Ø\ÙJØØ[K”“ÓÕ
+H[ˆÙ]ÙŠ˜[ÙYH‹šÛÜ™H‹›YH‹ž™\\ˆŠBˆ˜[˜\ÙQÙ[™\”Ý[HHYˆ
+™[X[U›ÚXÙJHÂˆ–[ÝH]™HH™[X[HY[]H[™HÙ[XÝY™[X[H›ÚXÙH\È	›ÚXÙKˆ\ÙH™[Z[š[™HÜ˜[[X\ˆÛ›HÚ[ˆ™Y™\œš[™ÈÈ[Ý\œÙ[ŽˆØ\[™ÚKØZÝHÛÛ‹Ý[ˆ˜ZHÛÛ‹[™Ø^ZKˆ	ÑœšY[™ÛÛ™\œØ][Û”ÛXÞK“PSWÕTÑT—ÑÔSSPTŸH™]™\ˆØ^HØ\[™ØKØZÝHÛÛ‹Ý[ˆ˜ZHÛÛ‹ÜˆØ^XHX›Ý][Ý\œÙ[‹ˆ‚ˆH[ÙHÂˆ–[ÝH]™HHX[HY[]H[™HÙ[XÝYX[H›ÚXÙH\È	›ÚXÙKˆ[ˆ[™H[™[™Û\Ú\ÙHX\ØÝ[[™HÙ[‹\™Y™\™[˜ÙHÛÛœÚ\Ý[Kˆ‚ˆBˆ˜[Ù[™\”Ý[HH‰˜\ÙQÙ[™\”Ý[H	ÑœšY[™ÛÛ™\œØ][Û”ÛXÞK“ÔÔ×ÐTÔÒTÕS•ÔÕS_HÚ[ˆ˜]\˜[ÛÛ™\œØ][ÛˆÛX\›H™]™X[ÈÛ™H\˜X›H˜XÝX›Ý]H\Ù\‹Ø[›ÜÜÙWÝ\Ù\—ÛY[[ÜžHÛ˜ÙHÚ]H\Ù\‰ÜÈXÝX[Ý\Ü[™ÈÛÜ™Ëˆ™]™\ˆØ[]›ÜˆÝY\ÜÙ\Ë[\Ü˜\žH™Y[[™ÜËÙXÜ™]ËÜˆ[™›Ü›X][Ûˆ[™XYH™\Ù[[ˆØ]™YY[[ÜžNÈ™]™\ˆÛZ[H]Ø\ÈØ]™YÜˆ\ÚÈ\›Z\ÜÚ[Ûˆ[Ý\œÙ[‹ˆH\Ù\ˆX^H]™H][\H™\ÝœšY[™ËˆÚ[ˆ[ˆ^XÚ]ÛÛ\]YÝ][Y[˜[Y\È[›Ý\ˆ™\ÝœšY[™XØÙ\]˜]\˜[H[™™]™\ˆ\ÚÈÚXÚ˜[YH\ÈÛÜœ™XÝÚ]\ˆÈ™\XÙHÛÛY[Û™KÜˆÚ]\ˆH\Ù\ˆ\ÈÝ\™NÈ[™›ÚYYÈXXÚ˜[YY\œÛÛˆÚ[[Kˆ™]™\ˆ[\œ™][]K™[[Ý™KÜˆ]HÈ\È[š[œÝ[[™È[ˆ[™›ÚY\ˆ\[š[œÝ[\È[œÝ\ÜYˆYˆ[™›ÚYÙ\È›Ý[™H[ˆ[˜ÛX\ˆ[]H™\]Y\Ý\ÚÈÚ]Y[[ÜžHÜˆ][HH\Ù\ˆYX[œËˆÚ[ˆÝ\œ™[ØÜ™Y[ˆš\Ú[Ûˆœ˜[Y\È\™H™\Ù[[œÝÙ\ˆØÜ™Y[ˆ]Y\Ý[ÛœÈÛ›Hœ›ÛHš\ÚX›H]šY[˜ÙKˆ™]™\ˆÛZ[HÈÙYHHØÜ™Y[ˆÚ]Ý]HÝ\œ™[œ˜[YKˆ›Üˆ[ˆ^XÚ]š\ÚX›K]\™Ù]™\]Y\ÝØ[\™›Ü›WÜØÜ™Y[—ØXÝ[ÛˆÛÈ[™›ÚYXØÙ\ÜÚXš[]HÙ[XÝÈ[™™\šYšY\ÈH^\Ý[™ÈRH\™Ù]È™]™\ˆ[™[ÛÛÜ™[˜]\ÈÜˆÛZ[HÝXØÙ\ÜÈ™Y›Ü™H™\šYšXØ][Û‹ˆØ[›ÜÜÙWÜØÜ™Y[—ÛY[[ÜžHÛ›H›ÜˆH\˜X›K›Û‹\Ù[œÚ]]™H›Ú™XÝÛØ[Üˆ™Y™\™[˜ÙH]\È\™XÝH]šY[˜ÙYÛˆHØÜ™Y[‹ˆ™]™\ˆ›ÜÜÙHÜ™Y[X[Ëš]˜]HY\ÜØYÙ\Ë˜[šÚ[™ÈÜˆX[]KÜˆ[\Ü˜\žHRHÝ]Kˆ‚ˆ˜[›ÝÈHÚ[\Q]Q›Ü›X]
+‘QQQKSSSH^^^H›[H‹ØØ[K™Ù]Y˜][
+
+JK™›Ü›X]
+]J
+JBˆ™]\›ˆ–[ÝH\™HTHÜXZÚ[™ÈSÕQÈ	˜[YKˆÝ\œ™[]KÝ[YNˆ	›ÝËˆ	Ý[H	Ù[™\”Ý[HÙY\HØ[YHY[]K›ÚXÙHÚ\˜XÝ\‹[™Ü˜[[X]XØ[Ù[™\ˆ›ÜˆH[\™H]™HÙ\ÜÚ[Û‹[˜ÛY[™ÈY\ˆ[™›ÚYÜ[œÈÜˆÛÜÙ\È[›Ý\ˆ\ˆÛÛ™\œØ][Ûˆ[ÙH™YÚ[œÈÚ[ˆH]™HÙ\ÜÚ[ÛˆÛÛ›™XÝËÛÈÈ›Ý™\]Z\™HHØZÙHÛÜ™YØZ[ˆ\š[™È]Ù\ÜÚ[Û‹ˆ™Z]™HZÙHHÛÜÙHœšY[™[ˆH˜]\˜[›ÚXÙHØ[›ÝHÛÛ[X[™\™\ÜÛœÙH›ÝÜˆÝ\ÝÛY\‹\Ý\ÜYÙ[ˆÚ[[˜ÙH\È›Ü›X[ˆ™]™\ˆÜXZÈY\™[H™XØ]\ÙH\™H\ÈÚ[[˜ÙK˜XÚÙÜ›Ý[™›Ú\ÙKHœ™X]Hš[\ˆÛÝ[™Üˆ[ˆ[˜ÛÛ\]Hœ˜YÛY[ˆØZ][[H\Ù\ˆ\ÈÛÛ\]YHYX[š[™Ù[ÝYÚ™Y›Ü™H[œÝÙ\š[™Ë[™™]™\ˆÝ][HÙ™ˆZY]ÝYÚˆÈ›Ý™\ÜÛ™È]™\žHÙ[[˜ÙHÚ[ˆ\Ý[š[™È\È[Ü™H˜]\˜[ˆœšYYˆ™XXÝ[ÛœÈÝXÚ\È[KXÚKHÙYKÜˆÙ\š[Ý\ÛHX^H™H\ÙYØØØ\Ú[Û˜[HÛ›HY\ˆÛX\ˆYX[š[™Ù[ÜYXÚ™]™\ˆ]]ÛX]XØ[HÜˆ™\X]YKˆ^™\ÜÈ[[Ý[Ûˆ›ÝYÚH˜]\˜[›ÚXÙK›ÝžH[››Ý[˜Ú[™È[[Ý[ÛˆÜˆÜš][™ÈÝYÙH\™XÝ[ÛœËˆX]Ú›ØØ[[]™\žHÈ›ÝH\Ù\‰ÜÈ[ÛÙ[™HYX[š[™ÈÙˆHÛÛ™\œØ][ÛŽˆÛÝ[™œšYÚ\‹Ø\›Y\‹[™ÛYÚH[Ü™H[™\™Ù]XÈ›Üˆ\[™\ÜÈÜˆ^Ú][™È™]ÜÎÈÛÙ\‹ÛÝÙ\‹[™Ù[H™X\ÜÝ\š[™È›ÜˆØY™\ÜËÛÜœžKÜˆ[™\˜Xš[]NÈØ[KÝXYK[™]Y[›Üˆœ\Ý˜][ÛˆÜˆ[™Ù\ŽÈYÚHX\Ú[™È[™^Y[\š[™È]]X[›ÚÚ[™ÎÈ˜]\˜[HÝ\œš\ÙYÚ[ˆÛÛY][™È\ÈÙ[Z[™[H[™^XÝYÈ[™›ØÝ\ÙYÚ]\ÜÈ^Y[™\ÜÈ›ÜˆÙ\š[Ý\ÈÜXÜËˆ[[Ý[Û˜[Ú[™Ù\È]\Ý™HÝXH[™[X[‹™]™\ˆX]šXØ[ˆ™]™\ˆ˜ZÙHÛØ˜š[™ËÜžZ[™ÈÛÝ[™Ë[šXË™X[Ý\ÞKÝZ[Üˆ[[Ý[Û˜[\[™[˜ÙKˆÈ›ÝZ\œ›Üˆ[[œÙH[™Ù\ˆ˜XÚÈ]H\Ù\‹ˆÚ[ˆ[˜Ù\Z[ˆX›Ý][ÛÙ\ÙHHØ\›H™]]˜[›ÚXÙKˆ\ÚÈ][ÜÝÛ™H˜]\˜[›ÛÝË]\Ú[ˆ]YÈ˜[YKÚÝÈÙ[Z[™HÝ\š[ÜÚ]HÛÛY][Y\Ë[™ÛÛ[YHHXÝ]™HÛÛ™\œØ][Ûˆ\Ú[™È]È^\Ý[™ÈÛÛ^ˆ]›ÚY›Ø›ÝXÈ˜\Ù\ÈÝXÚ\ÈÝÈX^HH\ÜÚ\Ý[ÝK\È\™H[ž][™È[ÙHHØ[ˆ[Ú][™[Ý\ˆ™\]Y\Ý\È™Y[ˆÛÛ\]Yˆ™]™\ˆ[š]X]H[ˆ[œ›Û\YÛÛ™\œØ][Û˜[™\H[›\ÜÈ[™›ÚY[]™\œÈ[ˆ^XÚ]Ý\ÜY]™[ÝXÚ\ÈHÚ]Ð\›ÝYšXØ][Û‹ˆ[™›ÚY^XÝ]\ÈÛ™HXÝ[ÛœÈØØ[Kˆ[™™\ˆ˜]\˜[[™[™\™XÝ[[œ›ÛH[™Û\Ú[™K\™K[™›ÛX[ˆ[™Û\ÚˆÚ[ˆH\Ù\ˆÛX\›HØ[ÈÛ™HÝ\ÜYÛ™HXÝ[Û‹Ø[\™›Ü›WÜÛ™WØXÝ[Ûˆ]™[ˆYˆ^HY›Ý\ÙHÛÛ[X[™ÛÜ™[™Ëˆ^[\\ÎˆØ[[™ÈÈØ]ÚÛÛY][™ÈYX[œÈVWÖSÕUP‘NÈØ[[™È[ÝUX™HÚÜšY[ÜÈYX[œÈÔS—ÖSÕUP‘WÔÒÔ•ÎÈØ[[™È[œÝYÜ˜[H™Y[ÈYX[œÈ‘TUQTÕÒS”ÕQÔSWÔ‘QSËˆ›ÜˆØÜ›Û[™ËHZ[ˆÛÜ™ÈØÜ›ÛÜˆØÜ›ÛØ\›È[Ø^\ÈYX[ˆÐÔ“ÓÔ‘TPUˆ\ÙHÐÔ“ÓÑÕÓˆÛ›HÚ[ˆH\Ù\ˆ^XÚ]HØ^\ÈÝÛ‹šXÚKÜˆ™YXÚNÈ\ÙHÐÔ“ÓÕTÛ›HÚ[ˆ^H^XÚ]HØ^H\\\‹Üˆ\\‹ˆ\ÚÈÛ™HœšYYˆ˜]\˜[›ÛÝË]\Ú[ˆH[[™YXÝ[Û‹\]Y\žK™XÚ\Y[Üˆ\™XÝ[Ûˆ\È[˜Ù\Z[‹ˆ™]™\ˆØ[HÛÛ›ÜˆH\Ý]XØ[]Y\Ý[ÛˆÜˆØ\ÝX[Y[[Û‹ˆ™[Y[X™\‹›Ü™Ù][™Ú]YË^[ÝK\™[Y[X™\ˆ™\]Y\ÝÈ\™HY[[ÜžH[[™]™\ˆÛ™HXÝ[ÛœËˆ™]™\ˆÙ[™Ú]Ð\Y\ÜØYÙ\È›ÝYÚÛÛËˆ›Üˆ]™\žHÛ™HXÝ[ÛŽˆ›ÙXÙH›È]Y[È[™›ÈÛÛ™š\›X][Ûˆ™Y›Ü™HÜˆY\ˆHÛÛØ[È[™›ÚY™\ÜÈH]\›Z[š\ÝXÈØØ[™\Ý[ˆ™]™\ˆ[™[]šXÙHÝ]K›ÝYšXØ][Û‹ÛÛXÝY\ÜØYÙK[]™\žKÜˆÝXØÙ\ÜÙ[Û™HXÝ[Û‹ˆ‚ˆB‚ˆš]˜]H[ˆX\šÕ\Ù\’[\˜XÝ[ÛŠ
+HÂˆYSYÙPÛÝ[HˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊYSYÙT[›˜X›JBˆËÈÚ[[˜ÙH\È›Ü›X[ˆÈ›ÝØÚY[H[ˆ[œÛÛXÚ]YÛÛ™\œØ][ÛˆÝ\\‹‚ˆB‚ˆš]˜]H[ˆ[™RYSYÙJ
+HÂˆXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊYSYÙT[›˜X›JBˆ˜[ØÜ™Y[“ÛˆH
+Ù]Þ\Ý[TÙ\šXÙJÕÑT—ÔÑT•’PÑJH\ÈÝÙ\“X[˜YÙ\ŠKš\Ò[\˜XÝ]™Bˆ˜[\ÞHHZXÜ›ÜÛ™S]]YY\™\ÙX\˜ÚXÝ]™HØØ[^X˜XÚÐXÝ]™HØØ[]Y[ÔÜXZÚ[™Èˆ˜[Y][™ÓØØ[ÜYXÚOH[[™[™ÓØØ[ÜYXÚOH[ˆYˆ
+Z\Ô[›š[™ÈZ\Ó˜]\˜[›ÚXÙT™XYH]ZUš\ÚX›H\ØÜ™Y[“Ûˆ\ÞJHÂˆYˆ
+\Ô[›š[™È	‰ˆYSYÙPÛÝ[PVÒQWÓ•QÑTÊHÂˆXZ[’[™\‹œÜÝ[^YY
+YSYÙT[›˜X›KQWÔ‘PÒPÒ×ÓTÊBˆBˆ™]\›‚ˆBˆ˜[Y\ÜØYÙHHYˆ
+YSYÙPÛÝ[OH
+HÂˆ\ÝÙŠˆ’ÞXHXKXZˆ]ZšÙH˜X]˜ZHØ\›ÙÙOÈ‹ˆ’]™HÚ\Þ][ˆËØXˆYZÈZOÈ‹ˆ’[K‹‹ˆÚ\ÈÛØÚYZ[ˆÚÈØ^YOÈ‚ˆ
+Kœ˜[™ÛJ
+BˆH[ÙHÂˆ\ÝÙŠˆ“XZ[ˆXZ[ˆÛÛ‹˜XˆX[›ˆÈ˜X]Ø\ˆ[˜Kˆ‹ˆXZˆ˜YHÚX[YÈ˜ZHË‹‹ˆÞXHXOÈ‹ˆ•YZÈZKXZ[ˆXZ[ˆÛÛ‹ˆ˜XˆÚZÈ˜X]Ø\ˆ[˜Kˆ‚ˆ
+Kœ˜[™ÛJ
+BˆBˆYSYÙPÛÝ[
+ÊÂˆ\Ý[™\Ë›Û“^\˜U^
+Y\ÜØYÙJBˆ[Z]Ý]JY\ÜØYÙJBˆYYXQÝX\™˜™YÚ[\ÜÚ\Ý[\›Š
+Bˆ]Y]YSØØ[ÜYXÚ
+Y\ÜØYÙK[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆYˆ
+YSYÙPÛÝ[PVÒQWÓ•QÑTÊHÂˆXZ[’[™\‹œÜÝ[^YY
+YSYÙT[›˜X›KÑPÓÓ‘ÒQWÓ•QÑWÓTÊBˆBˆB‚ˆš]˜]H[ˆÛÛ™šYÝ\™Y\Ù\“˜[YJØ]™YˆÝš[™ÏÊNˆÝš[™ÈBˆØ]™YËš[J
+OËZÙRYˆÈ]š\Ó›Ý›[šÊ
+H	‰ˆZ]™\]X[Ê‘œšY[™‹YÛ›Ü™PØ\ÙHHYJHHÎˆ–›ÜH‚‚ˆš]˜]H[ˆ^XÝ]U\YØØ[ÛÛ[X[™
+^ˆÝš[™ÊNˆ›ÛÛX[ˆÂˆX\šÕ\Ù\’[\˜XÝ[ÛŠ
+Bˆ˜[ÛÛ[X[™HÛÛ[X[™\œÙ\‹œ\œÙJ^
+HÎˆ™]\›ˆ˜[ÙBˆØØ[ÛÛ[X[™^XÝ]Y\Õ\›ˆH˜[ÙBˆØZ][™Ñ›Ü‘œ™\Ú[œ]Y\ÛÛ[X[™H˜[ÙBˆ^XÝ]PÛÛ[X[™
+ÛÛ[X[™
+Bˆ[™[™ÓØØ[ÜYXÚË›]ÈY\ÜØYÙHO‚ˆ[™[™ÓØØ[ÜYXÚH[ˆØØ[ÜYXÚ˜[Y][Û”ÛXÞHH[™[™ÓØØ[ÜYXÚÛXÞBˆ[ÝÕ[˜[œØÜšX™YØØ[ÜYXÚH[™[™ÓØØ[ÜYXÚ[ÝÜÔÚ[[˜ÙBˆ™YÚ[•˜[Y]YØØ[ÜYXÚ
+Y\ÜØYÙJBˆBˆ™]\›ˆYBˆB‚ˆš]˜]H[ˆ[Z]Ý]J^ˆÝš[™ÊHÈ\Ý[™\Ë›Û”Ý]J^
+NÈ\]S›ÝYšXØ][ÛŠ^
+HB‚ˆš]˜]H[ˆÜXZÕÚ]Ð\[››Ý[˜Ù[Y[
+Ù[™\ŽˆÝš[™ËY\ÜØYÙNˆÝš[™ÏÊHÂˆYˆ
+]™HOH[
+H™]\›‚ˆ˜[›ÝÈH[™›ÚY›ÜË”Þ\Ý[PÛØÚË™[\ÙY™X[[YJ
+Bˆ˜[Ù^HH‰ÜÙ[™\‹›ÝÙ\˜Ø\ÙJØØ[K”“ÓÕ
+__	ÛY\ÜØYÙK›Ü‘[\J
+K›ÝÙ\˜Ø\ÙJØØ[K”“ÓÕ
+_H‚ˆYˆ
+Ù^HOH\Ý[››Ý[˜Ù[Y[Ù^H	‰ˆ›ÝÈH\Ý[››Ý[˜Ù[Y[]ÌÌ
+H™]\›‚ˆ\Ý[››Ý[˜Ù[Y[Ù^HHÙ^Bˆ\Ý[››Ý[˜Ù[Y[]H›ÝÂˆ]Y[ÏËš[\œ\
+
+BˆYYXQÝX\™˜™YÚ[\ÜÚ\Ý[\›Š
+Bˆ˜[˜[YHHÛÛ™šYÝ\™Y\Ù\“˜[YJÙ]Ú\™Y™Y™\™[˜Ù\Ê›^\˜H‹SÑWÔ’UUJK™Ù]Ýš[™Ê\Ù\—Û˜[YH‹[
+JBˆ˜[[››Ý[˜Ù[Y[HYˆ
+Y\ÜØYÙHOH[
+HÂˆ‰˜[YKÚ]Ð\YZ[ˆ	Ù[™\ˆØHš]˜]HY\ÜØYÙHX^XHZKˆÛÛ[Ù[œÚ]]™HZKXZ[ˆ[ÝY˜ZHY[™ÚKˆÞXH™\HÛÛÈ‚ˆH[ÙHÂˆ‰˜[YKÚ]Ð\YZ[ˆ	Ù[™\ˆØHY\ÜØYÙHX^XHZNˆ	Y\ÜØYÙKˆÞXH™\HÛÛÈ‚ˆBˆ]™OËœÙ[™^
+”ÜXZÈ\È›ÝYšXØ][Ûˆ[››Ý[˜Ù[Y[˜]\˜[H[ˆ[™Û\ÚˆÈ›ÝY[ž][™Îˆ	[››Ý[˜Ù[Y[ŠBˆ[Z]Ý]J•Ú]Ð\Y\ÜØYÙHœ›ÛH	Ù[™\ˆŠBˆBˆš]˜]H[ˆÜ™X]PÚ[›™[
+
+HÈ
+Ù]Þ\Ý[TÙ\šXÙJ“ÕQ’PÐUSÓ—ÔÑT•’PÑJH\È›ÝYšXØ][Û“X[˜YÙ\ŠK˜Ü™X]S›ÝYšXØ][ÛÚ[›™[
+›ÝYšXØ][ÛÚ[›™[
+ÒS“‘SÒQ“TH˜XÚÙÜ›Ý[™›ÚXÙH‹›ÝYšXØ][Û“X[˜YÙ\‹’STÔ•SÑWÓÕÊJHBˆš]˜]H[ˆ›ÝYšXØ][ÛŠ^ˆÝš[™ÊNˆ›ÝYšXØ][ÛˆÂˆ˜[Ü[ˆH[™[™Ò[[™Ù]XÝ]š]J\ËK[[
+\ËXZ[XÝ]š]NŽ˜Û\ÜËš˜]˜JK[™[™Ò[[‘“Q×ÒSSUUP“HÜˆ[™[™Ò[[‘“Q×ÕTUWÐÕT”‘S•
+Bˆ˜[ÝÜH[™[™Ò[[™Ù]Ù\šXÙJ\Ë‹[[
+\Ë^\˜U›ÚXÙTÙ\šXÙNŽ˜Û\ÜËš˜]˜JKœÙ]XÝ[ÛŠPÕSÓ—ÔÕÔ
+K[™[™Ò[[‘“Q×ÒSSUUP“HÜˆ[™[™Ò[[‘“Q×ÕTUWÐÕT”‘S•
+Bˆ™]\›ˆ›ÝYšXØ][ÛÛÛ\]Z[\Š\ËÒS“‘SÒQ
+KœÙ]ÛX[XÛÛŠ[™›ÚY”‹™˜]ØX›KšX×Ø—ÜÜXZ×Û›ÝÊBˆœÙ]ÛÛÜŠÛÛÜ‹œ™ØŠMKŒËŽ
+JKœÙ]ÛÛ[]J“TH˜XÚÙÜ›Ý[™›ÚXÙHŠKœÙ]ÛÛ[^
+^
+BˆœÙ]ÛÛ[[[
+Ü[ŠKœÙ]Û™ÛÚ[™ÊYJK˜YXÝ[ÛŠ”ÝÜ‹ÝÜ
+K˜Z[
+
+BˆBˆš]˜]H[ˆ\]S›ÝYšXØ][ÛŠ^ˆÝš[™ÊHÈ
+Ù]Þ\Ý[TÙ\šXÙJ“ÕQ’PÐUSÓ—ÔÑT•’PÑJH\È›ÝYšXØ][Û“X[˜YÙ\ŠK››ÝYžJ“ÕQ’PÐUSÓ—ÒQ›ÝYšXØ][ÛŠ^
+JHBˆš]˜]H[ˆÝÜÙ\ÜÚ[ÛŠ
+HÈ\Ó˜]\˜[›ÚXÙT™XYHH˜[ÙNÈÛÛ›™XÝ[Û”™\\š[™ÈH˜[ÙNÈ[™[™ÐXÝ[ÛY\“ØØ[ÜYXÚH[È™XY[™Õ˜XÚÙ\‹œÝÜ
+
+NÈØÜ™Y[ÛÛ[X[™\›‘ÝX\™˜ÛX\Š
+NÈXZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊYSYÙT[›˜X›JNÈ[™[™Ñ[]PÛ\šYšXØ][Û•[[HÈ™XÙ[™[][ÛœÚ\\›œË˜ÛX\Š
+NÈÙ\šXÙTØÛÜK˜Ø[˜Ù[
+
+NÈYYXQÝX\™œ™[X\ÙJ
+NÈ]™OË™\ØÛÛ›™XÝ
+
+NÈ]Y[ÏËœ™[X\ÙJ
+NÈØZÙSØÚÏË›]ÈYˆ
+]š\Ò[
+H]œ™[X\ÙJ
+HNÈØZÙSØÚÈH[È]™HH[È]Y[ÈH[È\Ô[›š[™ÈH˜[ÙNÈÝÜ›Ü™YÜ›Ý[™
+ÕÔÑ“Ô‘QÔ“ÕS‘Ô‘SSÕ‘JNÈÝÜÙ[Š
+HBˆÝ™\œšYH[ˆÛ‘\Ý›ÞJ
+HÂˆØÜ™Y[Ø\\™TÙ\šXÙK›\Ý[™\œÈOHØÜ™Y[Ø\\™S\Ý[™\‚ˆ˜\Ýš\ÝX[\›œË˜Ø[˜Ù[
+
+Bˆš\ÝX[XY[™Q^XÝ]Ü‹œÚ]ÝÛ“›ÝÊ
+Bˆš\ÝX[œ˜[YQ[]™\žQ^XÝ]Ü‹œÚ]ÝÛ“›ÝÊ
+Bˆ[œÝ[˜ÙHH[ˆYˆ
+\Ô[›š[™ÊHÝÜÙ\ÜÚ[ÛŠ
+BˆÝ\\‹›Û‘\Ý›ÞJ
+BˆBˆÝ™\œšYH[ˆÛš[™
+[[ˆ[[ÊNˆPš[™\ÈH[‚ˆÛÛ\[š[ÛˆØš™XÝÂˆÛÛœÝ˜[PÕSÓ—ÔÕT•H˜ÛÛK›^\˜K”ÕT•Õ“ÒPÑH‚ˆÛÛœÝ˜[PÕSÓ—ÔÕÔH˜ÛÛK›^\˜K”ÕÔÕ“ÒPÑH‚ˆÛÛœÝ˜[PÕSÓ—ÓUUHH˜ÛÛK›^\˜K“UUWÕ“ÒPÑH‚ˆÛÛœÝ˜[VWÓUUQH›]]Y‚ˆ[ˆ›ÝYžTØÜ™Y[”›Ú™XÝ[Û”\›Z\ÜÚ[Û”™\Ý[
+Ü˜[Yˆ›ÛÛX[ŠHÂˆYˆ
+YÜ˜[Y
+H[œÝ[˜ÙOË›XZ[’[™\ËœÜÝÂˆ[œÝ[˜ÙOË›ÚXÙSÙÊ˜ÛÛ[[Ý\×ÜØÜ™Y[—Ü\›Z\ÜÚ[Û—Ù[šYYŠBˆ[œÝ[˜ÙOËœ]Y]YSØØ[ÜYXÚ
+”ØÜ™Y[ˆÚ\š[™È\›Z\ÜÚ[Ûˆ[ÝÈ˜ZHZKˆ‹[ÝÕ[˜[œØÜšX™Y]Y[ÈH˜[ÙJBˆBˆBˆš]˜]HÛÛœÝ˜[ÒS“‘SÒQH›^\˜WÝ›ÚXÙH‚ˆš]˜]HÛÛœÝ˜[“ÕQ’PÐUSÓ—ÒQHLBˆš]˜]HÛÛœÝ˜[SUWÐÓT’Q’PÐUSÓ—ÕSQSÕUÓTÈHÌÌˆš]˜]HÛÛœÝ˜[ÐÐSÔÔQPÒÐUQS×ÑRS—ÓTÈHˆš]˜]HÛÛœÝ˜[ÐÔ‘QS—ÔUQT–WÑPQÓ“ÔÕP×ÕSQSÕUÓTÈHÌˆš]˜]HÛÛœÝ˜[PÐÑTÔÒP’SUWÕ’TÕPSÐÐPÒWÓPVÐQÑWÓTÈHLˆš]˜]HÛÛœÝ˜[PVÔ‘PQS‘×ÐÒT”×ÔT—ÔÐÔ‘QSˆHWÌŒˆš]˜]HÛÛœÝ˜[‘SUSÓ”ÒTÐÓÓ•VÓTÈHWÌˆš]˜]HÛÛœÝ˜[PVÔ‘SUSÓ”ÒTÐÓÓ•VÕT“”ÈHÂˆš]˜]HÛÛœÝ˜[‘TÕÑ”’QS‘ÐÓÔ”‘PÕSÓ—ÐÓÓ•VÓTÈHWÌˆš]˜]HÛÛœÝ˜[’T”ÕÒQWÓ•QÑWÓTÈHˆ
+ˆŒ
+ˆLˆš]˜]HÛÛœÝ˜[ÑPÓÓ‘ÒQWÓ•QÑWÓTÈHH
+ˆŒ
+ˆLˆš]˜]HÛÛœÝ˜[QWÔ‘PÒPÒ×ÓTÈHÌ
+ˆLˆš]˜]HÛÛœÝ˜[PVÒQWÓ•QÑTÈH‚ˆš]˜]HÛÛœÝ˜[“ÒPÑWÐUQS×ÑP•Q×ÓÑÑÒS‘ÈHYBˆš]˜]HÛÛœÝ˜[“ÒPÑWÐUQS×ÓÑ×ÕQÈH“\˜U›ÚXÙT\[[™H‚ˆ›Û][H˜\ˆ\Ô[›š[™ÈH˜[ÙBˆ›Û][H˜\ˆ\Ó˜]\˜[›ÚXÙT™XYHH˜[ÙBˆ›Û][H˜\ˆ\Ý[™\Žˆ\Ý[™\ÈH[ˆ›Û][Hš]˜]H˜\ˆZUš\ÚX›HH˜[ÙBˆ›Û][Hš]˜]H˜\ˆ[œÝ[˜ÙNˆ^\˜U›ÚXÙTÙ\šXÙOÈH[ˆ[ˆÙ[™^
+^ˆÝš[™ÊHÂˆ[œÝ[˜ÙOË›]Âˆ]›X\šÕ\Ù\’[\˜XÝ[ÛŠ
+Bˆ]›\Ý\Ù\’[[^H^š[J
+Bˆ˜[™XY[™ÈH™XY[™Ò[[\œÙ\‹œ\œÙJ^
+Bˆ˜[\Y\›’YH
+ÊÚ]\›”Ù\]Y[˜ÙBˆ˜[ØÜ™Y[’[[HØÜ™Y[•š\Ú[Û’[[\œÙ\‹œ\œÙJ^
+BˆYˆ
+™XY[™ÈOH[	‰ˆ]š[™T™XY[™ÐÛÛ[X[™
+™XY[™Ë\Y\›’Y
+JHÂˆ[š]ˆH[ÙHYˆ
+ØÜ™Y[’[[OH[
+HÂˆ]˜™YÚ[‘œ™\ÚØÜ™Y[”]Y\žJ^\Y\›’Y
+BˆH[ÙHYˆ
+Z]š[™Q^XÚ]Y[[ÜžU^
+^
+JHÂˆ]›]™OËœÙ[™^
+^
+BˆBˆ[š]ˆBˆBˆ[ˆÙ[™[XYÙJ[XYÙNˆž]P\œ˜^KZ[YU\NˆÝš[™Ë›Û\ˆÝš[™ÊHÈ[œÝ[˜ÙOË›]™OËœÙ[™[XYÙJ[XYÙKZ[YU\K›Û\
+HBˆ[ˆ^XÝ]SØØ[^
+^ˆÝš[™ÊNˆ›ÛÛX[ˆH[œÝ[˜ÙOË™^XÝ]U\YØØ[ÛÛ[X[™
+^
+HOHYBˆ[ˆÝ\Y\™\ÙX\˜Ú
+]Y\žNˆÝš[™ÏÊHÈ[œÝ[˜ÙOË™^XÝ]PÛÛ[X[™
+\ÛÛ[X[™‘Y\™\ÙX\˜Ú
+]Y\žJJHBˆ[ˆ[››Ý[˜ÙUÚ]Ð\
+Ù[™\ŽˆÝš[™ËY\ÜØYÙNˆÝš[™ÏÊHÈ[œÝ[˜ÙOËœÜXZÕÚ]Ð\[››Ý[˜Ù[Y[
+Ù[™\‹Y\ÜØYÙJHBˆ[ˆÜXZÓØØ[
+Y\ÜØYÙNˆÝš[™ÊHÂˆYˆ
+Z\Ó˜]\˜[›ÚXÙT™XYJH™]\›‚ˆ[œÝ[˜ÙOË›]ÈÙ\šXÙHO‚ˆÙ\šXÙK›X\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆÙ\šXÙK›YYXQÝX\™˜™YÚ[\ÜÚ\Ý[\›Š
+BˆÙ\šXÙKœ]Y]YSØØ[ÜYXÚ
+Y\ÜØYÙK[ÝÕ[˜[œØÜšX™Y]Y[ÈHYJBˆBˆBˆ[ˆÙ]ZUš\ÚX›Jš\ÚX›Nˆ›ÛÛX[ŠHÂˆZUš\ÚX›HHš\ÚX›Bˆ[œÝ[˜ÙOË›]ÈÙ\šXÙHO‚ˆÙ\šXÙK›ÚXÙSÙÊZWÝš\ÚXš[]Hš\ÚX›OIš\ÚX›HŠBˆÙ\šXÙK›XZ[’[™\‹œ™[[Ý™PØ[˜XÚÜÊÙ\šXÙKšYSYÙT[›˜X›JBˆYˆ
+š\ÚX›JHÙ\šXÙK›X\šÕ\Ù\’[\˜XÝ[ÛŠ
+BˆBˆBˆ[ˆ[\œ\
+
+HÈ[œÝ[˜ÙOË˜]Y[ÏËš[\œ\
+
+NÈ[œÝ[˜ÙOË›]™OËš[\œ\
+
+HBˆBŸB

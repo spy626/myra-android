@@ -313,19 +313,7 @@ object PassiveMemoryObserver {
                     )
                 }
 
-            val topicLabels = activity.visibleElements.asSequence()
-                .filter {
-                    it.role in setOf(
-                        SemanticRole.TEXT,
-                        SemanticRole.VIDEO,
-                        SemanticRole.VIDEO_CARD,
-                        SemanticRole.LIST_ITEM
-                    )
-                }
-                .map { it.label }
-                .filter { it in safeLabels }
-                .take(20)
-                .toList()
+            val topicLabels = currentVideoTopicLabels(activity, safeLabels)
             ContentTopicExtractor.extract(topicLabels).forEach { topic ->
                 signals += BehaviorSignal(
                     BehaviorObservationKind.CONTENT_TOPIC,
@@ -376,6 +364,25 @@ object PassiveMemoryObserver {
             ).containsMatchIn(it)
         }
         return screenLooksLikeVideo || (hasVideoElement && playbackEvidence)
+    }
+
+    /**
+     * Topic evidence is restricted to the current player title. Recommendation cards,
+     * feed rows and generic text are deliberately excluded even while a player is open.
+     * If Accessibility does not expose a reliable VIDEO node, learning skips the event.
+     */
+    internal fun currentVideoTopicLabels(
+        activity: CurrentActivityContext,
+        safeLabels: List<String> = activity.visibleElements.map { it.label }
+    ): List<String> {
+        if (!isActiveYouTubeVideoContext(activity, safeLabels)) return emptyList()
+        return activity.visibleElements.asSequence()
+            .filter { it.role == SemanticRole.VIDEO }
+            .map { it.label.trim() }
+            .filter { it.length in 3..120 && it in safeLabels }
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .take(1)
+            .toList()
     }
 
     private const val OBSERVATION_COOLDOWN_MS = 120_000L

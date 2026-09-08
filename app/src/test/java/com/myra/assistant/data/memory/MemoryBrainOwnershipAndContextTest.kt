@@ -88,6 +88,49 @@ class MemoryBrainOwnershipAndContextTest {
         MemoryWorkingContext.clear()
     }
 
+    @Test fun verifiedRenamePreservesExtractorIdentityAcrossAllLinkedFacts() = runBlocking {
+        MemoryWorkingContext.clear()
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        PersonLinkedMemoryExtractor.extractAll(
+            "Mera best friend Kareem hai, uska gaming channel hai aur gaming videos banata hai"
+        ).forEach { repository.saveGrounded(it) }
+        val before = repository.allActive()
+        val entityId = before.first().entityId
+        assertEquals(3, before.size)
+        assertEquals(setOf(entityId), before.map { it.entityId }.toSet())
+
+        val outcome = brain.processFinalTurn("Kareem nahi, Karim")
+
+        assertTrue(outcome is MemoryBrainOutcome.Mutated)
+        val active = repository.allActive()
+        assertEquals(3, active.size)
+        assertEquals(setOf(entityId), active.map { it.entityId }.toSet())
+        assertTrue(active.all { it.entityName == "Karim" && it.fact.contains("Karim") })
+        assertTrue(repository.relevant("Kareem", 10).isEmpty())
+        assertEquals(3, repository.relevant("Karim", 10).size)
+        MemoryWorkingContext.clear()
+    }
+
+    @Test fun deletingOneLinkedFactKeepsPersonButWholePersonDeleteRemovesOnlyThatUnit() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        PersonLinkedMemoryExtractor.extractAll(
+            "Mera best friend Kareem hai aur uska gaming channel hai"
+        ).forEach { repository.saveGrounded(it) }
+        repository.saveGrounded(MemoryCandidate(
+            MemoryCategory.PROJECT, "Zopy builds LYRA", "project:lyra",
+            MemorySensitivity.LOW, .98
+        ))
+        val channel = repository.allActive().single { it.fact.contains("gaming channel") }
+
+        assertTrue(repository.forget(channel.id))
+        assertTrue(repository.allActive().any { it.entityName == "Kareem" })
+
+        assertTrue(repository.forgetMatching("Kareem"))
+        assertTrue(repository.allActive().none { it.entityName == "Kareem" })
+        assertTrue(repository.allActive().any { it.stableKey == "project:lyra" })
+    }
+
     @Test fun genericRememberQuestionMarksReturnedRowsAsActuallyRecalled() = runBlocking {
         MemoryWorkingContext.clear()
         val repository = MemoryRepository(FakeMemoryDao())
@@ -118,6 +161,27 @@ class MemoryBrainOwnershipAndContextTest {
         ) is MemoryCommand.Edit)
         assertNull(MemoryCommandParser.parse("Update my Android app"))
         assertNull(MemoryCommandParser.parse("Feature update nahi ho paya"))
+    }
+
+    @Test fun coordinatorOwnsFinalCorrectionClassificationAndQuestionsStayRecall() {
+        MemoryWorkingContext.clear()
+        MemoryWorkingContext.person("Kareem")
+        val brain = MemoryBrainCoordinator(MemoryRepository(FakeMemoryDao()))
+
+        val correction = brain.assessFinalTurn("Kareem nahi, Karim")
+        assertEquals(MemoryDecision.UPDATE, correction.decision)
+        assertEquals(BestFriendNameCorrection("Kareem", "Karim"), correction.correction)
+
+        assertEquals(MemoryDecision.RECALL, brain.assessFinalTurn("Kiska naam update nahi ho paya?").decision)
+        assertEquals(MemoryDecision.IGNORE, brain.assessFinalTurn("Feature update nahi ho paya").decision)
+        MemoryWorkingContext.clear()
+    }
+
+    @Test fun preFinalDetectionIsClassificationOnlyAndCannotPersist() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        assertTrue(brain.needsCorrectionClarification("Kareem nahi"))
+        assertTrue(repository.allActive().isEmpty())
     }
 
     @Test fun passivePrivacyControlsCanDisableAppAndContentLearningIndependently() {

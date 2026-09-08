@@ -203,6 +203,51 @@ class BehaviorMemoryLearnerTest {
         assertTrue(PassiveMemoryObserver.isActiveYouTubeVideoContext(player))
     }
 
+    @Test fun watchedTopicUsesCurrentVideoAndExcludesRecommendations() {
+        val player = activity(
+            screenType = "VIDEO",
+            elements = listOf(
+                element(SemanticRole.VIDEO, "Gemini AI Agents Tutorial"),
+                element(SemanticRole.VIDEO_CARD, "Best Chicken Curry"),
+                element(SemanticRole.LIST_ITEM, "Football Highlights"),
+                element(SemanticRole.CHANNEL_NAME, "Jonathan Gaming"),
+                element(SemanticRole.BUTTON, "Pause")
+            )
+        )
+
+        val titles = PassiveMemoryObserver.currentVideoTopicLabels(player)
+        val topics = ContentTopicExtractor.extract(titles)
+
+        assertEquals(listOf("Gemini AI Agents Tutorial"), titles)
+        assertTrue(topics.any { it.equals("AI", true) || it.contains("Gemini", true) })
+        assertFalse(topics.any { it.contains("Chicken", true) || it.contains("Football", true) })
+    }
+
+    @Test fun recommendationCardsWithoutCurrentVideoProduceNoTopicEvidence() {
+        val feed = activity(
+            screenType = "LIST",
+            elements = listOf(
+                element(SemanticRole.VIDEO_CARD, "AI Agents"),
+                element(SemanticRole.LIST_ITEM, "Android News"),
+                element(SemanticRole.CHANNEL_NAME, "Suggested Channel")
+            )
+        )
+        assertTrue(PassiveMemoryObserver.currentVideoTopicLabels(feed).isEmpty())
+    }
+
+    @Test fun channelAndTitleEvidenceRequireVerifiedActivePlayer() {
+        val player = activity(
+            screenType = "VIDEO",
+            elements = listOf(
+                element(SemanticRole.VIDEO, "Android AI Tutorial"),
+                element(SemanticRole.CHANNEL_NAME, "Creator Channel"),
+                element(SemanticRole.BUTTON, "Pause")
+            )
+        )
+        assertTrue(PassiveMemoryObserver.isActiveYouTubeVideoContext(player))
+        assertEquals(listOf("Android AI Tutorial"), PassiveMemoryObserver.currentVideoTopicLabels(player))
+    }
+
     private fun activity(screenType: String, elements: List<SemanticElement>) = CurrentActivityContext(
         packageName = "com.google.android.youtube",
         appLabel = "YouTube",

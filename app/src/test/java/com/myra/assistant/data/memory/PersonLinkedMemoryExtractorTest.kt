@@ -15,6 +15,9 @@ class PersonLinkedMemoryExtractorTest {
             facts.map { it.fact }
         )
         assertEquals("person:naufal:gaming_channel", facts.last().stableKey)
+        assertTrue(facts.all { !it.entityId.isNullOrBlank() })
+        assertEquals(1, facts.map { it.entityId }.distinct().size)
+        assertTrue(facts.all { it.entityName == "Naufal" })
         assertTrue(facts.none { it.fact.contains("sleep", true) || it.fact.contains("soye", true) })
     }
 
@@ -65,5 +68,17 @@ class PersonLinkedMemoryExtractorTest {
             listOf("Zopy's best friend is Naufal", "Naufal creates gaming videos"),
             facts.map { it.fact }
         )
+        assertEquals(1, facts.map { it.entityId }.distinct().size)
+        assertTrue(facts.all { it.entityName == "Naufal" })
+    }
+
+    @Test fun relationshipChannelAndCreatorShareOneStableIdentity() {
+        val facts = PersonLinkedMemoryExtractor.extractAll(
+            "Mera best friend Kareem hai, uska gaming channel hai aur gaming videos banata hai"
+        )
+
+        assertEquals(3, facts.size)
+        assertEquals(setOf(NaturalMemoryExtractor.stablePersonId("Kareem")), facts.map { it.entityId }.toSet())
+        assertEquals(setOf("Kareem"), facts.map { it.entityName }.toSet())
     }
 }
