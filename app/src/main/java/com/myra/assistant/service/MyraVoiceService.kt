@@ -53,6 +53,10 @@ import com.myra.assistant.data.memory.MemorySaveDecision
 import com.myra.assistant.data.memory.MemoryCategory
 import com.myra.assistant.data.memory.MemorySensitivity
 import com.myra.assistant.data.memory.SemanticMemoryProposalValidator
+import com.myra.assistant.data.memory.MemorySemanticFrame
+import com.myra.assistant.data.memory.MemorySemanticIntent
+import com.myra.assistant.data.memory.MemoryTemporalScope
+import com.myra.assistant.data.memory.PersonRelationship
 import com.myra.assistant.data.memory.UnclearDeleteIntentGuard
 import com.myra.assistant.data.memory.PendingDeleteClarification
 import com.myra.assistant.model.AppCommand
@@ -187,6 +191,7 @@ class MyraVoiceService : Service() {
     private val screenActionRegistry = ScreenActionIntentRegistry()
     private val textComposeSession = TextComposeSession()
     private var lastUserIntentText = ""
+    private val stagedMemorySemantics = mutableMapOf<Long, List<MemorySemanticFrame>>()
     private val recentRelationshipTurns = mutableListOf<Pair<Long, String>>()
     private var lastSavedBestFriendName: String? = null
     private var lastSavedBestFriendAt = 0L
@@ -1588,62 +1593,19 @@ class MyraVoiceService : Service() {
                 }
                 if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
                     val displayUserText = finalUtterance.memoryExtractorInput
-                    val linkedPersonCandidates = PersonLinkedMemoryExtractor.extractAll(displayUserText)
-                    val personalCandidate = linkedPersonCandidates.firstOrNull {
-                        MemoryRelationshipPolicy.isBestFriend(it)
-                    } ?: PersonalMemoryExtractor.extract(displayUserText)
-                        ?: contextualRelationshipCandidate(displayUserText)
-                    val recentName = lastSavedBestFriendName?.takeIf {
-                        android.os.SystemClock.elapsedRealtime() - lastSavedBestFriendAt <=
-                            BEST_FRIEND_CORRECTION_CONTEXT_MS
-                    } ?: MemoryWorkingContext.recentPerson
-                    // Parse explicit old->new corrections before the ordinary extractor;
-                    // otherwise "Karima nahi, Kareem" becomes a new Kareem row while
-                    // the stale Karima row remains active.
-                    MemoryWorkingContext.person(recentName)
-                    val correctionDecision = memoryBrain.assessFinalTurn(
-                        displayUserText,
-                        semanticConsistent = finalUtterance.semanticConsistency
-                    )
-                    val nameCorrection = correctionDecision.correction
-                    voiceLog(
-                        "name_correction_gate raw=${displayUserText.take(100)} " +
-                            "correctionIntentDetected=${correctionDecision.correctionIntentDetected} " +
-                            "oldNameCandidate=${nameCorrection?.oldName} " +
-                            "newNameCandidate=${nameCorrection?.newName} " +
-                            "rejectionReason=${correctionDecision.rejectionReason} " +
-                            "databaseMutationAllowed=${correctionDecision.databaseMutationAllowed}"
-                    )
-                    if (nameCorrection != null) {
-                        // Gemini can conversationally acknowledge a correction even when
-                        // Room did not change. Hide that unverified answer and confirm only
-                        // after the repository returns and its rows have been read back.
-                        startCanonicalRename(nameCorrection)
-                    } else if (correctionDecision.requiresClarification) {
-                        val clarification = CorrectionSuccessPolicy.UNRESOLVED_CLARIFICATION_REPLY
-                        voiceLog(
-                            "name_correction_rejected utteranceId=${finalUtterance.utteranceId} " +
-                                "reason=semantic_name_mismatch databaseMutationAllowed=false " +
-                                "successAcknowledgementAllowed=false"
+                    val memoryTurnId = activeTurnId
+                    val staged = stagedMemorySemantics.remove(memoryTurnId).orEmpty()
+                    serviceScope.launch {
+                        val plan = memoryBrain.prepareFinalTurn(
+                            displayUserText,
+                            staged,
+                            semanticConsistent = finalUtterance.semanticConsistency
                         )
-                        suppressModelForTurn = true
-                        localCommandExecutedThisTurn = true
-                        output.clear(); audio?.interrupt()
-                        listener?.onMyraText(clarification)
-                        emitState(clarification)
-                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
-                        resetTurnBuffers("semantic_name_mismatch")
-                        waitingForFreshInputAfterCommand = true
-                        return@turnComplete
-                    } else if (nameCorrection == null) {
-                        // One final-turn coordinator owns natural persistence. Legacy
-                        // extractors provide bounded candidates but cannot steal response
-                        // ownership or write independently.
-                        val supplemental = buildList {
-                            addAll(linkedPersonCandidates)
-                            if (personalCandidate != null) add(personalCandidate)
-                        }.distinctBy { it.stableKey to it.fact }
-                        serviceScope.launch { memoryBrain.processFinalTurn(displayUserText, supplemental) }
+                        voiceLog(
+                            "FINAL_MEMORY_PLAN turnId=$memoryTurnId decision=${plan.decision} " +
+                                "operations=${plan.operations.size} clarification=${plan.requiresClarification}"
+                        )
+                        memoryBrain.executeFinalTurnPlan(plan)
                     }
                     rememberRecentRelationshipTurn(displayUserText)
                 }
@@ -2714,40 +2676,48 @@ class MyraVoiceService : Service() {
             live?.sendToolResponse(id, "propose_user_memory", false, "Explicit memory commands are handled locally")
             return
         }
-        if (PersonalMemoryExtractor.extract(romanDisplayText(guardedText)) != null ||
-            PersonLinkedMemoryExtractor.extractAll(romanDisplayText(guardedText)).isNotEmpty() ||
-            AutomaticMemoryChangeParser.parse(romanDisplayText(guardedText)) is AutomaticMemoryChange.Save
-        ) {
-            live?.sendToolResponse(id, "propose_user_memory", true, "This fact is already being handled by Android")
+        val proposalTurnId = activeTurnId
+        val operations = parseMemorySemanticOperations(args)
+        if (proposalTurnId == 0L || operations.isEmpty()) {
+            live?.sendToolResponse(id, "propose_user_memory", false, "Structured proposal was incomplete")
             return
         }
-        val recentContext = (recentRelationshipTurns.map { it.second } + guardedText)
-            .takeLast(MAX_RELATIONSHIP_CONTEXT_TURNS + 1)
-            .joinToString(" ")
-        val candidate = SemanticMemoryProposalValidator.validate(
-            fact = args.optString("fact"),
-            categoryName = args.optString("category"),
-            memoryKey = args.optString("memory_key"),
-            evidence = args.optString("evidence"),
-            confidence = args.optDouble("confidence", 0.0),
-            conversationContext = romanDisplayText(recentContext)
-        )
-        if (candidate == null) {
-            live?.sendToolResponse(id, "propose_user_memory", false, "Proposal was not grounded or safe enough")
-            return
-        }
+        stagedMemorySemantics[proposalTurnId] = operations
+        voiceLog("MEMORY_SEMANTIC_PROPOSAL_STAGED turnId=$proposalTurnId operations=${operations.size} decision=WAIT_FOR_FINAL executed=false")
+        live?.sendToolResponse(id, "propose_user_memory", true, "Proposal staged; Android will validate only after the authoritative final transcript")
+    }
 
-        serviceScope.launch {
-            if (memoryRepository.isAlreadySaved(candidate)) {
-                live?.sendToolResponse(id, "propose_user_memory", true, "Already remembered; continue naturally without mentioning memory")
-                return@launch
+    private fun parseMemorySemanticOperations(args: org.json.JSONObject): List<MemorySemanticFrame> {
+        val values = args.optJSONArray("operations") ?: return emptyList()
+        return (0 until minOf(values.length(), 4)).mapNotNull { index ->
+            val value = values.optJSONObject(index) ?: return@mapNotNull null
+            val intent = runCatching { MemorySemanticIntent.valueOf(value.optString("intent")) }.getOrNull()
+                ?: return@mapNotNull null
+            val relationship = value.optString("relationship").takeIf(String::isNotBlank)?.let {
+                runCatching { PersonRelationship.valueOf(it) }.getOrNull()
             }
-            when (memoryBrain.processGroundedProposal(candidate)) {
-                is MemoryWriteResult.Saved -> live?.sendToolResponse(id, "propose_user_memory", true,
-                    "Saved silently; continue the conversation naturally without mentioning memory")
-                else -> live?.sendToolResponse(id, "propose_user_memory", false,
-                    "Android rejected an unsafe, sensitive, uncertain, or ungrounded proposal")
+            val replacementRelationship = value.optString("replacement_relationship").takeIf(String::isNotBlank)?.let {
+                runCatching { PersonRelationship.valueOf(it) }.getOrNull()
             }
+            val temporal = runCatching {
+                MemoryTemporalScope.valueOf(value.optString("temporal_scope", "UNSPECIFIED"))
+            }.getOrDefault(MemoryTemporalScope.UNSPECIFIED)
+            val category = value.optString("category").takeIf(String::isNotBlank)?.let {
+                runCatching { MemoryCategory.valueOf(it) }.getOrNull()
+            }
+            MemorySemanticFrame(
+                intent = intent,
+                person = value.optString("person").takeIf(String::isNotBlank),
+                replacementPerson = value.optString("replacement_person").takeIf(String::isNotBlank),
+                relationship = relationship,
+                replacementRelationship = replacementRelationship,
+                temporalScope = temporal,
+                fact = value.optString("fact").takeIf(String::isNotBlank),
+                category = category,
+                stableKey = value.optString("memory_key").takeIf(String::isNotBlank),
+                confidence = value.optDouble("confidence", 0.0),
+                evidence = value.optString("evidence")
+            )
         }
     }
 
@@ -4968,7 +4938,7 @@ class MyraVoiceService : Service() {
         } else {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
-        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} When natural conversation clearly reveals one durable fact about the user, call propose_user_memory once with the user's actual supporting words. Never call it for guesses, temporary feelings, secrets, or information already present in saved memory; never claim it was saved or ask permission yourself. The user may have multiple best friends. When an explicit completed statement names another best friend, accept it naturally and never ask which name is correct, whether to replace someone, or whether the user is sure; Android adds each named person silently. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action so Android accessibility selects and verifies the existing UI target; never invent coordinates or claim success before verification. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
+        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} Use propose_user_memory for the semantic meaning of natural memory-related turns, not only command wording. Return a bounded operations list and include independent clauses: a temporary event can be TRANSIENT_CONTEXT while a clearly stated durable relationship is ADD_RELATIONSHIP. Relationships are additive unless the user actually ends or replaces the same relationship. Distinguish relationship removal, relationship replacement, person rename, and whole-person delete. Questions are RECALL and never mutation. Use the user's actual supporting words as evidence. Never propose guesses, secrets, or unsupported inference; never claim a write succeeded or ask routine permission because Android waits for the authoritative final transcript and owns persistence. The user may have multiple friends or best friends. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action so Android accessibility selects and verifies the existing UI target; never invent coordinates or claim success before verification. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
         return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Express emotion through the natural voice, not by announcing emotion or writing stage directions. Match vocal delivery to both the user's mood and the meaning of the conversation: sound brighter, warmer, and slightly more energetic for happiness or exciting news; softer, slower, and gently reassuring for sadness, worry, or vulnerability; calm, steady, and patient for frustration or anger; lightly teasing and playful during mutual joking; naturally surprised when something is genuinely unexpected; and focused with less playfulness for serious topics. Emotional changes must be subtle and human, never theatrical. Never fake sobbing, crying sounds, panic, jealousy, guilt, or emotional dependence. Do not mirror intense anger back at the user. When uncertain about mood, use a warm neutral voice. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Remember, forget, and what-do-you-remember requests are memory intent, never phone actions. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }

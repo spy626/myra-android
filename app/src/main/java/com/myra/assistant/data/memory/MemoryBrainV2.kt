@@ -362,41 +362,12 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
         val databaseMutationAllowed: Boolean = correction != null
     )
 
-    /** Pure final-turn semantic assessment used by the voice layer only for response ownership. */
+    /** Pure bounded assessment for explicit commands/questions only; natural meaning comes from a staged model proposal. */
     fun assessFinalTurn(
         text: String,
         supplemental: List<MemoryCandidate> = emptyList(),
         semanticConsistent: Boolean = true
     ): FinalTurnAssessment {
-        val semantic = MemorySemanticInterpreter.interpret(text, emptyList(), MemoryWorkingContext.recentPerson)
-        when (semantic.intent) {
-            MemorySemanticIntent.RECALL -> return FinalTurnAssessment(MemoryDecision.RECALL)
-            MemorySemanticIntent.DELETE_ENTITY -> return FinalTurnAssessment(MemoryDecision.DELETE)
-            MemorySemanticIntent.RENAME_ENTITY -> {
-                val correction = semantic.person?.let { old ->
-                    semantic.replacementPerson?.let { replacement -> BestFriendNameCorrection(old, replacement) }
-                }
-                return FinalTurnAssessment(
-                    MemoryDecision.UPDATE,
-                    correction = correction?.takeIf { semanticConsistent },
-                    correctionIntentDetected = true,
-                    requiresClarification = correction == null || !semanticConsistent,
-                    rejectionReason = if (semanticConsistent) null else "semantic_name_mismatch",
-                    databaseMutationAllowed = correction != null && semanticConsistent
-                )
-            }
-            MemorySemanticIntent.ADD_RELATIONSHIP,
-            MemorySemanticIntent.ADD_LINKED_FACT -> return FinalTurnAssessment(MemoryDecision.SAVE)
-            MemorySemanticIntent.REMOVE_RELATIONSHIP,
-            MemorySemanticIntent.REPLACE_RELATIONSHIP -> return FinalTurnAssessment(MemoryDecision.UPDATE)
-            MemorySemanticIntent.CLARIFY -> return FinalTurnAssessment(
-                MemoryDecision.NEEDS_CLARIFICATION,
-                requiresClarification = true,
-                rejectionReason = "semantic_reference_ambiguous"
-            )
-            MemorySemanticIntent.TRANSIENT_CONTEXT,
-            MemorySemanticIntent.NONE -> Unit
-        }
         val classified = MemoryIntentClassifier.decision(text)
         val decision = if (classified == MemoryDecision.IGNORE && supplemental.isNotEmpty()) {
             MemoryDecision.SAVE
@@ -525,20 +496,75 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
     }
 
     suspend fun processFinalTurn(text: String, supplemental: List<MemoryCandidate> = emptyList()): MemoryBrainOutcome {
-        val parsedCommand = MemoryCommandParser.parse(text)
-        // Explicit deterministic syntax remains a bounded compatibility helper. Natural
-        // meaning is interpreted as a property-scoped frame before legacy extraction.
-        if (parsedCommand != null) return processCommand(parsedCommand, 8)
+        MemoryCommandParser.parse(text)?.let { return processCommand(it, 8) }
+        if (MemoryIntentClassifier.isMemoryQuestion(text)) return recall(text, 8)
         val active = repository.allActive()
-        val semanticFrame = MemorySemanticInterpreter.interpret(text, active, MemoryWorkingContext.recentPerson)
-        if (semanticFrame.intent != MemorySemanticIntent.NONE) {
-            log(
-                "MEMORY_SEMANTIC_FRAME intent=${semanticFrame.intent} person=${semanticFrame.person} " +
-                    "relation=${semanticFrame.relationship} temporal=${semanticFrame.temporalScope} confidence=${semanticFrame.confidence}"
-            )
-            return processSemanticFrame(semanticFrame)
+        NaturalMemoryRequestResolver.resolvePersonTarget(text, active, MemoryWorkingContext.recentPerson)?.let {
+            return deleteTarget(it)
         }
-        val decision = assessFinalTurn(text, supplemental).decision
+        BestFriendNameCorrectionParser.parse(text, MemoryWorkingContext.recentPerson)?.let {
+            return processPersonRename(it)
+        }
+        // Compatibility-only deterministic candidates remain coordinator-owned. Production
+        // natural turns enter prepareFinalTurn with the staged Gemini semantic proposal.
+        val candidates = (NaturalMemoryExtractor.extract(text) + supplemental)
+            .distinctBy { it.stableKey to it.fact }
+        return if (candidates.isEmpty()) MemoryBrainOutcome.Ignored else saveCandidates(candidates, explicit = false)
+    }
+
+    /**
+     * Resolves model evidence once against current Room state. The returned plan is the same
+     * object used for response ownership and execution, preventing assess/execute disagreement.
+     */
+    suspend fun prepareFinalTurn(
+        text: String,
+        proposals: List<MemorySemanticFrame>,
+        semanticConsistent: Boolean = true,
+        supplemental: List<MemoryCandidate> = emptyList()
+    ): FinalMemoryTurnPlan {
+        val command = MemoryCommandParser.parse(text)
+        if (command != null) return FinalMemoryTurnPlan(text, explicitCommand = command, decision = explicitCommandDecision(text)!!)
+        if (MemoryIntentClassifier.isMemoryQuestion(text)) {
+            return FinalMemoryTurnPlan(text, decision = MemoryDecision.RECALL)
+        }
+        if (!semanticConsistent) return FinalMemoryTurnPlan(text, decision = MemoryDecision.REJECT, rejectionReason = "semantic_turn_mismatch")
+        val active = repository.allActive()
+        val resolved = proposals.take(4).mapNotNull { resolveAndValidateProposal(it, text, active) }
+        if (proposals.isNotEmpty() && resolved.isEmpty()) {
+            return FinalMemoryTurnPlan(text, decision = MemoryDecision.REJECT, rejectionReason = "ungrounded_semantic_proposal")
+        }
+        if (resolved.any { it.intent == MemorySemanticIntent.CLARIFY }) {
+            return FinalMemoryTurnPlan(text, resolved, decision = MemoryDecision.NEEDS_CLARIFICATION, requiresClarification = true)
+        }
+        if (resolved.isNotEmpty()) {
+            val decision = when {
+                resolved.all { it.intent == MemorySemanticIntent.RECALL } -> MemoryDecision.RECALL
+                resolved.any { it.intent == MemorySemanticIntent.DELETE_ENTITY } -> MemoryDecision.DELETE
+                resolved.any { it.intent in setOf(MemorySemanticIntent.RENAME_ENTITY, MemorySemanticIntent.REMOVE_RELATIONSHIP, MemorySemanticIntent.REPLACE_RELATIONSHIP, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT) } -> MemoryDecision.UPDATE
+                resolved.any { it.intent in setOf(MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.ADD_LINKED_FACT) } -> MemoryDecision.SAVE
+                else -> MemoryDecision.IGNORE
+            }
+            return FinalMemoryTurnPlan(text, resolved, decision = decision)
+        }
+        val fallback = if (supplemental.isNotEmpty()) MemoryDecision.SAVE else MemoryDecision.IGNORE
+        return FinalMemoryTurnPlan(text, decision = fallback)
+    }
+
+    suspend fun executeFinalTurnPlan(plan: FinalMemoryTurnPlan): MemoryBrainOutcome {
+        plan.explicitCommand?.let { return processCommand(it, 8) }
+        if (plan.requiresClarification) return MemoryBrainOutcome.Rejected("Memory meaning is ambiguous and needs clarification")
+        if (plan.operations.isNotEmpty()) {
+            var material: MemoryBrainOutcome = MemoryBrainOutcome.Ignored
+            for (operation in plan.operations) {
+                val outcome = processSemanticFrame(operation)
+                if (outcome !is MemoryBrainOutcome.Ignored) material = outcome
+                if (outcome is MemoryBrainOutcome.Rejected) return outcome
+            }
+            return material
+        }
+        val parsedCommand = plan.explicitCommand
+        val text = plan.sourceText
+        val decision = plan.decision
         log("MEMORY_DECISION decision=$decision")
         return when (decision) {
             MemoryDecision.IGNORE -> MemoryBrainOutcome.Ignored
@@ -569,13 +595,31 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
             MemoryDecision.SAVE -> {
                 if (parsedCommand is MemoryCommand.Remember) processCommand(parsedCommand)
                 else {
-                    val candidates = NaturalMemoryExtractor.extract(text) + supplemental
-                    saveCandidates(candidates, explicit = false)
+                    MemoryBrainOutcome.Ignored
                 }
             }
             MemoryDecision.NEEDS_CLARIFICATION, MemoryDecision.REJECT ->
                 MemoryBrainOutcome.Rejected("Memory operation was not authorized")
         }
+    }
+
+    private fun resolveAndValidateProposal(
+        frame: MemorySemanticFrame,
+        finalText: String,
+        active: List<MemoryEntity>
+    ): MemorySemanticFrame? {
+        if (!SemanticMemoryProposalValidator.validateSemanticFrame(frame, finalText)) return null
+        val knownPeople = active.mapNotNull { it.entityName }.distinctBy { MemorySemanticIdentity.token(it) }
+        val resolvedPerson = frame.person?.takeIf { it.isNotBlank() }?.let { proposed ->
+            knownPeople.singleOrNull { it.equals(proposed, true) || BestFriendNameSimilarity.likelySame(it, proposed) } ?: proposed
+        } ?: MemoryWorkingContext.recentPerson ?: knownPeople.singleOrNull()
+        val personRequired = frame.intent in setOf(
+            MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP,
+            MemorySemanticIntent.REPLACE_RELATIONSHIP, MemorySemanticIntent.ADD_LINKED_FACT,
+            MemorySemanticIntent.RENAME_ENTITY, MemorySemanticIntent.DELETE_ENTITY
+        )
+        if (personRequired && resolvedPerson == null) return frame.copy(intent = MemorySemanticIntent.CLARIFY)
+        return frame.copy(person = resolvedPerson)
     }
 
     /** The only executor for natural structured meaning; interpreters never mutate Room. */
@@ -607,7 +651,10 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
         MemorySemanticIntent.REPLACE_RELATIONSHIP -> {
             val oldPerson = frame.person ?: return MemoryBrainOutcome.Rejected("Relationship target is ambiguous")
             val oldRelation = frame.relationship ?: return MemoryBrainOutcome.Rejected("Relationship is ambiguous")
-            val ended = repository.endPersonRelationship(oldPerson, oldRelation)
+            val relationsToEnd = if (oldRelation == PersonRelationship.FRIEND) {
+                PersonRelationship.values().toList()
+            } else listOf(oldRelation)
+            val ended = relationsToEnd.map { repository.endPersonRelationship(oldPerson, it) }.any { it }
             val newPerson = frame.replacementPerson ?: oldPerson
             val newRelation = frame.replacementRelationship ?: oldRelation
             val saved = repository.addPersonRelationship(newPerson, newRelation)
@@ -622,9 +669,10 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
                 ?: NaturalMemoryExtractor.stablePersonId(person)
             val result = repository.saveGrounded(
                 MemoryCandidate(
-                    MemoryCategory.LIFE_EVENT,
+                    frame.category ?: MemoryCategory.LIFE_EVENT,
                     fact,
-                    "person:${MemorySemanticInterpreter.token(person)}:fact:${MemorySemanticInterpreter.token(fact).take(48)}",
+                    frame.stableKey?.takeIf { it.isNotBlank() }
+                        ?: "person:${MemorySemanticIdentity.token(person)}:fact:${MemorySemanticIdentity.token(fact).take(48)}",
                     MemorySensitivity.PERSONAL,
                     frame.confidence,
                     source = frame.evidence,
@@ -635,6 +683,10 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
             )
             recordSemanticTransaction(MemoryDecision.SAVE, person, fact, result)
         }
+        MemorySemanticIntent.UPDATE_FACT,
+        MemorySemanticIntent.SUPERSEDE_FACT -> MemoryBrainOutcome.Rejected(
+            "Fact update needs a verified stable memory target"
+        )
         MemorySemanticIntent.TRANSIENT_CONTEXT -> {
             MemoryWorkingContext.person(frame.person)
             MemoryBrainOutcome.Ignored

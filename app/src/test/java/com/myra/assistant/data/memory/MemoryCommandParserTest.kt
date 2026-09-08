@@ -119,10 +119,7 @@ class MemoryCommandParserTest {
 
     @Test fun endedRelationshipIsNotParsedAsWholePersonForget() {
         assertEquals(null, MemoryCommandParser.parse("Kareem mera friend nahi hai"))
-        assertEquals(
-            MemorySemanticIntent.REMOVE_RELATIONSHIP,
-            MemorySemanticInterpreter.interpret("Kareem mera friend nahi hai", emptyList(), null).intent
-        )
+        assertNull(MemoryCommandParser.parse("Kareem mera friend nahi hai"))
     }
 
     @Test fun acceptsCommonAsrDeleteWording() {

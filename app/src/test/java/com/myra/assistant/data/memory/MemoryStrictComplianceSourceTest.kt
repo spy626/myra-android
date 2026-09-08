@@ -22,12 +22,18 @@ class MemoryStrictComplianceSourceTest {
         assertFalse(source.contains("BestFriendNameCorrectionParser.analyze("))
         assertFalse(source.contains("BestFriendNameCorrectionParser.validateNewName("))
         assertFalse(source.contains("ClarifiedPersonNameResolver.resolve("))
-        assertTrue(source.contains("memoryBrain.assessFinalTurn("))
+        assertFalse(source.contains("memoryBrain.assessFinalTurn("))
+        assertTrue(source.contains("memoryBrain.prepareFinalTurn("))
+        assertTrue(source.contains("memoryBrain.executeFinalTurnPlan("))
+        assertTrue(source.contains("MEMORY_SEMANTIC_PROPOSAL_STAGED"))
         assertFalse(source.contains("memoryBrain.processPersonRename("))
         assertTrue(source.contains("memoryBrain.processStructuredCorrection("))
         assertFalse(source.contains("memoryRepository.saveGrounded("))
         assertFalse(source.contains("memoryRepository.forgetMatching("))
         assertFalse(source.contains("memoryRepository.renamePerson("))
+        val userProposalHandler = source.substringAfter("private fun handleSemanticMemoryProposal")
+            .substringBefore("private fun handlePendingConfirmation")
+        assertFalse(userProposalHandler.contains("processGroundedProposal("))
     }
 
     @Test fun semanticInterpretersCannotOwnPersistence() {
@@ -41,6 +47,7 @@ class MemoryStrictComplianceSourceTest {
         ).readText()
         assertFalse(semantic.contains("MemoryRepository"))
         assertFalse(semantic.contains("MemoryDao"))
+        assertFalse(semantic.contains("Regex("))
         assertFalse(commandParser.contains("MemoryRepository"))
         assertFalse(commandParser.contains("MemoryDao"))
     }

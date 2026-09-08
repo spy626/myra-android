@@ -149,7 +149,7 @@ class MemoryRepository(private val dao: MemoryDao) {
             val profile = MemoryCandidate(
                 MemoryCategory.PERSON,
                 "$canonicalName is a person known to Zopy",
-                "person:${MemorySemanticInterpreter.token(canonicalName)}:identity",
+                "person:${MemorySemanticIdentity.token(canonicalName)}:identity",
                 MemorySensitivity.PERSONAL,
                 .96,
                 source = "semantic_relationship",
@@ -169,7 +169,7 @@ class MemoryRepository(private val dao: MemoryDao) {
             MemoryCandidate(
                 MemoryCategory.PERSON,
                 factOverride ?: "$canonicalName is Zopy's $label",
-                "person:${MemorySemanticInterpreter.token(canonicalName)}:relationship:${relationship.key}",
+                "person:${MemorySemanticIdentity.token(canonicalName)}:relationship:${relationship.key}",
                 MemorySensitivity.PERSONAL,
                 .97,
                 source = "semantic_relationship",
@@ -193,7 +193,7 @@ class MemoryRepository(private val dao: MemoryDao) {
                 MemoryCandidate(
                     MemoryCategory.PERSON,
                     "$displayName is a person known to Zopy",
-                    "person:${MemorySemanticInterpreter.token(displayName)}:identity",
+                    "person:${MemorySemanticIdentity.token(displayName)}:identity",
                     MemorySensitivity.PERSONAL,
                     .96,
                     source = "semantic_relationship",
@@ -327,18 +327,23 @@ class MemoryRepository(private val dao: MemoryDao) {
         val canonicalRows = mutableListOf<Pair<MemoryEntity, MemoryCandidate>>()
         for (memory in dao.activeAll().filter(MemoryRelationshipPolicy::isBestFriend)) {
             val name = MemoryRelationshipPolicy.personName(memory.fact) ?: continue
-            val candidate = canonicalizeAgainstExistingBestFriends(
-                MemoryCandidate(
+            val rawCandidate = MemoryCandidate(
                     category = MemoryCategory.PERSON,
                     fact = "Zopy's best friend is $name",
-                    stableKey = MemoryRelationshipPolicy.BEST_FRIEND_KEY,
+                    stableKey = "${MemoryRelationshipPolicy.BEST_FRIEND_KEY}:${PersonLinkedMemoryIdentity.stableToken(name)}",
                     sensitivity = MemorySensitivity.valueOf(memory.sensitivity),
                     confidence = memory.confidence,
                     source = memory.source,
+                    provenance = runCatching { MemoryProvenance.valueOf(memory.provenance) }.getOrDefault(MemoryProvenance.LEGACY),
                     entityId = memory.entityId ?: NaturalMemoryExtractor.stablePersonId(name),
                     entityName = memory.entityName ?: name
                 )
-            )
+            // A verified correction is canonical identity authority. Reconciliation may
+            // normalize legacy/noisy rows, but must never send verified spelling back
+            // through the ASR alias canonicalizer.
+            val candidate = if (rawCandidate.provenance == MemoryProvenance.VERIFIED_MEMORY_CORRECTION) {
+                rawCandidate
+            } else canonicalizeAgainstExistingBestFriends(rawCandidate)
             canonicalRows += memory to candidate
         }
         canonicalRows.groupBy { it.second.stableKey }.values.forEach { samePerson ->

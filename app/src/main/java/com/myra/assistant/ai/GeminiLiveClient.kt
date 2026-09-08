@@ -175,10 +175,29 @@ class GeminiLiveClient(
 
     private fun memoryProposalDeclaration() = JSONObject()
         .put("name", "propose_user_memory")
-        .put("description", "Propose one durable fact clearly stated by the user in natural conversation. Never use for guesses, temporary moods, secrets, explicit remember/forget commands, or facts already supplied in saved memory. Android validates and decides whether confirmation is required. Do not verbally mention saving after calling.")
+        .put("description", "Propose structured semantic meaning from the user's completed natural memory-related turn. Include every independent proposition, including transient clauses, in operations. Distinguish relationship changes from person rename/delete. Questions are RECALL. This is evidence only: Android waits for the authoritative final transcript, validates context/safety, and owns all persistence.")
         .put("parameters", JSONObject()
             .put("type", "OBJECT")
             .put("properties", JSONObject()
+                .put("operations", JSONObject().put("type", "ARRAY").put("maxItems", 4).put("items", JSONObject()
+                    .put("type", "OBJECT")
+                    .put("properties", JSONObject()
+                        .put("intent", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                            "ADD_RELATIONSHIP", "REMOVE_RELATIONSHIP", "REPLACE_RELATIONSHIP",
+                            "ADD_LINKED_FACT", "UPDATE_FACT", "SUPERSEDE_FACT", "RENAME_ENTITY",
+                            "DELETE_ENTITY", "RECALL", "TRANSIENT_CONTEXT", "CLARIFY", "NONE"
+                        ))))
+                        .put("person", JSONObject().put("type", "STRING"))
+                        .put("replacement_person", JSONObject().put("type", "STRING"))
+                        .put("relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
+                        .put("replacement_relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
+                        .put("temporal_scope", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("CURRENT", "HISTORICAL", "TEMPORARY", "RECURRING", "UNSPECIFIED"))))
+                        .put("fact", JSONObject().put("type", "STRING"))
+                        .put("category", JSONObject().put("type", "STRING"))
+                        .put("memory_key", JSONObject().put("type", "STRING"))
+                        .put("evidence", JSONObject().put("type", "STRING"))
+                        .put("confidence", JSONObject().put("type", "NUMBER")))
+                    .put("required", JSONArray(listOf("intent", "evidence", "confidence")))))
                 .put("fact", JSONObject().put("type", "STRING").put("description", "Concise third-person fact about Zopy."))
                 .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "IDENTITY", "PREFERENCE", "PERSON", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
@@ -187,7 +206,7 @@ class GeminiLiveClient(
                 .put("memory_key", JSONObject().put("type", "STRING").put("description", "Stable lowercase subject key such as best_friend, age, movie_genre, or current_project."))
                 .put("evidence", JSONObject().put("type", "STRING").put("description", "The supporting words the user actually said."))
                 .put("confidence", JSONObject().put("type", "NUMBER")))
-            .put("required", JSONArray(listOf("fact", "category", "memory_key", "evidence", "confidence"))))
+            .put("required", JSONArray().put("operations")))
 
     private fun memoryQueryDeclaration() = JSONObject()
         .put("name", "query_user_memory")

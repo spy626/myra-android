@@ -53,6 +53,28 @@ object SemanticMemoryProposalValidator {
         val positive: Boolean
     )
 
+    /** Validates model-proposed meaning against the authoritative final transcript. */
+    fun validateSemanticFrame(frame: MemorySemanticFrame, finalTranscript: String): Boolean {
+        if (frame.confidence !in 0.78..1.0) return false
+        if (frame.intent == MemorySemanticIntent.NONE) return false
+        val transcript = finalTranscript.trim()
+        if (transcript.isBlank() || prohibited.containsMatchIn(transcript)) return false
+        if (MemoryIntentClassifier.isMemoryQuestion(transcript) && frame.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY)) {
+            return false
+        }
+        val evidence = frame.evidence.trim()
+        if (evidence.isBlank() || evidence.trimEnd().endsWith('?')) return false
+        val transcriptTokens = meaningfulTokens(semanticNormalize(transcript))
+        val evidenceTokens = meaningfulTokens(semanticNormalize(evidence))
+        if (evidenceTokens.isEmpty()) return false
+        val grounding = evidenceTokens.count(transcriptTokens::contains).toDouble() / evidenceTokens.size
+        if (grounding < 0.65) return false
+        if (frame.intent == MemorySemanticIntent.RENAME_ENTITY && frame.replacementPerson.isNullOrBlank()) return false
+        if (frame.intent in setOf(MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP, MemorySemanticIntent.REPLACE_RELATIONSHIP) && frame.relationship == null) return false
+        if (frame.intent == MemorySemanticIntent.ADD_LINKED_FACT && frame.fact.isNullOrBlank()) return false
+        return true
+    }
+
     fun validate(
         fact: String,
         categoryName: String,

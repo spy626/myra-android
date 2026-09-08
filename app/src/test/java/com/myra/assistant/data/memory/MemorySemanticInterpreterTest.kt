@@ -1,166 +1,131 @@
 package com.myra.assistant.data.memory
 
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.*
 import org.junit.Test
 
 class MemorySemanticInterpreterTest {
-    @Test fun relationshipChangeRenameAndDeleteAreDifferentProperties() {
-        assertEquals(
-            MemorySemanticIntent.REPLACE_RELATIONSHIP,
-            frame("Ab mera dost Kareem nahi hai, Naufal hai").intent
+    @Test fun modelStructuredOperationsRemainDistinctAndCoordinatorOwned() = runBlocking {
+        val brain = MemoryBrainCoordinator(MemoryRepository(FakeMemoryDao()))
+        val meanings = listOf(
+            frame(MemorySemanticIntent.REPLACE_RELATIONSHIP, "Ari", "relationship changed", PersonRelationship.FRIEND, replacement = "Bea"),
+            frame(MemorySemanticIntent.RENAME_ENTITY, "Ari", "name corrected", replacement = "Bea"),
+            frame(MemorySemanticIntent.DELETE_ENTITY, "Ari", "forget Ari")
         )
-        assertEquals(
-            MemorySemanticIntent.RENAME_ENTITY,
-            frame("Kareem ka naam actually Naufal hai").intent
-        )
-        assertEquals(
-            MemorySemanticIntent.DELETE_ENTITY,
-            frame("Kareem ko meri memory se hata do").intent
-        )
+        assertEquals(listOf(MemorySemanticIntent.REPLACE_RELATIONSHIP, MemorySemanticIntent.RENAME_ENTITY, MemorySemanticIntent.DELETE_ENTITY), meanings.map { it.intent })
+        assertTrue(brain.prepareFinalTurn("relationship changed", listOf(meanings[0])).operations.single().intent == MemorySemanticIntent.REPLACE_RELATIONSHIP)
     }
 
-    @Test fun currentAdditiveAndHistoricalRelationshipsHaveDistinctFrames() {
-        val additive = listOf(
-            "Naufal mera dost hai",
-            "Naufal bhi mera dost hai",
-            "Jonathan is my friend",
-            "I consider Rumaisa a close friend"
-        ).map(::frame)
-        assertTrue(additive.all { it.intent == MemorySemanticIntent.ADD_RELATIONSHIP })
-        assertEquals(PersonRelationship.GOOD_FRIEND, additive.last().relationship)
-        assertEquals(MemorySemanticIntent.REMOVE_RELATIONSHIP, frame("Jonathan is not my friend anymore").intent)
-        val historical = frame("Pehle Ayesha mera dost tha")
-        assertEquals(MemorySemanticIntent.ADD_LINKED_FACT, historical.intent)
-        assertEquals(MemoryTemporalScope.HISTORICAL, historical.temporalScope)
-    }
-
-    @Test fun temporaryContactAndOrdinaryNegationDoNotInventRelationshipChanges() {
-        assertEquals(MemorySemanticIntent.TRANSIENT_CONTEXT, frame("Aaj Naufal ke saath game khela").intent)
-        assertEquals(MemorySemanticIntent.NONE, frame("Kareem se aaj baat nahi hui").intent)
-        assertEquals(MemorySemanticIntent.NONE, frame("Kareem ne mujhe call nahi kiya").intent)
-    }
-
-    @Test fun temporaryEventWithExplicitRelationshipKeepsOnlyStatedDurableMeaning() {
-        val result = frame("Aaj main Naufal ke saath game khel ke aaya hun, woh mera bohot accha dost hai")
-        assertEquals(MemorySemanticIntent.ADD_RELATIONSHIP, result.intent)
-        assertEquals("Naufal", result.person)
-        assertEquals(PersonRelationship.GOOD_FRIEND, result.relationship)
-    }
-
-    @Test fun questionsAlwaysResolveReadOnly() {
-        listOf(
-            "Mera dost kaun hai?",
-            "Mere dost kaun kaun hain?",
-            "Kya Kareem mera dost hai?",
-            "Kareem ab bhi mera dost hai kya?",
-            "Kiska naam update nahi ho paya?"
-        ).forEach { assertEquals(it, MemorySemanticIntent.RECALL, frame(it).intent) }
-    }
-
-    @Test fun contextualPronounUsesUniqueRecentPersonAndOtherwiseClarifies() {
-        val known = entity("Naufal", "person-naufal")
-        assertEquals("Naufal", MemorySemanticInterpreter.interpret("Woh gaming videos banata hai", listOf(known), "Naufal").person)
-        val ambiguous = MemorySemanticInterpreter.interpret(
-            "Woh gaming videos banata hai",
-            listOf(known, entity("Kareem", "person-kareem")),
-            null
-        )
-        assertEquals(MemorySemanticIntent.CLARIFY, ambiguous.intent)
-    }
-
-    @Test fun multipleFriendsCoexistAndRelationshipRemovalKeepsPerson() = runBlocking {
+    @Test fun compoundTurnPersistsRelationshipButKeepsTemporaryEventTransient() = runBlocking {
         MemoryWorkingContext.clear()
         val repository = MemoryRepository(FakeMemoryDao())
+        repository.addPersonRelationship("Ari", PersonRelationship.FRIEND)
         val brain = MemoryBrainCoordinator(repository)
-        assertTrue(brain.processFinalTurn("Mera dost Kareem hai") is MemoryBrainOutcome.Mutated)
-        assertTrue(brain.processFinalTurn("Naufal bhi mera dost hai") is MemoryBrainOutcome.Mutated)
-
-        val before = repository.allActive()
-        val kareemId = before.first { it.entityName == "Kareem" }.entityId
-        val naufalId = before.first { it.entityName == "Naufal" }.entityId
-        assertNotEquals(kareemId, naufalId)
-        assertTrue(before.any { it.entityName == "Kareem" && it.fact.contains("friend") })
-        assertTrue(before.any { it.entityName == "Naufal" && it.fact.contains("friend") })
-
-        assertTrue(brain.processFinalTurn("Ab Kareem mera dost nahi hai") is MemoryBrainOutcome.Mutated)
-        val after = repository.allActive()
-        assertTrue(after.any { it.entityName == "Kareem" && it.stableKey.endsWith(":identity") })
-        assertFalse(after.any { it.entityName == "Kareem" && it.fact.contains("Zopy's friend") })
-        assertTrue(after.any { it.entityName == "Naufal" && it.fact.contains("friend") })
-        MemoryWorkingContext.clear()
-    }
-
-    @Test fun relationshipReplacementDoesNotRenameOrDeleteOldEntity() = runBlocking {
-        MemoryWorkingContext.clear()
-        val repository = MemoryRepository(FakeMemoryDao())
-        val brain = MemoryBrainCoordinator(repository)
-        brain.processFinalTurn("Mera dost Kareem hai")
-        val oldId = repository.allActive().first { it.entityName == "Kareem" }.entityId
-
-        val result = brain.processFinalTurn("Ab mera dost Kareem nahi hai, Naufal hai")
-
-        assertTrue(result is MemoryBrainOutcome.Mutated)
+        val text = "played today and Bea is a good friend"
+        val plan = brain.prepareFinalTurn(text, listOf(
+            frame(MemorySemanticIntent.TRANSIENT_CONTEXT, "Bea", "played today", fact = "played today", temporal = MemoryTemporalScope.TEMPORARY),
+            frame(MemorySemanticIntent.ADD_RELATIONSHIP, "Bea", "Bea good friend", PersonRelationship.GOOD_FRIEND)
+        ))
+        assertEquals(2, plan.operations.size)
+        assertTrue(brain.executeFinalTurnPlan(plan) is MemoryBrainOutcome.Mutated)
         val active = repository.allActive()
-        assertTrue(active.any { it.entityName == "Kareem" && it.entityId == oldId })
-        assertFalse(active.any { it.entityName == "Kareem" && it.fact.contains("Zopy's friend") })
-        assertTrue(active.any { it.entityName == "Naufal" && it.fact.contains("friend") })
-        MemoryWorkingContext.clear()
+        assertTrue(active.any { it.entityName == "Ari" && it.fact.contains("friend") })
+        assertTrue(active.any { it.entityName == "Bea" && it.fact.contains("good friend") })
+        assertFalse(active.any { it.fact.contains("played today") })
     }
 
-    @Test fun relationshipDowngradePreservesEntityAndAddsNormalFriend() = runBlocking {
-        MemoryWorkingContext.clear()
+    @Test fun friendFamilyRemovalEndsSubtypesButKeepsPersonIdentity() = runBlocking {
         val repository = MemoryRepository(FakeMemoryDao())
-        repository.addPersonRelationship("Jonathan", PersonRelationship.BEST_FRIEND)
-        val entityId = repository.allActive().first { it.entityName == "Jonathan" }.entityId
+        repository.addPersonRelationship("Ari", PersonRelationship.GOOD_FRIEND)
         val brain = MemoryBrainCoordinator(repository)
+        val plan = brain.prepareFinalTurn("Ari friendship ended", listOf(
+            frame(MemorySemanticIntent.REMOVE_RELATIONSHIP, "Ari", "Ari friendship ended", PersonRelationship.FRIEND)
+        ))
+        brain.executeFinalTurnPlan(plan)
+        assertTrue(repository.allActive().any { it.entityName == "Ari" && it.stableKey.endsWith(":identity") })
+        assertFalse(repository.allActive().any { it.entityName == "Ari" && it.stableKey.contains(":relationship:") })
+    }
 
-        val result = brain.processFinalTurn("Jonathan ab best friend nahi, bas normal dost hai")
+    @Test fun relationshipReplacementUsesSameFriendHierarchyAndDoesNotRename() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        repository.addPersonRelationship("Ari", PersonRelationship.GOOD_FRIEND)
+        val oldId = repository.allActive().first().entityId
+        val brain = MemoryBrainCoordinator(repository)
+        val plan = brain.prepareFinalTurn("Ari friendship replaced by Bea", listOf(
+            frame(MemorySemanticIntent.REPLACE_RELATIONSHIP, "Ari", "Ari friendship replaced by Bea", PersonRelationship.FRIEND, replacement = "Bea")
+        ))
+        brain.executeFinalTurnPlan(plan)
+        val active = repository.allActive()
+        assertTrue(active.any { it.entityName == "Ari" && it.entityId == oldId })
+        assertFalse(active.any { it.entityName == "Ari" && it.stableKey.contains(":relationship:") })
+        assertTrue(active.any { it.entityName == "Bea" && it.fact.contains("friend") })
+    }
 
-        assertTrue(result is MemoryBrainOutcome.Mutated)
-        val active = repository.allActive().filter { it.entityName == "Jonathan" }
-        assertTrue(active.all { it.entityId == entityId })
+    @Test fun downgradeEndsOnlyBestFriendAndKeepsNormalFriend() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        repository.addPersonRelationship("Ari", PersonRelationship.BEST_FRIEND)
+        val id = repository.allActive().first().entityId
+        val brain = MemoryBrainCoordinator(repository)
+        val plan = brain.prepareFinalTurn("Ari is now a normal friend", listOf(
+            frame(MemorySemanticIntent.REPLACE_RELATIONSHIP, "Ari", "Ari now normal friend", PersonRelationship.BEST_FRIEND, replacementRelation = PersonRelationship.FRIEND)
+        ))
+        brain.executeFinalTurnPlan(plan)
+        val active = repository.allActive().filter { it.entityName == "Ari" }
+        assertEquals(setOf(id), active.map { it.entityId }.toSet())
         assertFalse(active.any { it.fact.contains("best friend") })
         assertTrue(active.any { it.fact.contains("Zopy's friend") })
-        MemoryWorkingContext.clear()
     }
 
-    @Test fun clearActualNameCorrectionPreservesEntityId() = runBlocking {
+    @Test fun uniqueDurablePersonResolvesPronounButAmbiguousPeopleClarify() = runBlocking {
         MemoryWorkingContext.clear()
         val repository = MemoryRepository(FakeMemoryDao())
+        repository.addPersonRelationship("Ari", PersonRelationship.FRIEND)
         val brain = MemoryBrainCoordinator(repository)
-        brain.processFinalTurn("Mera dost Kareem hai")
-        brain.processFinalTurn("Woh gaming videos banata hai")
-        val entityId = repository.allActive().first { it.entityName == "Kareem" }.entityId
-
-        val result = brain.processFinalTurn("Kareem ka naam actually Naufal hai")
-
-        assertTrue(result is MemoryBrainOutcome.Mutated)
-        val active = repository.allActive().filter { it.entityName == "Naufal" }
-        assertTrue(active.isNotEmpty())
-        assertTrue(active.all { it.entityId == entityId })
-        assertFalse(repository.allActive().any { it.entityName == "Kareem" })
-        MemoryWorkingContext.clear()
+        val proposal = frame(MemorySemanticIntent.ADD_LINKED_FACT, evidence = "makes gaming videos", fact = "Ari makes gaming videos")
+        assertEquals("Ari", brain.prepareFinalTurn("makes gaming videos", listOf(proposal)).operations.single().person)
+        repository.addPersonRelationship("Bea", PersonRelationship.FRIEND)
+        val ambiguous = brain.prepareFinalTurn("makes gaming videos", listOf(proposal.copy(person = null)))
+        assertTrue(ambiguous.requiresClarification)
     }
 
-    private fun frame(text: String) = MemorySemanticInterpreter.interpret(text, emptyList(), null)
+    @Test fun verifiedRenameSurvivesRepeatedReconciliationAndNewFactsReuseIdentity() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        repository.addPersonRelationship("Kareem", PersonRelationship.BEST_FRIEND)
+        val originalId = repository.allActive().first().entityId
+        assertTrue(repository.renamePerson("Kareem", "Karim"))
+        repeat(3) { repository.reconcileUniqueRelationships() }
+        val after = repository.allActive()
+        assertTrue(after.all { it.entityName == "Karim" })
+        assertEquals(setOf(originalId), after.map { it.entityId }.toSet())
+        val brain = MemoryBrainCoordinator(repository)
+        val plan = brain.prepareFinalTurn("Karim creates videos", listOf(
+            frame(MemorySemanticIntent.ADD_LINKED_FACT, "Karim", "Karim creates videos", fact = "Karim creates videos")
+        ))
+        brain.executeFinalTurnPlan(plan)
+        assertEquals(setOf(originalId), repository.allActive().map { it.entityId }.toSet())
+        assertFalse(repository.allActive().any { it.entityName == "Kareem" })
+    }
 
-    private fun entity(name: String, entityId: String) = MemoryEntity(
-        id = entityId,
-        stableKey = "person:${name.lowercase()}:identity",
-        category = MemoryCategory.PERSON.name,
-        fact = "$name is a person known to Zopy",
-        normalizedFact = name.lowercase(),
-        sensitivity = MemorySensitivity.PERSONAL.name,
-        confidence = .95,
-        source = "test",
-        createdAt = 1,
-        updatedAt = 1,
-        lastConfirmedAt = 1,
-        entityId = entityId,
-        entityName = name
-    )
+    @Test fun questionSafetyOverridesMutatingModelProposal() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        val plan = brain.prepareFinalTurn("Which friends do you remember?", listOf(
+            frame(MemorySemanticIntent.DELETE_ENTITY, "Ari", "friends remember")
+        ))
+        assertEquals(MemoryDecision.RECALL, plan.decision)
+        brain.executeFinalTurnPlan(plan)
+        assertTrue(repository.allActive().isEmpty())
+    }
+
+    private fun frame(
+        intent: MemorySemanticIntent,
+        person: String? = null,
+        evidence: String,
+        relationship: PersonRelationship? = null,
+        replacement: String? = null,
+        replacementRelation: PersonRelationship? = null,
+        fact: String? = null,
+        temporal: MemoryTemporalScope = MemoryTemporalScope.CURRENT
+    ) = MemorySemanticFrame(intent, person, replacement, relationship, replacementRelation, temporal,
+        fact, confidence = .96, evidence = evidence)
 }
