@@ -23,6 +23,25 @@ class MemoryStrictComplianceSourceTest {
         assertFalse(source.contains("BestFriendNameCorrectionParser.validateNewName("))
         assertFalse(source.contains("ClarifiedPersonNameResolver.resolve("))
         assertTrue(source.contains("memoryBrain.assessFinalTurn("))
-        assertTrue(source.contains("memoryBrain.processPersonRename("))
+        assertFalse(source.contains("memoryBrain.processPersonRename("))
+        assertTrue(source.contains("memoryBrain.processStructuredCorrection("))
+        assertFalse(source.contains("memoryRepository.saveGrounded("))
+        assertFalse(source.contains("memoryRepository.forgetMatching("))
+        assertFalse(source.contains("memoryRepository.renamePerson("))
+    }
+
+    @Test fun semanticInterpretersCannotOwnPersistence() {
+        val semantic = File(
+            sourceRoot,
+            "java/com/myra/assistant/data/memory/MemorySemanticInterpreter.kt"
+        ).readText()
+        val commandParser = File(
+            sourceRoot,
+            "java/com/myra/assistant/data/memory/MemoryCommandParser.kt"
+        ).readText()
+        assertFalse(semantic.contains("MemoryRepository"))
+        assertFalse(semantic.contains("MemoryDao"))
+        assertFalse(commandParser.contains("MemoryRepository"))
+        assertFalse(commandParser.contains("MemoryDao"))
     }
 }

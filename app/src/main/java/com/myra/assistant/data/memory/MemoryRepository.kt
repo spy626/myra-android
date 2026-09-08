@@ -133,6 +133,91 @@ class MemoryRepository(private val dao: MemoryDao) {
         }
     }
 
+    /** Adds one property-scoped relationship. Other people with the same relation coexist. */
+    suspend fun addPersonRelationship(
+        personName: String,
+        relationship: PersonRelationship,
+        factOverride: String? = null
+    ): MemoryWriteResult {
+        val canonicalName = personName.trim()
+        val existingRows = dao.activeAll().filter {
+            it.entityId != null && PersonLinkedMemoryIdentity.belongsTo(it, listOf(canonicalName))
+        }
+        val entityId = existingRows.mapNotNull { it.entityId }.distinct().singleOrNull()
+            ?: NaturalMemoryExtractor.stablePersonId(canonicalName)
+        if (existingRows.none { it.stableKey.endsWith(":profile") }) {
+            val profile = MemoryCandidate(
+                MemoryCategory.PERSON,
+                "$canonicalName is a person known to Zopy",
+                "person:${MemorySemanticInterpreter.token(canonicalName)}:profile",
+                MemorySensitivity.PERSONAL,
+                .96,
+                source = "semantic_relationship",
+                provenance = MemoryProvenance.USER_DIRECT_STATEMENT,
+                entityId = entityId,
+                entityName = canonicalName
+            )
+            val profileResult = saveGrounded(profile)
+            if (profileResult is MemoryWriteResult.Rejected) return profileResult
+        }
+        val label = when (relationship) {
+            PersonRelationship.FRIEND -> "friend"
+            PersonRelationship.GOOD_FRIEND -> "good friend"
+            PersonRelationship.BEST_FRIEND -> "best friend"
+        }
+        return saveGrounded(
+            MemoryCandidate(
+                MemoryCategory.PERSON,
+                factOverride ?: "$canonicalName is Zopy's $label",
+                "person:${MemorySemanticInterpreter.token(canonicalName)}:relationship:${relationship.key}",
+                MemorySensitivity.PERSONAL,
+                .97,
+                source = "semantic_relationship",
+                provenance = MemoryProvenance.USER_DIRECT_STATEMENT,
+                entityId = entityId,
+                entityName = canonicalName
+            )
+        )
+    }
+
+    /** Ends only the named relationship; the person identity and unrelated facts remain. */
+    suspend fun endPersonRelationship(personName: String, relationship: PersonRelationship): Boolean {
+        val active = dao.activeAll()
+        val personRows = active.filter { PersonLinkedMemoryIdentity.belongsTo(it, listOf(personName)) }
+        if (personRows.isEmpty()) return false
+        val entityId = personRows.mapNotNull { it.entityId }.distinct().singleOrNull()
+            ?: NaturalMemoryExtractor.stablePersonId(personName)
+        if (personRows.none { it.stableKey.endsWith(":profile") }) {
+            val displayName = personRows.firstNotNullOfOrNull { it.entityName } ?: personName
+            saveGrounded(
+                MemoryCandidate(
+                    MemoryCategory.PERSON,
+                    "$displayName is a person known to Zopy",
+                    "person:${MemorySemanticInterpreter.token(displayName)}:profile",
+                    MemorySensitivity.PERSONAL,
+                    .96,
+                    source = "semantic_relationship",
+                    provenance = MemoryProvenance.USER_DIRECT_STATEMENT,
+                    entityId = entityId,
+                    entityName = displayName
+                )
+            )
+        }
+        val relationRows = personRows.filter { row ->
+            row.stableKey.endsWith(":relationship:${relationship.key}") || when (relationship) {
+                PersonRelationship.BEST_FRIEND -> MemoryRelationshipPolicy.isBestFriend(row)
+                PersonRelationship.GOOD_FRIEND -> row.fact.contains("good friend", true)
+                PersonRelationship.FRIEND ->
+                    (row.fact.contains("friend", true) || row.fact.contains("dost", true)) &&
+                        !row.fact.contains("best friend", true) && !row.fact.contains("good friend", true)
+            }
+        }
+        val now = System.currentTimeMillis()
+        val changed = relationRows.sumOf { dao.deactivate(it.id, now) } > 0
+        if (changed) MemorySessionIndex.invalidate()
+        return changed
+    }
+
     /** Reuses an existing stable entity identity instead of minting one ID per producer. */
     private suspend fun resolveExistingPersonIdentity(candidate: MemoryCandidate): MemoryCandidate {
         val name = candidate.entityName?.trim()?.takeIf { it.isNotEmpty() } ?: return candidate

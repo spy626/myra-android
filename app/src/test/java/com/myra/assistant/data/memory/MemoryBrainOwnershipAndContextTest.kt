@@ -76,7 +76,7 @@ class MemoryBrainOwnershipAndContextTest {
             .forEach { repository.saveGrounded(it) }
         val entityId = repository.allActive().first { it.category == MemoryCategory.PERSON.name }.entityId
 
-        val outcome = brain.processPersonRename(BestFriendNameCorrection("Kareem", "Karim"))
+        val outcome = brain.processFinalTurn("Kareem ka naam actually Karim hai")
 
         assertTrue(outcome is MemoryBrainOutcome.Mutated)
         assertTrue((outcome as MemoryBrainOutcome.Mutated).result is MemoryWriteResult.Saved)

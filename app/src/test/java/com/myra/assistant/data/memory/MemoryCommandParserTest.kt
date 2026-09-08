@@ -104,8 +104,7 @@ class MemoryCommandParserTest {
             "Ayesha ko delete kar do",
             "Kareem ko meri memory se hata do",
             "Kareem ko memory se delete kar do",
-            "Kareem ko memory se delete karo",
-            "Kareem mera friend nahi hai ye bhool jao"
+            "Kareem ko memory se delete karo"
         ).forEach { phrase ->
             assertTrue(phrase, MemoryCommandParser.looksLikeIntent(phrase))
             val command = MemoryCommandParser.parse(phrase) as MemoryCommand.Forget
@@ -116,6 +115,14 @@ class MemoryCommandParserTest {
             }
             assertEquals(expected, command.query)
         }
+    }
+
+    @Test fun endedRelationshipIsNotParsedAsWholePersonForget() {
+        assertEquals(null, MemoryCommandParser.parse("Kareem mera friend nahi hai"))
+        assertEquals(
+            MemorySemanticIntent.REMOVE_RELATIONSHIP,
+            MemorySemanticInterpreter.interpret("Kareem mera friend nahi hai", emptyList(), null).intent
+        )
     }
 
     @Test fun acceptsCommonAsrDeleteWording() {

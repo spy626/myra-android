@@ -37,8 +37,7 @@ object MemoryCommandParser {
     private val relationshipForget = listOf(
         Regex("^(?:delete|remove)\\s+(?:karo|kar\\s+do)\\s+([\\p{L}][\\p{L}'-]{1,30})\\s+ko$", RegexOption.IGNORE_CASE),
         Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+ko\\s+(?:delete|remove)\\s+(?:karo|kar\\s+do|kero)$", RegexOption.IGNORE_CASE),
-        Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+ko\\s+(?:meri\\s+)?memory\\s+se\\s+(?:hata\\s+do|hatao|delete\\s+(?:kar\\s+do|karo|kero)|remove\\s+(?:kar\\s+do|karo|kero))$", RegexOption.IGNORE_CASE),
-        Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+mera\\s+(?:best\\s+)?(?:friend|frend|dost)\\s+nahi\\s+hai(?:,?\\s*(?:ye|yeh)\\s+bhool\\s+jao)?$", RegexOption.IGNORE_CASE)
+        Regex("^([\\p{L}][\\p{L}'-]{1,30})\\s+ko\\s+(?:meri\\s+)?memory\\s+se\\s+(?:hata\\s+do|hatao|delete\\s+(?:kar\\s+do|karo|kero)|remove\\s+(?:kar\\s+do|karo|kero))$", RegexOption.IGNORE_CASE)
     )
     private val naturalForget = Regex(
         "^(.{2,120}?)\\s+(?:ko\\s+)?(?:meri\\s+)?memor(?:y|ies)(?:\\s+se)?\\s+(?:hata\\s+do|hatao|delete\\s+(?:kar\\s+do|karo|kero)|remove\\s+(?:kar\\s+do|karo|kero))$",
