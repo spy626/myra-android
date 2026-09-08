@@ -441,18 +441,18 @@ class MemoryRepository(private val dao: MemoryDao) {
         }
         val identityRows = (bestFriendRows + BestFriendDeleteMatcher.findAll(canonicalName, memories))
             .distinctBy { it.id }
-        val replacement = MemoryRelationshipPolicy.canonicalizeAdditional(
-            MemoryCandidate(
-                category = MemoryCategory.PERSON,
-                fact = "Zopy's best friend is $canonicalName",
-                stableKey = MemoryRelationshipPolicy.BEST_FRIEND_KEY,
-                sensitivity = MemorySensitivity.valueOf(old.sensitivity),
-                confidence = old.confidence,
-                source = old.source,
-                provenance = MemoryProvenance.VERIFIED_MEMORY_CORRECTION,
-                entityId = old.entityId ?: NaturalMemoryExtractor.stablePersonId(oldName),
-                entityName = canonicalName
-            )
+        // A verified correction is the canonical spelling authority. Do not pass it
+        // through the ASR alias canonicalizer again (Karim must not become Kareem).
+        val replacement = MemoryCandidate(
+            category = MemoryCategory.PERSON,
+            fact = "Zopy's best friend is $canonicalName",
+            stableKey = "${MemoryRelationshipPolicy.BEST_FRIEND_KEY}:${PersonLinkedMemoryIdentity.stableToken(canonicalName)}",
+            sensitivity = MemorySensitivity.valueOf(old.sensitivity),
+            confidence = old.confidence,
+            source = old.source,
+            provenance = MemoryProvenance.VERIFIED_MEMORY_CORRECTION,
+            entityId = old.entityId ?: NaturalMemoryExtractor.stablePersonId(oldName),
+            entityName = canonicalName
         )
         val now = System.currentTimeMillis()
         val saved = persist(replacement, replaceBestFriends = false) as? MemoryWriteResult.Saved
