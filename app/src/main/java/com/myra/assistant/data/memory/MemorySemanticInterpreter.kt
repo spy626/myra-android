@@ -94,7 +94,7 @@ object MemorySemanticInterpreter {
         RegexOption.IGNORE_CASE
     )
     private val temporaryTogether = Regex(
-        "^(?:aaj|today)\\s+(?:main|i)\\s+$name\\s+(?:ke\\s+saath|with)\\s+(.+)$",
+        "^(?:aaj|today)\\s+(?:(?:main|i)\\s+)?$name\\s+(?:ke\\s+saath|with)\\s+(.+)$",
         RegexOption.IGNORE_CASE
     )
     private val contextualFriend = Regex(

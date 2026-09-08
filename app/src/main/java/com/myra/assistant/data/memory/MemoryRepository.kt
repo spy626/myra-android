@@ -145,11 +145,11 @@ class MemoryRepository(private val dao: MemoryDao) {
         }
         val entityId = existingRows.mapNotNull { it.entityId }.distinct().singleOrNull()
             ?: NaturalMemoryExtractor.stablePersonId(canonicalName)
-        if (existingRows.none { it.stableKey.endsWith(":profile") }) {
+        if (existingRows.none { it.stableKey.endsWith(":identity") }) {
             val profile = MemoryCandidate(
                 MemoryCategory.PERSON,
                 "$canonicalName is a person known to Zopy",
-                "person:${MemorySemanticInterpreter.token(canonicalName)}:profile",
+                "person:${MemorySemanticInterpreter.token(canonicalName)}:identity",
                 MemorySensitivity.PERSONAL,
                 .96,
                 source = "semantic_relationship",
@@ -187,13 +187,13 @@ class MemoryRepository(private val dao: MemoryDao) {
         if (personRows.isEmpty()) return false
         val entityId = personRows.mapNotNull { it.entityId }.distinct().singleOrNull()
             ?: NaturalMemoryExtractor.stablePersonId(personName)
-        if (personRows.none { it.stableKey.endsWith(":profile") }) {
+        if (personRows.none { it.stableKey.endsWith(":identity") }) {
             val displayName = personRows.firstNotNullOfOrNull { it.entityName } ?: personName
             saveGrounded(
                 MemoryCandidate(
                     MemoryCategory.PERSON,
                     "$displayName is a person known to Zopy",
-                    "person:${MemorySemanticInterpreter.token(displayName)}:profile",
+                    "person:${MemorySemanticInterpreter.token(displayName)}:identity",
                     MemorySensitivity.PERSONAL,
                     .96,
                     source = "semantic_relationship",

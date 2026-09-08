@@ -88,7 +88,7 @@ class MemorySemanticInterpreterTest {
 
         assertTrue(brain.processFinalTurn("Ab Kareem mera dost nahi hai") is MemoryBrainOutcome.Mutated)
         val after = repository.allActive()
-        assertTrue(after.any { it.entityName == "Kareem" && it.stableKey.endsWith(":profile") })
+        assertTrue(after.any { it.entityName == "Kareem" && it.stableKey.endsWith(":identity") })
         assertFalse(after.any { it.entityName == "Kareem" && it.fact.contains("Zopy's friend") })
         assertTrue(after.any { it.entityName == "Naufal" && it.fact.contains("friend") })
         MemoryWorkingContext.clear()
@@ -150,7 +150,7 @@ class MemorySemanticInterpreterTest {
 
     private fun entity(name: String, entityId: String) = MemoryEntity(
         id = entityId,
-        stableKey = "person:${name.lowercase()}:profile",
+        stableKey = "person:${name.lowercase()}:identity",
         category = MemoryCategory.PERSON.name,
         fact = "$name is a person known to Zopy",
         normalizedFact = name.lowercase(),
