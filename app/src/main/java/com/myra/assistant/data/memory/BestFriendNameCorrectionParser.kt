@@ -74,7 +74,16 @@ object BestFriendNameCorrectionParser {
         val validation = validateNewName(intent.newName)
         if (validation != null) return rejected(intent, oldName, validation)
 
-        val newName = BestFriendNameCanonicalizer.canonicalize(intent.newName.trim())
+        // A verified correction is the authority for canonical spelling. Preserve a
+        // clear corrected token such as Karim instead of folding it back to Kareem.
+        // Multi-token ASR aliases such as "now fal" may still use the established
+        // phonetic canonicalizer.
+        val corrected = intent.newName.trim().replace(Regex("\\s+"), " ")
+        val exactCorrected = corrected.split(' ').joinToString(" ") { word ->
+            word.lowercase(Locale.ROOT).replaceFirstChar { it.uppercase() }
+        }
+        val phonetic = BestFriendNameCanonicalizer.canonicalize(corrected)
+        val newName = if (corrected.contains(' ') && !phonetic.contains(' ')) phonetic else exactCorrected
         val canonicalOld = BestFriendNameCanonicalizer.canonicalize(oldName)
         if (newName.equals(canonicalOld, ignoreCase = true)) {
             return rejected(intent, canonicalOld, "old_and_new_names_are_identical", newName)
@@ -103,8 +112,8 @@ object BestFriendNameCorrectionParser {
     fun needsClearCorrectedName(raw: String): Boolean {
         val intent = detectIntent(clean(raw)) ?: return false
         val old = intent.oldName ?: return false
-        return BestFriendNameCanonicalizer.canonicalize(old)
-            .equals(BestFriendNameCanonicalizer.canonicalize(intent.newName), ignoreCase = true)
+        return old.trim().replace(Regex("\\s+"), " ")
+            .equals(intent.newName.trim().replace(Regex("\\s+"), " "), ignoreCase = true)
     }
 
     /** Keeps the database target when ASR heard both sides as the same name. */

@@ -180,7 +180,7 @@ class MemoryBrainOwnershipAndContextTest {
     @Test fun preFinalDetectionIsClassificationOnlyAndCannotPersist() = runBlocking {
         val repository = MemoryRepository(FakeMemoryDao())
         val brain = MemoryBrainCoordinator(repository)
-        assertTrue(brain.needsCorrectionClarification("Kareem nahi"))
+        assertEquals(MemoryDecision.SAVE, brain.explicitCommandDecision("Yaad rakho mujhe astronomy pasand hai"))
         assertTrue(repository.allActive().isEmpty())
     }
 

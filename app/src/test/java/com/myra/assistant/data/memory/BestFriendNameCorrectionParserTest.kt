@@ -38,6 +38,14 @@ class BestFriendNameCorrectionParserTest {
         )
     }
 
+    @Test fun explicitCorrectedSpellingIsNotFoldedBackToOldAlias() {
+        assertEquals(
+            BestFriendNameCorrection("Kareem", "Karim"),
+            BestFriendNameCorrectionParser.parse("Kareem nahi, Karim", "Kareem")
+        )
+        assertEquals(false, BestFriendNameCorrectionParser.needsClearCorrectedName("Kareem nahi, Karim"))
+    }
+
     @Test fun shortObservedNaufalCorrectionIsAcceptedButNewPersonIsNot() {
         assertNull(BestFriendNameCorrectionParser.parse("Nauphala", "Now Pal"))
         assertNull(BestFriendNameCorrectionParser.parse("Ayesha", "Karima"))
