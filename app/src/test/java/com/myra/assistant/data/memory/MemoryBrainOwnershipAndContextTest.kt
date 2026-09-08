@@ -107,7 +107,9 @@ class MemoryBrainOwnershipAndContextTest {
         assertEquals(3, active.size)
         assertEquals(setOf(entityId), active.map { it.entityId }.toSet())
         assertTrue(active.all { it.entityName == "Karim" && it.fact.contains("Karim") })
-        assertTrue(repository.relevant("Kareem", 10).isEmpty())
+        val oldAliasRecall = repository.relevant("Kareem", 10)
+        assertTrue(oldAliasRecall.none { it.entityName.equals("Kareem", true) })
+        assertTrue(oldAliasRecall.all { it.entityId == entityId && it.entityName == "Karim" })
         assertEquals(3, repository.relevant("Karim", 10).size)
         MemoryWorkingContext.clear()
     }
