@@ -47,7 +47,8 @@ class MemoryStrictComplianceSourceTest {
         ).readText()
         assertFalse(semantic.contains("MemoryRepository"))
         assertFalse(semantic.contains("MemoryDao"))
-        assertFalse(semantic.contains("Regex("))
+        assertFalse(semantic.contains("matchEntire("))
+        assertFalse(semantic.contains("containsMatchIn("))
         assertFalse(commandParser.contains("MemoryRepository"))
         assertFalse(commandParser.contains("MemoryDao"))
     }
