@@ -71,8 +71,23 @@ object SemanticMemoryProposalValidator {
         if (grounding < 0.65) return false
         if (frame.intent == MemorySemanticIntent.RENAME_ENTITY && frame.replacementPerson.isNullOrBlank()) return false
         if (frame.intent in setOf(MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP, MemorySemanticIntent.REPLACE_RELATIONSHIP) && frame.relationship == null) return false
-        if (frame.intent == MemorySemanticIntent.ADD_LINKED_FACT && frame.fact.isNullOrBlank()) return false
+        if (frame.intent in setOf(MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.ADD_LINKED_FACT, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT) && frame.fact.isNullOrBlank()) return false
         return true
+    }
+
+    fun validateGenericFrame(frame: MemorySemanticFrame, finalTranscript: String): MemoryCandidate? {
+        if (frame.intent !in setOf(MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT)) return null
+        val category = frame.category?.takeIf { it in GENERIC_DURABLE_CATEGORIES } ?: return null
+        val key = frame.stableKey?.trim()?.takeIf(String::isNotBlank) ?: return null
+        return validate(
+            fact = frame.fact.orEmpty(),
+            categoryName = category.name,
+            memoryKey = key,
+            evidence = frame.evidence,
+            confidence = frame.confidence,
+            conversationContext = finalTranscript,
+            allowTemporalCorrection = frame.intent != MemorySemanticIntent.ADD_FACT
+        )
     }
 
     fun validate(
@@ -81,7 +96,8 @@ object SemanticMemoryProposalValidator {
         memoryKey: String,
         evidence: String,
         confidence: Double,
-        conversationContext: String
+        conversationContext: String,
+        allowTemporalCorrection: Boolean = false
     ): MemoryCandidate? {
         val cleanFact = fact.trim().replace(Regex("\\s+"), " ")
         val cleanEvidence = evidence.trim().replace(Regex("\\s+"), " ")
@@ -93,7 +109,7 @@ object SemanticMemoryProposalValidator {
             !safeKey.matches(key) || confidence < 0.78 ||
             prohibited.containsMatchIn(cleanFact) || prohibited.containsMatchIn(cleanEvidence) ||
             malformedFact.containsMatchIn(cleanFact) ||
-            uncertain.containsMatchIn(cleanEvidence) || temporary.containsMatchIn(cleanEvidence) ||
+            uncertain.containsMatchIn(cleanEvidence) || (!allowTemporalCorrection && temporary.containsMatchIn(cleanEvidence)) ||
             cleanEvidence.trimEnd().endsWith('?')
         ) return null
 
@@ -287,5 +303,11 @@ object SemanticMemoryProposalValidator {
         MemoryCategory.WORKFLOW,
         MemoryCategory.APP_USAGE,
         MemoryCategory.SOLUTION
+    )
+    private val GENERIC_DURABLE_CATEGORIES = setOf(
+        MemoryCategory.IDENTITY, MemoryCategory.PREFERENCE, MemoryCategory.PROJECT,
+        MemoryCategory.GOAL, MemoryCategory.HABIT, MemoryCategory.LIFE_EVENT,
+        MemoryCategory.COMMUNICATION_STYLE, MemoryCategory.WORKFLOW,
+        MemoryCategory.APP_USAGE, MemoryCategory.SOLUTION
     )
 }

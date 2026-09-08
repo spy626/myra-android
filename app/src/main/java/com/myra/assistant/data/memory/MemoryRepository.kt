@@ -5,6 +5,10 @@ import java.util.Locale
 import java.util.UUID
 
 class MemoryRepository(private val dao: MemoryDao) {
+    suspend fun activeByStableKey(stableKey: String): MemoryEntity? =
+        dao.findByStableKey(stableKey)?.takeIf { it.active }
+
+    suspend fun activeById(id: String): MemoryEntity? = dao.findById(id)?.takeIf { it.active }
     /** Full local source of truth for Memory Core. Recall remains bounded after local ranking. */
     suspend fun allActive(limit: Int = Int.MAX_VALUE): List<MemoryEntity> {
         reconcilePreferenceDimensions()
