@@ -1,0 +1,181 @@
+name: Finalize Memory Brain V2
+
+on:
+  push:
+    branches:
+      - agent/myra-phase-1
+    paths:
+      - '.github/workflows/memory-v2-finalize.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/myra-phase-1
+          fetch-depth: 0
+
+      - name: Materialize reviewed Memory Brain files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          blob_to_file() {
+            local sha="$1"
+            local path="$2"
+            mkdir -p "$(dirname "$path")"
+            gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${sha}" --jq '.content' | tr -d '\n' | base64 -d > "$path"
+          }
+          blob_to_file 080342f79ff8ef8cfc1712140c2d38d9a04851ff app/src/main/java/com/myra/assistant/data/memory/MemoryCommandParser.kt
+          blob_to_file adbdb52eb2e1ca4a104aeee31f58d8fdf1d257eb app/src/main/java/com/myra/assistant/data/memory/MemoryPrivacyPreferences.kt
+          blob_to_file 1b7063d158a9ec1a9487fe1c2b71048dd47548c1 app/src/main/java/com/myra/assistant/data/memory/BehaviorMemoryLearner.kt
+          blob_to_file f4fd862fae0e6c70829bef6dd33c32eec7db3fc2 app/src/main/java/com/myra/assistant/data/memory/MemoryBrainV2.kt
+          blob_to_file 8a1264e2486fac0b57765da0d1543990ab8c5891 app/src/main/java/com/myra/assistant/ui/settings/MemorySettingsActivity.kt
+          blob_to_file 50ead188f6ead33faca6b71c4c797e2b22b047d3 app/src/main/res/layout/activity_memory_settings.xml
+          blob_to_file 6d1e8b339885bcaaf8bb5d04c1a22f314b32ed14 app/src/main/java/com/myra/assistant/data/memory/MemoryCommandReplyFormatter.kt
+          blob_to_file d90e409ac42bcdfa251a43cbe8c7ff2bb29a5b37 app/src/test/java/com/myra/assistant/data/memory/MemoryBrainOwnershipAndContextTest.kt
+
+      - name: Retire pre-final memory command ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt')
+          s = path.read_text()
+
+          def one(old: str, new: str, label: str):
+              global s
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              s = s.replace(old, new, 1)
+
+          one(
+          '''    private var pendingMemoryCommand: MemoryCommand? = null\n''',
+          '',
+          'pending memory command field'
+          )
+
+          one(
+          '''    private val memoryCommandRunnable = Runnable {\n        val command = pendingMemoryCommand\n        pendingMemoryCommand = null\n        if (command != null && !localCommandExecutedThisTurn) {\n            val spoken = commandProbe.toString().trim()\n            if (spoken.isNotBlank() && !commandUserTextEmitted) {\n                commitFinalUserMessage(spoken, "MEMORY_COMMAND_RUNNABLE")\n                commandUserTextEmitted = true\n            }\n            handleMemoryCommand(command)\n        }\n    }\n''',
+          '',
+          'pre-final memory runnable'
+          )
+
+          one(
+          '''                if (MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {\n                    suppressModelForTurn = true\n                    output.clear()\n                    audio?.interrupt()\n                    MemoryCommandParser.parse(romanMemoryTranscript)?.let { memoryCommand ->\n                        pendingMemoryCommand = memoryCommand\n                        mainHandler.removeCallbacks(memoryCommandRunnable)\n                        mainHandler.postDelayed(memoryCommandRunnable, MEMORY_COMMAND_PAUSE_MS)\n                    }\n                }\n''',
+          '''                if (MemoryCommandParser.looksLikeIntent(romanMemoryTranscript)) {\n                    // Memory-looking partial speech may reserve response ownership, but it\n                    // can never execute or persist. The authoritative final turn owns the\n                    // actual recall/mutation decision.\n                    suppressModelForTurn = true\n                    output.clear()\n                    audio?.interrupt()\n                    voiceLog("memory_intent_held_for_final turnId=$activeTurnId decision=WAIT_FOR_FINAL executed=false")\n                }\n''',
+          'partial memory scheduling block'
+          )
+
+          one(
+          '''                mainHandler.removeCallbacks(memoryCommandRunnable)\n                pendingMemoryCommand = null\n''',
+          '',
+          'turn-complete runnable cleanup'
+          )
+
+          one(
+          '''    private fun learnSafePreferenceFromCompletedTurn(userText: String) {\n        val romanUserText = romanDisplayText(userText)\n        val change = AutomaticMemoryChangeParser.parse(romanUserText) ?: return\n        serviceScope.launch {\n            // Automatic learning stays silent. Only explicit remember/forget\n            // commands produce a confirmation in the conversation.\n            when (change) {\n                is AutomaticMemoryChange.Save -> memoryRepository.save(change.candidate)\n                is AutomaticMemoryChange.Forget -> memoryRepository.forgetStableKey(change.stableKey)\n            }\n        }\n    }\n\n''',
+          '',
+          'legacy automatic preference mutation path'
+          )
+
+          old_handle = '''    private fun handleMemoryCommand(command: MemoryCommand) {\n        // Stop any ordinary model audio queued before the final transcript became a\n        // deterministic memory command. The local memory reply must be the only voice.\n        cancelSpeechForNewAction()\n        suppressModelForTurn = true\n        localCommandExecutedThisTurn = true\n        output.clear()\n        serviceScope.launch {\n            val rememberResult = if (command is MemoryCommand.Remember) {\n                memoryBrain.processGroundedProposal(command.candidate.copy(\n                    provenance = com.myra.assistant.data.memory.MemoryProvenance.USER_EXPLICIT_MEMORY_COMMAND\n                ))\n            } else null\n            val response = when (command) {\n                is MemoryCommand.Remember -> when (rememberResult) {\n                    is MemoryWriteResult.Saved -> MemoryCommandReplyFormatter.rememberSaved()\n                    is MemoryWriteResult.Rejected -> MemoryCommandReplyFormatter.rememberRejected()\n                    MemoryWriteResult.NeedsPermission, null -> MemoryCommandReplyFormatter.rememberRejected()\n                }\n                is MemoryCommand.Read -> {\n                    // Recall must not race a correction write from the previous turn.\n                    pendingCanonicalRename?.join()\n                    memoryRepository.logActiveBestFriends("before_recall query=${command.query}")\n                    val memories = memoryRepository.relevant(command.query, 5)\n                    PersonalMemoryRecallFormatter.format(memories.map { it.fact })\n                }\n                is MemoryCommand.Forget -> {\n                    MemoryCommandReplyFormatter.forgotten(\n                        memoryRepository.forgetMatching(command.query)\n                    )\n                }\n            }\n            mainHandler.post {\n                listener?.onMyraText(response)\n                emitState(response)\n                queueLocalSpeech(\n                    response,\n                    allowUntranscribedAudio = true,\n                    validationPolicy = LocalSpeechValidationPolicy.MEMORY\n                )\n            }\n        }\n    }\n'''
+
+          new_handle = '''    private fun handleMemoryCommand(command: MemoryCommand) {\n        // This is called only from a completed typed/final user turn. MemoryBrainCoordinator\n        // owns every Room recall/mutation; this service only owns response arbitration.\n        cancelSpeechForNewAction()\n        suppressModelForTurn = true\n        localCommandExecutedThisTurn = true\n        output.clear()\n        serviceScope.launch {\n            if (command is MemoryCommand.Read) pendingCanonicalRename?.join()\n            val outcome = memoryBrain.processCommand(command, 5)\n            val response = when (command) {\n                is MemoryCommand.Remember -> {\n                    val result = (outcome as? MemoryBrainOutcome.Mutated)?.result\n                    if (result is MemoryWriteResult.Saved) MemoryCommandReplyFormatter.rememberSaved()\n                    else MemoryCommandReplyFormatter.rememberRejected()\n                }\n                is MemoryCommand.Read -> when (outcome) {\n                    is MemoryBrainOutcome.Recalled -> outcome.workingAnswer\n                        ?: PersonalMemoryRecallFormatter.format(outcome.rows.map { it.fact })\n                    is MemoryBrainOutcome.Rejected -> outcome.reason\n                    else -> PersonalMemoryRecallFormatter.format(emptyList())\n                }\n                is MemoryCommand.Forget -> MemoryCommandReplyFormatter.forgotten(\n                    (outcome as? MemoryBrainOutcome.Deleted)?.succeeded == true\n                )\n                is MemoryCommand.Edit -> when {\n                    (outcome as? MemoryBrainOutcome.Mutated)?.result is MemoryWriteResult.Saved ->\n                        MemoryCommandReplyFormatter.editSaved()\n                    outcome is MemoryBrainOutcome.Rejected && outcome.reason.contains("ambiguous", true) ->\n                        "Kaunsi memory update karni hai? Pehle us memory ko recall ya clearly name karo."\n                    else -> MemoryCommandReplyFormatter.editRejected()\n                }\n            }\n            mainHandler.post {\n                listener?.onMyraText(response)\n                emitState(response)\n                queueLocalSpeech(\n                    response,\n                    allowUntranscribedAudio = true,\n                    validationPolicy = LocalSpeechValidationPolicy.MEMORY\n                )\n            }\n        }\n    }\n'''
+          one(old_handle, new_handle, 'memory command handler')
+
+          one(
+          '''                    val rows = memoryRepository.relevant(query, 8)\n                    val payload = org.json.JSONArray().apply {\n''',
+          '''                    val rows = memoryBrain.recall(query, 8).rows\n                    val payload = org.json.JSONArray().apply {\n''',
+          'read-only Gemini memory query'
+          )
+
+          one(
+          '''            val renamed = memoryRepository.renameBestFriend(correction.oldName, correction.newName)\n''',
+          '''            val renameOutcome = memoryBrain.processPersonRename(correction)\n            val renamed = (renameOutcome as? MemoryBrainOutcome.Mutated)?.result is MemoryWriteResult.Saved\n''',
+          'person rename owner'
+          )
+
+          one(
+          '''    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); mainHandler.removeCallbacks(memoryCommandRunnable); pendingMemoryCommand = null; pendingDeleteClarificationUntil = 0L; recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }\n''',
+          '''    private fun stopSession() { isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); pendingDeleteClarificationUntil = 0L; recentRelationshipTurns.clear(); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }\n''',
+          'session cleanup'
+          )
+
+          one('        private const val MEMORY_COMMAND_PAUSE_MS = 450L\n', '', 'memory pause constant')
+          one('        private const val PERSONAL_MEMORY_PAUSE_MS = 450L\n', '', 'legacy personal memory pause constant')
+          one('        private const val PERSONAL_MEMORY_CONFIRMATION_MS = 30_000L\n', '', 'legacy personal memory confirmation constant')
+
+          forbidden = [
+              'pendingMemoryCommand',
+              'memoryCommandRunnable',
+              'MEMORY_COMMAND_PAUSE_MS',
+              'PERSONAL_MEMORY_PAUSE_MS',
+              'PERSONAL_MEMORY_CONFIRMATION_MS',
+              'learnSafePreferenceFromCompletedTurn(',
+              'memoryRepository.forgetMatching(command.query)',
+              'memoryRepository.renameBestFriend(correction.oldName, correction.newName)',
+              'MEMORY_COMMAND_RUNNABLE'
+          ]
+          for token in forbidden:
+              if token in s:
+                  raise SystemExit(f'obsolete memory ownership still present: {token}')
+
+          required = [
+              'memory_intent_held_for_final',
+              'memoryBrain.processCommand(command, 5)',
+              'memoryBrain.processPersonRename(correction)',
+              'memoryBrain.recall(query, 8).rows'
+          ]
+          for token in required:
+              if token not in s:
+                  raise SystemExit(f'expected unified memory ownership missing: {token}')
+
+          path.write_text(s)
+          PY
+
+      - name: Verify memory-only diff shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --name-only
+          test "$(git diff --name-only | grep -Ev '^(app/src/main/java/com/myra/assistant/data/memory/|app/src/main/java/com/myra/assistant/ui/settings/MemorySettingsActivity.kt$|app/src/main/res/layout/activity_memory_settings.xml$|app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt$|app/src/test/java/com/myra/assistant/data/memory/)' | wc -l)" -eq 0
+          ! grep -q 'memoryCommandRunnable' app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt
+          ! grep -q 'pendingMemoryCommand' app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Unit tests and debug APK
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
+
+      - name: Commit verified Memory Brain V2
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'LYRA Memory Finalizer'
+          git config user.email 'actions@github.com'
+          git rm .github/workflows/memory-v2-finalize.yml
+          git add app/src/main/java/com/myra/assistant/data/memory \
+                  app/src/main/java/com/myra/assistant/ui/settings/MemorySettingsActivity.kt \
+                  app/src/main/res/layout/activity_memory_settings.xml \
+                  app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt \
+                  app/src/test/java/com/myra/assistant/data/memory/MemoryBrainOwnershipAndContextTest.kt
+          git diff --cached --check
+          git commit -m 'Finalize unified human-context Memory Brain V2'
+          git push origin HEAD:agent/myra-phase-1
