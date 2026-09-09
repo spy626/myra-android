@@ -3,7 +3,7 @@ package com.myra.assistant.data.memory
 object PersonalMemoryRecallFormatter {
     fun formatRows(rows: List<MemoryEntity>, type: MemoryRecallType): String {
         if (type == MemoryRecallType.FRIENDS || type == MemoryRecallType.BEST_FRIEND) {
-            val names = rows.mapNotNull { it.entityName ?: MemoryRelationshipPolicy.personName(it.fact) }
+            val names = rows.mapNotNull { it.entityName }
                 .distinctBy { it.lowercase() }
             if (names.isEmpty()) return if (type == MemoryRecallType.BEST_FRIEND) {
                 "Abhi koi saved best-friend memory nahi hai."

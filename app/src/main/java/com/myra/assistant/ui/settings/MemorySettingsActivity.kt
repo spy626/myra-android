@@ -22,7 +22,8 @@ import com.myra.assistant.data.memory.MemoryCategory
 import com.myra.assistant.data.memory.MemoryCoreManualActions
 import com.myra.assistant.data.memory.MemoryEntity
 import com.myra.assistant.data.memory.MemoryPrivacyPreferences
-import com.myra.assistant.data.memory.MemoryRepository
+import com.myra.assistant.data.memory.RoomAiriMemoryStore
+import com.myra.assistant.data.memory.MemoryBrainCoordinator
 import com.myra.assistant.data.memory.MemoryWriteResult
 import com.myra.assistant.databinding.ActivityMemorySettingsBinding
 import kotlinx.coroutines.launch
@@ -32,7 +33,8 @@ import java.util.Date
 /** User-controlled view of the same Room memory store used by LYRA voice. */
 class MemorySettingsActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMemorySettingsBinding
-    private val repository by lazy { MemoryRepository(LyraMemoryDatabase.get(this).memoryDao()) }
+    private val store by lazy { RoomAiriMemoryStore(LyraMemoryDatabase.get(this)) }
+    private val memoryOwner by lazy { MemoryBrainCoordinator(store) }
     private val privacyPreferences by lazy { MemoryPrivacyPreferences(this) }
     private var activeFilter = "ALL"
 
@@ -65,7 +67,7 @@ class MemorySettingsActivity : AppCompatActivity() {
 
     private fun refreshMemories() {
         lifecycleScope.launch {
-            val memories = repository.allActive().filterNot(::isInfrastructureAnchor).filter(::matchesFilter)
+            val memories = store.activeCards().filter(::matchesFilter)
             binding.memoryList.removeAllViews()
             binding.emptyText.visibility = if (memories.isEmpty()) View.VISIBLE else View.GONE
             binding.deleteAllButton.isEnabled = memories.isNotEmpty()
@@ -76,7 +78,7 @@ class MemorySettingsActivity : AppCompatActivity() {
     private fun setupFilters() {
         listOf(
             "ALL", "PEOPLE", "RELATIONSHIPS", "PREFERENCES", "PROJECTS", "GOALS",
-            "HABITS", "EPISODES", "WORKFLOWS", "SOLUTIONS", "BEHAVIOR"
+            "HABITS", "EPISODES", "IDEAS", "WORKFLOWS", "SOLUTIONS", "BEHAVIOR"
         ).forEach { filter ->
             binding.memoryFilters.addView(Button(this).apply {
                 text = filter
@@ -89,22 +91,18 @@ class MemorySettingsActivity : AppCompatActivity() {
     private fun matchesFilter(memory: MemoryEntity): Boolean = when (activeFilter) {
         "ALL" -> true
         "PEOPLE" -> memory.category == MemoryCategory.PERSON.name
-        "RELATIONSHIPS" -> memory.stableKey.contains(":relationship:")
+        "RELATIONSHIPS" -> memory.kind == "RELATIONSHIP"
         "PREFERENCES" -> memory.category in setOf(MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name)
         "PROJECTS" -> memory.category == MemoryCategory.PROJECT.name
         "GOALS" -> memory.category == MemoryCategory.GOAL.name
         "HABITS" -> memory.category == MemoryCategory.HABIT.name
-        "EPISODES" -> memory.observationMetadata?.contains("kind=EPISODIC") == true
+        "EPISODES" -> memory.kind == "EPISODE"
+        "IDEAS" -> memory.category == MemoryCategory.IDEA.name
         "WORKFLOWS" -> memory.category == MemoryCategory.WORKFLOW.name
         "SOLUTIONS" -> memory.category == MemoryCategory.SOLUTION.name
-        "BEHAVIOR" -> memory.provenance == com.myra.assistant.data.memory.MemoryProvenance.BEHAVIOR_PATTERN.name
+        "BEHAVIOR" -> memory.kind == "BEHAVIOR"
         else -> memory.category == activeFilter
     }
-
-    private fun isInfrastructureAnchor(memory: MemoryEntity): Boolean =
-        memory.stableKey.endsWith(":identity") &&
-            memory.observationMetadata.isNullOrBlank() &&
-            !memory.stableKey.contains(":relationship:")
 
     /**
      * Compact Memory Core row: left category icon box + category/fact/recalled content.
@@ -172,7 +170,7 @@ class MemorySettingsActivity : AppCompatActivity() {
         MemoryCategory.IDENTITY.name -> android.R.drawable.ic_menu_info_details
         MemoryCategory.PERSON.name -> android.R.drawable.ic_menu_myplaces
         MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name -> android.R.drawable.btn_star
-        MemoryCategory.PROJECT.name, MemoryCategory.WORKFLOW.name, MemoryCategory.SOLUTION.name -> android.R.drawable.ic_menu_agenda
+        MemoryCategory.PROJECT.name, MemoryCategory.IDEA.name, MemoryCategory.WORKFLOW.name, MemoryCategory.SOLUTION.name -> android.R.drawable.ic_menu_agenda
         MemoryCategory.GOAL.name -> android.R.drawable.ic_menu_compass
         MemoryCategory.HABIT.name -> android.R.drawable.ic_menu_recent_history
         MemoryCategory.LIFE_EVENT.name -> android.R.drawable.ic_menu_mapmode
@@ -201,7 +199,7 @@ class MemorySettingsActivity : AppCompatActivity() {
     }
 
     private fun showPersonRename(memory: MemoryEntity) {
-        val oldName = memory.entityName ?: com.myra.assistant.data.memory.MemoryRelationshipPolicy.personName(memory.fact)
+        val oldName = memory.entityName
         if (oldName.isNullOrBlank()) {
             Toast.makeText(this, "This linked identity cannot be edited safely here", Toast.LENGTH_LONG).show()
             return
@@ -213,7 +211,7 @@ class MemorySettingsActivity : AppCompatActivity() {
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 lifecycleScope.launch {
-                    val renamed = repository.renamePerson(oldName, input.text.toString())
+                    val renamed = memory.entityId?.let { store.renamePerson(it, input.text.toString(), System.currentTimeMillis()) } == true
                     if (renamed) { dialog.dismiss(); refreshMemories() }
                     else Toast.makeText(this@MemorySettingsActivity, "Rename was not verified", Toast.LENGTH_LONG).show()
                 }
@@ -268,11 +266,8 @@ class MemorySettingsActivity : AppCompatActivity() {
                 val fact = input.text.toString()
                 val category = categories[spinner.selectedItemPosition]
                 lifecycleScope.launch {
-                    val result = if (existing == null) {
-                        MemoryCoreManualActions.add(repository, fact, category)
-                    } else {
-                        MemoryCoreManualActions.edit(repository, existing, fact, category)
-                    }
+                    val result = if (existing == null) MemoryCoreManualActions.add(memoryOwner, fact, category)
+                    else com.myra.assistant.data.memory.MemoryWriteResult.Rejected("Delete and add the corrected structured memory.")
                     when (result) {
                         is MemoryWriteResult.Saved -> {
                             dialog.dismiss()
@@ -303,7 +298,7 @@ class MemorySettingsActivity : AppCompatActivity() {
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
                 lifecycleScope.launch {
-                    val deleted = repository.forgetFromSettings(memory)
+                    val deleted = store.forgetCard(memory)
                     Toast.makeText(
                         this@MemorySettingsActivity,
                         if (deleted) "Memory deleted" else "Memory was already removed",
@@ -322,7 +317,7 @@ class MemorySettingsActivity : AppCompatActivity() {
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete all") { _, _ ->
                 lifecycleScope.launch {
-                    repository.clearAll()
+                    store.clearAll()
                     Toast.makeText(this@MemorySettingsActivity, "All memories deleted", Toast.LENGTH_SHORT).show()
                     refreshMemories()
                 }

@@ -33,16 +33,13 @@ data class MemorySemanticFrame(
     val criticalLiterals: List<String> = emptyList(),
     val episode: EpisodicMemoryPayload? = null,
     val goal: GoalMemoryPayload? = null,
-    val resolvedEntityId: String? = null,
-    /** Populated only after coordinator validation; never accepted directly from Gemini. */
-    val validatedCandidate: MemoryCandidate? = null
+    val resolvedEntityId: String? = null
 )
 
 /** One completed turn may carry a bounded compound set of independent propositions. */
 data class FinalMemoryTurnPlan(
     val sourceText: String,
     val operations: List<MemorySemanticFrame> = emptyList(),
-    val explicitCommand: MemoryCommand? = null,
     val decision: MemoryDecision,
     val requiresClarification: Boolean = false,
     val rejectionReason: String? = null

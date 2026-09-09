@@ -1,6 +1,5 @@
 package com.myra.assistant.voice
 
-import com.myra.assistant.data.memory.CorrectionTranscriptNormalizer
 import com.myra.assistant.data.memory.AuthoritativeMemoryTurnEvidence
 import java.text.Normalizer
 
@@ -15,13 +14,9 @@ data class FinalSemanticUserUtterance(
     val canonicalNameTokens: List<String>,
     val displayNameTokens: List<String>
 ) {
-    // Memory's established name protection consumes the corrected display form. Intent and
-    // action ownership consume canonicalSemanticText, which deliberately preserves Unicode.
+    // Display text is presentation only. Durable authorization receives every finalized form.
     val memoryExtractorInput: String get() = displayText
-    val correctionParserInput: String get() = displayText
-    val deleteParserInput: String get() = displayText
-    val clarificationResolverInput: String get() = displayText
-    val semanticConsistency: Boolean get() = canonicalNameTokens == displayNameTokens
+    val semanticConsistency: Boolean get() = canonicalSemanticText.isNotBlank()
 
     val memoryEvidence: AuthoritativeMemoryTurnEvidence get() = AuthoritativeMemoryTurnEvidence(
         turnId = turnId,
@@ -41,13 +36,7 @@ data class FinalSemanticUserUtterance(
             rawGeminiTranscript: String,
             formatted: FinalTranscriptDisplayFormatter.Result
         ): FinalSemanticUserUtterance {
-            // Entity protection has already happened inside formatted.display. Apply the
-            // narrowly scoped correction normalizer only after that protection, never to
-            // ICU's ambiguous karima/karīma output.
-            val display = CorrectionTranscriptNormalizer.normalize(
-                rawGeminiTranscript,
-                formatted.display
-            )
+            val display = formatted.display
             val semantic = Normalizer.normalize(rawGeminiTranscript, Normalizer.Form.NFC)
                 .replace(Regex("\\s+"), " ").trim()
             val displayNames = formatted.protectedNameTokens.filter { name ->

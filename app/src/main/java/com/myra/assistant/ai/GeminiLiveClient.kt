@@ -190,7 +190,7 @@ class GeminiLiveClient(
                 .put("fact", JSONObject().put("type", "STRING"))
                 .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "IDENTITY", "PREFERENCE", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
-                    "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "SOLUTION"
+                    "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "IDEA", "SOLUTION"
                 ))))
                 .put("memory_key", JSONObject().put("type", "STRING"))
                 .put("source_span", JSONObject().put("type", "STRING"))
