@@ -116,6 +116,76 @@ class StructuredGenericMemoryPlanTest {
         assertTrue(active.any { it.stableKey == "semantic:goal:current_goal" })
     }
 
+    @Test fun temporaryAndHistoricalCorrectionsCannotReplaceCurrentPreference() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        val current = "Mujhe short answers pasand hain"
+        brain.executeFinalTurnPlan(brain.prepareFinalTurn(current, listOf(generic(
+            MemorySemanticIntent.ADD_FACT, MemoryCategory.PREFERENCE,
+            "Zopy prefers short answers", "response_style", current
+        ))))
+
+        val temporary = "Right now I prefer detailed answers"
+        val temporaryPlan = brain.prepareFinalTurn(temporary, listOf(generic(
+            MemorySemanticIntent.SUPERSEDE_FACT, MemoryCategory.PREFERENCE,
+            "Zopy prefers detailed answers", "response_style", temporary,
+            MemoryTemporalScope.TEMPORARY
+        )))
+        assertEquals(MemoryDecision.REJECT, temporaryPlan.decision)
+
+        val historical = "Earlier I preferred detailed answers"
+        val historicalPlan = brain.prepareFinalTurn(historical, listOf(generic(
+            MemorySemanticIntent.UPDATE_FACT, MemoryCategory.PREFERENCE,
+            "Zopy prefers detailed answers", "response_style", historical,
+            MemoryTemporalScope.HISTORICAL
+        )))
+        assertEquals(MemoryDecision.REJECT, historicalPlan.decision)
+
+        val active = repository.allActive()
+        assertEquals(1, active.count(PreferenceMemoryIdentity::isResponseVerbosity))
+        assertTrue(active.single(PreferenceMemoryIdentity::isResponseVerbosity).fact.contains("short"))
+    }
+
+    @Test fun currentCorrectionStillSupersedesAndRecurringHabitCanPersist() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        val short = "Mujhe short answers pasand hain"
+        brain.executeFinalTurnPlan(brain.prepareFinalTurn(short, listOf(generic(
+            MemorySemanticIntent.ADD_FACT, MemoryCategory.PREFERENCE,
+            "Zopy prefers short answers", "response_style", short
+        ))))
+        val detailed = "Actually ab mujhe detailed answers pasand hain"
+        brain.executeFinalTurnPlan(brain.prepareFinalTurn(detailed, listOf(generic(
+            MemorySemanticIntent.SUPERSEDE_FACT, MemoryCategory.PREFERENCE,
+            "Zopy prefers detailed answers", "response_style", detailed,
+            MemoryTemporalScope.CURRENT
+        ))))
+        val recurring = "I code daily"
+        brain.executeFinalTurnPlan(brain.prepareFinalTurn(recurring, listOf(generic(
+            MemorySemanticIntent.ADD_FACT, MemoryCategory.HABIT,
+            "Zopy codes daily", "coding_frequency", recurring,
+            MemoryTemporalScope.RECURRING
+        ))))
+
+        val active = repository.allActive()
+        assertEquals(1, active.count(PreferenceMemoryIdentity::isResponseVerbosity))
+        assertTrue(active.single(PreferenceMemoryIdentity::isResponseVerbosity).fact.contains("detailed"))
+        assertTrue(active.any { it.category == MemoryCategory.HABIT.name })
+    }
+
+    @Test fun temporaryAddFactIsNotPromoted() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        val text = "Right now I prefer quiet music"
+        val plan = brain.prepareFinalTurn(text, listOf(generic(
+            MemorySemanticIntent.ADD_FACT, MemoryCategory.PREFERENCE,
+            "Zopy prefers quiet music", "music_mood", text,
+            MemoryTemporalScope.TEMPORARY
+        )))
+        assertEquals(MemoryDecision.REJECT, plan.decision)
+        assertTrue(repository.allActive().isEmpty())
+    }
+
     @Test fun naturalRelationshipNegationIsNotAnExplicitCommand() {
         assertNull(MemoryCommandParser.parse("Dev mera friend nahi raha"))
         assertTrue(MemoryCommandParser.looksLikeIntent("Dev mera friend nahi raha"))
@@ -151,9 +221,10 @@ class StructuredGenericMemoryPlanTest {
         category: MemoryCategory,
         fact: String,
         key: String,
-        evidence: String
+        evidence: String,
+        temporal: MemoryTemporalScope = MemoryTemporalScope.CURRENT
     ) = MemorySemanticFrame(
         intent = intent, category = category, fact = fact, stableKey = key,
-        confidence = .96, evidence = evidence
+        temporalScope = temporal, confidence = .96, evidence = evidence
     )
 }

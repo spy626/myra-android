@@ -106,6 +106,73 @@ class MemorySemanticInterpreterTest {
         assertFalse(repository.allActive().any { it.entityName == "Kareem" })
     }
 
+    @Test fun linkedFactsUseSharedSensitivityPolicyAndKeepEntityIdentity() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        repository.addPersonRelationship("Ari", PersonRelationship.FRIEND)
+        val originalId = repository.allActive().first { it.entityName == "Ari" }.entityId
+        val brain = MemoryBrainCoordinator(repository)
+
+        val safe = "Ari travelled to Kerala"
+        brain.executeFinalTurnPlan(brain.prepareFinalTurn(safe, listOf(
+            frame(MemorySemanticIntent.ADD_LINKED_FACT, "Ari", safe, fact = safe)
+        )))
+        assertTrue(repository.allActive().any { it.fact == safe && it.entityId == originalId })
+
+        listOf(
+            "Ari has a medical diagnosis",
+            "Ari lives at an exact address",
+            "Ari discussed religion and trauma"
+        ).forEach { sensitive ->
+            val before = repository.allActive().size
+            brain.executeFinalTurnPlan(brain.prepareFinalTurn(sensitive, listOf(
+                frame(MemorySemanticIntent.ADD_LINKED_FACT, "Ari", sensitive, fact = sensitive)
+            )))
+            assertEquals(before, repository.allActive().size)
+        }
+
+        val prohibited = "Ari's OTP is 123456"
+        brain.executeFinalTurnPlan(brain.prepareFinalTurn(prohibited, listOf(
+            frame(MemorySemanticIntent.ADD_LINKED_FACT, "Ari", prohibited, fact = prohibited)
+        )))
+        assertFalse(repository.allActive().any { it.fact.contains("123456") })
+        assertTrue(repository.allActive().any { it.fact == safe })
+    }
+
+    @Test fun structuredRelationshipFieldsOverrideContradictoryModelFact() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        val text = "Ari is my good friend"
+        brain.executeFinalTurnPlan(brain.prepareFinalTurn(text, listOf(
+            frame(
+                MemorySemanticIntent.ADD_RELATIONSHIP,
+                "Ari",
+                text,
+                PersonRelationship.GOOD_FRIEND,
+                fact = "Bea is Zopy's best friend"
+            )
+        )))
+
+        val active = repository.allActive()
+        val relationship = active.single { it.stableKey.endsWith(":relationship:good_friend") }
+        assertEquals("Ari", relationship.entityName)
+        assertEquals("Ari is Zopy's good friend", relationship.fact)
+        assertFalse(active.any { it.entityName == "Bea" })
+        assertFalse(active.any { it.stableKey.endsWith(":relationship:best_friend") })
+    }
+
+    @Test fun canonicalBestFriendRelationshipStillPersists() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        val text = "Ari is my best friend"
+        brain.executeFinalTurnPlan(brain.prepareFinalTurn(text, listOf(
+            frame(MemorySemanticIntent.ADD_RELATIONSHIP, "Ari", text, PersonRelationship.BEST_FRIEND)
+        )))
+        assertTrue(repository.allActive().any {
+            it.entityName == "Ari" && it.stableKey.endsWith(":relationship:best_friend") &&
+                it.fact == "Ari is Zopy's best friend"
+        })
+    }
+
     @Test fun questionSafetyOverridesMutatingModelProposal() = runBlocking {
         val repository = MemoryRepository(FakeMemoryDao())
         val brain = MemoryBrainCoordinator(repository)

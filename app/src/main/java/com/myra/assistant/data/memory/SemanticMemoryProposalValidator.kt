@@ -77,6 +77,7 @@ object SemanticMemoryProposalValidator {
 
     fun validateGenericFrame(frame: MemorySemanticFrame, finalTranscript: String): MemoryCandidate? {
         if (frame.intent !in setOf(MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT)) return null
+        if (!allowsDurableMutation(frame, finalTranscript)) return null
         val category = frame.category?.takeIf { it in GENERIC_DURABLE_CATEGORIES } ?: return null
         val key = frame.stableKey?.trim()?.takeIf(String::isNotBlank) ?: return null
         return validate(
@@ -86,8 +87,43 @@ object SemanticMemoryProposalValidator {
             evidence = frame.evidence,
             confidence = frame.confidence,
             conversationContext = finalTranscript,
-            allowTemporalCorrection = frame.intent != MemorySemanticIntent.ADD_FACT
+            allowTemporalCorrection = false
         )
+    }
+
+    fun validateLinkedFactFrame(
+        frame: MemorySemanticFrame,
+        finalTranscript: String,
+        person: String,
+        entityId: String
+    ): MemoryCandidate? {
+        if (frame.intent != MemorySemanticIntent.ADD_LINKED_FACT || frame.temporalScope == MemoryTemporalScope.TEMPORARY) return null
+        val category = frame.category ?: MemoryCategory.LIFE_EVENT
+        val key = frame.stableKey?.trim()?.takeIf(String::isNotBlank)
+            ?: "linked_fact:${MemorySemanticIdentity.token(frame.fact.orEmpty()).take(32)}"
+        val validated = validate(
+            fact = frame.fact.orEmpty(),
+            categoryName = category.name,
+            memoryKey = key,
+            evidence = frame.evidence,
+            confidence = frame.confidence,
+            conversationContext = finalTranscript
+        ) ?: return null
+        return validated.copy(
+            stableKey = "person:${MemorySemanticIdentity.token(person)}:fact:${MemorySemanticIdentity.token(key)}",
+            entityId = entityId,
+            entityName = person
+        )
+    }
+
+    private fun allowsDurableMutation(frame: MemorySemanticFrame, finalTranscript: String): Boolean {
+        if (frame.temporalScope == MemoryTemporalScope.TEMPORARY) return false
+        if (frame.intent in setOf(MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT)) {
+            if (frame.temporalScope == MemoryTemporalScope.HISTORICAL) return false
+            // Authoritative transcript evidence wins when the model overstates durability.
+            if (temporary.containsMatchIn(finalTranscript)) return false
+        }
+        return true
     }
 
     fun validate(

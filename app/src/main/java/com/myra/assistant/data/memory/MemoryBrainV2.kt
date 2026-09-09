@@ -635,6 +635,15 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
             MemorySemanticIntent.RENAME_ENTITY, MemorySemanticIntent.DELETE_ENTITY
         )
         if (personRequired && resolvedPerson == null) return frame.copy(intent = MemorySemanticIntent.CLARIFY)
+        if (frame.intent == MemorySemanticIntent.ADD_LINKED_FACT) {
+            val person = resolvedPerson ?: return frame.copy(intent = MemorySemanticIntent.CLARIFY)
+            val linkedRows = active.filter { PersonLinkedMemoryIdentity.belongsTo(it, listOf(person)) }
+            val entityId = linkedRows.mapNotNull { it.entityId }.distinct().singleOrNull()
+                ?: NaturalMemoryExtractor.stablePersonId(person)
+            candidate = SemanticMemoryProposalValidator.validateLinkedFactFrame(
+                frame, finalText, person, entityId
+            ) ?: return null
+        }
         return frame.copy(person = resolvedPerson, validatedCandidate = candidate)
     }
 
@@ -660,8 +669,8 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
         MemorySemanticIntent.ADD_RELATIONSHIP -> {
             val person = frame.person ?: return MemoryBrainOutcome.Rejected("Person target is ambiguous")
             val relation = frame.relationship ?: return MemoryBrainOutcome.Rejected("Relationship is ambiguous")
-            val result = repository.addPersonRelationship(person, relation, frame.fact)
-            recordSemanticTransaction(MemoryDecision.SAVE, person, frame.fact, result)
+            val result = repository.addPersonRelationship(person, relation)
+            recordSemanticTransaction(MemoryDecision.SAVE, person, null, result)
         }
         MemorySemanticIntent.REMOVE_RELATIONSHIP -> {
             val person = frame.person ?: return MemoryBrainOutcome.Rejected("Person target is ambiguous")
@@ -685,25 +694,10 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
         }
         MemorySemanticIntent.ADD_LINKED_FACT -> {
             val person = frame.person ?: return MemoryBrainOutcome.Rejected("Person target is ambiguous")
-            val fact = frame.fact ?: return MemoryBrainOutcome.Rejected("Linked fact is empty")
-            val existing = repository.allActive().filter { PersonLinkedMemoryIdentity.belongsTo(it, listOf(person)) }
-            val entityId = existing.mapNotNull { it.entityId }.distinct().singleOrNull()
-                ?: NaturalMemoryExtractor.stablePersonId(person)
-            val result = repository.saveGrounded(
-                MemoryCandidate(
-                    frame.category ?: MemoryCategory.LIFE_EVENT,
-                    fact,
-                    frame.stableKey?.takeIf { it.isNotBlank() }
-                        ?: "person:${MemorySemanticIdentity.token(person)}:fact:${MemorySemanticIdentity.token(fact).take(48)}",
-                    MemorySensitivity.PERSONAL,
-                    frame.confidence,
-                    source = frame.evidence,
-                    provenance = MemoryProvenance.USER_DIRECT_STATEMENT,
-                    entityId = entityId,
-                    entityName = person
-                )
-            )
-            recordSemanticTransaction(MemoryDecision.SAVE, person, fact, result)
+            val candidate = frame.validatedCandidate
+                ?: return MemoryBrainOutcome.Rejected("Linked fact was not validated")
+            val result = repository.saveGrounded(candidate)
+            recordSemanticTransaction(MemoryDecision.SAVE, person, candidate.fact, result)
         }
         MemorySemanticIntent.UPDATE_FACT,
         MemorySemanticIntent.SUPERSEDE_FACT -> {

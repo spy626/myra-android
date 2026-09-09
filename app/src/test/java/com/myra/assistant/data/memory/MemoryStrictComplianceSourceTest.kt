@@ -57,4 +57,17 @@ class MemoryStrictComplianceSourceTest {
         assertFalse(commandParser.contains("MemoryRepository"))
         assertFalse(commandParser.contains("MemoryDao"))
     }
+
+    @Test fun structuredLinkedAndRelationshipWritesUseCoordinatorValidatedAuthority() {
+        val brain = File(sourceRoot, "java/com/myra/assistant/data/memory/MemoryBrainV2.kt").readText()
+        val linkedBlock = brain.substringAfter("MemorySemanticIntent.ADD_LINKED_FACT ->")
+            .substringBefore("MemorySemanticIntent.UPDATE_FACT")
+        val relationshipBlock = brain.substringAfter("MemorySemanticIntent.ADD_RELATIONSHIP ->")
+            .substringBefore("MemorySemanticIntent.REMOVE_RELATIONSHIP")
+        assertTrue(brain.contains("validateLinkedFactFrame("))
+        assertFalse(linkedBlock.contains("MemorySensitivity.PERSONAL"))
+        assertTrue(linkedBlock.contains("frame.validatedCandidate"))
+        assertTrue(relationshipBlock.contains("addPersonRelationship(person, relation)"))
+        assertFalse(relationshipBlock.contains("addPersonRelationship(person, relation, frame.fact)"))
+    }
 }
