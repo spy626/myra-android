@@ -249,7 +249,8 @@ data class GoalMemoryPayload(
 
 /** Single consolidation point converts authorized structured meaning into repository candidates. */
 object UnifiedMemoryConsolidator {
-    fun candidate(frame: MemorySemanticFrame, turnId: Long): MemoryCandidate? = when (frame.intent) {
+    fun candidate(frame: MemorySemanticFrame, turnId: Long): MemoryCandidate? {
+        return when (frame.intent) {
         MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT,
         MemorySemanticIntent.SUPERSEDE_FACT, MemorySemanticIntent.ADD_LINKED_FACT -> {
             val fact = frame.fact?.trim()?.takeIf { it.length in 3..200 } ?: return null
@@ -287,6 +288,7 @@ object UnifiedMemoryConsolidator {
             )
         }
         else -> null
+        }
     }
 }
 
