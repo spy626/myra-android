@@ -16,7 +16,7 @@ class StructuredGenericMemoryPlanTest {
         val frame = generic(
             MemorySemanticIntent.ADD_FACT, MemoryCategory.COMMUNICATION_STYLE,
             "Zopy prefers short answers", "response_style", "Mujhe short answers pasand hain"
-        )
+        ).copy(sourceSpan = "यह शॉर्ट आंसर पसंद है।")
 
         val plan = brain.prepareFinalTurn(final, listOf(frame))
 
@@ -38,7 +38,8 @@ class StructuredGenericMemoryPlanTest {
             relationship = PersonRelationship.GOOD_FRIEND,
             temporalScope = MemoryTemporalScope.CURRENT,
             confidence = .96,
-            evidence = "Naufal mera bohot accha dost hai"
+            evidence = "Naufal mera bohot accha dost hai",
+            sourceSpan = "Nauphala mera bahuta accha dosta hai."
         )
 
         val plan = brain.prepareFinalTurn(final, listOf(frame))

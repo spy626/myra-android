@@ -28,7 +28,10 @@ data class FinalSemanticUserUtterance(
         canonicalText = canonicalSemanticText,
         displayText = displayText,
         protectedCanonicalNames = canonicalNameTokens,
-        protectedDisplayNames = displayNameTokens
+        protectedDisplayNames = displayNameTokens,
+        sessionId = sessionId,
+        utteranceId = utteranceId,
+        contextGeneration = turnId
     )
 
     companion object {

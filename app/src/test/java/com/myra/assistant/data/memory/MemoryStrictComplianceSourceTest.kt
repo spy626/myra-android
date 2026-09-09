@@ -1,6 +1,7 @@
 package com.myra.assistant.data.memory
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -69,10 +70,24 @@ class MemoryStrictComplianceSourceTest {
             .substringBefore("MemorySemanticIntent.UPDATE_FACT")
         val relationshipBlock = brain.substringAfter("MemorySemanticIntent.ADD_RELATIONSHIP ->")
             .substringBefore("MemorySemanticIntent.REMOVE_RELATIONSHIP")
-        assertTrue(brain.contains("validateLinkedFactFrame("))
+        assertTrue(brain.contains("FinalTurnSourceSpanAuthorizer.authorize("))
+        assertFalse(brain.contains("SemanticMemoryProposalValidator"))
         assertFalse(linkedBlock.contains("MemorySensitivity.PERSONAL"))
         assertTrue(linkedBlock.contains("frame.validatedCandidate"))
         assertTrue(relationshipBlock.contains("addPersonRelationship(person, relation)"))
         assertFalse(relationshipBlock.contains("addPersonRelationship(person, relation, frame.fact)"))
+    }
+
+    @Test fun cutoverHasOneOwnerOneDatabaseAndHidesInfrastructureAnchors() {
+        val memorySources = File(sourceRoot, "java/com/myra/assistant/data/memory")
+            .walkTopDown().filter { it.extension == "kt" }.toList()
+        assertEquals(1, memorySources.sumOf { "class MemoryBrainCoordinator".toRegex().findAll(it.readText()).count() })
+        assertEquals(1, memorySources.sumOf { "@Database".toRegex().findAll(it.readText()).count() })
+        assertFalse(memorySources.any { it.name == "SemanticMemoryProposalValidator.kt" })
+        val ui = File(sourceRoot, "java/com/myra/assistant/ui/settings/MemorySettingsActivity.kt").readText()
+        assertTrue(ui.contains("filterNot(::isInfrastructureAnchor)"))
+        val gemini = File(sourceRoot, "java/com/myra/assistant/ai/GeminiLiveClient.kt").readText()
+        assertFalse(gemini.contains("MemoryDao"))
+        assertFalse(gemini.contains("MemoryRepository"))
     }
 }

@@ -5,7 +5,7 @@ import java.util.Locale
 enum class MemorySemanticIntent {
     ADD_FACT, ADD_RELATIONSHIP, REMOVE_RELATIONSHIP, REPLACE_RELATIONSHIP, ADD_LINKED_FACT,
     UPDATE_FACT, SUPERSEDE_FACT, RENAME_ENTITY, DELETE_ENTITY, RECALL,
-    TRANSIENT_CONTEXT, CLARIFY, NONE
+    ADD_EPISODE, ADD_GOAL, TRANSIENT_CONTEXT, CLARIFY, NONE
 }
 
 enum class PersonRelationship(val key: String) {
@@ -27,6 +27,13 @@ data class MemorySemanticFrame(
     val stableKey: String? = null,
     val confidence: Double = 0.0,
     val evidence: String = "",
+    val sourceSpan: String = evidence,
+    val sourceTurnId: Long = 0L,
+    val sourceSessionId: String = "compatibility",
+    val criticalLiterals: List<String> = emptyList(),
+    val episode: EpisodicMemoryPayload? = null,
+    val goal: GoalMemoryPayload? = null,
+    val resolvedEntityId: String? = null,
     /** Populated only after coordinator validation; never accepted directly from Gemini. */
     val validatedCandidate: MemoryCandidate? = null
 )

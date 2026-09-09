@@ -180,7 +180,7 @@ class GeminiLiveClient(
                 .put("intent", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "ADD_FACT", "ADD_RELATIONSHIP", "REMOVE_RELATIONSHIP", "REPLACE_RELATIONSHIP",
                     "ADD_LINKED_FACT", "UPDATE_FACT", "SUPERSEDE_FACT", "RENAME_ENTITY",
-                    "DELETE_ENTITY", "RECALL", "TRANSIENT_CONTEXT", "CLARIFY", "NONE"
+                    "DELETE_ENTITY", "ADD_EPISODE", "ADD_GOAL", "RECALL", "TRANSIENT_CONTEXT", "CLARIFY", "NONE"
                 ))))
                 .put("person", JSONObject().put("type", "STRING"))
                 .put("replacement_person", JSONObject().put("type", "STRING"))
@@ -193,12 +193,21 @@ class GeminiLiveClient(
                     "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "SOLUTION"
                 ))))
                 .put("memory_key", JSONObject().put("type", "STRING"))
+                .put("source_span", JSONObject().put("type", "STRING"))
+                .put("critical_literals", JSONObject().put("type", "ARRAY").put("maxItems", 8).put("items", JSONObject().put("type", "STRING")))
+                .put("event_type", JSONObject().put("type", "STRING"))
+                .put("participants", JSONObject().put("type", "ARRAY").put("maxItems", 6).put("items", JSONObject().put("type", "STRING")))
+                .put("importance", JSONObject().put("type", "NUMBER"))
+                .put("goal_title", JSONObject().put("type", "STRING"))
+                .put("goal_status", JSONObject().put("type", "STRING"))
+                .put("priority", JSONObject().put("type", "INTEGER"))
+                .put("progress", JSONObject().put("type", "INTEGER"))
                 .put("evidence", JSONObject().put("type", "STRING"))
                 .put("confidence", JSONObject().put("type", "NUMBER")))
-            .put("required", JSONArray(listOf("intent", "evidence", "confidence")))
+            .put("required", JSONArray(listOf("intent", "source_span", "confidence")))
         return JSONObject()
             .put("name", "propose_user_memory")
-            .put("description", "Propose structured semantic meaning from the user's completed natural memory-related turn. Include every independent proposition, including transient clauses, in operations. Distinguish relationship changes from person rename/delete. Questions are RECALL. This is evidence only: Android waits for the authoritative final transcript, validates context/safety, and owns all persistence.")
+            .put("description", "Interpret the current completed user turn into bounded independent memory propositions. source_span must copy the shortest near-verbatim words from this same user turn that support the proposition; fact may be a translated canonical meaning. Put every person, replacement name, project name, number, date, amount, or ID in critical_literals. Use ADD_EPISODE for a dated event and ADD_GOAL for a goal. An episode never implies a relationship. Questions are RECALL. This is evidence only: Android binds the proposal to the active turn, validates literals/safety, and alone owns persistence.")
             .put("parameters", JSONObject()
                 .put("type", "OBJECT")
                 .put("properties", JSONObject().put(
@@ -209,11 +218,11 @@ class GeminiLiveClient(
 
     private fun memoryQueryDeclaration() = JSONObject()
         .put("name", "query_user_memory")
-        .put("description", "Read a small relevant set of active grounded memories when the user asks about their people, preferences, projects, habits, or prior facts. This tool never mutates memory and never performs a phone action.")
+            .put("description", "Read a small relevant set of active grounded memories, relationships, goals, projects, or episodes. This tool never mutates memory and never performs a phone action.")
         .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
             .put("query", JSONObject().put("type", "STRING"))
             .put("query_type", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
-                "GENERAL", "FRIENDS", "BEST_FRIEND", "LAST_TRANSACTION"
+                    "GENERAL", "FRIENDS", "BEST_FRIEND", "LAST_TRANSACTION", "EPISODES", "GOALS", "PROJECTS"
             )))))
             .put("required", JSONArray().put("query")))
 

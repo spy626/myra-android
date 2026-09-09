@@ -65,7 +65,7 @@ class MemorySettingsActivity : AppCompatActivity() {
 
     private fun refreshMemories() {
         lifecycleScope.launch {
-            val memories = repository.allActive().filter(::matchesFilter)
+            val memories = repository.allActive().filterNot(::isInfrastructureAnchor).filter(::matchesFilter)
             binding.memoryList.removeAllViews()
             binding.emptyText.visibility = if (memories.isEmpty()) View.VISIBLE else View.GONE
             binding.deleteAllButton.isEnabled = memories.isNotEmpty()
@@ -74,7 +74,10 @@ class MemorySettingsActivity : AppCompatActivity() {
     }
 
     private fun setupFilters() {
-        listOf("ALL", "IDENTITY", "PEOPLE", "PREFERENCES", "PROJECTS", "HABITS", "ACTIVITY").forEach { filter ->
+        listOf(
+            "ALL", "PEOPLE", "RELATIONSHIPS", "PREFERENCES", "PROJECTS", "GOALS",
+            "HABITS", "EPISODES", "WORKFLOWS", "SOLUTIONS", "BEHAVIOR"
+        ).forEach { filter ->
             binding.memoryFilters.addView(Button(this).apply {
                 text = filter
                 textSize = 10f
@@ -85,13 +88,23 @@ class MemorySettingsActivity : AppCompatActivity() {
 
     private fun matchesFilter(memory: MemoryEntity): Boolean = when (activeFilter) {
         "ALL" -> true
-        "PEOPLE" -> memory.category in setOf(MemoryCategory.PERSON.name, MemoryCategory.LIFE_EVENT.name)
+        "PEOPLE" -> memory.category == MemoryCategory.PERSON.name
+        "RELATIONSHIPS" -> memory.stableKey.contains(":relationship:")
         "PREFERENCES" -> memory.category in setOf(MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name)
-        "PROJECTS" -> memory.category in setOf(MemoryCategory.PROJECT.name, MemoryCategory.GOAL.name, MemoryCategory.WORKFLOW.name)
+        "PROJECTS" -> memory.category == MemoryCategory.PROJECT.name
+        "GOALS" -> memory.category == MemoryCategory.GOAL.name
         "HABITS" -> memory.category == MemoryCategory.HABIT.name
-        "ACTIVITY" -> memory.category in setOf(MemoryCategory.APP_USAGE.name, MemoryCategory.CONTENT_INTEREST.name, MemoryCategory.CURRENT_INTEREST.name)
+        "EPISODES" -> memory.observationMetadata?.contains("kind=EPISODIC") == true
+        "WORKFLOWS" -> memory.category == MemoryCategory.WORKFLOW.name
+        "SOLUTIONS" -> memory.category == MemoryCategory.SOLUTION.name
+        "BEHAVIOR" -> memory.provenance == com.myra.assistant.data.memory.MemoryProvenance.BEHAVIOR_PATTERN.name
         else -> memory.category == activeFilter
     }
+
+    private fun isInfrastructureAnchor(memory: MemoryEntity): Boolean =
+        memory.stableKey.endsWith(":identity") &&
+            memory.observationMetadata.isNullOrBlank() &&
+            !memory.stableKey.contains(":relationship:")
 
     /**
      * Compact Memory Core row: left category icon box + category/fact/recalled content.
