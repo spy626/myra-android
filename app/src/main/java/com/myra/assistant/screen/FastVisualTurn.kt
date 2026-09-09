@@ -81,11 +81,15 @@ object ScreenStateFollowUpClassifier {
         val current = tokens.any(currentTime::contains)
         val inquiry = tokens.any { token -> stateInquiry.any { token == it || token.startsWith(it) && it.length >= 4 } }
         val referential = tokens.any(reference::contains)
+        val visualStateInquiry = tokens.any { token ->
+            token in setOf("visible", "showing", "changed", "moved", "left", "right", "side", "badla", "hila") ||
+                token.startsWith("dikh") || token.startsWith("dekh") || token.startsWith("दिख")
+        }
         val grounded = tokens.any { token -> screenGrounding.any { token == it || token.startsWith(it) && it.length >= 4 } } ||
             tokens.any { token -> token.startsWith("dikh") || token.startsWith("dekh") || token.startsWith("दिख") }
         // Time words modify meaning; they never create visual meaning. A short deictic
         // follow-up is visual only while a verified visual interaction is still active.
-        return current && inquiry && (grounded || hasVerifiedVisualContext && (referential || tokens.size <= 3))
+        return current && inquiry && (grounded || hasVerifiedVisualContext && (referential || visualStateInquiry || tokens.size <= 3))
     }
 }
 
