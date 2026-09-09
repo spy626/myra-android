@@ -1094,29 +1094,23 @@ class MyraVoiceService : Service() {
                 turnLatency.record(activeTurnId, Field.FINAL_TRANSCRIPT_RECEIVED, finalInputTranscriptAt)
                 voiceTurnIdentities.finalTranscript(activeTurnId, finalUtterance.utteranceId)
                 voiceLog(
-                    "final_input_transcript raw=${userText.take(160)} " +
-                        "normalized=${normalizedFinalUserText.take(160)} " +
-                        "display=${displayedFinalUserText.take(160)} finalInputTranscriptAt=$finalInputTranscriptAt"
+                    "final_input_transcript turnId=$activeTurnId utteranceId=${finalUtterance.utteranceId} " +
+                        "rawLength=${userText.length} canonicalLength=${normalizedFinalUserText.length} " +
+                        "displayLength=${displayedFinalUserText.length} finalInputTranscriptAt=$finalInputTranscriptAt"
                 )
                 voiceLog(
                     "final_transcript_display turnId=$activeTurnId utteranceId=${transcriptSessionId}:$activeTurnId " +
-                        "raw=${userText.take(160)} transliterated=${finalDisplay.transliterated.take(160)} " +
-                        "display=${displayedFinalUserText.take(160)} " +
+                        "transliterationApplied=${finalDisplay.transliterated != userText} " +
                         "latinWordsPreserved=${finalDisplay.latinWordsPreserved} " +
                         "properNameProtected=${finalDisplay.properNameProtected} " +
                         "ruleIds=${finalDisplay.appliedRuleIds.joinToString(",")}"
                 )
                 voiceLog(
                     "final_semantic_utterance utteranceId=${finalUtterance.utteranceId} " +
-                        "rawGeminiTranscript=${userText.take(160)} " +
-                        "canonicalSemanticText=${normalizedFinalUserText.take(160)} " +
-                        "displayText=${displayedFinalUserText.take(160)} " +
-                        "canonicalNameTokens=${finalUtterance.canonicalNameTokens} " +
-                        "displayNameTokens=${finalUtterance.displayNameTokens} " +
-                        "memoryExtractorInput=${finalUtterance.memoryExtractorInput.take(160)} " +
-                        "correctionParserInput=${finalUtterance.correctionParserInput.take(160)} " +
-                        "deleteParserInput=${finalUtterance.deleteParserInput.take(160)} " +
-                        "clarificationResolverInput=${finalUtterance.clarificationResolverInput.take(160)} " +
+                        "canonicalHasDevanagari=${Regex("[\\u0900-\\u097F]").containsMatchIn(normalizedFinalUserText)} " +
+                        "displayHasDevanagari=${Regex("[\\u0900-\\u097F]").containsMatchIn(displayedFinalUserText)} " +
+                        "canonicalNameTokenCount=${finalUtterance.canonicalNameTokens.size} " +
+                        "displayNameTokenCount=${finalUtterance.displayNameTokens.size} " +
                         "semanticConsistency=${finalUtterance.semanticConsistency}"
                 )
                 if (earlyScreenQueryDispatchedTurnId == activeTurnId && earlyScreenQuestionText.isNotBlank()) {
