@@ -52,9 +52,11 @@ class ScreenSceneAwarenessTest {
         assertTrue(AccessibilityVisualCache.fresh("pkg", 1, 1, "same", 200, 500, currentSceneRevision = 2) == null)
     }
 
-    @Test fun `current screen followups are screen questions without phrase-specific object`() {
-        assertTrue(ScreenStateFollowUpClassifier.isCurrentScreenFollowUp("Abhi kahan hai?"))
-        assertTrue(ScreenStateFollowUpClassifier.isCurrentScreenFollowUp("Ab kya change hua?"))
+    @Test fun `bare current screen followups require verified visual context`() {
+        assertFalse(ScreenStateFollowUpClassifier.isCurrentScreenFollowUp("Abhi kahan hai?"))
+        assertFalse(ScreenStateFollowUpClassifier.isCurrentScreenFollowUp("Ab kya change hua?"))
+        assertTrue(ScreenStateFollowUpClassifier.isCurrentScreenFollowUp("Abhi kahan hai?", true))
+        assertTrue(ScreenStateFollowUpClassifier.isCurrentScreenFollowUp("Ab kya change hua?", true))
         assertTrue(ScreenStateFollowUpClassifier.isCurrentScreenFollowUp("Is it still visible now?"))
         assertFalse(ScreenStateFollowUpClassifier.isCurrentScreenFollowUp("Kal kahan jana hai?"))
     }
@@ -72,4 +74,3 @@ class ScreenSceneAwarenessTest {
         id, SemanticRole.BUTTON, id, left, top, right, bottom, actionable = true
     )
 }
-

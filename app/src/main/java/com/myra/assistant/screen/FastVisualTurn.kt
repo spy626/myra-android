@@ -65,16 +65,16 @@ object ScreenStateFollowUpClassifier {
     )
     private val reference = setOf("it", "this", "that", "same", "wahi", "ye", "yeh", "wo", "woh", "वही", "यह", "वो")
     private val screenGrounding = setOf(
-        "screen", "page", "display", "button", "icon", "popup", "dialog", "option", "menu", "app",
+        "screen", "page", "display", "visible", "showing", "button", "icon", "popup", "dialog", "option", "menu", "app",
         "स्क्रीन", "पेज", "बटन", "आइकन", "विकल्प"
     )
 
-    fun isCurrentScreenFollowUp(text: String): Boolean {
+    fun isCurrentScreenFollowUp(text: String, hasVerifiedVisualContext: Boolean = false): Boolean {
         val normalized = Normalizer.normalize(text, Normalizer.Form.NFC)
             .lowercase(Locale.ROOT)
         val parsed = normalized.split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
             .filter(String::isNotBlank)
-        return isCurrentScreenFollowUp(parsed, false)
+        return isCurrentScreenFollowUp(parsed, hasVerifiedVisualContext)
     }
 
     internal fun isCurrentScreenFollowUp(tokens: List<String>, hasVerifiedVisualContext: Boolean): Boolean {
