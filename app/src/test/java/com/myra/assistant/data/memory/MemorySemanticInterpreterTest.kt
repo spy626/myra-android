@@ -13,7 +13,9 @@ class MemorySemanticInterpreterTest {
             frame(MemorySemanticIntent.DELETE_ENTITY, "Ari", "forget Ari")
         )
         assertEquals(listOf(MemorySemanticIntent.REPLACE_RELATIONSHIP, MemorySemanticIntent.RENAME_ENTITY, MemorySemanticIntent.DELETE_ENTITY), meanings.map { it.intent })
-        assertTrue(brain.prepareFinalTurn("relationship changed", listOf(meanings[0])).operations.single().intent == MemorySemanticIntent.REPLACE_RELATIONSHIP)
+        val grounded = meanings[0].copy(sourceSpan = "Ari relationship changed to Bea")
+        assertTrue(brain.prepareFinalTurn("Ari relationship changed to Bea", listOf(grounded))
+            .operations.single().intent == MemorySemanticIntent.REPLACE_RELATIONSHIP)
     }
 
     @Test fun compoundTurnPersistsRelationshipButKeepsTemporaryEventTransient() = runBlocking {

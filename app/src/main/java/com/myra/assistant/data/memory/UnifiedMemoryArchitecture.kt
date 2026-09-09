@@ -10,7 +10,7 @@ enum class ContextMutation { REPLACE_SELF, APPEND_SELF }
 enum class MemoryAuthorizationReason {
     AUTHORIZED, STALE_TURN, WRONG_TURN, QUESTION, EMPTY_SOURCE_SPAN, SOURCE_SPAN_NOT_FINAL,
     CRITICAL_LITERAL_MISSING, AMBIGUOUS_ENTITY, TEMPORARY, PROHIBITED_SECRET, LOW_CONFIDENCE,
-    UNSUPPORTED_OPERATION
+    SENSITIVE_CONTENT, UNSUPPORTED_OPERATION
 }
 
 data class ContextEntry(
@@ -154,6 +154,10 @@ object FinalTurnSourceSpanAuthorizer {
         "\\b(?:otp|passwords?|passcode|pin|cvv|security code|verification code|recovery code|authentication token|auth token|api key|private key|seed phrase|account number|card number|aadhaar|aadhar|pan number|passport number)\\b",
         RegexOption.IGNORE_CASE
     )
+    private val sensitive = Regex(
+        "\\b(?:exact address|medical|diagnosis|disease|religion|sexual|trauma|bank|government id)\\b",
+        RegexOption.IGNORE_CASE
+    )
 
     fun authorize(
         frame: MemorySemanticFrame,
@@ -173,6 +177,8 @@ object FinalTurnSourceSpanAuthorizer {
             return MemoryAuthorization(false, MemoryAuthorizationReason.LOW_CONFIDENCE)
         if (final.variants.any(prohibited::containsMatchIn) || prohibited.containsMatchIn(frame.sourceSpan))
             return MemoryAuthorization(false, MemoryAuthorizationReason.PROHIBITED_SECRET)
+        if (final.variants.any(sensitive::containsMatchIn) || sensitive.containsMatchIn(frame.sourceSpan))
+            return MemoryAuthorization(false, MemoryAuthorizationReason.SENSITIVE_CONTENT)
         if (frame.intent == MemorySemanticIntent.TRANSIENT_CONTEXT || frame.temporalScope == MemoryTemporalScope.TEMPORARY)
             return MemoryAuthorization(true, MemoryAuthorizationReason.TEMPORARY, criticalLiteralsGrounded = true)
         val span = normalize(frame.sourceSpan)
@@ -198,11 +204,27 @@ object FinalTurnSourceSpanAuthorizer {
     private fun sourceSpanPresent(span: String, final: String): Boolean {
         if (span == final || final.contains(span)) return true
         val spanTokens = span.split(' ')
-        if (spanTokens.size > 3) return false
         val finalTokens = final.split(' ')
-        return (1..3).any { size -> finalTokens.windowed(size).any { window ->
-            equivalent(window.joinToString(""), spanTokens.joinToString(""))
-        } }
+        if (spanTokens.size <= 3 && (1..3).any { size -> finalTokens.windowed(size).any { window ->
+                equivalent(window.joinToString(""), spanTokens.joinToString(""))
+            } }) return true
+        if (spanTokens.size !in 2..12) return false
+        var finalIndex = 0
+        var gaps = 0
+        for (token in spanTokens) {
+            var found = -1
+            for (index in finalIndex until minOf(finalTokens.size, finalIndex + 3)) {
+                if (token == finalTokens[index] || equivalent(token, finalTokens[index])) {
+                    found = index
+                    break
+                }
+            }
+            if (found < 0) return false
+            gaps += found - finalIndex
+            if (gaps > 2) return false
+            finalIndex = found + 1
+        }
+        return true
     }
 
     private fun criticalLiteralPresent(literal: String, final: AuthoritativeMemoryTurnEvidence): Boolean {

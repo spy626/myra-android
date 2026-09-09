@@ -35,7 +35,7 @@ class UnifiedMemoryArchitectureTest {
     @Test fun questionAndSecretsRemainReadOnlyAndExact() = runBlocking {
         val repository = MemoryRepository(FakeMemoryDao())
         val brain = MemoryBrainCoordinator(repository)
-        val question = "Do I enjoy astronomy?"
+        val question = "What do you remember about my astronomy preference?"
         val questionPlan = brain.prepareFinalTurn(question, listOf(fact("User enjoys astronomy", "interest", question)))
         assertEquals(MemoryDecision.RECALL, questionPlan.decision)
 
