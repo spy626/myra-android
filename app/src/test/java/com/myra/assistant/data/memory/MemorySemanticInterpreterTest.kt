@@ -168,8 +168,8 @@ class MemorySemanticInterpreterTest {
             frame(MemorySemanticIntent.ADD_RELATIONSHIP, "Ari", text, PersonRelationship.BEST_FRIEND)
         )))
         assertTrue(repository.allActive().any {
-            it.entityName == "Ari" && it.stableKey.endsWith(":relationship:best_friend") &&
-                it.fact == "Ari is Zopy's best friend"
+            it.entityName == "Ari" && MemoryRelationshipPolicy.isBestFriend(it) &&
+                it.fact == "Zopy's best friend is Ari"
         })
     }
 
