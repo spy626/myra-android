@@ -57,8 +57,8 @@ class StructuredGenericMemoryPlanTest {
         repository.addPersonRelationship("Samir", PersonRelationship.FRIEND)
         val final = AuthoritativeMemoryTurnEvidence(43L, "समीर का नाम बदलना है", "Samir ka naam badalna hai")
         val rename = MemorySemanticFrame(
-            intent = MemorySemanticIntent.RENAME_ENTITY, person = "Samir", replacementPerson = "Samar",
-            confidence = .96, evidence = "Samir ka naam badalna hai Samar"
+            intent = MemorySemanticIntent.RENAME_ENTITY, person = "Samir", replacementPerson = "Rohan",
+            confidence = .96, evidence = "Samir ka naam badalna hai Rohan"
         )
 
         val plan = brain.prepareFinalTurn(final, listOf(rename))
