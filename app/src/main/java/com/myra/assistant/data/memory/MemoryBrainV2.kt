@@ -608,8 +608,8 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
         plan.explicitCommand?.let { return processCommand(it, 8) }
         val operation = plan.operations.firstOrNull()
         val operationTurnId = operation?.sourceTurnId ?: 0L
-        if (operation?.sourceSessionId != "compatibility" &&
-            !UnifiedMemoryRuntime.isCurrent(operation?.sourceSessionId.orEmpty(), operationTurnId)) {
+        if (operation != null && operation.sourceSessionId != "compatibility" &&
+            !UnifiedMemoryRuntime.isCurrent(operation.sourceSessionId, operationTurnId)) {
             log("MEMORY_STALE_UPDATE_IGNORED turnId=$operationTurnId reason=NEWER_FINAL_TURN")
             return MemoryBrainOutcome.Ignored
         }

@@ -211,16 +211,17 @@ object FinalTurnSourceSpanAuthorizer {
         if (spanTokens.size !in 2..12) return false
         var finalIndex = 0
         var gaps = 0
-        for (token in spanTokens) {
+        for ((spanIndex, token) in spanTokens.withIndex()) {
             var found = -1
-            for (index in finalIndex until minOf(finalTokens.size, finalIndex + 3)) {
+            val searchEnd = if (spanIndex == 0) finalTokens.size else minOf(finalTokens.size, finalIndex + 3)
+            for (index in finalIndex until searchEnd) {
                 if (token == finalTokens[index] || equivalent(token, finalTokens[index])) {
                     found = index
                     break
                 }
             }
             if (found < 0) return false
-            gaps += found - finalIndex
+            if (spanIndex > 0) gaps += found - finalIndex
             if (gaps > 2) return false
             finalIndex = found + 1
         }
@@ -276,8 +277,13 @@ object UnifiedMemoryConsolidator {
         MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT,
         MemorySemanticIntent.SUPERSEDE_FACT, MemorySemanticIntent.ADD_LINKED_FACT -> {
             val fact = frame.fact?.trim()?.takeIf { it.length in 3..200 } ?: return null
-            val category = frame.category ?: return null
-            val key = frame.stableKey?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val category = frame.category ?: if (frame.intent == MemorySemanticIntent.ADD_LINKED_FACT) {
+                MemoryCategory.LIFE_EVENT
+            } else return null
+            val key = frame.stableKey?.trim()?.takeIf { it.isNotEmpty() }
+                ?: if (frame.intent == MemorySemanticIntent.ADD_LINKED_FACT) {
+                    "linked_fact:${MemorySemanticIdentity.token(fact).take(32)}"
+                } else return null
             val sensitivity = if (category in setOf(
                     MemoryCategory.PREFERENCE, MemoryCategory.COMMUNICATION_STYLE,
                     MemoryCategory.WORKFLOW, MemoryCategory.APP_USAGE, MemoryCategory.SOLUTION
