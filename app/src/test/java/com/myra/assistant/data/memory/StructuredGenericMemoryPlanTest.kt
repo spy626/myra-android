@@ -5,6 +5,67 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class StructuredGenericMemoryPlanTest {
+    @Test fun finalizedCanonicalAndRomanAsrVariantsAuthorizeLowRiskPreference() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        val final = AuthoritativeMemoryTurnEvidence(
+            turnId = 41L,
+            canonicalText = "यह शॉर्ट आंसर पसंद है।",
+            displayText = "Yaha sorta ansara pasanda hai."
+        )
+        val frame = generic(
+            MemorySemanticIntent.ADD_FACT, MemoryCategory.COMMUNICATION_STYLE,
+            "Zopy prefers short answers", "response_style", "Mujhe short answers pasand hain"
+        )
+
+        val plan = brain.prepareFinalTurn(final, listOf(frame))
+
+        assertEquals(MemoryDecision.SAVE, plan.decision)
+        assertTrue(brain.executeFinalTurnPlan(plan) is MemoryBrainOutcome.Mutated)
+        assertTrue(repository.allActive().single().fact.contains("short"))
+    }
+
+    @Test fun secondFriendWithConservativeAsrVariationIsAdditive() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        repository.addPersonRelationship("Tariq", PersonRelationship.FRIEND)
+        val final = AuthoritativeMemoryTurnEvidence(
+            42L, "नौफल मेरा बहुत अच्छा दोस्त है।", "Nauphala mera bahuta accha dosta hai."
+        )
+        val frame = MemorySemanticFrame(
+            intent = MemorySemanticIntent.ADD_RELATIONSHIP,
+            person = "Naufal",
+            relationship = PersonRelationship.GOOD_FRIEND,
+            temporalScope = MemoryTemporalScope.CURRENT,
+            confidence = .96,
+            evidence = "Naufal mera bohot accha dost hai"
+        )
+
+        val plan = brain.prepareFinalTurn(final, listOf(frame))
+        assertEquals(MemoryDecision.SAVE, plan.decision)
+        assertTrue(brain.executeFinalTurnPlan(plan) is MemoryBrainOutcome.Mutated)
+        val friends = brain.recall("friends", type = MemoryRecallType.FRIENDS).rows
+        assertEquals(setOf("Tariq", "Naufal"), friends.mapNotNull { it.entityName }.toSet())
+        assertEquals(PersonRelationship.GOOD_FRIEND.key,
+            friends.single { it.entityName == "Naufal" }.stableKey.substringAfterLast(':'))
+        assertTrue(brain.recall("best friend", type = MemoryRecallType.BEST_FRIEND).rows.isEmpty())
+    }
+
+    @Test fun emptyProtectedNameListsCannotAuthorizeRename() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        repository.addPersonRelationship("Samir", PersonRelationship.FRIEND)
+        val final = AuthoritativeMemoryTurnEvidence(43L, "समीर का नाम बदलना है", "Samir ka naam badalna hai")
+        val rename = MemorySemanticFrame(
+            intent = MemorySemanticIntent.RENAME_ENTITY, person = "Samir", replacementPerson = "Samar",
+            confidence = .96, evidence = "Samir ka naam badalna hai Samar"
+        )
+
+        val plan = brain.prepareFinalTurn(final, listOf(rename))
+
+        assertEquals(MemoryDecision.NEEDS_CLARIFICATION, plan.decision)
+        assertTrue(repository.allActive().single().entityName == "Samir")
+    }
     @Test fun genericPreferenceAddUsesCoordinatorPlan() = runBlocking {
         val repository = MemoryRepository(FakeMemoryDao())
         val brain = MemoryBrainCoordinator(repository)
@@ -164,7 +225,8 @@ class StructuredGenericMemoryPlanTest {
             "Zopy prefers detailed answers", "response_style", temporary,
             MemoryTemporalScope.TEMPORARY
         )))
-        assertEquals(MemoryDecision.REJECT, temporaryPlan.decision)
+        assertEquals(MemoryDecision.IGNORE, temporaryPlan.decision)
+        assertEquals(MemorySemanticIntent.TRANSIENT_CONTEXT, temporaryPlan.operations.single().intent)
 
         val historical = "Earlier I preferred detailed answers"
         val historicalPlan = brain.prepareFinalTurn(historical, listOf(generic(
@@ -215,7 +277,8 @@ class StructuredGenericMemoryPlanTest {
             "Zopy prefers quiet music", "music_mood", text,
             MemoryTemporalScope.TEMPORARY
         )))
-        assertEquals(MemoryDecision.REJECT, plan.decision)
+        assertEquals(MemoryDecision.IGNORE, plan.decision)
+        assertEquals(MemorySemanticIntent.TRANSIENT_CONTEXT, plan.operations.single().intent)
         assertTrue(repository.allActive().isEmpty())
     }
 

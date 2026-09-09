@@ -1,8 +1,17 @@
 package com.myra.assistant.data.memory
 
 import java.util.Locale
+import java.text.Normalizer
 
 object SemanticMemoryProposalValidator {
+    data class GroundingMetadata(
+        val selectedVariant: String,
+        val finalScript: String,
+        val evidenceScript: String,
+        val score: Double,
+        val nameGrounded: Boolean,
+        val rejectionReason: String
+    )
     private val safeKey = Regex("[a-z0-9][a-z0-9:_-]{1,49}")
     private val prohibited = Regex(
         """\b(?:otp|passwords?|passcode|pin|cvv|security code|verification code|recovery code|authentication token|auth token|api key|private key|seed phrase|bank|account number|card number|aadhaar|aadhar|pan number|passport number)\b""",
@@ -54,25 +63,72 @@ object SemanticMemoryProposalValidator {
     )
 
     /** Validates model-proposed meaning against the authoritative final transcript. */
-    fun validateSemanticFrame(frame: MemorySemanticFrame, finalTranscript: String): Boolean {
+    fun validateSemanticFrame(frame: MemorySemanticFrame, finalTranscript: String): Boolean =
+        validateSemanticFrame(frame, AuthoritativeMemoryTurnEvidence(0L, finalTranscript, finalTranscript))
+
+    fun validateSemanticFrame(frame: MemorySemanticFrame, finalEvidence: AuthoritativeMemoryTurnEvidence): Boolean {
         if (frame.confidence !in 0.78..1.0) return false
         if (frame.intent == MemorySemanticIntent.NONE) return false
-        val transcript = finalTranscript.trim()
-        if (transcript.isBlank() || prohibited.containsMatchIn(transcript)) return false
-        if (MemoryIntentClassifier.isMemoryQuestion(transcript) && frame.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY)) {
+        val variants = finalEvidence.variants
+        if (variants.isEmpty() || variants.any(prohibited::containsMatchIn)) return false
+        if (variants.any(MemoryIntentClassifier::isMemoryQuestion) && frame.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY)) {
             return false
         }
         val evidence = frame.evidence.trim()
-        if (evidence.isBlank() || evidence.trimEnd().endsWith('?')) return false
-        val transcriptTokens = meaningfulTokens(semanticNormalize(transcript))
+        if (evidence.isBlank() || evidence.trimEnd().endsWith('?') || prohibited.containsMatchIn(evidence)) return false
         val evidenceTokens = meaningfulTokens(semanticNormalize(evidence))
         if (evidenceTokens.isEmpty()) return false
-        val grounding = evidenceTokens.count(transcriptTokens::contains).toDouble() / evidenceTokens.size
-        if (grounding < 0.65) return false
+        val strict = frame.intent in setOf(
+            MemorySemanticIntent.REMOVE_RELATIONSHIP, MemorySemanticIntent.DELETE_ENTITY,
+            MemorySemanticIntent.REPLACE_RELATIONSHIP
+        )
+        val grounding = variants.maxOf { transcript ->
+            groundingScore(evidenceTokens, meaningfulTokens(semanticNormalize(transcript)), allowFuzzy = !strict)
+        }
+        val threshold = if (strict) 0.78 else 0.65
+        if (grounding < threshold) return false
         if (frame.intent == MemorySemanticIntent.RENAME_ENTITY && frame.replacementPerson.isNullOrBlank()) return false
         if (frame.intent in setOf(MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP, MemorySemanticIntent.REPLACE_RELATIONSHIP) && frame.relationship == null) return false
         if (frame.intent in setOf(MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.ADD_LINKED_FACT, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT) && frame.fact.isNullOrBlank()) return false
         return true
+    }
+
+    fun isNameGrounded(name: String, evidence: AuthoritativeMemoryTurnEvidence): Boolean {
+        if (name.any(Char::isDigit) || prohibited.containsMatchIn(name)) return false
+        val token = phoneticToken(name)
+        if (token.length < 4) return evidence.variants.any { mentionsExactName(it, name) }
+        val transcriptTokens = evidence.variants.flatMap { meaningfulTokens(semanticNormalize(it)) }.toSet()
+        val protected = evidence.protectedCanonicalNames + evidence.protectedDisplayNames
+        return protected.any { namesEquivalent(it, name) } || transcriptTokens.any { lexicalEquivalent(it, token) }
+    }
+
+    fun groundingMetadata(frame: MemorySemanticFrame, finalEvidence: AuthoritativeMemoryTurnEvidence): GroundingMetadata {
+        val expected = meaningfulTokens(semanticNormalize(frame.evidence))
+        val strict = frame.intent in setOf(MemorySemanticIntent.REMOVE_RELATIONSHIP, MemorySemanticIntent.DELETE_ENTITY, MemorySemanticIntent.REPLACE_RELATIONSHIP)
+        val scored = finalEvidence.variants.mapIndexed { index, value ->
+            index to groundingScore(expected, meaningfulTokens(semanticNormalize(value)), !strict)
+        }.maxByOrNull { it.second } ?: (-1 to 0.0)
+        val requiredName = if (frame.intent == MemorySemanticIntent.RENAME_ENTITY) frame.replacementPerson else frame.person
+        val nameOk = requiredName.isNullOrBlank() || isNameGrounded(requiredName, finalEvidence)
+        val valid = validateSemanticFrame(frame, finalEvidence)
+        return GroundingMetadata(
+            selectedVariant = when (scored.first) { 0 -> "CANONICAL"; 1 -> "DISPLAY"; else -> "NONE" },
+            finalScript = scriptOf(finalEvidence.variants.getOrNull(scored.first).orEmpty()),
+            evidenceScript = scriptOf(frame.evidence),
+            score = scored.second,
+            nameGrounded = nameOk,
+            rejectionReason = if (valid) "NONE" else when {
+                finalEvidence.variants.any(prohibited::containsMatchIn) || prohibited.containsMatchIn(frame.evidence) -> "PROHIBITED_CONTENT"
+                !nameOk -> "NAME_NOT_GROUNDED"
+                else -> "GROUNDING_FAILED"
+            }
+        )
+    }
+
+    private fun scriptOf(value: String): String = when {
+        value.any { it in '\u0900'..'\u097f' } -> "DEVANAGARI"
+        value.any { it.isLetter() && it.code < 128 } -> "LATIN"
+        else -> "OTHER"
     }
 
     fun validateGenericFrame(frame: MemorySemanticFrame, finalTranscript: String): MemoryCandidate? {
@@ -179,8 +235,8 @@ object SemanticMemoryProposalValidator {
         val evidenceTokens = meaningfulTokens(semanticEvidence)
         val factTokens = meaningfulTokens(semanticFact)
         if (evidenceTokens.isEmpty() || contextTokens.isEmpty()) return null
-        val evidenceGrounding = evidenceTokens.count(contextTokens::contains).toDouble() / evidenceTokens.size
-        val factGrounding = factTokens.count(contextTokens::contains).toDouble() / factTokens.size.coerceAtLeast(1)
+        val evidenceGrounding = groundingScore(evidenceTokens, contextTokens, allowFuzzy = true)
+        val factGrounding = groundingScore(factTokens, contextTokens, allowFuzzy = true)
         if (evidenceGrounding < 0.70 || factGrounding < 0.40) return null
 
         val sensitivity = when {
@@ -325,6 +381,57 @@ object SemanticMemoryProposalValidator {
             }
         }
         .toSet()
+
+    private fun groundingScore(expected: Set<String>, actual: Set<String>, allowFuzzy: Boolean): Double {
+        if (expected.isEmpty()) return 0.0
+        return expected.count { wanted ->
+            actual.any { seen -> wanted == seen || (allowFuzzy && lexicalEquivalent(wanted, seen)) }
+        }.toDouble() / expected.size
+    }
+
+    /** Conservative lexical equivalence for finalized ASR variants. Numeric/secret-like tokens
+     * are exact-only. This is deliberately operation-gated by the caller. */
+    private fun lexicalEquivalent(left: String, right: String): Boolean {
+        if (left == right) return true
+        if (left.any(Char::isDigit) || right.any(Char::isDigit)) return false
+        val a = phoneticToken(left)
+        val b = phoneticToken(right)
+        if (a.length < 4 || b.length < 4) return false
+        val distance = editDistance(a, b)
+        val allowed = when (maxOf(a.length, b.length)) {
+            in 4..5 -> 1
+            in 6..8 -> 2
+            else -> 3
+        }
+        return distance <= allowed
+    }
+
+    private fun namesEquivalent(left: String, right: String): Boolean =
+        left.equals(right, true) || BestFriendNameSimilarity.likelySame(left, right) ||
+            lexicalEquivalent(left, right)
+
+    private fun phoneticToken(value: String): String {
+        var token = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"), "")
+            .replace(Regex("[^\\p{L}]"), "")
+        token = token.replace("ph", "f").replace("v", "w")
+        // Common ASR romanization adds a terminal schwa; dropping only that suffix is bounded.
+        if (token.length >= 5 && token.endsWith('a')) token = token.dropLast(1)
+        return token
+    }
+
+    private fun editDistance(left: String, right: String): Int {
+        var previous = IntArray(right.length + 1) { it }
+        left.forEachIndexed { i, a ->
+            val current = IntArray(right.length + 1)
+            current[0] = i + 1
+            right.forEachIndexed { j, b ->
+                current[j + 1] = minOf(current[j] + 1, previous[j + 1] + 1, previous[j] + if (a == b) 0 else 1)
+            }
+            previous = current
+        }
+        return previous[right.length]
+    }
 
     private fun personToken(value: String): String = normalize(value).replace(' ', '_').take(36)
 

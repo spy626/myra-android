@@ -1,6 +1,7 @@
 package com.myra.assistant.voice
 
 import com.myra.assistant.data.memory.CorrectionTranscriptNormalizer
+import com.myra.assistant.data.memory.AuthoritativeMemoryTurnEvidence
 import java.text.Normalizer
 
 /** One immutable finalized transcript shared by UI and every durable-memory consumer. */
@@ -21,6 +22,14 @@ data class FinalSemanticUserUtterance(
     val deleteParserInput: String get() = displayText
     val clarificationResolverInput: String get() = displayText
     val semanticConsistency: Boolean get() = canonicalNameTokens == displayNameTokens
+
+    val memoryEvidence: AuthoritativeMemoryTurnEvidence get() = AuthoritativeMemoryTurnEvidence(
+        turnId = turnId,
+        canonicalText = canonicalSemanticText,
+        displayText = displayText,
+        protectedCanonicalNames = canonicalNameTokens,
+        protectedDisplayNames = displayNameTokens
+    )
 
     companion object {
         fun from(

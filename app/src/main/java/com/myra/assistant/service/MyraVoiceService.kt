@@ -1626,14 +1626,28 @@ class MyraVoiceService : Service() {
                         )
                     }
                     serviceScope.launch {
+                        staged.forEach { proposal ->
+                            val validation = com.myra.assistant.data.memory.SemanticMemoryProposalValidator
+                                .groundingMetadata(proposal, finalUtterance.memoryEvidence)
+                            voiceLog(
+                                "MEMORY_PROPOSAL_VALIDATION turnId=$memoryTurnId intent=${proposal.intent} " +
+                                    "finalScript=${validation.finalScript} evidenceScript=${validation.evidenceScript} " +
+                                    "selectedAuthoritativeVariant=${validation.selectedVariant} " +
+                                    "groundingScore=${"%.2f".format(java.util.Locale.ROOT, validation.score)} " +
+                                    "nameGrounding=${if (validation.nameGrounded) "GROUNDED" else "UNRESOLVED"} " +
+                                    "temporalDecision=${proposal.temporalScope} rejectionReason=${validation.rejectionReason} " +
+                                    "resolved=${validation.rejectionReason == "NONE"}"
+                            )
+                        }
                         val plan = memoryBrain.prepareFinalTurn(
-                            displayUserText,
+                            finalUtterance.memoryEvidence,
                             staged,
                             semanticConsistent = finalUtterance.semanticConsistency
                         )
                         voiceLog(
                             "FINAL_MEMORY_PLAN turnId=$memoryTurnId decision=${plan.decision} " +
-                                "operations=${plan.operations.size} clarification=${plan.requiresClarification}"
+                                "operations=${plan.operations.size} clarification=${plan.requiresClarification} " +
+                                "rejectionReason=${plan.rejectionReason ?: "NONE"}"
                         )
                         plan.operations.forEach { operation ->
                             voiceLog(
@@ -2798,7 +2812,12 @@ class MyraVoiceService : Service() {
             modelText.takeIf { it.isNotBlank() }?.let(::romanDisplayText) ?: "Acha, samajh gayi."
         } else MemoryCommandReplyFormatter.rememberRejected()
         is MemoryBrainOutcome.Deleted -> MemoryCommandReplyFormatter.forgotten(outcome.succeeded)
-        is MemoryBrainOutcome.Rejected -> outcome.reason
+        is MemoryBrainOutcome.Rejected -> when {
+            outcome.reason.contains("ambiguous", true) ->
+                "Kaunsi memory ya person ki baat hai? Naam clearly batao."
+            else -> modelText.takeIf { it.isNotBlank() }?.let(::romanDisplayText)
+                ?: "Main is baat ko memory mein save nahi kar payi."
+        }
         MemoryBrainOutcome.Ignored -> modelText.takeIf { it.isNotBlank() }?.let(::romanDisplayText)
             ?: "Acha, samajh gayi."
     }
@@ -2826,7 +2845,8 @@ class MyraVoiceService : Service() {
                 "MEMORY_WRITE_RESULT turnId=$turnId operation=${plan.decision} status=REJECTED verification=true"
             )
             MemoryBrainOutcome.Ignored -> voiceLog(
-                "MEMORY_WRITE_RESULT turnId=$turnId operation=${plan.decision} status=REJECTED verification=true"
+                "MEMORY_WRITE_RESULT turnId=$turnId operation=${plan.operations.firstOrNull()?.intent ?: plan.decision} " +
+                    "status=IGNORED verification=true"
             )
         }
     }

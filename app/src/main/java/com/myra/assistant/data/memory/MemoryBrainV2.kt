@@ -8,6 +8,22 @@ enum class MemoryDecision { IGNORE, RECALL, SAVE, UPDATE, DELETE, NEEDS_CLARIFIC
 enum class MemoryRecallType { GENERAL, FRIENDS, BEST_FRIEND, LAST_TRANSACTION }
 enum class MemoryTransactionStatus { SUCCEEDED, FAILED, REJECTED }
 
+/** Final-turn evidence used to authorize semantic memory operations. Display text is only one
+ * approved representation; it is never the sole authority for a model proposal. */
+data class AuthoritativeMemoryTurnEvidence(
+    val turnId: Long,
+    val canonicalText: String,
+    val displayText: String,
+    val protectedCanonicalNames: List<String> = emptyList(),
+    val protectedDisplayNames: List<String> = emptyList()
+) {
+    val variants: List<String> = listOf(canonicalText, displayText)
+        .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    // Legacy deterministic parsers intentionally keep their corrected Roman input. Semantic
+    // proposal authorization separately evaluates every approved variant above.
+    val sourceText: String get() = displayText.ifBlank { canonicalText }
+}
+
 data class LastMemoryTransaction(
     val type: MemoryDecision,
     val targetId: String? = null,
@@ -534,19 +550,32 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
         semanticConsistent: Boolean = true,
         supplemental: List<MemoryCandidate> = emptyList()
     ): FinalMemoryTurnPlan {
+        return prepareFinalTurn(
+            AuthoritativeMemoryTurnEvidence(0L, text, text), proposals,
+            semanticConsistent, supplemental
+        )
+    }
+
+    suspend fun prepareFinalTurn(
+        evidence: AuthoritativeMemoryTurnEvidence,
+        proposals: List<MemorySemanticFrame>,
+        semanticConsistent: Boolean = true,
+        supplemental: List<MemoryCandidate> = emptyList()
+    ): FinalMemoryTurnPlan {
+        val text = evidence.sourceText
         val command = MemoryCommandParser.parse(text)
         if (command != null) return FinalMemoryTurnPlan(text, explicitCommand = command, decision = explicitCommandDecision(text)!!)
         if (MemoryIntentClassifier.isMemoryQuestion(text)) {
             return FinalMemoryTurnPlan(text, decision = MemoryDecision.RECALL)
         }
-        if (!semanticConsistent) return FinalMemoryTurnPlan(text, decision = MemoryDecision.REJECT, rejectionReason = "semantic_turn_mismatch")
+        if (!semanticConsistent) return FinalMemoryTurnPlan(text, decision = MemoryDecision.REJECT, rejectionReason = "SEMANTIC_TURN_MISMATCH")
         val active = repository.allActive()
         val resolved = mutableListOf<MemorySemanticFrame>()
         for (proposal in proposals.take(4)) {
-            resolveAndValidateProposal(proposal, text, active)?.let(resolved::add)
+            resolveAndValidateProposal(proposal, evidence, active)?.let(resolved::add)
         }
         if (proposals.isNotEmpty() && resolved.isEmpty()) {
-            return FinalMemoryTurnPlan(text, decision = MemoryDecision.REJECT, rejectionReason = "ungrounded_semantic_proposal")
+            return FinalMemoryTurnPlan(text, decision = MemoryDecision.REJECT, rejectionReason = "UNGROUNDED_SEMANTIC_PROPOSAL")
         }
         if (resolved.any { it.intent == MemorySemanticIntent.CLARIFY }) {
             return FinalMemoryTurnPlan(text, resolved, decision = MemoryDecision.NEEDS_CLARIFICATION, requiresClarification = true)
@@ -620,10 +649,15 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
 
     private suspend fun resolveAndValidateProposal(
         frame: MemorySemanticFrame,
-        finalText: String,
+        evidence: AuthoritativeMemoryTurnEvidence,
         active: List<MemoryEntity>
     ): MemorySemanticFrame? {
-        if (!SemanticMemoryProposalValidator.validateSemanticFrame(frame, finalText)) return null
+        if (!SemanticMemoryProposalValidator.validateSemanticFrame(frame, evidence)) return null
+        val finalText = evidence.variants.joinToString(" \n ")
+        if (frame.temporalScope == MemoryTemporalScope.TEMPORARY && frame.intent in setOf(
+                MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT,
+                MemorySemanticIntent.SUPERSEDE_FACT, MemorySemanticIntent.ADD_LINKED_FACT
+            )) return frame.copy(intent = MemorySemanticIntent.TRANSIENT_CONTEXT, validatedCandidate = null)
         var candidate = if (frame.intent in setOf(MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT)) {
             SemanticMemoryProposalValidator.validateGenericFrame(frame, finalText) ?: return null
         } else null
@@ -647,6 +681,15 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
             MemorySemanticIntent.RENAME_ENTITY, MemorySemanticIntent.DELETE_ENTITY
         )
         if (personRequired && resolvedPerson == null) return frame.copy(intent = MemorySemanticIntent.CLARIFY)
+        if (frame.intent == MemorySemanticIntent.RENAME_ENTITY) {
+            val oldName = resolvedPerson ?: return frame.copy(intent = MemorySemanticIntent.CLARIFY)
+            val uniquelyKnown = knownPeople.filter { it.equals(oldName, true) || BestFriendNameSimilarity.likelySame(it, oldName) }
+            val replacement = frame.replacementPerson?.trim().orEmpty()
+            if (uniquelyKnown.size != 1 || replacement.isBlank() ||
+                !SemanticMemoryProposalValidator.isNameGrounded(replacement, evidence)) {
+                return frame.copy(intent = MemorySemanticIntent.CLARIFY)
+            }
+        }
         if (frame.intent == MemorySemanticIntent.ADD_LINKED_FACT) {
             val person = resolvedPerson ?: return frame.copy(intent = MemorySemanticIntent.CLARIFY)
             val linkedRows = active.filter { PersonLinkedMemoryIdentity.belongsTo(it, listOf(person)) }
