@@ -82,7 +82,7 @@ object ScreenStateFollowUpClassifier {
         val inquiry = tokens.any { token -> stateInquiry.any { token == it || token.startsWith(it) && it.length >= 4 } }
         val referential = tokens.any(reference::contains)
         val visualStateInquiry = tokens.any { token ->
-            token in setOf("visible", "showing", "changed", "moved", "left", "right", "side", "badla", "hila") ||
+            token in setOf("visible", "showing", "change", "changed", "moved", "left", "right", "side", "badla", "hila") ||
                 token.startsWith("dikh") || token.startsWith("dekh") || token.startsWith("दिख")
         }
         val grounded = tokens.any { token -> screenGrounding.any { token == it || token.startsWith(it) && it.length >= 4 } } ||
