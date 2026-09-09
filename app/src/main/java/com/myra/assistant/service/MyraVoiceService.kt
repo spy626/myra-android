@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 81451)
-Total output lines: 5321
-
 package com.myra.assistant.service
 
 import android.app.*
@@ -1563,7 +1560,2107 @@ class MyraVoiceService : Service() {
                         }
                         pendingBestFriendCorrectionOldName =
                             memoryBrain.ambiguousCorrectionTarget(displayText, recentName)
-      …31451 tokens truncated…bserve
+                        pendingBestFriendCorrectionUntil = android.os.SystemClock.elapsedRealtime() +
+                            BEST_FRIEND_CORRECTION_CONTEXT_MS
+                        voiceLog(
+                            "correction_clarification_set type=BEST_FRIEND_RENAME " +
+                                "target=${pendingBestFriendCorrectionOldName} raw=${userText.take(100)} " +
+                                "normalized=${displayText.take(100)}"
+                        )
+                        listener?.onMyraText(clarification)
+                        emitState(clarification)
+                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
+                        resetTurnBuffers()
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
+                    if (UnclearDeleteIntentGuard.needsClarification(finalUtterance.deleteParserInput)) {
+                        val clarification = "Kis memory ko delete karna hai? Naam ek baar saaf bol do."
+                        localCommandExecutedThisTurn = true
+                        suppressModelForTurn = true
+                        output.clear()
+                        audio?.interrupt()
+                        // Keep the question actionable. Previously a one-word reply such
+                        // as "Kareem" went to Gemini, which spoke a false success without
+                        // ever calling MemoryRepository.forgetMatching().
+                        pendingDeleteClarificationUntil = android.os.SystemClock.elapsedRealtime() +
+                            DELETE_CLARIFICATION_TIMEOUT_MS
+                        listener?.onMyraText(clarification)
+                        emitState(clarification)
+                        queueLocalSpeech(clarification, allowUntranscribedAudio = true)
+                        resetTurnBuffers()
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
+                    val parsed = CommandParser.parse(userText)
+                    if (turnDecision.authorizesPhoneActions && parsed != null) {
+                        executeCommand(parsed)
+                    } else if (turnDecision.authorizesPhoneActions &&
+                        (probableActionTurn || CommandParser.isProbableDeviceAction(userText))) {
+                        suppressModelForTurn = true
+                        val error = if (CommandParser.isAmbiguousFlashlightCommand(userText)) {
+                            "Zopy, torch on karun ya off?"
+                        } else {
+                            "Zopy, command samajh aayi, lekin action clear nahi hua. Ek baar seedha bolkar try karo."
+                        }
+                        listener?.onMyraText(error, true)
+                        emitState(error)
+                        queueLocalSpeech(error)
+                    }
+                }
+                if (userText.isNotBlank() && !localCommandExecutedThisTurn) {
+                    val displayUserText = finalUtterance.memoryExtractorInput
+                    val memoryTurnId = activeTurnId
+                    com.myra.assistant.data.memory.UnifiedMemoryRuntime.claimTurn(
+                        finalUtterance.sessionId, finalUtterance.turnId
+                    )
+                    val staged = stagedMemorySemantics.remove(memoryTurnId).orEmpty()
+                    val pendingRecall = stagedMemoryRecalls.remove(memoryTurnId)
+                    val memoryOwned = staged.isNotEmpty() || pendingRecall != null
+                    if (memoryOwned) {
+                        suppressModelForTurn = true
+                        localCommandExecutedThisTurn = true
+                        audio?.interrupt()
+                        responseArbiter.claimControlled(memoryTurnId)
+                        voiceLog(
+                            "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_PENDING " +
+                                "planDecision=PENDING verifiedBeforeResponse=false"
+                        )
+                    }
+                    serviceScope.launch {
+                        staged.forEach { proposal ->
+                            val validation = com.myra.assistant.data.memory.FinalTurnSourceSpanAuthorizer.authorize(
+                                proposal, finalUtterance.memoryEvidence, memoryTurnId,
+                                com.myra.assistant.data.memory.MemoryIntentClassifier.isMemoryQuestion(displayUserText)
+                            )
+                            voiceLog(
+                                "MEMORY_PROPOSAL_VALIDATION turnId=$memoryTurnId intent=${proposal.intent} " +
+                                    "selectedAuthoritativeVariant=${validation.selectedVariant} " +
+                                    "criticalLiteralsGrounded=${validation.criticalLiteralsGrounded} " +
+                                    "temporalDecision=${proposal.temporalScope} rejectionReason=${validation.reason} " +
+                                    "resolved=${validation.authorized}"
+                            )
+                        }
+                        val plan = memoryBrain.prepareFinalTurn(
+                            finalUtterance.memoryEvidence,
+                            staged,
+                            semanticConsistent = finalUtterance.semanticConsistency
+                        )
+                        voiceLog(
+                            "FINAL_MEMORY_PLAN turnId=$memoryTurnId decision=${plan.decision} " +
+                                "operations=${plan.operations.size} clarification=${plan.requiresClarification} " +
+                                "rejectionReason=${plan.rejectionReason ?: "NONE"}"
+                        )
+                        plan.operations.forEach { operation ->
+                            voiceLog(
+                                "MEMORY_PLAN_OPERATION turnId=$memoryTurnId intent=${operation.intent} " +
+                                    "category=${operation.category ?: "NONE"} relationship=${operation.relationship ?: "NONE"} " +
+                                    "temporalScope=${operation.temporalScope} source=MODEL"
+                            )
+                        }
+                        val outcome = pendingRecall?.result?.await()
+                            ?: memoryBrain.executeFinalTurnPlan(plan)
+                        logMemoryOutcome(memoryTurnId, plan, outcome, pendingRecall?.type)
+                        if (memoryOwned) {
+                            val response = verifiedMemoryResponse(outcome, myraText)
+                            mainHandler.post {
+                                voiceLog(
+                                    "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_VERIFIED " +
+                                        "planDecision=${plan.decision} verifiedBeforeResponse=true"
+                                )
+                                listener?.onMyraText(response)
+                                emitState(response)
+                                queueLocalSpeech(
+                                    response,
+                                    allowUntranscribedAudio = true,
+                                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
+                                )
+                            }
+                        }
+                    }
+                    rememberRecentRelationshipTurn(displayUserText)
+                    if (memoryOwned) {
+                        memoryResponsePendingTurnId = 0L
+                        resetTurnBuffers("memory_owned_turn_complete")
+                        waitingForFreshInputAfterCommand = true
+                        if (mediaGuard.isAwake()) mediaGuard.finishInteraction()
+                        return@turnComplete
+                    }
+                }
+                if (myraText.isNotBlank() && !suppressModelForTurn && responseArbiter.acceptsOrdinaryModel()) {
+                    listener?.onMyraText(romanDisplayText(myraText))
+                }
+                resetTurnBuffers("normal_turn_complete")
+                if (suppressModelForTurn) waitingForFreshInputAfterCommand = true
+                if (mediaGuard.isAwake()) mediaGuard.finishInteraction()
+                pendingLocalSpeech?.let { message ->
+                    pendingLocalSpeech = null
+                    localSpeechValidationPolicy = pendingLocalSpeechPolicy
+                    allowUntranscribedLocalSpeech = pendingLocalSpeechAllowsSilence
+                    beginValidatedLocalSpeech(message)
+                }
+            }
+            client.onError = {
+                voiceLog("GEMINI_DISCONNECTED timestamp=${android.os.SystemClock.elapsedRealtime()} reason=${it.take(160)} media_projection_state=${ScreenCaptureService.currentState}")
+                emitState(it)
+            }
+            audio?.onMicChunk = { client.sendAudio(it) }
+            audio?.onAmplitude = { listener?.onAmplitude(it) }
+            audio?.onSpeechActivityChanged = { active ->
+                if (active && screenResponseActive) {
+                    voiceLog("playback_cancelled_by_real_user responseOwner=CONTROLLED_SCREEN screen_query_id=$screenResponseQueryId vad_trigger_source=local_vad")
+                    audio?.interrupt(); live?.interrupt(); finishScreenResponse("real_user_barge_in")
+                    // The interruption is also the beginning of the replacement user
+                    // utterance. Allocate its identity now; waiting for ASR recreated
+                    // the old turnId=0 / new transcript-turn mismatch.
+                    beginOrdinarySpeechActivity(latestObservedModelGenerationId, "local_vad_after_screen_replacement")
+                } else if (active) beginOrdinarySpeechActivity(latestObservedModelGenerationId, "local_vad")
+                else {
+                    finishOrdinarySpeechActivity()
+                    dispatchArmedScreenQuestionAtSpeechEnd()
+                }
+            }
+            audio?.onSpeakingChanged = { speaking ->
+                voiceLog(
+                    "service_playback_state speaking=$speaking active=$localPlaybackActive " +
+                        "generationComplete=$localSpeechGenerationComplete"
+                )
+                localAudioSpeaking = speaking
+                if (speaking && screenResponseActive) {
+                    fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId && it.firstPlaybackAt == 0L }?.apply {
+                        firstPlaybackAt = android.os.SystemClock.elapsedRealtime()
+                        voiceLog("firstPlayback visualTurnId=$id at=$firstPlaybackAt speechEndToFirstPlaybackMs=${if (speechEndedAt > 0L) firstPlaybackAt - speechEndedAt else -1L}")
+                    }
+                }
+                listener?.onSpeaking(speaking)
+                updateNotification(if (speaking) "LYRA is speaking" else "LYRA is listening")
+                if (!speaking && localPlaybackActive && localSpeechGenerationComplete) {
+                    finishLocalPlayback()
+                }
+                if (!speaking && screenResponseActive && screenResponseGenerationComplete) {
+                    finishScreenResponse("playback_end")
+                }
+            }
+            client.connect()
+        }
+    }
+
+    private suspend fun buildSavedMemoryContext(): String {
+        memoryRepository.reconcileUniqueRelationships()
+        memoryRepository.reconcilePreferenceDimensions()
+        return SavedMemoryContextFormatter.format(
+            memoryRepository.relevant("", 8).map { it.fact }
+        )
+    }
+
+    private fun handleExplicitMemoryText(text: String): Boolean {
+        val decision = memoryBrain.explicitCommandDecision(text) ?: return false
+        handleMemoryFinalTurn(text, decision)
+        return true
+    }
+
+    private fun handleMemoryFinalTurn(text: String, decision: com.myra.assistant.data.memory.MemoryDecision) {
+        cancelSpeechForNewAction()
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        output.clear()
+        serviceScope.launch {
+            val outcome = memoryBrain.processFinalTurn(text)
+            val response = when (decision) {
+                com.myra.assistant.data.memory.MemoryDecision.SAVE -> {
+                    if ((outcome as? MemoryBrainOutcome.Mutated)?.result is MemoryWriteResult.Saved) {
+                        MemoryCommandReplyFormatter.rememberSaved()
+                    } else MemoryCommandReplyFormatter.rememberRejected()
+                }
+                com.myra.assistant.data.memory.MemoryDecision.RECALL -> when (outcome) {
+                    is MemoryBrainOutcome.Recalled -> outcome.workingAnswer
+                        ?: PersonalMemoryRecallFormatter.format(outcome.rows.map { it.fact })
+                    is MemoryBrainOutcome.Rejected -> outcome.reason
+                    else -> PersonalMemoryRecallFormatter.format(emptyList())
+                }
+                com.myra.assistant.data.memory.MemoryDecision.DELETE ->
+                    MemoryCommandReplyFormatter.forgotten((outcome as? MemoryBrainOutcome.Deleted)?.succeeded == true)
+                com.myra.assistant.data.memory.MemoryDecision.UPDATE -> when {
+                    (outcome as? MemoryBrainOutcome.Mutated)?.result is MemoryWriteResult.Saved ->
+                        MemoryCommandReplyFormatter.editSaved()
+                    outcome is MemoryBrainOutcome.Rejected && outcome.reason.contains("ambiguous", true) ->
+                        "Kaunsi memory update karni hai? Pehle us memory ko recall ya clearly name karo."
+                    else -> MemoryCommandReplyFormatter.editRejected()
+                }
+                else -> return@launch
+            }
+            mainHandler.post {
+                listener?.onMyraText(response)
+                emitState(response)
+                queueLocalSpeech(response, allowUntranscribedAudio = true,
+                    validationPolicy = LocalSpeechValidationPolicy.MEMORY)
+            }
+        }
+    }
+
+    private fun handleMemoryCommand(command: MemoryCommand) {
+        // This is called only from a completed typed/final user turn. MemoryBrainCoordinator
+        // owns every Room recall/mutation; this service only owns response arbitration.
+        cancelSpeechForNewAction()
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        output.clear()
+        serviceScope.launch {
+            if (command is MemoryCommand.Read) pendingCanonicalRename?.join()
+            val outcome = memoryBrain.processCommand(command, 5)
+            val response = when (command) {
+                is MemoryCommand.Remember -> {
+                    val result = (outcome as? MemoryBrainOutcome.Mutated)?.result
+                    if (result is MemoryWriteResult.Saved) MemoryCommandReplyFormatter.rememberSaved()
+                    else MemoryCommandReplyFormatter.rememberRejected()
+                }
+                is MemoryCommand.Read -> when (outcome) {
+                    is MemoryBrainOutcome.Recalled -> outcome.workingAnswer
+                        ?: PersonalMemoryRecallFormatter.format(outcome.rows.map { it.fact })
+                    is MemoryBrainOutcome.Rejected -> outcome.reason
+                    else -> PersonalMemoryRecallFormatter.format(emptyList())
+                }
+                is MemoryCommand.Forget -> MemoryCommandReplyFormatter.forgotten(
+                    (outcome as? MemoryBrainOutcome.Deleted)?.succeeded == true
+                )
+                is MemoryCommand.Edit -> when {
+                    (outcome as? MemoryBrainOutcome.Mutated)?.result is MemoryWriteResult.Saved ->
+                        MemoryCommandReplyFormatter.editSaved()
+                    outcome is MemoryBrainOutcome.Rejected && outcome.reason.contains("ambiguous", true) ->
+                        "Kaunsi memory update karni hai? Pehle us memory ko recall ya clearly name karo."
+                    else -> MemoryCommandReplyFormatter.editRejected()
+                }
+            }
+            mainHandler.post {
+                listener?.onMyraText(response)
+                emitState(response)
+                queueLocalSpeech(
+                    response,
+                    allowUntranscribedAudio = true,
+                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
+                )
+            }
+        }
+    }
+
+    private fun handleSemanticToolCall(id: String, functionName: String, args: org.json.JSONObject) {
+        when (functionName) {
+            "propose_user_memory" -> {
+                handleSemanticMemoryProposal(id, args)
+                return
+            }
+            "query_user_memory" -> {
+                val query = args.optString("query").trim()
+                val queryType = runCatching {
+                    MemoryRecallType.valueOf(args.optString("query_type", "GENERAL"))
+                }.getOrDefault(MemoryRecallType.GENERAL)
+                val recallTurnId = activeTurnId
+                val pendingRecall = if (recallTurnId != 0L) {
+                    PendingMemoryRecall(query, queryType).also { stagedMemoryRecalls[recallTurnId] = it }
+                } else null
+                if (pendingRecall != null) {
+                    reserveMemoryResponse(recallTurnId, "QUERY_USER_MEMORY")
+                }
+                serviceScope.launch {
+                    val outcome = memoryBrain.recall(query, 8, queryType)
+                    val rows = outcome.rows
+                    pendingRecall?.result?.complete(outcome)
+                    voiceLog(
+                        "MEMORY_RECALL_RESULT turnId=$recallTurnId queryType=$queryType rowCount=${rows.size} " +
+                            "relationshipTypes=${safeRelationshipTypes(rows)} " +
+                            "workingTransactionUsed=${outcome.workingAnswer != null}"
+                    )
+                    val payload = org.json.JSONArray().apply {
+                        rows.forEach { row -> put(org.json.JSONObject()
+                            .put("id", row.id).put("category", row.category).put("fact", row.fact)
+                            .put("source", row.provenance).put("confidence", row.confidence)) }
+                    }
+                    live?.sendToolResponse(id, "query_user_memory", true, payload.toString())
+                }
+                return
+            }
+            "perform_screen_action" -> {
+                handleScreenActionTool(id, args)
+                return
+            }
+            "propose_screen_memory" -> {
+                handleScreenMemoryProposal(id, args)
+                return
+            }
+            "perform_phone_action" -> Unit
+            else -> {
+                live?.sendToolResponse(id, functionName, false, "Unsupported tool")
+                return
+            }
+        }
+        if (localCommandExecutedThisTurn) {
+            // The deterministic parser already handled this same streamed utterance.
+            // A later Gemini tool call is an acknowledgement, not a second action.
+            live?.sendToolResponse(id, functionName, true, "Action was already handled locally")
+            return
+        }
+        val action = args.optString("action").uppercase(Locale.ROOT)
+        val guardedText = lastUserIntentText.ifBlank { input.toString().trim() }
+        if (CommandParser.isMemoryIntent(guardedText)) {
+            suppressModelForTurn = false
+            live?.sendToolResponse(id, functionName, false, "This is a memory request, not a phone action")
+            return
+        }
+        if (action == "TIME" && CommandParser.parse(guardedText) !is AppCommand.CurrentTime) {
+            suppressModelForTurn = false
+            live?.sendToolResponse(id, functionName, false, "The user mentioned time conversationally; no clock query was made")
+            return
+        }
+        if (action == "QUERY_WHATSAPP" && !CommandParser.isExplicitWhatsAppMessageQuery(guardedText)) {
+            suppressModelForTurn = false
+            live?.sendToolResponse(id, functionName, false, "No explicit WhatsApp notification query was made")
+            return
+        }
+        val target = args.optString("target").trim()
+        val query = args.optString("query").trim()
+        val pendingSearch = com.myra.assistant.agent.FinalSearchHandoff.parse(guardedText)
+        if (action in setOf("YOUTUBE_SEARCH", "WEB_SEARCH", "BROWSER_SEARCH") ||
+            pendingSearch != null && action in setOf("PLAY_YOUTUBE", "OPEN_APP")
+        ) {
+            voiceLog("SEARCH_PROPOSAL_HELD_FOR_FINAL turnId=$activeTurnId candidateCapability=$action " +
+                "queryLength=${pendingSearch?.query?.length ?: query.length} decision=WAIT_FOR_FINAL executed=false")
+            // Reserve only this turn's response; no failure, speech, reset or physical action.
+            suppressModelForTurn = true
+            output.clear()
+            live?.sendToolHeld(id, functionName)
+            return
+        }
+        val command: AppCommand? = when (action) {
+            "OPEN_APP" -> target.takeIf { it.length in 2..40 }?.let(AppCommand::OpenApp)
+            "CLOSE_APP" -> AppCommand.CloseCurrentApp(target.ifBlank { null })
+            "PLAY_YOUTUBE" -> AppCommand.PlayYouTube(query.ifBlank { null })
+            "OPEN_YOUTUBE_SHORTS" -> AppCommand.OpenYouTubeShorts
+            "REQUEST_INSTAGRAM_REELS" -> AppCommand.RequestInstagramReels
+            "SCROLL_DOWN" -> AppCommand.ScrollYouTube(AppCommand.ScrollDirection.DOWN)
+            "SCROLL_UP" -> AppCommand.ScrollYouTube(AppCommand.ScrollDirection.UP)
+            "SCROLL_REPEAT" -> AppCommand.ScrollYouTube(null)
+            "MEDIA_PAUSE" -> AppCommand.ControlMedia(AppCommand.MediaAction.PAUSE)
+            "MEDIA_PLAY" -> AppCommand.ControlMedia(AppCommand.MediaAction.PLAY)
+            "MEDIA_NEXT" -> AppCommand.ControlMedia(AppCommand.MediaAction.NEXT)
+            "MEDIA_PREVIOUS" -> AppCommand.ControlMedia(AppCommand.MediaAction.PREVIOUS)
+            "MEDIA_FIRST" -> AppCommand.ControlMedia(AppCommand.MediaAction.FIRST)
+            "FLASHLIGHT_ON" -> AppCommand.SetFlashlight(true)
+            "FLASHLIGHT_OFF" -> AppCommand.SetFlashlight(false)
+            "HOME" -> AppCommand.GoHome
+            "BACK" -> AppCommand.GoBack
+            "TIME" -> AppCommand.CurrentTime
+            "BATTERY" -> AppCommand.BatteryLevel
+            "TAKE_SCREENSHOT" -> AppCommand.TakeScreenshot
+            "QUERY_WHATSAPP" -> AppCommand.QueryWhatsAppMessages
+            else -> null
+        }
+        if (command == null) {
+            live?.sendToolResponse(id, functionName, false, "Missing or unsupported action details")
+            return
+        }
+        if (command is AppCommand.ScrollYouTube) {
+            handleScrollProposal(command, "gemini_phone_tool", ScrollProposalAuthorization.PRE_FINAL)
+            live?.sendToolResponse(
+                id, functionName, true,
+                "Scroll proposal staged; final Android turn authorization is pending"
+            )
+            return
+        }
+        // A semantic tool call is a new action turn. Android remains the authority:
+        // Gemini chooses only from the allowlist, while the existing executor verifies
+        // accessibility, installed apps, and actual device capabilities.
+        localCommandExecutedThisTurn = false
+        waitingForFreshInputAfterCommand = false
+        executeCommand(command)
+        live?.sendToolResponse(id, functionName, true, "Android accepted the validated action")
+    }
+
+    private fun handleScreenActionTool(id: String, args: org.json.JSONObject) {
+        val intentText = lastUserIntentText.ifBlank { input.toString().trim() }
+        screenActionRegistry.cancel()?.let {
+            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=new_explicit_screen_command")
+        }
+        if (ScreenVisionIntentParser.parse(intentText) == null &&
+            UnifiedLyraAgentRuntime.agent.currentTask()?.interpretedGoal != com.myra.assistant.agent.AgentGoalType.TAP &&
+            fastVisualTurns.current()?.kind != FastVisualKind.ACTION
+        ) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "No explicit visible-screen action was requested")
+            return
+        }
+        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
+            voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId source=perform_screen_action")
+            live?.sendToolResponse(id, "perform_screen_action", false, "This screen command was already committed for the current voice turn")
+            return
+        }
+        val toolTarget = args.optString("target_text").trim()
+        val toolPosition = args.optString("position").trim().takeIf { it.isNotBlank() && it != "unspecified" }
+            ?: when {
+                Regex("\\b(?:center|middle|beech)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "center"
+                Regex("\\b(?:left|baaye|baye)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "left"
+                Regex("\\b(?:right|daaye|daye)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "right"
+                Regex("\\b(?:top|upar)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "top"
+                Regex("\\b(?:bottom|neeche)\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) -> "bottom"
+                else -> null
+            }
+        val explicitTitle = toolTarget.ifBlank {
+            intentText.takeIf {
+                toolPosition == null && Regex("\\b(?:video|वीडियो)\\b", RegexOption.IGNORE_CASE).containsMatchIn(it)
+            }.orEmpty()
+        }
+        val resolvedTarget = brain.resolveScreenTarget(
+            explicitTitle,
+            toolPosition,
+            args.optInt("ordinal", 0)
+        )
+        if (resolvedTarget == null) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "Visible target is ambiguous; ask the user to choose")
+            return
+        }
+        val target = resolvedTarget.targetText
+        val position = resolvedTarget.position
+        val ordinal = resolvedTarget.ordinal
+        val accessibility = AccessibilityHelperService.instance
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "LYRA Accessibility is disabled")
+            return
+        }
+        val foreground = accessibility.currentForegroundContext()
+        val actionScope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
+        if (actionScope == null) {
+            live?.sendToolResponse(id, "perform_screen_action", false, "Current Accessibility window is unavailable")
+            return
+        }
+        val beforeAccessibility = accessibility.visibleScreenSignature()
+        fastVisualTurns.current()?.let {
+            it.actionResolvedAt = android.os.SystemClock.elapsedRealtime()
+            voiceLog("visual_action_resolved visualTurnId=${it.id} target=${target.orEmpty().take(80)} position=${position.orEmpty()} ordinal=${ordinal ?: 0}")
+        }
+        val semanticHint = fastVisualTurns.current()?.semanticHint.orEmpty().lowercase(Locale.ROOT)
+        val direct = accessibility.resolveAndTapVisibleTarget(target, position, ordinal, actionScope) { candidate, _ ->
+            when {
+                semanticHint.contains("like") -> candidate.role == "like_control"
+                semanticHint.contains("subscribe") -> candidate.role == "subscribe_control" &&
+                    !candidate.label.lowercase(Locale.ROOT).contains("subscribed")
+                semanticHint.contains("comment") -> candidate.role == "comments_control"
+                else -> true
+            }
+        }
+        if (direct.accepted) {
+            fastVisualTurns.current()?.let {
+                it.actionExecutedAt = android.os.SystemClock.elapsedRealtime()
+                voiceLog(
+                    "visual_action_executed visualTurnId=${it.id} accepted=true " +
+                        "responseToActionMs=${if (it.firstModelResponseAt > 0L) it.actionExecutedAt - it.firstModelResponseAt else -1L} " +
+                        "speechEndToActionMs=${if (it.speechEndedAt > 0L) it.actionExecutedAt - it.speechEndedAt else -1L}"
+                )
+            }
+            voiceLog(
+                "agent_tool_selected tool=accessibility_click package=${actionScope.expectedPackage} " +
+                    "windowGeneration=${actionScope.expectedGeneration} targetResolution=${direct.resolution}"
+            )
+            mainHandler.postDelayed({
+                val stillOwned = com.myra.assistant.screen.ForegroundActionPolicy.canExecute(
+                    actionScope, accessibility.currentForegroundContext()
+                )
+                val changed = stillOwned && beforeAccessibility.isNotBlank() &&
+                    accessibility.visibleScreenSignature() != beforeAccessibility
+                fastVisualTurns.current()?.let {
+                    it.verificationAt = android.os.SystemClock.elapsedRealtime()
+                    voiceLog("visual_verification_complete visualTurnId=${it.id} verified=$changed totalVisualTurnMs=${it.verificationAt - it.startedAt}")
+                    fastVisualTurns.finish(it.id)
+                }
+                voiceLog("agent_verification tool=accessibility_click accepted=true verified=$changed")
+                live?.sendToolResponse(
+                    id, "perform_screen_action", changed,
+                    if (changed) "Accessibility action verified" else "Action was accepted but the expected screen change was not verified"
+                )
+            }, 350L)
+            return
+        }
+        // Normal visual actions never request MediaProjection. The model already
+        // received a fresh Accessibility screenshot when visual fallback was used.
+        live?.sendToolResponse(
+            id, "perform_screen_action", false,
+            if (direct.resolution == "ambiguous") "Visible target is ambiguous; ask the user to choose"
+            else "No current Accessibility target matched; ask a short clarification"
+        )
+        return
+    }
+
+    private fun beginFreshScreenQuery(
+        question: String,
+        userTurnId: Long,
+        visualRequest: FastVisualRequest = FastVisualRequestClassifier.classify(question)
+            ?: FastVisualRequest(FastVisualKind.QUESTION, "screen_question")
+    ) {
+        screenQuestionDetectedAt = android.os.SystemClock.elapsedRealtime()
+        val currentScreenFollowUp = com.myra.assistant.screen.ScreenStateFollowUpClassifier
+            .isCurrentScreenFollowUp(question)
+        if (currentScreenFollowUp) {
+            // A follow-up about "now" must first rewalk Accessibility. This remains
+            // read-only and does not change final action ownership.
+            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+            val scene = com.myra.assistant.screen.ScreenSceneAwarenessStore.current()
+            voiceLog(
+                "CURRENT_SCREEN_FOLLOW_UP turnId=$userTurnId sceneRevision=${scene?.sceneRevision ?: 0L} " +
+                    "freshObservationRequested=true"
+            )
+        }
+        val identity = voiceTurnIdentities.current()?.takeIf { it.userTurnId == userTurnId }
+        val boundSpeechTurnId = identity?.transcriptTurnId ?: speechTimingTurnId
+        val boundSpeechEndAt = identity?.speechEndAt?.takeIf { it > 0L } ?: speechActivityEndedAt
+        val speechTiming = ScreenQueryTimingPolicy.bind(userTurnId, boundSpeechTurnId, boundSpeechEndAt)
+        screenQuerySpeechTurnConsistency = speechTiming.consistent
+        screenResponseSpeechEndedAt = speechTiming.speechEndAt
+        voiceLog(
+            "screen_query_timing_bound userTurnId=$userTurnId speechTimingTurnId=$boundSpeechTurnId " +
+                "speechStartAt=${identity?.speechStartAt ?: speechActivityStartedAt} speechEndAt=$screenResponseSpeechEndedAt " +
+                "transcriptTurnId=${identity?.transcriptTurnId ?: 0L} finalTranscriptId=${identity?.finalTranscriptId.orEmpty()} " +
+                "intentDetectedAt=$screenQuestionDetectedAt screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency"
+        )
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        output.clear()
+        val foreground = AccessibilityHelperService.instance?.currentForegroundContext()
+        val visualTurn = foreground?.let {
+            fastVisualTurns.begin(userTurnId, visualRequest, it.packageName, it.windowId, it.generation,
+                screenResponseSpeechEndedAt, screenQuestionDetectedAt)
+        }
+        visualTurn?.apply {
+            authoritativeTurnCompleteAt = screenResponseSpeechEndedAt
+            finalTranscriptAt = latestTurnAcceptedAt.takeIf { latestIntentTimingTurnId == userTurnId } ?: 0L
+            intentResolvedAt = latestIntentDecidedAt.takeIf { latestIntentTimingTurnId == userTurnId } ?: screenQuestionDetectedAt
+        }
+        voiceLog(
+            "visual_turn_started visualTurnId=${visualTurn?.id.orEmpty()} userTurnId=$userTurnId " +
+                "kind=${visualRequest.kind} package=${foreground?.packageName.orEmpty()} " +
+                "windowId=${foreground?.windowId ?: -1} generation=${foreground?.generation ?: -1}"
+        )
+        voiceLog(
+            "visualTurnAccepted visualTurnId=${visualTurn?.id.orEmpty()} at=$screenQuestionDetectedAt " +
+                "intentToVisualTurnMs=${if (latestIntentDecidedAt > 0L) screenQuestionDetectedAt - latestIntentDecidedAt else -1L}"
+        )
+        // Preserve an active media-speech candidate when LYRA is already silent;
+        // interrupt/reset is only needed for a genuine barge-in on LYRA playback.
+        if (localAudioSpeaking) audio?.interrupt()
+        if (!currentScreenFollowUp && visualRequest.kind == FastVisualKind.QUESTION &&
+            tryInstantAccessibilityAnswer(question, userTurnId)
+        ) {
+            visualTurn?.let { fastVisualTurns.finish(it.id) }
+            return
+        }
+        if (visualAwarenessPreferences.enabled && beginAccessibilityScreenQuery(question, userTurnId, visualRequest)) return
+        if (!visualAwarenessPreferences.enabled) {
+            voiceLog("screen_query_terminal state=REJECTED_VISUAL_AWARENESS_OFF userTurnId=$userTurnId")
+            visualTurn?.let {
+                voiceLog("TOTAL_VISUAL_TURN visualTurnId=${it.id} route=EYE_OFF_LOCAL totalVisualTurnMs=${android.os.SystemClock.elapsedRealtime() - it.startedAt}")
+                fastVisualTurns.finish(it.id)
+            }
+            speakScreenUnavailable("Visual awareness off hai. Eye button on karo.")
+            return
+        }
+        // Android 10 and older do not expose AccessibilityService.takeScreenshot.
+        // A user-started continuous projection is the explicit legacy fallback.
+        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
+            voiceLog("screen_query_terminal state=REJECTED_SCREEN_INACTIVE userTurnId=$userTurnId")
+            speakScreenUnavailable(
+                if (ScreenCaptureService.currentState == ScreenShareState.PAUSED) "Screen Vision paused hai. LYRA app se resume karo."
+                else "Screen Vision abhi active nahi hai."
+            )
+            return
+        }
+        if (tryInstantScreenAnswer(question, userTurnId)) return
+        val query = ScreenCaptureService.requestFreshFrame(userTurnId) { result ->
+            mainHandler.post {
+                when (result) {
+                    is FreshFrameResult.Unavailable -> {
+                        voiceLog("screen_frame_unavailable reason=${result.reason} screen_query_id=${result.query.queryId} screen_session_id=${result.query.sessionId}")
+                        voiceLog("screen_query_terminal screenQueryId=${result.query.queryId} state=CAPTURE_FAILED reason=${result.reason}")
+                        speakScreenUnavailable("Fresh screen frame nahi mili. Ek baar phir try karo.")
+                    }
+                    is FreshFrameResult.Ready -> {
+                        val frame = result.frame
+                        if (!ScreenCaptureService.session.isCurrent(result.query.sessionId)) {
+                            voiceLog("screen_query_result_dropped_stale screen_query_id=${result.query.queryId} screen_session_id=${result.query.sessionId} reason=session_invalid_before_send")
+                            return@post
+                        }
+                        voiceLog("screen_query_state screenQueryId=${result.query.queryId} state=FRAME_SELECTED frameId=${frame.frameId}")
+                        val accessibility = AccessibilityHelperService.instance
+                        val elements = accessibility?.visibleElements(100).orEmpty()
+                        val privacyResult = ScreenFramePrivacyFilter.apply(
+                            jpeg = frame.bytes,
+                            elements = elements,
+                            screenWidth = resources.displayMetrics.widthPixels,
+                            screenHeight = resources.displayMetrics.heightPixels,
+                            enabled = screenVisionPreferences.sensitiveContentProtection
+                        )
+                        if (privacyResult is ScreenPrivacyResult.Blocked) {
+                            voiceLog(
+                                "screen_privacy_filter screenQueryId=${result.query.queryId} frameId=${frame.frameId} " +
+                                    "sensitiveProtectionEnabled=true sensitiveScanResult=SENSITIVE sensitiveCategoryDetected=${privacyResult.categories} " +
+                                    "sensitiveRegionCount=0 redactionApplied=false fullFrameBlocked=true blockReason=${privacyResult.reason} safePixelsPreserved=false"
+                            )
+                            voiceLog("screen_query_terminal screenQueryId=${result.query.queryId} state=REJECTED_PRIVACY")
+                            speakScreenPrivacyBlocked()
+                            return@post
+                        }
+                        val allowed = privacyResult as ScreenPrivacyResult.Allowed
+                        voiceLog(
+                            "screen_privacy_filter screenQueryId=${result.query.queryId} frameId=${frame.frameId} " +
+                                "sensitiveProtectionEnabled=${screenVisionPreferences.sensitiveContentProtection} " +
+                                "sensitiveScanResult=${if (allowed.regionCount > 0) "REDACTED" else "SAFE"} " +
+                                "sensitiveCategoryDetected=${allowed.categories} sensitiveRegionCount=${allowed.regionCount} " +
+                                "redactionApplied=${allowed.redactionApplied} fullFrameBlocked=false blockReason=none safePixelsPreserved=true"
+                        )
+                        screenResponseActive = true
+                        screenResponseHasContent = false
+                        screenResponseStartedLogged = false
+                        screenResponseGenerationComplete = false
+                        screenResponseTextCommitted = false
+                        screenResponseUserTurnId = result.query.userTurnId
+                        screenResponseAfterGenerationId = latestObservedModelGenerationId
+                        screenResponseGenerationId = 0L
+                        screenResponseBinding = ScreenResponseBinding(
+                            result.query.userTurnId, result.query.queryId, result.query.sessionId,
+                            latestObservedModelGenerationId
+                        )
+                        screenResponseSessionId = result.query.sessionId
+                        screenResponseQueryId = result.query.queryId
+                        screenFreshFrameCapturedAt = frame.capturedAt
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }.joinToString("\n") {
+                            "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]${if (it.clickable) " clickable" else ""}"
+                        }.take(12_000)
+                        screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
+                        voiceLog(
+                            "frame_used_for_query screen_query_id=${result.query.queryId} userTurnId=${result.query.userTurnId} " +
+                                "screen_session_id=${frame.sessionId} frame_id=${frame.frameId} frame_age_ms=${now - frame.capturedAt} " +
+                                "frame_hash=${frame.hash} speechEndAt=$screenResponseSpeechEndedAt screenQuestionDetectedAt=$screenQuestionDetectedAt " +
+                                "freshCaptureRequestedAt=${result.query.requestedAt} freshFrameCapturedAt=${frame.capturedAt} frameEncodedAt=${frame.encodedAt} " +
+                                "frameSource=${frame.source} frameAgeAtQueryMs=${(now - frame.capturedAt).coerceAtLeast(0L)} " +
+                                "intentToFrameMs=${(now - screenQuestionDetectedAt).coerceAtLeast(0L)} captureToEncodeMs=${frame.encodedAt - frame.capturedAt} " +
+                                "frameToGeminiSendMs=${(screenFrameSentAt - frame.encodedAt).coerceAtLeast(0L)} frameSentToGeminiAt=$screenFrameSentAt " +
+                                "screenQuerySpeechTurnConsistency=$screenQuerySpeechTurnConsistency " +
+                                "speechEndToIntentMs=${if (screenQuerySpeechTurnConsistency) (screenQuestionDetectedAt - screenResponseSpeechEndedAt).coerceAtLeast(0L) else -1L}"
+                        )
+                        voiceLog("screen_query_state screenQueryId=${result.query.queryId} state=SENT frameId=${frame.frameId}")
+                        voiceLog(
+                            "VISION_REQUEST_STARTED screenQueryId=${result.query.queryId} screen_session_id=${result.query.sessionId} " +
+                                "frame_id=${frame.frameId} timestamp=$screenFrameSentAt frameWaitMs=${(now - result.query.requestedAt).coerceAtLeast(0L)}"
+                        )
+                        live?.sendImage(
+                            allowed.bytes, "image/jpeg",
+                            "$question\nDescribe only the newest supplied screen frame for query ${result.query.queryId}. " +
+                                "Do not answer from older visual context. If text is readable, summarize only the visible page; never invent hidden or offscreen content. " +
+                                "Screen sharing is ACTIVE. Current safe accessibility elements:\n$ui\n" +
+                                "If uncertain, say exactly what is uncertain. Keep the spoken answer to one or two complete sentences."
+                        )
+                        mainHandler.postDelayed({
+                            if (screenResponseActive && screenResponseQueryId == result.query.queryId && !screenResponseHasContent) {
+                                voiceLog("screen_query_orphaned screenQueryId=${result.query.queryId} lastState=SENT userTurnId=${result.query.userTurnId}")
+                            }
+                        }, SCREEN_QUERY_DIAGNOSTIC_TIMEOUT_MS)
+                    }
+                }
+            }
+        }
+        if (query == null) speakScreenUnavailable("Screen Vision initialize ho raha hai. Ek baar phir try karo.")
+        else voiceLog("screen_query_created screen_query_id=${query.queryId} screen_session_id=${query.sessionId} userTurnId=$userTurnId state=CREATED")
+    }
+
+    private fun tryInstantAccessibilityAnswer(question: String, userTurnId: Long): Boolean {
+        val queryType = ScreenVisionIntentParser.parseInstantQuery(question) ?: return false
+        if (queryType != InstantScreenQuery.CURRENT_APP) return false
+        val context = ActivityContextStore.snapshot() ?: return false
+        val now = android.os.SystemClock.elapsedRealtime()
+        if ((now - context.timestamp).coerceAtLeast(0L) > 1_500L) return false
+        val safe = context.visibleElements.asSequence().map { it.label }
+            .filter { it.length >= 3 && ScreenPrivacyPolicy.sensitiveCategory(it) == null }
+            .distinct().take(3).toList()
+        val answer = when (queryType) {
+            InstantScreenQuery.CURRENT_APP -> context.appLabel?.let { "$it open hai." }
+                ?: "${context.packageName.substringAfterLast('.')} open hai."
+            InstantScreenQuery.OVERVIEW -> when {
+                safe.isNotEmpty() -> "${context.appLabel ?: context.packageName.substringAfterLast('.')} open hai. Screen par ${safe.joinToString(", ")} dikh raha hai."
+                else -> null
+            }
+        } ?: return false
+        voiceLog("TOTAL_SCREEN_RESPONSE screenQueryId=a11y-cache-$userTurnId route=ACCESSIBILITY_CONTEXT total_ms=0 screenshotUsed=false")
+        emitState(answer)
+        queueLocalSpeech(answer, allowUntranscribedAudio = true)
+        return true
+    }
+
+    private fun beginAccessibilityScreenQuery(
+        question: String,
+        userTurnId: Long,
+        visualRequest: FastVisualRequest = FastVisualRequest(FastVisualKind.QUESTION, "screen_question")
+    ): Boolean {
+        val accessibility = AccessibilityHelperService.instance ?: return false
+        val foreground = accessibility.currentForegroundContext() ?: return false
+        val requestedAt = android.os.SystemClock.elapsedRealtime()
+        val queryId = "a11y-$userTurnId-${requestedAt.toString(16)}"
+        val visualTurnId = fastVisualTurns.current()?.takeIf { it.userTurnId == userTurnId }?.id
+        fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameRequestedAt = requestedAt
+        voiceLog("visualFrameRequested visualTurnId=${visualTurnId.orEmpty()} screenQueryId=$queryId at=$requestedAt")
+        if (visualTurnId == null) return false
+        val acquisitionGate = VisualAcquisitionGate(visualTurnId, requestedAt)
+        val outerTimeout = visualDeadlineExecutor.schedule({
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!acquisitionGate.tryTimeout(now)) return@schedule
+            voiceLog(
+                "visual_frame_outer_timeout visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                    "elapsedMs=${now - requestedAt} timeoutMs=${VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS}"
+            )
+            // Deadline fallback must not queue behind the very image worker it is
+            // timing out. This executor owns only deadlines and can terminate the turn
+            // even if frame delivery is blocked.
+            if (fastVisualTurns.owns(visualTurnId)) {
+                completeScreenQuestionFromSemanticScene(question, userTurnId, visualTurnId, queryId, foreground)
+            }
+        }, VisualScreenshotTimeoutPolicy.OUTER_ACQUISITION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        val accepted = accessibility.requestFreshVisualScreenshot(
+            if (com.myra.assistant.screen.ScreenStateFollowUpClassifier.isCurrentScreenFollowUp(question)) 0L
+                else ACCESSIBILITY_VISUAL_CACHE_MAX_AGE_MS,
+            fallbackMaxAgeMs = if (com.myra.assistant.screen.ScreenStateFollowUpClassifier.isCurrentScreenFollowUp(question)) 0L
+                else VisualScreenshotTimeoutPolicy.SAFE_FALLBACK_MAX_AGE_MS,
+            requestToken = queryId,
+            isCurrentRequest = {
+                acquisitionGate.mayDispatch(fastVisualTurns.current()?.id, android.os.SystemClock.elapsedRealtime())
+            }
+        ) { result ->
+            val scheduledAt = android.os.SystemClock.elapsedRealtime()
+            if (!acquisitionGate.onPlatformCallback(fastVisualTurns.current()?.id, scheduledAt)) {
+                voiceLog(
+                    "visualFrameDeliveryScheduled visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                        "accepted=false reason=callback_after_outer_deadline_or_replacement taskAgeMs=${scheduledAt - requestedAt}"
+                )
+                return@requestFreshVisualScreenshot
+            }
+            val queueDepth = visualFrameDeliveryExecutor.queue.size
+            voiceLog(
+                "visualFrameDeliveryScheduled visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                    "timestamp=$scheduledAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
+                    "queueDepth=$queueDepth taskAgeMs=${scheduledAt - requestedAt}"
+            )
+            visualFrameDeliveryExecutor.execute {
+                val deliveryStartedAt = android.os.SystemClock.elapsedRealtime()
+                voiceLog(
+                    "visualFrameDeliveryStarted visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                        "timestamp=$deliveryStartedAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
+                        "queueDepth=${visualFrameDeliveryExecutor.queue.size} taskAgeMs=${deliveryStartedAt - requestedAt} lockWaitMs=0"
+                )
+                // The outer deadline owns the complete operation through usable-frame
+                // delivery. Android callback success alone must not complete this gate.
+                if (!acquisitionGate.tryComplete(fastVisualTurns.current()?.id, deliveryStartedAt)) {
+                    result.getOrNull()?.screenshot?.let {
+                        voiceLog(
+                            "visualFrameDelivered visualTurnId=$visualTurnId screenQueryId=$queryId accepted=false " +
+                                "reason=outer_deadline_or_replaced cacheWarmOnly=true taskAgeMs=${deliveryStartedAt - requestedAt}"
+                        )
+                    }
+                    voiceLog(
+                        "screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=$visualTurnId " +
+                            "reason=outer_deadline_or_replaced"
+                    )
+                    return@execute
+                }
+                outerTimeout.cancel(false)
+                if (visualTurnId == null || !fastVisualTurns.owns(visualTurnId)) {
+                    voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId visualTurnId=${visualTurnId.orEmpty()} reason=visual_turn_replaced")
+                    return@execute
+                }
+                val selection = result.getOrNull()
+                if (selection == null) {
+                    val reason = result.exceptionOrNull()?.message ?: "accessibility_screenshot_failed"
+                    voiceLog("screenshot_failure_reason screenQueryId=$queryId reason=$reason")
+                    voiceLog("agent_observation package=${foreground.packageName} screenshotUsed=false reason=$reason")
+                    completeScreenQuestionFromSemanticScene(
+                        question, userTurnId, visualTurnId, queryId, foreground
+                    )
+                    return@execute
+                }
+                val screenshot = selection.screenshot
+                val current = accessibility.currentForegroundContext()
+                if (current == null || current.packageName != screenshot.packageName ||
+                    current.windowId != screenshot.windowId || current.generation != screenshot.generation
+                ) {
+                    voiceLog("screen_query_result_dropped_stale screen_query_id=$queryId reason=accessibility_context_changed")
+                    fastVisualTurns.finish(visualTurnId)
+                    return@execute
+                }
+                val frameReadyAt = android.os.SystemClock.elapsedRealtime()
+                fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.frameReadyAt = frameReadyAt
+                voiceLog(
+                    "visual_frame_ready visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                        "visualFrameSource=${selection.source} selectionReason=${if (selection.source == com.myra.assistant.screen.VisualFrameSource.ACCESSIBILITY_CACHE) "fresh_matching_cache" else "cache_stale_or_changed"} " +
+                        "frameAgeMs=${(frameReadyAt - screenshot.capturedAt).coerceAtLeast(0L)} " +
+                        "visualFrameAcquisitionMs=${(frameReadyAt - requestedAt).coerceAtLeast(0L)} " +
+                        "speechEndToFrameReadyMs=${if (screenResponseSpeechEndedAt > 0L) frameReadyAt - screenResponseSpeechEndedAt else -1L}"
+                )
+                voiceLog(
+                    "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                        "at=$frameReadyAt visualFrameSource=${selection.source}"
+                )
+                voiceLog(
+                    "visualFrameDelivered visualTurnId=$visualTurnId screenQueryId=$queryId accepted=true " +
+                        "timestamp=$frameReadyAt executorName=lyra-current-visual-delivery threadName=${Thread.currentThread().name} " +
+                        "queueDepth=${visualFrameDeliveryExecutor.queue.size} taskAgeMs=${frameReadyAt - requestedAt}"
+                )
+                // Reuse the already-published semantic scene. Rewalking a large
+                // Accessibility tree here previously delayed the visual model request.
+                val elements = ActivityContextStore.snapshot()?.takeIf {
+                    it.packageName == current.packageName && it.windowId == current.windowId &&
+                        it.generation == current.generation
+                }?.visibleElements?.take(60)?.map {
+                    VisibleScreenElement(
+                        it.label,
+                        android.graphics.Rect(it.left, it.top, it.right, it.bottom),
+                        it.actionable,
+                        it.role.name
+                    )
+                }.orEmpty()
+                val privacyResult = ScreenFramePrivacyFilter.apply(
+                    screenshot.bytes, elements, screenshot.width, screenshot.height,
+                    screenVisionPreferences.sensitiveContentProtection
+                )
+                if (privacyResult is ScreenPrivacyResult.Blocked) {
+                    voiceLog("screen_query_terminal screenQueryId=$queryId state=REJECTED_PRIVACY source=ACCESSIBILITY_SCREENSHOT")
+                    fastVisualTurns.finish(visualTurnId)
+                    speakScreenPrivacyBlocked()
+                    return@execute
+                }
+                val allowed = privacyResult as ScreenPrivacyResult.Allowed
+                screenResponseActive = true
+                screenResponseHasContent = false
+                screenResponseStartedLogged = false
+                screenResponseGenerationComplete = false
+                screenResponseTextCommitted = false
+                screenResponseUserTurnId = userTurnId
+                screenResponseAfterGenerationId = latestObservedModelGenerationId
+                screenResponseGenerationId = 0L
+                val sessionId = "accessibility:${current.packageName}:${current.generation}"
+                screenResponseBinding = ScreenResponseBinding(userTurnId, queryId, sessionId, latestObservedModelGenerationId)
+                screenResponseSessionId = sessionId
+                screenResponseQueryId = queryId
+                screenResponseAccessibilityPackage = current.packageName
+                screenResponseAccessibilityGeneration = current.generation
+                screenFreshFrameCapturedAt = screenshot.capturedAt
+                screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
+                fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.modelRequestAt = screenFrameSentAt
+                val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
+                    .joinToString("\n") { "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]" }
+                    .take(4_000)
+                voiceLog(
+                    "agent_observation package=${current.packageName} windowGeneration=${current.generation} " +
+                        "semanticElements=${ActivityContextStore.snapshot()?.visibleElements?.size ?: 0} screenshotUsed=true"
+                )
+                voiceLog(
+                    "VISION_REQUEST_STARTED screenQueryId=$queryId source=ACCESSIBILITY_SCREENSHOT " +
+                        "captureMs=${screenFrameSentAt - requestedAt} bytes=${allowed.bytes.size}"
+                )
+                voiceLog(
+                    "visual_model_request_sent visualTurnId=$visualTurnId screenQueryId=$queryId " +
+                        "frameReadyToModelRequestMs=${(screenFrameSentAt - frameReadyAt).coerceAtLeast(0L)}"
+                )
+                voiceLog(
+                    "visual_model_payload visualTurnId=$visualTurnId imageEncodedBytes=${allowed.bytes.size} " +
+                        "imageDimensions=${screenshot.width}x${screenshot.height} semanticContextChars=${ui.length} " +
+                        "semanticElementCount=${elements.size} requestPayloadBytes=${allowed.bytes.size + ui.toByteArray().size + question.toByteArray().size} " +
+                        "networkSendAt=$screenFrameSentAt"
+                )
+                voiceLog("visualModelRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt")
+                voiceLog("ttsRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt owner=CONTROLLED_SCREEN")
+                val visualInstruction = if (visualRequest.kind == FastVisualKind.ACTION) {
+                    "This is a visual action. Identify exactly one safe current-screen target. " +
+                        "Call perform_screen_action with its semantic label or position. Do not answer conversationally or claim success."
+                } else {
+                    "Answer the user's current-screen question directly in one or two complete sentences."
+                }
+                live?.sendImage(
+                    allowed.bytes, "image/jpeg",
+                    "$question\nUse only this fresh Accessibility screenshot and current safe UI elements. " +
+                        "Do not infer hidden content. $visualInstruction\n$ui"
+                )
+            }
+        }
+        if (accepted) {
+            voiceLog("screen_query_created screen_query_id=$queryId source=ACCESSIBILITY_SCREENSHOT userTurnId=$userTurnId")
+        } else {
+            outerTimeout.cancel(false)
+        }
+        return accepted
+    }
+
+    private fun completeScreenQuestionFromSemanticScene(
+        question: String,
+        userTurnId: Long,
+        visualTurnId: String,
+        queryId: String,
+        expected: com.myra.assistant.screen.ForegroundAppContext
+    ) {
+        val scene = ActivityContextStore.snapshot()?.takeIf {
+            SemanticScreenFallbackPolicy.mayAnswer(
+                expected.packageName, expected.windowId, expected.generation,
+                it.packageName, it.windowId, it.generation, it.visibleElements.size,
+                android.os.SystemClock.elapsedRealtime() - it.timestamp
+            )
+        }
+        val labels = scene?.visibleElements.orEmpty().asSequence()
+            .map { it.label.trim() }
+            .filter { it.length >= 3 && ScreenPrivacyPolicy.sensitiveCategory(it) == null }
+            .distinct().take(4).toList()
+        if (scene == null || labels.isEmpty()) {
+            fastVisualTurns.finish(visualTurnId)
+            voiceLog("screen_query_terminal screenQueryId=$queryId state=CAPTURE_FAILED visualSource=NONE")
+            speakScreenUnavailable("Current screen image nahi mili.")
+            return
+        }
+        val app = scene.appLabel ?: scene.packageName.substringAfterLast('.')
+        val answer = "$app open hai. Screen par ${labels.joinToString(", ")} dikh raha hai."
+        val now = android.os.SystemClock.elapsedRealtime()
+        voiceLog(
+            "visualFrameAvailable visualTurnId=$visualTurnId screenQueryId=$queryId at=$now " +
+                "visualFrameSource=SEMANTIC_SCREEN semanticElements=${scene.visibleElements.size}"
+        )
+        voiceLog(
+            "TOTAL_VISUAL_TURN visualTurnId=$visualTurnId route=SEMANTIC_SCREEN " +
+                "visualFrameAcquisitionMs=${now - (fastVisualTurns.current()?.frameRequestedAt ?: now)}"
+        )
+        fastVisualTurns.finish(visualTurnId)
+        emitState(answer)
+        queueLocalSpeech(answer, allowUntranscribedAudio = true)
+    }
+
+    private fun isScreenResponseContextCurrent(): Boolean {
+        if (!screenResponseSessionId.startsWith("accessibility:")) {
+            return ScreenCaptureService.session.isCurrent(screenResponseSessionId)
+        }
+        val current = AccessibilityHelperService.instance?.currentForegroundContext() ?: return false
+        return current.packageName == screenResponseAccessibilityPackage &&
+            current.generation == screenResponseAccessibilityGeneration
+    }
+
+    private fun tryInstantScreenAnswer(question: String, userTurnId: Long): Boolean {
+        val queryType = ScreenVisionIntentParser.parseInstantQuery(question) ?: return false
+        val now = android.os.SystemClock.elapsedRealtime()
+        val context = ScreenContextStore.freshSnapshot(
+            ScreenCaptureService.session.sessionId, now, ScreenCacheUse.QUESTION
+        ) ?: run {
+            voiceLog("FRAME_STALE userTurnId=$userTurnId route=HOT_SCREEN_CACHE fallback=VISION")
+            return false
+        }
+        val safeText = context.summary.visibleText.filter {
+            ScreenPrivacyPolicy.sensitiveCategory(it) == null
+        }
+        val app = context.summary.appName ?: context.summary.packageName?.substringAfterLast('.')
+        val answer = when (queryType) {
+            InstantScreenQuery.CURRENT_APP -> app?.let { "$it open hai." }
+            InstantScreenQuery.OVERVIEW -> {
+                val useful = safeText.filter { it.length >= 3 }.distinct().take(3)
+                when {
+                    useful.isNotEmpty() && app != null -> "$app open hai. Screen par ${useful.joinToString(", ")} dikh raha hai."
+                    useful.isNotEmpty() -> "Screen par ${useful.joinToString(", ")} dikh raha hai."
+                    app != null -> "$app open hai, lekin readable text clear nahi hai."
+                    else -> null
+                }
+            }
+        } ?: return false
+        val newestAt = maxOf(context.frameTimestamp, context.accessibilityTimestamp)
+        instantScreenQueryId = "hot-$userTurnId-${now.toString(16)}"
+        instantScreenQueryStartedAt = screenResponseSpeechEndedAt.takeIf {
+            screenQuerySpeechTurnConsistency && it > 0L
+        } ?: now
+        instantScreenCacheAgeMs = (now - newestAt).coerceAtLeast(0L)
+        voiceLog(
+            "FRAME_SELECTED screenQueryId=$instantScreenQueryId userTurnId=$userTurnId source=HOT_SCREEN_CACHE " +
+                "screen_session_id=${context.screenSessionId} frame_id=${context.frameId} frame_age_ms=$instantScreenCacheAgeMs"
+        )
+        voiceLog(
+            "TOTAL_SCREEN_RESPONSE screenQueryId=$instantScreenQueryId route=HOT_SCREEN_CACHE stage=ANSWER_READY " +
+                "voice_ms=-1 capture_ms=0 accessibility_ms=0 vision_ms=0 gemini_ms=0 tts_ms=-1 " +
+                "total_ms=${(now - instantScreenQueryStartedAt).coerceAtLeast(0L)}"
+        )
+        emitState(answer)
+        queueLocalSpeech(answer, allowUntranscribedAudio = true)
+        return true
+    }
+
+    private fun armScreenQuestion(
+        question: String,
+        userTurnId: Long,
+        source: String,
+        finalTranscriptCommitted: Boolean = false
+    ) {
+        if (question.isBlank() || userTurnId == 0L) return
+        armedScreenQuestion = question
+        armedScreenQuestionTurnId = userTurnId
+        armedScreenQuestionDetectedAt = android.os.SystemClock.elapsedRealtime()
+        armedScreenQuestionFinalCommitted = finalTranscriptCommitted
+        voiceLog(
+            "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt userTurnId=$userTurnId source=$source " +
+                "speechEndAt=$speechActivityEndedAt finalTranscriptAt=0 stableFinalBubbleCommitted=false"
+        )
+        // ASR chunks and local VAD are independent streams. The stable read-only screen
+        // question often arrives after VAD has already ended, so it must not wait for a
+        // second speech edge or Gemini's delayed final transcript.
+        if (com.myra.assistant.screen.EarlyScreenQuestionPolicy.mayAuthorizeAtSpeechEnd(
+                question, ordinaryModelAudioGate.isSpeechActive()
+            ) && speechActivityEndedAt > 0L
+        ) {
+            mainHandler.postDelayed(
+                { dispatchArmedScreenQuestionAtSpeechEnd() },
+                com.myra.assistant.screen.EarlyScreenQuestionPolicy.STABILIZATION_MS
+            )
+        }
+    }
+
+    private fun dispatchArmedScreenQuestionAtSpeechEnd() {
+        val question = armedScreenQuestion.takeIf { it.isNotBlank() } ?: return
+        val turnId = armedScreenQuestionTurnId.takeIf { it != 0L } ?: return
+        if (screenResponseActive) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!com.myra.assistant.screen.ArmedScreenQuestionPolicy.mayDispatchForIdentity(
+                turnId, voiceTurnIdentities.current()?.userTurnId
+            )) {
+            voiceLog(
+                "screen_query_armed_cancelled userTurnId=$turnId reason=replaced_voice_identity " +
+                    "ageMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
+            )
+            armedScreenQuestion = ""
+            armedScreenQuestionTurnId = 0L
+            armedScreenQuestionDetectedAt = 0L
+            armedScreenQuestionFinalCommitted = false
+            return
+        }
+        val stabilizationRemaining = com.myra.assistant.screen.EarlyScreenQuestionPolicy.STABILIZATION_MS -
+            (now - armedScreenQuestionDetectedAt)
+        if (stabilizationRemaining > 0L) {
+            mainHandler.postDelayed({ dispatchArmedScreenQuestionAtSpeechEnd() }, stabilizationRemaining)
+            return
+        }
+        voiceLog(
+            "screen_query_early_dispatch userTurnId=$turnId speech_end_at=$speechActivityEndedAt " +
+                "screen_query_intent_detected_at=$armedScreenQuestionDetectedAt speechEndToIntentMs=${(armedScreenQuestionDetectedAt - speechActivityEndedAt).coerceAtLeast(0L)} " +
+                "intentToDispatchMs=${(now - armedScreenQuestionDetectedAt).coerceAtLeast(0L)}"
+        )
+        earlyScreenQueryAwaitingFinalTranscript = !armedScreenQuestionFinalCommitted
+        earlyScreenQuestionText = question
+        earlyScreenQueryDispatchedTurnId = turnId
+        beginFreshScreenQuery(question, turnId)
+        armedScreenQuestion = ""
+        armedScreenQuestionTurnId = 0L
+        armedScreenQuestionDetectedAt = 0L
+        armedScreenQuestionFinalCommitted = false
+    }
+
+    private fun speakScreenUnavailable(message: String) {
+        screenResponseActive = false
+        screenResponseHasContent = false
+        screenResponseStartedLogged = false
+        screenResponseGenerationComplete = false
+        screenResponseTextCommitted = false
+        screenResponseUserTurnId = 0L
+        screenResponseAfterGenerationId = 0L
+        screenResponseGenerationId = 0L
+        screenResponseBinding = null
+        screenResponseSessionId = ""
+        screenResponseAccessibilityPackage = ""
+        screenResponseAccessibilityGeneration = 0L
+        screenResponseQueryId = ""
+        listener?.onMyraText(message, true)
+        emitState(message)
+        queueLocalSpeech(message, allowUntranscribedAudio = true)
+    }
+
+    private fun speakScreenPrivacyBlocked() {
+        val message = "Sensitive information visible hai, isliye main screen details read nahi kar rahi."
+        listener?.onMyraText(message, true)
+        emitState(message)
+        queueLocalSpeech(message, allowUntranscribedAudio = true)
+    }
+
+    private fun hasRecentVerifiedVisualContext(now: Long = android.os.SystemClock.elapsedRealtime()): Boolean {
+        return lastVerifiedVisualResponseAt > 0L &&
+            (now - lastVerifiedVisualResponseAt).coerceAtLeast(0L) <= 30_000L
+    }
+
+    private fun finishScreenResponse(reason: String) {
+        if (screenResponseHasContent && reason != "real_user_barge_in") {
+            lastVerifiedVisualResponseAt = android.os.SystemClock.elapsedRealtime()
+        }
+        fastVisualTurns.current()?.takeIf { it.userTurnId == screenResponseUserTurnId }?.let {
+            val now = android.os.SystemClock.elapsedRealtime()
+            voiceLog(
+                "TOTAL_VISUAL_TURN visualTurnId=${it.id} reason=$reason " +
+                    "speechEndToAuthoritativeTurnMs=${if (it.speechEndedAt > 0L && it.authoritativeTurnCompleteAt > 0L) it.authoritativeTurnCompleteAt - it.speechEndedAt else -1L} " +
+                    "authoritativeTurnToTranscriptMs=${if (it.authoritativeTurnCompleteAt > 0L && it.finalTranscriptAt > 0L) it.finalTranscriptAt - it.authoritativeTurnCompleteAt else -1L} " +
+                    "transcriptToIntentMs=${if (it.finalTranscriptAt > 0L && it.intentResolvedAt > 0L) it.intentResolvedAt - it.finalTranscriptAt else -1L} " +
+                    "intentToVisualFrameMs=${if (it.intentResolvedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.intentResolvedAt else -1L} " +
+                    "visualFrameAcquisitionMs=${if (it.frameRequestedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.frameRequestedAt else -1L} " +
+                    "speechEndToFrameReadyMs=${if (it.speechEndedAt > 0L && it.frameReadyAt > 0L) it.frameReadyAt - it.speechEndedAt else -1L} " +
+                    "frameReadyToModelRequestMs=${if (it.frameReadyAt > 0L && it.modelRequestAt > 0L) it.modelRequestAt - it.frameReadyAt else -1L} " +
+                    "modelRequestToFirstResponseMs=${if (it.modelRequestAt > 0L && it.firstModelResponseAt > 0L) it.firstModelResponseAt - it.modelRequestAt else -1L} " +
+                    "responseToActionMs=${if (it.firstModelResponseAt > 0L && it.actionExecutedAt > 0L) it.actionExecutedAt - it.firstModelResponseAt else -1L} " +
+                    "speechEndToActionMs=${if (it.speechEndedAt > 0L && it.actionExecutedAt > 0L) it.actionExecutedAt - it.speechEndedAt else -1L} " +
+                    "speechEndToFirstAudioMs=${if (it.speechEndedAt > 0L && it.firstAudioAt > 0L) it.firstAudioAt - it.speechEndedAt else -1L} " +
+                    "visualResultToReplyQueuedMs=${if (it.firstModelResponseAt > 0L && it.replyQueuedAt > 0L) it.replyQueuedAt - it.firstModelResponseAt else -1L} " +
+                    "replyQueuedToFirstAudioMs=${if (it.replyQueuedAt > 0L && it.firstAudioAt > 0L) it.firstAudioAt - it.replyQueuedAt else -1L} " +
+                    "speechEndToFirstPlaybackMs=${if (it.speechEndedAt > 0L && it.firstPlaybackAt > 0L) it.firstPlaybackAt - it.speechEndedAt else -1L} " +
+                    "totalVisualTurnMs=${now - it.startedAt}"
+            )
+            fastVisualTurns.finish(it.id)
+        }
+        voiceLog("screen_query_terminal screenQueryId=$screenResponseQueryId state=${if (reason == "real_user_barge_in") "CANCELLED_REAL_BARGE_IN" else "COMPLETED"} reason=$reason")
+        voiceLog("screen_response_playback_end screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId reason=$reason")
+        screenResponseActive = false
+        screenResponseHasContent = false
+        screenResponseStartedLogged = false
+        screenResponseGenerationComplete = false
+        screenResponseTextCommitted = false
+        screenResponseUserTurnId = 0L
+        screenResponseAfterGenerationId = 0L
+        screenResponseGenerationId = 0L
+        screenResponseBinding = null
+        screenResponseSessionId = ""
+        screenResponseAccessibilityPackage = ""
+        screenResponseAccessibilityGeneration = 0L
+        screenResponseQueryId = ""
+        resetTurnBuffers("screen_response_$reason")
+    }
+
+    private fun handleScreenMemoryProposal(id: String, args: org.json.JSONObject) {
+        val prefs = screenVisionPreferences
+        if (!prefs.visionEnabled || !prefs.automaticLearning || !prefs.saveScreenMemories ||
+            !ScreenCaptureService.hasFreshFrame()
+        ) {
+            live?.sendToolResponse(id, "propose_screen_memory", false, "Automatic screen memory is disabled")
+            return
+        }
+        val fact = args.optString("fact").trim().replace(Regex("\\s+"), " ")
+        val categoryName = args.optString("category").uppercase(Locale.ROOT)
+        val confidence = args.optDouble("confidence", 0.0)
+        val stableKey = args.optString("memory_key").lowercase(Locale.ROOT)
+            .replace(Regex("[^a-z0-9_:]+"), "_").trim('_').take(80)
+        if (fact.length !in 5..200 || stableKey.isBlank() ||
+            !ScreenPrivacyPolicy.isMemoryWorthy(categoryName, confidence) ||
+            (prefs.sensitiveContentProtection && ScreenPrivacyPolicy.blocksLongTermMemory(fact))
+        ) {
+            live?.sendToolResponse(id, "propose_screen_memory", false, "Screen observation was not safe and durable enough to save")
+            return
+        }
+        val category = runCatching { MemoryCategory.valueOf(categoryName) }.getOrNull()
+        if (category == null) {
+            live?.sendToolResponse(id, "propose_screen_memory", false, "Unsupported memory category")
+            return
+        }
+        serviceScope.launch {
+            val candidate = MemoryCandidate(
+                category, fact, "screen:$stableKey", MemorySensitivity.LOW,
+                confidence, source = "screen_observation",
+                provenance = com.myra.assistant.data.memory.MemoryProvenance.SCREEN_OBSERVATION
+            )
+            val result = if (memoryRepository.isAlreadySaved(candidate)) {
+                MemoryWriteResult.Saved("existing")
+            } else memoryBrain.processGroundedProposal(candidate)
+            val saved = result is MemoryWriteResult.Saved
+            voiceLog("screen_memory_write fact=${fact.take(80)} source=screen_observation saved=$saved")
+            live?.sendToolResponse(
+                id, "propose_screen_memory", saved,
+                if (saved) "Structured screen observation saved in the existing Memory Brain"
+                else "Screen observation was not saved"
+            )
+        }
+    }
+
+    private fun handleSemanticMemoryProposal(id: String, args: org.json.JSONObject) {
+        val guardedText = lastUserIntentText.ifBlank { input.toString().trim() }
+        if (guardedText.isBlank() || MemoryCommandParser.parse(romanDisplayText(guardedText)) != null) {
+            live?.sendToolResponse(id, "propose_user_memory", false, "Explicit memory commands are handled locally")
+            return
+        }
+        val proposalTurnId = activeTurnId
+        val operations = parseMemorySemanticOperations(args).map { it.copy(sourceTurnId = proposalTurnId) }
+        if (proposalTurnId == 0L || operations.isEmpty()) {
+            live?.sendToolResponse(id, "propose_user_memory", false, "Structured proposal was incomplete")
+            return
+        }
+        val existing = stagedMemorySemantics[proposalTurnId].orEmpty()
+        val merged = StagedMemoryProposalPolicy.merge(existing, operations)
+        stagedMemorySemantics[proposalTurnId] = merged
+        reserveMemoryResponse(proposalTurnId, "SEMANTIC_PROPOSAL")
+        voiceLog(
+            "MEMORY_SEMANTIC_PROPOSAL_STAGED turnId=$proposalTurnId received=${operations.size} " +
+                "merged=${merged.size} decision=WAIT_FOR_FINAL executed=false"
+        )
+        live?.sendToolHeld(id, "propose_user_memory")
+    }
+
+    private fun reserveMemoryResponse(turnId: Long, source: String) {
+        memoryResponsePendingTurnId = turnId
+        suppressModelForTurn = true
+        responseArbiter.claimControlled(turnId)
+        audio?.interrupt()
+        voiceLog(
+            "MEMORY_RESPONSE_OWNER turnId=$turnId owner=MEMORY_PENDING source=$source " +
+                "planDecision=WAIT_FOR_FINAL verifiedBeforeResponse=false"
+        )
+    }
+
+    private fun verifiedMemoryResponse(outcome: MemoryBrainOutcome, modelText: String): String = when (outcome) {
+        is MemoryBrainOutcome.Recalled -> outcome.workingAnswer
+            ?: PersonalMemoryRecallFormatter.formatRows(outcome.rows, outcome.type)
+        is MemoryBrainOutcome.Mutated -> if (outcome.result is MemoryWriteResult.Saved) {
+            modelText.takeIf { it.isNotBlank() }?.let(::romanDisplayText) ?: "Acha, samajh gayi."
+        } else MemoryCommandReplyFormatter.rememberRejected()
+        is MemoryBrainOutcome.Deleted -> MemoryCommandReplyFormatter.forgotten(outcome.succeeded)
+        is MemoryBrainOutcome.Rejected -> when {
+            outcome.reason.contains("ambiguous", true) ->
+                "Kaunsi memory ya person ki baat hai? Naam clearly batao."
+            else -> modelText.takeIf {
+                it.isNotBlank() && !it.contains("memory operation was not authorized", true)
+            }?.let(::romanDisplayText)
+                ?: "Main is baat ko memory mein save nahi kar payi."
+        }
+        MemoryBrainOutcome.Ignored -> modelText.takeIf { it.isNotBlank() }?.let(::romanDisplayText)
+            ?: "Acha, samajh gayi."
+    }
+
+    private fun logMemoryOutcome(
+        turnId: Long,
+        plan: com.myra.assistant.data.memory.FinalMemoryTurnPlan,
+        outcome: MemoryBrainOutcome,
+        recallType: MemoryRecallType?
+    ) {
+        when (outcome) {
+            is MemoryBrainOutcome.Recalled -> voiceLog(
+                "MEMORY_RECALL_RESULT turnId=$turnId queryType=${recallType ?: "SEMANTIC"} " +
+                    "rowCount=${outcome.rows.size} relationshipTypes=${safeRelationshipTypes(outcome.rows)} " +
+                    "workingTransactionUsed=${outcome.workingAnswer != null}"
+            )
+            is MemoryBrainOutcome.Mutated -> voiceLog(
+                "MEMORY_WRITE_RESULT turnId=$turnId operation=${plan.operations.firstOrNull()?.intent ?: plan.decision} " +
+                    "status=${if (outcome.result is MemoryWriteResult.Saved) "SAVED" else "REJECTED"} verification=true"
+            )
+            is MemoryBrainOutcome.Deleted -> voiceLog(
+                "MEMORY_WRITE_RESULT turnId=$turnId operation=DELETE status=${if (outcome.succeeded) "SAVED" else "FAILED"} verification=true"
+            )
+            is MemoryBrainOutcome.Rejected -> voiceLog(
+                "MEMORY_WRITE_RESULT turnId=$turnId operation=${plan.decision} status=REJECTED verification=true"
+            )
+            MemoryBrainOutcome.Ignored -> voiceLog(
+                "MEMORY_WRITE_RESULT turnId=$turnId operation=${plan.operations.firstOrNull()?.intent ?: plan.decision} " +
+                    "status=IGNORED verification=true"
+            )
+        }
+    }
+
+    private fun safeRelationshipTypes(rows: List<com.myra.assistant.data.memory.MemoryEntity>): String =
+        rows.mapNotNull { row ->
+            PersonRelationship.values().firstOrNull { row.stableKey.endsWith(":relationship:${it.key}") }?.name
+                ?: PersonRelationship.BEST_FRIEND.name.takeIf { MemoryRelationshipPolicy.isBestFriend(row) }
+        }.distinct().sorted().joinToString(",").ifBlank { "NONE" }
+
+    private fun parseMemorySemanticOperations(args: org.json.JSONObject): List<MemorySemanticFrame> {
+        val values = args.optJSONArray("operations") ?: return emptyList()
+        return (0 until minOf(values.length(), 4)).mapNotNull { index ->
+            val value = values.optJSONObject(index) ?: return@mapNotNull null
+            val intent = runCatching { MemorySemanticIntent.valueOf(value.optString("intent")) }.getOrNull()
+                ?: return@mapNotNull null
+            val relationship = value.optString("relationship").takeIf(String::isNotBlank)?.let {
+                runCatching { PersonRelationship.valueOf(it) }.getOrNull()
+            }
+            val replacementRelationship = value.optString("replacement_relationship").takeIf(String::isNotBlank)?.let {
+                runCatching { PersonRelationship.valueOf(it) }.getOrNull()
+            }
+            val temporal = runCatching {
+                MemoryTemporalScope.valueOf(value.optString("temporal_scope", "UNSPECIFIED"))
+            }.getOrDefault(MemoryTemporalScope.UNSPECIFIED)
+            val category = value.optString("category").takeIf(String::isNotBlank)?.let {
+                runCatching { MemoryCategory.valueOf(it) }.getOrNull()
+            }
+            val criticalLiterals = value.optJSONArray("critical_literals")?.let { array ->
+                (0 until minOf(array.length(), 8)).mapNotNull { i ->
+                    array.optString(i).trim().takeIf(String::isNotEmpty)
+                }
+            }.orEmpty()
+            val participants = value.optJSONArray("participants")?.let { array ->
+                (0 until minOf(array.length(), 6)).mapNotNull { i ->
+                    array.optString(i).trim().takeIf(String::isNotEmpty)
+                }
+            }.orEmpty()
+            val episode = if (intent == MemorySemanticIntent.ADD_EPISODE) {
+                com.myra.assistant.data.memory.EpisodicMemoryPayload(
+                    eventType = value.optString("event_type", "event"),
+                    summary = value.optString("fact"),
+                    participants = participants,
+                    importance = value.optDouble("importance", .5).coerceIn(0.0, 1.0)
+                )
+            } else null
+            val goal = if (intent == MemorySemanticIntent.ADD_GOAL) {
+                com.myra.assistant.data.memory.GoalMemoryPayload(
+                    title = value.optString("goal_title"),
+                    description = value.optString("fact").takeIf(String::isNotBlank),
+                    status = value.optString("goal_status", "ACTIVE"),
+                    priority = value.optInt("priority", 0).coerceIn(0, 5),
+                    progress = value.optInt("progress", 0).coerceIn(0, 100)
+                )
+            } else null
+            MemorySemanticFrame(
+                intent = intent,
+                person = value.optString("person").takeIf(String::isNotBlank),
+                replacementPerson = value.optString("replacement_person").takeIf(String::isNotBlank),
+                relationship = relationship,
+                replacementRelationship = replacementRelationship,
+                temporalScope = temporal,
+                fact = value.optString("fact").takeIf(String::isNotBlank),
+                category = category,
+                stableKey = value.optString("memory_key").takeIf(String::isNotBlank),
+                confidence = value.optDouble("confidence", 0.0),
+                evidence = value.optString("evidence"),
+                sourceSpan = value.optString("source_span", value.optString("evidence")),
+                criticalLiterals = criticalLiterals,
+                episode = episode,
+                goal = goal
+            )
+        }
+    }
+
+    private fun handlePendingConfirmation(raw: String): Boolean {
+        val pending = pendingConfirmedCommand ?: return false
+        if (android.os.SystemClock.elapsedRealtime() > pendingConfirmationExpiresAt) {
+            pendingConfirmedCommand = null
+            return false
+        }
+        val text = raw.lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+        val yes = Regex("^(?:haan|ha|han|yes|yeah|yep|kar\\s+do|karo|open\\s+kar\\s+do|bilkul|theek\\s+hai)$").matches(text)
+        val no = Regex("^(?:nahi|nahin|no|nope|cancel|rehne\\s+do|mat\\s+karo)$").matches(text)
+        if (!yes && !no) return false
+        pendingConfirmedCommand = null
+        pendingConfirmationExpiresAt = 0L
+        waitingForFreshInputAfterCommand = false
+        localCommandExecutedThisTurn = false
+        commandUserTextEmitted = true
+        commitFinalUserMessage(raw.trim(), "PHONE_ACTION_CONFIRMATION")
+        if (yes) {
+            executeCommand(pending)
+        } else {
+            suppressModelForTurn = true
+            val message = "Theek hai yaar, nahi kholungi."
+            listener?.onMyraText(message)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = true)
+        }
+        return true
+    }
+
+    private fun isSafeDirectMediaCommand(command: AppCommand): Boolean = when (command) {
+        is AppCommand.PlayYouTube, AppCommand.OpenYouTubeShorts,
+        AppCommand.OpenInstagramReels, AppCommand.TakeScreenshot, AppCommand.RepeatYouTubeSearch,
+        is AppCommand.OpenApp, is AppCommand.CloseCurrentApp,
+        is AppCommand.ReplyWhatsApp, AppCommand.QueryWhatsAppMessages,
+        AppCommand.GoHome, AppCommand.GoBack, AppCommand.CurrentTime,
+        AppCommand.BatteryLevel, is AppCommand.SetFlashlight,
+        is AppCommand.ControlMedia, is AppCommand.ScrollYouTube -> true
+        else -> false
+    }
+
+    private fun shouldExecute(command: AppCommand): Boolean {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val key = when (command) {
+            is AppCommand.OpenApp -> "open:${command.appName.lowercase(Locale.ROOT)}"
+            is AppCommand.CloseCurrentApp -> "close:${command.requestedName.orEmpty().lowercase(Locale.ROOT)}"
+            is AppCommand.SearchYouTube -> "youtube-search:${command.query.lowercase(Locale.ROOT)}"
+            is AppCommand.PlayYouTube -> "youtube-play:${command.query.orEmpty().lowercase(Locale.ROOT)}"
+            AppCommand.OpenYouTubeShorts -> "youtube-shorts"
+            AppCommand.RequestInstagramReels -> "request-instagram-reels"
+            AppCommand.OpenInstagramReels -> "open-instagram-reels"
+            AppCommand.TakeScreenshot -> "take-screenshot"
+            AppCommand.RepeatYouTubeSearch -> "youtube-search:repeat"
+            is AppCommand.DeepResearch -> "research:${command.query.orEmpty().lowercase(Locale.ROOT)}"
+            is AppCommand.ReplyWhatsApp -> "whatsapp-reply:${command.sender.orEmpty().lowercase(Locale.ROOT)}:${command.message.lowercase(Locale.ROOT)}"
+            AppCommand.QueryWhatsAppMessages -> "whatsapp-message-query"
+            AppCommand.GoHome -> "go-home"
+            AppCommand.GoBack -> "go-back"
+            AppCommand.CurrentTime -> "current-time"
+            AppCommand.BatteryLevel -> "battery-level"
+            is AppCommand.SetFlashlight -> "flashlight:${command.enabled}"
+            is AppCommand.ControlMedia -> "media:${command.action.name.lowercase(Locale.ROOT)}"
+            is AppCommand.ScrollYouTube -> "youtube-scroll:${command.direction?.name?.lowercase(Locale.ROOT) ?: "repeat"}"
+        }
+        // Scroll is intentionally repeatable hands-free, so only suppress near-identical
+        // transcript fragments from the same utterance. Other actions keep the longer
+        // safety window that prevents accidental duplicate execution.
+        val dedupeWindowMs = if (command is AppCommand.ScrollYouTube) 700L else 4_000L
+        if (key == lastCommandKey && now - lastCommandAt < dedupeWindowMs) return false
+        lastCommandKey = key; lastCommandAt = now; return true
+    }
+
+    private fun executeCommand(command: AppCommand) {
+        if (command is AppCommand.ScrollYouTube) {
+            // Every non-final caller is reduced to a proposal here. Physical scroll is
+            // reachable only from handleScrollProposal(FINAL_AUTHORIZED).
+            handleScrollProposal(command, "legacy_command_boundary", ScrollProposalAuthorization.PRE_FINAL)
+            return
+        }
+        if (localCommandExecutedThisTurn || !shouldExecute(command)) return
+        if (command is AppCommand.SearchYouTube) {
+            voiceLog(
+                "SEARCH_EXECUTOR_ENTRY class=MyraVoiceService method=executeCommand turnId=$activeTurnId " +
+                    "finalTranscript=legacy query=${command.query.take(120)} destination=YOUTUBE " +
+                    "foregroundPackage=${AccessibilityHelperService.instance?.currentForegroundContext()?.packageName}"
+            )
+        }
+        localCommandExecutedThisTurn = true
+        latestActionDispatchedAt = android.os.SystemClock.elapsedRealtime()
+        if (command == AppCommand.RequestInstagramReels) {
+            pendingConfirmedCommand = AppCommand.OpenInstagramReels
+            pendingConfirmationExpiresAt = android.os.SystemClock.elapsedRealtime() + 30_000L
+            suppressModelForTurn = true
+            waitingForFreshInputAfterCommand = true
+            commandProbe.clear()
+            output.clear()
+            val message = "Instagram open kar dun tumhare liye?"
+            listener?.onMyraText(message)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = true)
+            return
+        }
+        if (command is AppCommand.DeepResearch) { executeDeepResearch(command); return }
+        cancelSpeechForNewAction()
+        suppressModelForTurn = true
+        waitingForFreshInputAfterCommand = true
+        commandProbe.clear()
+        output.clear()
+        live?.interrupt()
+        mediaGuard.finishInteraction()
+        val result = assistantController.processCommand(
+            StructuredCommandParser.fromLegacy(command, command.toString()),
+            speak = false,
+            notifyListeners = false
+        )
+        brain.recordPhoneAction(
+            app = (command as? AppCommand.OpenApp)?.appName,
+            action = command.toString(),
+            success = result.success && result.verified
+        )
+        listener?.onMyraText(result.spokenMessage, !result.success)
+        emitState(result.spokenMessage)
+        queueLocalSpeech(
+            result.spokenMessage,
+            allowUntranscribedAudio = result.success && isSafeUntranscribedConfirmation(command)
+        )
+    }
+
+    private fun handleBrainCancellation(taskToken: Long) {
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        waitingForFreshInputAfterCommand = true
+        pendingActionAfterLocalSpeech = null
+        pendingConfirmedCommand = null
+        pendingConfirmationExpiresAt = 0L
+        output.clear(); commandProbe.clear()
+        cancelSpeechForNewAction()
+        screenActionRegistry.cancel()?.let {
+            voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=user_cancelled")
+        }
+        brain.finishTask(taskToken, true)
+        val message = "Theek hai, rok diya."
+        listener?.onMyraText(message)
+        emitState(message)
+        queueLocalSpeech(message, allowUntranscribedAudio = true)
+        voiceLog("brain_task_cancelled taskToken=$taskToken")
+    }
+
+    private fun handleReadingCommand(command: ReadingCommand, turnId: Long): Boolean {
+        val current = readingTracker.snapshot()
+        if (command !is ReadingCommand.Start && current == null) return false
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        waitingForFreshInputAfterCommand = true
+        when (command) {
+            ReadingCommand.Start -> {
+                if (!screenCommandTurnGuard.tryCommit(turnId)) {
+                    voiceLog("screen_command_duplicate_dropped turnId=$turnId source=reading_start")
+                    return true
+                }
+                startArticleReading(turnId)
+            }
+            ReadingCommand.Stop -> stopArticleReading("user_stop", "Theek hai, reading rok di.")
+            ReadingCommand.Pause -> {
+                readingTracker.pause()
+                pendingActionAfterLocalSpeech = null
+                audio?.interrupt(); live?.interrupt()
+                speakReadingStatus("Reading pause kar di.")
+                voiceLog("READING_SESSION_PAUSED reading_session_id=${current?.readingSessionId} timestamp=${android.os.SystemClock.elapsedRealtime()}")
+            }
+            ReadingCommand.Resume, ReadingCommand.Continue -> {
+                if (current?.screenSessionId != ScreenCaptureService.session.sessionId ||
+                    ScreenCaptureService.currentState != ScreenShareState.ACTIVE
+                ) {
+                    stopArticleReading("screen_session_changed", "Screen sharing active nahi hai.")
+                } else {
+                    readingTracker.resume()
+                    readCurrentArticleContent(turnId, allowAutoScroll = true)
+                }
+            }
+            ReadingCommand.StartAgain -> {
+                readingTracker.resetProgress()
+                val accessibility = AccessibilityHelperService.instance
+                val active = readingTracker.snapshot()
+                val accepted = if (accessibility != null && active?.scrollContainerId != null) {
+                    accessibility.scrollArticleToBeginning(
+                        active.scrollContainerId, active.foregroundPackage, active.screenSessionId
+                    ) { _ -> mainHandler.post { readCurrentArticleContent(turnId, allowAutoScroll = true) } }
+                } else false
+                if (!accepted) readCurrentArticleContent(turnId, allowAutoScroll = true)
+            }
+            ReadingCommand.ReadAgain -> readCurrentArticleContent(turnId, allowAutoScroll = false, forceRepeat = true)
+            ReadingCommand.ReadNewOnly -> {
+                readingTracker.resume()
+                readCurrentArticleContent(turnId, allowAutoScroll = false)
+            }
+            ReadingCommand.Forget -> {
+                pendingActionAfterLocalSpeech = null
+                readingTracker.forget()
+                speakReadingStatus("Reading position bhool gayi.")
+            }
+        }
+        return true
+    }
+
+    private fun startArticleReading(turnId: Long) {
+        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
+            speakReadingStatus("Screen sharing is off.", error = true)
+            return
+        }
+        val accessibility = AccessibilityHelperService.instance
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            speakReadingStatus("Article reading ke liye LYRA Accessibility enable karo.", error = true)
+            return
+        }
+        val contentType = accessibility.detectContentType()
+        if (contentType != ScreenContentType.ARTICLE) {
+            val message = when (contentType) {
+                ScreenContentType.VIDEO_PLATFORM -> "Ye YouTube hai, article nahi. Auto-scroll start nahi karungi."
+                ScreenContentType.SOCIAL_FEED -> "Ye social feed hai, article nahi. Auto-scroll start nahi karungi."
+                else -> "Current page ko article ke roop mein safely confirm nahi kar pa rahi. Auto-scroll start nahi karungi."
+            }
+            voiceLog("READING_START_REJECTED contentType=$contentType turnId=$turnId")
+            speakReadingStatus(message, error = true)
+            return
+        }
+        val context = com.myra.assistant.screen.ScreenContextStore.snapshot()
+        val identity = listOfNotNull(context.currentPackage, accessibility.visibleArticleText().firstOrNull())
+            .joinToString(":").take(300)
+        val containerId = accessibility.currentArticleScrollContainerId() ?: run {
+            voiceLog("READING_START_REJECTED contentType=$contentType turnId=$turnId reason=no_article_scroll_container")
+            speakReadingStatus("Article ka safe scroll area nahi mila. Auto-scroll start nahi karungi.", error = true)
+            return
+        }
+        val session = readingTracker.start(
+            ScreenCaptureService.session.sessionId, identity,
+            accessibility.currentPackageName().orEmpty(), contentType, explicitlyRequested = true,
+            scrollContainerId = containerId
+        ) ?: run {
+            speakReadingStatus("Article reading start nahi hui.", error = true)
+            return
+        }
+        voiceLog(
+            "READING_SESSION_STARTED reading_session_id=${session.readingSessionId} " +
+                "screen_session_id=${session.screenSessionId} container_id=${session.scrollContainerId} " +
+                "timestamp=${android.os.SystemClock.elapsedRealtime()} contentType=$contentType"
+        )
+        readCurrentArticleContent(turnId, allowAutoScroll = true)
+    }
+
+    private fun readCurrentArticleContent(
+        turnId: Long,
+        allowAutoScroll: Boolean,
+        forceRepeat: Boolean = false
+    ) {
+        val session = readingTracker.snapshot() ?: return
+        val foregroundPackage = accessibilityPackage()
+        if (readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, foregroundPackage)) {
+            pendingActionAfterLocalSpeech = null
+            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=context_changed package=$foregroundPackage")
+            return
+        }
+        if (session.state !in setOf(ReadingState.READING, ReadingState.VERIFYING_NEW_CONTENT) ||
+            !ScreenCaptureService.session.isCurrent(session.screenSessionId)
+        ) return
+        val accessibility = AccessibilityHelperService.instance ?: return
+        if (accessibility.detectContentType() != ScreenContentType.ARTICLE) {
+            stopArticleReading("article_boundary", "Article complete.")
+            return
+        }
+        val frameLookupAt = android.os.SystemClock.elapsedRealtime()
+        val query = ScreenCaptureService.requestFreshFrame(turnId) { result ->
+            mainHandler.post {
+                val frame = (result as? FreshFrameResult.Ready)?.frame
+                if (frame == null || !ScreenCaptureService.session.isCurrent(session.screenSessionId)) {
+                    stopArticleReading("fresh_frame_unavailable", "Fresh article screen nahi mili.", error = true)
+                    return@post
+                }
+                accessibility.refreshScreenContext()
+                readingTracker.recordObservation(frame.frameId, accessibility.lastSnapshotAt())
+                val lines = accessibility.visibleArticleText()
+                val fresh = if (forceRepeat) {
+                    lines.map { com.myra.assistant.screen.ReadingSegment(it, ReadingTracker.fingerprint(it)) }
+                } else readingTracker.acceptVisibleText(lines, android.os.SystemClock.elapsedRealtime())
+                val currentSession = readingTracker.snapshot() ?: return@post
+                voiceLog(
+                    "READING_NEW_CONTENT_FOUND reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} " +
+                        "timestamp=${android.os.SystemClock.elapsedRealtime()} newSegments=${fresh.size} frameWaitMs=${android.os.SystemClock.elapsedRealtime() - frameLookupAt}"
+                )
+                if (fresh.isEmpty()) {
+                    voiceLog("READING_DUPLICATE_SKIPPED reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} visibleSegments=${lines.size}")
+                    if (allowAutoScroll && readingTracker.canAutoScroll()) autoScrollArticle(turnId)
+                    else finishArticleAtEnd()
+                    return@post
+                }
+                val spoken = fresh.joinToString(" ") { it.text }.take(MAX_READING_CHARS_PER_SCREEN)
+                voiceLog(
+                    "READING_CONTENT_READ reading_session_id=${currentSession.readingSessionId} frame_id=${frame.frameId} " +
+                        "timestamp=${android.os.SystemClock.elapsedRealtime()} chars=${spoken.length} segments=${fresh.size}"
+                )
+                listener?.onMyraText(spoken)
+                emitState("Article padh rahi hoon…")
+                if (allowAutoScroll) readingTracker.markWaitingForScroll()
+                pendingActionAfterLocalSpeech = if (allowAutoScroll) ({ autoScrollArticle(turnId) }) else null
+                queueLocalSpeech(spoken, allowUntranscribedAudio = false)
+            }
+        }
+        if (query == null) stopArticleReading("screen_inactive", "Screen sharing is off.", error = true)
+    }
+
+    private fun autoScrollArticle(turnId: Long) {
+        val session = readingTracker.snapshot() ?: return
+        val foregroundPackage = accessibilityPackage()
+        if (readingTracker.pauseIfContextChanged(ScreenCaptureService.session.sessionId, foregroundPackage) ||
+            foregroundPackage == "com.google.android.youtube"
+        ) {
+            pendingActionAfterLocalSpeech = null
+            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=package_changed package=$foregroundPackage")
+            return
+        }
+        val accessibility = AccessibilityHelperService.instance ?: run { finishArticleAtEnd(); return }
+        val containerId = session.scrollContainerId ?: run {
+            voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${session.readingSessionId} reason=unbound_container")
+            finishArticleAtEnd()
+            return
+        }
+        if (!readingTracker.shouldAutoScroll(containerId, session.screenSessionId, foregroundPackage) ||
+            !readingTracker.recordAutoScroll()
+        ) {
+            finishArticleAtEnd()
+            return
+        }
+        voiceLog(
+            "READING_AUTO_SCROLL_STARTED reading_session_id=${session.readingSessionId} " +
+                "timestamp=${android.os.SystemClock.elapsedRealtime()} count=${readingTracker.snapshot()?.consecutiveAutoScrollCount}"
+        )
+        val accepted = accessibility.scrollArticleVerified(
+            containerId, session.foregroundPackage, session.screenSessionId
+        ) { changed ->
+            mainHandler.post {
+                val active = readingTracker.snapshot()
+                if (active?.state != ReadingState.SCROLLING) return@post
+                voiceLog(
+                    "READING_AUTO_SCROLL_COMPLETED reading_session_id=${active.readingSessionId} " +
+                        "timestamp=${android.os.SystemClock.elapsedRealtime()} changed=$changed"
+                )
+                if (!changed) finishArticleAtEnd()
+                else {
+                    ScreenCaptureService.requestFreshFrame(turnId) { fresh ->
+                        mainHandler.post {
+                            val frame = (fresh as? FreshFrameResult.Ready)?.frame
+                            val current = readingTracker.snapshot() ?: return@post
+                            if (frame == null || frame.sessionId != current.screenSessionId ||
+                                frame.frameId <= current.lastFrameId
+                            ) {
+                                voiceLog("ARTICLE_SCROLL_REJECTED reading_session_id=${current.readingSessionId} reason=no_fresh_post_scroll_frame")
+                                finishArticleAtEnd()
+                                return@post
+                            }
+                            readingTracker.markVerifyingNewContent(frame.frameId, accessibility.lastSnapshotAt())
+                            voiceLog("ARTICLE_SCROLL_VERIFIED reading_session_id=${current.readingSessionId} preFrameId=${current.lastFrameId} postFrameId=${frame.frameId}")
+                            readCurrentArticleContent(turnId, allowAutoScroll = true)
+                        }
+                    }
+                }
+            }
+        }
+        if (!accepted) finishArticleAtEnd()
+    }
+
+    private fun finishArticleAtEnd() {
+        val id = readingTracker.snapshot()?.readingSessionId
+        readingTracker.complete()
+        pendingActionAfterLocalSpeech = null
+        voiceLog("READING_END_DETECTED reading_session_id=$id timestamp=${android.os.SystemClock.elapsedRealtime()}")
+        speakReadingStatus("Article complete.")
+    }
+
+    private fun stopArticleReading(reason: String, message: String, error: Boolean = false) {
+        val id = readingTracker.snapshot()?.readingSessionId
+        readingTracker.stop()
+        pendingActionAfterLocalSpeech = null
+        audio?.interrupt(); live?.interrupt()
+        voiceLog("READING_SESSION_STOPPED reading_session_id=$id timestamp=${android.os.SystemClock.elapsedRealtime()} reason=$reason")
+        speakReadingStatus(message, error)
+    }
+
+    private fun speakReadingStatus(message: String, error: Boolean = false) {
+        listener?.onMyraText(message, error)
+        emitState(message)
+        queueLocalSpeech(message, allowUntranscribedAudio = true)
+    }
+
+    private fun accessibilityPackage(): String =
+        AccessibilityHelperService.instance?.currentPackageName().orEmpty()
+
+    private fun executeBrainMultiStep(plan: BrainDecision.ScrollThenOpenVideo) {
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        waitingForFreshInputAfterCommand = true
+        cancelSpeechForNewAction()
+        val accessibility = AccessibilityHelperService.instance
+        if (!screenVisionPreferences.visionEnabled || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) {
+            finishBrainTask(plan.taskToken, false, "Screen Vision active nahi hai.")
+            return
+        }
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            finishBrainTask(plan.taskToken, false, "LYRA Accessibility enable karo.")
+            return
+        }
+        val down = plan.direction == BrainScrollDirection.DOWN
+        voiceLog("brain_plan_started taskToken=${plan.taskToken} plan=scroll_then_open ordinal=${plan.ordinal} direction=${plan.direction}")
+        val accepted = accessibility.scrollYouTubeVerified(down) { scrolled ->
+            mainHandler.post {
+                if (!brain.isTaskCurrent(plan.taskToken)) return@post
+                if (!scrolled) {
+                    finishBrainTask(plan.taskToken, false, "Screen scroll nahi hua.")
+                    return@post
+                }
+                ScreenCaptureService.requestFreshFrame(activeTurnId) { fresh ->
+                    mainHandler.post {
+                        if (!brain.isTaskCurrent(plan.taskToken)) return@post
+                        val beforeFrame = (fresh as? FreshFrameResult.Ready)?.frame
+                        if (beforeFrame == null || !ScreenCaptureService.session.isCurrent(beforeFrame.sessionId)) {
+                            finishBrainTask(plan.taskToken, false, "Scroll ke baad fresh screen nahi mili.")
+                            return@post
+                        }
+                        val beforeSignature = accessibility.visibleScreenSignature()
+                        val actionIntent = screenActionRegistry.create(
+                            activeTurnId, beforeFrame.sessionId,
+                            lastUserIntentText, "video", null, plan.ordinal,
+                            accessibility.currentPackageName(), android.os.SystemClock.elapsedRealtime(),
+                            beforeFrame.frameId, 1.0
+                        )
+                        voiceLog("SCREEN_ACTION_CREATED actionId=${actionIntent.actionId} turnId=${actionIntent.turnId} screenSessionId=${actionIntent.screenSessionId} frameId=${actionIntent.sourceFrameId} resolverVersion=${actionIntent.resolverVersion}")
+                        val tapped = accessibility.tapVisibleYouTubeVideo(plan.ordinal)
+                        voiceLog("brain_plan_step taskToken=${plan.taskToken} step=tap ordinal=${plan.ordinal} accepted=$tapped")
+                        if (!tapped) {
+                            finishBrainTask(plan.taskToken, false, "Second video clear nahi mila.")
+                            return@post
+                        }
+                        mainHandler.postDelayed({
+                            ScreenCaptureService.requestFreshFrame(activeTurnId) { postResult ->
+                                mainHandler.post {
+                                    if (!brain.isTaskCurrent(plan.taskToken)) return@post
+                                    if (!screenActionRegistry.isCurrent(
+                        actionIntent.actionId, actionIntent.turnId, actionIntent.screenSessionId
+                    )) {
+                                        voiceLog("SCREEN_ACTION_CANCELLED actionId=${actionIntent.actionId} reason=replaced_before_verification")
+                                        return@post
+                                    }
+                                    val postFrame = (postResult as? FreshFrameResult.Ready)?.frame
+                                    val accessibilityChanged = beforeSignature.isNotBlank() &&
+                                        accessibility.visibleScreenSignature() != beforeSignature
+                                    val frameChanged = postFrame != null && postFrame.sessionId == beforeFrame.sessionId &&
+                                        postFrame.frameId > beforeFrame.frameId && postFrame.hash != beforeFrame.hash
+                                    val verified = ScreenCaptureService.session.isCurrent(beforeFrame.sessionId) &&
+                                        (accessibilityChanged || frameChanged)
+                                    brain.recordScreenAction(
+                                        ScreenTargetReference(targetText = "video", ordinal = plan.ordinal),
+                                        verified
+                                    )
+                                    screenActionRegistry.cancel(actionIntent.actionId)
+                                    finishBrainTask(
+                                        plan.taskToken,
+                                        verified,
+                                        if (verified) "Video open ho gaya."
+                                        else "Tap hua, lekin video open hona verify nahi hua."
+                                    )
+                                }
+                            }
+                        }, 400L)
+                    }
+                }
+            }
+        }
+        if (!accepted) finishBrainTask(plan.taskToken, false, "YouTube scroll start nahi hua.")
+    }
+
+    private fun executeYouTubeSemanticAction(command: YouTubeSemanticCommand): Boolean {
+        val accessibility = AccessibilityHelperService.instance ?: return false
+        val foreground = accessibility.currentForegroundContext() ?: return false
+        val isYouTube = foreground.packageName.equals("com.google.android.youtube", true)
+        if (!isYouTube) {
+            textComposeSession.cancel()
+            return false
+        }
+        textComposeSession.invalidateUnless(foreground.packageName, foreground.windowId, foreground.generation)
+        if (command == YouTubeSemanticCommand.CancelComment && textComposeSession.snapshot() == null) return false
+        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground) ?: return false
+        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
+            voiceLog("youtube_semantic_duplicate_dropped turnId=$activeTurnId command=${command.javaClass.simpleName}")
+            return true
+        }
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        cancelSpeechForNewAction()
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        latestActionDispatchedAt = startedAt
+        val before = accessibility.visibleScreenSignature()
+
+        if (command == YouTubeSemanticCommand.SendComment &&
+            !textComposeSession.canSend(foreground.packageName, foreground.windowId, foreground.generation)
+        ) {
+            finishYouTubeSemantic(false, "Pehle comment type karo.", command, startedAt, "no_owned_draft")
+            return true
+        }
+        if (command is YouTubeSemanticCommand.TypeText && textComposeSession.snapshot() == null) {
+            finishYouTubeSemantic(false, "Pehle comments kholo.", command, startedAt, "comment_context_missing")
+            return true
+        }
+        if (command == YouTubeSemanticCommand.CancelComment) {
+            textComposeSession.cancel()
+            finishYouTubeSemantic(true, "Theek hai, comment send nahi kiya.", command, startedAt, "cancelled")
+            return true
+        }
+
+        val result = accessibility.performYouTubeSemanticAction(command, scope)
+        voiceLog(
+            "youtube_semantic_resolution turnId=$activeTurnId normalizedIntent=${command.javaClass.simpleName} " +
+                "package=${foreground.packageName} role=${result.role} resolution=${result.resolution} " +
+                "payloadLength=${(command as? YouTubeSemanticCommand.TypeText)?.payload?.length ?: 0} " +
+                "dispatchMs=${android.os.SystemClock.elapsedRealtime() - startedAt}"
+        )
+        if (!result.accepted) {
+            if (canUseVisualFallback(command) && visualAwarenessPreferences.enabled &&
+                requestAccessibilityVisualRetry(command, foreground, activeTurnId, startedAt)
+            ) {
+                return true
+            }
+            val message = when (result.resolution) {
+                "ambiguous" -> "Kaunsa wala?"
+                "stale_foreground", "stale_candidate" -> "Screen badal gayi. Dobara target batao."
+                "not_found" -> when (command) {
+                    is YouTubeSemanticCommand.OpenChannel -> "Channel target clear nahi mila."
+                    is YouTubeSemanticCommand.TypeText -> "Comment field clear nahi mila."
+                    YouTubeSemanticCommand.SendComment -> "Comment ka send button nahi mila."
+                    else -> "Ye control current YouTube screen par clear nahi mila."
+                }
+                else -> "YouTube action accept nahi hua."
+            }
+            finishYouTubeSemantic(false, message, command, startedAt, result.resolution)
+            return true
+        }
+
+        when (command) {
+            YouTubeSemanticCommand.OpenComments -> mainHandler.postDelayed({
+                val current = accessibility.currentForegroundContext()
+                if (current != null && current.packageName.equals("com.google.android.youtube", true)) {
+                    textComposeSession.open(current.packageName, current.windowId, current.generation)
+                }
+            }, 450L)
+            is YouTubeSemanticCommand.TypeText -> {
+                val field = result.fieldIdentity
+                if (field == null || !textComposeSession.setDraft(
+                        foreground.packageName, foreground.windowId, foreground.generation, field, command.payload
+                    )) {
+                    finishYouTubeSemantic(false, "Comment context badal gaya. Dobara comments kholo.", command, startedAt, "field_ownership_rejected")
+                    return true
+                }
+            }
+            YouTubeSemanticCommand.SendComment -> textComposeSession.cancel()
+            else -> Unit
+        }
+        val message = when {
+            result.resolution == "already_active" && command == YouTubeSemanticCommand.Like -> "Video pehle se liked hai."
+            result.resolution == "already_active" && command == YouTubeSemanticCommand.Subscribe -> "Channel pehle se subscribed hai."
+            command is YouTubeSemanticCommand.TypeText -> "Comment type ho gaya."
+            command == YouTubeSemanticCommand.SendComment -> "Comment post ho gaya."
+            command == YouTubeSemanticCommand.OpenComments -> "Comments open ho gaye."
+            command == YouTubeSemanticCommand.Like -> "Video like ho gaya."
+            command == YouTubeSemanticCommand.Subscribe -> "Subscribe ho gaya."
+            command is YouTubeSemanticCommand.OpenChannel -> "Channel open ho gaya."
+            else -> "Open ho gaya."
+        }
+        mainHandler.postDelayed({
+            val stillOwned = com.myra.assistant.screen.ForegroundActionPolicy.canExecute(scope, accessibility.currentForegroundContext())
+            val changed = before.isNotBlank() && accessibility.visibleScreenSignature() != before
+            voiceLog("youtube_semantic_verification command=${command.javaClass.simpleName} stillOwned=$stillOwned changed=$changed")
+            finishYouTubeSemantic(true, message, command, startedAt, if (changed) "verified_change" else "accepted_no_repeat")
+        }, if (command is YouTubeSemanticCommand.TypeText) 120L else 380L)
+        return true
+    }
+
+    private fun handleUnifiedActionFollowUp() {
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        cancelSpeechForNewAction()
+        AccessibilityHelperService.instance?.refreshScreenContext()
+        val working = WorkingTaskRuntime.store.snapshot()
+        val message = when (working.lastVerifiedSuccess) {
+            true -> "Haan, pichhla action verify ho gaya tha."
+            false -> "Haan, abhi result verify nahi hua."
+            null -> "Abhi result verify nahi hua; current screen dobara check karni hogi."
+        }
+        listener?.onMyraText(message, working.lastVerifiedSuccess != true)
+        emitState(message)
+        queueLocalSpeech(message, allowUntranscribedAudio = false)
+        voiceLog(
+            "agent_verification_follow_up taskId=${working.taskId} lastAction=${working.lastRequestedAction} " +
+                "verified=${working.lastVerifiedSuccess}"
+        )
+    }
+
+    private fun runtimePerception(taskId: String): PerceptionSnapshot? {
+        val context = ActivityContextStore.snapshot() ?: return null
+        val scene = ScreenSceneFactory.from(context, WorkingTaskRuntime.store.snapshot().activeExternalApp)
+        return PerceptionSnapshot(scene, taskId, android.os.SystemClock.elapsedRealtime())
+    }
+
+    /** Production owner for migrated capabilities. Planner output is the only path to an
+     * adapter; the service schedules observation but never calls the low-level executor twice. */
+    private fun executeGeneralRuntimeCapability(
+        expectedCapability: ToolCapability,
+        requestedTurnId: Long,
+        requestedTaskId: String,
+        onTerminal: (GeneralVerificationStatus, String) -> Unit
+    ): Boolean {
+        val runtime = GeneralAgentRuntimeStore.runtime
+        val task = runtime.activeTask() ?: return false
+        if (!RuntimeActionBindingGuard.matches(requestedTurnId, requestedTaskId, task.turnId, task.id)) {
+            voiceLog(
+                "AGENT_RUNTIME_TURN_MISMATCH requestedTurnId=$requestedTurnId taskTurnId=${task.turnId} " +
+                    "requestedTaskId=$requestedTaskId activeTaskId=${task.id} action=$expectedCapability decision=blocked"
+            )
+            voiceLog(
+                "VOICE_ACTION_IDENTITY_INVALID speechTurnId=$requestedTurnId runtimeTurnId=${task.turnId} " +
+                    "reason=runtime_task_identity_mismatch"
+            )
+            return false
+        }
+        val enteredAt = android.os.SystemClock.elapsedRealtime()
+        turnLatency.record(task.turnId, Field.RUNTIME_ENTERED, enteredAt)
+        voiceLog("AGENT_RUNTIME_ENTER taskId=${task.id} turnId=${task.turnId} capability=$expectedCapability recoveryCount=${task.recoveryCount}")
+        var before = runtimePerception(task.id)
+        if (before == null) {
+            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+            before = runtimePerception(task.id)
+        }
+        voiceLog("PLANNER_STARTED taskId=${task.id} turnId=${task.turnId} status=${task.status} recoveryCount=${task.recoveryCount}")
+        val planned = runtime.next(before)
+        runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, before?.scene) }
+        voiceLog("PLANNER_RESULT taskId=${task.id} turnId=${task.turnId} result=${planned.javaClass.simpleName}")
+        if (planned is PlannerResult.NeedObservation) {
+            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+            val observed = runtimePerception(task.id)
+            if (observed == null) {
+                runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN, "screen unavailable")
+                onTerminal(GeneralVerificationStatus.UNKNOWN, "screen unavailable")
+                return true
+            }
+            return executeGeneralRuntimeCapability(expectedCapability, requestedTurnId, requestedTaskId, onTerminal)
+        }
+        if (planned is PlannerResult.NeedClarification || planned is PlannerResult.Fail || planned is PlannerResult.Complete) {
+            val observed = when (planned) {
+                is PlannerResult.NeedClarification -> planned.message
+                is PlannerResult.Fail -> planned.reason
+                is PlannerResult.Complete -> planned.reason
+                else -> "planner stopped"
+            }
+            val status = if (planned is PlannerResult.Fail) GeneralVerificationStatus.FAILURE else GeneralVerificationStatus.UNKNOWN
+            runtime.completeFromAdapter(status, observed)
+            onTerminal(status, observed)
+            return true
+        }
+        val step = when (planned) {
+            is PlannerResult.Next -> planned.step
+            is PlannerResult.Recover -> planned.step
+            is PlannerResult.VerifyPrevious -> planned.step
+            else -> return false
+        }
+        val actionBefore = before
+        if (step.capability != expectedCapability || actionBefore == null) {
+            runtime.completeFromAdapter(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
+            onTerminal(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
+            return true
+        }
+        val adapter = generalActionRouter.select(step, actionBefore)
+        if (adapter == null) {
+            voiceLog("LEGACY_FALLBACK_USED taskId=${task.id} turnId=${task.turnId} capability=${step.capability} reason=no_registered_adapter")
+            runtime.completeFromAdapter(GeneralVerificationStatus.FAILURE, "no registered adapter")
+            onTerminal(GeneralVerificationStatus.FAILURE, "no registered adapter")
+            return true
+        }
+        voiceLog(
+            "ACTION_ROUTER_SELECTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} " +
+                "adapter=${adapter.adapterId} foregroundPackage=${actionBefore.scene.externalForegroundPackage} screenGeneration=${actionBefore.scene.generation}"
+        )
+        voiceLog("ACTION_ADAPTER_ENTER taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} adapter=${adapter.adapterId}")
+        voiceLog("ACTION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability}")
+        val actionStartedAt = android.os.SystemClock.elapsedRealtime()
+        turnLatency.record(task.turnId, Field.ACTION_STARTED, actionStartedAt)
+        val result = adapter.execute(step, actionBefore)
+        val actionReturnedAt = android.os.SystemClock.elapsedRealtime()
+        if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
+            scrollContinuationTelemetry.dispatched(task.turnId, task.id, task.intent.parameters["direction"],
+                result.accepted, actionReturnedAt, actionBefore.scene.externalForegroundPackage,
+                actionBefore.scene.windowId, actionBefore.scene.generation)
+        }
+        turnLatency.record(task.turnId, Field.ACTION_RETURNED, actionReturnedAt)
+        turnLatency.record(task.turnId, Field.OBSERVATION_SCHEDULED, actionReturnedAt)
+        runtime.recordAction(step, result, actionBefore)
+        runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, actionBefore.scene) }
+        voiceLog(
+            "ACTION_RETURNED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} " +
+                "adapter=${adapter.adapterId} accepted=${result.accepted} elapsedMs=${android.os.SystemClock.elapsedRealtime() - enteredAt}"
+        )
+        lateinit var observeAndVerify: (Int) -> Unit
+        observeAndVerify = observe@ { resampleCount ->
+            val current = runtime.activeTask()
+            if (current?.id != task.id || current.turnId != task.turnId) return@observe
+            val observationStartedAt = android.os.SystemClock.elapsedRealtime()
+            turnLatency.record(task.turnId, Field.OBSERVATION_STARTED, observationStartedAt)
+            voiceLog(
+                "POST_ACTION_OBSERVATION_STARTED taskId=${task.id} turnId=${task.turnId} " +
+                    "stepId=${step.id} capability=${step.capability} resampleCount=$resampleCount"
+            )
+            AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+            val after = runtimePerception(task.id)
+            if (after == null) {
+                if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL &&
+                    ScrollVerificationResamplePolicy.shouldResample(result.accepted, false, resampleCount)
+                ) {
+                    voiceLog(
+                        "SCROLL_VERIFY_RESAMPLE_SCHEDULED taskId=${task.id} turnId=${task.turnId} " +
+                            "resample=${resampleCount + 1} reason=fresh_scene_unavailable delayMs=${ScrollVerificationResamplePolicy.DELAY_MS}"
+                    )
+                    mainHandler.postDelayed({
+                        voiceLog("SCROLL_VERIFY_RESAMPLE_READY taskId=${task.id} turnId=${task.turnId} resample=${resampleCount + 1}")
+                        observeAndVerify(resampleCount + 1)
+                    }, ScrollVerificationResamplePolicy.DELAY_MS)
+                    return@observe
+                }
+                runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN, "fresh screen unavailable")
+                onTerminal(GeneralVerificationStatus.UNKNOWN, "fresh screen unavailable")
+                return@observe
             }
             voiceLog(
                 "POST_ACTION_OBSERVATION_READY taskId=${task.id} turnId=${task.turnId} stepId=${step.id} " +
