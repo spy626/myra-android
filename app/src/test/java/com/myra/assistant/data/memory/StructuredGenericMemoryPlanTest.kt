@@ -17,6 +17,39 @@ class StructuredGenericMemoryPlanTest {
         assertEquals(MemoryDecision.SAVE, plan.decision)
         assertTrue(brain.executeFinalTurnPlan(plan) is MemoryBrainOutcome.Mutated)
         assertEquals(PreferenceMemoryIdentity.RESPONSE_VERBOSITY_KEY, repository.allActive().single().stableKey)
+        val recalled = brain.recall("answer preference", type = MemoryRecallType.GENERAL)
+        assertTrue(recalled.rows.single().fact.contains("short"))
+    }
+
+    @Test fun friendshipRecallKeepsFriendFamilyDistinctFromBestFriend() = runBlocking {
+        val repository = MemoryRepository(FakeMemoryDao())
+        val brain = MemoryBrainCoordinator(repository)
+        repository.addPersonRelationship("Dev", PersonRelationship.FRIEND)
+        repository.addPersonRelationship("Mira", PersonRelationship.GOOD_FRIEND)
+
+        val friends = brain.recall("friends", type = MemoryRecallType.FRIENDS)
+        assertEquals(setOf("Dev", "Mira"), friends.rows.mapNotNull { it.entityName }.toSet())
+        val bestFriends = brain.recall("best friend", type = MemoryRecallType.BEST_FRIEND)
+        assertTrue(bestFriends.rows.isEmpty())
+    }
+
+    @Test fun lastTransactionRecallUsesVerifiedWorkingContextWithoutMutation() = runBlocking {
+        MemoryWorkingContext.clear()
+        MemoryWorkingContext.transaction(LastMemoryTransaction(
+            type = MemoryDecision.UPDATE,
+            oldValue = "old value",
+            newValue = "new value",
+            status = MemoryTransactionStatus.FAILED,
+            failureReason = "ambiguous"
+        ))
+        val repository = MemoryRepository(FakeMemoryDao())
+        val outcome = MemoryBrainCoordinator(repository).recall(
+            "last update", type = MemoryRecallType.LAST_TRANSACTION
+        )
+        assertNotNull(outcome.workingAnswer)
+        assertEquals(1, outcome.rows.size)
+        assertTrue(repository.allActive().isEmpty())
+        MemoryWorkingContext.clear()
     }
 
     @Test fun semanticUpdateSupersedesOnlySamePreferenceDimension() = runBlocking {

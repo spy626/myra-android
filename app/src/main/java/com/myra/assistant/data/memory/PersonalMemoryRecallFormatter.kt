@@ -1,6 +1,23 @@
 package com.myra.assistant.data.memory
 
 object PersonalMemoryRecallFormatter {
+    fun formatRows(rows: List<MemoryEntity>, type: MemoryRecallType): String {
+        if (type == MemoryRecallType.FRIENDS || type == MemoryRecallType.BEST_FRIEND) {
+            val names = rows.mapNotNull { it.entityName ?: MemoryRelationshipPolicy.personName(it.fact) }
+                .distinctBy { it.lowercase() }
+            if (names.isEmpty()) return if (type == MemoryRecallType.BEST_FRIEND) {
+                "Abhi koi saved best-friend memory nahi hai."
+            } else "Abhi koi active friend memory nahi hai."
+            val joined = joinNaturally(names)
+            return if (type == MemoryRecallType.BEST_FRIEND) {
+                if (names.size == 1) "$joined tumhari best friend hai." else "$joined tumhari best friends hain."
+            } else {
+                if (names.size == 1) "$joined tumhara dost hai." else "$joined tumhare dost hain."
+            }
+        }
+        return format(rows.map { it.fact })
+    }
+
     fun format(facts: List<String>): String {
         val friendNames = facts.asSequence()
             .mapNotNull(::bestFriendName)

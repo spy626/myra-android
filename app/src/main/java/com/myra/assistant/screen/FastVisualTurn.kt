@@ -17,10 +17,10 @@ object FastVisualRequestClassifier {
     private val actionConcepts = setOf("tap", "press", "click", "dabao", "open", "khol", "subscribe", "like")
     private val visualObjects = setOf("this", "that", "ye", "yeh", "isko", "usko", "jo", "icon", "button", "thumb", "hand", "uploader", "screen")
 
-    fun classify(text: String): FastVisualRequest? {
+    fun classify(text: String, hasVerifiedVisualContext: Boolean = false): FastVisualRequest? {
         val tokens = tokens(text)
         if (tokens.isEmpty()) return null
-        if (ScreenStateFollowUpClassifier.isCurrentScreenFollowUp(tokens, text.trim().endsWith("?"))) {
+        if (ScreenStateFollowUpClassifier.isCurrentScreenFollowUp(tokens, hasVerifiedVisualContext)) {
             return FastVisualRequest(FastVisualKind.QUESTION, "current_screen_follow_up")
         }
         val hasDeicticQuestion = tokens.any { it in setOf("ye", "yeh", "this", "isme", "इसमें", "यह", "ये") } &&
@@ -63,24 +63,29 @@ object ScreenStateFollowUpClassifier {
         "kahan", "kaha", "kya", "kidhar", "dikh", "dikha", "badla", "hila",
         "कहाँ", "कहा", "क्या", "किधर", "दिख", "बदला", "हिला"
     )
-    private val reference = setOf("it", "this", "that", "same", "wahi", "ye", "yeh", "wo", "woh", "hai", "है", "वही", "यह", "वो")
+    private val reference = setOf("it", "this", "that", "same", "wahi", "ye", "yeh", "wo", "woh", "वही", "यह", "वो")
+    private val screenGrounding = setOf(
+        "screen", "page", "display", "button", "icon", "popup", "dialog", "option", "menu", "app",
+        "स्क्रीन", "पेज", "बटन", "आइकन", "विकल्प"
+    )
 
     fun isCurrentScreenFollowUp(text: String): Boolean {
         val normalized = Normalizer.normalize(text, Normalizer.Form.NFC)
             .lowercase(Locale.ROOT)
         val parsed = normalized.split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
             .filter(String::isNotBlank)
-        return isCurrentScreenFollowUp(parsed, normalized.trim().endsWith("?"))
+        return isCurrentScreenFollowUp(parsed, false)
     }
 
-    internal fun isCurrentScreenFollowUp(tokens: List<String>, questionMark: Boolean): Boolean {
+    internal fun isCurrentScreenFollowUp(tokens: List<String>, hasVerifiedVisualContext: Boolean): Boolean {
         val current = tokens.any(currentTime::contains)
         val inquiry = tokens.any { token -> stateInquiry.any { token == it || token.startsWith(it) && it.length >= 4 } }
         val referential = tokens.any(reference::contains)
-        // Temporal/deictic state questions are read-only. Ambiguous bare follow-ups
-        // become current-screen questions only when they still ask about state.
-        return (current && (inquiry || referential || tokens.size <= 3)) ||
-            (questionMark && current && tokens.size <= 6)
+        val grounded = tokens.any { token -> screenGrounding.any { token == it || token.startsWith(it) && it.length >= 4 } } ||
+            tokens.any { token -> token.startsWith("dikh") || token.startsWith("dekh") || token.startsWith("दिख") }
+        // Time words modify meaning; they never create visual meaning. A short deictic
+        // follow-up is visual only while a verified visual interaction is still active.
+        return current && inquiry && (grounded || hasVerifiedVisualContext && (referential || tokens.size <= 3))
     }
 }
 

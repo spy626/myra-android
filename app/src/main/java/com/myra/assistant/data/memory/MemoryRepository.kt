@@ -237,7 +237,11 @@ class MemoryRepository(private val dao: MemoryDao) {
      * selected rows leave the repository. This removes the old newest-100 recall ceiling
      * without dumping the whole database into Gemini.
      */
-    suspend fun relevant(query: String, limit: Int = 5): List<MemoryEntity> {
+    suspend fun relevant(
+        query: String,
+        limit: Int = 5,
+        recallType: MemoryRecallType = MemoryRecallType.GENERAL
+    ): List<MemoryEntity> {
         if (query == MemoryWorkingContext.LAST_TRANSACTION_QUERY) {
             val synthetic = workingTransactionMemory()
             val selected = synthetic?.let(::listOf).orEmpty()
@@ -245,13 +249,28 @@ class MemoryRepository(private val dao: MemoryDao) {
             return selected
         }
         val active = dao.activeAll()
-        val selected = MemoryRelevanceSelector.select(query, active, limit)
+        val selected = when (recallType) {
+            MemoryRecallType.FRIENDS -> active.filter {
+                it.stableKey.contains(":relationship:") || MemoryRelationshipPolicy.isBestFriend(it)
+            }.groupBy { it.entityId ?: PersonLinkedMemoryIdentity.stableToken(it.entityName.orEmpty()) }
+                .values.map { relationships ->
+                    relationships.maxByOrNull { relationshipRecallPriority(it) } ?: relationships.first()
+                }.take(limit)
+            MemoryRecallType.BEST_FRIEND -> active.filter(MemoryRelationshipPolicy::isBestFriend).take(limit)
+            else -> MemoryRelevanceSelector.select(query, active, limit)
+        }
         if (query.isNotBlank()) {
             val now = System.currentTimeMillis()
             selected.forEach { dao.markUsed(it.id, now) }
         }
         MemorySessionIndex.publish(selected)
         return selected
+    }
+
+    private fun relationshipRecallPriority(row: MemoryEntity): Int = when {
+        MemoryRelationshipPolicy.isBestFriend(row) -> 3
+        row.stableKey.endsWith(":relationship:${PersonRelationship.GOOD_FRIEND.key}") -> 2
+        else -> 1
     }
 
     private fun workingTransactionMemory(): MemoryEntity? {

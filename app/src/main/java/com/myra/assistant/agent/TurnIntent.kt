@@ -26,7 +26,7 @@ data class AgentTurnDecision(
  * structured AgentIntent, never through a legacy parser acting on its own.
  */
 object UnifiedTurnInterpreter {
-    fun interpret(raw: String, working: WorkingTaskContext?): AgentTurnDecision {
+    fun interpret(raw: String, working: WorkingTaskContext?, verifiedVisualContext: Boolean = false): AgentTurnDecision {
         val text = normalize(raw)
         if (text.isBlank()) return conversation(raw)
 
@@ -46,7 +46,9 @@ object UnifiedTurnInterpreter {
                 requiresPerception = true, confidence = .94
             )
         }
-        if (FastVisualRequestClassifier.classify(raw)?.kind == FastVisualKind.QUESTION) {
+        val activeVisualReference = verifiedVisualContext || working?.lastVerifiedSuccess == true &&
+            (working.currentReference != null || working.previousActionTarget != null)
+        if (FastVisualRequestClassifier.classify(raw, activeVisualReference)?.kind == FastVisualKind.QUESTION) {
             return AgentTurnDecision(TurnIntent.SCREEN_QUESTION, text, requiresPerception = true, confidence = .94)
         }
         if (isExplicitMemoryMutation(text)) {

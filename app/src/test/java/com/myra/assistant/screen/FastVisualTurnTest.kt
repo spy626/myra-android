@@ -23,6 +23,21 @@ class FastVisualTurnTest {
         assertNull(FastVisualRequestClassifier.classify("Tell me a joke"))
     }
 
+    @Test fun temporalWordsDoNotCreateVisualIntentWithoutScreenGrounding() {
+        assertNull(FastVisualRequestClassifier.classify("Ab mera dost kaun hai?"))
+        assertNull(FastVisualRequestClassifier.classify("Ab mujhe kya karna chahiye?"))
+        assertNull(FastVisualRequestClassifier.classify("Now what time is it?"))
+        assertNull(FastVisualRequestClassifier.classify("Ab kahan hai?"))
+        assertEquals(
+            FastVisualKind.QUESTION,
+            FastVisualRequestClassifier.classify("Ab kahan hai?", hasVerifiedVisualContext = true)?.kind
+        )
+        assertEquals(
+            FastVisualKind.QUESTION,
+            FastVisualRequestClassifier.classify("Ab wo button kahan gaya?")?.kind
+        )
+    }
+
     @Test fun oneTurnOwnsVisualResponseAndNewTurnReplacesIt() {
         val coordinator = FastVisualTurnCoordinator()
         val first = coordinator.begin(1, FastVisualRequest(FastVisualKind.QUESTION, "screen"), "a", 2, 3, 10, 11)

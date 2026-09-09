@@ -5,6 +5,7 @@ import java.util.Locale
 import java.util.UUID
 
 enum class MemoryDecision { IGNORE, RECALL, SAVE, UPDATE, DELETE, NEEDS_CLARIFICATION, REJECT }
+enum class MemoryRecallType { GENERAL, FRIENDS, BEST_FRIEND, LAST_TRANSACTION }
 enum class MemoryTransactionStatus { SUCCEEDED, FAILED, REJECTED }
 
 data class LastMemoryTransaction(
@@ -176,7 +177,11 @@ object MemorySessionIndex {
 
 sealed class MemoryBrainOutcome {
     data object Ignored : MemoryBrainOutcome()
-    data class Recalled(val rows: List<MemoryEntity>, val workingAnswer: String? = null) : MemoryBrainOutcome()
+    data class Recalled(
+        val rows: List<MemoryEntity>,
+        val workingAnswer: String? = null,
+        val type: MemoryRecallType = MemoryRecallType.GENERAL
+    ) : MemoryBrainOutcome()
     data class Mutated(val result: MemoryWriteResult, val explicit: Boolean) : MemoryBrainOutcome()
     data class Deleted(val succeeded: Boolean) : MemoryBrainOutcome()
     data class Rejected(val reason: String) : MemoryBrainOutcome()
@@ -437,21 +442,28 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
     }
 
     /** Read-only path used by Gemini Live and deterministic recall. It owns no speech. */
-    suspend fun recall(query: String, limit: Int = 8): MemoryBrainOutcome.Recalled {
-        val workingAnswer = if (query == MemoryWorkingContext.LAST_TRANSACTION_QUERY) {
+    suspend fun recall(
+        query: String,
+        limit: Int = 8,
+        type: MemoryRecallType = MemoryRecallType.GENERAL
+    ): MemoryBrainOutcome.Recalled {
+        val effectiveQuery = if (type == MemoryRecallType.LAST_TRANSACTION) {
+            MemoryWorkingContext.LAST_TRANSACTION_QUERY
+        } else query
+        val workingAnswer = if (effectiveQuery == MemoryWorkingContext.LAST_TRANSACTION_QUERY) {
             MemoryWorkingContext.transactionFact()
         } else null
-        val rows = repository.relevant(query, limit)
+        val rows = repository.relevant(effectiveQuery, limit, type)
 
         // An explicit generic "what do you remember" query is a real recall even though
         // the repository's blank-query startup path intentionally does not mark usage.
-        if (query.isBlank() && rows.isNotEmpty()) {
+        if (effectiveQuery.isBlank() && rows.isNotEmpty()) {
             rows.forEach { row -> repository.relevant(row.fact, 1) }
             MemorySessionIndex.publish(rows)
         }
         MemoryWorkingContext.recalled(rows)
         log("MEMORY_RECALL count=${rows.size}")
-        return MemoryBrainOutcome.Recalled(rows, workingAnswer)
+        return MemoryBrainOutcome.Recalled(rows, workingAnswer, type)
     }
 
     /** Verified person correction entry for both natural final turns and clarification turns. */
@@ -656,7 +668,15 @@ class MemoryBrainCoordinator(private val repository: MemoryRepository) {
             val result = repository.saveGrounded(candidate)
             recordGenericFactTransaction(MemoryDecision.SAVE, candidate, result)
         }
-        MemorySemanticIntent.RECALL -> recall(frame.fact.orEmpty(), 8)
+        MemorySemanticIntent.RECALL -> recall(
+            frame.fact.orEmpty(),
+            8,
+            when (frame.relationship) {
+                PersonRelationship.BEST_FRIEND -> MemoryRecallType.BEST_FRIEND
+                PersonRelationship.FRIEND, PersonRelationship.GOOD_FRIEND -> MemoryRecallType.FRIENDS
+                null -> MemoryRecallType.GENERAL
+            }
+        )
         MemorySemanticIntent.DELETE_ENTITY -> deleteTarget(
             frame.person ?: return MemoryBrainOutcome.Rejected("Person target is ambiguous")
         )

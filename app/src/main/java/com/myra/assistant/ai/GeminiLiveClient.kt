@@ -211,7 +211,10 @@ class GeminiLiveClient(
         .put("name", "query_user_memory")
         .put("description", "Read a small relevant set of active grounded memories when the user asks about their people, preferences, projects, habits, or prior facts. This tool never mutates memory and never performs a phone action.")
         .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
-            .put("query", JSONObject().put("type", "STRING")))
+            .put("query", JSONObject().put("type", "STRING"))
+            .put("query_type", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                "GENERAL", "FRIENDS", "BEST_FRIEND", "LAST_TRANSACTION"
+            )))))
             .put("required", JSONArray().put("query")))
 
     private fun screenActionDeclaration() = JSONObject()

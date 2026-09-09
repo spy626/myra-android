@@ -10,9 +10,15 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
     fun currentTask(): AgentTask? = active
 
     /** First and authoritative owner of every completed user turn. */
-    @Synchronized fun acceptTurn(request: String, context: CurrentActivityContext?, visualAllowed: Boolean, turnId: Long = 0L): AgentTurnDecision {
+    @Synchronized fun acceptTurn(
+        request: String,
+        context: CurrentActivityContext?,
+        visualAllowed: Boolean,
+        turnId: Long = 0L,
+        verifiedVisualContext: Boolean = false
+    ): AgentTurnDecision {
         val working = WorkingTaskRuntime.store.snapshot()
-        val decision = UnifiedTurnInterpreter.interpret(request, working)
+        val decision = UnifiedTurnInterpreter.interpret(request, working, verifiedVisualContext)
         val scene = context?.let { ScreenSceneFactory.from(it, working.activeExternalApp) }
         val task = if (decision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL)) {
             createTask(request, context, visualAllowed, decision)
