@@ -55,6 +55,7 @@ class StructuredGenericMemoryPlanTest {
         val repository = MemoryRepository(FakeMemoryDao())
         val brain = MemoryBrainCoordinator(repository)
         repository.addPersonRelationship("Samir", PersonRelationship.FRIEND)
+        val before = repository.allActive()
         val final = AuthoritativeMemoryTurnEvidence(43L, "समीर का नाम बदलना है", "Samir ka naam badalna hai")
         val rename = MemorySemanticFrame(
             intent = MemorySemanticIntent.RENAME_ENTITY, person = "Samir", replacementPerson = "Rohan",
@@ -64,7 +65,7 @@ class StructuredGenericMemoryPlanTest {
         val plan = brain.prepareFinalTurn(final, listOf(rename))
 
         assertEquals(MemoryDecision.NEEDS_CLARIFICATION, plan.decision)
-        assertTrue(repository.allActive().single().entityName == "Samir")
+        assertEquals(before, repository.allActive())
     }
     @Test fun genericPreferenceAddUsesCoordinatorPlan() = runBlocking {
         val repository = MemoryRepository(FakeMemoryDao())
