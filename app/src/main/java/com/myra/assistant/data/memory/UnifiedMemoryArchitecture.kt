@@ -245,9 +245,12 @@ object FinalTurnSourceSpanAuthorizer {
         return BestFriendNameSimilarity.likelySame(left, right)
     }
 
-    private fun phonetic(value: String): String = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFD)
-        .replace(Regex("\\p{M}+"), "").replace(Regex("[^\\p{L}]"), "")
-        .replace("ph", "f").removeSuffix("a")
+    private fun phonetic(value: String): String {
+        val normalized = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"), "").replace(Regex("[^\\p{L}]"), "")
+            .replace("ph", "f")
+        return if (normalized.length > 4) normalized.removeSuffix("a") else normalized
+    }
 
     private fun normalize(value: String): String = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
