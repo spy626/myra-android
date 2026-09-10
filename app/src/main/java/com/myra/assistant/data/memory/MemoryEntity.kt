@@ -84,5 +84,8 @@ data class MemoryEntity(
     val confidence: Double, val provenance: String, val createdAt: Long, val updatedAt: Long,
     val entityId: String? = null, val entityName: String? = null,
     val lastRecalledAt: Long = 0, val temporalScope: String = MemoryTemporalScope.CURRENT.name,
-    val importance: Int = 5, val explicit: Boolean = true, val kind: String = "SEMANTIC"
+    val importance: Int = 5, val explicit: Boolean = true, val kind: String = "SEMANTIC",
+    val sourceText: String? = null, val sourceKind: String? = null,
+    val sourceSessionId: String? = null, val sourceTurnId: Long = 0L,
+    val sourceUtteranceId: String? = null
 )
