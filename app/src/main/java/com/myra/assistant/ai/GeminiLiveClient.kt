@@ -2,6 +2,7 @@ package com.myra.assistant.ai
 
 import android.util.Base64
 import android.util.Log
+import com.myra.assistant.data.memory.JarvisSimpleMemoryRuntime
 import com.myra.assistant.diagnostics.VoicePipelineLogger
 import okhttp3.*
 import okio.ByteString
@@ -254,7 +255,8 @@ class GeminiLiveClient(
     fun sendText(text: String) {
         if (text.isBlank()) return
         val turn = JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text)))
-        sendWhenReady(JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString())
+        val payload = JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString()
+        if (sendWhenReady(payload)) JarvisSimpleMemoryRuntime.markTypedUserText(text)
     }
 
     fun sendImage(image: ByteArray, mimeType: String, prompt: String) {
@@ -396,28 +398,28 @@ class GeminiLiveClient(
                 }
             }
             content.optJSONObject("inputTranscription")?.let { transcription ->
-                val text = transcription.optString("text")
-                if (text.isNotEmpty()) {
+                val inputText = transcription.optString("text")
+                if (inputText.isNotEmpty()) {
                     inputTranscriptChunk += 1
                     if (TRANSCRIPT_DEBUG_LOGGING) {
-                        // Log the untouched API value before any assembler, formatter,
-                        // command parser, or UI code sees it. JSONObject.quote keeps
-                        // spaces and escaped characters visible in Logcat.
                         Log.d(
                             TRANSCRIPT_LOG_TAG,
                             "raw_input tMs=${System.nanoTime() / 1_000_000} " +
                                 "turn=$inputTranscriptTurn chunk=$inputTranscriptChunk " +
-                                "text=${JSONObject.quote(text)}"
+                                "text=${JSONObject.quote(inputText)}"
                         )
                     }
-                    onInputTranscript?.invoke(text, modelGenerationId.get())
+                    onInputTranscript?.invoke(inputText, modelGenerationId.get())
                     reschedulePendingTurnBoundary()
                 }
             }
-            content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let {
-                onOutputTranscript?.invoke(it, modelGenerationId.get())
+            content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let { outputText ->
+                val generationId = modelGenerationId.get()
+                JarvisSimpleMemoryRuntime.appendAssistantTranscript(generationId, outputText)
+                onOutputTranscript?.invoke(outputText, generationId)
             }
             if (content.optBoolean("interrupted")) {
+                JarvisSimpleMemoryRuntime.discardAssistantTranscript(modelGenerationId.get())
                 onInterrupted?.invoke(modelGenerationId.get())
             }
             if (content.optBoolean("generationComplete")) {
@@ -538,6 +540,7 @@ class GeminiLiveClient(
                     "turn=$inputTranscriptTurn chunks=$inputTranscriptChunk"
             )
         }
+        JarvisSimpleMemoryRuntime.completeAssistantTranscript(modelGenerationId.get())
         onTurnComplete?.invoke()
         inputTranscriptTurn += 1
         inputTranscriptChunk = 0
@@ -565,6 +568,7 @@ class GeminiLiveClient(
             pendingTurnFallback = null
             pendingTurnComplete = false
         }
+        JarvisSimpleMemoryRuntime.discardAssistantTranscript(modelGenerationId.get())
         transcriptionScheduler.shutdownNow()
         reconnectScheduler.shutdownNow()
         socket?.close(1000, "App closed")
