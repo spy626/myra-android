@@ -154,10 +154,11 @@ object MemoryOperationContractValidator {
                 if (candidates.isEmpty()) MemoryFailureReason.MISSING_REQUIRED_ENTITY else MemoryFailureReason.AMBIGUOUS_ENTITY)
             frame = frame.copy(person = candidates.single(), criticalLiterals = (frame.criticalLiterals + candidates.single()).distinct())
         }
-        if (frame.intent == MemorySemanticIntent.ADD_EPISODE && frame.episode != null &&
-            frame.episode.participants.isEmpty()) {
+        val initialEpisode = frame.episode
+        if (frame.intent == MemorySemanticIntent.ADD_EPISODE && initialEpisode != null &&
+            initialEpisode.participants.isEmpty()) {
             val participants = currentTurnPeople(frame, final)
-            if (participants.isNotEmpty()) frame = frame.copy(episode = frame.episode.copy(participants = participants))
+            if (participants.isNotEmpty()) frame = frame.copy(episode = initialEpisode.copy(participants = participants))
         }
         val reason = when (frame.intent) {
             MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP -> when {
@@ -183,8 +184,10 @@ object MemoryOperationContractValidator {
             }
             MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT ->
                 MemoryFailureReason.MISSING_REQUIRED_FACT.takeIf { frame.fact.isNullOrBlank() || frame.stableKey.isNullOrBlank() }
-            MemorySemanticIntent.ADD_EPISODE -> MemoryFailureReason.MISSING_REQUIRED_EPISODE.takeIf {
-                frame.episode == null || frame.episode.summary.isBlank() || frame.episode.eventType.isBlank()
+            MemorySemanticIntent.ADD_EPISODE -> frame.episode.let { episode ->
+                MemoryFailureReason.MISSING_REQUIRED_EPISODE.takeIf {
+                    episode == null || episode.summary.isBlank() || episode.eventType.isBlank()
+                }
             }
             MemorySemanticIntent.ADD_GOAL -> MemoryFailureReason.MISSING_REQUIRED_GOAL.takeIf { frame.goal?.title.isNullOrBlank() }
             else -> null
