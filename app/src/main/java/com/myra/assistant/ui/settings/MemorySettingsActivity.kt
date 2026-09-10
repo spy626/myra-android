@@ -142,7 +142,8 @@ class MemorySettingsActivity : AppCompatActivity() {
         content.addView(TextView(this).apply {
             text = buildString {
                 append("Source: ")
-                append(memory.sourceKind.ifBlank { memory.provenance }.replace('_', ' '))
+                val sourceChannel = memory.sourceKind?.takeIf { it.isNotBlank() } ?: memory.provenance
+                append(sourceChannel.replace('_', ' '))
                 if (memory.sourceTurnId > 0L) append(" · turn ").append(memory.sourceTurnId)
             }
             setTextColor(Color.rgb(119, 112, 119))
@@ -164,6 +165,10 @@ class MemorySettingsActivity : AppCompatActivity() {
     }
 
     private fun showMemoryDetails(memory: MemoryEntity) {
+        val sourceChannel = memory.sourceKind?.takeIf { it.isNotBlank() } ?: memory.provenance
+        val sourceText = memory.sourceText?.takeIf { it.isNotBlank() } ?: "Not available for migrated legacy data"
+        val sourceSession = memory.sourceSessionId?.takeIf { it.isNotBlank() } ?: "Not available"
+        val sourceUtterance = memory.sourceUtteranceId?.takeIf { it.isNotBlank() } ?: "Not available"
         val details = buildString {
             append(memory.fact).append("\n\n")
             append("Category: ").append(if (memory.kind == "RELATIONSHIP") "Relationship" else memory.category.replace('_', ' ')).append('\n')
@@ -173,11 +178,11 @@ class MemorySettingsActivity : AppCompatActivity() {
                 if (memory.lastRecalledAt > 0L) DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(memory.lastRecalledAt))
                 else "Never"
             ).append("\n\n")
-            append("Source channel: ").append(memory.sourceKind.ifBlank { memory.provenance }.replace('_', ' ')).append('\n')
-            append("Original source: ").append(memory.sourceText.ifBlank { "Not available for migrated legacy data" }).append('\n')
-            append("Source session: ").append(memory.sourceSessionId.ifBlank { "Not available" }).append('\n')
+            append("Source channel: ").append(sourceChannel.replace('_', ' ')).append('\n')
+            append("Original source: ").append(sourceText).append('\n')
+            append("Source session: ").append(sourceSession).append('\n')
             append("Source turn: ").append(if (memory.sourceTurnId > 0L) memory.sourceTurnId else "Not available").append('\n')
-            append("Source utterance: ").append(memory.sourceUtteranceId.ifBlank { "Not available" })
+            append("Source utterance: ").append(sourceUtterance)
         }
         val builder = AlertDialog.Builder(this)
             .setTitle("Memory details")
