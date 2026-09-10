@@ -92,6 +92,8 @@ dependencies {
     implementation 'com.google.android.filament:gltfio-android:1.75.0'
     implementation 'com.google.android.filament:filament-utils-android:1.75.0'
     testImplementation 'junit:junit:4.13.2'
+    // JVM unit tests build the same org.json proposal payloads used by Gemini Live.
+    testImplementation 'org.json:json:20240303'
     // JVM-only dependency used to execute the exact v2->v3 SQL against a real SQLite engine.
     testImplementation 'org.xerial:sqlite-jdbc:3.46.1.0'
 }

@@ -129,11 +129,9 @@ object AiriMemorySafetyPolicy {
 
     fun rejectReason(frame: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence, isQuestion: Boolean): MemoryFailureReason? {
         if (isQuestion || frame.intent == MemorySemanticIntent.RECALL) return null
-        val structured = listOfNotNull(frame.stableKey, frame.category?.name, frame.fact, frame.sourceSpan) +
-            frame.criticalLiterals + final.variants
+        val structured = listOfNotNull(frame.stableKey, frame.category?.name, frame.fact, frame.sourceSpan) + frame.criticalLiterals + final.variants
         val combined = structured.joinToString(" ")
-        if (semanticSecretKeys.containsMatchIn(listOfNotNull(frame.stableKey, frame.category?.name, frame.fact).joinToString(" ")) ||
-            credential.containsMatchIn(combined)) return MemoryFailureReason.PROHIBITED_SECRET
+        if (semanticSecretKeys.containsMatchIn(listOfNotNull(frame.stableKey, frame.category?.name, frame.fact).joinToString(" ")) || credential.containsMatchIn(combined)) return MemoryFailureReason.PROHIBITED_SECRET
         if (financialId.containsMatchIn(combined) || governmentId.containsMatchIn(combined)) return MemoryFailureReason.SENSITIVE_CONTENT
         return null
     }
@@ -144,6 +142,11 @@ data class MemoryContractResult(val frame: MemorySemanticFrame?, val reason: Mem
 
 /** Required payload contract plus conservative, current-turn-only recovery for one missing person. */
 object MemoryOperationContractValidator {
+    private val genericPersonWords = setOf(
+        "someone", "somebody", "anyone", "anybody", "person", "friend", "friends",
+        "dost", "koi", "kisi", "some one", "कोई", "किसी", "दोस्त"
+    )
+
     fun validateAndRecover(input: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence): MemoryContractResult {
         var frame = input
         if (frame.intent in setOf(MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP,
@@ -155,8 +158,7 @@ object MemoryOperationContractValidator {
             frame = frame.copy(person = candidates.single(), criticalLiterals = (frame.criticalLiterals + candidates.single()).distinct())
         }
         val initialEpisode = frame.episode
-        if (frame.intent == MemorySemanticIntent.ADD_EPISODE && initialEpisode != null &&
-            initialEpisode.participants.isEmpty()) {
+        if (frame.intent == MemorySemanticIntent.ADD_EPISODE && initialEpisode != null && initialEpisode.participants.isEmpty()) {
             val participants = currentTurnPeople(frame, final)
             if (participants.isNotEmpty()) frame = frame.copy(episode = initialEpisode.copy(participants = participants))
         }
@@ -185,9 +187,7 @@ object MemoryOperationContractValidator {
             MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT ->
                 MemoryFailureReason.MISSING_REQUIRED_FACT.takeIf { frame.fact.isNullOrBlank() || frame.stableKey.isNullOrBlank() }
             MemorySemanticIntent.ADD_EPISODE -> frame.episode.let { episode ->
-                MemoryFailureReason.MISSING_REQUIRED_EPISODE.takeIf {
-                    episode == null || episode.summary.isBlank() || episode.eventType.isBlank()
-                }
+                MemoryFailureReason.MISSING_REQUIRED_EPISODE.takeIf { episode == null || episode.summary.isBlank() || episode.eventType.isBlank() }
             }
             MemorySemanticIntent.ADD_GOAL -> MemoryFailureReason.MISSING_REQUIRED_GOAL.takeIf { frame.goal?.title.isNullOrBlank() }
             else -> null
@@ -198,16 +198,28 @@ object MemoryOperationContractValidator {
     }
 
     private fun currentTurnPeople(frame: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence): List<String> {
+        fun validPerson(value: String): Boolean {
+            val normalized = AiriText.normalizeName(value)
+            return value.length in 2..80 && value.any(Char::isLetter) && value.none(Char::isDigit) &&
+                normalized.isNotBlank() && normalized !in genericPersonWords
+        }
+
         val explicit = (final.protectedCanonicalNames + final.protectedDisplayNames + frame.criticalLiterals)
-            .map(String::trim).filter { it.length in 2..80 && it.any(Char::isLetter) && it.none(Char::isDigit) }
+            .map(String::trim)
+            .filter(::validPerson)
             .filter { FinalTurnSourceSpanAuthorizer.groundedLiteral(it, final) }
-            .map(AiriText::displayName).distinctBy(AiriText::normalizeName)
+            .map(AiriText::displayName)
+            .filter(::validPerson)
+            .distinctBy(AiriText::normalizeName)
         if (explicit.isNotEmpty()) return explicit
+
         val capitalized = Regex("\\b[\\p{Lu}][\\p{L}]{2,}(?:\\s+[\\p{Lu}][\\p{L}]{2,}){0,2}\\b")
-            .findAll(frame.sourceSpan).map { it.value }.filter { candidate ->
-                final.variants.any { it.contains(candidate) }
-            }.toList()
-        return capitalized.map(AiriText::displayName).distinctBy(AiriText::normalizeName)
+            .findAll(frame.sourceSpan)
+            .map { it.value }
+            .filter(::validPerson)
+            .filter { candidate -> final.variants.any { it.contains(candidate) } }
+            .toList()
+        return capitalized.map(AiriText::displayName).filter(::validPerson).distinctBy(AiriText::normalizeName)
     }
 }
 
