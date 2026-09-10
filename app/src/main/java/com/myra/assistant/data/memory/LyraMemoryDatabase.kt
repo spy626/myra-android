@@ -7,23 +7,28 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-/** The one local storage truth for the AIRI-based memory runtime. */
+/** The one local storage truth for LYRA, including the active JARVIS-style memory tables. */
 @Database(
     entities = [SemanticMemoryEntity::class, PersonEntity::class, PersonAliasEntity::class,
         RelationshipEntity::class, EpisodicMemoryEntity::class, EpisodeParticipantEntity::class,
-        GoalMemoryEntity::class, BehaviorObservationEntity::class, ConversationTruthEntity::class],
-    version = 4,
+        GoalMemoryEntity::class, BehaviorObservationEntity::class, ConversationTruthEntity::class,
+        JarvisMessageEntity::class, JarvisCommandLogEntity::class, JarvisMemoryEntity::class],
+    version = 5,
     exportSchema = false
 )
 abstract class LyraMemoryDatabase : RoomDatabase() {
     abstract fun airiMemoryDao(): AiriMemoryDao
+    abstract fun jarvisDao(): JarvisDao
 
     companion object {
         @Volatile private var instance: LyraMemoryDatabase? = null
 
         fun get(context: Context): LyraMemoryDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, LyraMemoryDatabase::class.java, "lyra_memory.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                // The JARVIS runtime performs tiny bounded local reads/writes from voice callbacks.
+                // Keeping the single DB main-thread capable preserves deterministic command ordering.
+                .allowMainThreadQueries()
                 .build().also { instance = it }
         }
 
@@ -33,9 +38,11 @@ abstract class LyraMemoryDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE memories ADD COLUMN lastUsedAt INTEGER NOT NULL DEFAULT 0")
             }
         }
+
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) { MIGRATION_2_3_SQL.forEach(db::execSQL) }
         }
+
         val MIGRATION_2_3_SQL = listOf(
             "ALTER TABLE memories ADD COLUMN provenance TEXT NOT NULL DEFAULT 'LEGACY'",
             "ALTER TABLE memories ADD COLUMN lifecycleStatus TEXT NOT NULL DEFAULT 'ACTIVE'",
@@ -47,7 +54,7 @@ abstract class LyraMemoryDatabase : RoomDatabase() {
             "CREATE TABLE IF NOT EXISTS behavior_observations (`id` TEXT NOT NULL, `stableKey` TEXT NOT NULL, `kind` TEXT NOT NULL, `label` TEXT NOT NULL, `observationCount` INTEGER NOT NULL, `sessionCount` INTEGER NOT NULL, `dayCount` INTEGER NOT NULL, `firstObservedAt` INTEGER NOT NULL, `lastObservedAt` INTEGER NOT NULL, `lastSessionId` TEXT NOT NULL, `lastDayBucket` INTEGER NOT NULL, `metadata` TEXT, `promotedMemoryId` TEXT, PRIMARY KEY(`id`))"
         )
 
-        /** Explicit one-time cutover. Old generic rows are imported as legacy semantic history. */
+        /** Explicit one-time AIRI cutover. Old generic rows are retained as legacy semantic history. */
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 AIRI_SCHEMA_SQL.forEach(db::execSQL)
@@ -56,6 +63,26 @@ abstract class LyraMemoryDatabase : RoomDatabase() {
                 db.execSQL("DROP TABLE memories")
             }
         }
+
+        /** Adds the JARVIS chat, command-log and durable-memory tables without deleting AIRI history. */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                JARVIS_SCHEMA_SQL.forEach(db::execSQL)
+            }
+        }
+
+        val JARVIS_SCHEMA_SQL = listOf(
+            "CREATE TABLE IF NOT EXISTS `messages` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sender` TEXT NOT NULL, `content` TEXT NOT NULL, `actionType` TEXT, `isSuccess` INTEGER NOT NULL, `timestamp` INTEGER NOT NULL, `messageKey` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `turnId` INTEGER NOT NULL, `utteranceId` TEXT NOT NULL, `sourceKind` TEXT NOT NULL)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_messages_messageKey` ON `messages` (`messageKey`)",
+            "CREATE INDEX IF NOT EXISTS `index_messages_timestamp` ON `messages` (`timestamp`)",
+            "CREATE TABLE IF NOT EXISTS `command_logs` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `rawCommand` TEXT NOT NULL, `intentType` TEXT NOT NULL, `resultText` TEXT NOT NULL, `isSuccess` INTEGER NOT NULL, `timestamp` INTEGER NOT NULL, `verified` INTEGER NOT NULL, `sourceKind` TEXT NOT NULL)",
+            "CREATE INDEX IF NOT EXISTS `index_command_logs_timestamp` ON `command_logs` (`timestamp`)",
+            "CREATE TABLE IF NOT EXISTS `memories` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `memoryKey` TEXT NOT NULL, `memoryType` TEXT NOT NULL, `subject` TEXT NOT NULL, `normalizedSubject` TEXT NOT NULL, `value` TEXT NOT NULL, `sourceText` TEXT NOT NULL, `sourceKind` TEXT NOT NULL, `sourceSessionId` TEXT NOT NULL, `sourceTurnId` INTEGER NOT NULL, `sourceUtteranceId` TEXT NOT NULL, `confidence` REAL NOT NULL, `importance` INTEGER NOT NULL, `active` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `lastAccessedAt` INTEGER NOT NULL, `accessCount` INTEGER NOT NULL)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_memories_memoryKey` ON `memories` (`memoryKey`)",
+            "CREATE INDEX IF NOT EXISTS `index_memories_memoryType_active` ON `memories` (`memoryType`, `active`)",
+            "CREATE INDEX IF NOT EXISTS `index_memories_normalizedSubject_active` ON `memories` (`normalizedSubject`, `active`)",
+            "CREATE INDEX IF NOT EXISTS `index_memories_updatedAt` ON `memories` (`updatedAt`)"
+        )
 
         val AIRI_SCHEMA_SQL = listOf(
             "CREATE TABLE IF NOT EXISTS airi_semantic_memory (`memoryId` TEXT NOT NULL, `semanticKey` TEXT NOT NULL, `category` TEXT NOT NULL, `statement` TEXT NOT NULL, `normalizedStatement` TEXT NOT NULL, `subjectEntityId` TEXT, `temporalScope` TEXT NOT NULL, `confidence` REAL NOT NULL, `importance` INTEGER NOT NULL, `explicit` INTEGER NOT NULL, `provenance` TEXT NOT NULL, `sourceTurnId` INTEGER NOT NULL, `sourceUtteranceId` TEXT NOT NULL, `active` INTEGER NOT NULL, `supersededById` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `lastAccessed` INTEGER NOT NULL, `accessCount` INTEGER NOT NULL, `deletedAt` INTEGER, PRIMARY KEY(`memoryId`))",
