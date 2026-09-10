@@ -13,7 +13,9 @@ data class VerifiedMemoryTransaction(
 enum class MemoryFailureReason {
     NONE, STALE_TURN, WRONG_TURN, QUESTION_MUTATION, EMPTY_SOURCE_SPAN, SOURCE_SPAN_NOT_FINAL,
     CRITICAL_LITERAL_MISSING, AMBIGUOUS_ENTITY, TARGET_NOT_FOUND, TEMPORARY, PROHIBITED_SECRET,
-    LOW_CONFIDENCE, SENSITIVE_CONTENT, UNSUPPORTED_OPERATION, VERIFY_FAILED
+    LOW_CONFIDENCE, SENSITIVE_CONTENT, UNSUPPORTED_OPERATION, VERIFY_FAILED,
+    MISSING_REQUIRED_ENTITY, MISSING_REQUIRED_RELATIONSHIP, MISSING_REQUIRED_REPLACEMENT,
+    MISSING_REQUIRED_FACT, MISSING_REQUIRED_GOAL, MISSING_REQUIRED_EPISODE
 }
 
 interface AiriMemoryStore {
@@ -153,12 +155,15 @@ class RoomAiriMemoryStore(
 
     override suspend fun retrieve(query: String, type: MemoryRecallType, limit: Int): List<MemoryEntity> {
         val bounded = limit.coerceIn(1, 8); val normalizedQuery = AiriText.normalize(query)
-        return when (type) {
+        val result = when (type) {
             MemoryRecallType.FRIENDS -> activeRelationships(PersonRelationship.entries.toSet(), bounded)
             MemoryRecallType.BEST_FRIEND -> activeRelationships(setOf(PersonRelationship.BEST_FRIEND), bounded)
             MemoryRecallType.EPISODES -> dao.recentEpisodes(bounded).map(::episodeCard)
             MemoryRecallType.GOALS -> dao.activeGoals(bounded).map(::goalCard)
             MemoryRecallType.PROJECTS -> semanticCards(bounded * 4).filter { it.category == MemoryCategory.PROJECT.name }.take(bounded)
+            MemoryRecallType.PREFERENCES -> semanticCards(bounded * 4).filter {
+                it.category in setOf(MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name)
+            }.take(bounded)
             MemoryRecallType.LAST_TRANSACTION -> emptyList()
             MemoryRecallType.GENERAL -> {
                 val structured = semanticCards(80) + activeRelationships(PersonRelationship.entries.toSet(), 80) +
@@ -169,17 +174,24 @@ class RoomAiriMemoryStore(
                     .map { it.first }.distinctBy { it.id }.take(bounded).toList()
             }
         }
+        touchRetrieved(result)
+        return result
     }
 
     override suspend fun activeCards(limit: Int): List<MemoryEntity> =
         (semanticCards(limit) + activeRelationships(PersonRelationship.entries.toSet(), limit) +
-            dao.activeGoals(limit).map(::goalCard) + dao.recentEpisodes(limit).map(::episodeCard))
+            dao.activeGoals(limit).map(::goalCard) + dao.recentEpisodes(limit).map(::episodeCard) +
+            BehaviorObservationKind.entries.flatMap { dao.behaviorByKind(it.name, limit) }
+                .filter { it.state == "ACTIVE" }.distinctBy { it.patternId }.map(::behaviorCard))
             .sortedByDescending { it.updatedAt }.take(limit)
 
     override suspend fun forgetCard(card: MemoryEntity): Boolean = when (card.kind) {
         "RELATIONSHIP" -> card.entityId?.let { id -> PersonRelationship.entries.firstOrNull { it.name == card.stableKey.substringAfterLast(':') }?.let { endRelationship(id, it) } } == true
         "PERSON" -> card.entityId?.let { deletePerson(it) } == true
         "SEMANTIC" -> dao.deleteSemantic(card.id, clock()) == 1
+        "EPISODE" -> dao.deleteEpisode(card.id, clock()) == 1
+        "GOAL" -> dao.deleteGoal(card.id, clock()) == 1
+        "BEHAVIOR" -> dao.deleteBehavior(card.stableKey) == 1
         else -> false
     }
     override suspend fun clearAll() = database.withTransaction { dao.clearAllMemory() }
@@ -209,6 +221,17 @@ class RoomAiriMemoryStore(
     private fun goalCard(row: GoalMemoryEntity) = MemoryEntity(row.goalId, row.stableKey, MemoryCategory.GOAL.name,
         row.description ?: row.title, 1.0, row.provenance, row.createdAt, row.updatedAt,
         lastRecalledAt = row.lastAccessed, importance = row.priority, kind = "GOAL")
+    private fun behaviorCard(row: BehaviorObservationEntity) = MemoryEntity(row.patternId, row.stableKey,
+        MemoryCategory.HABIT.name, row.label, row.confidence, "BEHAVIOR_PATTERN", row.firstObservedAt,
+        row.lastObservedAt, importance = row.importance, explicit = false, kind = "BEHAVIOR")
+    private suspend fun touchRetrieved(rows: List<MemoryEntity>) {
+        if (rows.isEmpty()) return
+        val at = clock()
+        rows.filter { it.kind == "SEMANTIC" }.map { it.id }.takeIf { it.isNotEmpty() }?.let { dao.touchSemantic(it, at) }
+        rows.filter { it.kind == "EPISODE" }.map { it.id }.takeIf { it.isNotEmpty() }?.let { dao.touchEpisodes(it, at) }
+        rows.filter { it.kind == "GOAL" }.map { it.id }.takeIf { it.isNotEmpty() }?.let { dao.touchGoals(it, at) }
+        // Relationship reads are touched by activeRelationships before projection.
+    }
     private fun lexicalScore(query: String, row: MemoryEntity): Int {
         if (query.isBlank()) return 1
         val tokens = query.split(' ').filter { it.length >= 2 }.toSet()

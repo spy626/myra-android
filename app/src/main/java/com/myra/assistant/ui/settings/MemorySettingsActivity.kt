@@ -17,12 +17,10 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCategory
 import com.myra.assistant.data.memory.MemoryCoreManualActions
 import com.myra.assistant.data.memory.MemoryEntity
 import com.myra.assistant.data.memory.MemoryPrivacyPreferences
-import com.myra.assistant.data.memory.RoomAiriMemoryStore
 import com.myra.assistant.data.memory.MemoryBrainCoordinator
 import com.myra.assistant.data.memory.MemoryWriteResult
 import com.myra.assistant.databinding.ActivityMemorySettingsBinding
@@ -33,8 +31,7 @@ import java.util.Date
 /** User-controlled view of the same Room memory store used by LYRA voice. */
 class MemorySettingsActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMemorySettingsBinding
-    private val store by lazy { RoomAiriMemoryStore(LyraMemoryDatabase.get(this)) }
-    private val memoryOwner by lazy { MemoryBrainCoordinator(store) }
+    private val memoryOwner by lazy { MemoryBrainCoordinator.get(this) }
     private val privacyPreferences by lazy { MemoryPrivacyPreferences(this) }
     private var activeFilter = "ALL"
 
@@ -67,7 +64,7 @@ class MemorySettingsActivity : AppCompatActivity() {
 
     private fun refreshMemories() {
         lifecycleScope.launch {
-            val memories = store.activeCards().filter(::matchesFilter)
+            val memories = memoryOwner.activeCards().filter(::matchesFilter)
             binding.memoryList.removeAllViews()
             binding.emptyText.visibility = if (memories.isEmpty()) View.VISIBLE else View.GONE
             binding.deleteAllButton.isEnabled = memories.isNotEmpty()
@@ -211,7 +208,7 @@ class MemorySettingsActivity : AppCompatActivity() {
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 lifecycleScope.launch {
-                    val renamed = memory.entityId?.let { store.renamePerson(it, input.text.toString(), System.currentTimeMillis()) } == true
+                    val renamed = memory.entityId?.let { memoryOwner.renameFromManualUi(it, input.text.toString()) } == true
                     if (renamed) { dialog.dismiss(); refreshMemories() }
                     else Toast.makeText(this@MemorySettingsActivity, "Rename was not verified", Toast.LENGTH_LONG).show()
                 }
@@ -298,7 +295,7 @@ class MemorySettingsActivity : AppCompatActivity() {
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
                 lifecycleScope.launch {
-                    val deleted = store.forgetCard(memory)
+                    val deleted = memoryOwner.deleteMemory(memory)
                     Toast.makeText(
                         this@MemorySettingsActivity,
                         if (deleted) "Memory deleted" else "Memory was already removed",
@@ -317,8 +314,10 @@ class MemorySettingsActivity : AppCompatActivity() {
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete all") { _, _ ->
                 lifecycleScope.launch {
-                    store.clearAll()
-                    Toast.makeText(this@MemorySettingsActivity, "All memories deleted", Toast.LENGTH_SHORT).show()
+                    val cleared = memoryOwner.clearMemories()
+                    Toast.makeText(this@MemorySettingsActivity,
+                        if (cleared) "All memories deleted" else "Memory deletion was not verified",
+                        Toast.LENGTH_SHORT).show()
                     refreshMemories()
                 }
             }

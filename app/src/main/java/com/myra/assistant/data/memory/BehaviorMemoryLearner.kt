@@ -33,6 +33,8 @@ class BehaviorMemoryLearner(private val store: AiriMemoryStore) {
             state = if (active) "ACTIVE" else "OBSERVED", confidence = if (active) .86 else .5,
             importance = if (active) 4 else 1, metadata = signal.safeMetadata)
         store.upsertBehavior(row)
+        if (store.behavior(key)?.let { it.patternId == row.patternId && it.observationCount == observations } != true)
+            return MemoryWriteResult.Rejected("Behavior observation was not verified")
         return if (active) MemoryWriteResult.Saved(row.patternId) else null
     }
 
@@ -82,10 +84,10 @@ object PassiveMemoryObserver {
         val accepted = synchronized(lastObserved) { signals.filter { val key = "${it.kind}:${it.label.lowercase()}"; val last = lastObserved[key] ?: 0; if (it.observedAt - last < OBSERVATION_COOLDOWN_MS) false else { lastObserved[key] = it.observedAt; true } } }
         if (accepted.isEmpty()) return
         scope.launch {
-            val learner = BehaviorMemoryLearner(RoomAiriMemoryStore(LyraMemoryDatabase.get(context)))
-            accepted.forEach { learner.observe(it) }
+            val owner = MemoryBrainCoordinator.get(context)
+            accepted.forEach { owner.recordBehaviorObservation(it) }
             val day = activity.timestamp / BehaviorMemoryLearner.DAY_MS
-            if (day != lastDecayDay) { lastDecayDay = day; learner.decay(activity.timestamp) }
+            if (day != lastDecayDay) { lastDecayDay = day; owner.reviewInferredMemory(activity.timestamp) }
         }
     }
     internal fun isActiveYouTubeVideoContext(activity: CurrentActivityContext, safeLabels: List<String> = activity.visibleElements.map { it.label }): Boolean =

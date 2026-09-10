@@ -26,10 +26,8 @@ import com.myra.assistant.brain.BrainDecision
 import com.myra.assistant.brain.LyraBrainCoordinator
 import com.myra.assistant.brain.ScreenTargetReference
 import com.myra.assistant.brain.ScrollDirection as BrainScrollDirection
-import com.myra.assistant.data.memory.LyraMemoryDatabase
 import com.myra.assistant.data.memory.MemoryCommandReplyFormatter
 import com.myra.assistant.data.memory.PersonalMemoryRecallFormatter
-import com.myra.assistant.data.memory.RoomAiriMemoryStore
 import com.myra.assistant.data.memory.MemoryBrainCoordinator
 import com.myra.assistant.data.memory.MemoryBrainOutcome
 import com.myra.assistant.data.memory.MemoryRecallType
@@ -329,8 +327,8 @@ class MyraVoiceService : Service() {
             )
         ))
     }
-    private val memoryStore by lazy { RoomAiriMemoryStore(LyraMemoryDatabase.get(this)) }
-    private val memoryBrain by lazy { MemoryBrainCoordinator(memoryStore) }
+    private val memoryBrain by lazy { MemoryBrainCoordinator.get(this) }
+    private val fastMemoryLane by lazy { com.myra.assistant.data.memory.LocalFastMemoryLane(memoryBrain) }
     private val assistantController by lazy { (application as MyApplication).assistantController }
     private val screenVisionPreferences by lazy { ScreenVisionPreferences(this) }
     private val visualAwarenessPreferences by lazy { VisualAwarenessPreferences(this) }
@@ -1414,7 +1412,10 @@ class MyraVoiceService : Service() {
                     )
                     val staged = stagedMemorySemantics.remove(memoryTurnId).orEmpty()
                     val pendingRecall = stagedMemoryRecalls.remove(memoryTurnId)
-                    val memoryOwned = staged.isNotEmpty() || pendingRecall != null
+                    val localRecallIntent = com.myra.assistant.data.memory.LocalMemoryRecallRouter
+                        .classify(finalUtterance.memoryEvidence)
+                    val memoryIntentResolvedAt = android.os.SystemClock.elapsedRealtime()
+                    val memoryOwned = staged.isNotEmpty() || pendingRecall != null || localRecallIntent != null
                     if (memoryOwned) {
                         suppressModelForTurn = true
                         localCommandExecutedThisTurn = true
@@ -1439,9 +1440,12 @@ class MyraVoiceService : Service() {
                                     "resolved=${validation.authorized}"
                             )
                         }
-                        val plan = memoryBrain.prepareFinalTurn(
-                            finalUtterance.memoryEvidence,
-                            staged,
+                        val plan = if (localRecallIntent != null) {
+                            com.myra.assistant.data.memory.FinalMemoryTurnPlan(
+                                displayedFinalUserText, decision = com.myra.assistant.data.memory.MemoryDecision.RECALL
+                            )
+                        } else memoryBrain.prepareFinalTurn(
+                            finalUtterance.memoryEvidence, staged,
                             semanticConsistent = finalUtterance.semanticConsistency
                         )
                         voiceLog(
@@ -1456,12 +1460,27 @@ class MyraVoiceService : Service() {
                                     "temporalScope=${operation.temporalScope} source=MODEL"
                             )
                         }
-                        val outcome = pendingRecall?.let { memoryBrain.recall(it.query, 8, it.type) }
+                        val retrievalStartedAt = android.os.SystemClock.elapsedRealtime()
+                        val localExecution = if (localRecallIntent != null) {
+                            fastMemoryLane.recall(finalUtterance.memoryEvidence)
+                        } else null
+                        val outcome = localExecution?.outcome
+                            ?: pendingRecall?.let { memoryBrain.recall(it.query, 8, it.type) }
                             ?: memoryBrain.executeFinalTurnPlan(plan, finalUtterance.memoryEvidence)
-                        logMemoryOutcome(memoryTurnId, plan, outcome, pendingRecall?.type)
+                        val effectiveRecallType = localExecution?.intent?.type ?: pendingRecall?.type
+                        logMemoryOutcome(memoryTurnId, plan, outcome, effectiveRecallType)
                         if (memoryOwned) {
                             val response = verifiedMemoryResponse(outcome, myraText)
                             mainHandler.post {
+                                val replyQueuedAt = android.os.SystemClock.elapsedRealtime()
+                                if (localExecution != null) voiceLog(
+                                    "MEMORY_FAST_LANE turnId=$memoryTurnId queryType=${localExecution.intent.type} " +
+                                        "authoritativeFinalToMemoryIntentMs=${(memoryIntentResolvedAt - finalInputTranscriptAt).coerceAtLeast(0)} " +
+                                        "memoryIntentToRetrievalMs=${(retrievalStartedAt - memoryIntentResolvedAt).coerceAtLeast(0)} " +
+                                        "retrievalDurationMs=${localExecution.outcome.durationMs} " +
+                                        "retrievalToReplyQueuedMs=${(replyQueuedAt - retrievalStartedAt - localExecution.outcome.durationMs).coerceAtLeast(0)} " +
+                                        "networkCall=false"
+                                )
                                 voiceLog(
                                     "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_VERIFIED " +
                                         "planDecision=${plan.decision} verifiedBeforeResponse=true"
@@ -1545,7 +1564,7 @@ class MyraVoiceService : Service() {
 
     private suspend fun buildSavedMemoryContext(): String {
         return SavedMemoryContextFormatter.format(
-            memoryStore.retrieve("", MemoryRecallType.GENERAL, 8).map { it.fact }
+            memoryBrain.recall("", type = MemoryRecallType.GENERAL).rows.map { it.fact }
         )
     }
 
@@ -2462,7 +2481,7 @@ class MyraVoiceService : Service() {
             val result = (memoryBrain.executeFinalTurnPlan(plan, evidence) as? MemoryBrainOutcome.Mutated)?.result
                 ?: MemoryWriteResult.Rejected("Screen memory write was not verified")
             val saved = result is MemoryWriteResult.Saved
-            voiceLog("screen_memory_write fact=${fact.take(80)} source=screen_observation saved=$saved")
+            voiceLog("screen_memory_write category=$category factLength=${fact.length} source=screen_observation saved=$saved")
             live?.sendToolResponse(
                 id, "propose_screen_memory", saved,
                 if (saved) "Structured screen observation saved in the existing Memory Brain"
@@ -2565,68 +2584,7 @@ class MyraVoiceService : Service() {
         }.distinct().sorted().joinToString(",").ifBlank { "NONE" }
 
     private fun parseMemorySemanticOperations(args: org.json.JSONObject): List<MemorySemanticFrame> {
-        val values = args.optJSONArray("operations") ?: return emptyList()
-        return (0 until minOf(values.length(), 4)).mapNotNull { index ->
-            val value = values.optJSONObject(index) ?: return@mapNotNull null
-            val intent = runCatching { MemorySemanticIntent.valueOf(value.optString("intent")) }.getOrNull()
-                ?: return@mapNotNull null
-            val relationship = value.optString("relationship").takeIf(String::isNotBlank)?.let {
-                runCatching { PersonRelationship.valueOf(it) }.getOrNull()
-            }
-            val replacementRelationship = value.optString("replacement_relationship").takeIf(String::isNotBlank)?.let {
-                runCatching { PersonRelationship.valueOf(it) }.getOrNull()
-            }
-            val temporal = runCatching {
-                MemoryTemporalScope.valueOf(value.optString("temporal_scope", "UNSPECIFIED"))
-            }.getOrDefault(MemoryTemporalScope.UNSPECIFIED)
-            val category = value.optString("category").takeIf(String::isNotBlank)?.let {
-                runCatching { MemoryCategory.valueOf(it) }.getOrNull()
-            }
-            val criticalLiterals = value.optJSONArray("critical_literals")?.let { array ->
-                (0 until minOf(array.length(), 8)).mapNotNull { i ->
-                    array.optString(i).trim().takeIf(String::isNotEmpty)
-                }
-            }.orEmpty()
-            val participants = value.optJSONArray("participants")?.let { array ->
-                (0 until minOf(array.length(), 6)).mapNotNull { i ->
-                    array.optString(i).trim().takeIf(String::isNotEmpty)
-                }
-            }.orEmpty()
-            val episode = if (intent == MemorySemanticIntent.ADD_EPISODE) {
-                com.myra.assistant.data.memory.EpisodicMemoryPayload(
-                    eventType = value.optString("event_type", "event"),
-                    summary = value.optString("fact"),
-                    participants = participants,
-                    importance = value.optDouble("importance", .5).coerceIn(0.0, 1.0)
-                )
-            } else null
-            val goal = if (intent == MemorySemanticIntent.ADD_GOAL) {
-                com.myra.assistant.data.memory.GoalMemoryPayload(
-                    title = value.optString("goal_title"),
-                    description = value.optString("fact").takeIf(String::isNotBlank),
-                    status = value.optString("goal_status", "ACTIVE"),
-                    priority = value.optInt("priority", 0).coerceIn(0, 5),
-                    progress = value.optInt("progress", 0).coerceIn(0, 100)
-                )
-            } else null
-            MemorySemanticFrame(
-                intent = intent,
-                person = value.optString("person").takeIf(String::isNotBlank),
-                replacementPerson = value.optString("replacement_person").takeIf(String::isNotBlank),
-                relationship = relationship,
-                replacementRelationship = replacementRelationship,
-                temporalScope = temporal,
-                fact = value.optString("fact").takeIf(String::isNotBlank),
-                category = category,
-                stableKey = value.optString("memory_key").takeIf(String::isNotBlank),
-                confidence = value.optDouble("confidence", 0.0),
-                evidence = value.optString("evidence"),
-                sourceSpan = value.optString("source_span", value.optString("evidence")),
-                criticalLiterals = criticalLiterals,
-                episode = episode,
-                goal = goal
-            )
-        }
+        return com.myra.assistant.data.memory.GeminiMemoryOperationParser.parse(args)
     }
 
     private fun handlePendingConfirmation(raw: String): Boolean {

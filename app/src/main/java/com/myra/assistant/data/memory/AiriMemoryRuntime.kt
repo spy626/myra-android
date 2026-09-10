@@ -74,13 +74,12 @@ data class MemoryAuthorization(val authorized: Boolean, val reason: MemoryFailur
 
 /** Authorizes source evidence, not translated/model-generated predicates. */
 object FinalTurnSourceSpanAuthorizer {
-    private val secretLabels = setOf("otp", "password", "passcode", "pin", "cvv", "token", "api", "key", "seed", "recovery")
     fun authorize(frame: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence, activeTurnId: Long, isQuestion: Boolean): MemoryAuthorization {
         if (frame.sourceTurnId != 0L && frame.sourceTurnId != activeTurnId) return denied(MemoryFailureReason.WRONG_TURN)
         if (!AiriMemoryRuntime.isCurrent(final.sessionId, final.turnId) || final.turnId != activeTurnId) return denied(MemoryFailureReason.STALE_TURN)
         if (isQuestion && frame.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY)) return denied(MemoryFailureReason.QUESTION_MUTATION)
         if (frame.confidence !in .78..1.0) return denied(MemoryFailureReason.LOW_CONFIDENCE)
-        if ((final.variants + frame.sourceSpan).any(::containsSecret)) return denied(MemoryFailureReason.PROHIBITED_SECRET)
+        AiriMemorySafetyPolicy.rejectReason(frame, final, isQuestion)?.let { return denied(it) }
         if (frame.intent == MemorySemanticIntent.TRANSIENT_CONTEXT || frame.temporalScope == MemoryTemporalScope.TEMPORARY) return MemoryAuthorization(true, MemoryFailureReason.TEMPORARY, criticalLiteralsGrounded = true)
         val span = normalize(frame.sourceSpan)
         if (span.isBlank()) return denied(MemoryFailureReason.EMPTY_SOURCE_SPAN)
@@ -91,10 +90,6 @@ object FinalTurnSourceSpanAuthorizer {
         return MemoryAuthorization(true, MemoryFailureReason.NONE, if (selected == 0) "CANONICAL" else "DISPLAY", true)
     }
     private fun denied(reason: MemoryFailureReason) = MemoryAuthorization(false, reason)
-    private fun containsSecret(text: String): Boolean {
-        val words = normalize(text).split(' ')
-        return words.any { it in secretLabels } || words.windowed(2).any { it.joinToString(" ") in setOf("security code", "private key", "account number", "card number") }
-    }
     private fun containsSpan(final: String, span: String): Boolean {
         if (final == span || final.contains(span)) return true
         val wanted = span.split(' '); val actual = final.split(' ')
@@ -107,7 +102,7 @@ object FinalTurnSourceSpanAuthorizer {
         }
         return true
     }
-    private fun groundedLiteral(literal: String, final: AuthoritativeMemoryTurnEvidence): Boolean {
+    internal fun groundedLiteral(literal: String, final: AuthoritativeMemoryTurnEvidence): Boolean {
         val normalized = normalize(literal)
         if (normalized.isBlank()) return false
         if (normalized.any(Char::isDigit)) return final.variants.any { normalize(it).split(' ').contains(normalized) }
@@ -123,6 +118,94 @@ object FinalTurnSourceSpanAuthorizer {
     private fun phonetic(v: String) = normalize(v).replace("ph", "f").replace("v", "w").replace(Regex("([aeiou])$"), "").replace(" ", "")
     private fun normalize(v: String) = Normalizer.normalize(v.lowercase(Locale.ROOT), Normalizer.Form.NFKD).replace(Regex("\\p{M}+"), "").replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
     private fun editDistance(a: String, b: String): Int { var prev = IntArray(b.length + 1) { it }; for (i in a.indices) { val cur = IntArray(b.length + 1); cur[0] = i + 1; for (j in b.indices) cur[j + 1] = minOf(cur[j] + 1, prev[j + 1] + 1, prev[j] + if (a[i] == b[j]) 0 else 1); prev = cur }; return prev[b.length] }
+}
+
+/** Central AIRI-owner safety policy. Read-only questions are permitted but never persisted. */
+object AiriMemorySafetyPolicy {
+    private val credential = Regex("\\b(otp|one[ -]?time password|password|passcode|pin|cvv|security code|verification code|recovery code|auth(?:entication)? token|api key|private key|seed phrase)\\b", RegexOption.IGNORE_CASE)
+    private val financialId = Regex("\\b(?:bank account|account|card)\\s*(?:number|no|id|#)\\b|\\b(?:account|card)\\b.{0,20}\\d{4}", RegexOption.IGNORE_CASE)
+    private val governmentId = Regex("\\b(?:aadhaar|aadhar|pan|passport)\\s*(?:number|no|id|#)\\b|\\b(?:aadhaar|aadhar|pan|passport)\\b.{0,16}[a-z0-9-]*\\d[a-z0-9-]*", RegexOption.IGNORE_CASE)
+    private val semanticSecretKeys = Regex("(credential|authentication|otp|password|passcode|private_key|api_key|seed_phrase|bank_account|card_number|government_id|aadhaar|aadhar|pan_number|passport_number)", RegexOption.IGNORE_CASE)
+
+    fun rejectReason(frame: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence, isQuestion: Boolean): MemoryFailureReason? {
+        if (isQuestion || frame.intent == MemorySemanticIntent.RECALL) return null
+        val structured = listOfNotNull(frame.stableKey, frame.category?.name, frame.fact, frame.sourceSpan) +
+            frame.criticalLiterals + final.variants
+        val combined = structured.joinToString(" ")
+        if (semanticSecretKeys.containsMatchIn(listOfNotNull(frame.stableKey, frame.category?.name, frame.fact).joinToString(" ")) ||
+            credential.containsMatchIn(combined)) return MemoryFailureReason.PROHIBITED_SECRET
+        if (financialId.containsMatchIn(combined) || governmentId.containsMatchIn(combined)) return MemoryFailureReason.SENSITIVE_CONTENT
+        return null
+    }
+}
+
+data class MemoryContractResult(val frame: MemorySemanticFrame?, val reason: MemoryFailureReason? = null,
+    val recoveredEntity: Boolean = false)
+
+/** Required payload contract plus conservative, current-turn-only recovery for one missing person. */
+object MemoryOperationContractValidator {
+    fun validateAndRecover(input: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence): MemoryContractResult {
+        var frame = input
+        if (frame.intent in setOf(MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP,
+                MemorySemanticIntent.REPLACE_RELATIONSHIP, MemorySemanticIntent.RENAME_ENTITY,
+                MemorySemanticIntent.DELETE_ENTITY, MemorySemanticIntent.ADD_LINKED_FACT) && frame.person.isNullOrBlank()) {
+            val candidates = currentTurnPeople(frame, final)
+            if (candidates.size != 1) return MemoryContractResult(null,
+                if (candidates.isEmpty()) MemoryFailureReason.MISSING_REQUIRED_ENTITY else MemoryFailureReason.AMBIGUOUS_ENTITY)
+            frame = frame.copy(person = candidates.single(), criticalLiterals = (frame.criticalLiterals + candidates.single()).distinct())
+        }
+        if (frame.intent == MemorySemanticIntent.ADD_EPISODE && frame.episode != null &&
+            frame.episode.participants.isEmpty()) {
+            val participants = currentTurnPeople(frame, final)
+            if (participants.isNotEmpty()) frame = frame.copy(episode = frame.episode.copy(participants = participants))
+        }
+        val reason = when (frame.intent) {
+            MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP -> when {
+                frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
+                frame.relationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
+                else -> null
+            }
+            MemorySemanticIntent.REPLACE_RELATIONSHIP -> when {
+                frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
+                frame.replacementRelationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
+                else -> null
+            }
+            MemorySemanticIntent.RENAME_ENTITY -> when {
+                frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
+                frame.replacementPerson.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_REPLACEMENT
+                else -> null
+            }
+            MemorySemanticIntent.DELETE_ENTITY -> MemoryFailureReason.MISSING_REQUIRED_ENTITY.takeIf { frame.person.isNullOrBlank() }
+            MemorySemanticIntent.ADD_LINKED_FACT -> when {
+                frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
+                frame.fact.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_FACT
+                else -> null
+            }
+            MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT ->
+                MemoryFailureReason.MISSING_REQUIRED_FACT.takeIf { frame.fact.isNullOrBlank() || frame.stableKey.isNullOrBlank() }
+            MemorySemanticIntent.ADD_EPISODE -> MemoryFailureReason.MISSING_REQUIRED_EPISODE.takeIf {
+                frame.episode == null || frame.episode.summary.isBlank() || frame.episode.eventType.isBlank()
+            }
+            MemorySemanticIntent.ADD_GOAL -> MemoryFailureReason.MISSING_REQUIRED_GOAL.takeIf { frame.goal?.title.isNullOrBlank() }
+            else -> null
+        }
+        if (frame.sourceSpan.isBlank()) return MemoryContractResult(null, MemoryFailureReason.EMPTY_SOURCE_SPAN)
+        if (frame.confidence <= 0.0) return MemoryContractResult(null, MemoryFailureReason.LOW_CONFIDENCE)
+        return MemoryContractResult(frame.takeIf { reason == null }, reason, frame !== input)
+    }
+
+    private fun currentTurnPeople(frame: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence): List<String> {
+        val explicit = (final.protectedCanonicalNames + final.protectedDisplayNames + frame.criticalLiterals)
+            .map(String::trim).filter { it.length in 2..80 && it.any(Char::isLetter) && it.none(Char::isDigit) }
+            .filter { FinalTurnSourceSpanAuthorizer.groundedLiteral(it, final) }
+            .map(AiriText::displayName).distinctBy(AiriText::normalizeName)
+        if (explicit.isNotEmpty()) return explicit
+        val capitalized = Regex("\\b[\\p{Lu}][\\p{L}]{2,}(?:\\s+[\\p{Lu}][\\p{L}]{2,}){0,2}\\b")
+            .findAll(frame.sourceSpan).map { it.value }.filter { candidate ->
+                final.variants.any { it.contains(candidate) }
+            }.toList()
+        return capitalized.map(AiriText::displayName).distinctBy(AiriText::normalizeName)
+    }
 }
 
 object AiriMemoryRuntime {

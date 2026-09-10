@@ -1,11 +1,12 @@
 package com.myra.assistant.data.memory
 
 import android.util.Log
+import android.content.Context
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 enum class MemoryDecision { IGNORE, RECALL, SAVE, UPDATE, DELETE, TRANSIENT, NEEDS_CLARIFICATION, REJECT }
-enum class MemoryRecallType { GENERAL, FRIENDS, BEST_FRIEND, LAST_TRANSACTION, EPISODES, GOALS, PROJECTS }
+enum class MemoryRecallType { GENERAL, PREFERENCES, FRIENDS, BEST_FRIEND, LAST_TRANSACTION, EPISODES, GOALS, PROJECTS }
 enum class MemoryTransactionStatus { SUCCEEDED, FAILED, REJECTED, TRANSIENT }
 
 data class AuthoritativeMemoryTurnEvidence(
@@ -71,7 +72,19 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
 
         val resolved = mutableListOf<MemorySemanticFrame>()
         for (raw in bounded) {
-            val frame = raw.copy(sourceSessionId = evidence.sessionId)
+            val contract = MemoryOperationContractValidator.validateAndRecover(raw, evidence)
+            val structuralReason = contract.reason
+            if (structuralReason != null) {
+                log("MEMORY_CONSOLIDATION_PLAN turnId=${evidence.turnId} operation=${raw.intent} structural=$structuralReason authorized=false")
+                return if (structuralReason in setOf(MemoryFailureReason.MISSING_REQUIRED_ENTITY, MemoryFailureReason.AMBIGUOUS_ENTITY))
+                    clarify(evidence, structuralReason)
+                else FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT, rejectionReason = structuralReason.name)
+            }
+            val frame = contract.frame!!.copy(sourceSessionId = evidence.sessionId)
+            if (contract.recoveredEntity) log(
+                "MEMORY_ENTITY_RESOLUTION turnId=${evidence.turnId} operation=${frame.intent} " +
+                    "source=CURRENT_FINAL_TURN candidateCount=1 resolved=true"
+            )
             val authorization = FinalTurnSourceSpanAuthorizer.authorize(frame, evidence, evidence.turnId, isQuestion)
             log("MEMORY_CONSOLIDATION_PLAN turnId=${evidence.turnId} operation=${frame.intent} safety=${authorization.reason} authorized=${authorization.authorized}")
             if (!authorization.authorized) return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT, rejectionReason = authorization.reason.name)
@@ -157,6 +170,34 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
         return MemoryBrainOutcome.Recalled(rows, answer, type, (System.nanoTime() - started) / 1_000_000)
     }
 
+    /** Read facade for Memory Core; no persistence object escapes the owner. */
+    suspend fun activeCards(limit: Int = 200): List<MemoryEntity> = store.activeCards(limit)
+
+    suspend fun addFromManualUi(fact: String, category: MemoryCategory): MemoryWriteResult {
+        val clean = fact.trim().replace(Regex("\\s+"), " ")
+        if (clean.length !in 3..500) return MemoryWriteResult.Rejected("Memory must contain 3 to 500 characters.")
+        val turn = System.currentTimeMillis(); val session = "manual-ui"
+        AiriMemoryRuntime.claimTurn(session, turn)
+        val evidence = AuthoritativeMemoryTurnEvidence(turn, clean, clean, sessionId = session)
+        val frame = MemorySemanticFrame(MemorySemanticIntent.ADD_FACT, temporalScope = MemoryTemporalScope.CURRENT,
+            fact = clean, category = category, stableKey = "manual:${category.name}:${AiriText.semanticKey(clean).take(48)}",
+            confidence = 1.0, sourceSpan = clean, sourceTurnId = turn)
+        val plan = prepareFinalTurn(evidence, listOf(frame))
+        return ((executeFinalTurnPlan(plan, evidence) as? MemoryBrainOutcome.Mutated)?.result)
+            ?: MemoryWriteResult.Rejected(plan.rejectionReason ?: "Memory write was not verified.")
+    }
+
+    suspend fun renameFromManualUi(entityId: String, replacement: String): Boolean {
+        val clean = AiriText.displayName(replacement)
+        if (clean.length !in 2..80 || clean.any(Char::isDigit)) return false
+        return store.renamePerson(entityId, clean, System.currentTimeMillis())
+    }
+
+    suspend fun deleteMemory(card: MemoryEntity): Boolean = store.forgetCard(card)
+    suspend fun clearMemories(): Boolean { store.clearAll(); return store.activeCards(1).isEmpty() }
+    suspend fun recordBehaviorObservation(signal: BehaviorSignal): MemoryWriteResult? = BehaviorMemoryLearner(store).observe(signal)
+    suspend fun reviewInferredMemory(now: Long) = BehaviorMemoryLearner(store).decay(now)
+
     suspend fun captureConversation(evidence: AuthoritativeMemoryTurnEvidence, assistantText: String?) {
         val now = System.currentTimeMillis(); val base = evidence.turnId * 2
         store.appendConversation(ConversationTruthEntity("${evidence.utteranceId}:user", evidence.sessionId, base,
@@ -176,4 +217,12 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
         return MemoryBrainOutcome.Rejected(reason.name.lowercase().replace('_', ' '), reason)
     }
     private fun log(value: String) = runCatching { Log.d("LyraAiriMemory", value) }
+
+    companion object {
+        @Volatile private var shared: MemoryBrainCoordinator? = null
+        fun get(context: Context): MemoryBrainCoordinator = shared ?: synchronized(this) {
+            shared ?: MemoryBrainCoordinator(RoomAiriMemoryStore(LyraMemoryDatabase.get(context.applicationContext)))
+                .also { shared = it }
+        }
+    }
 }

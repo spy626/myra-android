@@ -49,10 +49,13 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     }
     override suspend fun activeRelationships(types: Set<PersonRelationship>, limit: Int): List<MemoryEntity> {
         val allowed = types.map { it.name }.toSet()
-        return relationships.filter { it.active && it.relationshipType in allowed }.take(limit).mapNotNull { r -> people[r.targetEntityId]?.takeIf { it.active }?.let { p ->
+        val selected = relationships.filter { it.active && it.relationshipType in allowed }.take(limit)
+        val ids = selected.map { it.relationshipId }.toSet(); val at = time()
+        relationships.replaceAll { if (it.relationshipId in ids) it.copy(lastAccessed = at, accessCount = it.accessCount + 1) else it }
+        return selected.mapNotNull { r -> people[r.targetEntityId]?.takeIf { it.active }?.let { p ->
             MemoryEntity(r.relationshipId, "relationship:${r.relationshipType}", MemoryCategory.PERSON.name,
                 "${p.canonicalName} is Zopy's ${r.relationshipType.lowercase().replace('_', ' ')}", r.confidence,
-                r.provenance, r.createdAt, r.updatedAt, p.entityId, p.canonicalName, kind = "RELATIONSHIP") } }
+                r.provenance, r.createdAt, r.updatedAt, p.entityId, p.canonicalName, lastRecalledAt = at, kind = "RELATIONSHIP") } }
     }
     override suspend fun addSemantic(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence): String? {
         val fact = frame.fact ?: return null; val key = frame.stableKey ?: return null; val id = UUID.randomUUID().toString(); val t = time()
@@ -69,15 +72,33 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         val g = frame.goal ?: return null; val key = AiriText.semanticKey(frame.stableKey ?: g.title); val t = time(); val id = goals[key]?.goalId ?: UUID.randomUUID().toString()
         goals[key] = GoalMemoryEntity(id, key, g.title, g.description, g.status, g.priority, g.progress, g.deadline, g.parentGoalId, "GOAL", "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, goals[key]?.createdAt ?: t, t, t); return id
     }
-    override suspend fun retrieve(query: String, type: MemoryRecallType, limit: Int): List<MemoryEntity> = when (type) {
-        MemoryRecallType.FRIENDS -> activeRelationships(PersonRelationship.entries.toSet(), limit)
-        MemoryRecallType.BEST_FRIEND -> activeRelationships(setOf(PersonRelationship.BEST_FRIEND), limit)
-        MemoryRecallType.EPISODES -> episodes.takeLast(limit).reversed().map { MemoryEntity(it.first.episodeId, "episode:${it.first.eventType}", "LIFE_EVENT", it.first.summary, it.first.confidence, it.first.provenance, it.first.createdAt, it.first.occurredAt, kind = "EPISODE") }
-        MemoryRecallType.GOALS -> goals.values.take(limit).map { MemoryEntity(it.goalId, it.stableKey, "GOAL", it.description ?: it.title, 1.0, it.provenance, it.createdAt, it.updatedAt, kind = "GOAL") }
-        else -> semantic.filter { it.active }.take(limit).map { MemoryEntity(it.memoryId, it.semanticKey, it.category, it.statement, it.confidence, it.provenance, it.createdAt, it.updatedAt) }
+    override suspend fun retrieve(query: String, type: MemoryRecallType, limit: Int): List<MemoryEntity> {
+        val result = when (type) {
+            MemoryRecallType.FRIENDS -> activeRelationships(PersonRelationship.entries.toSet(), limit)
+            MemoryRecallType.BEST_FRIEND -> activeRelationships(setOf(PersonRelationship.BEST_FRIEND), limit)
+            MemoryRecallType.EPISODES -> episodes.takeLast(limit).reversed().map { MemoryEntity(it.first.episodeId, "episode:${it.first.eventType}", "LIFE_EVENT", it.first.summary, it.first.confidence, it.first.provenance, it.first.createdAt, it.first.occurredAt, lastRecalledAt = it.first.lastAccessed, kind = "EPISODE") }
+            MemoryRecallType.GOALS -> goals.values.take(limit).map { MemoryEntity(it.goalId, it.stableKey, "GOAL", it.description ?: it.title, 1.0, it.provenance, it.createdAt, it.updatedAt, lastRecalledAt = it.lastAccessed, kind = "GOAL") }
+            MemoryRecallType.PREFERENCES -> semantic.filter { it.active && it.category in setOf("PREFERENCE", "COMMUNICATION_STYLE") }.take(limit).map(::semanticCard)
+            else -> semantic.filter { it.active }.take(limit).map(::semanticCard)
+        }
+        val at = time(); val ids = result.map { it.id }.toSet()
+        semantic.replaceAll { if (it.memoryId in ids) it.copy(lastAccessed = at, accessCount = it.accessCount + 1) else it }
+        episodes.replaceAll { pair -> if (pair.first.episodeId in ids) pair.first.copy(lastAccessed = at, accessCount = pair.first.accessCount + 1) to pair.second else pair }
+        goals.replaceAll { _, row -> if (row.goalId in ids) row.copy(lastAccessed = at, accessCount = row.accessCount + 1) else row }
+        return result
     }
-    override suspend fun activeCards(limit: Int) = (retrieve("", MemoryRecallType.GENERAL, limit) + activeRelationships(PersonRelationship.entries.toSet(), limit) + retrieve("", MemoryRecallType.EPISODES, limit) + retrieve("", MemoryRecallType.GOALS, limit)).take(limit)
-    override suspend fun forgetCard(card: MemoryEntity) = when (card.kind) { "RELATIONSHIP" -> card.entityId?.let { id -> relationships.firstOrNull { it.relationshipId == card.id }?.let { endRelationship(id, PersonRelationship.valueOf(it.relationshipType)) } } == true; "PERSON" -> card.entityId?.let { deletePerson(it) } == true; else -> { var changed = false; semantic.replaceAll { if (it.memoryId == card.id && it.active) { changed = true; it.copy(active = false, deletedAt = time()) } else it }; changed } }
+    private fun semanticCard(it: SemanticMemoryEntity) = MemoryEntity(it.memoryId, it.semanticKey, it.category, it.statement, it.confidence, it.provenance, it.createdAt, it.updatedAt, lastRecalledAt = it.lastAccessed)
+    override suspend fun activeCards(limit: Int) = (retrieve("", MemoryRecallType.GENERAL, limit) + activeRelationships(PersonRelationship.entries.toSet(), limit) + retrieve("", MemoryRecallType.EPISODES, limit) + retrieve("", MemoryRecallType.GOALS, limit) + behavior.values.filter { it.state == "ACTIVE" }.map {
+        MemoryEntity(it.patternId, it.stableKey, "HABIT", it.label, it.confidence, "BEHAVIOR_PATTERN", it.firstObservedAt, it.lastObservedAt, importance = it.importance, explicit = false, kind = "BEHAVIOR")
+    }).take(limit)
+    override suspend fun forgetCard(card: MemoryEntity) = when (card.kind) {
+        "RELATIONSHIP" -> card.entityId?.let { id -> relationships.firstOrNull { it.relationshipId == card.id }?.let { endRelationship(id, PersonRelationship.valueOf(it.relationshipType)) } } == true
+        "PERSON" -> card.entityId?.let { deletePerson(it) } == true
+        "EPISODE" -> episodes.removeAll { it.first.episodeId == card.id }
+        "GOAL" -> goals.entries.removeAll { it.value.goalId == card.id }
+        "BEHAVIOR" -> behavior.remove(card.stableKey) != null
+        else -> { var changed = false; semantic.replaceAll { if (it.memoryId == card.id && it.active) { changed = true; it.copy(active = false, deletedAt = time()) } else it }; changed }
+    }
     override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear() }
     override suspend fun appendConversation(row: ConversationTruthEntity): Boolean { if (conversation.any { it.messageId == row.messageId }) return false; conversation += row; return true }
     override suspend fun promptProjection(sessionId: String, limit: Int) = conversation.filter { it.sessionId == sessionId }.takeLast(limit)

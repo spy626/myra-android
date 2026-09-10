@@ -1,6 +1,7 @@
 package com.myra.assistant.data.memory
 
 import java.util.Locale
+import org.json.JSONObject
 
 enum class MemorySemanticIntent {
     ADD_FACT, ADD_RELATIONSHIP, REMOVE_RELATIONSHIP, REPLACE_RELATIONSHIP, ADD_LINKED_FACT,
@@ -58,4 +59,52 @@ object StagedMemoryProposalPolicy {
             listOf(it.intent, it.person, it.replacementPerson, it.relationship,
                 it.replacementRelationship, it.stableKey, it.fact).joinToString("|")
         }.take(limit)
+}
+
+/** Platform boundary parser for the existing Gemini tool; it performs no interpretation or I/O. */
+object GeminiMemoryOperationParser {
+    fun parse(args: JSONObject): List<MemorySemanticFrame> {
+        val values = args.optJSONArray("operations") ?: return emptyList()
+        return (0 until minOf(values.length(), 4)).mapNotNull { index ->
+            val value = values.optJSONObject(index) ?: return@mapNotNull null
+            val intent = runCatching { MemorySemanticIntent.valueOf(value.optString("intent")) }.getOrNull()
+                ?: return@mapNotNull null
+            val relationship = value.enumValue<PersonRelationship>("relationship")
+            val replacementRelationship = value.enumValue<PersonRelationship>("replacement_relationship")
+            val temporal = value.enumValue<MemoryTemporalScope>("temporal_scope") ?: MemoryTemporalScope.UNSPECIFIED
+            val category = value.enumValue<MemoryCategory>("category")
+            val critical = value.stringArray("critical_literals", 8)
+            val participants = value.stringArray("participants", 6)
+            val fact = value.optString("fact").trim().takeIf(String::isNotEmpty)
+            MemorySemanticFrame(
+                intent = intent,
+                person = value.optString("person").trim().takeIf(String::isNotEmpty),
+                replacementPerson = value.optString("replacement_person").trim().takeIf(String::isNotEmpty),
+                relationship = relationship,
+                replacementRelationship = replacementRelationship,
+                temporalScope = temporal,
+                fact = fact,
+                category = category,
+                stableKey = value.optString("memory_key").trim().takeIf(String::isNotEmpty),
+                confidence = value.optDouble("confidence", 0.0),
+                evidence = value.optString("evidence"),
+                sourceSpan = value.optString("source_span", value.optString("evidence")),
+                criticalLiterals = critical,
+                episode = if (intent == MemorySemanticIntent.ADD_EPISODE) EpisodicMemoryPayload(
+                    value.optString("event_type"), fact.orEmpty(), participants,
+                    value.optDouble("importance", .5).coerceIn(0.0, 1.0)
+                ) else null,
+                goal = if (intent == MemorySemanticIntent.ADD_GOAL) GoalMemoryPayload(
+                    value.optString("goal_title"), fact, value.optString("goal_status", "ACTIVE"),
+                    value.optInt("priority", 0).coerceIn(0, 5), value.optInt("progress", 0).coerceIn(0, 100)
+                ) else null
+            )
+        }
+    }
+
+    private inline fun <reified T : Enum<T>> JSONObject.enumValue(key: String): T? =
+        optString(key).trim().takeIf(String::isNotEmpty)?.let { runCatching { enumValueOf<T>(it) }.getOrNull() }
+    private fun JSONObject.stringArray(key: String, limit: Int): List<String> = optJSONArray(key)?.let { array ->
+        (0 until minOf(array.length(), limit)).mapNotNull { array.optString(it).trim().takeIf(String::isNotEmpty) }
+    }.orEmpty()
 }

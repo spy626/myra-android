@@ -182,12 +182,12 @@ class GeminiLiveClient(
                     "ADD_LINKED_FACT", "UPDATE_FACT", "SUPERSEDE_FACT", "RENAME_ENTITY",
                     "DELETE_ENTITY", "ADD_EPISODE", "ADD_GOAL", "RECALL", "TRANSIENT_CONTEXT", "CLARIFY", "NONE"
                 ))))
-                .put("person", JSONObject().put("type", "STRING"))
-                .put("replacement_person", JSONObject().put("type", "STRING"))
+                .put("person", JSONObject().put("type", "STRING").put("description", "Required for every relationship, rename, entity delete, and linked-fact operation. Copy the current person literal."))
+                .put("replacement_person", JSONObject().put("type", "STRING").put("description", "Required for RENAME_ENTITY."))
                 .put("relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
-                .put("replacement_relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
+                .put("replacement_relationship", JSONObject().put("type", "STRING").put("description", "Required for REPLACE_RELATIONSHIP.").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
                 .put("temporal_scope", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("CURRENT", "HISTORICAL", "TEMPORARY", "RECURRING", "UNSPECIFIED"))))
-                .put("fact", JSONObject().put("type", "STRING"))
+                .put("fact", JSONObject().put("type", "STRING").put("description", "Required for fact/linked-fact operations and as the episode summary."))
                 .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "IDENTITY", "PREFERENCE", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
                     "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "IDEA", "SOLUTION"
@@ -195,10 +195,10 @@ class GeminiLiveClient(
                 .put("memory_key", JSONObject().put("type", "STRING"))
                 .put("source_span", JSONObject().put("type", "STRING"))
                 .put("critical_literals", JSONObject().put("type", "ARRAY").put("maxItems", 8).put("items", JSONObject().put("type", "STRING")))
-                .put("event_type", JSONObject().put("type", "STRING"))
+                .put("event_type", JSONObject().put("type", "STRING").put("description", "Required for ADD_EPISODE."))
                 .put("participants", JSONObject().put("type", "ARRAY").put("maxItems", 6).put("items", JSONObject().put("type", "STRING")))
                 .put("importance", JSONObject().put("type", "NUMBER"))
-                .put("goal_title", JSONObject().put("type", "STRING"))
+                .put("goal_title", JSONObject().put("type", "STRING").put("description", "Required for ADD_GOAL."))
                 .put("goal_status", JSONObject().put("type", "STRING"))
                 .put("priority", JSONObject().put("type", "INTEGER"))
                 .put("progress", JSONObject().put("type", "INTEGER"))
@@ -207,7 +207,7 @@ class GeminiLiveClient(
             .put("required", JSONArray(listOf("intent", "source_span", "confidence")))
         return JSONObject()
             .put("name", "propose_user_memory")
-            .put("description", "Interpret the current completed user turn into bounded independent memory propositions. source_span must copy the shortest near-verbatim words from this same user turn that support the proposition; fact may be a translated canonical meaning. Put every person, replacement name, project name, number, date, amount, or ID in critical_literals. Use ADD_EPISODE for a dated event and ADD_GOAL for a goal. An episode never implies a relationship. Questions are RECALL. This is evidence only: Android binds the proposal to the active turn, validates literals/safety, and alone owns persistence.")
+            .put("description", "Interpret the current completed user turn into bounded independent memory propositions. Required by intent: ADD/REMOVE_RELATIONSHIP need person+relationship; REPLACE_RELATIONSHIP needs person+replacement_relationship; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD_GOAL needs goal_title. Every operation needs source_span+confidence. source_span copies the shortest near-verbatim current-turn words; fact may be translated meaning. Put every critical literal in critical_literals. Questions are RECALL. Android validates structure, literals and safety and alone owns persistence.")
             .put("parameters", JSONObject()
                 .put("type", "OBJECT")
                 .put("properties", JSONObject().put(
@@ -222,7 +222,7 @@ class GeminiLiveClient(
         .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
             .put("query", JSONObject().put("type", "STRING"))
             .put("query_type", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
-                    "GENERAL", "FRIENDS", "BEST_FRIEND", "LAST_TRANSACTION", "EPISODES", "GOALS", "PROJECTS"
+                    "GENERAL", "PREFERENCES", "FRIENDS", "BEST_FRIEND", "LAST_TRANSACTION", "EPISODES", "GOALS", "PROJECTS"
             )))))
             .put("required", JSONArray().put("query")))
 

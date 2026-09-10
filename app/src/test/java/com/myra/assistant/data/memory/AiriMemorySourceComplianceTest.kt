@@ -35,6 +35,29 @@ class AiriMemorySourceComplianceTest {
         assertFalse(store.contains("Gemini")); assertFalse(store.contains("http")); assertFalse(store.contains("Retrofit"))
     }
 
+    @Test fun simpleRecallCrossesServiceBoundaryWithoutGeminiToolStaging() {
+        val lane = File(root, "data/memory/LocalFastMemoryLane.kt").readText()
+        val service = File(root, "service/MyraVoiceService.kt").readText()
+        assertTrue(lane.contains("class LocalFastMemoryLane"))
+        assertTrue(lane.contains("owner.recall"))
+        assertFalse(lane.contains("GeminiLiveClient"))
+        assertFalse(lane.contains("query_user_memory"))
+        assertTrue(service.contains("fastMemoryLane.recall(finalUtterance.memoryEvidence)"))
+        assertTrue(service.contains("networkCall=false"))
+    }
+
+    @Test fun allProductionDurableWritersAreCoordinatorOwned() {
+        val sources = root.walkTopDown().filter { it.extension == "kt" }.toList()
+        val roomConstructors = sources.filter { it.readText().contains("RoomAiriMemoryStore(") }
+        assertEquals(setOf("AiriMemoryStore.kt", "AiriMemoryCoordinator.kt"), roomConstructors.map { it.name }.toSet())
+        val passive = File(root, "data/memory/BehaviorMemoryLearner.kt").readText()
+        val ui = File(root, "ui/settings/MemorySettingsActivity.kt").readText()
+        assertFalse(passive.contains("RoomAiriMemoryStore("))
+        assertTrue(passive.contains("owner.recordBehaviorObservation"))
+        assertFalse(ui.contains(".forgetCard(")); assertFalse(ui.contains(".renamePerson(")); assertFalse(ui.contains(".clearAll("))
+        assertTrue(ui.contains("memoryOwner.deleteMemory")); assertTrue(ui.contains("memoryOwner.renameFromManualUi"))
+    }
+
     @Test fun entityAnchorsAreNotStoredAsUserFacingCards() {
         val entity = File(root, "data/memory/MemoryEntity.kt").readText()
         val store = File(root, "data/memory/AiriMemoryStore.kt").readText()

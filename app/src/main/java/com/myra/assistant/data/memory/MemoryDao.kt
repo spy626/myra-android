@@ -71,11 +71,17 @@ interface AiriMemoryDao {
     suspend fun episodesFor(entityId: String, limit: Int): List<EpisodicMemoryEntity>
     @Query("UPDATE airi_episodes SET lastAccessed = :at, accessCount = accessCount + 1 WHERE episodeId IN (:ids)")
     suspend fun touchEpisodes(ids: List<String>, at: Long)
+    @Query("UPDATE airi_episodes SET deletedAt = :at WHERE episodeId = :id AND deletedAt IS NULL")
+    suspend fun deleteEpisode(id: String, at: Long): Int
 
     @Query("SELECT * FROM airi_goals WHERE deletedAt IS NULL AND status NOT IN ('COMPLETED','ABANDONED') ORDER BY priority DESC, updatedAt DESC LIMIT :limit")
     suspend fun activeGoals(limit: Int): List<GoalMemoryEntity>
     @Query("SELECT * FROM airi_goals WHERE stableKey = :key AND deletedAt IS NULL LIMIT 1")
     suspend fun goalByKey(key: String): GoalMemoryEntity?
+    @Query("UPDATE airi_goals SET lastAccessed = :at, accessCount = accessCount + 1 WHERE goalId IN (:ids)")
+    suspend fun touchGoals(ids: List<String>, at: Long)
+    @Query("UPDATE airi_goals SET deletedAt = :at, updatedAt = :at WHERE goalId = :id AND deletedAt IS NULL")
+    suspend fun deleteGoal(id: String, at: Long): Int
     @Query("SELECT * FROM airi_behavior_patterns WHERE stableKey = :key LIMIT 1")
     suspend fun behavior(key: String): BehaviorObservationEntity?
     @Query("SELECT * FROM airi_behavior_patterns WHERE kind = :kind ORDER BY observationCount DESC LIMIT :limit")

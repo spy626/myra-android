@@ -1,5 +1,7 @@
 # Recovery retry after repository Actions permissions reset.
 name: Build Android APK
+permissions:
+  contents: write
 on:
   push:
     branches: [main, 'agent/**']
@@ -49,3 +51,27 @@ jobs:
         with:
           name: myra-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish direct debug APK prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/agent/myra-phase-1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tag="airi-memory-${COMMIT_SHA:0:12}"
+          response=$(curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/releases" \
+            -d "{\"tag_name\":\"$tag\",\"target_commitish\":\"$COMMIT_SHA\",\"name\":\"LYRA AIRI Memory $tag\",\"body\":\"Automated debug APK for physical Android acceptance. PHONE PASS is not claimed.\",\"draft\":false,\"prerelease\":true}")
+          upload_url=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"].split("{")[0])')
+          curl --fail-with-body --silent --show-error \
+            -o /dev/null \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/vnd.android.package-archive" \
+            --data-binary @app/build/outputs/apk/debug/app-debug.apk \
+            "$upload_url?name=app-debug.apk"
