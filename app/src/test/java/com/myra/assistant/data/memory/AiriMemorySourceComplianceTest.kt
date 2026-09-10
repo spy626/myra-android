@@ -46,14 +46,29 @@ class AiriMemorySourceComplianceTest {
         assertTrue(service.contains("networkCall=false"))
     }
 
-    @Test fun allProductionDurableWritersAreCoordinatorOwned() {
-        val sources = root.walkTopDown().filter { it.extension == "kt" }.toList()
-        val roomConstructors = sources.filter { it.readText().contains("RoomAiriMemoryStore(") }
-        assertEquals(setOf("AiriMemoryStore.kt", "AiriMemoryCoordinator.kt"), roomConstructors.map { it.name }.toSet())
-        val passive = File(root, "data/memory/BehaviorMemoryLearner.kt").readText()
+    @Test fun jarvisProductionWritersStayBehindOneMemoryDatabaseBoundary() {
+        val db = File(root, "data/memory/LyraMemoryDatabase.kt").readText()
+        val jarvisSchema = File(root, "data/memory/JarvisMemoryDatabase.kt").readText()
+        val jarvisRuntime = File(root, "data/memory/JarvisSimpleMemory.kt").readText()
+        val service = File(root, "service/MyraVoiceService.kt").readText()
         val ui = File(root, "ui/settings/MemorySettingsActivity.kt").readText()
-        assertFalse(passive.contains("RoomAiriMemoryStore("))
-        assertTrue(passive.contains("owner.recordBehaviorObservation"))
+
+        assertTrue(db.contains("JarvisMessageEntity::class"))
+        assertTrue(db.contains("JarvisCommandLogEntity::class"))
+        assertTrue(db.contains("JarvisMemoryEntity::class"))
+        assertTrue(db.contains("abstract fun jarvisDao(): JarvisDao"))
+        assertTrue(db.contains("MIGRATION_4_5"))
+
+        assertFalse(jarvisSchema.contains("Room.databaseBuilder"))
+        assertFalse(jarvisSchema.contains("abstract class JarvisDatabase"))
+        assertTrue(jarvisSchema.contains("LyraMemoryDatabase.get(context)"))
+        assertTrue(jarvisRuntime.contains("JarvisDatabase.getInstance(context).jarvisDao()"))
+
+        assertFalse(service.contains("JarvisDao"))
+        assertFalse(service.contains(".jarvisDao()"))
+        assertFalse(ui.contains("JarvisDao"))
+        assertFalse(ui.contains(".jarvisDao()"))
+        assertTrue(service.contains("memoryBrain.executeFinalTurnPlan"))
         assertFalse(ui.contains(".forgetCard(")); assertFalse(ui.contains(".renamePerson(")); assertFalse(ui.contains(".clearAll("))
         assertTrue(ui.contains("memoryOwner.deleteMemory")); assertTrue(ui.contains("memoryOwner.renameFromManualUi"))
     }
