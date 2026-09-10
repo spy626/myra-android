@@ -2,23 +2,21 @@ package com.myra.assistant.data.memory
 
 import android.content.Context
 import androidx.room.Dao
-import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
-import androidx.room.Room
-import androidx.room.RoomDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
- * JARVIS memory database contract ported from the reference app.
+ * JARVIS memory tables and DAO ported from the reference app.
  *
- * The two original JARVIS tables keep the same names and the same recent-history limits:
- * messages (30) and command_logs (20). LYRA adds one memories table only for the durable
- * facts/preferences/relationships requested by the user; it is not a second memory brain.
+ * The two original JARVIS tables keep the same names and recent-history limits:
+ * messages (30) and command_logs (20). LYRA adds one memories table only for durable
+ * facts/preferences/relationships requested by the user. All three tables live inside
+ * LyraMemoryDatabase so there is exactly one Room database and one storage truth.
  */
 @Entity(
     tableName = "messages",
@@ -82,7 +80,6 @@ data class JarvisMemoryEntity(
 
 @Dao
 interface JarvisDao {
-    // Exact JARVIS chat-history shape.
     @Query("SELECT * FROM messages ORDER BY timestamp ASC")
     fun getAllMessages(): Flow<List<JarvisMessageEntity>>
 
@@ -95,7 +92,6 @@ interface JarvisDao {
     @Query("DELETE FROM messages")
     fun clearMessages()
 
-    // Exact JARVIS command-log shape.
     @Query("SELECT * FROM command_logs ORDER BY timestamp DESC LIMIT 20")
     fun getRecentLogs(): List<JarvisCommandLogEntity>
 
@@ -105,7 +101,6 @@ interface JarvisDao {
     @Query("DELETE FROM command_logs")
     fun clearLogs()
 
-    // Single durable extension for facts/preferences/relationships.
     @Query("SELECT * FROM memories WHERE active = 1 ORDER BY importance DESC, updatedAt DESC LIMIT :limit")
     fun getActiveMemories(limit: Int): List<JarvisMemoryEntity>
 
@@ -131,29 +126,10 @@ interface JarvisDao {
     fun clearMemories()
 }
 
-@Database(
-    entities = [JarvisMessageEntity::class, JarvisCommandLogEntity::class, JarvisMemoryEntity::class],
-    version = 1,
-    exportSchema = false
-)
-abstract class JarvisDatabase : RoomDatabase() {
-    abstract fun jarvisDao(): JarvisDao
-
-    companion object {
-        @Volatile private var instance: JarvisDatabase? = null
-
-        fun getInstance(context: Context): JarvisDatabase = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(
-                context.applicationContext,
-                JarvisDatabase::class.java,
-                "jarvis_database"
-            )
-                .fallbackToDestructiveMigration()
-                // Voice callbacks are not lifecycle coroutines. The database remains tiny and local;
-                // allowing these bounded calls keeps the JARVIS request/response ordering deterministic.
-                .allowMainThreadQueries()
-                .build()
-                .also { instance = it }
-        }
-    }
+/**
+ * Compatibility entry point used by the JARVIS runtime and migration bridge.
+ * It deliberately delegates to LyraMemoryDatabase instead of constructing another Room DB.
+ */
+object JarvisDatabase {
+    fun getInstance(context: Context): LyraMemoryDatabase = LyraMemoryDatabase.get(context)
 }
