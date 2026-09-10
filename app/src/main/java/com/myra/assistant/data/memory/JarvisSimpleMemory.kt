@@ -9,6 +9,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Simple, deterministic JARVIS-style memory core.
@@ -18,7 +19,9 @@ import java.util.Locale
  * are stored in one small local SQLite database. No network/model call is required to save or recall.
  */
 enum class JarvisMemoryType { IDENTITY, PREFERENCE, RELATIONSHIP, GOAL, PERSONAL_FACT, NOTE }
-enum class JarvisMemorySource { USER_CHAT, SCREEN_OBSERVATION, MANUAL_UI, COMMAND, SETTINGS, LEGACY }
+enum class JarvisMemorySource {
+    USER_CHAT, USER_TEXT, USER_VOICE, SCREEN_OBSERVATION, MANUAL_UI, COMMAND, SETTINGS, LEGACY
+}
 
 data class JarvisStoredMemory(
     val id: Long,
@@ -411,9 +414,17 @@ private class JarvisSimpleMemoryStore(context: Context) {
 
 /** Process-wide bridge used by voice, UI and action logging. */
 object JarvisSimpleMemoryRuntime {
+    private data class ConversationAnchor(
+        val sessionId: String, val turnId: Long, val utteranceId: String, val capturedAt: Long
+    )
+
     @Volatile private var store: JarvisSimpleMemoryStore? = null
     @Volatile private var appContext: Context? = null
+    @Volatile private var latestAnchor: ConversationAnchor? = null
+    @Volatile private var lastTypedNormalized: String = ""
+    @Volatile private var lastTypedAt: Long = 0L
     private var settingsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private val assistantBuffers = ConcurrentHashMap<Long, StringBuilder>()
 
     @Synchronized fun initialize(context: Context) {
         if (store != null) return
@@ -428,17 +439,66 @@ object JarvisSimpleMemoryRuntime {
         }.also(preferences::registerOnSharedPreferenceChangeListener)
     }
 
+    fun markTypedUserText(text: String) {
+        val normalized = normalize(text)
+        if (normalized.isBlank()) return
+        lastTypedNormalized = normalized
+        lastTypedAt = System.currentTimeMillis()
+    }
+
     fun recordFinalUserMessage(
         sessionId: String, turnId: Long, utteranceId: String, text: String,
-        source: JarvisMemorySource = JarvisMemorySource.USER_CHAT
+        source: JarvisMemorySource? = null
     ) {
         val local = store ?: return
         val clean = text.trim()
         if (clean.isBlank()) return
-        local.appendMessage("user:$utteranceId", sessionId, turnId, utteranceId, "user", clean, source.name)
+        val now = System.currentTimeMillis()
+        val inferredSource = source ?: if (
+            normalize(clean) == lastTypedNormalized && now - lastTypedAt in 0..60_000L
+        ) JarvisMemorySource.USER_TEXT else JarvisMemorySource.USER_VOICE
+        latestAnchor = ConversationAnchor(sessionId, turnId, utteranceId, now)
+        local.appendMessage("user:$utteranceId", sessionId, turnId, utteranceId, "user", clean, inferredSource.name, now)
         JarvisSimpleMemoryExtractor.extract(clean).forEach { candidate ->
-            local.upsertMemory(candidate, clean, source.name, sessionId, turnId, utteranceId)
+            local.upsertMemory(candidate, clean, inferredSource.name, sessionId, turnId, utteranceId, now)
         }
+        if (inferredSource == JarvisMemorySource.USER_TEXT) {
+            lastTypedNormalized = ""
+            lastTypedAt = 0L
+        }
+    }
+
+    fun appendAssistantTranscript(generationId: Long, chunk: String) {
+        val clean = chunk.trim()
+        if (clean.isBlank()) return
+        val buffer = assistantBuffers.getOrPut(generationId) { StringBuilder() }
+        synchronized(buffer) {
+            val current = buffer.toString()
+            when {
+                current.isBlank() -> buffer.append(clean)
+                clean == current || current.endsWith(clean) -> Unit
+                clean.startsWith(current) -> { buffer.setLength(0); buffer.append(clean) }
+                else -> {
+                    if (!current.endsWith(' ') && !clean.startsWith(' ') &&
+                        current.lastOrNull()?.isLetterOrDigit() == true && clean.firstOrNull()?.isLetterOrDigit() == true
+                    ) buffer.append(' ')
+                    buffer.append(clean)
+                }
+            }
+        }
+    }
+
+    fun completeAssistantTranscript(generationId: Long) {
+        val anchor = latestAnchor ?: run { assistantBuffers.remove(generationId); return }
+        val buffer = assistantBuffers.remove(generationId) ?: return
+        val text = synchronized(buffer) { buffer.toString().trim() }
+        if (text.isBlank()) return
+        val utteranceId = "gemini:$generationId:${anchor.turnId}"
+        recordAssistantMessage(anchor.sessionId, anchor.turnId, utteranceId, text)
+    }
+
+    fun discardAssistantTranscript(generationId: Long) {
+        assistantBuffers.remove(generationId)
     }
 
     fun recordAssistantMessage(
@@ -516,7 +576,10 @@ object JarvisSimpleMemoryRuntime {
             }
             if (messages.isNotEmpty()) {
                 append("Recent conversation:\n")
-                messages.forEach { msg -> append("- ").append(msg.sender).append(": ").append(msg.content.safe()).append('\n') }
+                messages.forEach { msg ->
+                    append("- ").append(msg.sender).append(": ").append(msg.content.safe())
+                        .append(" [source=").append(msg.sourceKind).append("]\n")
+                }
             }
             if (settings.isNotEmpty()) {
                 append("Saved settings: ")
