@@ -129,6 +129,8 @@ object AiriMemoryRuntime {
     val contexts = LyraContextRegistry()
     val tasks = WorkingTaskMemoryStore()
     private val latest = ConcurrentHashMap<String, Long>()
+    /** Starts a new final-owner lifecycle. Turn counters may restart after service recreation. */
+    fun beginSession(sessionId: String, turnId: Long) { latest[sessionId] = turnId }
     fun claimTurn(sessionId: String, turnId: Long) { latest.compute(sessionId) { _, old -> maxOf(old ?: 0L, turnId) } }
     fun isCurrent(sessionId: String, turnId: Long) = sessionId == "compatibility" || latest[sessionId] == turnId
 }

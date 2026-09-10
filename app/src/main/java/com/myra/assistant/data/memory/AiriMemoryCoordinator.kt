@@ -1,6 +1,8 @@
 package com.myra.assistant.data.memory
 
 import android.util.Log
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 
 enum class MemoryDecision { IGNORE, RECALL, SAVE, UPDATE, DELETE, TRANSIENT, NEEDS_CLARIFICATION, REJECT }
 enum class MemoryRecallType { GENERAL, FRIENDS, BEST_FRIEND, LAST_TRANSACTION, EPISODES, GOALS, PROJECTS }
@@ -52,7 +54,14 @@ sealed class MemoryBrainOutcome {
 
 /** One final-turn owner. It is the only class allowed to authorize consolidated writes. */
 class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
+    private val ownedSessions = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
     suspend fun prepareFinalTurn(evidence: AuthoritativeMemoryTurnEvidence, staged: List<MemorySemanticFrame>, semanticConsistent: Boolean = true): FinalMemoryTurnPlan {
+        if (ownedSessions.add(evidence.sessionId)) {
+            AiriMemoryRuntime.beginSession(evidence.sessionId, evidence.turnId)
+        } else {
+            AiriMemoryRuntime.claimTurn(evidence.sessionId, evidence.turnId)
+        }
         val bounded = staged.take(4)
         if (bounded.isEmpty()) return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.IGNORE)
         if (!semanticConsistent) return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT, rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name)
