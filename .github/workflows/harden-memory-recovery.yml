@@ -1,0 +1,60 @@
+name: Harden Memory Recovery
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+
+jobs:
+  harden-memory-recovery:
+    if: github.event.head_commit.message == 'Stage memory recovery hardening'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/myra-phase-1
+          fetch-depth: 0
+
+      - name: Keep destructive entity recovery explicit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/myra/assistant/data/memory/AiriMemoryRuntime.kt')
+          text = path.read_text()
+          old_comment = '''        // Best-effort person recovery for relationship/linked-fact/episode operations
+                  // that are missing an explicit person — helpful, not a hard requirement below.'''
+          # Comment indentation in source is eight spaces on both lines; normalize with a direct fallback below.
+          old_comment_exact = '''        // Best-effort person recovery for relationship/linked-fact/episode operations
+          // that are missing an explicit person — helpful, not a hard requirement below.'''
+          new_comment = '''        // Best-effort person recovery is limited to save-like operations. Destructive
+          // rename/delete/relationship changes must carry an explicit target from the
+          // structured proposal; never infer that target from another name in the turn.'''
+          if old_comment_exact in text:
+              text = text.replace(old_comment_exact, new_comment, 1)
+
+          old = '''if (frame.intent in setOf(MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP,
+                  MemorySemanticIntent.REPLACE_RELATIONSHIP, MemorySemanticIntent.RENAME_ENTITY,
+                  MemorySemanticIntent.DELETE_ENTITY, MemorySemanticIntent.ADD_LINKED_FACT) && frame.person.isNullOrBlank()) {'''
+          new = '''if (frame.intent in setOf(
+                  MemorySemanticIntent.ADD_RELATIONSHIP,
+                  MemorySemanticIntent.ADD_LINKED_FACT
+              ) && frame.person.isNullOrBlank()) {'''
+          if old not in text:
+              raise SystemExit('Expected entity-recovery block was not found; refusing unsafe edit')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+
+          rm -f .github/workflows/harden-memory-recovery.yml
+          git diff --check
+          git diff -- app/src/main/java/com/myra/assistant/data/memory/AiriMemoryRuntime.kt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Harden destructive memory entity recovery"
+          git push origin HEAD:agent/myra-phase-1
