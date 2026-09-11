@@ -191,11 +191,13 @@ object MemoryOperationContractValidator {
     fun validateAndRecover(input: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence): MemoryContractResult {
         var frame = input
 
-        // Best-effort person recovery for relationship/linked-fact/episode operations
-        // that are missing an explicit person — helpful, not a hard requirement below.
-        if (frame.intent in setOf(MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP,
-                MemorySemanticIntent.REPLACE_RELATIONSHIP, MemorySemanticIntent.RENAME_ENTITY,
-                MemorySemanticIntent.DELETE_ENTITY, MemorySemanticIntent.ADD_LINKED_FACT) && frame.person.isNullOrBlank()) {
+        // Best-effort person recovery is limited to save-like operations. Destructive
+        // rename/delete/relationship changes must carry an explicit target from the
+        // structured proposal; never infer that target from another name in the turn.
+        if (frame.intent in setOf(
+        MemorySemanticIntent.ADD_RELATIONSHIP,
+        MemorySemanticIntent.ADD_LINKED_FACT
+    ) && frame.person.isNullOrBlank()) {
             val candidates = currentTurnPeople(frame, final)
             if (candidates.size == 1) {
                 frame = frame.copy(person = candidates.single(), criticalLiterals = (frame.criticalLiterals + candidates.single()).distinct())
