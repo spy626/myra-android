@@ -4772,6 +4772,14 @@ class MyraVoiceService : Service() {
 
     private fun emitState(text: String) { listener?.onState(text); updateNotification(text) }
 
+    private fun speakActionOutcome(text: String) {
+        if (live == null) return
+        audio?.interrupt()
+        mediaGuard.beginAssistantTurn()
+        live?.sendText("Speak this action outcome naturally in Hinglish. Do not add anything: $text")
+        emitState(text)
+    }
+
     private fun speakWhatsAppAnnouncement(sender: String, message: String?) {
         if (live == null) return
         val now = android.os.SystemClock.elapsedRealtime()
@@ -4859,6 +4867,7 @@ class MyraVoiceService : Service() {
         fun executeLocalText(text: String): Boolean = instance?.executeTypedLocalCommand(text) == true
         fun startDeepResearch(query: String?) { instance?.executeCommand(AppCommand.DeepResearch(query)) }
         fun announceWhatsApp(sender: String, message: String?) { instance?.speakWhatsAppAnnouncement(sender, message) }
+        fun announceActionOutcome(text: String) { instance?.speakActionOutcome(text) }
         fun speakLocal(message: String) {
             if (!isNaturalVoiceReady) return
             instance?.let { service ->

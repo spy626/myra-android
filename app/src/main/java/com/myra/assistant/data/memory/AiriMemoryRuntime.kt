@@ -72,41 +72,59 @@ class FinalTranscriptTurnBuffer(private val maxCharacters: Int = 240) {
 data class MemoryAuthorization(val authorized: Boolean, val reason: MemoryFailureReason,
     val selectedVariant: String = "NONE", val criticalLiteralsGrounded: Boolean = false)
 
-/** Authorizes source evidence, not translated/model-generated predicates. */
+/**
+ * Authorizes a memory operation for the current turn.
+ *
+ * Save-like operations are permissive because the durable write path stores the
+ * authoritative final user text whenever structured model fields are missing or
+ * ungrounded. Destructive entity operations remain strict: a model may not rename,
+ * delete, or change a relationship for a person that is not grounded in the current
+ * final user turn.
+ */
 object FinalTurnSourceSpanAuthorizer {
+    private val destructiveEntityIntents = setOf(
+        MemorySemanticIntent.REMOVE_RELATIONSHIP,
+        MemorySemanticIntent.REPLACE_RELATIONSHIP,
+        MemorySemanticIntent.RENAME_ENTITY,
+        MemorySemanticIntent.DELETE_ENTITY
+    )
+
     fun authorize(frame: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence, activeTurnId: Long, isQuestion: Boolean): MemoryAuthorization {
         if (frame.sourceTurnId != 0L && frame.sourceTurnId != activeTurnId) return denied(MemoryFailureReason.WRONG_TURN)
         if (!AiriMemoryRuntime.isCurrent(final.sessionId, final.turnId) || final.turnId != activeTurnId) return denied(MemoryFailureReason.STALE_TURN)
-        if (isQuestion && frame.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY)) return denied(MemoryFailureReason.QUESTION_MUTATION)
-        if (frame.confidence !in .78..1.0) return denied(MemoryFailureReason.LOW_CONFIDENCE)
-        AiriMemorySafetyPolicy.rejectReason(frame, final, isQuestion)?.let { return denied(it) }
-        if (frame.intent == MemorySemanticIntent.TRANSIENT_CONTEXT || frame.temporalScope == MemoryTemporalScope.TEMPORARY) return MemoryAuthorization(true, MemoryFailureReason.TEMPORARY, criticalLiteralsGrounded = true)
-        val span = normalize(frame.sourceSpan)
-        if (span.isBlank()) return denied(MemoryFailureReason.EMPTY_SOURCE_SPAN)
-        val selected = final.variants.indexOfFirst { containsSpan(normalize(it), span) }
-        if (selected < 0) return denied(MemoryFailureReason.SOURCE_SPAN_NOT_FINAL)
-        val literals = listOfNotNull(frame.person, frame.replacementPerson) + frame.criticalLiterals
-        if (!literals.distinct().all { groundedLiteral(it, final) }) return denied(MemoryFailureReason.CRITICAL_LITERAL_MISSING)
-        return MemoryAuthorization(true, MemoryFailureReason.NONE, if (selected == 0) "CANONICAL" else "DISPLAY", true)
-    }
-    private fun denied(reason: MemoryFailureReason) = MemoryAuthorization(false, reason)
-    private fun containsSpan(final: String, span: String): Boolean {
-        if (final == span || final.contains(span)) return true
-        val wanted = span.split(' '); val actual = final.split(' ')
-        if (wanted.size !in 1..12) return false
-        var cursor = 0; var gaps = 0
-        for ((position, token) in wanted.withIndex()) {
-            val end = if (position == 0) actual.size else minOf(actual.size, cursor + 4)
-            val found = (cursor until end).firstOrNull { lexicalEquivalent(token, actual[it]) } ?: return false
-            gaps += found - cursor; if (gaps > 3) return false; cursor = found + 1
+        if (isQuestion && frame.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY)) {
+            return denied(MemoryFailureReason.QUESTION_MUTATION)
         }
-        return true
+        AiriMemorySafetyPolicy.rejectReason(frame, final, isQuestion)?.let { return denied(it) }
+
+        if (frame.intent in destructiveEntityIntents) {
+            val person = frame.person?.trim().orEmpty()
+            if (person.isBlank() || !groundedLiteral(person, final)) {
+                return denied(MemoryFailureReason.CRITICAL_LITERAL_MISSING)
+            }
+            if (frame.intent == MemorySemanticIntent.RENAME_ENTITY) {
+                val replacement = frame.replacementPerson?.trim().orEmpty()
+                if (replacement.isBlank() || !groundedLiteral(replacement, final)) {
+                    return denied(MemoryFailureReason.CRITICAL_LITERAL_MISSING)
+                }
+            }
+        }
+
+        return MemoryAuthorization(true, MemoryFailureReason.NONE, "AUTHORITATIVE_FINAL_TURN", true)
     }
+
+    private fun denied(reason: MemoryFailureReason) = MemoryAuthorization(false, reason)
+
     internal fun groundedLiteral(literal: String, final: AuthoritativeMemoryTurnEvidence): Boolean {
         val normalized = normalize(literal)
         if (normalized.isBlank()) return false
         if (normalized.any(Char::isDigit)) return final.variants.any { normalize(it).split(' ').contains(normalized) }
-        val candidates = final.protectedCanonicalNames + final.protectedDisplayNames + final.variants.flatMap { normalize(it).split(' ').windowed(1, 1) { w -> w.joinToString("") } + normalize(it).split(' ').windowed(2, 1) { w -> w.joinToString("") } + normalize(it).split(' ').windowed(3, 1) { w -> w.joinToString("") } }
+        val candidates = final.protectedCanonicalNames + final.protectedDisplayNames + final.variants.flatMap {
+            val tokens = normalize(it).split(' ').filter(String::isNotBlank)
+            tokens.windowed(1, 1) { w -> w.joinToString("") } +
+                tokens.windowed(2, 1) { w -> w.joinToString("") } +
+                tokens.windowed(3, 1) { w -> w.joinToString("") }
+        }
         return candidates.any { lexicalEquivalent(normalized.replace(" ", ""), normalize(it).replace(" ", "")) }
     }
     private fun lexicalEquivalent(a: String, b: String): Boolean {
@@ -129,10 +147,21 @@ object AiriMemorySafetyPolicy {
 
     fun rejectReason(frame: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence, isQuestion: Boolean): MemoryFailureReason? {
         if (isQuestion || frame.intent == MemorySemanticIntent.RECALL) return null
-        val structured = listOfNotNull(frame.stableKey, frame.category?.name, frame.fact, frame.sourceSpan) + frame.criticalLiterals + final.variants
-        val combined = structured.joinToString(" ")
-        if (semanticSecretKeys.containsMatchIn(listOfNotNull(frame.stableKey, frame.category?.name, frame.fact).joinToString(" ")) || credential.containsMatchIn(combined)) return MemoryFailureReason.PROHIBITED_SECRET
-        if (financialId.containsMatchIn(combined) || governmentId.containsMatchIn(combined)) return MemoryFailureReason.SENSITIVE_CONTENT
+
+        // Safety decisions use the authoritative final user turn, not ungrounded model
+        // fields. A hallucinated model fact must neither be saved nor falsely block a
+        // valid user memory.
+        val authoritative = final.variants.joinToString(" ")
+        if (credential.containsMatchIn(authoritative)) return MemoryFailureReason.PROHIBITED_SECRET
+        if (financialId.containsMatchIn(authoritative) || governmentId.containsMatchIn(authoritative)) {
+            return MemoryFailureReason.SENSITIVE_CONTENT
+        }
+
+        // Keep a narrow semantic-key defense for non-model/manual callers that may
+        // intentionally provide a secret-typed key with no transcript text.
+        if (authoritative.isBlank() && semanticSecretKeys.containsMatchIn(frame.stableKey.orEmpty())) {
+            return MemoryFailureReason.PROHIBITED_SECRET
+        }
         return null
     }
 }
@@ -140,7 +169,19 @@ object AiriMemorySafetyPolicy {
 data class MemoryContractResult(val frame: MemorySemanticFrame?, val reason: MemoryFailureReason? = null,
     val recoveredEntity: Boolean = false)
 
-/** Required payload contract plus conservative, current-turn-only recovery for one missing person. */
+/**
+ * Required payload contract, rewritten to auto-recover missing structured fields
+ * instead of rejecting the whole save.
+ *
+ * ARCHITECTURE NOTE: previously ADD_EPISODE required BOTH `episode.summary` AND
+ * `episode.eventType` to be non-blank, and ADD_FACT required a pre-computed
+ * `stableKey` — any single missing field silently killed the entire save. That's
+ * why simple facts ("X is my best friend") saved fine (Gemini reliably fills those
+ * 2 fields) while casual narrative facts ("went to Manali with Kareem") did not
+ * (eventType in particular was inconsistently populated by the model). We now fill
+ * in sensible defaults instead of rejecting, and only refuse a save when there's
+ * truly no usable text at all.
+ */
 object MemoryOperationContractValidator {
     private val genericPersonWords = setOf(
         "someone", "somebody", "anyone", "anybody", "person", "friend", "friends",
@@ -149,51 +190,83 @@ object MemoryOperationContractValidator {
 
     fun validateAndRecover(input: MemorySemanticFrame, final: AuthoritativeMemoryTurnEvidence): MemoryContractResult {
         var frame = input
+
+        // Best-effort person recovery for relationship/linked-fact/episode operations
+        // that are missing an explicit person — helpful, not a hard requirement below.
         if (frame.intent in setOf(MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP,
                 MemorySemanticIntent.REPLACE_RELATIONSHIP, MemorySemanticIntent.RENAME_ENTITY,
                 MemorySemanticIntent.DELETE_ENTITY, MemorySemanticIntent.ADD_LINKED_FACT) && frame.person.isNullOrBlank()) {
             val candidates = currentTurnPeople(frame, final)
-            if (candidates.size != 1) return MemoryContractResult(null,
-                if (candidates.isEmpty()) MemoryFailureReason.MISSING_REQUIRED_ENTITY else MemoryFailureReason.AMBIGUOUS_ENTITY)
-            frame = frame.copy(person = candidates.single(), criticalLiterals = (frame.criticalLiterals + candidates.single()).distinct())
-        }
-        val initialEpisode = frame.episode
-        if (frame.intent == MemorySemanticIntent.ADD_EPISODE && initialEpisode != null && initialEpisode.participants.isEmpty()) {
-            val participants = currentTurnPeople(frame, final)
-            if (participants.isNotEmpty()) frame = frame.copy(episode = initialEpisode.copy(participants = participants))
-        }
-        val reason = when (frame.intent) {
-            MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP -> when {
-                frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
-                frame.relationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
-                else -> null
+            if (candidates.size == 1) {
+                frame = frame.copy(person = candidates.single(), criticalLiterals = (frame.criticalLiterals + candidates.single()).distinct())
             }
+            // If we still can't find exactly one person, fall through — most of these
+            // intents just fall back to treating it as a plain ADD_FACT below rather
+            // than blocking the save outright (see the `reason` block).
+        }
+
+        val initialEpisode = frame.episode
+        if (frame.intent == MemorySemanticIntent.ADD_EPISODE) {
+            val participants = initialEpisode?.participants?.takeIf { it.isNotEmpty() } ?: currentTurnPeople(frame, final)
+            val summary = initialEpisode?.summary?.trim()?.takeUnless { it.isBlank() }
+                ?: frame.fact?.trim()?.takeUnless { it.isBlank() }
+                ?: frame.sourceSpan.trim().takeUnless { it.isBlank() }
+                ?: final.sourceText.trim().takeUnless { it.isBlank() }
+            val eventType = initialEpisode?.eventType?.trim()?.takeUnless { it.isBlank() } ?: "activity"
+            if (summary != null) {
+                frame = frame.copy(episode = (initialEpisode ?: EpisodicMemoryPayload("activity", summary, participants))
+                    .copy(eventType = eventType, summary = summary, participants = participants))
+            }
+        }
+
+        // Only genuinely empty content gets rejected now — no more required-field
+        // checklists per intent type.
+        val hasUsableContent = !frame.fact.isNullOrBlank() ||
+            frame.episode?.summary?.isNotBlank() == true ||
+            frame.goal?.title?.isNullOrBlank() == false ||
+            !frame.sourceSpan.isBlank()
+
+        val reason = when (frame.intent) {
+            // Save-like operations are allowed to fall back to the authoritative raw
+            // final user text later in mutate(); missing model structure is not a reason
+            // to lose the memory.
+            MemorySemanticIntent.ADD_RELATIONSHIP,
+            MemorySemanticIntent.ADD_LINKED_FACT,
+            MemorySemanticIntent.ADD_FACT,
+            MemorySemanticIntent.UPDATE_FACT,
+            MemorySemanticIntent.SUPERSEDE_FACT,
+            MemorySemanticIntent.ADD_EPISODE,
+            MemorySemanticIntent.ADD_GOAL ->
+                MemoryFailureReason.MISSING_REQUIRED_FACT.takeIf { !hasUsableContent && final.sourceText.isBlank() }
+
+            // Destructive/update-entity operations stay strict because auto-filling a
+            // delete/rename target would be unsafe.
+            MemorySemanticIntent.REMOVE_RELATIONSHIP,
+            MemorySemanticIntent.DELETE_ENTITY ->
+                MemoryFailureReason.MISSING_REQUIRED_ENTITY.takeIf { frame.person.isNullOrBlank() }
+
             MemorySemanticIntent.REPLACE_RELATIONSHIP -> when {
                 frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
                 frame.replacementRelationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
                 else -> null
             }
+
             MemorySemanticIntent.RENAME_ENTITY -> when {
                 frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
                 frame.replacementPerson.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_REPLACEMENT
                 else -> null
             }
-            MemorySemanticIntent.DELETE_ENTITY -> MemoryFailureReason.MISSING_REQUIRED_ENTITY.takeIf { frame.person.isNullOrBlank() }
-            MemorySemanticIntent.ADD_LINKED_FACT -> when {
-                frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
-                frame.fact.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_FACT
-                else -> null
-            }
-            MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT ->
-                MemoryFailureReason.MISSING_REQUIRED_FACT.takeIf { frame.fact.isNullOrBlank() || frame.stableKey.isNullOrBlank() }
-            MemorySemanticIntent.ADD_EPISODE -> frame.episode.let { episode ->
-                MemoryFailureReason.MISSING_REQUIRED_EPISODE.takeIf { episode == null || episode.summary.isBlank() || episode.eventType.isBlank() }
-            }
-            MemorySemanticIntent.ADD_GOAL -> MemoryFailureReason.MISSING_REQUIRED_GOAL.takeIf { frame.goal?.title.isNullOrBlank() }
+
             else -> null
         }
-        if (frame.sourceSpan.isBlank()) return MemoryContractResult(null, MemoryFailureReason.EMPTY_SOURCE_SPAN)
-        if (frame.confidence <= 0.0) return MemoryContractResult(null, MemoryFailureReason.LOW_CONFIDENCE)
+
+        // Auto-generate a stableKey if the model didn't supply one, rather than
+        // rejecting the save for a missing internal bookkeeping field.
+        if (reason == null && frame.stableKey.isNullOrBlank()) {
+            val basis = frame.fact ?: frame.episode?.summary ?: frame.sourceSpan.takeIf(String::isNotBlank) ?: final.sourceText
+            frame = frame.copy(stableKey = "auto:${frame.intent.name.lowercase()}:${AiriText.semanticKey(basis).take(48)}")
+        }
+
         return MemoryContractResult(frame.takeIf { reason == null }, reason, frame !== input)
     }
 
@@ -213,12 +286,17 @@ object MemoryOperationContractValidator {
             .distinctBy(AiriText::normalizeName)
         if (explicit.isNotEmpty()) return explicit
 
-        val capitalized = Regex("\\b[\\p{Lu}][\\p{L}]{2,}(?:\\s+[\\p{Lu}][\\p{L}]{2,}){0,2}\\b")
-            .findAll(frame.sourceSpan)
-            .map { it.value }
+        // Never mine a model-generated sourceSpan for a person. Scan the actual final
+        // user transcript so recovery cannot manufacture an entity.
+        val capitalized = final.variants
+            .flatMap { variant ->
+                Regex("\\b[\\p{Lu}][\\p{L}]{2,}(?:\\s+[\\p{Lu}][\\p{L}]{2,}){0,2}\\b")
+                    .findAll(variant)
+                    .map { it.value }
+                    .toList()
+            }
             .filter(::validPerson)
-            .filter { candidate -> final.variants.any { it.contains(candidate) } }
-            .toList()
+            .distinct()
         return capitalized.map(AiriText::displayName).filter(::validPerson).distinctBy(AiriText::normalizeName)
     }
 }

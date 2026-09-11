@@ -12,14 +12,22 @@ data class LocalRecallExecution(val intent: LocalRecallIntent, val outcome: Memo
  * before the model can decide whether to call a memory tool.
  */
 object LocalMemoryRecallRouter {
-    private val question = setOf("who", "what", "which", "how", "tell", "show", "remember", "kaun", "kya", "kis", "kaise", "batao", "yaad", "कौन", "क्या", "किस", "कैसे", "बताओ", "याद")
+    private val question = setOf(
+        "who", "what", "which", "where", "when", "how", "tell", "show", "remember",
+        "kaun", "kya", "kis", "kab", "kaha", "kahan", "kahaan", "kaise", "batao", "yaad",
+        "कौन", "क्या", "किस", "कब", "कहाँ", "कैसे", "बताओ", "याद"
+    )
     private val possessive = setOf("my", "mine", "i", "me", "mera", "mere", "meri", "mujhe", "main", "maine", "मेरा", "मेरे", "मेरी", "मुझे", "मैं", "मैंने")
     private val friend = setOf("friend", "friends", "dost", "दोस्त", "mitr", "मित्र")
     private val best = setOf("best", "closest", "sabse", "बेस्ट", "सबसे")
     private val preference = setOf("prefer", "preference", "preferences", "pasand", "पसंद", "answers", "answer", "replies", "reply", "jawab", "जवाब")
     private val goal = setOf("goal", "goals", "aim", "target", "lakshya", "लक्ष्य")
     private val project = setOf("project", "projects", "परियोजना")
-    private val episode = setOf("episode", "event", "happened", "did", "kiya", "khela", "last", "recent", "kab", "घटना", "किया", "खेला", "कब")
+    private val episode = setOf(
+        "episode", "event", "happened", "did", "kiya", "khela", "last", "recent", "kab",
+        "went", "visited", "trip", "travel", "gaya", "gya", "gaye", "ghumne", "ghoomne", "gumne",
+        "saath", "saat", "where", "kaha", "kahan", "kahaan", "घटना", "किया", "खेला", "कब", "कहाँ"
+    )
     private val transaction = setOf("saved", "save", "updated", "update", "deleted", "delete", "failed", "succeeded", "transaction", "operation", "सहेजा", "बदला", "हटाया")
     private val memory = setOf("memory", "memories", "remember", "yaad", "मेमोरी", "याद")
     private val identity = setOf("name", "naam", "नाम")
@@ -29,9 +37,12 @@ object LocalMemoryRecallRouter {
         val text = normalize(evidence.canonicalText + " " + evidence.displayText)
         val tokens = text.split(' ').filter(String::isNotBlank).toSet()
         val asks = evidence.variants.any { it.trim().endsWith('?') } || tokens.any(question::contains)
-        if (!asks || tokens.none(possessive::contains)) return null
+        val personal = tokens.any(possessive::contains)
+        val eventRecall = isEventRecall(tokens)
+        if (!asks || (!personal && !eventRecall)) return null
         if (tokens.any(mutation::contains) && tokens.none(question::contains)) return null
         val type = when {
+            eventRecall -> MemoryRecallType.EPISODES
             tokens.any(friend::contains) && tokens.any(best::contains) -> MemoryRecallType.BEST_FRIEND
             tokens.any(friend::contains) -> MemoryRecallType.FRIENDS
             tokens.any(goal::contains) -> MemoryRecallType.GOALS
@@ -44,6 +55,17 @@ object LocalMemoryRecallRouter {
             else -> return null
         }
         return LocalRecallIntent(type, evidence.sourceText, .98)
+    }
+
+    private fun isEventRecall(tokens: Set<String>): Boolean {
+        val companion = tokens.any { it in setOf("saath", "saat", "with") }
+        val pastAction = tokens.any {
+            it in setOf("went", "visited", "trip", "travel", "gaya", "gya", "gaye", "ghumne", "ghoomne", "gumne")
+        }
+        val asksWhereOrWhen = tokens.any {
+            it in setOf("where", "when", "kaha", "kahan", "kahaan", "kab", "कहाँ", "कब")
+        }
+        return (companion && asksWhereOrWhen) || (pastAction && asksWhereOrWhen)
     }
 
     private fun normalize(value: String) = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)

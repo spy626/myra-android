@@ -7,15 +7,18 @@ enum class InstantScreenQuery { OVERVIEW, CURRENT_APP }
 
 object ScreenVisionIntentParser {
     private val screenSignal = Regex(
-        """\b(?:screen|display|visible|dikh|dekh|website|page|thumbnail|analytics|code|error|button|card|item|result|video|this|that|looking)\b""",
+        """\b(?:screen|display|visible|dikh|dekh|website|page|thumbnail|analytics|code|error|button|icon|toggle|switch|option|setting|settings|menu|card|item|result|video|this|that|looking)\b""",
         RegexOption.IGNORE_CASE
     )
     private val analyzeSignal = Regex(
         """\b(?:what(?:'s| is)|how|kya|read|summari[sz]e|explain|analy[sz]e|dikha|dekh|looking|error)\b""",
         RegexOption.IGNORE_CASE
     )
+    // Hindi/Hinglish "dabao/dabaye/dabana" (press/push) is an extremely common way to
+    // ask for a tap and was missing here entirely — that alone made every "X button/
+    // icon dabao" command silently fail to reach perform_screen_action.
     private val controlSignal = Regex(
-        """\b(?:tap|click|open|chalao|khol|press)\b""",
+        """\b(?:tap|click|open|chalao|khol|kholo|press|dabao|dabaye|dabana|dabaiye|on karo|off karo)\b""",
         RegexOption.IGNORE_CASE
     )
 

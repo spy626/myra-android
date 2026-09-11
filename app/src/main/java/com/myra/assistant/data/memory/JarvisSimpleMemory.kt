@@ -6,6 +6,7 @@ import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.launch
 
 /** JARVIS-style durable types. No behavior/episode/parallel-brain hierarchy is created here. */
 enum class JarvisMemoryType { IDENTITY, PREFERENCE, RELATIONSHIP, GOAL, PROJECT, PERSONAL_FACT, NOTE }
@@ -191,30 +192,47 @@ object JarvisSimpleMemoryExtractor {
                 out.putIfAbsent(key, JarvisMemoryCandidate(key, JarvisMemoryType.NOTE, "FACT|$clean", clean, importance = 6))
             }
         }
+
+        // Preserve ordinary lived experiences without waiting for Gemini to produce a
+        // perfectly structured ADD_EPISODE payload. The exact final user sentence is
+        // the memory value, so places/people/details are never lost to schema filling.
+        if (looksLikeExperience(text)) {
+            val key = "episode:${shortHash(text)}"
+            out.putIfAbsent(
+                key,
+                JarvisMemoryCandidate(
+                    key,
+                    JarvisMemoryType.NOTE,
+                    "FACT|$text",
+                    text,
+                    importance = 6
+                )
+            )
+        }
         return out.values.toList()
     }
 
     private fun relationship(text: String): Pair<String, String>? {
         val bestPatterns = listOf(
-            Regex("(?i)\\bmera best (?:friend|dost)\\s+([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+hai(?:[.!]|$)"),
-            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+mera best (?:friend|dost) hai(?:[.!]|$)"),
-            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+is my best friend(?:[.!]|$)"),
+            Regex("(?i)\\b(?:mera|mara) best (?:friend|frend|dost)\\s+([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+hai(?:[.!]|$)"),
+            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+(?:mera|mara) best (?:friend|frend|dost) hai(?:[.!]|$)"),
+            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+is my best (?:friend|frend)(?:[.!]|$)"),
             Regex("^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+मेरा बेस्ट दोस्त है(?:[।.!]|$)")
         )
         firstFrom(text, bestPatterns)?.let { return it.cleanName() to "BEST_FRIEND" }
 
         val goodPatterns = listOf(
             Regex("(?i)\\bmera (?:bohot|bahut|very) (?:accha|acha|good) (?:friend|dost)\\s+([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+hai(?:[.!]|$)"),
-            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+mera (?:bohot|bahut|very) (?:accha|acha|good) (?:friend|dost) hai(?:[.!]|$)"),
-            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+is my (?:very )?good friend(?:[.!]|$)"),
+            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+(?:mera|mara) (?:bohot|bahut|very) (?:accha|acha|achha|good) (?:friend|frend|dost) hai(?:[.!]|$)"),
+            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+is my (?:very )?good (?:friend|frend)(?:[.!]|$)"),
             Regex("^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+मेरा बहुत अच्छा दोस्त है(?:[।.!]|$)")
         )
         firstFrom(text, goodPatterns)?.let { return it.cleanName() to "GOOD_FRIEND" }
 
         val friendPatterns = listOf(
             Regex("(?i)\\bmera (?:friend|dost)\\s+([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+hai(?:[.!]|$)"),
-            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+mera (?:friend|dost) hai(?:[.!]|$)"),
-            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+is my friend(?:[.!]|$)"),
+            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+(?:mera|mara) (?:friend|frend|dost) hai(?:[.!]|$)"),
+            Regex("(?i)^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+is my (?:friend|frend)(?:[.!]|$)"),
             Regex("\\bमेरा दोस्त\\s+([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+है(?:[।.!]|$)"),
             Regex("^\\s*([\\p{L}][\\p{L}\\p{M} .'-]{1,60}?)\\s+मेरा दोस्त है(?:[।.!]|$)")
         )
@@ -248,9 +266,26 @@ object JarvisSimpleMemoryExtractor {
     )
 
     private fun looksLikeQuestion(text: String): Boolean {
-        if (text.trim().endsWith('?')) return true
-        return Regex("(?i)^(?:what|who|which|where|when|why|how|kya|kaun|kab|kahan|kyun|kaise|क्या|कौन|कब|कहाँ|क्यों|कैसे)\\b")
-            .containsMatchIn(text)
+        val clean = text.trim()
+        if (clean.endsWith('?')) return true
+        if (Regex("(?i)^(?:what|who|which|where|when|why|how|kya|kaun|kab|kahan|kahaan|kyun|kaise|क्या|कौन|कब|कहाँ|क्यों|कैसे)\\b")
+                .containsMatchIn(clean)
+        ) return true
+        return Regex(
+            "(?i)\\b(?:ke saath|ke saat|k saath|k saat|with)\\b.{0,80}" +
+                "\\b(?:kaha|kahan|kahaan|where|kab|when)\\b"
+        ).containsMatchIn(clean)
+    }
+
+    private fun looksLikeExperience(text: String): Boolean {
+        val normalized = normalize(text)
+        if (normalized.isBlank()) return false
+        return listOf(
+            Regex("(?i)\\b(?:went|visited|travelled|traveled|met|bought|watched|ate|stayed|returned|came back)\\b"),
+            Regex("(?i)\\b(?:ghumne|ghoomne|ghuma|ghumi|gaya tha|gayi thi|gaye the|gya tha|gyaata|gayata|gye the)\\b"),
+            Regex("(?i)\\b(?:ke saath|ke saat|k saath|k saat)\\b.{0,120}\\b(?:gaya|gya|ghuma|ghumne|trip|travel)\\b"),
+            Regex("(?i)\\b(?:trip|journey|vacation|holiday)\\b")
+        ).any { it.containsMatchIn(normalized) }
     }
 
     private fun firstGroup(text: String, vararg patterns: Regex): String? = firstFrom(text, patterns.toList())
@@ -437,6 +472,16 @@ object JarvisSimpleMemoryRuntime {
         val capturedAt: Long
     )
 
+    private data class PendingMemory(
+        val candidate: JarvisMemoryCandidate,
+        val sourceText: String,
+        val sourceKind: String,
+        val sessionId: String,
+        val turnId: Long,
+        val utteranceId: String,
+        val capturedAt: Long
+    )
+
     private sealed interface Mutation {
         data class Saved(val id: String) : Mutation
         data class Deleted(val success: Boolean) : Mutation
@@ -454,6 +499,17 @@ object JarvisSimpleMemoryRuntime {
     @Volatile private var lastTypedNormalized: String = ""
     @Volatile private var lastTypedAt: Long = 0L
     private val assistantBuffers = ConcurrentHashMap<Long, StringBuilder>()
+    private val pendingMemories = ConcurrentHashMap<String, PendingMemory>()
+    private val pendingSourceKinds = ConcurrentHashMap<String, String>()
+
+    // Dedicated background scope for the plain (non-suspend) entry points below.
+    // These are called directly from voice/network callback code (GeminiLiveClient,
+    // ActionAuditLogger, FinalUserMessageCommitter) that isn't itself a coroutine —
+    // routing the actual disk I/O through here means the caller never blocks on it,
+    // which is a big chunk of what made recall/save feel "late" before.
+    private val ioScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
 
     @Synchronized fun initialize(context: Context) {
         if (store != null) return
@@ -484,19 +540,42 @@ object JarvisSimpleMemoryRuntime {
             normalize(clean) == lastTypedNormalized && now - lastTypedAt in 0..60_000L
         ) JarvisMemorySource.USER_TEXT else JarvisMemorySource.USER_VOICE
 
+        // Anchor + deterministic memory candidates are exposed synchronously in a
+        // small pending cache. Disk I/O remains off the caller thread, but an immediate
+        // recall can already see the just-spoken fact instead of racing the Room write.
         latestAnchor = ConversationAnchor(sessionId, turnId, utteranceId, now)
-        local.appendMessage(
-            messageKey = "user:$utteranceId",
-            sessionId = sessionId,
-            turnId = turnId,
-            utteranceId = utteranceId,
-            sender = "user",
-            content = clean,
-            sourceKind = inferredSource.name,
-            at = now
-        )
-        JarvisSimpleMemoryExtractor.extract(clean).forEach { candidate ->
-            local.upsertMemory(candidate, clean, inferredSource.name, sessionId, turnId, utteranceId, now)
+        val candidates = JarvisSimpleMemoryExtractor.extract(clean)
+        pendingSourceKinds[utteranceId] = inferredSource.name
+        candidates.forEach { candidate ->
+            pendingMemories[candidate.key] = PendingMemory(
+                candidate, clean, inferredSource.name, sessionId, turnId, utteranceId, now
+            )
+        }
+
+        ioScope.launch {
+            runCatching {
+                local.appendMessage(
+                    messageKey = "user:$utteranceId",
+                    sessionId = sessionId,
+                    turnId = turnId,
+                    utteranceId = utteranceId,
+                    sender = "user",
+                    content = clean,
+                    sourceKind = inferredSource.name,
+                    at = now
+                )
+            }
+            candidates.forEach { candidate ->
+                val committed = runCatching {
+                    local.upsertMemory(candidate, clean, inferredSource.name, sessionId, turnId, utteranceId, now)
+                }.isSuccess
+                if (committed) {
+                    pendingMemories[candidate.key]?.takeIf { it.utteranceId == utteranceId }?.let {
+                        pendingMemories.remove(candidate.key, it)
+                    }
+                }
+            }
+            pendingSourceKinds.remove(utteranceId, inferredSource.name)
         }
         if (inferredSource == JarvisMemorySource.USER_TEXT) {
             lastTypedNormalized = ""
@@ -556,10 +635,13 @@ object JarvisSimpleMemoryRuntime {
         actionType: String? = null,
         isSuccess: Boolean = true
     ) {
-        store?.appendMessage(
-            "assistant:$utteranceId", sessionId, turnId, utteranceId,
-            "assistant", text, source, actionType, isSuccess
-        )
+        val local = store ?: return
+        ioScope.launch {
+            local.appendMessage(
+                "assistant:$utteranceId", sessionId, turnId, utteranceId,
+                "assistant", text, source, actionType, isSuccess
+            )
+        }
     }
 
     fun recordCommand(
@@ -570,7 +652,10 @@ object JarvisSimpleMemoryRuntime {
         verified: Boolean,
         source: JarvisMemorySource = JarvisMemorySource.COMMAND
     ) {
-        store?.appendCommand(rawCommand, intentType, resultText, success, verified, source.name)
+        val local = store ?: return
+        ioScope.launch {
+            local.appendCommand(rawCommand, intentType, resultText, success, verified, source.name)
+        }
     }
 
     fun prepareFinalTurn(
@@ -581,12 +666,26 @@ object JarvisSimpleMemoryRuntime {
         AiriMemoryRuntime.claimTurn(evidence.sessionId, evidence.turnId)
         val bounded = staged.take(4)
         if (bounded.isEmpty()) return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.IGNORE)
-        if (!semanticConsistent) return FinalMemoryTurnPlan(
+
+        val destructive = bounded.any {
+            it.intent in setOf(
+                MemorySemanticIntent.REMOVE_RELATIONSHIP,
+                MemorySemanticIntent.REPLACE_RELATIONSHIP,
+                MemorySemanticIntent.RENAME_ENTITY,
+                MemorySemanticIntent.DELETE_ENTITY
+            )
+        }
+        // A model/schema mismatch must never drop a valid save-like memory because the
+        // durable write path falls back to the authoritative final user sentence. Keep
+        // semantic consistency strict only for destructive entity mutations.
+        if (!semanticConsistent && destructive) return FinalMemoryTurnPlan(
             evidence.sourceText,
             decision = MemoryDecision.REJECT,
             rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name
         )
-        val isQuestion = bounded.any { it.intent == MemorySemanticIntent.RECALL }
+
+        val isQuestion = bounded.any { it.intent == MemorySemanticIntent.RECALL } ||
+            looksLikeQuestion(evidence.sourceText)
         if (isQuestion && bounded.any { it.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY) }) {
             return FinalMemoryTurnPlan(
                 evidence.sourceText,
@@ -687,6 +786,17 @@ object JarvisSimpleMemoryRuntime {
         var lastSavedId: String? = null
         var deleted = false
         var transient = false
+        var ignoredSave = false
+        val saveLikeIntents = setOf(
+            MemorySemanticIntent.ADD_FACT,
+            MemorySemanticIntent.ADD_LINKED_FACT,
+            MemorySemanticIntent.ADD_RELATIONSHIP,
+            MemorySemanticIntent.ADD_GOAL,
+            MemorySemanticIntent.ADD_EPISODE,
+            MemorySemanticIntent.UPDATE_FACT,
+            MemorySemanticIntent.SUPERSEDE_FACT
+        )
+
         for (frame in plan.operations) {
             if (frame.temporalScope == MemoryTemporalScope.TEMPORARY || frame.intent == MemorySemanticIntent.TRANSIENT_CONTEXT) {
                 transient = AiriWorkingMemory.transient(evidence, frame.fact ?: plan.sourceText)
@@ -695,25 +805,30 @@ object JarvisSimpleMemoryRuntime {
             when (val result = mutate(frame, evidence)) {
                 is Mutation.Saved -> lastSavedId = result.id
                 is Mutation.Deleted -> deleted = deleted || result.success
-                Mutation.Ignored -> Unit
+                Mutation.Ignored -> if (frame.intent in saveLikeIntents) ignoredSave = true
             }
         }
 
-        val status = if (transient && lastSavedId == null && !deleted) {
-            MemoryTransactionStatus.TRANSIENT
-        } else MemoryTransactionStatus.SUCCEEDED
+        val failedSave = ignoredSave && lastSavedId == null && !deleted && !transient
+        val status = when {
+            failedSave -> MemoryTransactionStatus.FAILED
+            transient && lastSavedId == null && !deleted -> MemoryTransactionStatus.TRANSIENT
+            else -> MemoryTransactionStatus.SUCCEEDED
+        }
         AiriWorkingMemory.record(
             VerifiedMemoryTransaction(
                 evidence.turnId,
                 plan.operations.lastOrNull()?.intent ?: MemorySemanticIntent.NONE,
                 status,
-                lastSavedId
+                lastSavedId,
+                reason = MemoryFailureReason.VERIFY_FAILED.takeIf { failedSave }
             )
         )
         return when {
+            failedSave -> MemoryBrainOutcome.Rejected("memory save failed", MemoryFailureReason.VERIFY_FAILED)
             transient && lastSavedId == null && !deleted -> MemoryBrainOutcome.Transient()
             deleted -> MemoryBrainOutcome.Deleted(true)
-            lastSavedId != null -> MemoryBrainOutcome.Mutated(MemoryWriteResult.Saved(lastSavedId!!), explicit = true)
+            lastSavedId != null -> MemoryBrainOutcome.Mutated(MemoryWriteResult.Saved(requireNotNull(lastSavedId)), explicit = true)
             else -> MemoryBrainOutcome.Ignored
         }
     }
@@ -721,7 +836,7 @@ object JarvisSimpleMemoryRuntime {
     fun recallRows(query: String, type: MemoryRecallType, limit: Int = 8): List<MemoryEntity> {
         val local = store ?: return emptyList()
         val q = normalize(query)
-        val all = local.activeMemories(200)
+        val all = mergedActiveMemories(200)
         val selected = when (type) {
             MemoryRecallType.PREFERENCES -> all.filter { it.memoryType == JarvisMemoryType.PREFERENCE }
             MemoryRecallType.FRIENDS -> all.filter { it.memoryType == JarvisMemoryType.RELATIONSHIP }
@@ -731,9 +846,10 @@ object JarvisSimpleMemoryRuntime {
             MemoryRecallType.GOALS -> all.filter { it.memoryType == JarvisMemoryType.GOAL }
             MemoryRecallType.PROJECTS -> all.filter { it.memoryType == JarvisMemoryType.PROJECT }
             MemoryRecallType.EPISODES -> all.filter { it.memoryKey.startsWith("episode:") }
+                .sortedByDescending { lexicalScore(q, it) }
             MemoryRecallType.LAST_TRANSACTION -> emptyList()
             MemoryRecallType.GENERAL -> when {
-                isNameQuery(q) -> listOfNotNull(local.memoryByKey("identity:name"))
+                isNameQuery(q) -> all.filter { it.memoryKey == "identity:name" }.take(1)
                 q.contains("friend") || q.contains("dost") || q.contains("दोस्त") ->
                     all.filter { it.memoryType == JarvisMemoryType.RELATIONSHIP }
                 q.contains("pasand") || q.contains("prefer") || q.contains("like") || q.contains("पसंद") ->
@@ -745,12 +861,12 @@ object JarvisSimpleMemoryRuntime {
                 else -> all.sortedByDescending { lexicalScore(q, it) }
             }
         }.take(limit.coerceIn(1, 10))
-        local.touch(selected.map { it.id })
+        local.touch(selected.map { it.id }.filter { it > 0L })
         return selected.map(::toProjection)
     }
 
     fun activeMemoryRows(limit: Int = 100): List<MemoryEntity> =
-        store?.activeMemories(limit)?.map(::toProjection).orEmpty()
+        mergedActiveMemories(limit).map(::toProjection)
 
     fun addManualMemory(fact: String, category: MemoryCategory): MemoryWriteResult {
         val local = store ?: return MemoryWriteResult.Rejected("Memory database is not initialized.")
@@ -800,7 +916,7 @@ object JarvisSimpleMemoryRuntime {
 
     fun promptContext(memoryLimit: Int = 10, chatLimit: Int = 30): String {
         val local = store ?: return ""
-        val memories = local.activeMemories(memoryLimit.coerceIn(1, 12))
+        val memories = mergedActiveMemories(memoryLimit.coerceIn(1, 12))
         val messages = local.recentMessages(chatLimit.coerceIn(2, 30))
         val settings = safeSettings()
         if (memories.isEmpty() && messages.isEmpty() && settings.isEmpty()) return ""
@@ -832,40 +948,121 @@ object JarvisSimpleMemoryRuntime {
 
     fun recentMessages(limit: Int = 30): List<JarvisChatMessage> = store?.recentMessages(limit).orEmpty()
     fun recentCommands(limit: Int = 20): List<JarvisCommandLog> = store?.recentCommands(limit).orEmpty()
-    fun activeMemories(limit: Int = 100): List<JarvisStoredMemory> = store?.activeMemories(limit).orEmpty()
+    fun activeMemories(limit: Int = 100): List<JarvisStoredMemory> = mergedActiveMemories(limit)
 
     private fun mutate(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence): Mutation {
         val local = store ?: return Mutation.Ignored
-        val sourceKind = local.sourceForUtterance(evidence.utteranceId) ?: JarvisMemorySource.USER_CHAT.name
-        val sourceText = evidence.sourceText
+        val rawText = evidence.sourceText.trim().replace(Regex("\\s+"), " ").take(500)
+        if (rawText.length < 3 || isSensitive(rawText) || looksLikeQuestion(rawText)) return Mutation.Ignored
+
+        val sourceKind = pendingSourceKinds[evidence.utteranceId]
+            ?: local.sourceForUtterance(evidence.utteranceId)
+            ?: JarvisMemorySource.USER_CHAT.name
         val now = System.currentTimeMillis()
+
         fun save(candidate: JarvisMemoryCandidate): Mutation.Saved {
-            val id = local.upsertMemory(candidate, sourceText, sourceKind, evidence.sessionId, evidence.turnId, evidence.utteranceId, now)
+            val id = local.upsertMemory(
+                candidate,
+                rawText,
+                sourceKind,
+                evidence.sessionId,
+                evidence.turnId,
+                evidence.utteranceId,
+                now
+            )
+            pendingMemories[candidate.key]?.takeIf { it.utteranceId == evidence.utteranceId }?.let {
+                pendingMemories.remove(candidate.key, it)
+            }
             return Mutation.Saved("jarvis:$id")
         }
 
+        fun saveGeneric(
+            keyPrefix: String,
+            type: JarvisMemoryType = JarvisMemoryType.NOTE,
+            subject: String = "user",
+            importance: Int = 6,
+            keyOverride: String? = null
+        ): Mutation.Saved = save(
+            JarvisMemoryCandidate(
+                key = keyOverride ?: "$keyPrefix:${shortHash(rawText)}",
+                type = type,
+                value = "FACT|$rawText",
+                fact = rawText,
+                subject = subject,
+                confidence = 1f,
+                importance = importance
+            )
+        )
+
+        val extracted = JarvisSimpleMemoryExtractor.extract(rawText)
+
         return when (frame.intent) {
-            MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REPLACE_RELATIONSHIP -> {
-                val name = frame.person.orEmpty().ifBlank { return Mutation.Ignored }
-                val relation = (frame.replacementRelationship ?: frame.relationship ?: PersonRelationship.FRIEND).name
-                save(
-                    JarvisMemoryCandidate(
-                        "relationship:${keyToken(name)}",
-                        JarvisMemoryType.RELATIONSHIP,
-                        "$relation|$name",
-                        "$name is Zopy's ${relationshipLabel(relation)}",
-                        subject = name,
-                        confidence = frame.confidence.toFloat().coerceIn(0f, 1f),
-                        importance = 9
-                    )
-                )
+            MemorySemanticIntent.ADD_RELATIONSHIP -> {
+                val deterministic = extracted.firstOrNull { it.type == JarvisMemoryType.RELATIONSHIP }
+                if (deterministic != null) {
+                    save(deterministic)
+                } else {
+                    val name = frame.person?.trim().orEmpty()
+                    val relation = frame.relationship
+                    if (
+                        name.isNotBlank() &&
+                        relation != null &&
+                        FinalTurnSourceSpanAuthorizer.groundedLiteral(name, evidence) &&
+                        rawSupportsRelationship(rawText, relation)
+                    ) {
+                        save(
+                            JarvisMemoryCandidate(
+                                "relationship:${keyToken(name)}",
+                                JarvisMemoryType.RELATIONSHIP,
+                                "${relation.name}|$name",
+                                rawText,
+                                subject = name,
+                                confidence = 1f,
+                                importance = 9
+                            )
+                        )
+                    } else {
+                        // Missing/unreliable entity structure must not drop the user's
+                        // statement. Preserve the exact turn as a generic durable fact.
+                        saveGeneric("relationship-fallback", importance = 7)
+                    }
+                }
             }
-            MemorySemanticIntent.REMOVE_RELATIONSHIP -> Mutation.Deleted(local.deactivateSubject(frame.person.orEmpty()))
+
+            MemorySemanticIntent.REPLACE_RELATIONSHIP -> {
+                val name = frame.person.orEmpty()
+                val relation = frame.replacementRelationship
+                if (
+                    name.isBlank() ||
+                    relation == null ||
+                    !FinalTurnSourceSpanAuthorizer.groundedLiteral(name, evidence)
+                ) {
+                    Mutation.Ignored
+                } else {
+                    save(
+                        JarvisMemoryCandidate(
+                            "relationship:${keyToken(name)}",
+                            JarvisMemoryType.RELATIONSHIP,
+                            "${relation.name}|$name",
+                            rawText,
+                            subject = name,
+                            confidence = 1f,
+                            importance = 9
+                        )
+                    )
+                }
+            }
+
+            MemorySemanticIntent.REMOVE_RELATIONSHIP ->
+                Mutation.Deleted(local.deactivateSubject(frame.person.orEmpty()))
+
             MemorySemanticIntent.RENAME_ENTITY -> {
                 val old = frame.person.orEmpty()
                 val replacement = frame.replacementPerson.orEmpty()
-                val existing = local.memoriesForSubject(old).firstOrNull { it.memoryType == JarvisMemoryType.RELATIONSHIP }
+                val existing = local.memoriesForSubject(old)
+                    .firstOrNull { it.memoryType == JarvisMemoryType.RELATIONSHIP }
                     ?: return Mutation.Deleted(false)
+                if (replacement.isBlank()) return Mutation.Deleted(false)
                 local.deactivateMemory(existing.id)
                 val relation = existing.value.substringBefore('|', "FRIEND")
                 save(
@@ -873,62 +1070,78 @@ object JarvisSimpleMemoryRuntime {
                         "relationship:${keyToken(replacement)}",
                         JarvisMemoryType.RELATIONSHIP,
                         "$relation|$replacement",
-                        "$replacement is Zopy's ${relationshipLabel(relation)}",
+                        rawText,
                         subject = replacement,
                         importance = existing.importance
                     )
                 )
             }
-            MemorySemanticIntent.DELETE_ENTITY -> Mutation.Deleted(local.deactivateSubject(frame.person.orEmpty()))
+
+            MemorySemanticIntent.DELETE_ENTITY ->
+                Mutation.Deleted(local.deactivateSubject(frame.person.orEmpty()))
+
             MemorySemanticIntent.ADD_GOAL -> {
-                val title = frame.goal?.title?.trim().takeUnless { it.isNullOrBlank() }
-                    ?: frame.fact?.trim().takeUnless { it.isNullOrBlank() }
-                    ?: return Mutation.Ignored
-                save(
-                    JarvisMemoryCandidate(
-                        frame.stableKey?.takeIf(String::isNotBlank) ?: "goal:${shortHash(title)}",
-                        JarvisMemoryType.GOAL,
-                        "FACT|$title",
-                        title,
-                        confidence = frame.confidence.toFloat().coerceIn(0f, 1f),
-                        importance = 8
-                    )
-                )
+                val deterministic = extracted.firstOrNull { it.type == JarvisMemoryType.GOAL }
+                if (deterministic != null) {
+                    save(deterministic)
+                } else {
+                    saveGeneric("goal", JarvisMemoryType.GOAL, importance = 8)
+                }
             }
+
             MemorySemanticIntent.ADD_EPISODE -> {
-                val fact = frame.episode?.summary?.trim().takeUnless { it.isNullOrBlank() }
-                    ?: frame.fact?.trim().takeUnless { it.isNullOrBlank() }
-                    ?: return Mutation.Ignored
-                save(
-                    JarvisMemoryCandidate(
-                        "episode:${shortHash(fact)}",
-                        JarvisMemoryType.NOTE,
-                        "FACT|$fact",
-                        fact,
-                        confidence = frame.confidence.toFloat().coerceIn(0f, 1f),
-                        importance = 5
-                    )
-                )
+                val deterministic = extracted.firstOrNull { it.key.startsWith("episode:") }
+                if (deterministic != null) {
+                    save(deterministic)
+                } else {
+                    // eventType/summary are optional metadata now; raw final text is the
+                    // authoritative episodic fact and preserves every named place/person.
+                    saveGeneric("episode", JarvisMemoryType.NOTE, importance = 6)
+                }
             }
+
+            MemorySemanticIntent.ADD_LINKED_FACT -> {
+                val person = frame.person?.trim()
+                    ?.takeIf { it.isNotBlank() && FinalTurnSourceSpanAuthorizer.groundedLiteral(it, evidence) }
+                val localCandidate = extracted.firstOrNull { candidate ->
+                    person != null && candidate.subject.equals(person, ignoreCase = true)
+                }
+                if (localCandidate != null) {
+                    save(localCandidate)
+                } else {
+                    val type = safeTypeForRawFact(frame.category)
+                    val subject = person ?: "user"
+                    saveGeneric(
+                        keyPrefix = if (person == null) "linked-fallback" else "linked:${keyToken(person)}",
+                        type = type,
+                        subject = subject,
+                        importance = 6
+                    )
+                }
+            }
+
             MemorySemanticIntent.ADD_FACT,
             MemorySemanticIntent.UPDATE_FACT,
-            MemorySemanticIntent.SUPERSEDE_FACT,
-            MemorySemanticIntent.ADD_LINKED_FACT -> {
-                val fact = frame.fact?.trim().takeUnless { it.isNullOrBlank() } ?: return Mutation.Ignored
-                val type = typeForCategory(frame.category ?: MemoryCategory.IDENTITY)
-                val subject = frame.person?.takeIf(String::isNotBlank) ?: "user"
-                save(
-                    JarvisMemoryCandidate(
-                        frame.stableKey?.takeIf(String::isNotBlank) ?: "fact:${shortHash(fact)}",
-                        type,
-                        "FACT|$fact",
-                        fact,
-                        subject = subject,
-                        confidence = frame.confidence.toFloat().coerceIn(0f, 1f),
-                        importance = if (type == JarvisMemoryType.PREFERENCE) 7 else 6
+            MemorySemanticIntent.SUPERSEDE_FACT -> {
+                val deterministic = candidateForCategory(extracted, frame.category)
+                if (deterministic != null) {
+                    save(deterministic)
+                } else {
+                    val existing = frame.stableKey
+                        ?.takeIf(String::isNotBlank)
+                        ?.let(local::memoryByKey)
+                        ?.takeIf { it.memoryType != JarvisMemoryType.RELATIONSHIP }
+
+                    saveGeneric(
+                        keyPrefix = "fact",
+                        type = existing?.memoryType ?: safeTypeForRawFact(frame.category),
+                        subject = existing?.subject ?: "user",
+                        importance = existing?.importance ?: if (frame.category == MemoryCategory.PREFERENCE) 7 else 6,
+                        keyOverride = existing?.memoryKey
                     )
-                )
+                }
             }
+
             MemorySemanticIntent.RECALL,
             MemorySemanticIntent.TRANSIENT_CONTEXT,
             MemorySemanticIntent.CLARIFY,
@@ -936,8 +1149,120 @@ object JarvisSimpleMemoryRuntime {
         }
     }
 
-    private fun hasPerson(name: String): Boolean =
-        name.isNotBlank() && store?.memoriesForSubject(name)?.any { it.memoryType == JarvisMemoryType.RELATIONSHIP } == true
+    private fun hasPerson(name: String): Boolean {
+        if (name.isBlank()) return false
+        val normalized = normalize(name)
+        return mergedActiveMemories(200).any {
+            it.memoryType == JarvisMemoryType.RELATIONSHIP && normalize(it.subject) == normalized
+        }
+    }
+
+    private fun mergedActiveMemories(limit: Int): List<JarvisStoredMemory> {
+        val bounded = limit.coerceIn(1, 200)
+        val pending = pendingMemories.values
+            .sortedByDescending { it.capturedAt }
+            .map(::pendingAsStored)
+        val durable = store?.activeMemories(200).orEmpty()
+
+        // Pending rows come first so an immediately repeated/corrected fact wins until
+        // its Room commit completes. De-duplication by memoryKey prevents double recall.
+        return (pending + durable)
+            .distinctBy { it.memoryKey }
+            .take(bounded)
+    }
+
+    private fun pendingAsStored(pending: PendingMemory): JarvisStoredMemory {
+        val candidate = pending.candidate
+        val syntheticId = -((candidate.key.hashCode().toLong() and 0x7fffffffL) + 1L)
+        return JarvisStoredMemory(
+            id = syntheticId,
+            memoryKey = candidate.key,
+            memoryType = candidate.type,
+            subject = candidate.subject,
+            value = candidate.value,
+            sourceText = pending.sourceText,
+            sourceKind = pending.sourceKind,
+            sourceSessionId = pending.sessionId,
+            sourceTurnId = pending.turnId,
+            sourceUtteranceId = pending.utteranceId,
+            confidence = candidate.confidence,
+            importance = candidate.importance,
+            active = true,
+            createdAt = pending.capturedAt,
+            updatedAt = pending.capturedAt,
+            lastAccessedAt = pending.capturedAt,
+            accessCount = 0
+        )
+    }
+
+    private fun candidateForCategory(
+        candidates: List<JarvisMemoryCandidate>,
+        category: MemoryCategory?
+    ): JarvisMemoryCandidate? {
+        val wanted = when (category) {
+            MemoryCategory.PREFERENCE,
+            MemoryCategory.COMMUNICATION_STYLE,
+            MemoryCategory.CONTENT_INTEREST,
+            MemoryCategory.CURRENT_INTEREST -> setOf(JarvisMemoryType.PREFERENCE)
+
+            MemoryCategory.PROJECT,
+            MemoryCategory.WORKFLOW,
+            MemoryCategory.SOLUTION -> setOf(JarvisMemoryType.PROJECT)
+
+            MemoryCategory.GOAL -> setOf(JarvisMemoryType.GOAL)
+            MemoryCategory.PERSON -> setOf(JarvisMemoryType.RELATIONSHIP)
+            MemoryCategory.IDENTITY -> setOf(JarvisMemoryType.IDENTITY, JarvisMemoryType.PERSONAL_FACT)
+            else -> emptySet()
+        }
+        if (wanted.isNotEmpty()) candidates.firstOrNull { it.type in wanted }?.let { return it }
+        return candidates.firstOrNull { it.type != JarvisMemoryType.RELATIONSHIP }
+    }
+
+    private fun safeTypeForRawFact(category: MemoryCategory?): JarvisMemoryType = when (category) {
+        MemoryCategory.PREFERENCE,
+        MemoryCategory.COMMUNICATION_STYLE,
+        MemoryCategory.CONTENT_INTEREST,
+        MemoryCategory.CURRENT_INTEREST -> JarvisMemoryType.PREFERENCE
+
+        MemoryCategory.PROJECT,
+        MemoryCategory.WORKFLOW,
+        MemoryCategory.SOLUTION -> JarvisMemoryType.PROJECT
+
+        MemoryCategory.GOAL -> JarvisMemoryType.GOAL
+        MemoryCategory.IDENTITY -> JarvisMemoryType.PERSONAL_FACT
+
+        // A generic raw sentence does not have the RELATIONSHIP value shape expected
+        // by recall, so an unresolved PERSON fact is preserved as a NOTE instead.
+        MemoryCategory.PERSON -> JarvisMemoryType.NOTE
+        else -> JarvisMemoryType.NOTE
+    }
+
+    private fun rawSupportsRelationship(text: String, relationship: PersonRelationship): Boolean {
+        val q = normalize(text)
+        return when (relationship) {
+            PersonRelationship.BEST_FRIEND ->
+                Regex("\\b(?:best friend|best dost|bestfriend|बेस्ट दोस्त)\\b").containsMatchIn(q)
+            PersonRelationship.GOOD_FRIEND ->
+                Regex("\\b(?:good friend|accha dost|acha dost|achha dost|bohot accha dost|bahut accha dost|अच्छा दोस्त)\\b")
+                    .containsMatchIn(q)
+            PersonRelationship.FRIEND ->
+                Regex("\\b(?:friend|dost|दोस्त)\\b").containsMatchIn(q)
+        }
+    }
+
+    private fun looksLikeQuestion(text: String): Boolean {
+        val clean = text.trim()
+        if (clean.endsWith('?')) return true
+        if (Regex(
+                "(?i)^(?:what|who|which|where|when|why|how|do i|did i|am i|is my|" +
+                    "kya|kaun|kab|kahan|kahaan|kyun|kaise|kiske|kis ke|क्या|कौन|कब|कहाँ|क्यों|कैसे)\\b"
+            ).containsMatchIn(clean)
+        ) return true
+        return Regex(
+            "(?i)\\b(?:ke saath|ke saat|k saath|k saat|with)\\b.{0,80}" +
+                "\\b(?:kaha|kahan|kahaan|where|kab|when)\\b"
+        ).containsMatchIn(clean)
+    }
 
     private fun toProjection(row: JarvisStoredMemory): MemoryEntity {
         val relationName = row.value.substringAfter('|', row.subject).takeIf { row.memoryType == JarvisMemoryType.RELATIONSHIP }

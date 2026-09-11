@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 enum class MemoryDecision { IGNORE, RECALL, SAVE, UPDATE, DELETE, TRANSIENT, NEEDS_CLARIFICATION, REJECT }
 enum class MemoryRecallType { GENERAL, PREFERENCES, FRIENDS, BEST_FRIEND, LAST_TRANSACTION, EPISODES, GOALS, PROJECTS }
@@ -75,7 +77,7 @@ class MemoryBrainCoordinator private constructor(
         } else {
             AiriMemoryRuntime.claimTurn(evidence.sessionId, evidence.turnId)
         }
-        if (jarvisPrimary) return JarvisSimpleMemoryRuntime.prepareFinalTurn(evidence, staged, semanticConsistent)
+        if (jarvisPrimary) return withContext(Dispatchers.IO) { JarvisSimpleMemoryRuntime.prepareFinalTurn(evidence, staged, semanticConsistent) }
         val store = requireNotNull(legacyStore)
 
         val bounded = staged.take(4)
@@ -164,7 +166,7 @@ class MemoryBrainCoordinator private constructor(
             plan.sourceText,
             plan.sourceText
         )
-        if (jarvisPrimary) return JarvisSimpleMemoryRuntime.executeFinalTurnPlan(plan, turn)
+        if (jarvisPrimary) return withContext(Dispatchers.IO) { JarvisSimpleMemoryRuntime.executeFinalTurnPlan(plan, turn) }
         val store = requireNotNull(legacyStore)
 
         if (!AiriMemoryRuntime.isCurrent(turn.sessionId, turn.turnId)) return reject(turn.turnId, MemoryFailureReason.STALE_TURN)
@@ -253,18 +255,18 @@ class MemoryBrainCoordinator private constructor(
         val answer = if (type == MemoryRecallType.LAST_TRANSACTION) AiriWorkingMemory.transactionAnswer() else null
         val rows = when {
             answer != null -> emptyList()
-            jarvisPrimary -> JarvisSimpleMemoryRuntime.recallRows(query, type, limit)
+            jarvisPrimary -> withContext(Dispatchers.IO) { JarvisSimpleMemoryRuntime.recallRows(query, type, limit) }
             else -> requireNotNull(legacyStore).retrieve(query, type, limit)
         }
         return MemoryBrainOutcome.Recalled(rows, answer, type, (System.nanoTime() - started) / 1_000_000)
     }
 
     suspend fun activeCards(limit: Int = 200): List<MemoryEntity> =
-        if (jarvisPrimary) JarvisSimpleMemoryRuntime.activeMemoryRows(limit)
+        if (jarvisPrimary) withContext(Dispatchers.IO) { JarvisSimpleMemoryRuntime.activeMemoryRows(limit) }
         else requireNotNull(legacyStore).activeCards(limit)
 
     suspend fun addFromManualUi(fact: String, category: MemoryCategory): MemoryWriteResult {
-        if (jarvisPrimary) return JarvisSimpleMemoryRuntime.addManualMemory(fact, category)
+        if (jarvisPrimary) return withContext(Dispatchers.IO) { JarvisSimpleMemoryRuntime.addManualMemory(fact, category) }
         val store = requireNotNull(legacyStore)
         val clean = fact.trim().replace(Regex("\\s+"), " ")
         if (clean.length !in 3..500) return MemoryWriteResult.Rejected("Memory must contain 3 to 500 characters.")
@@ -288,7 +290,7 @@ class MemoryBrainCoordinator private constructor(
     }
 
     suspend fun renameFromManualUi(entityId: String, replacement: String): Boolean {
-        if (jarvisPrimary) return JarvisSimpleMemoryRuntime.renamePerson(entityId, replacement)
+        if (jarvisPrimary) return withContext(Dispatchers.IO) { JarvisSimpleMemoryRuntime.renamePerson(entityId, replacement) }
         val store = requireNotNull(legacyStore)
         val clean = AiriText.displayName(replacement)
         if (clean.length !in 2..80 || clean.any(Char::isDigit)) return false
@@ -298,13 +300,13 @@ class MemoryBrainCoordinator private constructor(
     suspend fun deleteMemory(card: MemoryEntity): Boolean {
         if (jarvisPrimary) {
             val id = card.id.removePrefix("jarvis:").toLongOrNull() ?: return false
-            return JarvisSimpleMemoryRuntime.deleteMemory(id)
+            return withContext(Dispatchers.IO) { JarvisSimpleMemoryRuntime.deleteMemory(id) }
         }
         return requireNotNull(legacyStore).forgetCard(card)
     }
 
     suspend fun clearMemories(): Boolean {
-        if (jarvisPrimary) return JarvisSimpleMemoryRuntime.clearLongTermMemories()
+        if (jarvisPrimary) return withContext(Dispatchers.IO) { JarvisSimpleMemoryRuntime.clearLongTermMemories() }
         val store = requireNotNull(legacyStore)
         store.clearAll()
         return store.activeCards(1).isEmpty()

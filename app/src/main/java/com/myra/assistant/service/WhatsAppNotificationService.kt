@@ -108,7 +108,21 @@ object WhatsAppReplyStore {
             else -> targets[requested] ?: targets.values
                 .filter { normalize(it.sender).contains(requested) || requested.contains(normalize(it.sender)) }
                 .maxByOrNull { it.receivedAt }
-        } ?: return Result("${requestedSender ?: "Us message"} ka active WhatsApp reply option nahi mila.", false)
+        }
+        if (target == null) {
+            // No active notification-reply target for this sender — fall back to
+            // proactively opening WhatsApp, finding the contact, and typing/sending
+            // the message via Accessibility, instead of just giving up.
+            val contact = requestedSender?.trim().orEmpty()
+            val accessibility = com.myra.assistant.service.AccessibilityHelperService.instance
+            if (contact.isBlank() || accessibility == null || !com.myra.assistant.service.AccessibilityHelperService.isEnabled(context)) {
+                return Result("${requestedSender ?: "Us message"} ka active WhatsApp reply option nahi mila.", false)
+            }
+            accessibility.composeWhatsAppMessage(contact, text, autoSend = true) { success, outcome ->
+                MyraVoiceService.announceActionOutcome(outcome)
+            }
+            return Result("Theek hai, WhatsApp khol kar $contact ko dhoondh rahi hoon...", true)
+        }
 
         val outgoingKey = normalize(text)
         val actionKey = "${normalize(target.sender)}|$outgoingKey"

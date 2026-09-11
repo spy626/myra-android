@@ -1055,6 +1055,129 @@ class AccessibilityHelperService : AccessibilityService() {
             .firstOrNull { it.length >= 6 && !Regex("^\\d{1,2}:\\d{2}$").matches(it) }
     }
 
+    /**
+     * Generic "find a visible editable field matching this hint and type into it" —
+     * the typing counterpart to tapVisibleTarget(). Matches by contentDescription,
+     * hint text, or existing text containing targetHint (case-insensitive), so it
+     * works across app updates without depending on exact resource IDs.
+     */
+    fun typeIntoVisibleField(targetHint: String?, text: String, expectedScope: ForegroundActionScope? = null): Boolean {
+        val initialContext = currentForegroundContext() ?: return false
+        if (expectedScope != null && !ForegroundActionPolicy.canExecute(expectedScope, initialContext)) return false
+        val root = rootInActiveWindow ?: return false
+        val hint = targetHint?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        var best: AccessibilityNodeInfo? = null
+        var bestScore = -1
+        fun collect(node: AccessibilityNodeInfo) {
+            if (node.isVisibleToUser && node.isEditable) {
+                val label = listOfNotNull(node.contentDescription, node.text, node.hintText)
+                    .joinToString(" ") { it.toString() }.trim().lowercase(Locale.ROOT)
+                val score = when {
+                    hint.isBlank() -> 0
+                    label.contains(hint) -> 2
+                    hint.split(' ').any { it.length >= 3 && label.contains(it) } -> 1
+                    else -> -1
+                }
+                if (score > bestScore) {
+                    bestScore = score
+                    best = node
+                }
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::collect)
+        }
+        collect(root)
+        val target = best ?: return false
+        if (bestScore < 0) return false
+        if (expectedScope != null && !ForegroundActionPolicy.canExecute(expectedScope, currentForegroundContext())) return false
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    /**
+     * Proactively composes (and optionally sends) a WhatsApp message to a contact by
+     * name, independent of any existing notification. This is the missing piece that
+     * made "WhatsApp Kareem ko type karo" fail when Kareem hadn't messaged recently —
+     * WhatsAppReplyStore can only reply to an already-remembered notification target.
+     *
+     * Flow: launch WhatsApp -> open search -> type contact name -> tap the contact ->
+     * type the message into the chat's message box -> optionally tap Send.
+     * Each step polls briefly for the UI to settle, mirroring clickFirstVideoWhenReady().
+     */
+    fun composeWhatsAppMessage(contactName: String, message: String, autoSend: Boolean, onResult: (Boolean, String) -> Unit) {
+        val launch = packageManager.getLaunchIntentForPackage(WHATSAPP_PACKAGE)
+            ?: packageManager.getLaunchIntentForPackage(WHATSAPP_BUSINESS_PACKAGE)
+        if (launch == null) {
+            onResult(false, "WhatsApp installed nahi mila.")
+            return
+        }
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        runCatching { startActivity(launch) }.onFailure {
+            onResult(false, "WhatsApp open nahi ho saka.")
+            return
+        }
+        awaitWhatsAppForeground(attempt = 0) { foregroundReady ->
+            if (!foregroundReady) {
+                onResult(false, "WhatsApp screen ready nahi hui.")
+                return@awaitWhatsAppForeground
+            }
+            if (!tapVisibleTarget("Search", null, null)) {
+                onResult(false, "WhatsApp mein search icon nahi mila.")
+                return@awaitWhatsAppForeground
+            }
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!typeIntoVisibleField("Search", contactName)) {
+                    onResult(false, "Contact search field nahi mila.")
+                    return@postDelayed
+                }
+                openWhatsAppContactWhenReady(contactName, attempt = 0) { contactOpened ->
+                    if (!contactOpened) {
+                        onResult(false, "\"$contactName\" WhatsApp mein nahi mila.")
+                        return@openWhatsAppContactWhenReady
+                    }
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (!typeIntoVisibleField("Message", message)) {
+                            onResult(false, "Message box nahi mila.")
+                            return@postDelayed
+                        }
+                        if (!autoSend) {
+                            onResult(true, "\"$contactName\" ke liye message type ho gaya. Send abhi nahi kiya.")
+                            return@postDelayed
+                        }
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            val sent = tapVisibleTarget("Send", null, null)
+                            onResult(sent, if (sent) "\"$contactName\" ko message bhej diya." else "Send button nahi mila.")
+                        }, 250L)
+                    }, 600L)
+                }
+            }, 400L)
+        }
+    }
+
+    private fun awaitWhatsAppForeground(attempt: Int, onReady: (Boolean) -> Unit) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            val pkg = rootInActiveWindow?.packageName?.toString().orEmpty()
+            when {
+                pkg == WHATSAPP_PACKAGE || pkg == WHATSAPP_BUSINESS_PACKAGE -> onReady(true)
+                attempt < 6 -> awaitWhatsAppForeground(attempt + 1, onReady)
+                else -> onReady(false)
+            }
+        }, if (attempt == 0) 700L else 350L)
+    }
+
+    private fun openWhatsAppContactWhenReady(contactName: String, attempt: Int, onOpened: (Boolean) -> Unit) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (tapVisibleTarget(contactName, null, null)) {
+                onOpened(true)
+            } else if (attempt < 5) {
+                openWhatsAppContactWhenReady(contactName, attempt + 1, onOpened)
+            } else {
+                onOpened(false)
+            }
+        }, if (attempt == 0) 550L else 400L)
+    }
+
     fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
     fun goBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
 
@@ -1496,6 +1619,8 @@ class AccessibilityHelperService : AccessibilityService() {
 
     companion object {
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+        private const val WHATSAPP_PACKAGE = "com.whatsapp"
+        private const val WHATSAPP_BUSINESS_PACKAGE = "com.whatsapp.w4b"
         private const val INSTAGRAM_PACKAGE = "com.instagram.android"
         private const val YOUTUBE_HISTORY_URL = "https://www.youtube.com/feed/history"
         private const val SKIP_AD_POLL_INTERVAL_MS = 500L
