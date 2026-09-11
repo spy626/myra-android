@@ -9,7 +9,6 @@ on:
 
 jobs:
   apply-final-source:
-    if: github.event.head_commit.message == 'Stage final LYRA source replacement'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,17 +29,15 @@ jobs:
           rm -rf .github/lyra-replace
           rm -f .github/workflows/apply-final-source.yml
 
-          expected="$(cat <<'EOF' | sort
-app/src/main/java/com/myra/assistant/data/memory/AiriMemoryCoordinator.kt
-app/src/main/java/com/myra/assistant/data/memory/AiriMemoryRuntime.kt
-app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt
-app/src/main/java/com/myra/assistant/data/memory/LocalFastMemoryLane.kt
-app/src/main/java/com/myra/assistant/screen/ScreenVisionIntent.kt
-app/src/main/java/com/myra/assistant/service/AccessibilityHelperService.kt
-app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt
-app/src/main/java/com/myra/assistant/service/WhatsAppNotificationService.kt
-EOF
-)"
+          expected="$(printf '%s\n' \
+            'app/src/main/java/com/myra/assistant/data/memory/AiriMemoryCoordinator.kt' \
+            'app/src/main/java/com/myra/assistant/data/memory/AiriMemoryRuntime.kt' \
+            'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt' \
+            'app/src/main/java/com/myra/assistant/data/memory/LocalFastMemoryLane.kt' \
+            'app/src/main/java/com/myra/assistant/screen/ScreenVisionIntent.kt' \
+            'app/src/main/java/com/myra/assistant/service/AccessibilityHelperService.kt' \
+            'app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt' \
+            'app/src/main/java/com/myra/assistant/service/WhatsAppNotificationService.kt' | sort)"
           actual="$(git diff --name-only HEAD^ -- | sort)"
           if [ "$actual" != "$expected" ]; then
             echo "Unexpected final source diff"
