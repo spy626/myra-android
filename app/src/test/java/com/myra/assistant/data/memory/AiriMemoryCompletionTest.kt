@@ -22,33 +22,57 @@ class AiriMemoryCompletionTest {
         assertEquals("Leena", owner.recall("friends", type = MemoryRecallType.FRIENDS).rows.single().entityName)
     }
 
-    @Test fun missingOrAmbiguousRequiredEntityNeverAuthorizes() = runBlocking {
+    @Test fun saveLikeMissingOrAmbiguousEntityDoesNotBlockAuthoritativeFallback() = runBlocking {
         val owner = MemoryBrainCoordinator(InMemoryAiriMemoryStore())
         val missing = evidence(102, "Someone is my friend", "Someone is my friend")
         val base = MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP,
             relationship = PersonRelationship.FRIEND, sourceSpan = missing.displayText,
             sourceTurnId = missing.turnId, confidence = .95)
-        assertEquals(MemoryFailureReason.MISSING_REQUIRED_ENTITY.name,
-            owner.prepareFinalTurn(missing, listOf(base)).rejectionReason)
+        val missingContract = MemoryOperationContractValidator.validateAndRecover(base, missing)
+        assertNull(missingContract.reason)
+        assertNotNull(missingContract.frame)
+        val missingPlan = owner.prepareFinalTurn(missing, listOf(base))
+        assertEquals(MemoryDecision.SAVE, missingPlan.decision)
+        assertNull(missingPlan.rejectionReason)
 
         val ambiguous = evidence(103, "Asha and Mira are my friends", "Asha and Mira are my friends")
         val two = base.copy(sourceSpan = ambiguous.displayText, sourceTurnId = ambiguous.turnId,
             criticalLiterals = listOf("Asha", "Mira"))
-        val plan = owner.prepareFinalTurn(ambiguous, listOf(two))
-        assertEquals(MemoryDecision.NEEDS_CLARIFICATION, plan.decision)
-        assertEquals(MemoryFailureReason.AMBIGUOUS_ENTITY.name, plan.rejectionReason)
+        val ambiguousContract = MemoryOperationContractValidator.validateAndRecover(two, ambiguous)
+        assertNull(ambiguousContract.reason)
+        assertNotNull(ambiguousContract.frame)
+        val ambiguousPlan = owner.prepareFinalTurn(ambiguous, listOf(two))
+        assertEquals(MemoryDecision.SAVE, ambiguousPlan.decision)
+        assertNull(ambiguousPlan.rejectionReason)
+
+        val destructiveEvidence = evidence(104, "Rename someone to Zara", "Rename someone to Zara", listOf("Zara"))
+        val destructive = MemorySemanticFrame(MemorySemanticIntent.RENAME_ENTITY,
+            replacementPerson = "Zara", sourceSpan = destructiveEvidence.displayText,
+            sourceTurnId = destructiveEvidence.turnId, confidence = .95, criticalLiterals = listOf("Zara"))
+        assertEquals(MemoryFailureReason.MISSING_REQUIRED_ENTITY,
+            MemoryOperationContractValidator.validateAndRecover(destructive, destructiveEvidence).reason)
     }
 
-    @Test fun operationSpecificRequiredFieldsAreRejectedBeforeAuthorization() {
+    @Test fun saveLikeFieldsRecoverWhileDestructiveFieldsRemainStrict() {
         val e = evidence(104, "Ravi is my friend", "Ravi is my friend", listOf("Ravi"))
-        fun reason(frame: MemorySemanticFrame) = MemoryOperationContractValidator.validateAndRecover(frame, e).reason
+        fun contract(frame: MemorySemanticFrame) = MemoryOperationContractValidator.validateAndRecover(frame, e)
+        fun reason(frame: MemorySemanticFrame) = contract(frame).reason
         val common = MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP, person = "Ravi",
             sourceSpan = e.displayText, sourceTurnId = e.turnId, confidence = .9)
-        assertEquals(MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP, reason(common))
-        assertEquals(MemoryFailureReason.MISSING_REQUIRED_REPLACEMENT, reason(common.copy(intent = MemorySemanticIntent.RENAME_ENTITY)))
-        assertEquals(MemoryFailureReason.MISSING_REQUIRED_FACT, reason(common.copy(intent = MemorySemanticIntent.ADD_LINKED_FACT)))
-        assertEquals(MemoryFailureReason.MISSING_REQUIRED_EPISODE, reason(common.copy(intent = MemorySemanticIntent.ADD_EPISODE)))
-        assertEquals(MemoryFailureReason.MISSING_REQUIRED_GOAL, reason(common.copy(intent = MemorySemanticIntent.ADD_GOAL)))
+
+        assertNull(reason(common))
+        assertNull(reason(common.copy(intent = MemorySemanticIntent.ADD_LINKED_FACT)))
+
+        val episode = contract(common.copy(intent = MemorySemanticIntent.ADD_EPISODE))
+        assertNull(episode.reason)
+        assertEquals("Ravi is my friend", episode.frame!!.episode!!.summary)
+        assertEquals("activity", episode.frame!!.episode!!.eventType)
+
+        assertNull(reason(common.copy(intent = MemorySemanticIntent.ADD_GOAL)))
+        assertEquals(MemoryFailureReason.MISSING_REQUIRED_REPLACEMENT,
+            reason(common.copy(intent = MemorySemanticIntent.RENAME_ENTITY)))
+        assertEquals(MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP,
+            reason(common.copy(intent = MemorySemanticIntent.REPLACE_RELATIONSHIP)))
     }
 
     @Test fun devanagariAndRomanRelationshipsAreAdditiveAndDowngradeSameEntity() = runBlocking {
