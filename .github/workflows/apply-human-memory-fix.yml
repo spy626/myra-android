@@ -1,0 +1,237 @@
+name: Apply human memory and latency fix
+permissions:
+  contents: write
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/apply-human-memory-fix.yml']
+
+jobs:
+  apply-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/myra-phase-1
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply human-like memory fix
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one exact match, got {count}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          def sub_once(path, pattern, replacement, flags=re.S):
+              p = Path(path)
+              text = p.read_text()
+              new, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one regex match, got {count}: {pattern[:120]!r}")
+              p.write_text(new)
+
+          # 1) First-class entity-scoped recall type.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/AiriMemoryCoordinator.kt',
+              'enum class MemoryRecallType { GENERAL, PREFERENCES, FRIENDS, BEST_FRIEND, LAST_TRANSACTION, EPISODES, GOALS, PROJECTS }',
+              'enum class MemoryRecallType { GENERAL, PERSON, PREFERENCES, FRIENDS, BEST_FRIEND, LAST_TRANSACTION, EPISODES, GOALS, PROJECTS }'
+          )
+
+          # Legacy AIRI compatibility path must stay exhaustive even though production is JARVIS.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/AiriMemoryStore.kt',
+              '''        val result = when (type) {\n            MemoryRecallType.FRIENDS -> activeRelationships(PersonRelationship.entries.toSet(), bounded)''',
+              '''        val result = when (type) {\n            MemoryRecallType.PERSON -> {\n                val structured = semanticCards(80) + activeRelationships(PersonRelationship.entries.toSet(), 80) +\n                    dao.recentEpisodes(20).map(::episodeCard)\n                structured.asSequence().map { it to lexicalScore(normalizedQuery, it) }\n                    .filter { it.second > 0 }\n                    .sortedWith(compareByDescending<Pair<MemoryEntity, Int>> { it.second }.thenByDescending { it.first.updatedAt })\n                    .map { it.first }.distinctBy { it.id }.take(bounded).toList()\n            }\n            MemoryRecallType.FRIENDS -> activeRelationships(PersonRelationship.entries.toSet(), bounded)'''
+          )
+
+          # 2) Person-about questions go straight to the local memory lane.
+          p = Path('app/src/main/java/com/myra/assistant/data/memory/LocalFastMemoryLane.kt')
+          text = p.read_text()
+          text = text.replace(
+              '''    private val mutation = setOf("save", "add", "change", "update", "delete", "remove", "forget", "rename", "rakh", "jodo", "badlo", "hata", "bhool", "सहेज", "जोड़", "बदल", "हटा", "भूल")\n''',
+              '''    private val mutation = setOf("save", "add", "change", "update", "delete", "remove", "forget", "rename", "rakh", "jodo", "badlo", "hata", "bhool", "सहेज", "जोड़", "बदल", "हटा", "भूल")\n    private val personAbout = listOf(\n        Regex("(?i)\\\\b[\\\\p{L}][\\\\p{L}\\\\p{M}'-]{1,50}\\\\s+ke\\\\s+(?:baare|bare)\\\\s+(?:mein|me)\\\\s+(?:kya\\\\s+)?(?:jaante|jante|jaanta|janta|malum|maalum|pata)\\\\b"),\n        Regex("(?i)\\\\b(?:what\\\\s+do\\\\s+you\\\\s+know\\\\s+about|tell\\\\s+me\\\\s+about)\\\\s+[\\\\p{L}][\\\\p{L}\\\\p{M}'-]{1,50}\\\\b")\n    )\n''',
+              1
+          )
+          old = '''        val asks = evidence.variants.any { it.trim().endsWith('?') } || tokens.any(question::contains)\n        val personal = tokens.any(possessive::contains)\n        val eventRecall = isEventRecall(tokens)\n        if (!asks || (!personal && !eventRecall)) return null\n        if (tokens.any(mutation::contains) && tokens.none(question::contains)) return null\n        val type = when {\n            eventRecall -> MemoryRecallType.EPISODES\n'''
+          new = '''        val asks = evidence.variants.any { it.trim().endsWith('?') } || tokens.any(question::contains)\n        val personal = tokens.any(possessive::contains)\n        val eventRecall = isEventRecall(tokens)\n        val personRecall = personAbout.any { it.containsMatchIn(text) }\n        if ((!asks && !personRecall) || (!personal && !eventRecall && !personRecall)) return null\n        if (tokens.any(mutation::contains) && tokens.none(question::contains)) return null\n        val type = when {\n            personRecall -> MemoryRecallType.PERSON\n            eventRecall -> MemoryRecallType.EPISODES\n'''
+          if old not in text:
+              raise SystemExit('LocalFastMemoryLane classify anchor missing')
+          p.write_text(text.replace(old, new, 1))
+
+          # 3) Strong-but-bounded ASR person canonicalization + read-time cleanup of old junk rows.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''    fun personEquivalent(left: String, right: String): Boolean {\n        val a = personPhonetic(left)\n        val b = personPhonetic(right)\n        if (a.isBlank() || b.isBlank()) return false\n        if (a == b) return true\n        if (a.first() != b.first()) return false\n        return editDistance(a, b) <= 1\n    }''',
+              '''    fun personEquivalent(left: String, right: String): Boolean {\n        val a = personPhonetic(left)\n        val b = personPhonetic(right)\n        if (a.isBlank() || b.isBlank()) return false\n        if (a == b) return true\n        if (a.first() != b.first()) return false\n        val distance = editDistance(a, b)\n        if (distance <= 1) return true\n        if (distance != 2 || minOf(a.length, b.length) < 5 || kotlin.math.abs(a.length - b.length) > 1) return false\n        val commonPrefix = a.zip(b).takeWhile { (x, y) -> x == y }.size\n        return commonPrefix >= 3\n    }'''
+          )
+
+          sub_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              r'''    fun canonicalizeRows\(rows: List<JarvisStoredMemory>\): List<JarvisStoredMemory> \{.*?\n    \}\n\n    fun keyToken''',
+              '''    fun canonicalizeRows(rows: List<JarvisStoredMemory>): List<JarvisStoredMemory> {\n        if (rows.isEmpty()) return rows\n\n        // Older builds could keep a whole raw utterance as a generic NOTE in the same turn\n        // where a stronger relationship/preference/event was already stored. Keep the DB history,\n        // but do not surface that duplicate as an IDEA or feed it back into recall.\n        val structuredTurns = rows.asSequence()\n            .filter { it.sourceTurnId > 0L }\n            .filter { row ->\n                row.memoryType != JarvisMemoryType.NOTE ||\n                    row.memoryKey.startsWith("episode:") || row.memoryKey.startsWith("person-fact:")\n            }\n            .map { it.sourceTurnId }.toSet()\n        val cleaned = rows.filterNot { row ->\n            row.memoryType == JarvisMemoryType.NOTE &&\n                row.sourceTurnId in structuredTurns &&\n                !row.memoryKey.startsWith("episode:") &&\n                !row.memoryKey.startsWith("person-fact:") &&\n                (row.memoryKey.startsWith("fact:") ||\n                    row.memoryKey.startsWith("relationship-fallback:") ||\n                    row.memoryKey.startsWith("linked-fallback:"))\n        }\n\n        // Build fuzzy-equivalent person groups rather than grouping only by an exact phonetic\n        // signature. This collapses safe ASR variants such as Kareem/Karim and Naufal/Naufer,\n        // while the bounded matcher refuses broad merges.\n        val relationshipGroups = mutableListOf<MutableList<JarvisStoredMemory>>()\n        cleaned.filter { it.memoryType == JarvisMemoryType.RELATIONSHIP }\n            .sortedBy { it.createdAt }\n            .forEach { row ->\n                val group = relationshipGroups.firstOrNull { existing ->\n                    existing.any { personEquivalent(it.subject, row.subject) }\n                }\n                if (group != null) group += row else relationshipGroups += mutableListOf(row)\n            }\n        val relationships = relationshipGroups.map { group ->\n            val canonical = group.minByOrNull { it.createdAt } ?: group.first()\n            val winner = group.maxByOrNull { it.updatedAt } ?: canonical\n            val relation = winner.value.substringBefore('|', "FRIEND")\n            val name = canonical.subject\n            winner.copy(\n                memoryKey = "relationship:${keyToken(name)}",\n                subject = name,\n                value = "$relation|$name"\n            )\n        }\n\n        val preferences = cleaned.filter { it.memoryType == JarvisMemoryType.PREFERENCE }\n            .map { row ->\n                val parsed = when {\n                    row.value.startsWith("LIKE|") -> true to row.value.substringAfter('|')\n                    row.value.startsWith("DISLIKE|") -> false to row.value.substringAfter('|')\n                    else -> extractPreference(row.sourceText)\n                        ?: extractPreference(row.value.substringAfter("FACT|", row.value))\n                }\n                if (parsed == null) row else {\n                    val (liked, raw) = parsed\n                    val canonical = canonicalPreference(raw)\n                    row.copy(\n                        memoryKey = "preference:${keyToken(canonical)}",\n                        value = "${if (liked) "LIKE" else "DISLIKE"}|$canonical"\n                    )\n                }\n            }\n            .groupBy { it.memoryKey }\n            .values\n            .map { group -> group.maxByOrNull { it.updatedAt } ?: group.first() }\n\n        val episodeRows = cleaned.filter { it.memoryKey.startsWith("episode:") }\n            .sortedBy { it.createdAt }\n        val episodes = mutableListOf<JarvisStoredMemory>()\n        episodeRows.forEach { row ->\n            val rowText = row.value.substringAfter("FACT|", row.sourceText).ifBlank { row.sourceText }\n            val index = episodes.indexOfFirst {\n                val existingText = it.value.substringAfter("FACT|", it.sourceText).ifBlank { it.sourceText }\n                episodesSimilar(existingText, rowText)\n            }\n            if (index < 0) {\n                episodes += row\n            } else {\n                val existing = episodes[index]\n                val existingText = existing.value.substringAfter("FACT|", existing.sourceText).ifBlank { existing.sourceText }\n                val chosen = preferredText(existingText, rowText)\n                episodes[index] = existing.copy(\n                    value = "FACT|$chosen",\n                    sourceText = chosen,\n                    updatedAt = maxOf(existing.updatedAt, row.updatedAt)\n                )\n            }\n        }\n\n        val untouched = cleaned.filter {\n            it.memoryType != JarvisMemoryType.RELATIONSHIP &&\n                it.memoryType != JarvisMemoryType.PREFERENCE &&\n                !it.memoryKey.startsWith("episode:")\n        }\n\n        return (relationships + preferences + episodes + untouched)\n            .distinctBy { "${it.memoryType}:${it.memoryKey}:${it.subject}" }\n            .sortedWith(\n                compareByDescending<JarvisStoredMemory> { it.importance }\n                    .thenByDescending { it.updatedAt }\n            )\n    }\n\n    fun keyToken'''
+          )
+
+          # Provisional RAM-only save lane: clear self-contained facts are recallable immediately,\n          # but Room still waits for the authoritative final transcript.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''    fun recordFinalUserMessage(\n        sessionId: String,''',
+              '''    fun stageProvisionalUserMemory(\n        sessionId: String,\n        turnId: Long,\n        text: String,\n        source: JarvisMemorySource = JarvisMemorySource.USER_VOICE\n    ) {\n        val clean = text.trim().replace(Regex("\\\\s+"), " ").take(500)\n        if (clean.length < 3 || looksLikeQuestion(clean) || isSensitive(clean)) return\n        val extracted = JarvisSimpleMemoryExtractor.extract(clean)\n        val admission = ContextAwareMemoryAdmission.admit(clean, extracted, contextSnapshot(), knownPeopleFast())\n        val utteranceId = "provisional:$sessionId:$turnId"\n        val now = System.currentTimeMillis()\n        admission.candidates.distinctBy { it.key }.forEach { candidate ->\n            pendingMemories[candidate.key] = PendingMemory(\n                candidate, clean, source.name, sessionId, turnId, utteranceId, now\n            )\n        }\n    }\n\n    fun recordFinalUserMessage(\n        sessionId: String,'''
+          )
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''        val inferredSource = source ?: if (\n            normalize(clean) == lastTypedNormalized && now - lastTypedAt in 0..60_000L\n        ) JarvisMemorySource.USER_TEXT else JarvisMemorySource.USER_VOICE\n\n        // Chat history keeps every finalized turn,''',
+              '''        val inferredSource = source ?: if (\n            normalize(clean) == lastTypedNormalized && now - lastTypedAt in 0..60_000L\n        ) JarvisMemorySource.USER_TEXT else JarvisMemorySource.USER_VOICE\n\n        // Replace any RAM-only partial interpretation from this turn with authoritative final evidence.\n        pendingMemories.entries.toList().forEach { (key, pending) ->\n            if (pending.turnId == turnId && pending.utteranceId.startsWith("provisional:")) {\n                pendingMemories.remove(key, pending)\n            }\n        }\n\n        // Chat history keeps every finalized turn,'''
+          )
+
+          # Coalesce multi-operation meaning: anaphoric second clauses become linked person facts;\n          # a whole-turn duplicate ADD_FACT is dropped instead of becoming a junk IDEA.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''        val decision = when {\n            operations.all { it.intent == MemorySemanticIntent.RECALL } -> MemoryDecision.RECALL''',
+              '''        val consolidated = consolidateSemanticOperations(operations, evidence)\n        val decision = when {\n            consolidated.all { it.intent == MemorySemanticIntent.RECALL } -> MemoryDecision.RECALL'''
+          )
+          for old, new in [
+              ('operations.any { it.intent == MemorySemanticIntent.CLARIFY }', 'consolidated.any { it.intent == MemorySemanticIntent.CLARIFY }'),
+              ('operations.all { it.intent == MemorySemanticIntent.TRANSIENT_CONTEXT || it.temporalScope == MemoryTemporalScope.TEMPORARY }', 'consolidated.all { it.intent == MemorySemanticIntent.TRANSIENT_CONTEXT || it.temporalScope == MemoryTemporalScope.TEMPORARY }'),
+              ('operations.any { it.intent in setOf(MemorySemanticIntent.DELETE_ENTITY, MemorySemanticIntent.REMOVE_RELATIONSHIP) }', 'consolidated.any { it.intent in setOf(MemorySemanticIntent.DELETE_ENTITY, MemorySemanticIntent.REMOVE_RELATIONSHIP) }'),
+              ('operations.any { it.intent in setOf(MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT, MemorySemanticIntent.RENAME_ENTITY, MemorySemanticIntent.REPLACE_RELATIONSHIP) }', 'consolidated.any { it.intent in setOf(MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT, MemorySemanticIntent.RENAME_ENTITY, MemorySemanticIntent.REPLACE_RELATIONSHIP) }')
+          ]:
+              replace_once('app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt', old, new)
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''            operations,\n            decision,\n            requiresClarification = decision == MemoryDecision.NEEDS_CLARIFICATION,''',
+              '''            consolidated,\n            decision,\n            requiresClarification = decision == MemoryDecision.NEEDS_CLARIFICATION,'''
+          )
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''    fun executeFinalTurnPlan(\n        plan: FinalMemoryTurnPlan,''',
+              '''    private fun consolidateSemanticOperations(\n        operations: List<MemorySemanticFrame>,\n        evidence: AuthoritativeMemoryTurnEvidence\n    ): List<MemorySemanticFrame> {\n        if (operations.size < 2) return operations\n        val relationship = operations.filter { it.intent == MemorySemanticIntent.ADD_RELATIONSHIP }\n            .mapNotNull { frame -> frame.person?.trim()?.takeIf(String::isNotBlank)?.let { it to frame } }\n            .singleOrNull() ?: return operations\n        val person = relationship.first\n        val raw = normalize(evidence.sourceText)\n        val anaphora = Regex("(?i)\\\\b(?:uska|uski|uske|unka|unki|unke|his|her|he|she)\\\\b")\n        return operations.mapNotNull { frame ->\n            if (frame.intent != MemorySemanticIntent.ADD_FACT) return@mapNotNull frame\n            val span = frame.sourceSpan.trim()\n            val fact = frame.fact?.trim().orEmpty()\n            val normalizedSpan = normalize(span)\n            val normalizedFact = normalize(fact)\n            val wholeTurnDuplicate = operations.size > 1 && (\n                normalizedSpan.isNotBlank() && normalizedSpan == raw ||\n                    normalizedFact.isNotBlank() && normalizedFact == raw\n                )\n            if (wholeTurnDuplicate) return@mapNotNull null\n            val clause = listOf(span, fact).joinToString(" ")\n            val personMentioned = clause.split(Regex("\\\\s+")).any { token ->\n                JarvisMemoryCanonicalizer.personEquivalent(token, person)\n            }\n            if (anaphora.containsMatchIn(clause) || personMentioned) {\n                frame.copy(\n                    intent = MemorySemanticIntent.ADD_LINKED_FACT,\n                    person = person,\n                    category = MemoryCategory.PERSON,\n                    stableKey = frame.stableKey?.takeIf(String::isNotBlank)\n                        ?: "person-fact:${keyToken(person)}:${shortHash(fact.ifBlank { span })}"\n                )\n            } else frame\n        }\n    }\n\n    fun executeFinalTurnPlan(\n        plan: FinalMemoryTurnPlan,'''
+          )
+
+          # Entity-scoped recall; never mix unrelated people for “what do you know about X?”.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''        val selected = when (type) {\n            MemoryRecallType.PREFERENCES -> all.filter { it.memoryType == JarvisMemoryType.PREFERENCE }''',
+              '''        val selected = when (type) {\n            MemoryRecallType.PERSON -> {\n                val person = resolvePersonFromQuery(q, all)\n                if (person == null) emptyList() else all\n                    .filter { rowRelatesToPerson(it, person) }\n                    .sortedWith(compareByDescending<JarvisStoredMemory> { it.memoryType == JarvisMemoryType.RELATIONSHIP }\n                        .thenByDescending { lexicalScore(q, it) }\n                        .thenByDescending { it.updatedAt })\n            }\n            MemoryRecallType.PREFERENCES -> all.filter { it.memoryType == JarvisMemoryType.PREFERENCE }'''
+          )
+
+          # Store the model's small, grounded atomic linked fact instead of the whole raw utterance.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''                if (localCandidate != null) {\n                    save(localCandidate)\n                } else if (fallbackAllowed) {\n                    val type = safeTypeForRawFact(frame.category)\n                    val subject = person ?: "user"\n                    saveGeneric(\n                        keyPrefix = if (person == null) "linked-fallback" else "linked:${keyToken(person)}",\n                        type = type,\n                        subject = subject,\n                        importance = 6\n                    )\n                } else {\n                    Mutation.NotDurable\n                }''',
+              '''                if (localCandidate != null) {\n                    save(localCandidate)\n                } else if (fallbackAllowed) {\n                    val canonicalPerson = person?.let(::canonicalPersonName)\n                    val atomic = atomicModelFactCandidate(\n                        frame, rawText, canonicalPerson,\n                        safeTypeForRawFact(frame.category),\n                        keyPrefix = canonicalPerson?.let { "person-fact:${keyToken(it)}" } ?: "linked-fact"\n                    )\n                    if (atomic != null) save(atomic) else Mutation.NotDurable\n                } else {\n                    Mutation.NotDurable\n                }'''
+          )
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''                } else if (fallbackAllowed) {\n                    val existing = frame.stableKey\n                        ?.takeIf(String::isNotBlank)\n                        ?.let(local::memoryByKey)\n                        ?.takeIf { it.memoryType != JarvisMemoryType.RELATIONSHIP }\n\n                    saveGeneric(\n                        keyPrefix = "fact",\n                        type = existing?.memoryType ?: safeTypeForRawFact(frame.category),\n                        subject = existing?.subject ?: "user",\n                        importance = existing?.importance ?: if (frame.category == MemoryCategory.PREFERENCE) 7 else 6,\n                        keyOverride = existing?.memoryKey\n                    )\n                } else {''',
+              '''                } else if (fallbackAllowed) {\n                    val existing = frame.stableKey\n                        ?.takeIf(String::isNotBlank)\n                        ?.let(local::memoryByKey)\n                        ?.takeIf { it.memoryType != JarvisMemoryType.RELATIONSHIP }\n                    val atomic = atomicModelFactCandidate(\n                        frame, rawText, existing?.subject ?: "user",\n                        existing?.memoryType ?: safeTypeForRawFact(frame.category),\n                        keyPrefix = "fact-semantic",\n                        keyOverride = existing?.memoryKey\n                    )\n                    if (atomic != null) save(atomic) else saveGeneric(\n                        keyPrefix = "fact",\n                        type = existing?.memoryType ?: safeTypeForRawFact(frame.category),\n                        subject = existing?.subject ?: "user",\n                        importance = existing?.importance ?: if (frame.category == MemoryCategory.PREFERENCE) 7 else 6,\n                        keyOverride = existing?.memoryKey\n                    )\n                } else {'''
+          )
+
+          # Fuzzy person existence and helper functions for atomic facts/person recall.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''        val normalized = normalize(name)\n        return mergedActiveMemories(200).any {\n            it.memoryType == JarvisMemoryType.RELATIONSHIP && normalize(it.subject) == normalized\n        }''',
+              '''        return mergedActiveMemories(200).any {\n            it.memoryType == JarvisMemoryType.RELATIONSHIP &&\n                JarvisMemoryCanonicalizer.personEquivalent(it.subject, name)\n        }'''
+          )
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''    private fun candidateForCategory(\n        candidates: List<JarvisMemoryCandidate>,''',
+              '''    private fun canonicalPersonName(candidate: String): String {\n        val clean = candidate.trim()\n        if (clean.isBlank()) return clean\n        return mergedActiveMemories(200)\n            .filter { it.memoryType == JarvisMemoryType.RELATIONSHIP }\n            .filter { JarvisMemoryCanonicalizer.personEquivalent(it.subject, clean) }\n            .minByOrNull { it.createdAt }?.subject ?: clean\n    }\n\n    private fun resolvePersonFromQuery(query: String, rows: List<JarvisStoredMemory>): String? {\n        val names = rows.asSequence()\n            .filter { it.memoryType == JarvisMemoryType.RELATIONSHIP ||\n                (it.subject.isNotBlank() && !it.subject.equals("user", true) && !it.subject.equals("zopy", true)) }\n            .map { it.subject.trim() }.filter(String::isNotBlank).toList()\n        if (names.isEmpty()) return null\n        val tokens = normalize(query).split(' ').filter { it.length >= 2 }\n        val matches = names.filter { name ->\n            val normalizedName = normalize(name)\n            query.contains(normalizedName) || tokens.any { token ->\n                JarvisMemoryCanonicalizer.personEquivalent(token, name)\n            }\n        }.fold(mutableListOf<String>()) { acc, name ->\n            if (acc.none { JarvisMemoryCanonicalizer.personEquivalent(it, name) }) acc += name\n            acc\n        }\n        return matches.singleOrNull()?.let(::canonicalPersonName)\n    }\n\n    private fun rowRelatesToPerson(row: JarvisStoredMemory, person: String): Boolean {\n        if (row.subject.isNotBlank() && !row.subject.equals("user", true) &&\n            JarvisMemoryCanonicalizer.personEquivalent(row.subject, person)\n        ) return true\n        val textTokens = normalize(row.fact() + " " + row.sourceText).split(' ')\n        return textTokens.any { token -> token.length >= 2 && JarvisMemoryCanonicalizer.personEquivalent(token, person) }\n    }\n\n    private fun atomicModelFactCandidate(\n        frame: MemorySemanticFrame,\n        rawText: String,\n        subject: String?,\n        type: JarvisMemoryType,\n        keyPrefix: String,\n        keyOverride: String? = null\n    ): JarvisMemoryCandidate? {\n        val fact = frame.fact?.trim()?.replace(Regex("\\\\s+"), " ")?.takeIf { it.length in 3..240 } ?: return null\n        val span = frame.sourceSpan.trim().replace(Regex("\\\\s+"), " ")\n        if (frame.confidence < 0.80 || span.length < 2 || !sourceSpanGrounded(span, rawText)) return null\n        val rawDigits = Regex("\\\\d+").findAll(rawText).map { it.value }.toSet()\n        if (Regex("\\\\d+").findAll(fact).any { it.value !in rawDigits }) return null\n        val resolvedSubject = subject?.trim().takeUnless { it.isNullOrBlank() } ?: "user"\n        return JarvisMemoryCandidate(\n            key = keyOverride ?: "$keyPrefix:${shortHash(fact)}",\n            type = type,\n            value = "FACT|$fact",\n            fact = fact,\n            subject = resolvedSubject,\n            confidence = frame.confidence.toFloat().coerceIn(0f, 1f),\n            importance = if (type == JarvisMemoryType.RELATIONSHIP) 9 else 6\n        )\n    }\n\n    private fun sourceSpanGrounded(span: String, rawText: String): Boolean {\n        val s = normalize(span)\n        val raw = normalize(rawText)\n        if (s.isBlank() || raw.isBlank()) return false\n        if (raw.contains(s)) return true\n        val spanTokens = s.split(' ').filter { it.length > 1 }\n        if (spanTokens.isEmpty()) return false\n        val rawTokens = raw.split(' ').toSet()\n        val shared = spanTokens.count(rawTokens::contains)\n        return shared >= 2 && shared.toDouble() / spanTokens.size.toDouble() >= 0.70\n    }\n\n    private fun candidateForCategory(\n        candidates: List<JarvisMemoryCandidate>,'''
+          )
+
+          # Person-linked facts render as PERSON, never generic IDEA.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/data/memory/JarvisSimpleMemory.kt',
+              '''                JarvisMemoryType.NOTE ->\n                    if (row.memoryKey.startsWith("episode:")) MemoryCategory.LIFE_EVENT.name\n                    else MemoryCategory.IDEA.name''',
+              '''                JarvisMemoryType.NOTE -> when {\n                    row.memoryKey.startsWith("episode:") -> MemoryCategory.LIFE_EVENT.name\n                    row.memoryKey.startsWith("person-fact:") || row.memoryKey.startsWith("linked:") -> MemoryCategory.PERSON.name\n                    else -> MemoryCategory.IDEA.name\n                }'''
+          )
+
+          # 4) Voice service: save-like proposals no longer block natural replies; local recall can answer\n          # at the semantic-tool boundary instead of waiting 9–10s for Gemini's final transcript.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt',
+              '''    private val stagedMemoryRecalls = java.util.concurrent.ConcurrentHashMap<Long, PendingMemoryRecall>()\n    private var memoryResponsePendingTurnId = 0L''',
+              '''    private val stagedMemoryRecalls = java.util.concurrent.ConcurrentHashMap<Long, PendingMemoryRecall>()\n    private val earlyMemoryRecallTurns = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()\n    private val nonBlockingMemorySaveTurns = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()\n    private var memoryResponsePendingTurnId = 0L'''
+          )
+
+          # query_user_memory tool: try the same local early lane before staging/holding.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt',
+              '''                val recallTurnId = activeTurnId\n                val pendingRecall = if (recallTurnId != 0L) {''',
+              '''                val recallTurnId = activeTurnId\n                val earlyQueryText = query.ifBlank { lastUserIntentText.ifBlank { input.toString().trim() } }\n                if (recallTurnId != 0L && tryEarlyLocalMemoryRecall(id, "query_user_memory", recallTurnId, earlyQueryText)) {\n                    return\n                }\n                val pendingRecall = if (recallTurnId != 0L) {'''
+          )
+
+          sub_once(
+              'app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt',
+              r'''    private fun handleSemanticMemoryProposal\(id: String, args: org\.json\.JSONObject\) \{.*?\n    \}\n\n    private fun reserveMemoryResponse''',
+              '''    private fun handleSemanticMemoryProposal(id: String, args: org.json.JSONObject) {\n        val guardedText = lastUserIntentText.ifBlank { input.toString().trim() }\n        if (guardedText.isBlank()) {\n            live?.sendToolResponse(id, "propose_user_memory", false, "Current turn is unavailable")\n            return\n        }\n        val proposalTurnId = activeTurnId\n        val operations = parseMemorySemanticOperations(args).map { it.copy(sourceTurnId = proposalTurnId) }\n        if (proposalTurnId == 0L || operations.isEmpty()) {\n            live?.sendToolResponse(id, "propose_user_memory", false, "Structured proposal was incomplete")\n            return\n        }\n\n        if (operations.all { it.intent == MemorySemanticIntent.RECALL } &&\n            tryEarlyLocalMemoryRecall(id, "propose_user_memory", proposalTurnId, guardedText)\n        ) return\n\n        val existing = stagedMemorySemantics[proposalTurnId].orEmpty()\n        val merged = StagedMemoryProposalPolicy.merge(existing, operations)\n        stagedMemorySemantics[proposalTurnId] = merged\n\n        val saveLike = merged.isNotEmpty() && merged.all { it.intent in setOf(\n            MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.ADD_RELATIONSHIP,\n            MemorySemanticIntent.ADD_LINKED_FACT, MemorySemanticIntent.ADD_EPISODE,\n            MemorySemanticIntent.ADD_GOAL, MemorySemanticIntent.UPDATE_FACT,\n            MemorySemanticIntent.SUPERSEDE_FACT\n        ) }\n        val explicitMemoryManagement = Regex(\n            "(?i)\\\\b(?:remember|yaad\\\\s+rakh|memory\\\\s+mein|save\\\\s+(?:this|it)|forget|bhool|delete\\\\s+memory|rename)\\\\b"\n        ).containsMatchIn(guardedText)\n\n        if (saveLike && !explicitMemoryManagement) {\n            nonBlockingMemorySaveTurns += proposalTurnId\n            com.myra.assistant.data.memory.JarvisSimpleMemoryRuntime.stageProvisionalUserMemory(\n                transcriptSessionId, proposalTurnId, guardedText\n            )\n            voiceLog(\n                "MEMORY_SEMANTIC_PROPOSAL_STAGED turnId=$proposalTurnId received=${operations.size} " +\n                    "merged=${merged.size} decision=NON_BLOCKING_FINAL_VALIDATE executed=false"\n            )\n            live?.sendToolResponse(\n                id, "propose_user_memory", true,\n                "Memory meaning is staged locally; continue the natural reply while Android validates the final turn"\n            )\n            return\n        }\n\n        reserveMemoryResponse(proposalTurnId, "SEMANTIC_PROPOSAL")\n        voiceLog(\n            "MEMORY_SEMANTIC_PROPOSAL_STAGED turnId=$proposalTurnId received=${operations.size} " +\n                "merged=${merged.size} decision=WAIT_FOR_FINAL executed=false"\n        )\n        live?.sendToolHeld(id, "propose_user_memory")\n    }\n\n    private fun tryEarlyLocalMemoryRecall(\n        id: String,\n        functionName: String,\n        turnId: Long,\n        queryText: String\n    ): Boolean {\n        val clean = queryText.trim()\n        if (turnId == 0L || clean.length < 3) return false\n        val evidence = com.myra.assistant.data.memory.AuthoritativeMemoryTurnEvidence(\n            turnId = turnId,\n            canonicalText = clean,\n            displayText = romanDisplayText(clean),\n            sessionId = transcriptSessionId,\n            utteranceId = "$transcriptSessionId:early:$turnId",\n            contextGeneration = turnId\n        )\n        val localIntent = com.myra.assistant.data.memory.LocalMemoryRecallRouter.classify(evidence) ?: return false\n        if (!earlyMemoryRecallTurns.add(turnId)) {\n            live?.sendToolResponse(id, functionName, true, "Local memory recall is already handling this turn")\n            return true\n        }\n        reserveMemoryResponse(turnId, "EARLY_LOCAL_RECALL")\n        live?.sendToolResponse(id, functionName, true, "Android local memory recall is handling this turn")\n        val started = android.os.SystemClock.elapsedRealtime()\n        serviceScope.launch {\n            val execution = fastMemoryLane.recall(evidence)\n            if (execution == null) {\n                earlyMemoryRecallTurns.remove(turnId)\n                return@launch\n            }\n            val outcome = execution.outcome\n            val response = verifiedMemoryResponse(outcome, "")\n            memoryBrain.captureConversation(evidence, response)\n            mainHandler.post {\n                val queuedAt = android.os.SystemClock.elapsedRealtime()\n                voiceLog(\n                    "MEMORY_FAST_LANE_EARLY turnId=$turnId queryType=${execution.intent.type} " +\n                        "retrievalDurationMs=${outcome.durationMs} semanticToolToReplyQueuedMs=${queuedAt - started} networkCall=false"\n                )\n                listener?.onMyraText(response)\n                emitState(response)\n                queueLocalSpeech(\n                    response, allowUntranscribedAudio = true,\n                    validationPolicy = LocalSpeechValidationPolicy.MEMORY\n                )\n            }\n        }\n        return true\n    }\n\n    private fun reserveMemoryResponse'''
+          )
+
+          # Final turn: early recall must not answer twice; non-blocking saves validate/write but do not\n          # steal the already-streaming natural model response.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt',
+              '''                    val staged = stagedMemorySemantics.remove(memoryTurnId).orEmpty()\n                    val pendingRecall = stagedMemoryRecalls.remove(memoryTurnId)\n                    val localRecallIntent = com.myra.assistant.data.memory.LocalMemoryRecallRouter\n                        .classify(finalUtterance.memoryEvidence)\n                    val memoryIntentResolvedAt = android.os.SystemClock.elapsedRealtime()\n                    val memoryOwned = staged.isNotEmpty() || pendingRecall != null || localRecallIntent != null''',
+              '''                    val staged = stagedMemorySemantics.remove(memoryTurnId).orEmpty()\n                    val pendingRecall = stagedMemoryRecalls.remove(memoryTurnId)\n                    val earlyRecallAlreadyHandled = earlyMemoryRecallTurns.remove(memoryTurnId)\n                    val nonBlockingSave = nonBlockingMemorySaveTurns.remove(memoryTurnId)\n                    val localRecallIntent = if (earlyRecallAlreadyHandled) null else\n                        com.myra.assistant.data.memory.LocalMemoryRecallRouter.classify(finalUtterance.memoryEvidence)\n                    val memoryIntentResolvedAt = android.os.SystemClock.elapsedRealtime()\n                    val memoryOwned = !earlyRecallAlreadyHandled && !nonBlockingSave &&\n                        (staged.isNotEmpty() || pendingRecall != null || localRecallIntent != null)'''
+          )
+          replace_once(
+              'app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt',
+              '''                    serviceScope.launch {\n                        staged.forEach { proposal ->''',
+              '''                    if (!earlyRecallAlreadyHandled) serviceScope.launch {\n                        staged.forEach { proposal ->'''
+          )
+          replace_once(
+              'app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt',
+              '''                    if (memoryOwned) {\n                        memoryResponsePendingTurnId = 0L\n                        resetTurnBuffers("memory_owned_turn_complete")''',
+              '''                    if (memoryOwned || earlyRecallAlreadyHandled) {\n                        memoryResponsePendingTurnId = 0L\n                        resetTurnBuffers(if (earlyRecallAlreadyHandled) "early_memory_recall_finalized" else "memory_owned_turn_complete")'''
+          )
+
+          # 5) Strengthen model contract: atomic facts and pronoun-linked person facts.
+          replace_once(
+              'app/src/main/java/com/myra/assistant/ai/GeminiLiveClient.kt',
+              '''            .put("description", "Interpret durable user meaning using the current completed turn together with the recent conversation. Do not propose long-term memory for acknowledgements, chitchat, commands, hypothetical/speculative statements, quoted/reported claims, or fragments whose referent is unclear. A short answer may become memory only when the immediately preceding context makes its subject and meaning unambiguous. Required by intent: ADD/REMOVE_RELATIONSHIP need person+relationship; REPLACE_RELATIONSHIP needs person+replacement_relationship; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD_GOAL needs goal_title. Every operation needs source_span+confidence. source_span copies the shortest near-verbatim current-turn words; fact may express the context-resolved meaning but must not add unsupported details. Put every critical literal in critical_literals. Questions are RECALL. Android performs final context/safety admission and alone owns persistence.")''',
+              '''            .put("description", "Interpret durable user meaning using the current completed turn together with the recent conversation. Save atomic meanings, not the whole utterance: one relationship plus one separate person fact must be separate operations. Never emit a duplicate generic ADD_FACT for text already represented by a relationship/episode/goal/preference. If a same-turn clause uses uska/uski/uske/his/her and one person is unambiguous, use ADD_LINKED_FACT for that person. Do not propose long-term memory for acknowledgements, chitchat, commands, hypothetical/speculative statements, quoted/reported claims, or fragments whose referent is unclear. A short answer may become memory only when the immediately preceding context makes its subject and meaning unambiguous. Required by intent: ADD/REMOVE_RELATIONSHIP need person+relationship; REPLACE_RELATIONSHIP needs person+replacement_relationship; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD_GOAL needs goal_title. Every operation needs source_span+confidence. source_span copies the shortest near-verbatim current-turn words; fact may express only the context-resolved meaning and must not add unsupported details. Put every critical literal in critical_literals. Questions are RECALL. Android performs final context/safety admission and alone owns persistence.")'''
+          )
+
+          # Tests: person recall, noisy name convergence, and unrelated-name protection.
+          replace_once(
+              'app/src/test/java/com/myra/assistant/data/memory/LocalMemoryRecallRouterTest.kt',
+              '''    @Test fun unrelatedQuestionDoesNotHijackMemoryLane() {\n        assertNull(LocalMemoryRecallRouter.classify(evidence("Weather kaisa hai?")))\n    }''',
+              '''    @Test fun personAboutQuestionUsesEntityScopedLocalRecall() {\n        assertEquals(\n            MemoryRecallType.PERSON,\n            LocalMemoryRecallRouter.classify(evidence("Naufer ke baare mein kya jaante ho?"))?.type\n        )\n        assertEquals(\n            MemoryRecallType.PERSON,\n            LocalMemoryRecallRouter.classify(evidence("What do you know about Naufal?"))?.type\n        )\n    }\n\n    @Test fun unrelatedQuestionDoesNotHijackMemoryLane() {\n        assertNull(LocalMemoryRecallRouter.classify(evidence("Weather kaisa hai?")))\n    }'''
+          )
+          replace_once(
+              'app/src/test/java/com/myra/assistant/data/memory/JarvisMemoryCanonicalizerTest.kt',
+              '''        assertFalse(JarvisMemoryCanonicalizer.personEquivalent("Kareem", "Naufal"))\n    }''',
+              '''        assertFalse(JarvisMemoryCanonicalizer.personEquivalent("Kareem", "Naufal"))\n        assertTrue(JarvisMemoryCanonicalizer.personEquivalent("Naufal", "Naufer"))\n        assertFalse(JarvisMemoryCanonicalizer.personEquivalent("Naufal", "Naveed"))\n    }'''
+          )
+
+          # Any remaining exhaustive recall-type switch should be made explicit by the compiler.\n          print('patched files successfully')
+          PY
+
+      - name: Unit tests and debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Commit production fix and remove temporary workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-human-memory-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java app/src/test/java .github/workflows/apply-human-memory-fix.yml
+          git commit -m 'Make memory context-aware entity-scoped and low-latency'
+          git push origin HEAD:agent/myra-phase-1
