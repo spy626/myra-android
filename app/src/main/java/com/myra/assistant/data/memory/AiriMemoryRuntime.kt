@@ -215,12 +215,10 @@ object MemoryOperationContractValidator {
             .map(String::trim).filter { it.length in 2..80 && it.any(Char::isLetter) && it.none(Char::isDigit) }
             .filter { FinalTurnSourceSpanAuthorizer.groundedLiteral(it, final) }
             .map(AiriText::displayName).distinctBy(AiriText::normalizeName)
-        if (explicit.isNotEmpty()) return explicit
-        val capitalized = Regex("\\b[\\p{Lu}][\\p{L}]{2,}(?:\\s+[\\p{Lu}][\\p{L}]{2,}){0,2}\\b")
-            .findAll(frame.sourceSpan).map { it.value }.filter { candidate ->
-                final.variants.any { it.contains(candidate) }
-            }.toList()
-        return capitalized.map(AiriText::displayName).distinctBy(AiriText::normalizeName)
+        // Capitalization is presentation, not identity evidence (for example,
+        // an initial "Someone" must never be minted as a person). Final-turn
+        // protected names and model critical literals are the only candidates.
+        return explicit
     }
 }
 
