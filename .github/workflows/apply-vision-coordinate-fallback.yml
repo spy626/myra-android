@@ -41,6 +41,8 @@ jobs:
           p.write_text(s.replace(old, new, 1))
           PY
           git diff --check
+          echo '--- patched MyraVoiceService 1788-1832 ---'
+          nl -ba app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt | sed -n '1788,1832p'
       - name: Unit tests and debug APK
         shell: bash
         run: |
