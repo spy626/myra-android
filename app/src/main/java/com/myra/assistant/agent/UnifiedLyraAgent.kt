@@ -1,11 +1,27 @@
 package com.myra.assistant.agent
 
 import java.util.Locale
+import com.myra.assistant.data.memory.AiriMemoryRuntime
+import com.myra.assistant.data.memory.TaskMemoryStatus
+import com.myra.assistant.data.memory.WorkingTaskMemory
 
 class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry()) {
     @Volatile private var active: AgentTask? = null
     @Volatile private var lastReferencedElement: SemanticElement? = null
     private val rejectedElementIds = linkedSetOf<String>()
+    private val sparkCommands = ArrayDeque<SparkCommand>()
+    val sparkRuntime = LyraSparkRuntime(AiriMemoryRuntime.contexts, commandSink = { command ->
+        synchronized(sparkCommands) {
+            sparkCommands += command
+            while (sparkCommands.size > 32) sparkCommands.removeFirst()
+        }
+    })
+
+    /** Commands remain proposals until the unified agent/service consumes and verifies them. */
+    fun pendingSparkCommands(): List<SparkCommand> = synchronized(sparkCommands) { sparkCommands.toList() }
+    fun takeSparkCommand(): SparkCommand? = synchronized(sparkCommands) {
+        if (sparkCommands.isEmpty()) null else sparkCommands.removeFirst()
+    }
 
     fun currentTask(): AgentTask? = active
 
@@ -29,7 +45,25 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
             active = null
             null
         }
-        WorkingTaskRuntime.store.onTurn(decision, task, scene)
+        val currentWorking = WorkingTaskRuntime.store.onTurn(decision, task, scene)
+        currentWorking.taskId?.let { taskId ->
+            AiriMemoryRuntime.tasks.update(WorkingTaskMemory(
+                taskId = taskId, goal = currentWorking.currentGoal,
+                status = when (currentWorking.completionState) {
+                    TaskCompletionState.SUCCESS -> TaskMemoryStatus.DONE
+                    TaskCompletionState.FAILURE -> TaskMemoryStatus.BLOCKED
+                    else -> TaskMemoryStatus.ACTIVE
+                },
+                currentStep = currentWorking.currentStep, confirmedFacts = listOfNotNull(currentWorking.lastObservedOutcome),
+                blockers = listOfNotNull(currentWorking.lastObservedOutcome.takeIf { currentWorking.lastVerifiedSuccess == false }),
+                nextStep = task?.plan?.firstOrNull()?.id, plan = task?.plan?.map { it.id }.orEmpty(),
+                workingAssumptions = emptyList(), lastFailureReason = currentWorking.lastObservedOutcome.takeIf { currentWorking.lastVerifiedSuccess == false },
+                completionCriteria = listOfNotNull(currentWorking.expectedOutcome), foregroundContext = currentWorking.activeExternalApp,
+                lastAction = currentWorking.lastRequestedAction, expectedResult = currentWorking.expectedOutcome,
+                verificationState = currentWorking.completionState?.name, sourceTurnId = turnId,
+                contextGeneration = currentWorking.contextGeneration
+            ))
+        }
         val structured = toStructuredIntent(request, decision, task, working)
         if (decision.authorizesPhoneActions) {
             val runtime = GeneralAgentRuntimeStore.runtime
