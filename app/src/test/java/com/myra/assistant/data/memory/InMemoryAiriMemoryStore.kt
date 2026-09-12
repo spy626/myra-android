@@ -11,6 +11,8 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     val goals = linkedMapOf<String, GoalMemoryEntity>()
     val behavior = linkedMapOf<String, BehaviorObservationEntity>()
     val conversation = mutableListOf<ConversationTruthEntity>()
+    val segmentation = linkedMapOf<String, SegmentationStateEntity>()
+    val spans = mutableListOf<EpisodeSpanEntity>()
     private var now = 1_000L
     private fun time() = ++now
 
@@ -58,15 +60,25 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
                 r.provenance, r.createdAt, r.updatedAt, p.entityId, p.canonicalName, lastRecalledAt = at, kind = "RELATIONSHIP") } }
     }
     override suspend fun addSemantic(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence): String? {
-        val fact = frame.fact ?: return null; val key = frame.stableKey ?: return null; val id = UUID.randomUUID().toString(); val t = time()
-        if (frame.temporalScope == MemoryTemporalScope.CURRENT) semantic.replaceAll { if (it.semanticKey == AiriText.semanticKey(key) && it.active) it.copy(active = false, supersededById = id) else it }
-        semantic += SemanticMemoryEntity(id, AiriText.semanticKey(key), frame.category?.name ?: "PREFERENCE", fact, AiriText.normalize(fact), frame.resolvedEntityId, frame.temporalScope.name, frame.confidence, 6, true, "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, createdAt = t, updatedAt = t, lastAccessed = t)
+        val fact = frame.fact ?: return null; val key = frame.stableKey ?: return null; val normalizedKey = AiriText.semanticKey(key); val t = time()
+        semantic.firstOrNull { it.active && it.semanticKey == normalizedKey && it.normalizedStatement == AiriText.normalize(fact) }?.let { current ->
+            semantic.replaceAll { if (it.memoryId == current.memoryId) it.copy(confidence = (it.confidence + .05).coerceAtMost(1.0), updatedAt = t) else it }
+            return current.memoryId
+        }
+        val id = UUID.randomUUID().toString()
+        if (frame.temporalScope == MemoryTemporalScope.CURRENT && frame.intent in setOf(MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT)) semantic.replaceAll { if (it.semanticKey == normalizedKey && it.active) it.copy(active = false, supersededById = id, invalidAt = t) else it }
+        semantic += SemanticMemoryEntity(id, normalizedKey, frame.category?.name ?: "PREFERENCE", fact, AiriText.normalize(fact), frame.resolvedEntityId, frame.temporalScope.name, frame.confidence, 6, true, "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, createdAt = t, updatedAt = t, lastAccessed = t, conversationId = evidence.sessionId)
         return id
     }
     override suspend fun addEpisode(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence, participantIds: List<String>): String? {
         val p = frame.episode ?: return null; val id = UUID.randomUUID().toString(); val t = time()
         episodes += EpisodicMemoryEntity(id, p.eventType, p.summary, AiriText.normalize(p.summary), frame.temporalScope.name, t, frame.confidence, 5, "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, t, t) to participantIds
         return id
+    }
+    override suspend fun invalidateSemantic(key: String): Boolean {
+        var changed = false; val t = time(); val normalized = AiriText.semanticKey(key)
+        semantic.replaceAll { if (it.semanticKey == normalized && it.active) { changed = true; it.copy(active = false, invalidAt = t, updatedAt = t) } else it }
+        return changed
     }
     override suspend fun addGoal(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence): String? {
         val g = frame.goal ?: return null; val key = AiriText.semanticKey(frame.stableKey ?: g.title); val t = time(); val id = goals[key]?.goalId ?: UUID.randomUUID().toString()
@@ -99,10 +111,45 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         "BEHAVIOR" -> behavior.remove(card.stableKey) != null
         else -> { var changed = false; semantic.replaceAll { if (it.memoryId == card.id && it.active) { changed = true; it.copy(active = false, deletedAt = time()) } else it }; changed }
     }
-    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear() }
+    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear() }
     override suspend fun appendConversation(row: ConversationTruthEntity): Boolean { if (conversation.any { it.messageId == row.messageId }) return false; conversation += row; return true }
     override suspend fun promptProjection(sessionId: String, limit: Int) = conversation.filter { it.sessionId == sessionId }.takeLast(limit)
     override suspend fun conversationCount(sessionId: String) = conversation.count { it.sessionId == sessionId }
+    override suspend fun lastConversationSequence(sessionId: String) = conversation.filter { it.sessionId == sessionId }.maxOfOrNull { it.sequence }
+    override suspend fun segmentationState(conversationId: String) = segmentation[conversationId]
+    override suspend fun saveSegmentationState(row: SegmentationStateEntity) { segmentation[row.conversationId] = row }
+    override suspend fun conversationRange(conversationId: String, start: Long, end: Long) = conversation
+        .filter { it.sessionId == conversationId && it.sequence in start..end }.sortedBy { it.sequence }
+    override suspend fun saveEpisodeSpan(row: EpisodeSpanEntity): Boolean {
+        if (spans.any { it.spanId == row.spanId }) return false; spans += row; return true
+    }
+    override suspend fun episodeSpans(conversationId: String) = spans.filter { it.conversationId == conversationId }
+    override suspend fun ensureEpisodeForSpan(span: EpisodeSpanEntity, messages: List<ConversationTruthEntity>): String? {
+        if (messages.isEmpty() || span.classification != SegmentClassification.INFORMATIVE.name) return null
+        val id = "episode:${span.conversationId}:${span.startSequence}:${span.endSequence}"
+        if (episodes.any { it.first.episodeId == id }) return id
+        val t = time(); val content = messages.joinToString("\n") { "${it.role}: ${it.content}" }
+        episodes += EpisodicMemoryEntity(id, "conversation_segment", messages.first().content.take(96),
+            AiriText.normalize(content), MemoryTemporalScope.HISTORICAL.name, t, 1.0, 4,
+            "CONVERSATION_SEGMENTATION", messages.last().turnId, messages.last().utteranceId, t, t,
+            conversationId = span.conversationId, startSequence = span.startSequence, endSequence = span.endSequence,
+            title = messages.first().content.take(96), content = content, classification = span.classification) to emptyList()
+        return id
+    }
+    override suspend fun markEpisodeConsolidated(id: String, at: Long): Boolean {
+        var changed = false; episodes.replaceAll { pair ->
+            if (pair.first.episodeId == id && pair.first.consolidatedAt == null) { changed = true; pair.first.copy(consolidatedAt = at) to pair.second } else pair
+        }; return changed
+    }
+    override suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int {
+        var changed = 0; episodes.replaceAll { pair ->
+            val rating = ratings[pair.first.episodeId]
+            if (rating != null && !pair.first.isFlashbulb) {
+                val next = AiriFsrs.review(FsrsState(pair.first.stability, pair.first.difficulty, pair.first.lastReviewedAt), rating, reviewedAt)
+                if (next.lastReviewedAt == reviewedAt) { changed++; pair.first.copy(stability = next.stability, difficulty = next.difficulty, lastReviewedAt = reviewedAt) to pair.second } else pair
+            } else pair
+        }; return changed
+    }
     override suspend fun behavior(key: String) = behavior[key]
     override suspend fun upsertBehavior(row: BehaviorObservationEntity) { behavior[row.stableKey] = row }
     override suspend fun behaviorByKind(kind: String, limit: Int) = behavior.values.filter { it.kind == kind }.sortedByDescending { it.observationCount }.take(limit)
