@@ -34,15 +34,31 @@ jobs:
           from pathlib import Path
           p = Path('app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt')
           s = p.read_text()
-          old = "For an explicit visible-target request, call perform_screen_action so Android accessibility selects and verifies the existing UI target; never invent coordinates or claim success before verification."
-          new = "For an explicit visible-target request, call perform_screen_action. Android always tries Accessibility first. Only if the newest user-authorized action screenshot shows one uniquely clear target that Accessibility cannot represent may you include normalized visual coordinates for that target. Never guess coordinates and never use coordinate fallback for ambiguous, payment, permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. Android must revalidate the foreground and verify the result before success is reported."
-          if old not in s:
+
+          old_prompt = "For an explicit visible-target request, call perform_screen_action so Android accessibility selects and verifies the existing UI target; never invent coordinates or claim success before verification."
+          new_prompt = "For an explicit visible-target request, call perform_screen_action. Android always tries Accessibility first. Only if the newest user-authorized action screenshot shows one uniquely clear target that Accessibility cannot represent may you include normalized visual coordinates for that target. Never guess coordinates and never use coordinate fallback for ambiguous, payment, permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. Android must revalidate the foreground and verify the result before success is reported."
+          if old_prompt not in s:
               raise SystemExit('screen action system-prompt contract not found')
-          p.write_text(s.replace(old, new, 1))
+          s = s.replace(old_prompt, new_prompt, 1)
+
+          # Kotlin cannot smart-cast the nullable visual turn outside the Boolean
+          # expression that proved ownership. Keep the fallback null-safe instead of
+          # forcing !!: a disappeared/replaced visual turn must never authorize a tap.
+          old_log = '"vision_coordinate_fallback turnId=$actionTurnId visualTurnId=${activeVisualTurn.id} " +'
+          new_log = '"vision_coordinate_fallback turnId=$actionTurnId visualTurnId=${activeVisualTurn?.id.orEmpty()} " +'
+          if old_log not in s:
+              raise SystemExit('nullable visual-turn log site not found')
+          s = s.replace(old_log, new_log, 1)
+
+          old_finish = 'activeVisualTurn.let { fastVisualTurns.finish(it.id) }'
+          new_finish = 'activeVisualTurn?.let { fastVisualTurns.finish(it.id) }'
+          if old_finish not in s:
+              raise SystemExit('nullable visual-turn finish site not found')
+          s = s.replace(old_finish, new_finish, 1)
+
+          p.write_text(s)
           PY
           git diff --check
-          echo '--- patched MyraVoiceService 1788-1832 ---'
-          nl -ba app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt | sed -n '1788,1832p'
       - name: Unit tests and debug APK
         shell: bash
         run: |
