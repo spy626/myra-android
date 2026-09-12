@@ -1,5 +1,6 @@
 package com.myra.assistant.ui.settings
 
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -16,18 +17,18 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.myra.assistant.data.memory.MemoryBrainCoordinator
 import com.myra.assistant.data.memory.MemoryCategory
 import com.myra.assistant.data.memory.MemoryCoreManualActions
 import com.myra.assistant.data.memory.MemoryEntity
 import com.myra.assistant.data.memory.MemoryPrivacyPreferences
+import com.myra.assistant.data.memory.MemoryBrainCoordinator
 import com.myra.assistant.data.memory.MemoryWriteResult
 import com.myra.assistant.databinding.ActivityMemorySettingsBinding
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
-import kotlinx.coroutines.launch
 
-/** User-controlled view of the same JARVIS Room owner used by LYRA voice. */
+/** User-controlled view of the same Room memory store used by LYRA voice. */
 class MemorySettingsActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMemorySettingsBinding
     private val memoryOwner by lazy { MemoryBrainCoordinator.get(this) }
@@ -72,28 +73,38 @@ class MemorySettingsActivity : AppCompatActivity() {
     }
 
     private fun setupFilters() {
-        listOf("ALL", "PEOPLE", "RELATIONSHIPS", "PREFERENCES", "PROJECTS", "GOALS", "IDEAS").forEach { filter ->
+        listOf(
+            "ALL", "PEOPLE", "RELATIONSHIPS", "PREFERENCES", "PROJECTS", "GOALS",
+            "HABITS", "EPISODES", "IDEAS", "WORKFLOWS", "SOLUTIONS", "BEHAVIOR"
+        ).forEach { filter ->
             binding.memoryFilters.addView(Button(this).apply {
                 text = filter
                 textSize = 10f
-                setOnClickListener {
-                    activeFilter = filter
-                    refreshMemories()
-                }
+                setOnClickListener { activeFilter = filter; refreshMemories() }
             })
         }
     }
 
     private fun matchesFilter(memory: MemoryEntity): Boolean = when (activeFilter) {
         "ALL" -> true
-        "PEOPLE", "RELATIONSHIPS" -> memory.kind == "RELATIONSHIP"
+        "PEOPLE" -> memory.category == MemoryCategory.PERSON.name
+        "RELATIONSHIPS" -> memory.kind == "RELATIONSHIP"
         "PREFERENCES" -> memory.category in setOf(MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name)
         "PROJECTS" -> memory.category == MemoryCategory.PROJECT.name
         "GOALS" -> memory.category == MemoryCategory.GOAL.name
+        "HABITS" -> memory.category == MemoryCategory.HABIT.name
+        "EPISODES" -> memory.kind == "EPISODE"
         "IDEAS" -> memory.category == MemoryCategory.IDEA.name
-        else -> true
+        "WORKFLOWS" -> memory.category == MemoryCategory.WORKFLOW.name
+        "SOLUTIONS" -> memory.category == MemoryCategory.SOLUTION.name
+        "BEHAVIOR" -> memory.kind == "BEHAVIOR"
+        else -> memory.category == activeFilter
     }
 
+    /**
+     * Compact Memory Core row: left category icon box + category/fact/recalled content.
+     * It follows LYRA's existing dark/green visual language and does not copy reference colors.
+     */
     private fun memoryCard(memory: MemoryEntity): View {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -129,7 +140,7 @@ class MemorySettingsActivity : AppCompatActivity() {
             }
         }
         content.addView(TextView(this).apply {
-            text = if (memory.kind == "RELATIONSHIP") "RELATIONSHIP" else memory.category.replace('_', ' ')
+            text = memory.category.replace('_', ' ')
             setTextColor(accent)
             textSize = 11f
         })
@@ -140,12 +151,9 @@ class MemorySettingsActivity : AppCompatActivity() {
             setPadding(0, dp(4), 0, 0)
         })
         content.addView(TextView(this).apply {
-            text = buildString {
-                append("Source: ")
-                val sourceChannel = memory.sourceKind?.takeIf { it.isNotBlank() } ?: memory.provenance
-                append(sourceChannel.replace('_', ' '))
-                if (memory.sourceTurnId > 0L) append(" · turn ").append(memory.sourceTurnId)
-            }
+            text = "Recalled: " + if (memory.lastRecalledAt > 0L) {
+                DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(memory.lastRecalledAt))
+            } else "Never"
             setTextColor(Color.rgb(119, 112, 119))
             textSize = 11f
             setPadding(0, dp(7), 0, 0)
@@ -161,36 +169,28 @@ class MemorySettingsActivity : AppCompatActivity() {
         MemoryCategory.PREFERENCE.name, MemoryCategory.COMMUNICATION_STYLE.name -> android.R.drawable.btn_star
         MemoryCategory.PROJECT.name, MemoryCategory.IDEA.name, MemoryCategory.WORKFLOW.name, MemoryCategory.SOLUTION.name -> android.R.drawable.ic_menu_agenda
         MemoryCategory.GOAL.name -> android.R.drawable.ic_menu_compass
+        MemoryCategory.HABIT.name -> android.R.drawable.ic_menu_recent_history
+        MemoryCategory.LIFE_EVENT.name -> android.R.drawable.ic_menu_mapmode
+        MemoryCategory.APP_USAGE.name -> android.R.drawable.ic_menu_manage
+        MemoryCategory.CONTENT_INTEREST.name, MemoryCategory.CURRENT_INTEREST.name -> android.R.drawable.ic_menu_search
         else -> com.myra.assistant.R.drawable.ic_lyra_sparkle
     }
 
     private fun showMemoryDetails(memory: MemoryEntity) {
-        val sourceChannel = memory.sourceKind?.takeIf { it.isNotBlank() } ?: memory.provenance
-        val sourceText = memory.sourceText?.takeIf { it.isNotBlank() } ?: "Not available for migrated legacy data"
-        val sourceSession = memory.sourceSessionId?.takeIf { it.isNotBlank() } ?: "Not available"
-        val sourceUtterance = memory.sourceUtteranceId?.takeIf { it.isNotBlank() } ?: "Not available"
         val details = buildString {
             append(memory.fact).append("\n\n")
-            append("Category: ").append(if (memory.kind == "RELATIONSHIP") "Relationship" else memory.category.replace('_', ' ')).append('\n')
-            append("Created: ").append(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(memory.createdAt))).append('\n')
-            append("Updated: ").append(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(memory.updatedAt))).append('\n')
-            append("Last recalled: ").append(
-                if (memory.lastRecalledAt > 0L) DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(memory.lastRecalledAt))
-                else "Never"
-            ).append("\n\n")
-            append("Source channel: ").append(sourceChannel.replace('_', ' ')).append('\n')
-            append("Original source: ").append(sourceText).append('\n')
-            append("Source session: ").append(sourceSession).append('\n')
-            append("Source turn: ").append(if (memory.sourceTurnId > 0L) memory.sourceTurnId else "Not available").append('\n')
-            append("Source utterance: ").append(sourceUtterance)
+            append("Category: ").append(memory.category.replace('_', ' ')).append('\n')
+            append("Created: ").append(DateFormat.getDateInstance().format(Date(memory.createdAt))).append('\n')
+            append("Updated: ").append(DateFormat.getDateInstance().format(Date(memory.updatedAt))).append('\n')
+            append("Recalled: ").append(if (memory.lastRecalledAt > 0) DateFormat.getDateInstance().format(Date(memory.lastRecalledAt)) else "Never").append('\n')
+            append("Source: ").append(memory.provenance.replace('_', ' '))
         }
-        val builder = AlertDialog.Builder(this)
-            .setTitle("Memory details")
-            .setMessage(details)
+        val builder = AlertDialog.Builder(this).setTitle("Memory details").setMessage(details)
             .setNegativeButton("Close", null)
             .setNeutralButton("Delete") { _, _ -> confirmDelete(memory) }
-        if (memory.kind == "RELATIONSHIP" && !memory.entityName.isNullOrBlank()) {
-            builder.setPositiveButton("Rename person") { _, _ -> showPersonRename(memory) }
+        builder.setPositiveButton("Edit") { _, _ ->
+            if (memory.category == MemoryCategory.PERSON.name) showPersonRename(memory)
+            else showMemoryEditor(memory)
         }
         builder.show()
     }
@@ -198,54 +198,45 @@ class MemorySettingsActivity : AppCompatActivity() {
     private fun showPersonRename(memory: MemoryEntity) {
         val oldName = memory.entityName
         if (oldName.isNullOrBlank()) {
-            Toast.makeText(this, "This relationship has no editable person name", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "This linked identity cannot be edited safely here", Toast.LENGTH_LONG).show()
             return
         }
-        val input = EditText(this).apply {
-            setText(oldName)
-            selectAll()
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Rename person")
-            .setMessage("The relationship stays the same; only this person's name changes.")
-            .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
-            .create()
+        val input = EditText(this).apply { setText(oldName); selectAll() }
+        val dialog = AlertDialog.Builder(this).setTitle("Rename person")
+            .setMessage("Linked memories stay attached to the same person.")
+            .setView(input).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 lifecycleScope.launch {
                     val renamed = memory.entityId?.let { memoryOwner.renameFromManualUi(it, input.text.toString()) } == true
-                    if (renamed) {
-                        dialog.dismiss()
-                        refreshMemories()
-                    } else {
-                        Toast.makeText(this@MemorySettingsActivity, "Rename was not verified", Toast.LENGTH_LONG).show()
-                    }
+                    if (renamed) { dialog.dismiss(); refreshMemories() }
+                    else Toast.makeText(this@MemorySettingsActivity, "Rename was not verified", Toast.LENGTH_LONG).show()
                 }
             }
         }
         dialog.show()
     }
 
-    private fun showMemoryEditor() {
-        // Relationship rows are learned from an explicit statement such as "Kareem is my friend".
-        // The generic manual editor is intentionally limited to fact-like categories so it cannot
-        // manufacture a relationship without a person/type contract.
-        val categories = listOf(
-            MemoryCategory.IDENTITY,
-            MemoryCategory.PREFERENCE,
-            MemoryCategory.PROJECT,
-            MemoryCategory.GOAL,
-            MemoryCategory.IDEA
-        )
+    private fun actionButton(label: String, click: () -> Unit) = Button(this).apply {
+        text = label
+        textSize = 11f
+        setTextColor(Color.WHITE)
+        backgroundTintList = ColorStateList.valueOf(Color.rgb(45, 72, 58))
+        layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(8) }
+        setOnClickListener { click() }
+    }
+
+    private fun showMemoryEditor(existing: MemoryEntity? = null) {
+        val categories = MemoryCategory.entries
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(22), dp(8), dp(22), 0)
         }
         val input = EditText(this).apply {
-            hint = "Example: I prefer short answers"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            hint = "Example: Zopy likes horror movies"
+            setText(existing?.fact.orEmpty())
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minLines = 2
             maxLines = 4
         }
@@ -253,15 +244,16 @@ class MemorySettingsActivity : AppCompatActivity() {
             adapter = ArrayAdapter(
                 this@MemorySettingsActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                categories.map { it.name.lowercase().replaceFirstChar(Char::uppercase) }
+                categories.map { it.name.lowercase().replaceFirstChar { char -> char.uppercase() } }
             )
-            setSelection(1)
+            val existingCategory = existing?.category?.let { runCatching { MemoryCategory.valueOf(it) }.getOrNull() }
+            setSelection(categories.indexOf(existingCategory ?: MemoryCategory.PREFERENCE).coerceAtLeast(0))
         }
         container.addView(input)
         container.addView(spinner)
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Add memory")
-            .setMessage("Passwords, OTPs, API keys and financial identifiers are never accepted as memory.")
+            .setTitle(if (existing == null) "Add memory" else "Edit memory")
+            .setMessage("Do not save passwords, OTPs or financial details.")
             .setView(container)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save", null)
@@ -271,14 +263,24 @@ class MemorySettingsActivity : AppCompatActivity() {
                 val fact = input.text.toString()
                 val category = categories[spinner.selectedItemPosition]
                 lifecycleScope.launch {
-                    when (val result = MemoryCoreManualActions.add(memoryOwner, fact, category)) {
+                    val result = if (existing == null) MemoryCoreManualActions.add(memoryOwner, fact, category)
+                    else com.myra.assistant.data.memory.MemoryWriteResult.Rejected("Delete and add the corrected structured memory.")
+                    when (result) {
                         is MemoryWriteResult.Saved -> {
                             dialog.dismiss()
                             Toast.makeText(this@MemorySettingsActivity, "Memory saved", Toast.LENGTH_SHORT).show()
                             refreshMemories()
                         }
-                        is MemoryWriteResult.Rejected -> Toast.makeText(this@MemorySettingsActivity, result.reason, Toast.LENGTH_LONG).show()
-                        MemoryWriteResult.NeedsPermission -> Toast.makeText(this@MemorySettingsActivity, "Memory could not be saved", Toast.LENGTH_LONG).show()
+                        is MemoryWriteResult.Rejected -> Toast.makeText(
+                            this@MemorySettingsActivity,
+                            result.reason,
+                            Toast.LENGTH_LONG
+                        ).show()
+                        MemoryWriteResult.NeedsPermission -> Toast.makeText(
+                            this@MemorySettingsActivity,
+                            "Memory could not be saved",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
                 }
             }
@@ -308,16 +310,14 @@ class MemorySettingsActivity : AppCompatActivity() {
     private fun confirmDeleteAll() {
         AlertDialog.Builder(this)
             .setTitle("Delete all memories?")
-            .setMessage("This removes saved JARVIS long-term memories. Chat and command history are separate.")
+            .setMessage("This permanently removes every saved LYRA memory from this phone.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete all") { _, _ ->
                 lifecycleScope.launch {
                     val cleared = memoryOwner.clearMemories()
-                    Toast.makeText(
-                        this@MemorySettingsActivity,
+                    Toast.makeText(this@MemorySettingsActivity,
                         if (cleared) "All memories deleted" else "Memory deletion was not verified",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                        Toast.LENGTH_SHORT).show()
                     refreshMemories()
                 }
             }
