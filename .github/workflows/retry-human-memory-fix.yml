@@ -1,0 +1,76 @@
+name: Retry human memory fix
+permissions:
+  contents: write
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/retry-human-memory-fix.yml']
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/myra-phase-1
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply patch and compile correction
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import textwrap, re
+          workflow = Path('.github/workflows/apply-human-memory-fix.yml').read_text()
+          block = workflow.split("python3 <<'PY'\n", 1)[1].split('\n          PY', 1)[0]
+          exec(compile(textwrap.dedent(block), '<human-memory-patch>', 'exec'))
+
+          p = Path('app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt')
+          text = p.read_text()
+          pattern = r'''        val explicitMemoryManagement = Regex\(\n.*?        \)\.containsMatchIn\(guardedText\)'''
+          replacement = '''        val explicitMemoryManagement = Regex(\n            """(?i)\\b(?:remember|yaad\\s+rakh|memory\\s+mein|save\\s+(?:this|it)|forget|bhool|delete\\s+memory|rename)\\b"""\n        ).containsMatchIn(guardedText)'''
+          text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit(f'explicit memory regex correction count={count}')
+          p.write_text(text)
+          PY
+      - name: Unit tests and APK
+        id: gradle
+        shell: bash
+        run: |
+          set +e
+          gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon > "$RUNNER_TEMP/memory-build.log" 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            tail -n 500 "$RUNNER_TEMP/memory-build.log" > .ci-memory-error-2.txt
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Commit diagnostics on failure
+        if: steps.gradle.outputs.failed == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .ci-memory-error-2.txt
+          git commit -m 'Capture human memory fix second compile error'
+          git push origin HEAD:agent/myra-phase-1
+          exit 1
+      - name: Commit verified production fix
+        if: steps.gradle.outputs.failed == 'false'
+        run: |
+          rm -f .github/workflows/apply-human-memory-fix.yml \
+                .github/workflows/diagnose-human-memory-fix.yml \
+                .github/workflows/retry-human-memory-fix.yml \
+                .ci-memory-error.txt .ci-memory-error-2.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Make memory context-aware entity-scoped and low-latency'
+          git push origin HEAD:agent/myra-phase-1
