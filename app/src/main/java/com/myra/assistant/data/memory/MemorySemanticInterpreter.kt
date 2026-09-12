@@ -5,8 +5,9 @@ import org.json.JSONObject
 
 enum class MemorySemanticIntent {
     ADD_FACT, ADD_RELATIONSHIP, REMOVE_RELATIONSHIP, REPLACE_RELATIONSHIP, ADD_LINKED_FACT,
-    UPDATE_FACT, SUPERSEDE_FACT, RENAME_ENTITY, DELETE_ENTITY, RECALL,
-    ADD_EPISODE, ADD_GOAL, TRANSIENT_CONTEXT, CLARIFY, NONE
+    UPDATE_FACT, SUPERSEDE_FACT, INVALIDATE_FACT, RENAME_ENTITY, DELETE_ENTITY, RECALL,
+    ADD_EPISODE, ADD_GOAL, UPDATE_GOAL, ADD_IDEA, ADD_PROJECT, ADD_SOLUTION, ADD_WORKFLOW,
+    TRANSIENT_CONTEXT, CLARIFY, NONE
 }
 
 enum class PersonRelationship(val key: String) {
@@ -14,6 +15,7 @@ enum class PersonRelationship(val key: String) {
 }
 
 enum class MemoryTemporalScope { CURRENT, HISTORICAL, TEMPORARY, RECURRING, UNSPECIFIED }
+enum class MemoryAssertionMode { USER_ASSERTED, HYPOTHETICAL, REPORTED_SPEECH, QUESTION }
 
 /** Structured meaning proposed by the existing Gemini Live session; never Room authority. */
 data class MemorySemanticFrame(
@@ -34,7 +36,9 @@ data class MemorySemanticFrame(
     val criticalLiterals: List<String> = emptyList(),
     val episode: EpisodicMemoryPayload? = null,
     val goal: GoalMemoryPayload? = null,
-    val resolvedEntityId: String? = null
+    val resolvedEntityId: String? = null,
+    val sourceEpisodeIds: List<String> = emptyList(),
+    val assertionMode: MemoryAssertionMode = MemoryAssertionMode.USER_ASSERTED
 )
 
 /** One completed turn may carry a bounded compound set of independent propositions. */
@@ -73,6 +77,7 @@ object GeminiMemoryOperationParser {
             val replacementRelationship = value.enumValue<PersonRelationship>("replacement_relationship")
             val temporal = value.enumValue<MemoryTemporalScope>("temporal_scope") ?: MemoryTemporalScope.UNSPECIFIED
             val category = value.enumValue<MemoryCategory>("category")
+            val assertionMode = value.enumValue<MemoryAssertionMode>("assertion_mode") ?: MemoryAssertionMode.USER_ASSERTED
             val critical = value.stringArray("critical_literals", 8)
             val participants = value.stringArray("participants", 6)
             val fact = value.optString("fact").trim().takeIf(String::isNotEmpty)
@@ -94,10 +99,12 @@ object GeminiMemoryOperationParser {
                     value.optString("event_type"), fact.orEmpty(), participants,
                     value.optDouble("importance", .5).coerceIn(0.0, 1.0)
                 ) else null,
-                goal = if (intent == MemorySemanticIntent.ADD_GOAL) GoalMemoryPayload(
+                goal = if (intent in setOf(MemorySemanticIntent.ADD_GOAL, MemorySemanticIntent.UPDATE_GOAL)) GoalMemoryPayload(
                     value.optString("goal_title"), fact, value.optString("goal_status", "ACTIVE"),
                     value.optInt("priority", 0).coerceIn(0, 5), value.optInt("progress", 0).coerceIn(0, 100)
-                ) else null
+                ) else null,
+                sourceEpisodeIds = value.stringArray("source_episode_ids", 8),
+                assertionMode = assertionMode
             )
         }
     }
