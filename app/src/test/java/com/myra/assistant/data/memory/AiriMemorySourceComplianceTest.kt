@@ -42,6 +42,8 @@ class AiriMemorySourceComplianceTest {
         assertTrue(lane.contains("owner.recall"))
         assertFalse(lane.contains("GeminiLiveClient"))
         assertFalse(lane.contains("query_user_memory"))
+        val gemini = File(root, "ai/GeminiLiveClient.kt").readText()
+        assertFalse(gemini.contains(".put(memoryQueryDeclaration())"))
         assertTrue(service.contains("fastMemoryLane.recall(finalUtterance.memoryEvidence)"))
         assertTrue(service.contains("networkCall=false"))
     }

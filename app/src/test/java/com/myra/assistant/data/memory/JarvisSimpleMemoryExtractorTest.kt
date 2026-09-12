@@ -27,6 +27,14 @@ class JarvisSimpleMemoryExtractorTest {
         assertEquals("LIKE|short answers", row.value)
     }
 
+
+
+    @Test fun normalizesCommonAsrNoiseInCommunicationPreference() {
+        val row = JarvisSimpleMemoryExtractor.extract("Mujhe sorta ansara pasanda hai.").single()
+        assertEquals(JarvisMemoryType.PREFERENCE, row.type)
+        assertEquals("LIKE|short answers", row.value)
+    }
+
     @Test fun questionsNeverBecomeNewMemory() {
         assertTrue(JarvisSimpleMemoryExtractor.extract("Mera naam kya hai?").isEmpty())
         assertTrue(JarvisSimpleMemoryExtractor.extract("Who is my best friend?").isEmpty())

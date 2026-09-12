@@ -14,7 +14,7 @@ data class LocalRecallExecution(val intent: LocalRecallIntent, val outcome: Memo
 object LocalMemoryRecallRouter {
     private val question = setOf(
         "who", "what", "which", "where", "when", "how", "tell", "show", "remember",
-        "kaun", "kya", "kis", "kab", "kaha", "kahan", "kahaan", "kaise", "batao", "yaad",
+        "kaun", "kya", "kis", "kab", "kaha", "kahan", "kahaan", "kaise", "kaisa", "kaisi", "batao", "yaad",
         "कौन", "क्या", "किस", "कब", "कहाँ", "कैसे", "बताओ", "याद"
     )
     private val possessive = setOf("my", "mine", "i", "me", "mera", "mere", "meri", "mujhe", "main", "maine", "मेरा", "मेरे", "मेरी", "मुझे", "मैं", "मैंने")
@@ -29,7 +29,10 @@ object LocalMemoryRecallRouter {
         "saath", "saat", "where", "kaha", "kahan", "kahaan", "घटना", "किया", "खेला", "कब", "कहाँ"
     )
     private val transaction = setOf("saved", "save", "updated", "update", "deleted", "delete", "failed", "succeeded", "transaction", "operation", "सहेजा", "बदला", "हटाया")
-    private val memory = setOf("memory", "memories", "remember", "yaad", "मेमोरी", "याद")
+    private val memory = setOf(
+        "memory", "memories", "remember", "yaad", "know", "knows", "known",
+        "jaante", "jante", "jaanta", "janta", "malum", "maalum", "मेमोरी", "याद"
+    )
     private val identity = setOf("name", "naam", "नाम")
     private val mutation = setOf("save", "add", "change", "update", "delete", "remove", "forget", "rename", "rakh", "jodo", "badlo", "hata", "bhool", "सहेज", "जोड़", "बदल", "हटा", "भूल")
 

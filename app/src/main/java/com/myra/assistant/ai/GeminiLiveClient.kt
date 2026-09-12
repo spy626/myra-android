@@ -141,7 +141,7 @@ class GeminiLiveClient(
                 .put("temperature", 0.9))
             .put("tools", JSONArray().put(JSONObject().put(
                 "functionDeclarations",
-                JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration()).put(memoryQueryDeclaration())
+                JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration())
                     .put(screenActionDeclaration()).put(screenMemoryProposalDeclaration())
             )))
             .put("realtimeInputConfig", JSONObject()

@@ -239,21 +239,8 @@ object JarvisSimpleMemoryExtractor {
         return firstFrom(text, friendPatterns)?.cleanName()?.let { it to "FRIEND" }
     }
 
-    private fun preference(text: String): Pair<Boolean, String>? {
-        val positive = listOf(
-            Regex("(?i)\\bi (?:like|love|prefer)\\s+(.+?)(?:[.!]|$)"),
-            Regex("(?i)\\bmujhe\\s+(.+?)\\s+pasand (?:hai|hain)(?:[.!]|$)"),
-            Regex("\\bमुझे\\s+(.+?)\\s+पसंद (?:है|हैं)(?:[।.!]|$)")
-        )
-        firstFrom(text, positive)?.let { return true to it }
-        val negative = listOf(
-            Regex("(?i)\\bi (?:dislike|hate|do not like|don't like)\\s+(.+?)(?:[.!]|$)"),
-            Regex("(?i)\\bmujhe\\s+(.+?)\\s+pasand nahi (?:hai|hain)(?:[.!]|$)"),
-            Regex("\\bमुझे\\s+(.+?)\\s+पसंद नहीं (?:है|हैं)(?:[।.!]|$)")
-        )
-        firstFrom(text, negative)?.let { return false to it }
-        return null
-    }
+    private fun preference(text: String): Pair<Boolean, String>? =
+        JarvisMemoryCanonicalizer.extractPreference(text)
 
     private fun explicitNote(text: String): String? = firstFrom(
         text,
@@ -303,6 +290,268 @@ object JarvisSimpleMemoryExtractor {
         .digest(normalize(value).toByteArray()).take(6).joinToString("") { "%02x".format(it) }
 }
 
+
+internal object JarvisMemoryCanonicalizer {
+    private val styleWords = listOf("short", "long", "detailed", "concise", "brief", "simple")
+    private val answerWords = listOf("answer", "answers", "reply", "replies", "jawab")
+    private val episodeStopWords = setOf(
+        "i", "me", "my", "main", "maine", "mera", "meri", "mere",
+        "ke", "k", "ki", "ka", "ko", "tha", "thi", "the", "and", "aur",
+        "with", "in", "to", "par", "pe", "hai", "hain", "was", "were"
+    )
+
+    fun canonicalPreference(raw: String): String {
+        val clean = raw.trim().trim(' ', '.', ',', '!', '?', '।')
+            .replace(Regex("\\s+"), " ").take(240)
+        if (clean.isBlank()) return clean
+        val tokens = normalize(clean).split(' ').filter(String::isNotBlank)
+        if (tokens.isEmpty()) return clean
+
+        val answerIndex = tokens.indexOfFirst { token ->
+            answerWords.any { target -> fuzzyToken(token, target, maxDistance = 1) }
+        }
+        if (answerIndex >= 0) {
+            val style = tokens.take(answerIndex).asReversed().firstNotNullOfOrNull { token ->
+                styleWords.firstOrNull { target -> fuzzyToken(token, target, maxDistance = 1) }
+            }
+            if (style != null) return "$style answers"
+        }
+        return clean
+    }
+
+    fun extractPreference(text: String): Pair<Boolean, String>? {
+        val clean = text.trim().replace(Regex("\\s+"), " ")
+        val positive = listOf(
+            Regex("(?i)\\bi (?:like|love|prefer)\\s+(.+?)(?:[.!]|$)"),
+            Regex("(?i)\\bmujhe\\s+(.+?)\\s+pasand(?:a|h)?\\s+(?:hai|hain)(?:[.!]|$)"),
+            Regex("\\bमुझे\\s+(.+?)\\s+पसंद\\s+(?:है|हैं)(?:[।.!]|$)")
+        )
+        positive.firstNotNullOfOrNull { it.find(clean)?.groupValues?.getOrNull(1) }?.let {
+            return true to canonicalPreference(it)
+        }
+        val negative = listOf(
+            Regex("(?i)\\bi (?:dislike|hate|do not like|don't like)\\s+(.+?)(?:[.!]|$)"),
+            Regex("(?i)\\bmujhe\\s+(.+?)\\s+pasand(?:a|h)?\\s+nahi\\s+(?:hai|hain)(?:[.!]|$)"),
+            Regex("\\bमुझे\\s+(.+?)\\s+पसंद नहीं\\s+(?:है|हैं)(?:[।.!]|$)")
+        )
+        negative.firstNotNullOfOrNull { it.find(clean)?.groupValues?.getOrNull(1) }?.let {
+            return false to canonicalPreference(it)
+        }
+        return null
+    }
+
+    fun personEquivalent(left: String, right: String): Boolean {
+        val a = personPhonetic(left)
+        val b = personPhonetic(right)
+        if (a.isBlank() || b.isBlank()) return false
+        if (a == b) return true
+        if (a.first() != b.first()) return false
+        return editDistance(a, b) <= 1
+    }
+
+    fun personSignature(name: String): String = personPhonetic(name)
+
+    fun episodesSimilar(left: String, right: String): Boolean {
+        val a = episodeTokens(left)
+        val b = episodeTokens(right)
+        if (a.size < 3 || b.size < 3) return false
+        val shared = a.intersect(b).size
+        if (shared < 3) return false
+        val union = a.union(b).size.coerceAtLeast(1)
+        val jaccard = shared.toDouble() / union.toDouble()
+        val containment = shared.toDouble() / minOf(a.size, b.size).toDouble()
+        return jaccard >= 0.65 || (shared >= 4 && containment >= 0.80)
+    }
+
+    fun preferredText(left: String, right: String): String {
+        val a = left.trim().replace(Regex("\\s+"), " ")
+        val b = right.trim().replace(Regex("\\s+"), " ")
+        val aScore = textQualityScore(a)
+        val bScore = textQualityScore(b)
+        return when {
+            bScore > aScore -> b
+            aScore > bScore -> a
+            b.length > a.length -> b
+            else -> a
+        }
+    }
+
+
+    fun canonicalizeRows(rows: List<JarvisStoredMemory>): List<JarvisStoredMemory> {
+        if (rows.isEmpty()) return rows
+
+        val relationships = rows.filter { it.memoryType == JarvisMemoryType.RELATIONSHIP }
+            .groupBy { personSignature(it.subject) }
+            .filterKeys(String::isNotBlank)
+            .values
+            .map { group ->
+                val canonical = group.minByOrNull { it.createdAt } ?: group.first()
+                val winner = group.maxByOrNull { it.updatedAt } ?: canonical
+                val relation = winner.value.substringBefore('|', "FRIEND")
+                val name = canonical.subject
+                winner.copy(
+                    memoryKey = "relationship:${keyToken(name)}",
+                    subject = name,
+                    value = "$relation|$name"
+                )
+            }
+
+        val preferences = rows.filter { it.memoryType == JarvisMemoryType.PREFERENCE }
+            .map { row ->
+                val parsed = when {
+                    row.value.startsWith("LIKE|") -> true to row.value.substringAfter('|')
+                    row.value.startsWith("DISLIKE|") -> false to row.value.substringAfter('|')
+                    else -> extractPreference(row.sourceText)
+                        ?: extractPreference(row.value.substringAfter("FACT|", row.value))
+                }
+                if (parsed == null) row else {
+                    val (liked, raw) = parsed
+                    val canonical = canonicalPreference(raw)
+                    row.copy(
+                        memoryKey = "preference:${keyToken(canonical)}",
+                        value = "${if (liked) "LIKE" else "DISLIKE"}|$canonical"
+                    )
+                }
+            }
+            .groupBy { it.memoryKey }
+            .values
+            .map { group -> group.maxByOrNull { it.updatedAt } ?: group.first() }
+
+        val episodeRows = rows.filter { it.memoryKey.startsWith("episode:") }
+            .sortedBy { it.createdAt }
+        val episodes = mutableListOf<JarvisStoredMemory>()
+        episodeRows.forEach { row ->
+            val rowText = row.value.substringAfter("FACT|", row.sourceText).ifBlank { row.sourceText }
+            val index = episodes.indexOfFirst {
+                val existingText = it.value.substringAfter("FACT|", it.sourceText).ifBlank { it.sourceText }
+                episodesSimilar(existingText, rowText)
+            }
+            if (index < 0) {
+                episodes += row
+            } else {
+                val existing = episodes[index]
+                val existingText = existing.value.substringAfter("FACT|", existing.sourceText).ifBlank { existing.sourceText }
+                val chosen = preferredText(existingText, rowText)
+                episodes[index] = existing.copy(
+                    value = "FACT|$chosen",
+                    sourceText = chosen,
+                    updatedAt = maxOf(existing.updatedAt, row.updatedAt)
+                )
+            }
+        }
+
+        val untouched = rows.filter {
+            it.memoryType != JarvisMemoryType.RELATIONSHIP &&
+                it.memoryType != JarvisMemoryType.PREFERENCE &&
+                !it.memoryKey.startsWith("episode:")
+        }
+
+        return (relationships + preferences + episodes + untouched)
+            .distinctBy { "${it.memoryType}:${it.memoryKey}:${it.subject}" }
+            .sortedWith(
+                compareByDescending<JarvisStoredMemory> { it.importance }
+                    .thenByDescending { it.updatedAt }
+            )
+    }
+
+    fun keyToken(value: String): String =
+        normalize(value).replace(' ', '_').take(80)
+
+    private fun episodeTokens(value: String): Set<String> = normalize(value)
+        .split(' ')
+        .filter(String::isNotBlank)
+        .map(::episodeToken)
+        .filter { it.length > 1 && it !in episodeStopWords }
+        .toSet()
+
+    private fun episodeToken(raw: String): String {
+        var token = raw
+        token = when (token) {
+            "satha", "sath", "saath", "saat" -> "sath"
+            "ghumane", "ghoomne", "gumne", "ghumne", "ghuma", "ghumi" -> "ghumne"
+            "gya", "gaya", "gaye", "gayi", "gyaata", "gayata", "gyata" -> "gaya"
+            else -> token
+        }
+        if (token.length >= 5 && token.endsWith("a") &&
+            token !in setOf("kerala", "manila", "goa")
+        ) token = token.dropLast(1)
+        return token
+    }
+
+    private fun personPhonetic(value: String): String {
+        var v = normalize(value).replace(" ", "")
+        if (v.isBlank()) return ""
+        v = v
+            .replace("ph", "f")
+            .replace("ee", "i")
+            .replace("ea", "i")
+            .replace("ie", "i")
+            .replace("oo", "u")
+            .replace("ou", "u")
+            .replace("q", "k")
+        if (v.length >= 5 && v.endsWith("a")) v = v.dropLast(1)
+        return v
+    }
+
+    private fun fuzzyToken(raw: String, target: String, maxDistance: Int): Boolean {
+        val a = tokenPhonetic(raw)
+        val b = tokenPhonetic(target)
+        if (a == b) return true
+        if (a.isBlank() || b.isBlank()) return false
+        return editDistance(a, b) <= maxDistance
+    }
+
+    private fun tokenPhonetic(value: String): String {
+        var v = normalize(value).replace(" ", "")
+        v = v
+            .replace("ph", "f")
+            .replace("ee", "i")
+            .replace("ea", "i")
+            .replace("ie", "i")
+            .replace("oo", "u")
+            .replace("ou", "u")
+            .replace("answers", "ansar")
+            .replace("answer", "ansar")
+            .replace("replies", "reply")
+        if (v.length >= 5 && v.endsWith("a")) v = v.dropLast(1)
+        return v
+    }
+
+    private fun textQualityScore(value: String): Int {
+        if (value.isBlank()) return 0
+        var score = value.length.coerceAtMost(120)
+        if (value.any(Char::isUpperCase)) score += 8
+        if (value.any { it == '.' || it == ',' }) score += 4
+        val normalized = normalize(value)
+        if (normalized.contains(" and ")) score += 3
+        if (normalized.contains(" tha") || normalized.contains(" thi") || normalized.contains(" the")) score += 2
+        return score
+    }
+
+    private fun editDistance(a: String, b: String): Int {
+        var previous = IntArray(b.length + 1) { it }
+        for (i in a.indices) {
+            val current = IntArray(b.length + 1)
+            current[0] = i + 1
+            for (j in b.indices) {
+                current[j + 1] = minOf(
+                    current[j] + 1,
+                    previous[j + 1] + 1,
+                    previous[j] + if (a[i] == b[j]) 0 else 1
+                )
+            }
+            previous = current
+        }
+        return previous[b.length]
+    }
+
+    private fun normalize(value: String): String =
+        Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+}
+
 private class JarvisSimpleMemoryStore(context: Context) {
     private val dao = JarvisDatabase.getInstance(context).jarvisDao()
 
@@ -344,21 +593,22 @@ private class JarvisSimpleMemoryStore(context: Context) {
         utteranceId: String,
         at: Long = System.currentTimeMillis()
     ): Long {
-        val old = dao.getMemoryByKey(candidate.key)
+        val (effectiveCandidate, effectiveSourceText) = canonicalizeForStore(candidate, sourceText)
+        val old = dao.getMemoryByKey(effectiveCandidate.key)
         val row = JarvisMemoryEntity(
             id = old?.id ?: 0L,
-            memoryKey = candidate.key,
-            memoryType = candidate.type.name,
-            subject = candidate.subject,
-            normalizedSubject = normalize(candidate.subject),
-            value = candidate.value,
-            sourceText = sourceText.trim().take(500),
+            memoryKey = effectiveCandidate.key,
+            memoryType = effectiveCandidate.type.name,
+            subject = effectiveCandidate.subject,
+            normalizedSubject = normalize(effectiveCandidate.subject),
+            value = effectiveCandidate.value,
+            sourceText = effectiveSourceText.trim().take(500),
             sourceKind = sourceKind,
             sourceSessionId = sessionId,
             sourceTurnId = turnId,
             sourceUtteranceId = utteranceId,
-            confidence = candidate.confidence,
-            importance = candidate.importance.coerceIn(1, 10),
+            confidence = effectiveCandidate.confidence,
+            importance = effectiveCandidate.importance.coerceIn(1, 10),
             active = true,
             createdAt = old?.createdAt ?: at,
             updatedAt = at,
@@ -366,6 +616,89 @@ private class JarvisSimpleMemoryStore(context: Context) {
             accessCount = old?.accessCount ?: 0
         )
         return dao.upsertMemory(row)
+    }
+
+    private fun canonicalizeForStore(
+        candidate: JarvisMemoryCandidate,
+        sourceText: String
+    ): Pair<JarvisMemoryCandidate, String> {
+        var effective = candidate
+        var effectiveSource = sourceText.trim().take(500)
+
+        if (effective.type == JarvisMemoryType.RELATIONSHIP) {
+            val canonical = dao.getActiveMemories(200)
+                .filter { it.memoryType == JarvisMemoryType.RELATIONSHIP.name }
+                .filter { JarvisMemoryCanonicalizer.personEquivalent(it.subject, effective.subject) }
+                .minByOrNull { it.createdAt }
+            if (canonical != null) {
+                val relation = effective.value.substringBefore('|', "FRIEND")
+                val canonicalName = canonical.subject
+                effective = effective.copy(
+                    key = "relationship:${JarvisMemoryCanonicalizer.keyToken(canonicalName)}",
+                    subject = canonicalName,
+                    value = "$relation|$canonicalName",
+                    fact = "$canonicalName is Zopy's ${relationshipLabel(relation)}"
+                )
+            }
+        }
+
+        if (effective.type == JarvisMemoryType.PREFERENCE) {
+            val parsed = preferenceFromCandidate(effective, effectiveSource)
+            if (parsed != null) {
+                val (liked, preference) = parsed
+                val canonical = JarvisMemoryCanonicalizer.canonicalPreference(preference)
+                if (canonical.isNotBlank()) {
+                    effective = effective.copy(
+                        key = "preference:${JarvisMemoryCanonicalizer.keyToken(canonical)}",
+                        value = "${if (liked) "LIKE" else "DISLIKE"}|$canonical",
+                        fact = if (liked) "Zopy likes $canonical" else "Zopy dislikes $canonical"
+                    )
+                }
+            }
+        }
+
+        if (effective.key.startsWith("episode:")) {
+            val duplicate = dao.getActiveMemories(200)
+                .filter { it.memoryKey.startsWith("episode:") }
+                .firstOrNull {
+                    JarvisMemoryCanonicalizer.episodesSimilar(episodeText(it), effectiveSource)
+                }
+            if (duplicate != null) {
+                val chosen = JarvisMemoryCanonicalizer.preferredText(episodeText(duplicate), effectiveSource)
+                effectiveSource = chosen
+                effective = effective.copy(
+                    key = duplicate.memoryKey,
+                    value = "FACT|$chosen",
+                    fact = chosen,
+                    subject = duplicate.subject
+                )
+            }
+        }
+
+        return effective to effectiveSource
+    }
+
+    private fun preferenceFromCandidate(
+        candidate: JarvisMemoryCandidate,
+        sourceText: String
+    ): Pair<Boolean, String>? {
+        val value = candidate.value
+        return when {
+            value.startsWith("LIKE|") -> true to value.substringAfter('|')
+            value.startsWith("DISLIKE|") -> false to value.substringAfter('|')
+            else -> JarvisMemoryCanonicalizer.extractPreference(sourceText)
+                ?: JarvisMemoryCanonicalizer.extractPreference(value.substringAfter("FACT|", value))
+        }
+    }
+
+
+    private fun episodeText(row: JarvisMemoryEntity): String =
+        row.value.substringAfter("FACT|", row.sourceText).ifBlank { row.sourceText }
+
+    private fun relationshipLabel(value: String): String = when (value.uppercase(Locale.ROOT)) {
+        "BEST_FRIEND" -> "best friend"
+        "GOOD_FRIEND" -> "good friend"
+        else -> "friend"
     }
 
     @Synchronized fun activeMemories(limit: Int = 100): List<JarvisStoredMemory> =
@@ -498,6 +831,8 @@ object JarvisSimpleMemoryRuntime {
     @Volatile private var latestAnchor: ConversationAnchor? = null
     @Volatile private var lastTypedNormalized: String = ""
     @Volatile private var lastTypedAt: Long = 0L
+    @Volatile private var durableSnapshot: List<JarvisStoredMemory> = emptyList()
+    @Volatile private var durableSnapshotLoaded: Boolean = false
     private val assistantBuffers = ConcurrentHashMap<Long, StringBuilder>()
     private val pendingMemories = ConcurrentHashMap<String, PendingMemory>()
     private val pendingSourceKinds = ConcurrentHashMap<String, String>()
@@ -514,8 +849,13 @@ object JarvisSimpleMemoryRuntime {
     @Synchronized fun initialize(context: Context) {
         if (store != null) return
         val app = context.applicationContext
-        store = JarvisSimpleMemoryStore(app)
+        val local = JarvisSimpleMemoryStore(app)
+        store = local
         preferences = app.getSharedPreferences("myra", Context.MODE_PRIVATE)
+
+        // Warm an immutable in-process snapshot off the voice thread. Common recalls
+        // then avoid a Room round-trip entirely; read-time canonicalization is non-destructive.
+        ioScope.launch { refreshSnapshot(local) }
     }
 
     fun markTypedUserText(text: String) {
@@ -545,6 +885,7 @@ object JarvisSimpleMemoryRuntime {
         // recall can already see the just-spoken fact instead of racing the Room write.
         latestAnchor = ConversationAnchor(sessionId, turnId, utteranceId, now)
         val candidates = JarvisSimpleMemoryExtractor.extract(clean)
+            .distinctBy { it.key }
         pendingSourceKinds[utteranceId] = inferredSource.name
         candidates.forEach { candidate ->
             pendingMemories[candidate.key] = PendingMemory(
@@ -576,6 +917,7 @@ object JarvisSimpleMemoryRuntime {
                 }
             }
             pendingSourceKinds.remove(utteranceId, inferredSource.name)
+            refreshSnapshot(local)
         }
         if (inferredSource == JarvisMemorySource.USER_TEXT) {
             lastTypedNormalized = ""
@@ -884,6 +1226,7 @@ object JarvisSimpleMemoryRuntime {
             importance = 7
         )
         val id = local.upsertMemory(candidate, clean, JarvisMemorySource.MANUAL_UI.name, "manual-ui", now, "manual-ui:$now", now)
+        refreshSnapshot(local)
         return MemoryWriteResult.Saved("jarvis:$id")
     }
 
@@ -905,12 +1248,29 @@ object JarvisSimpleMemoryRuntime {
             subject = clean,
             importance = existing.importance
         )
-        store?.upsertMemory(candidate, sourceText, JarvisMemorySource.MANUAL_UI.name, "manual-ui", System.currentTimeMillis(), "manual-rename:${System.currentTimeMillis()}")
+        val local = store ?: return false
+        local.upsertMemory(candidate, sourceText, JarvisMemorySource.MANUAL_UI.name, "manual-ui", System.currentTimeMillis(), "manual-rename:${System.currentTimeMillis()}")
+        refreshSnapshot(local)
         return true
     }
 
-    fun deleteMemory(id: Long): Boolean = store?.deactivateMemory(id) == true
-    fun clearLongTermMemories(): Boolean = store?.clearLongTermMemories() == true
+    fun deleteMemory(id: Long): Boolean {
+        val local = store ?: return false
+        val deleted = local.deactivateMemory(id)
+        if (deleted) refreshSnapshot(local)
+        return deleted
+    }
+
+    fun clearLongTermMemories(): Boolean {
+        val local = store ?: return false
+        val cleared = local.clearLongTermMemories()
+        if (cleared) {
+            durableSnapshot = emptyList()
+            durableSnapshotLoaded = true
+            pendingMemories.clear()
+        }
+        return cleared
+    }
     fun clearConversationHistory(): Boolean = store?.clearConversationHistory() == true
     fun clearCommandHistory(): Boolean = store?.clearCommandHistory() == true
 
@@ -970,6 +1330,7 @@ object JarvisSimpleMemoryRuntime {
                 evidence.utteranceId,
                 now
             )
+            refreshSnapshot(local)
             pendingMemories[candidate.key]?.takeIf { it.utteranceId == evidence.utteranceId }?.let {
                 pendingMemories.remove(candidate.key, it)
             }
@@ -1053,8 +1414,11 @@ object JarvisSimpleMemoryRuntime {
                 }
             }
 
-            MemorySemanticIntent.REMOVE_RELATIONSHIP ->
-                Mutation.Deleted(local.deactivateSubject(frame.person.orEmpty()))
+            MemorySemanticIntent.REMOVE_RELATIONSHIP -> {
+                val deleted = local.deactivateSubject(frame.person.orEmpty())
+                if (deleted) refreshSnapshot(local)
+                Mutation.Deleted(deleted)
+            }
 
             MemorySemanticIntent.RENAME_ENTITY -> {
                 val old = frame.person.orEmpty()
@@ -1077,8 +1441,11 @@ object JarvisSimpleMemoryRuntime {
                 )
             }
 
-            MemorySemanticIntent.DELETE_ENTITY ->
-                Mutation.Deleted(local.deactivateSubject(frame.person.orEmpty()))
+            MemorySemanticIntent.DELETE_ENTITY -> {
+                val deleted = local.deactivateSubject(frame.person.orEmpty())
+                if (deleted) refreshSnapshot(local)
+                Mutation.Deleted(deleted)
+            }
 
             MemorySemanticIntent.ADD_GOAL -> {
                 val deterministic = extracted.firstOrNull { it.type == JarvisMemoryType.GOAL }
@@ -1162,13 +1529,29 @@ object JarvisSimpleMemoryRuntime {
         val pending = pendingMemories.values
             .sortedByDescending { it.capturedAt }
             .map(::pendingAsStored)
-        val durable = store?.activeMemories(200).orEmpty()
+        val durable = if (durableSnapshotLoaded) {
+            durableSnapshot
+        } else {
+            val local = store
+            if (local == null) emptyList() else local.activeMemories(200).also {
+                durableSnapshot = it
+                durableSnapshotLoaded = true
+            }
+        }
 
         // Pending rows come first so an immediately repeated/corrected fact wins until
-        // its Room commit completes. De-duplication by memoryKey prevents double recall.
-        return (pending + durable)
-            .distinctBy { it.memoryKey }
-            .take(bounded)
+        // its Room commit completes. Canonicalization is read-only: it collapses ASR
+        // duplicates for recall/UI without destructively deleting historical rows.
+        return JarvisMemoryCanonicalizer.canonicalizeRows(
+            (pending + durable).distinctBy { it.memoryKey }
+        ).take(bounded)
+    }
+
+    private fun refreshSnapshot(local: JarvisSimpleMemoryStore) {
+        runCatching { local.activeMemories(200) }.onSuccess {
+            durableSnapshot = it
+            durableSnapshotLoaded = true
+        }
     }
 
     private fun pendingAsStored(pending: PendingMemory): JarvisStoredMemory {
@@ -1275,7 +1658,9 @@ object JarvisSimpleMemoryRuntime {
                 JarvisMemoryType.RELATIONSHIP -> MemoryCategory.PERSON.name
                 JarvisMemoryType.GOAL -> MemoryCategory.GOAL.name
                 JarvisMemoryType.PROJECT -> MemoryCategory.PROJECT.name
-                JarvisMemoryType.NOTE -> MemoryCategory.IDEA.name
+                JarvisMemoryType.NOTE ->
+                    if (row.memoryKey.startsWith("episode:")) MemoryCategory.LIFE_EVENT.name
+                    else MemoryCategory.IDEA.name
             },
             fact = row.fact(),
             confidence = row.confidence.toDouble(),
@@ -1287,7 +1672,11 @@ object JarvisSimpleMemoryRuntime {
             lastRecalledAt = row.lastAccessedAt,
             importance = row.importance,
             explicit = true,
-            kind = if (row.memoryType == JarvisMemoryType.RELATIONSHIP) "RELATIONSHIP" else "SEMANTIC",
+            kind = when {
+                row.memoryType == JarvisMemoryType.RELATIONSHIP -> "RELATIONSHIP"
+                row.memoryKey.startsWith("episode:") -> "EPISODIC"
+                else -> "SEMANTIC"
+            },
             sourceText = row.sourceText,
             sourceKind = row.sourceKind,
             sourceSessionId = row.sourceSessionId,
