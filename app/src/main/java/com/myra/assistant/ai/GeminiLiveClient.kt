@@ -188,7 +188,7 @@ class GeminiLiveClient(
                 .put("relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
                 .put("replacement_relationship", JSONObject().put("type", "STRING").put("description", "Required for REPLACE_RELATIONSHIP.").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
                 .put("temporal_scope", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("CURRENT", "HISTORICAL", "TEMPORARY", "RECURRING", "UNSPECIFIED"))))
-                .put("fact", JSONObject().put("type", "STRING").put("description", "Required for fact/linked-fact operations and as the episode summary."))
+                .put("fact", JSONObject().put("type", "STRING").put("description", "Meaning established by the current final user turn plus recent conversation context. Never invent missing details; leave ambiguous chatter as NONE/CLARIFY."))
                 .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "IDENTITY", "PREFERENCE", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
                     "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "IDEA", "SOLUTION"
@@ -208,7 +208,7 @@ class GeminiLiveClient(
             .put("required", JSONArray(listOf("intent", "source_span", "confidence")))
         return JSONObject()
             .put("name", "propose_user_memory")
-            .put("description", "Interpret the current completed user turn into bounded independent memory propositions. Required by intent: ADD/REMOVE_RELATIONSHIP need person+relationship; REPLACE_RELATIONSHIP needs person+replacement_relationship; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD_GOAL needs goal_title. Every operation needs source_span+confidence. source_span copies the shortest near-verbatim current-turn words; fact may be translated meaning. Put every critical literal in critical_literals. Questions are RECALL. Android validates structure, literals and safety and alone owns persistence.")
+            .put("description", "Interpret durable user meaning using the current completed turn together with the recent conversation. Do not propose long-term memory for acknowledgements, chitchat, commands, hypothetical/speculative statements, quoted/reported claims, or fragments whose referent is unclear. A short answer may become memory only when the immediately preceding context makes its subject and meaning unambiguous. Required by intent: ADD/REMOVE_RELATIONSHIP need person+relationship; REPLACE_RELATIONSHIP needs person+replacement_relationship; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD_GOAL needs goal_title. Every operation needs source_span+confidence. source_span copies the shortest near-verbatim current-turn words; fact may express the context-resolved meaning but must not add unsupported details. Put every critical literal in critical_literals. Questions are RECALL. Android performs final context/safety admission and alone owns persistence.")
             .put("parameters", JSONObject()
                 .put("type", "OBJECT")
                 .put("properties", JSONObject().put(
