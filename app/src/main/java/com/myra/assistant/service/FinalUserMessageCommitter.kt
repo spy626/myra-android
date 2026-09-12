@@ -1,7 +1,5 @@
 package com.myra.assistant.service
 
-import com.myra.assistant.data.memory.JarvisSimpleMemoryRuntime
-
 internal data class FinalUserMessage(
     val sessionId: String,
     val turnId: Long,
@@ -25,15 +23,6 @@ internal class FinalUserMessageCommitter {
         val messageId = "user:${message.utteranceId}"
         committed[message.utteranceId] = messageId
         while (committed.size > 100) committed.remove(committed.keys.first())
-
-        // JARVIS-style truth capture happens for every accepted final user turn, not only
-        // turns that Gemini classified as a memory command. The store is idempotent by utterance id.
-        JarvisSimpleMemoryRuntime.recordFinalUserMessage(
-            sessionId = message.sessionId,
-            turnId = message.turnId,
-            utteranceId = message.utteranceId,
-            text = message.display.ifBlank { message.raw }
-        )
         return UserMessageCommitResult.Accepted(messageId, message)
     }
 }
