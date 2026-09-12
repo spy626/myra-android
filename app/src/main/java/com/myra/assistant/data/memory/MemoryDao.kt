@@ -17,6 +17,13 @@ interface AiriMemoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertGoal(row: GoalMemoryEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertBehavior(row: BehaviorObservationEntity)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun appendConversation(row: ConversationTruthEntity): Long
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSegmentationState(row: SegmentationStateEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertEpisodeSpan(row: EpisodeSpanEntity): Long
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertSemanticProvenance(rows: List<SemanticProvenanceEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertSemanticFts(row: SemanticMemoryFtsEntity)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertEpisodeFts(row: EpisodicMemoryFtsEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun enqueueReview(row: PendingReviewEntity): Long
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun appendSparkTrace(row: SparkTraceEntity): Long
 
     @Query("SELECT * FROM airi_semantic_memory WHERE active = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT :limit")
     suspend fun activeSemantic(limit: Int): List<SemanticMemoryEntity>
@@ -26,8 +33,16 @@ interface AiriMemoryDao {
     suspend fun semanticById(id: String): SemanticMemoryEntity?
     @Query("SELECT * FROM airi_semantic_memory WHERE subjectEntityId = :entityId AND deletedAt IS NULL ORDER BY updatedAt DESC")
     suspend fun semanticByEntity(entityId: String): List<SemanticMemoryEntity>
+    @Query("SELECT * FROM airi_semantic_memory WHERE conversationId = :conversationId AND invalidAt IS NULL AND active = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT :limit")
+    suspend fun activeSemanticForConversation(conversationId: String, limit: Int): List<SemanticMemoryEntity>
+    @Query("SELECT s.* FROM airi_semantic_memory s JOIN airi_semantic_fts f ON s.memoryId = f.memoryId WHERE airi_semantic_fts MATCH :query AND s.active = 1 AND s.invalidAt IS NULL AND s.deletedAt IS NULL LIMIT :limit")
+    suspend fun searchSemanticFts(query: String, limit: Int): List<SemanticMemoryEntity>
     @Query("UPDATE airi_semantic_memory SET active = 0, supersededById = :replacementId, updatedAt = :at WHERE semanticKey = :key AND active = 1")
     suspend fun supersedeSemantic(key: String, replacementId: String, at: Long): Int
+    @Query("UPDATE airi_semantic_memory SET active = 0, invalidAt = :at, updatedAt = :at WHERE semanticKey = :key AND active = 1 AND invalidAt IS NULL")
+    suspend fun invalidateSemantic(key: String, at: Long): Int
+    @Query("UPDATE airi_semantic_memory SET confidence = MIN(1.0, confidence + :boost), updatedAt = :at WHERE memoryId = :id AND active = 1 AND invalidAt IS NULL")
+    suspend fun reinforceSemantic(id: String, boost: Double, at: Long): Int
     @Query("UPDATE airi_semantic_memory SET active = 0, deletedAt = :at, updatedAt = :at WHERE memoryId = :id AND deletedAt IS NULL")
     suspend fun deleteSemantic(id: String, at: Long): Int
     @Query("UPDATE airi_semantic_memory SET lastAccessed = :at, accessCount = accessCount + 1 WHERE memoryId IN (:ids)")
@@ -67,12 +82,20 @@ interface AiriMemoryDao {
 
     @Query("SELECT * FROM airi_episodes WHERE deletedAt IS NULL ORDER BY occurredAt DESC LIMIT :limit")
     suspend fun recentEpisodes(limit: Int): List<EpisodicMemoryEntity>
+    @Query("SELECT * FROM airi_episodes WHERE episodeId = :id AND deletedAt IS NULL LIMIT 1")
+    suspend fun episodeById(id: String): EpisodicMemoryEntity?
+    @Query("SELECT e.* FROM airi_episodes e JOIN airi_episode_fts f ON e.episodeId = f.episodeId WHERE airi_episode_fts MATCH :query AND e.deletedAt IS NULL LIMIT :limit")
+    suspend fun searchEpisodeFts(query: String, limit: Int): List<EpisodicMemoryEntity>
     @Query("SELECT e.* FROM airi_episodes e JOIN airi_episode_participants p ON e.episodeId = p.episodeId WHERE p.entityId = :entityId AND e.deletedAt IS NULL ORDER BY e.occurredAt DESC LIMIT :limit")
     suspend fun episodesFor(entityId: String, limit: Int): List<EpisodicMemoryEntity>
     @Query("UPDATE airi_episodes SET lastAccessed = :at, accessCount = accessCount + 1 WHERE episodeId IN (:ids)")
     suspend fun touchEpisodes(ids: List<String>, at: Long)
     @Query("UPDATE airi_episodes SET deletedAt = :at WHERE episodeId = :id AND deletedAt IS NULL")
     suspend fun deleteEpisode(id: String, at: Long): Int
+    @Query("UPDATE airi_episodes SET stability = :stability, difficulty = :difficulty, lastReviewedAt = :reviewedAt WHERE episodeId = :id AND deletedAt IS NULL")
+    suspend fun updateEpisodeReview(id: String, stability: Double, difficulty: Double, reviewedAt: Long): Int
+    @Query("UPDATE airi_episodes SET consolidatedAt = :at WHERE episodeId = :id AND consolidatedAt IS NULL")
+    suspend fun markEpisodeConsolidated(id: String, at: Long): Int
 
     @Query("SELECT * FROM airi_goals WHERE deletedAt IS NULL AND status NOT IN ('COMPLETED','ABANDONED') ORDER BY priority DESC, updatedAt DESC LIMIT :limit")
     suspend fun activeGoals(limit: Int): List<GoalMemoryEntity>
@@ -91,6 +114,16 @@ interface AiriMemoryDao {
     @Query("SELECT * FROM airi_conversation_truth WHERE sessionId = :sessionId ORDER BY sequence DESC LIMIT :limit")
     suspend fun recentConversation(sessionId: String, limit: Int): List<ConversationTruthEntity>
     @Query("SELECT COUNT(*) FROM airi_conversation_truth WHERE sessionId = :sessionId") suspend fun conversationCount(sessionId: String): Int
+    @Query("SELECT MAX(sequence) FROM airi_conversation_truth WHERE sessionId = :sessionId") suspend fun lastConversationSequence(sessionId: String): Long?
+    @Query("SELECT * FROM airi_conversation_truth WHERE sessionId = :sessionId AND sequence BETWEEN :start AND :end ORDER BY sequence")
+    suspend fun conversationRange(sessionId: String, start: Long, end: Long): List<ConversationTruthEntity>
+    @Query("SELECT * FROM airi_segmentation_state WHERE conversationId = :conversationId LIMIT 1")
+    suspend fun segmentationState(conversationId: String): SegmentationStateEntity?
+    @Query("SELECT * FROM airi_episode_spans WHERE conversationId = :conversationId ORDER BY startSequence")
+    suspend fun episodeSpans(conversationId: String): List<EpisodeSpanEntity>
+    @Query("SELECT * FROM airi_pending_review WHERE conversationId = :conversationId ORDER BY createdAt LIMIT :limit")
+    suspend fun pendingReviews(conversationId: String, limit: Int): List<PendingReviewEntity>
+    @Query("DELETE FROM airi_pending_review WHERE reviewId IN (:ids)") suspend fun deleteReviews(ids: List<String>): Int
 
     @Query("DELETE FROM airi_semantic_memory") suspend fun clearSemantic()
     @Query("DELETE FROM airi_people") suspend fun clearPeople()
@@ -98,8 +131,17 @@ interface AiriMemoryDao {
     @Query("DELETE FROM airi_goals") suspend fun clearGoals()
     @Query("DELETE FROM airi_behavior_patterns") suspend fun clearBehavior()
     @Query("DELETE FROM airi_conversation_truth") suspend fun clearConversation()
+    @Query("DELETE FROM airi_segmentation_state") suspend fun clearSegmentationState()
+    @Query("DELETE FROM airi_episode_spans") suspend fun clearEpisodeSpans()
+    @Query("DELETE FROM airi_pending_review") suspend fun clearReviewQueue()
+    @Query("DELETE FROM airi_semantic_provenance") suspend fun clearSemanticProvenance()
+    @Query("DELETE FROM airi_semantic_fts") suspend fun clearSemanticFts()
+    @Query("DELETE FROM airi_episode_fts") suspend fun clearEpisodeFts()
+    @Query("DELETE FROM airi_spark_trace") suspend fun clearSparkTrace()
 
     @Transaction suspend fun clearAllMemory() {
-        clearSemantic(); clearPeople(); clearEpisodes(); clearGoals(); clearBehavior(); clearConversation()
+        clearSemanticFts(); clearEpisodeFts(); clearSemanticProvenance(); clearReviewQueue(); clearEpisodeSpans()
+        clearSegmentationState(); clearSemantic(); clearPeople(); clearEpisodes(); clearGoals(); clearBehavior()
+        clearConversation(); clearSparkTrace()
     }
 }
