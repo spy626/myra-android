@@ -2,7 +2,6 @@ package com.myra.assistant.ai
 
 import android.util.Base64
 import android.util.Log
-import com.myra.assistant.data.memory.JarvisSimpleMemoryRuntime
 import com.myra.assistant.diagnostics.VoicePipelineLogger
 import okhttp3.*
 import okio.ByteString
@@ -141,7 +140,7 @@ class GeminiLiveClient(
                 .put("temperature", 0.9))
             .put("tools", JSONArray().put(JSONObject().put(
                 "functionDeclarations",
-                JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration())
+                JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration()).put(memoryQueryDeclaration())
                     .put(screenActionDeclaration()).put(screenMemoryProposalDeclaration())
             )))
             .put("realtimeInputConfig", JSONObject()
@@ -181,14 +180,16 @@ class GeminiLiveClient(
                 .put("intent", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "ADD_FACT", "ADD_RELATIONSHIP", "REMOVE_RELATIONSHIP", "REPLACE_RELATIONSHIP",
                     "ADD_LINKED_FACT", "UPDATE_FACT", "SUPERSEDE_FACT", "RENAME_ENTITY",
-                    "DELETE_ENTITY", "ADD_EPISODE", "ADD_GOAL", "RECALL", "TRANSIENT_CONTEXT", "CLARIFY", "NONE"
+                    "DELETE_ENTITY", "ADD_EPISODE", "ADD_GOAL", "UPDATE_GOAL", "ADD_IDEA", "ADD_PROJECT",
+                    "ADD_SOLUTION", "ADD_WORKFLOW", "INVALIDATE_FACT", "RECALL", "TRANSIENT_CONTEXT", "CLARIFY", "NONE"
                 ))))
                 .put("person", JSONObject().put("type", "STRING").put("description", "Required for every relationship, rename, entity delete, and linked-fact operation. Copy the current person literal."))
                 .put("replacement_person", JSONObject().put("type", "STRING").put("description", "Required for RENAME_ENTITY."))
                 .put("relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
                 .put("replacement_relationship", JSONObject().put("type", "STRING").put("description", "Required for REPLACE_RELATIONSHIP.").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
                 .put("temporal_scope", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("CURRENT", "HISTORICAL", "TEMPORARY", "RECURRING", "UNSPECIFIED"))))
-                .put("fact", JSONObject().put("type", "STRING").put("description", "Meaning established by the current final user turn plus recent conversation context. Never invent missing details; leave ambiguous chatter as NONE/CLARIFY."))
+                .put("assertion_mode", JSONObject().put("type", "STRING").put("description", "Required semantic attribution: do not attribute hypothetical or reported speech to the user.").put("enum", JSONArray(listOf("USER_ASSERTED", "HYPOTHETICAL", "REPORTED_SPEECH", "QUESTION"))))
+                .put("fact", JSONObject().put("type", "STRING").put("description", "Required for fact/linked-fact operations and as the episode summary."))
                 .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "IDENTITY", "PREFERENCE", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
                     "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "IDEA", "SOLUTION"
@@ -203,12 +204,13 @@ class GeminiLiveClient(
                 .put("goal_status", JSONObject().put("type", "STRING"))
                 .put("priority", JSONObject().put("type", "INTEGER"))
                 .put("progress", JSONObject().put("type", "INTEGER"))
+                .put("source_episode_ids", JSONObject().put("type", "ARRAY").put("maxItems", 8).put("items", JSONObject().put("type", "STRING")))
                 .put("evidence", JSONObject().put("type", "STRING"))
                 .put("confidence", JSONObject().put("type", "NUMBER")))
-            .put("required", JSONArray(listOf("intent", "source_span", "confidence")))
+            .put("required", JSONArray(listOf("intent", "source_span", "confidence", "assertion_mode")))
         return JSONObject()
             .put("name", "propose_user_memory")
-            .put("description", "Interpret durable user meaning using the current completed turn together with the recent conversation. Do not propose long-term memory for acknowledgements, chitchat, commands, hypothetical/speculative statements, quoted/reported claims, or fragments whose referent is unclear. A short answer may become memory only when the immediately preceding context makes its subject and meaning unambiguous. Required by intent: ADD/REMOVE_RELATIONSHIP need person+relationship; REPLACE_RELATIONSHIP needs person+replacement_relationship; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD_GOAL needs goal_title. Every operation needs source_span+confidence. source_span copies the shortest near-verbatim current-turn words; fact may express the context-resolved meaning but must not add unsupported details. Put every critical literal in critical_literals. Questions are RECALL. Android performs final context/safety admission and alone owns persistence.")
+            .put("description", "Interpret the current completed user turn into bounded independent AIRI semantic actions. Required by intent: ADD/REMOVE_RELATIONSHIP need person+relationship; REPLACE_RELATIONSHIP needs person+replacement_relationship; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD/UPDATE_GOAL need goal_title. Every operation needs source_span+confidence+assertion_mode. source_span copies the shortest near-verbatim current-turn words; normalized fact meaning may be translated. Use USER_ASSERTED only for the user's own asserted proposition; hypothetical and reported speech must be marked. Put every critical literal in critical_literals. Questions are RECALL. Android validates structure, literals, attribution, lifecycle and safety and alone owns persistence.")
             .put("parameters", JSONObject()
                 .put("type", "OBJECT")
                 .put("properties", JSONObject().put(
@@ -229,15 +231,11 @@ class GeminiLiveClient(
 
     private fun screenActionDeclaration() = JSONObject()
         .put("name", "perform_screen_action")
-        .put("description", "Select exactly one currently visible UI target for an explicit user-requested tap/click/press/open action. Prefer target_text/position/ordinal so Android Accessibility can act directly. Only when the newest supplied action screenshot clearly shows one target that is not represented by safe Accessibility elements, also provide visual_x and visual_y as the target center normalized from 0..1000 plus visual_confidence. Never provide coordinates for ambiguous, sensitive, permission, payment, install, account-delete, or system UI targets, and never claim success before Android verifies the result.")
+        .put("description", "Select one currently visible UI target using accessibility-backed screen elements. Use only when Screen Vision is active and the user explicitly asks to tap, click, press, or open a visible target. Never guess when multiple targets are equally plausible.")
         .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
-            .put("target_text", JSONObject().put("type", "STRING").put("description", "Best semantic label for the requested visible target."))
+            .put("target_text", JSONObject().put("type", "STRING"))
             .put("position", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("top", "bottom", "left", "right", "center", "middle", "unspecified"))))
             .put("ordinal", JSONObject().put("type", "INTEGER"))
-            .put("visual_x", JSONObject().put("type", "INTEGER").put("minimum", 0).put("maximum", 1000).put("description", "Optional last-resort target-center X coordinate normalized to 0..1000 for the newest supplied action screenshot."))
-            .put("visual_y", JSONObject().put("type", "INTEGER").put("minimum", 0).put("maximum", 1000).put("description", "Optional last-resort target-center Y coordinate normalized to 0..1000 for the newest supplied action screenshot."))
-            .put("visual_confidence", JSONObject().put("type", "NUMBER").put("minimum", 0.0).put("maximum", 1.0).put("description", "Confidence that visual_x/visual_y identify exactly the requested target."))
-            .put("visual_target_description", JSONObject().put("type", "STRING").put("description", "Short visual description of the exact target used for the coordinate fallback."))
         ))
 
     private fun screenMemoryProposalDeclaration() = JSONObject()
@@ -259,8 +257,7 @@ class GeminiLiveClient(
     fun sendText(text: String) {
         if (text.isBlank()) return
         val turn = JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text)))
-        val payload = JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString()
-        if (sendWhenReady(payload)) JarvisSimpleMemoryRuntime.markTypedUserText(text)
+        sendWhenReady(JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString())
     }
 
     fun sendImage(image: ByteArray, mimeType: String, prompt: String) {
@@ -402,28 +399,28 @@ class GeminiLiveClient(
                 }
             }
             content.optJSONObject("inputTranscription")?.let { transcription ->
-                val inputText = transcription.optString("text")
-                if (inputText.isNotEmpty()) {
+                val text = transcription.optString("text")
+                if (text.isNotEmpty()) {
                     inputTranscriptChunk += 1
                     if (TRANSCRIPT_DEBUG_LOGGING) {
+                        // Log the untouched API value before any assembler, formatter,
+                        // command parser, or UI code sees it. JSONObject.quote keeps
+                        // spaces and escaped characters visible in Logcat.
                         Log.d(
                             TRANSCRIPT_LOG_TAG,
                             "raw_input tMs=${System.nanoTime() / 1_000_000} " +
                                 "turn=$inputTranscriptTurn chunk=$inputTranscriptChunk " +
-                                "text=${JSONObject.quote(inputText)}"
+                                "text=${JSONObject.quote(text)}"
                         )
                     }
-                    onInputTranscript?.invoke(inputText, modelGenerationId.get())
+                    onInputTranscript?.invoke(text, modelGenerationId.get())
                     reschedulePendingTurnBoundary()
                 }
             }
-            content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let { outputText ->
-                val generationId = modelGenerationId.get()
-                JarvisSimpleMemoryRuntime.appendAssistantTranscript(generationId, outputText)
-                onOutputTranscript?.invoke(outputText, generationId)
+            content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let {
+                onOutputTranscript?.invoke(it, modelGenerationId.get())
             }
             if (content.optBoolean("interrupted")) {
-                JarvisSimpleMemoryRuntime.discardAssistantTranscript(modelGenerationId.get())
                 onInterrupted?.invoke(modelGenerationId.get())
             }
             if (content.optBoolean("generationComplete")) {
@@ -544,7 +541,6 @@ class GeminiLiveClient(
                     "turn=$inputTranscriptTurn chunks=$inputTranscriptChunk"
             )
         }
-        JarvisSimpleMemoryRuntime.completeAssistantTranscript(modelGenerationId.get())
         onTurnComplete?.invoke()
         inputTranscriptTurn += 1
         inputTranscriptChunk = 0
@@ -572,7 +568,6 @@ class GeminiLiveClient(
             pendingTurnFallback = null
             pendingTurnComplete = false
         }
-        JarvisSimpleMemoryRuntime.discardAssistantTranscript(modelGenerationId.get())
         transcriptionScheduler.shutdownNow()
         reconnectScheduler.shutdownNow()
         socket?.close(1000, "App closed")
