@@ -1,0 +1,11 @@
+<resources>
+    <color name="black">#020202</color>
+    <color name="card">#0C090A</color>
+    <color name="red">#E10F2F</color>
+    <color name="red_bright">#FF2949</color>
+    <color name="red_deep">#640817</color>
+    <color name="purple">#8A1028</color>
+    <color name="gunmetal">#3A3638</color>
+    <color name="text">#F1ECEE</color>
+    <color name="hint">#746C70</color>
+</resources>

@@ -1,0 +1,578 @@
+package com.myra.assistant.ai
+
+import android.util.Base64
+import android.util.Log
+import com.myra.assistant.diagnostics.VoicePipelineLogger
+import okhttp3.*
+import okio.ByteString
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+
+class GeminiLiveClient(
+    private val apiKey: String,
+    private val model: String,
+    private val voice: String,
+    private val systemPrompt: String
+) : WebSocketListener() {
+    var onReady: (() -> Unit)? = null
+    var onAudio: ((ByteArray, Long) -> Unit)? = null
+    var onInputTranscript: ((String, Long) -> Unit)? = null
+    var onOutputTranscript: ((String, Long) -> Unit)? = null
+    var onTurnComplete: (() -> Unit)? = null
+    var onGenerationComplete: ((Long) -> Unit)? = null
+    var onInterrupted: ((Long) -> Unit)? = null
+    var onToolCall: ((String, String, JSONObject) -> Unit)? = null
+    var onState: ((String) -> Unit)? = null
+    var onError: ((String) -> Unit)? = null
+    var onServerEvent: ((String, Long) -> Unit)? = null
+
+    private val manualClose = AtomicBoolean(false)
+    private val connectionState = GeminiConnectionStateMachine()
+    private val reconnectScheduler = Executors.newSingleThreadScheduledExecutor()
+    private val reconnectLock = Any()
+    private var reconnectFuture: ScheduledFuture<*>? = null
+    private val client = OkHttpClient.Builder().pingInterval(8, TimeUnit.SECONDS).build()
+    private var socket: WebSocket? = null
+    private val socketGenerations = ConcurrentHashMap<WebSocket, Int>()
+    private var renewThread: Thread? = null
+    private val ready = AtomicBoolean(false)
+    private val transcriptionLock = Any()
+    private val transcriptionScheduler = Executors.newSingleThreadScheduledExecutor()
+    private var pendingTurnComplete = false
+    private var pendingTurnFallback: ScheduledFuture<*>? = null
+    private var inputTranscriptTurn = 1L
+    private var inputTranscriptChunk = 0L
+    private val receivedAudioChunk = AtomicLong(0)
+    private val modelGenerationId = AtomicLong(0)
+    @Volatile private var modelGenerationOpen = false
+
+    fun connect() {
+        if (apiKey.isBlank()) { onError?.invoke("Add your Gemini API key in Settings"); return }
+        manualClose.set(false)
+        val current = connectionState.snapshot().state
+        if (current in setOf(GeminiConnectionState.CONNECTING, GeminiConnectionState.CONNECTED)) return
+        startConnect(reconnect = current == GeminiConnectionState.RECONNECTING)
+    }
+
+    private fun startConnect(reconnect: Boolean) {
+        if (manualClose.get()) return
+        val attempt = connectionState.beginConnect(android.os.SystemClock.elapsedRealtime(), reconnect)
+        val generation = attempt.generation
+        VoicePipelineLogger.debug(
+            "${if (reconnect) "GEMINI_RECONNECT_STARTED" else "GEMINI_CONNECT_START"} " +
+                "connectionAttemptId=${attempt.connectionAttemptId} generation=$generation " +
+                "timestamp=${attempt.startedAt}"
+        )
+        onState?.invoke("Checking Gemini access…")
+        ready.set(false)
+        val modelId = model.removePrefix("models/")
+        val check = Request.Builder().url("https://generativelanguage.googleapis.com/v1beta/models/$modelId").header("x-goog-api-key", apiKey).build()
+        client.newCall(check).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: java.io.IOException) {
+                if (!connectionState.isCurrent(generation) || manualClose.get()) {
+                    logStaleCallback(generation, "preflight_failure")
+                    return
+                }
+                scheduleReconnect(generation, "preflight_failure")
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!connectionState.isCurrent(generation) || manualClose.get()) {
+                        logStaleCallback(generation, "preflight_response")
+                        return
+                    }
+                    if (!it.isSuccessful) {
+                        val raw = it.body?.string().orEmpty()
+                        val message = try { JSONObject(raw).optJSONObject("error")?.optString("message") } catch (_: Exception) { null }
+                        onError?.invoke("Gemini access error (${it.code}): ${message ?: it.message}")
+                        return
+                    }
+                    openLiveSocket(generation)
+                }
+            }
+        })
+    }
+
+    private fun openLiveSocket(attempt: Int) {
+        if (!connectionState.markSocketConnecting(attempt)) {
+            logStaleCallback(attempt, "open_socket")
+            return
+        }
+        onState?.invoke("Connecting…")
+        val encodedKey = java.net.URLEncoder.encode(apiKey, Charsets.UTF_8.name())
+        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$encodedKey"
+        val opened = try {
+            client.newWebSocket(Request.Builder().url(url).build(), this)
+        } catch (e: Exception) {
+            onError?.invoke("Could not start Gemini Live: ${e.message}")
+            return
+        }
+        socket = opened
+        socketGenerations[opened] = attempt
+        Thread {
+            Thread.sleep(15_000)
+            if (connectionState.isCurrent(attempt) && socket === opened && !ready.get() && !manualClose.get()) {
+                opened.cancel()
+                scheduleReconnect(attempt, "connection_timeout")
+            }
+        }.start()
+    }
+
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+        if (socket !== webSocket || manualClose.get()) {
+            webSocket.close(1000, "Stale connection")
+            return
+        }
+        val setup = JSONObject().put("setup", JSONObject()
+            .put("model", "models/${model.removePrefix("models/")}")
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
+            .put("generationConfig", JSONObject()
+                .put("responseModalities", JSONArray().put("AUDIO"))
+                .put("speechConfig", JSONObject()
+                    .put("languageCode", LiveLanguagePolicy.SPEECH_LANGUAGE_CODE)
+                    .put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice))))
+                .put("temperature", 0.9))
+            .put("tools", JSONArray().put(JSONObject().put(
+                "functionDeclarations",
+                JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration()).put(memoryQueryDeclaration())
+                    .put(screenActionDeclaration()).put(screenMemoryProposalDeclaration())
+            )))
+            .put("realtimeInputConfig", JSONObject()
+                .put("turnCoverage", "TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO"))
+            .put("inputAudioTranscription", JSONObject())
+            .put("outputAudioTranscription", JSONObject()))
+        webSocket.send(setup.toString())
+        renewThread = Thread {
+            try {
+                Thread.sleep(540_000)
+                if (!manualClose.get() && socket === webSocket) webSocket.close(1000, "Session renewal")
+            } catch (_: InterruptedException) { }
+        }.also { it.start() }
+    }
+
+    private fun phoneActionDeclaration() = JSONObject()
+        .put("name", "perform_phone_action")
+        .put("description", "Perform one allowed Android phone action when the user's natural-language intent is clear. Ask a conversational follow-up when required details are uncertain. Instagram Reels must use REQUEST_INSTAGRAM_REELS.")
+        .put("parameters", JSONObject()
+            .put("type", "OBJECT")
+            .put("properties", JSONObject()
+                .put("action", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                    "OPEN_APP", "CLOSE_APP", "YOUTUBE_SEARCH", "PLAY_YOUTUBE",
+                    "OPEN_YOUTUBE_SHORTS", "REQUEST_INSTAGRAM_REELS", "SCROLL_DOWN", "SCROLL_UP",
+                    "SCROLL_REPEAT", "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS",
+                    "MEDIA_FIRST", "FLASHLIGHT_ON", "FLASHLIGHT_OFF", "HOME", "BACK", "TIME",
+                    "BATTERY", "TAKE_SCREENSHOT", "QUERY_WHATSAPP"
+                ))))
+                .put("target", JSONObject().put("type", "STRING"))
+                .put("query", JSONObject().put("type", "STRING")))
+            .put("required", JSONArray().put("action")))
+
+    private fun memoryProposalDeclaration(): JSONObject {
+        val operation = JSONObject()
+            .put("type", "OBJECT")
+            .put("properties", JSONObject()
+                .put("intent", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                    "ADD_FACT", "ADD_RELATIONSHIP", "REMOVE_RELATIONSHIP", "REPLACE_RELATIONSHIP",
+                    "ADD_LINKED_FACT", "UPDATE_FACT", "SUPERSEDE_FACT", "RENAME_ENTITY",
+                    "DELETE_ENTITY", "ADD_EPISODE", "ADD_GOAL", "UPDATE_GOAL", "ADD_IDEA", "ADD_PROJECT",
+                    "ADD_SOLUTION", "ADD_WORKFLOW", "INVALIDATE_FACT", "RECALL", "TRANSIENT_CONTEXT", "CLARIFY", "NONE"
+                ))))
+                .put("person", JSONObject().put("type", "STRING").put("description", "Required for every relationship, rename, entity delete, and linked-fact operation. Copy the current person literal."))
+                .put("replacement_person", JSONObject().put("type", "STRING").put("description", "Required for RENAME_ENTITY."))
+                .put("relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
+                .put("replacement_relationship", JSONObject().put("type", "STRING").put("description", "Required for REPLACE_RELATIONSHIP.").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
+                .put("temporal_scope", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("CURRENT", "HISTORICAL", "TEMPORARY", "RECURRING", "UNSPECIFIED"))))
+                .put("assertion_mode", JSONObject().put("type", "STRING").put("description", "Required semantic attribution: do not attribute hypothetical or reported speech to the user.").put("enum", JSONArray(listOf("USER_ASSERTED", "HYPOTHETICAL", "REPORTED_SPEECH", "QUESTION"))))
+                .put("fact", JSONObject().put("type", "STRING").put("description", "Required for fact/linked-fact operations and as the episode summary."))
+                .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                    "IDENTITY", "PREFERENCE", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
+                    "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "IDEA", "SOLUTION"
+                ))))
+                .put("memory_key", JSONObject().put("type", "STRING"))
+                .put("source_span", JSONObject().put("type", "STRING"))
+                .put("critical_literals", JSONObject().put("type", "ARRAY").put("maxItems", 8).put("items", JSONObject().put("type", "STRING")))
+                .put("event_type", JSONObject().put("type", "STRING").put("description", "Required for ADD_EPISODE."))
+                .put("participants", JSONObject().put("type", "ARRAY").put("maxItems", 6).put("items", JSONObject().put("type", "STRING")))
+                .put("importance", JSONObject().put("type", "NUMBER"))
+                .put("goal_title", JSONObject().put("type", "STRING").put("description", "Required for ADD_GOAL."))
+                .put("goal_status", JSONObject().put("type", "STRING"))
+                .put("priority", JSONObject().put("type", "INTEGER"))
+                .put("progress", JSONObject().put("type", "INTEGER"))
+                .put("source_episode_ids", JSONObject().put("type", "ARRAY").put("maxItems", 8).put("items", JSONObject().put("type", "STRING")))
+                .put("evidence", JSONObject().put("type", "STRING"))
+                .put("confidence", JSONObject().put("type", "NUMBER")))
+            .put("required", JSONArray(listOf("intent", "source_span", "confidence", "assertion_mode")))
+        return JSONObject()
+            .put("name", "propose_user_memory")
+            .put("description", "Interpret the current completed user turn into bounded independent AIRI semantic actions. Required by intent: ADD/REMOVE_RELATIONSHIP need person+relationship; REPLACE_RELATIONSHIP needs person+replacement_relationship; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD/UPDATE_GOAL need goal_title. Every operation needs source_span+confidence+assertion_mode. source_span copies the shortest near-verbatim current-turn words; normalized fact meaning may be translated. Use USER_ASSERTED only for the user's own asserted proposition; hypothetical and reported speech must be marked. Put every critical literal in critical_literals. Questions are RECALL. Android validates structure, literals, attribution, lifecycle and safety and alone owns persistence.")
+            .put("parameters", JSONObject()
+                .put("type", "OBJECT")
+                .put("properties", JSONObject().put(
+                    "operations", JSONObject().put("type", "ARRAY").put("maxItems", 4).put("items", operation)
+                ))
+                .put("required", JSONArray().put("operations")))
+    }
+
+    private fun memoryQueryDeclaration() = JSONObject()
+        .put("name", "query_user_memory")
+            .put("description", "Read a small relevant set of active grounded memories, relationships, goals, projects, or episodes. This tool never mutates memory and never performs a phone action.")
+        .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("query", JSONObject().put("type", "STRING"))
+            .put("query_type", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                    "GENERAL", "PREFERENCES", "FRIENDS", "BEST_FRIEND", "LAST_TRANSACTION", "EPISODES", "GOALS", "PROJECTS"
+            )))))
+            .put("required", JSONArray().put("query")))
+
+    private fun screenActionDeclaration() = JSONObject()
+        .put("name", "perform_screen_action")
+        .put("description", "Select one currently visible UI target using accessibility-backed screen elements. Use only when Screen Vision is active and the user explicitly asks to tap, click, press, or open a visible target. Never guess when multiple targets are equally plausible.")
+        .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("target_text", JSONObject().put("type", "STRING"))
+            .put("position", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("top", "bottom", "left", "right", "center", "middle", "unspecified"))))
+            .put("ordinal", JSONObject().put("type", "INTEGER"))
+        ))
+
+    private fun screenMemoryProposalDeclaration() = JSONObject()
+        .put("name", "propose_screen_memory")
+        .put("description", "Propose one durable, useful, non-sensitive project, goal, or preference fact directly visible on the shared screen. Never propose credentials, messages, health/banking data, temporary screen state, UI labels, or guesses.")
+        .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("fact", JSONObject().put("type", "STRING"))
+            .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("PROJECT", "GOAL", "PREFERENCE"))))
+            .put("memory_key", JSONObject().put("type", "STRING"))
+            .put("confidence", JSONObject().put("type", "NUMBER"))
+        ).put("required", JSONArray(listOf("fact", "category", "memory_key", "confidence"))))
+
+    fun sendAudio(bytes: ByteArray) {
+        if (!ready.get() || bytes.isEmpty()) return
+        val audio = JSONObject().put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("mimeType", "audio/pcm;rate=16000")
+        sendWhenReady(JSONObject().put("realtimeInput", JSONObject().put("audio", audio)).toString())
+    }
+
+    fun sendText(text: String) {
+        if (text.isBlank()) return
+        val turn = JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text)))
+        sendWhenReady(JSONObject().put("clientContent", JSONObject().put("turns", JSONArray().put(turn)).put("turnComplete", true)).toString())
+    }
+
+    fun sendImage(image: ByteArray, mimeType: String, prompt: String) {
+        if (image.isEmpty()) return
+        val parts = JSONArray()
+            .put(JSONObject().put("inlineData", JSONObject()
+                .put("mimeType", mimeType.ifBlank { "image/jpeg" })
+                .put("data", Base64.encodeToString(image, Base64.NO_WRAP))))
+            .put(JSONObject().put("text", prompt.ifBlank {
+                "Analyze this screenshot. Explain naturally what is visible and help me understand any problem."
+            }))
+        val turn = JSONObject().put("role", "user").put("parts", parts)
+        sendWhenReady(JSONObject().put("clientContent", JSONObject()
+            .put("turns", JSONArray().put(turn))
+            .put("turnComplete", true)).toString())
+    }
+
+    /** Adds a changed screen frame to the active Live session without ending a user turn. */
+    fun sendScreenFrame(image: ByteArray, mimeType: String = "image/jpeg") {
+        if (image.isEmpty()) return
+        val video = JSONObject()
+            .put("data", Base64.encodeToString(image, Base64.NO_WRAP))
+            .put("mimeType", mimeType)
+        sendWhenReady(JSONObject().put("realtimeInput", JSONObject().put("video", video)).toString())
+    }
+
+    fun sendToolResponse(id: String, name: String, success: Boolean, message: String) {
+        val response = JSONObject()
+            .put("result", if (success) "success" else "failed")
+            .put("message", message)
+        val functionResponse = JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("response", response)
+        sendWhenReady(
+            JSONObject().put(
+                "toolResponse",
+                JSONObject().put("functionResponses", JSONArray().put(functionResponse))
+            ).toString()
+        )
+    }
+
+    /** A held proposal is neither execution success nor failure. */
+    fun sendToolHeld(id: String, name: String) {
+        val response = JSONObject().put("result", "pending_authorization")
+            .put("decision", "WAIT_FOR_FINAL").put("executed", false)
+            .put("message", "No action attempted. Wait for Android final-turn owner. Do not report success or failure.")
+        val call = JSONObject().put("id", id).put("name", name).put("response", response)
+        sendWhenReady(JSONObject().put("toolResponse", JSONObject()
+            .put("functionResponses", JSONArray().put(call))).toString())
+    }
+
+    private fun sendWhenReady(payload: String): Boolean {
+        val active = socket
+        if (!ready.get() || active == null) {
+            onState?.invoke("Reconnecting…")
+            scheduleReconnect(connectionState.snapshot().generation, "send_without_ready_socket")
+            return false
+        }
+        val accepted = active.send(payload)
+        if (!accepted) {
+            ready.set(false)
+            onState?.invoke("Reconnecting…")
+            scheduleReconnect(connectionState.snapshot().generation, "socket_send_rejected")
+        }
+        return accepted
+    }
+
+    /**
+     * Local playback is interrupted by AudioEngine. Never send an empty clientContent
+     * turn: Gemini rejects that packet with close code 1007 (invalid argument).
+     */
+    fun interrupt() = Unit
+
+    override fun onMessage(webSocket: WebSocket, text: String) {
+        val callbackGeneration = socketGenerations[webSocket] ?: -1
+        if (socket !== webSocket || manualClose.get()) {
+            logStaleCallback(callbackGeneration, "message")
+            return
+        }
+        try {
+            val root = JSONObject(text)
+            root.optJSONObject("error")?.let {
+                val message = it.optString("message", "Gemini rejected the Live setup")
+                onError?.invoke("Gemini Live error: $message")
+                manualClose.set(true)
+                webSocket.close(1002, "Setup rejected")
+                return
+            }
+            if (root.has("setupComplete")) {
+                ready.set(true)
+                val connectedAt = android.os.SystemClock.elapsedRealtime()
+                if (!connectionState.markConnected(callbackGeneration, connectedAt)) {
+                    logStaleCallback(callbackGeneration, "setup_complete")
+                    return
+                }
+                synchronized(reconnectLock) {
+                    reconnectFuture?.cancel(false)
+                    reconnectFuture = null
+                }
+                VoicePipelineLogger.debug(
+                    "GEMINI_CONNECTED generation=$callbackGeneration timestamp=$connectedAt " +
+                        "reconnectLatencyMs=${(connectedAt - connectionState.snapshot().startedAt).coerceAtLeast(0L)}"
+                )
+                onState?.invoke("Ready")
+                onReady?.invoke()
+                return
+            }
+            root.optJSONObject("toolCall")?.optJSONArray("functionCalls")?.let { calls ->
+                onServerEvent?.invoke("tool_call", modelGenerationId.get())
+                for (i in 0 until calls.length()) {
+                    val call = calls.optJSONObject(i) ?: continue
+                    val id = call.optString("id")
+                    val name = call.optString("name")
+                    if (id.isNotBlank() && name.isNotBlank()) {
+                        onToolCall?.invoke(id, name, call.optJSONObject("args") ?: JSONObject())
+                    }
+                }
+                return
+            }
+            val content = root.optJSONObject("serverContent") ?: return
+            onServerEvent?.invoke("server_content", modelGenerationId.get())
+            val parts = content.optJSONObject("modelTurn")?.optJSONArray("parts")
+            if (parts != null) for (i in 0 until parts.length()) {
+                val data = parts.optJSONObject(i)?.optJSONObject("inlineData")?.optString("data")
+                if (!data.isNullOrBlank()) {
+                    if (!modelGenerationOpen) {
+                        modelGenerationId.incrementAndGet()
+                        modelGenerationOpen = true
+                    }
+                    val generationId = modelGenerationId.get()
+                    val pcm = Base64.decode(data, Base64.DEFAULT)
+                    if (VOICE_AUDIO_DEBUG_LOGGING) {
+                        VoicePipelineLogger.debug(
+                            "ws_audio_received seq=${receivedAudioChunk.incrementAndGet()} generationId=$generationId bytes=${pcm.size}"
+                        )
+                    }
+                    onAudio?.invoke(pcm, generationId)
+                }
+            }
+            content.optJSONObject("inputTranscription")?.let { transcription ->
+                val text = transcription.optString("text")
+                if (text.isNotEmpty()) {
+                    inputTranscriptChunk += 1
+                    if (TRANSCRIPT_DEBUG_LOGGING) {
+                        // Log the untouched API value before any assembler, formatter,
+                        // command parser, or UI code sees it. JSONObject.quote keeps
+                        // spaces and escaped characters visible in Logcat.
+                        Log.d(
+                            TRANSCRIPT_LOG_TAG,
+                            "raw_input tMs=${System.nanoTime() / 1_000_000} " +
+                                "turn=$inputTranscriptTurn chunk=$inputTranscriptChunk " +
+                                "text=${JSONObject.quote(text)}"
+                        )
+                    }
+                    onInputTranscript?.invoke(text, modelGenerationId.get())
+                    reschedulePendingTurnBoundary()
+                }
+            }
+            content.optJSONObject("outputTranscription")?.optString("text")?.takeIf { it.isNotBlank() }?.let {
+                onOutputTranscript?.invoke(it, modelGenerationId.get())
+            }
+            if (content.optBoolean("interrupted")) {
+                onInterrupted?.invoke(modelGenerationId.get())
+            }
+            if (content.optBoolean("generationComplete")) {
+                onGenerationComplete?.invoke(modelGenerationId.get())
+            }
+            if (content.optBoolean("turnComplete")) {
+                modelGenerationOpen = false
+                deferTurnCompleteUntilTranscriptIsQuiet()
+            }
+        } catch (e: Exception) { onError?.invoke("Invalid Live response: ${e.message}") }
+    }
+
+    override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+        onMessage(webSocket, bytes.utf8())
+    }
+
+    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        val callbackGeneration = socketGenerations[webSocket] ?: -1
+        if (socket !== webSocket || manualClose.get()) {
+            logStaleCallback(callbackGeneration, "socket_failure")
+            return
+        }
+        ready.set(false)
+        val detail = response?.let { "HTTP ${it.code} ${it.message}" } ?: (t.message ?: "Network failure")
+        VoicePipelineLogger.debug("GEMINI_DISCONNECTED generation=$callbackGeneration reason=${detail.take(160)}")
+        scheduleReconnect(callbackGeneration, "socket_failure")
+    }
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        if (socket !== webSocket || manualClose.get()) {
+            logStaleCallback(socketGenerations[webSocket] ?: -1, "socket_closing")
+            return
+        }
+        ready.set(false)
+    }
+    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+        val callbackGeneration = socketGenerations.remove(webSocket) ?: -1
+        if (socket !== webSocket || manualClose.get()) {
+            logStaleCallback(callbackGeneration, "socket_closed")
+            return
+        }
+        ready.set(false)
+        scheduleReconnect(callbackGeneration, "socket_closed_$code")
+    }
+    private fun scheduleReconnect(callbackGeneration: Int, reason: String) {
+        if (manualClose.get()) return
+        synchronized(reconnectLock) {
+            if (reconnectFuture?.isDone == false) return
+            val retry = connectionState.markFailure(callbackGeneration)
+            if (retry == null) {
+                if (connectionState.exhausted()) {
+                    VoicePipelineLogger.debug("GEMINI_RECONNECT_FAILED generation=$callbackGeneration reason=retry_budget_exhausted")
+                    onError?.invoke("Gemini connection failed after repeated retries. Check internet and try again.")
+                } else logStaleCallback(callbackGeneration, "schedule_reconnect")
+                return
+            }
+            val delayMs = connectionState.backoffMs(retry, callbackGeneration + retry)
+            onState?.invoke("Reconnecting…")
+            VoicePipelineLogger.debug(
+                "GEMINI_RECONNECT_SCHEDULED generation=$callbackGeneration retry=$retry delayMs=$delayMs reason=$reason"
+            )
+            reconnectFuture = reconnectScheduler.schedule({
+                synchronized(reconnectLock) { reconnectFuture = null }
+                if (!manualClose.get() && connectionState.isCurrent(callbackGeneration)) {
+                    startConnect(reconnect = true)
+                } else logStaleCallback(callbackGeneration, "reconnect_worker")
+            }, delayMs, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    private fun logStaleCallback(callbackGeneration: Int, source: String) {
+        VoicePipelineLogger.debug(
+            "GEMINI_STALE_CALLBACK_IGNORED callbackGeneration=$callbackGeneration " +
+                "currentGeneration=${connectionState.snapshot().generation} source=$source"
+        )
+    }
+    private fun deferTurnCompleteUntilTranscriptIsQuiet() {
+        synchronized(transcriptionLock) {
+            pendingTurnComplete = true
+            scheduleTurnBoundaryAfterTranscriptQuietPeriod()
+        }
+    }
+
+    private fun reschedulePendingTurnBoundary() {
+        synchronized(transcriptionLock) {
+            if (pendingTurnComplete) scheduleTurnBoundaryAfterTranscriptQuietPeriod()
+        }
+    }
+
+    private fun scheduleTurnBoundaryAfterTranscriptQuietPeriod() {
+        pendingTurnFallback?.cancel(false)
+        // The Gemini Developer API transcription object contains only `text`; unlike
+        // some Vertex variants it has no final/finished flag. Since Google also says
+        // transcription ordering is independent of turnComplete, finalize after a
+        // short quiet window so late deltas are included without adding voice latency.
+        pendingTurnFallback = transcriptionScheduler.schedule({
+            val release = synchronized(transcriptionLock) {
+                if (!pendingTurnComplete) false
+                else {
+                    pendingTurnComplete = false
+                    pendingTurnFallback = null
+                    true
+                }
+            }
+            if (release) completeTurnBoundary()
+        }, 350, TimeUnit.MILLISECONDS)
+    }
+
+    private fun completeTurnBoundary() {
+        synchronized(transcriptionLock) {
+            pendingTurnComplete = false
+            pendingTurnFallback?.cancel(false)
+            pendingTurnFallback = null
+        }
+        if (TRANSCRIPT_DEBUG_LOGGING) {
+            Log.d(
+                TRANSCRIPT_LOG_TAG,
+                "input_turn_complete tMs=${System.nanoTime() / 1_000_000} " +
+                    "turn=$inputTranscriptTurn chunks=$inputTranscriptChunk"
+            )
+        }
+        onTurnComplete?.invoke()
+        inputTranscriptTurn += 1
+        inputTranscriptChunk = 0
+    }
+
+    private companion object {
+        // Temporary diagnostic switch. Remove after one failing long utterance has
+        // been captured because input transcripts may contain private conversation.
+        const val TRANSCRIPT_DEBUG_LOGGING = true
+        const val TRANSCRIPT_LOG_TAG = "LyraInputTranscript"
+        const val VOICE_AUDIO_DEBUG_LOGGING = true
+        const val VOICE_AUDIO_LOG_TAG = "LyraVoicePipeline"
+    }
+
+    fun disconnect() {
+        manualClose.set(true)
+        connectionState.markStopping()
+        synchronized(reconnectLock) {
+            reconnectFuture?.cancel(false)
+            reconnectFuture = null
+        }
+        renewThread?.interrupt()
+        synchronized(transcriptionLock) {
+            pendingTurnFallback?.cancel(false)
+            pendingTurnFallback = null
+            pendingTurnComplete = false
+        }
+        transcriptionScheduler.shutdownNow()
+        reconnectScheduler.shutdownNow()
+        socket?.close(1000, "App closed")
+        socket = null
+        socketGenerations.clear()
+        connectionState.markDisconnected()
+    }
+}

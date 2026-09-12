@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="#050505" android:fillViewport="true" android:overScrollMode="never">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:paddingHorizontal="20dp" android:paddingTop="18dp" android:paddingBottom="32dp">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:gravity="center_vertical">
+            <TextView android:id="@+id/backButton" android:layout_width="44dp" android:layout_height="44dp" android:gravity="center" android:text="‹" android:textColor="#EEEEEE" android:textSize="36sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Settings" android:textColor="#EEEEEE" android:textSize="25sp" android:textStyle="bold" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Configure how LYRA works" android:textColor="#777077" android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+        <TextView style="@style/MyraLabel" android:text="AI &amp; CLOUD" />
+        <LinearLayout android:id="@+id/apiCloudCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="☁" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="API &amp; Cloud Settings" /><TextView style="@style/MyraSettingsSubtitle" android:text="Gemini, Groq, DeepSeek and Tavily keys" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
+        <LinearLayout android:id="@+id/voiceAiCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="◉" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Voice &amp; AI Models" /><TextView style="@style/MyraSettingsSubtitle" android:text="Live model, voice and personality" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
+        <TextView style="@style/MyraLabel" android:text="PERSONALIZATION" />
+        <LinearLayout android:id="@+id/memoryCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="◆" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Memory" /><TextView style="@style/MyraSettingsSubtitle" android:text="View, add and delete saved memories" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
+        <LinearLayout android:id="@+id/screenVisionCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="▣" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Screen Vision" /><TextView style="@style/MyraSettingsSubtitle" android:text="Share, analyze and control the visible screen" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
+        <LinearLayout android:id="@+id/orbCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="●" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Orb Customization" /><TextView style="@style/MyraSettingsSubtitle" android:text="Color, size and animation style" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
+        <LinearLayout android:id="@+id/contactsCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="★" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Personal &amp; Prime Contacts" /><TextView style="@style/MyraSettingsSubtitle" android:text="Your name and voice-command contacts" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
+        <TextView style="@style/MyraLabel" android:text="DEVICE" />
+        <LinearLayout android:id="@+id/permissionsCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="✓" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Permissions &amp; Device Actions" /><TextView style="@style/MyraSettingsSubtitle" android:text="Microphone and Accessibility controls" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
+        <LinearLayout android:id="@+id/notificationAccessCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="▣" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Notification Intelligence" /><TextView style="@style/MyraSettingsSubtitle" android:text="Announce and reply to WhatsApp messages" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
+        <TextView style="@style/MyraLabel" android:text="DIAGNOSTICS" />
+        <LinearLayout android:id="@+id/exportVoiceLogsCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="⇧" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Export Voice Logs" /><TextView style="@style/MyraSettingsSubtitle" android:text="Share playback diagnostics for silent replies" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
