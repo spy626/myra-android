@@ -1,0 +1,167 @@
+                 val deterministic = extracted.firstOrNull { it.type == JarvisMemoryType.GOAL }
+                 if (deterministic != null) {
+                     save(deterministic)
+-                } else {
++                } else if (fallbackAllowed) {
+                     saveGeneric("goal", JarvisMemoryType.GOAL, importance = 8)
++                } else {
++                    Mutation.NotDurable
+                 }
+             }
+ 
+@@ -1460,10 +1522,12 @@ object JarvisSimpleMemoryRuntime {
+                 val deterministic = extracted.firstOrNull { it.key.startsWith("episode:") }
+                 if (deterministic != null) {
+                     save(deterministic)
+-                } else {
+-                    // eventType/summary are optional metadata now; raw final text is the
+-                    // authoritative episodic fact and preserves every named place/person.
++                } else if (fallbackAllowed) {
++                    // Structured metadata is optional, but the turn still has to pass semantic
++                    // admission. Raw final user text remains the source of truth.
+                     saveGeneric("episode", JarvisMemoryType.NOTE, importance = 6)
++                } else {
++                    Mutation.NotDurable
+                 }
+             }
+ 
+@@ -1475,7 +1539,7 @@ object JarvisSimpleMemoryRuntime {
+                 }
+                 if (localCandidate != null) {
+                     save(localCandidate)
+-                } else {
++                } else if (fallbackAllowed) {
+                     val type = safeTypeForRawFact(frame.category)
+                     val subject = person ?: "user"
+                     saveGeneric(
+@@ -1484,6 +1548,8 @@ object JarvisSimpleMemoryRuntime {
+                         subject = subject,
+                         importance = 6
+                     )
++                } else {
++                    Mutation.NotDurable
+                 }
+             }
+ 
+@@ -1493,7 +1559,7 @@ object JarvisSimpleMemoryRuntime {
+                 val deterministic = candidateForCategory(extracted, frame.category)
+                 if (deterministic != null) {
+                     save(deterministic)
+-                } else {
++                } else if (fallbackAllowed) {
+                     val existing = frame.stableKey
+                         ?.takeIf(String::isNotBlank)
+                         ?.let(local::memoryByKey)
+@@ -1506,6 +1572,8 @@ object JarvisSimpleMemoryRuntime {
+                         importance = existing?.importance ?: if (frame.category == MemoryCategory.PREFERENCE) 7 else 6,
+                         keyOverride = existing?.memoryKey
+                     )
++                } else {
++                    Mutation.NotDurable
+                 }
+             }
+ 
+@@ -1516,6 +1584,29 @@ object JarvisSimpleMemoryRuntime {
+         }
+     }
+ 
++    private fun rememberContext(sender: String, text: String, turnId: Long) {
++        val clean = text.trim().replace(Regex("\\s+"), " ").take(500)
++        if (clean.isBlank()) return
++        synchronized(contextLock) {
++            recentContext.addLast(MemoryContextTurn(sender, clean, turnId))
++            while (recentContext.size > CONTEXT_WINDOW) recentContext.removeFirst()
++        }
++    }
++
++    private fun contextSnapshot(): List<MemoryContextTurn> = synchronized(contextLock) {
++        recentContext.toList()
++    }
++
++    /** Never blocks the voice thread: only already-warmed/pending rows participate here. */
++    private fun knownPeopleFast(): List<String> {
++        val pending = pendingMemories.values.map { it.candidate.subject }
++        val durable = if (durableSnapshotLoaded) durableSnapshot.map { it.subject } else emptyList()
++        return (pending + durable)
++            .map { it.trim() }
++            .filter { it.isNotBlank() && !it.equals("user", ignoreCase = true) && !it.equals("zopy", ignoreCase = true) }
++            .distinctBy { normalize(it) }
++    }
++
+     private fun hasPerson(name: String): Boolean {
+         if (name.isBlank()) return false
+         val normalized = normalize(name)
+@@ -1621,6 +1712,7 @@ object JarvisSimpleMemoryRuntime {
+     }
+ 
+     private fun rawSupportsRelationship(text: String, relationship: PersonRelationship): Boolean {
++        if (ContextAwareMemoryAdmission.rejectsPositiveRelationship(text)) return false
+         val q = normalize(text)
+         return when (relationship) {
+             PersonRelationship.BEST_FRIEND ->
+diff --git a/app/src/test/java/com/myra/assistant/data/memory/ContextAwareMemoryAdmissionTest.kt b/app/src/test/java/com/myra/assistant/data/memory/ContextAwareMemoryAdmissionTest.kt
+new file mode 100644
+index 0000000..49ae79d
+--- /dev/null
++++ b/app/src/test/java/com/myra/assistant/data/memory/ContextAwareMemoryAdmissionTest.kt
+@@ -0,0 +1,133 @@
++package com.myra.assistant.data.memory
++
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++class ContextAwareMemoryAdmissionTest {
++    @Test fun directDurableRelationshipStillSavesImmediately() {
++        val text = "Kareem mera best friend hai"
++        val result = ContextAwareMemoryAdmission.admit(
++            text,
++            JarvisSimpleMemoryExtractor.extract(text),
++            emptyList(),
++            emptyList()
++        )
++        assertEquals("BEST_FRIEND|Kareem", result.candidates.single().value)
++    }
++
++    @Test fun hypotheticalRelationshipDoesNotBecomeDurableMemory() {
++        val text = "Agar Kareem mera best friend hota to accha hota"
++        val result = ContextAwareMemoryAdmission.admit(
++            text,
++            JarvisSimpleMemoryExtractor.extract(text),
++            emptyList(),
++            emptyList()
++        )
++        assertTrue(result.candidates.isEmpty())
++    }
++
++    @Test fun reportedRelationshipDoesNotBecomeUsersRelationship() {
++        val text = "Naufal ne bola Kareem uska best friend hai"
++        val result = ContextAwareMemoryAdmission.admit(
++            text,
++            JarvisSimpleMemoryExtractor.extract(text),
++            emptyList(),
++            listOf("Kareem", "Naufal")
++        )
++        assertTrue(result.candidates.isEmpty())
++    }
++
++    @Test fun meaninglessChitchatStaysConversationOnly() {
++        val result = ContextAwareMemoryAdmission.admit(
++            "haan",
++            emptyList(),
++            emptyList(),
++            emptyList()
++        )
++        assertTrue(result.candidates.isEmpty())
++    }
++
++    @Test fun shortAnswerInTravelContextBecomesOneMeaningfulEpisode() {
++        val result = ContextAwareMemoryAdmission.admit(
++            "Manali aur Kerala",
++            emptyList(),
++            listOf(MemoryContextTurn("assistant", "Kareem ke saath kahan gaye the?", 4L)),
++            listOf("Kareem")
++        )
++        val episode = result.candidates.single { it.key.startsWith("episode:") }
++        assertEquals("Kareem", episode.subject)
++        assertTrue(episode.fact.contains("Manali aur Kerala"))
