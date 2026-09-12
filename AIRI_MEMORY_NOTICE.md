@@ -2,13 +2,25 @@
 
 LYRA's native memory runtime ports applicable architecture contracts from
 [moeru-ai/airi](https://github.com/moeru-ai/airi), inspected at revision
-`dfc6951a55bf4fdd66a68a0c881ae880ddd95f77`.
+`553d8a0da4ef131441a1de77d556c6df6cab3026`, and from
+[moeru-ai/plast-mem](https://github.com/moeru-ai/plast-mem), inspected at
+revision `611103456d953c9a74452f4239817b3468f94bba`.
 
 The source-owned context registry, bounded/stale task-memory merge, transcript
-truth/projection, and serialized transcript-buffer responsibilities are derived
-from AIRI's MIT-licensed project. The Android Room consolidation, entity graph,
-local retrieval, safety, and review/decay implementation is an independent
-native completion of AIRI's plast-mem contract/WIP seam.
+truth/projection, transcript buffering, Spark Command, and Spark Notify
+responsibilities are derived from AIRI's MIT-licensed project. Stateful event
+segmentation, episodic memory, semantic NEW/REINFORCE/UPDATE/INVALIDATE,
+BM25/vector/RRF retrieval, and episodic FSRS review follow Plast-Mem's current
+architecture and contracts. Kotlin, Room, local feature-hash embeddings, the
+stable person/entity index, Android lifecycle integration, and stronger LYRA
+secret policy are Android-native equivalents.
+
+At these revisions, Flashbulb Memory remains an upstream documented TODO.
+LYRA's guarded high-significance episode flag and retrieval floor are an
+Android completion of that TODO, not a claim of upstream production support.
+No agent/runtime subsystem named Pulse exists in the inspected AIRI source;
+Spark Notify is therefore the ported proactive event lane and no synthetic
+"AIRI Pulse" subsystem was introduced.
 
 MIT License
 
