@@ -278,6 +278,8 @@ class MyraVoiceService : Service() {
     private var screenResponseQueryId = ""
     private var screenQuestionDetectedAt = 0L
     private var screenFreshFrameCapturedAt = 0L
+    /** Privacy-filtered source frame for one user-authorized visual ACTION only; RAM-only. */
+    private var screenActionSourceFrame: ByteArray? = null
     private var screenFrameSentAt = 0L
     private var screenResponseSpeechEndedAt = 0L
     private var screenQuerySpeechTurnConsistency = false
@@ -1282,6 +1284,13 @@ class MyraVoiceService : Service() {
                     }
                 if (fastVisualRequest != null &&
                     (turnDecision.intent == TurnIntent.SCREEN_QUESTION || turnDecision.authorizesPhoneActions)) {
+                    if (fastVisualRequest.kind == FastVisualKind.ACTION && turnDecision.authorizesPhoneActions &&
+                        tryAccessibilityFirstVisualAction(userText, activeTurnId)
+                    ) {
+                        resetTurnBuffers("accessibility_first_visual_action")
+                        waitingForFreshInputAfterCommand = true
+                        return@turnComplete
+                    }
                     if (turnDecision.intent == TurnIntent.SCREEN_QUESTION && ordinaryModelAudioGate.isSpeechActive()) {
                         armScreenQuestion(userText, activeTurnId, "FINAL_SCREEN_QUERY_WAITING_FOR_SPEECH_END", true)
                         suppressModelForTurn = true
@@ -1690,21 +1699,26 @@ class MyraVoiceService : Service() {
 
     private fun handleScreenActionTool(id: String, args: org.json.JSONObject) {
         val intentText = lastUserIntentText.ifBlank { input.toString().trim() }
+        val activeVisualTurn = fastVisualTurns.current()
+        val actionTurnId = activeVisualTurn?.userTurnId?.takeIf { it > 0L }
+            ?: screenResponseUserTurnId.takeIf { it > 0L }
+            ?: activeTurnId
         screenActionRegistry.cancel()?.let {
             voiceLog("SCREEN_ACTION_CANCELLED actionId=${it.actionId} turnId=${it.turnId} reason=new_explicit_screen_command")
         }
         if (ScreenVisionIntentParser.parse(intentText) == null &&
             UnifiedLyraAgentRuntime.agent.currentTask()?.interpretedGoal != com.myra.assistant.agent.AgentGoalType.TAP &&
-            fastVisualTurns.current()?.kind != FastVisualKind.ACTION
+            activeVisualTurn?.kind != FastVisualKind.ACTION
         ) {
             live?.sendToolResponse(id, "perform_screen_action", false, "No explicit visible-screen action was requested")
             return
         }
-        if (!screenCommandTurnGuard.tryCommit(activeTurnId)) {
-            voiceLog("screen_command_duplicate_dropped turnId=$activeTurnId source=perform_screen_action")
+        if (!screenCommandTurnGuard.tryCommit(actionTurnId)) {
+            voiceLog("screen_command_duplicate_dropped turnId=$actionTurnId source=perform_screen_action")
             live?.sendToolResponse(id, "perform_screen_action", false, "This screen command was already committed for the current voice turn")
             return
         }
+
         val toolTarget = args.optString("target_text").trim()
         val toolPosition = args.optString("position").trim().takeIf { it.isNotBlank() && it != "unspecified" }
             ?: when {
@@ -1720,18 +1734,23 @@ class MyraVoiceService : Service() {
                 toolPosition == null && Regex("\\b(?:video|वीडियो)\\b", RegexOption.IGNORE_CASE).containsMatchIn(it)
             }.orEmpty()
         }
-        val resolvedTarget = brain.resolveScreenTarget(
-            explicitTitle,
-            toolPosition,
-            args.optInt("ordinal", 0)
-        )
-        if (resolvedTarget == null) {
+        val resolvedTarget = brain.resolveScreenTarget(explicitTitle, toolPosition, args.optInt("ordinal", 0))
+        val target = resolvedTarget?.targetText ?: toolTarget.takeIf(String::isNotBlank)
+        val position = resolvedTarget?.position ?: toolPosition
+        val ordinal = resolvedTarget?.ordinal ?: args.optInt("ordinal", 0).takeIf { it > 0 }
+
+        val hasVisualCoordinates = args.has("visual_x") && args.has("visual_y")
+        val visualX = args.optInt("visual_x", -1)
+        val visualY = args.optInt("visual_y", -1)
+        val visualConfidence = args.optDouble("visual_confidence", 0.0)
+        val visualDescription = args.optString("visual_target_description").trim()
+            .ifBlank { target.orEmpty() }
+            .ifBlank { intentText }
+        if (resolvedTarget == null && target.isNullOrBlank() && !hasVisualCoordinates) {
             live?.sendToolResponse(id, "perform_screen_action", false, "Visible target is ambiguous; ask the user to choose")
             return
         }
-        val target = resolvedTarget.targetText
-        val position = resolvedTarget.position
-        val ordinal = resolvedTarget.ordinal
+
         val accessibility = AccessibilityHelperService.instance
         if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
             live?.sendToolResponse(id, "perform_screen_action", false, "LYRA Accessibility is disabled")
@@ -1744,60 +1763,342 @@ class MyraVoiceService : Service() {
             return
         }
         val beforeAccessibility = accessibility.visibleScreenSignature()
-        fastVisualTurns.current()?.let {
+        activeVisualTurn?.let {
             it.actionResolvedAt = android.os.SystemClock.elapsedRealtime()
-            voiceLog("visual_action_resolved visualTurnId=${it.id} target=${target.orEmpty().take(80)} position=${position.orEmpty()} ordinal=${ordinal ?: 0}")
+            voiceLog(
+                "visual_action_resolved visualTurnId=${it.id} target=${target.orEmpty().take(80)} " +
+                    "position=${position.orEmpty()} ordinal=${ordinal ?: 0} coordinateCandidate=$hasVisualCoordinates"
+            )
         }
-        val semanticHint = fastVisualTurns.current()?.semanticHint.orEmpty().lowercase(Locale.ROOT)
-        val direct = accessibility.resolveAndTapVisibleTarget(target, position, ordinal, actionScope) { candidate, _ ->
+        val semanticHint = activeVisualTurn?.semanticHint.orEmpty().lowercase(Locale.ROOT)
+        var actionResult = accessibility.resolveAndTapVisibleTarget(target, position, ordinal, actionScope) { candidate, _ ->
             when {
                 semanticHint.contains("like") -> candidate.role == "like_control"
                 semanticHint.contains("subscribe") -> candidate.role == "subscribe_control" &&
                     !candidate.label.lowercase(Locale.ROOT).contains("subscribed")
                 semanticHint.contains("comment") -> candidate.role == "comments_control"
+                semanticHint.contains("search") || Regex("\\bsearch\\b", RegexOption.IGNORE_CASE).containsMatchIn(intentText) ->
+                    candidate.role.startsWith("search", true)
                 else -> true
             }
         }
-        if (direct.accepted) {
-            fastVisualTurns.current()?.let {
-                it.actionExecutedAt = android.os.SystemClock.elapsedRealtime()
+        var actionTool = "accessibility_click"
+
+        if (!actionResult.accepted && hasVisualCoordinates) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            val coordinateOwnedByFreshVisualTurn = activeVisualTurn?.kind == FastVisualKind.ACTION &&
+                screenResponseActive && screenResponseUserTurnId == actionTurnId &&
+                screenFreshFrameCapturedAt > 0L && screenActionSourceFrame != null &&
+                activeVisualTurn.packageName == actionScope.expectedPackage &&
+                activeVisualTurn.windowId == actionScope.expectedWindowId &&
+                activeVisualTurn.generation == actionScope.expectedGeneration
+            val safeFailureForFallback = actionResult.resolution in setOf("not_found", "selected")
+            if (coordinateOwnedByFreshVisualTurn && safeFailureForFallback) {
+                val frameAgeMs = (now - screenFreshFrameCapturedAt).coerceAtLeast(0L)
+                val coordinateResult = accessibility.tapAtVisionCoordinates(
+                    visualX,
+                    visualY,
+                    visualConfidence,
+                    frameAgeMs,
+                    actionScope,
+                    visualDescription
+                )
                 voiceLog(
-                    "visual_action_executed visualTurnId=${it.id} accepted=true " +
-                        "responseToActionMs=${if (it.firstModelResponseAt > 0L) it.actionExecutedAt - it.firstModelResponseAt else -1L} " +
-                        "speechEndToActionMs=${if (it.speechEndedAt > 0L) it.actionExecutedAt - it.speechEndedAt else -1L}"
+                    "vision_coordinate_fallback turnId=$actionTurnId visualTurnId=${activeVisualTurn?.id.orEmpty()} " +
+                        "semanticResolution=${actionResult.resolution} coordinateResolution=${coordinateResult.resolution} " +
+                        "confidence=$visualConfidence frameAgeMs=$frameAgeMs accepted=${coordinateResult.accepted}"
+                )
+                if (coordinateResult.accepted) {
+                    actionResult = coordinateResult
+                    actionTool = "vision_coordinate_tap"
+                } else if (coordinateResult.resolution.startsWith("vision_")) {
+                    live?.sendToolResponse(
+                        id,
+                        "perform_screen_action",
+                        false,
+                        "Visual coordinate fallback was blocked by Android safety checks: ${coordinateResult.resolution}"
+                    )
+                    activeVisualTurn?.let { fastVisualTurns.finish(it.id) }
+                    screenActionSourceFrame = null
+                    return
+                }
+            } else {
+                voiceLog(
+                    "vision_coordinate_fallback_blocked turnId=$actionTurnId visualTurnId=${activeVisualTurn?.id.orEmpty()} " +
+                        "reason=${if (!coordinateOwnedByFreshVisualTurn) "unbound_or_stale_visual_turn" else "unsafe_semantic_failure_${actionResult.resolution}"}"
                 )
             }
-            voiceLog(
-                "agent_tool_selected tool=accessibility_click package=${actionScope.expectedPackage} " +
-                    "windowGeneration=${actionScope.expectedGeneration} targetResolution=${direct.resolution}"
-            )
-            mainHandler.postDelayed({
-                val stillOwned = com.myra.assistant.screen.ForegroundActionPolicy.canExecute(
-                    actionScope, accessibility.currentForegroundContext()
-                )
-                val changed = stillOwned && beforeAccessibility.isNotBlank() &&
-                    accessibility.visibleScreenSignature() != beforeAccessibility
-                fastVisualTurns.current()?.let {
-                    it.verificationAt = android.os.SystemClock.elapsedRealtime()
-                    voiceLog("visual_verification_complete visualTurnId=${it.id} verified=$changed totalVisualTurnMs=${it.verificationAt - it.startedAt}")
-                    fastVisualTurns.finish(it.id)
-                }
-                voiceLog("agent_verification tool=accessibility_click accepted=true verified=$changed")
-                live?.sendToolResponse(
-                    id, "perform_screen_action", changed,
-                    if (changed) "Accessibility action verified" else "Action was accepted but the expected screen change was not verified"
-                )
-            }, 350L)
+        }
+
+        if (!actionResult.accepted) {
+            val message = when (actionResult.resolution) {
+                "ambiguous" -> "Visible target is ambiguous; ask the user to choose"
+                "stale_foreground", "stale_candidate" -> "The screen changed before the target could be used"
+                "authorization_rejected" -> "The visible target did not match the requested control"
+                else -> "No safe current-screen target matched; ask a short clarification"
+            }
+            live?.sendToolResponse(id, "perform_screen_action", false, message)
+            activeVisualTurn?.let { fastVisualTurns.finish(it.id) }
+            screenActionSourceFrame = null
             return
         }
-        // Normal visual actions never request MediaProjection. The model already
-        // received a fresh Accessibility screenshot when visual fallback was used.
-        live?.sendToolResponse(
-            id, "perform_screen_action", false,
-            if (direct.resolution == "ambiguous") "Visible target is ambiguous; ask the user to choose"
-            else "No current Accessibility target matched; ask a short clarification"
+
+        activeVisualTurn?.let {
+            it.actionExecutedAt = android.os.SystemClock.elapsedRealtime()
+            voiceLog(
+                "visual_action_executed visualTurnId=${it.id} accepted=true tool=$actionTool " +
+                    "responseToActionMs=${if (it.firstModelResponseAt > 0L) it.actionExecutedAt - it.firstModelResponseAt else -1L} " +
+                    "speechEndToActionMs=${if (it.speechEndedAt > 0L) it.actionExecutedAt - it.speechEndedAt else -1L}"
+            )
+        }
+        voiceLog(
+            "agent_tool_selected tool=$actionTool package=${actionScope.expectedPackage} " +
+                "windowGeneration=${actionScope.expectedGeneration} targetResolution=${actionResult.resolution}"
         )
-        return
+        completeScreenActionVerification(
+            id = id,
+            actionTurnId = actionTurnId,
+            accessibility = accessibility,
+            beforeAccessibility = beforeAccessibility,
+            sourceFrame = screenActionSourceFrame?.copyOf(),
+            actionTool = actionTool,
+            resolution = actionResult.resolution,
+            visualTurnId = activeVisualTurn?.id
+        )
+    }
+
+    private fun completeScreenActionVerification(
+        id: String,
+        actionTurnId: Long,
+        accessibility: AccessibilityHelperService,
+        beforeAccessibility: String,
+        sourceFrame: ByteArray?,
+        actionTool: String,
+        resolution: String,
+        visualTurnId: String?
+    ) {
+        val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun finish(verified: Boolean, evidence: String) {
+            if (!finished.compareAndSet(false, true)) return
+            val now = android.os.SystemClock.elapsedRealtime()
+            fastVisualTurns.current()?.takeIf { visualTurnId != null && it.id == visualTurnId }?.let {
+                it.verificationAt = now
+                voiceLog(
+                    "visual_verification_complete visualTurnId=${it.id} verified=$verified evidence=$evidence " +
+                        "totalVisualTurnMs=${it.verificationAt - it.startedAt}"
+                )
+                fastVisualTurns.finish(it.id)
+            }
+            screenActionSourceFrame = null
+            voiceLog(
+                "agent_verification tool=$actionTool resolution=$resolution accepted=true verified=$verified evidence=$evidence"
+            )
+            live?.sendToolResponse(
+                id,
+                "perform_screen_action",
+                verified,
+                if (verified) "Android verified the requested screen action"
+                else "Action was dispatched but the expected screen change was not verified"
+            )
+        }
+
+        fun comparePrivacyFilteredFrame(bytes: ByteArray, width: Int, height: Int, source: String) {
+            val before = sourceFrame ?: run { finish(false, "no_pre_action_visual_frame"); return }
+            val elements = accessibility.visibleElements(80)
+            val privacy = ScreenFramePrivacyFilter.apply(
+                bytes,
+                elements,
+                width,
+                height,
+                screenVisionPreferences.sensitiveContentProtection
+            )
+            val allowed = privacy as? ScreenPrivacyResult.Allowed
+            if (allowed == null) {
+                finish(false, "post_action_visual_privacy_blocked")
+                return
+            }
+            finish(visualFramesDiffer(before, allowed.bytes), source)
+        }
+
+        fun tryMediaProjectionVerification(): Boolean {
+            if (sourceFrame == null || ScreenCaptureService.currentState != ScreenShareState.ACTIVE) return false
+            val query = ScreenCaptureService.requestFreshFrame(actionTurnId) { result ->
+                mainHandler.post {
+                    val frame = (result as? FreshFrameResult.Ready)?.frame
+                    if (frame == null) {
+                        finish(false, "post_action_frame_unavailable")
+                        return@post
+                    }
+                    comparePrivacyFilteredFrame(
+                        frame.bytes,
+                        resources.displayMetrics.widthPixels,
+                        resources.displayMetrics.heightPixels,
+                        "media_projection_frame_change"
+                    )
+                }
+            }
+            return query != null
+        }
+
+        mainHandler.postDelayed({
+            accessibility.refreshScreenContext(force = true)
+            val afterAccessibility = accessibility.visibleScreenSignature()
+            if (beforeAccessibility.isNotBlank() && afterAccessibility.isNotBlank() &&
+                beforeAccessibility != afterAccessibility
+            ) {
+                finish(true, "accessibility_scene_change")
+                return@postDelayed
+            }
+            if (sourceFrame == null || !visualAwarenessPreferences.enabled) {
+                if (!tryMediaProjectionVerification()) finish(false, "no_visual_verification_source")
+                return@postDelayed
+            }
+            val requestToken = "action-verify-$actionTurnId-${android.os.SystemClock.elapsedRealtime().toString(16)}"
+            val started = accessibility.requestFreshVisualScreenshot(
+                maxAgeMs = 0L,
+                fallbackMaxAgeMs = 0L,
+                requestToken = requestToken,
+                isCurrentRequest = { !finished.get() }
+            ) { result ->
+                mainHandler.post {
+                    val selection = result.getOrNull()
+                    if (selection == null) {
+                        if (!tryMediaProjectionVerification()) finish(false, "post_action_accessibility_screenshot_failed")
+                        return@post
+                    }
+                    comparePrivacyFilteredFrame(
+                        selection.screenshot.bytes,
+                        selection.screenshot.width,
+                        selection.screenshot.height,
+                        "accessibility_visual_frame_change"
+                    )
+                }
+            }
+            if (!started && !tryMediaProjectionVerification()) {
+                finish(false, "post_action_visual_capture_not_started")
+            }
+        }, 350L)
+    }
+
+    private fun visualFramesDiffer(beforeJpeg: ByteArray, afterJpeg: ByteArray): Boolean {
+        if (beforeJpeg.isEmpty() || afterJpeg.isEmpty()) return false
+        val before = android.graphics.BitmapFactory.decodeByteArray(beforeJpeg, 0, beforeJpeg.size) ?: return false
+        val after = android.graphics.BitmapFactory.decodeByteArray(afterJpeg, 0, afterJpeg.size) ?: run {
+            before.recycle()
+            return false
+        }
+        return try {
+            val detector = com.myra.assistant.screen.ScreenFrameChangeDetector()
+            detector.changed(before)
+            detector.changed(after)
+        } finally {
+            before.recycle()
+            after.recycle()
+        }
+    }
+
+    /**
+     * Fast/free path for ordinary Android UI. A clear Accessibility node is clicked without
+     * taking or uploading a screenshot. Vision is reached only when this resolver cannot
+     * identify one safe semantic target.
+     */
+    private fun tryAccessibilityFirstVisualAction(request: String, userTurnId: Long): Boolean {
+        if (userTurnId <= 0L || screenCommandTurnGuard.hasCommitted(userTurnId)) return false
+        val accessibility = AccessibilityHelperService.instance ?: return false
+        if (!AccessibilityHelperService.isEnabled(this)) return false
+        val foreground = accessibility.currentForegroundContext() ?: return false
+        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground) ?: return false
+        val normalized = request.lowercase(Locale.ROOT)
+        val position = when {
+            Regex("\\b(?:center|middle|beech)\\b").containsMatchIn(normalized) -> "center"
+            Regex("\\b(?:left|baaye|baye)\\b").containsMatchIn(normalized) -> "left"
+            Regex("\\b(?:right|daaye|daye)\\b").containsMatchIn(normalized) -> "right"
+            Regex("\\b(?:top|upar)\\b").containsMatchIn(normalized) -> "top"
+            Regex("\\b(?:bottom|neeche|niche)\\b").containsMatchIn(normalized) -> "bottom"
+            else -> null
+        }
+        val ordinal = when {
+            Regex("\\b(?:first|1st|pehla|pehli)\\b").containsMatchIn(normalized) -> 1
+            Regex("\\b(?:second|2nd|doosra|dusra|doosri|dusri)\\b").containsMatchIn(normalized) -> 2
+            Regex("\\b(?:third|3rd|teesra|tisra)\\b").containsMatchIn(normalized) -> 3
+            else -> null
+        }
+        val beforeSignature = accessibility.visibleScreenSignature()
+        val beforeGeneration = foreground.generation
+        var actionIntent: ScreenActionIntent? = null
+        val result = accessibility.resolveAndTapVisibleTarget(
+            request,
+            position,
+            ordinal,
+            scope
+        ) { candidate, confidence ->
+            if (screenCommandTurnGuard.hasCommitted(userTurnId)) false
+            else {
+                val sessionId = "accessibility:${scope.expectedPackage}:${scope.expectedGeneration}"
+                actionIntent = screenActionRegistry.create(
+                    userTurnId,
+                    sessionId,
+                    request,
+                    candidate.label,
+                    position,
+                    ordinal,
+                    scope.expectedPackage,
+                    android.os.SystemClock.elapsedRealtime(),
+                    0L,
+                    confidence,
+                    scope.expectedWindowId,
+                    scope.expectedGeneration
+                )
+                true
+            }
+        }
+        if (!result.accepted) {
+            actionIntent?.let { screenActionRegistry.cancel(it.actionId) }
+            voiceLog(
+                "screen_action_fast_path_miss turnId=$userTurnId package=${scope.expectedPackage} " +
+                    "resolution=${result.resolution} fallback=VISION_IF_ENABLED"
+            )
+            return false
+        }
+        if (!screenCommandTurnGuard.tryCommit(userTurnId)) {
+            actionIntent?.let { screenActionRegistry.cancel(it.actionId) }
+            voiceLog("screen_action_fast_path_guard_race turnId=$userTurnId actionAlreadyDispatched=true")
+            return true
+        }
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        output.clear()
+        cancelSpeechForNewAction()
+        latestActionDispatchedAt = android.os.SystemClock.elapsedRealtime()
+        voiceLog(
+            "screen_action_path turnId=$userTurnId path=ACCESSIBILITY_FAST_PATH package=${scope.expectedPackage} " +
+                "target=${result.candidate?.label.orEmpty().take(100)} role=${result.candidate?.role.orEmpty()} " +
+                "confidence=${result.confidence} screenshotUsed=false"
+        )
+        val intent = actionIntent
+        mainHandler.postDelayed({
+            accessibility.refreshScreenContext(force = true)
+            val current = accessibility.currentForegroundContext()
+            val afterSignature = accessibility.visibleScreenSignature()
+            val verified = current != null && (
+                current.generation != beforeGeneration ||
+                    (beforeSignature.isNotBlank() && afterSignature.isNotBlank() && beforeSignature != afterSignature)
+                )
+            intent?.let { screenActionRegistry.cancel(it.actionId) }
+            voiceLog(
+                "screen_action_fast_verification turnId=$userTurnId verified=$verified " +
+                    "beforeGeneration=$beforeGeneration afterGeneration=${current?.generation ?: -1L}"
+            )
+            if (!verified) {
+                val message = "Tap hua, lekin screen change verify nahi hua."
+                listener?.onMyraText(message, true)
+                emitState(message)
+                queueLocalSpeech(message, allowUntranscribedAudio = false)
+            } else {
+                emitState("Sun rahi hoon…")
+            }
+        }, 320L)
+        return true
     }
 
     private fun beginFreshScreenQuery(
@@ -1834,6 +2135,9 @@ class MyraVoiceService : Service() {
         suppressModelForTurn = true
         localCommandExecutedThisTurn = true
         output.clear()
+        // One visual-action frame may authorize one last-resort coordinate tap only.
+        // Never reuse coordinates or pixels across screen turns.
+        screenActionSourceFrame = null
         val foreground = AccessibilityHelperService.instance?.currentForegroundContext()
         val visualTurn = foreground?.let {
             fastVisualTurns.begin(userTurnId, visualRequest, it.packageName, it.windowId, it.generation,
@@ -1961,12 +2265,26 @@ class MyraVoiceService : Service() {
                             "VISION_REQUEST_STARTED screenQueryId=${result.query.queryId} screen_session_id=${result.query.sessionId} " +
                                 "frame_id=${frame.frameId} timestamp=$screenFrameSentAt frameWaitMs=${(now - result.query.requestedAt).coerceAtLeast(0L)}"
                         )
+                        if (visualRequest.kind == FastVisualKind.ACTION) {
+                            // Privacy-filtered pixels are kept only long enough to verify this one action.
+                            screenActionSourceFrame = allowed.bytes.copyOf()
+                        }
+                        val projectionInstruction = if (visualRequest.kind == FastVisualKind.ACTION) {
+                            "This is a user-authorized visual action. Prefer the safe Accessibility elements below. " +
+                                "If and only if the requested target is uniquely clear in this newest frame but is missing from Accessibility, " +
+                                "call perform_screen_action with visual_x and visual_y as the target center on a 0..1000 normalized grid, " +
+                                "visual_confidence, and a short visual_target_description. Never provide coordinates for ambiguous, payment, " +
+                                "permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. " +
+                                "Do not claim success; Android must revalidate the foreground and verify the result."
+                        } else {
+                            "Describe only the newest supplied screen frame. If text is readable, summarize only visible content. " +
+                                "If uncertain, say exactly what is uncertain. Keep the spoken answer to one or two complete sentences."
+                        }
                         live?.sendImage(
                             allowed.bytes, "image/jpeg",
-                            "$question\nDescribe only the newest supplied screen frame for query ${result.query.queryId}. " +
-                                "Do not answer from older visual context. If text is readable, summarize only the visible page; never invent hidden or offscreen content. " +
-                                "Screen sharing is ACTIVE. Current safe accessibility elements:\n$ui\n" +
-                                "If uncertain, say exactly what is uncertain. Keep the spoken answer to one or two complete sentences."
+                            "$question\nUse only the newest screen frame for query ${result.query.queryId}. " +
+                                "Do not answer from older visual context or invent hidden content. $projectionInstruction " +
+                                "Screen sharing is ACTIVE. Current safe accessibility elements:\n$ui"
                         )
                         mainHandler.postDelayed({
                             if (screenResponseActive && screenResponseQueryId == result.query.queryId && !screenResponseHasContent) {
@@ -2184,9 +2502,18 @@ class MyraVoiceService : Service() {
                 )
                 voiceLog("visualModelRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt")
                 voiceLog("ttsRequestSent visualTurnId=$visualTurnId screenQueryId=$queryId at=$screenFrameSentAt owner=CONTROLLED_SCREEN")
+                if (visualRequest.kind == FastVisualKind.ACTION) {
+                    // Privacy-filtered pixels are retained in RAM only for this action's
+                    // coordinate authorization and post-action visual verification.
+                    screenActionSourceFrame = allowed.bytes.copyOf()
+                }
                 val visualInstruction = if (visualRequest.kind == FastVisualKind.ACTION) {
-                    "This is a visual action. Identify exactly one safe current-screen target. " +
-                        "Call perform_screen_action with its semantic label or position. Do not answer conversationally or claim success."
+                    "This is a user-authorized visual action. First identify the target by the safe Accessibility elements below and call " +
+                        "perform_screen_action with target_text/position. Only when the requested target is uniquely clear in this newest " +
+                        "screenshot but is absent from Accessibility may you also include visual_x and visual_y for the target center on a " +
+                        "0..1000 normalized grid, visual_confidence, and visual_target_description. Never provide coordinates for ambiguous, " +
+                        "payment, permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. " +
+                        "Do not answer conversationally and never claim success before Android verification."
                 } else {
                     "Answer the user's current-screen question directly in one or two complete sentences."
                 }
@@ -2381,12 +2708,14 @@ class MyraVoiceService : Service() {
         screenResponseAccessibilityPackage = ""
         screenResponseAccessibilityGeneration = 0L
         screenResponseQueryId = ""
+        screenActionSourceFrame = null
         listener?.onMyraText(message, true)
         emitState(message)
         queueLocalSpeech(message, allowUntranscribedAudio = true)
     }
 
     private fun speakScreenPrivacyBlocked() {
+        screenActionSourceFrame = null
         val message = "Sensitive information visible hai, isliye main screen details read nahi kar rahi."
         listener?.onMyraText(message, true)
         emitState(message)
@@ -2439,6 +2768,7 @@ class MyraVoiceService : Service() {
         screenResponseAccessibilityPackage = ""
         screenResponseAccessibilityGeneration = 0L
         screenResponseQueryId = ""
+        screenActionSourceFrame = null
         resetTurnBuffers("screen_response_$reason")
     }
 
@@ -4707,7 +5037,7 @@ class MyraVoiceService : Service() {
         } else {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
-        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} Use propose_user_memory for the semantic meaning of natural memory-related turns, not only command wording. Use ADD_FACT for durable non-person facts such as preferences, communication style, projects, goals, habits, workflows, app usage, and solutions. Use UPDATE_FACT or SUPERSEDE_FACT only with the same stable semantic dimension; never guess a target key. Return a bounded operations list and include independent clauses: a temporary event can be TRANSIENT_CONTEXT while a clearly stated durable relationship is ADD_RELATIONSHIP. Relationships are additive unless the user actually ends or replaces the same relationship. Distinguish relationship removal, relationship replacement, person rename, and whole-person delete. Questions are RECALL and never mutation. Personal-memory questions are owned by Android's local fast lane; do not call or wait for a memory-read model tool. FRIENDS includes the active friendship family; BEST_FRIEND never promotes an ordinary friend. Use the user's actual supporting words as evidence. Never propose guesses, secrets, or unsupported inference; never claim a write succeeded or ask routine permission because Android waits for the authoritative final transcript and owns persistence. The user may have multiple friends or best friends. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action so Android accessibility selects and verifies the existing UI target; never invent coordinates or claim success before verification. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
+        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} Use propose_user_memory for the semantic meaning of natural memory-related turns, not only command wording. Use ADD_FACT for durable non-person facts such as preferences, communication style, projects, goals, habits, workflows, app usage, and solutions. Use UPDATE_FACT or SUPERSEDE_FACT only with the same stable semantic dimension; never guess a target key. Return a bounded operations list and include independent clauses: a temporary event can be TRANSIENT_CONTEXT while a clearly stated durable relationship is ADD_RELATIONSHIP. Relationships are additive unless the user actually ends or replaces the same relationship. Distinguish relationship removal, relationship replacement, person rename, and whole-person delete. Questions are RECALL and never mutation. Personal-memory questions are owned by Android's local fast lane; do not call or wait for a memory-read model tool. FRIENDS includes the active friendship family; BEST_FRIEND never promotes an ordinary friend. Use the user's actual supporting words as evidence. Never propose guesses, secrets, or unsupported inference; never claim a write succeeded or ask routine permission because Android waits for the authoritative final transcript and owns persistence. The user may have multiple friends or best friends. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action. Android always tries Accessibility first. Only if the newest user-authorized action screenshot shows one uniquely clear target that Accessibility cannot represent may you include normalized visual coordinates for that target. Never guess coordinates and never use coordinate fallback for ambiguous, payment, permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. Android must revalidate the foreground and verify the result before success is reported. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
         return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Express emotion through the natural voice, not by announcing emotion or writing stage directions. Match vocal delivery to both the user's mood and the meaning of the conversation: sound brighter, warmer, and slightly more energetic for happiness or exciting news; softer, slower, and gently reassuring for sadness, worry, or vulnerability; calm, steady, and patient for frustration or anger; lightly teasing and playful during mutual joking; naturally surprised when something is genuinely unexpected; and focused with less playfulness for serious topics. Emotional changes must be subtle and human, never theatrical. Never fake sobbing, crying sounds, panic, jealousy, guilt, or emotional dependence. Do not mirror intense anger back at the user. When uncertain about mood, use a warm neutral voice. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Remember, forget, and what-do-you-remember requests are memory intent, never phone actions. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }
@@ -4856,6 +5186,10 @@ class MyraVoiceService : Service() {
                 val typedTurnId = ++it.turnSequence
                 val screenIntent = ScreenVisionIntentParser.parse(text)
                 if (reading != null && it.handleReadingCommand(reading, typedTurnId)) {
+                    Unit
+                } else if (screenIntent == com.myra.assistant.screen.ScreenVisionIntent.CONTROL_TARGET &&
+                    it.tryAccessibilityFirstVisualAction(text, typedTurnId)
+                ) {
                     Unit
                 } else if (screenIntent != null) {
                     it.beginFreshScreenQuery(text, typedTurnId)

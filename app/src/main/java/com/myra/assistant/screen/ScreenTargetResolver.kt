@@ -36,7 +36,7 @@ object ScreenTargetResolver {
         val clickable = candidates.filter { it.clickable && it.right > it.left && it.bottom > it.top }
         if (clickable.isEmpty()) return ScreenTargetResolution.NotFound
 
-        val requestedVideo = Regex("\\b(?:video|youtube|वीडियो)\\b", RegexOption.IGNORE_CASE)
+        val requestedVideo = Regex("\\b(?:video|thumbnail|वीडियो)\\b", RegexOption.IGNORE_CASE)
             .containsMatchIn(targetText.orEmpty())
         if (requestedVideo) {
             val videoCandidates = clickable.filter {
@@ -61,7 +61,18 @@ object ScreenTargetResolver {
 
         val requestedRole = requestedRole(targetText)
         val roleMatches = if (requestedRole == null) clickable else clickable.filter {
-            it.role.equals(requestedRole, true) || normalize(it.label).contains(requestedRole)
+            it.role.equals(requestedRole, true) ||
+                (requestedRole == "button" && (it.role.endsWith("_control", true) || it.role.endsWith("_button", true))) ||
+                (requestedRole.startsWith("search") && it.role.startsWith("search", true)) ||
+                normalize(it.label).contains(requestedRole.replace('_', ' '))
+        }
+        if (requestedRole == "search_field") {
+            val fields = roleMatches.filter { it.role.equals("search_field", true) }
+            if (fields.size == 1) return ScreenTargetResolution.Selected(fields.single(), 0.98)
+            if (fields.isEmpty()) {
+                val buttons = roleMatches.filter { it.role.equals("search_button", true) }
+                if (buttons.size == 1) return ScreenTargetResolution.Selected(buttons.single(), 0.92)
+            }
         }
         val queryTokens = tokens(targetText).filterNot(GENERIC_WORDS::contains).toSet()
         val scoped = if (queryTokens.isNotEmpty()) roleMatches else roleMatches.filter {
@@ -124,6 +135,12 @@ object ScreenTargetResolver {
     }
 
     private fun requestedRole(value: String?): String? = when {
+        Regex("\\b(?:like|thumbs up)\\b", RegexOption.IGNORE_CASE).containsMatchIn(value.orEmpty()) -> "like_control"
+        Regex("\\bsubscribe(?:d)?\\b", RegexOption.IGNORE_CASE).containsMatchIn(value.orEmpty()) -> "subscribe_control"
+        Regex("\\bcomments?\\b", RegexOption.IGNORE_CASE).containsMatchIn(value.orEmpty()) -> "comments_control"
+        Regex("\\b(?:search)\\b.*\\b(?:bar|field|box|textbox|input)\\b|\\b(?:bar|field|box|textbox|input)\\b.*\\bsearch\\b", RegexOption.IGNORE_CASE)
+            .containsMatchIn(value.orEmpty()) -> "search_field"
+        Regex("\\bsearch\\b", RegexOption.IGNORE_CASE).containsMatchIn(value.orEmpty()) -> "search"
         Regex("\\b(?:video|thumbnail|वीडियो)\\b", RegexOption.IGNORE_CASE).containsMatchIn(value.orEmpty()) -> "video"
         Regex("\\b(?:button|btn|बटन)\\b", RegexOption.IGNORE_CASE).containsMatchIn(value.orEmpty()) -> "button"
         else -> null
@@ -134,8 +151,9 @@ object ScreenTargetResolver {
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
 
     private val GENERIC_WORDS = setOf(
-        "open", "play", "tap", "click", "karo", "kholo", "chalao", "dabao", "wala", "wali",
-        "video", "button", "item", "result", "the", "called", "about", "jo", "usko", "isko"
+        "open", "play", "tap", "click", "press", "karo", "kar", "do", "kholo", "chalao", "dabao", "wala", "wali",
+        "video", "button", "icon", "control", "item", "result", "search", "bar", "field", "box", "textbox", "input",
+        "youtube", "the", "called", "about", "jo", "usko", "isko", "is", "this", "that", "ye", "yeh", "pe", "par", "ko", "please"
     )
     private const val MIN_TITLE_CONFIDENCE = 0.45
     private const val AMBIGUITY_MARGIN = 0.12

@@ -15,7 +15,7 @@ data class FastVisualRequest(val kind: FastVisualKind, val semanticHint: String)
 object FastVisualRequestClassifier {
     private val questionConcepts = setOf("see", "screen", "visible", "dikh", "dikhra", "dekh", "error", "problem", "स्क्रीन", "दिख", "देख")
     private val actionConcepts = setOf("tap", "press", "click", "dabao", "open", "khol", "subscribe", "like")
-    private val visualObjects = setOf("this", "that", "ye", "yeh", "isko", "usko", "jo", "icon", "button", "thumb", "hand", "uploader", "screen")
+    private val visualObjects = setOf("this", "that", "ye", "yeh", "isko", "usko", "jo", "icon", "button", "search", "bar", "field", "textbox", "input", "thumb", "hand", "uploader", "screen")
 
     fun classify(text: String, hasVerifiedVisualContext: Boolean = false): FastVisualRequest? {
         val tokens = tokens(text)

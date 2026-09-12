@@ -41,6 +41,7 @@ import com.myra.assistant.screen.AccessibilityScreenshot
 import com.myra.assistant.screen.AccessibilityVisualCache
 import com.myra.assistant.screen.VisualFrameSource
 import com.myra.assistant.screen.VisualScreenshotSelection
+import com.myra.assistant.screen.VisionCoordinateSafetyPolicy
 import com.myra.assistant.screen.ScreenSceneAwarenessStore
 import com.myra.assistant.agent.ActivityContextStore
 import com.myra.assistant.agent.ActivityObservationCoalescer
@@ -179,6 +180,62 @@ class AccessibilityHelperService : AccessibilityService() {
     }
 
     fun takeScreenshot(): Boolean = performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
+
+    /**
+     * Last-resort visual tap for custom/canvas UI that exposes no usable Accessibility node.
+     * Coordinates are normalized to 0..1000 and are accepted only after freshness, foreground,
+     * confidence and sensitive-surface checks. Normal Accessibility clicks always stay primary.
+     */
+    fun tapAtVisionCoordinates(
+        normalizedX: Int,
+        normalizedY: Int,
+        confidence: Double,
+        sourceFrameAgeMs: Long,
+        expectedScope: ForegroundActionScope,
+        targetDescription: String? = null
+    ): VisibleTargetTapResult {
+        if (!visualAwareness.enabled) {
+            return VisibleTargetTapResult(false, confidence = confidence, resolution = "visual_awareness_off")
+        }
+        val current = currentForegroundContext()
+            ?: return VisibleTargetTapResult(false, confidence = confidence, resolution = "no_accessibility_root")
+        if (!ForegroundActionPolicy.canExecute(expectedScope, current)) {
+            return VisibleTargetTapResult(false, confidence = confidence, resolution = "stale_foreground")
+        }
+        val labels = visibleElements(120).map { it.label } + listOfNotNull(targetDescription)
+        val safety = VisionCoordinateSafetyPolicy.evaluate(
+            current.packageName, normalizedX, normalizedY, confidence, sourceFrameAgeMs, labels
+        )
+        if (!safety.allowed) {
+            VoicePipelineLogger.debug(
+                "VISION_COORDINATE_TAP_BLOCKED package=${current.packageName} reason=${safety.reason} " +
+                    "x=$normalizedX y=$normalizedY confidence=$confidence frameAgeMs=$sourceFrameAgeMs"
+            )
+            return VisibleTargetTapResult(false, confidence = confidence, resolution = safety.reason)
+        }
+        // Revalidate immediately before dispatch so a model result can never tap a replacement window.
+        if (!ForegroundActionPolicy.canExecute(expectedScope, currentForegroundContext())) {
+            return VisibleTargetTapResult(false, confidence = confidence, resolution = "stale_foreground")
+        }
+        val x = VisionCoordinateSafetyPolicy.toPixel(normalizedX, resources.displayMetrics.widthPixels)
+        val y = VisionCoordinateSafetyPolicy.toPixel(normalizedY, resources.displayMetrics.heightPixels)
+        val path = Path().apply {
+            moveTo(x, y)
+            lineTo((x + 0.1f).coerceAtMost(resources.displayMetrics.widthPixels - 1f), y)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 70L))
+            .build()
+        val accepted = dispatchGesture(gesture, null, null)
+        VoicePipelineLogger.debug(
+            "VISION_COORDINATE_TAP_DISPATCHED package=${current.packageName} accepted=$accepted " +
+                "x=$normalizedX y=$normalizedY confidence=$confidence frameAgeMs=$sourceFrameAgeMs"
+        )
+        return VisibleTargetTapResult(
+            accepted, confidence = confidence,
+            resolution = if (accepted) "vision_coordinate" else "gesture_rejected"
+        )
+    }
 
     /**
      * Captures an in-memory Accessibility screenshot on Android 11+. This is LYRA's
@@ -1188,12 +1245,13 @@ class AccessibilityHelperService : AccessibilityService() {
         fun collect(node: AccessibilityNodeInfo) {
             if (result.size >= limit) return
             if (node.isVisibleToUser) {
-                val label = listOfNotNull(node.text, node.contentDescription)
+                val label = listOfNotNull(node.text, node.contentDescription, node.hintText, node.viewIdResourceName)
                     .joinToString(" ").trim().replace(Regex("\\s+"), " ")
                 if (label.isNotBlank()) {
                     val bounds = Rect().also(node::getBoundsInScreen)
+                    val actionable = findClickable(node) != null || node.isEditable
                     if (!bounds.isEmpty) result += VisibleScreenElement(
-                        label.take(240), bounds, findClickable(node) != null,
+                        label.take(240), bounds, actionable,
                         node.className?.toString().orEmpty()
                     )
                 }
@@ -1530,14 +1588,14 @@ class AccessibilityHelperService : AccessibilityService() {
         val candidates = mutableListOf<Candidate>()
         fun collect(node: AccessibilityNodeInfo) {
             if (node.isVisibleToUser) {
-                val clickable = findClickable(node)
-                val label = listOfNotNull(node.text, node.contentDescription)
+                val actionable = findClickable(node) ?: node.takeIf { it.isEditable }
+                val label = listOfNotNull(node.text, node.contentDescription, node.hintText, node.viewIdResourceName)
                     .joinToString(" ").trim().replace(Regex("\\s+"), " ")
-                if (clickable != null && label.isNotBlank()) {
-                    val bounds = Rect().also(clickable::getBoundsInScreen)
+                if (actionable != null && label.isNotBlank()) {
+                    val bounds = Rect().also(actionable::getBoundsInScreen)
                     if (!bounds.isEmpty) {
                         val className = node.className?.toString().orEmpty()
-                        val contextLabel = nodeContextLabel(node) + " " + nodeContextLabel(clickable)
+                        val contextLabel = nodeContextLabel(node) + " " + nodeContextLabel(actionable)
                         val youtubeVideo = root.packageName?.toString() == YOUTUBE_PACKAGE &&
                             looksLikeVideoCard(contextLabel, afterPlayer = false) &&
                             !AD_SIGNAL.containsMatchIn(contextLabel) &&
@@ -1545,19 +1603,25 @@ class AccessibilityHelperService : AccessibilityService() {
                         val youtubeRole = if (root.packageName?.toString() == YOUTUBE_PACKAGE) {
                             youtubeSemanticRole(label, contextLabel, node)
                         } else null
+                        val normalizedLabel = label.lowercase(Locale.ROOT)
+                        val searchLike = Regex("\\bsearch\\b", RegexOption.IGNORE_CASE).containsMatchIn(label) ||
+                            node.viewIdResourceName.orEmpty().contains("search", true)
                         val role = when {
                             youtubeRole == YouTubeSemanticRole.LIKE_BUTTON -> "like_control"
                             youtubeRole == YouTubeSemanticRole.SUBSCRIBE_BUTTON -> "subscribe_control"
                             youtubeRole == YouTubeSemanticRole.COMMENTS_SECTION -> "comments_control"
                             youtubeRole == YouTubeSemanticRole.CHANNEL_PROFILE -> "channel_profile"
+                            searchLike && (node.isEditable || className.contains("EditText", true) ||
+                                Regex("\\b(?:bar|field|box|input)\\b").containsMatchIn(normalizedLabel)) -> "search_field"
+                            searchLike -> "search_button"
                             youtubeVideo -> "video"
                             className.contains("button", true) -> "button"
                             else -> "interactive"
                         }
                         val semanticLabel = if (youtubeVideo) {
-                            extractVideoSearchQuery(clickable) ?: label
+                            extractVideoSearchQuery(actionable) ?: label
                         } else label
-                        candidates += Candidate(candidates.size, clickable, semanticLabel, bounds, role)
+                        candidates += Candidate(candidates.size, actionable, semanticLabel, bounds, role)
                     }
                 }
             }
@@ -1600,8 +1664,10 @@ class AccessibilityHelperService : AccessibilityService() {
         ) {
             return VisibleTargetTapResult(false, selected.candidate, selected.confidence, "stale_foreground")
         }
+        val accepted = node.performAction(AccessibilityNodeInfo.ACTION_CLICK) ||
+            (node.isEditable && node.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
         return VisibleTargetTapResult(
-            node.performAction(AccessibilityNodeInfo.ACTION_CLICK),
+            accepted,
             selected.candidate,
             selected.confidence,
             "selected"

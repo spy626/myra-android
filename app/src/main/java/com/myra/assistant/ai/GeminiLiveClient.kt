@@ -229,11 +229,15 @@ class GeminiLiveClient(
 
     private fun screenActionDeclaration() = JSONObject()
         .put("name", "perform_screen_action")
-        .put("description", "Select one currently visible UI target using accessibility-backed screen elements. Use only when Screen Vision is active and the user explicitly asks to tap, click, press, or open a visible target. Never guess when multiple targets are equally plausible.")
+        .put("description", "Select exactly one currently visible UI target for an explicit user-requested tap/click/press/open action. Prefer target_text/position/ordinal so Android Accessibility can act directly. Only when the newest supplied action screenshot clearly shows one target that is not represented by safe Accessibility elements, also provide visual_x and visual_y as the target center normalized from 0..1000 plus visual_confidence. Never provide coordinates for ambiguous, sensitive, permission, payment, install, account-delete, or system UI targets, and never claim success before Android verifies the result.")
         .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
-            .put("target_text", JSONObject().put("type", "STRING"))
+            .put("target_text", JSONObject().put("type", "STRING").put("description", "Best semantic label for the requested visible target."))
             .put("position", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("top", "bottom", "left", "right", "center", "middle", "unspecified"))))
             .put("ordinal", JSONObject().put("type", "INTEGER"))
+            .put("visual_x", JSONObject().put("type", "INTEGER").put("minimum", 0).put("maximum", 1000).put("description", "Optional last-resort target-center X coordinate normalized to 0..1000 for the newest supplied action screenshot."))
+            .put("visual_y", JSONObject().put("type", "INTEGER").put("minimum", 0).put("maximum", 1000).put("description", "Optional last-resort target-center Y coordinate normalized to 0..1000 for the newest supplied action screenshot."))
+            .put("visual_confidence", JSONObject().put("type", "NUMBER").put("minimum", 0.0).put("maximum", 1.0).put("description", "Confidence that visual_x/visual_y identify exactly the requested target."))
+            .put("visual_target_description", JSONObject().put("type", "STRING").put("description", "Short visual description of the exact target used for the coordinate fallback."))
         ))
 
     private fun screenMemoryProposalDeclaration() = JSONObject()

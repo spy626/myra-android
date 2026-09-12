@@ -7,7 +7,7 @@ enum class InstantScreenQuery { OVERVIEW, CURRENT_APP }
 
 object ScreenVisionIntentParser {
     private val screenSignal = Regex(
-        """\b(?:screen|display|visible|dikh|dekh|website|page|thumbnail|analytics|code|error|button|icon|toggle|switch|option|setting|settings|menu|card|item|result|video|this|that|looking)\b""",
+        """\b(?:screen|display|visible|dikh|dekh|website|page|thumbnail|analytics|code|error|button|icon|toggle|switch|option|setting|settings|menu|card|item|result|video|search|bar|field|textbox|input|this|that|looking)\b""",
         RegexOption.IGNORE_CASE
     )
     private val analyzeSignal = Regex(
