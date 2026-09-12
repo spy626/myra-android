@@ -1,0 +1,60 @@
+name: Apply safe visual coordinate fallback
+permissions:
+  contents: write
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths:
+      - '.github/vision-coordinate-fallback.patch.gz.b64'
+      - '.github/workflows/apply-vision-coordinate-fallback.yml'
+
+jobs:
+  apply-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/myra-phase-1
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply safe visual fallback patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .github/vision-coordinate-fallback.patch.gz.b64 | gzip -d > "$RUNNER_TEMP/vision.patch"
+          git apply --3way --check "$RUNNER_TEMP/vision.patch"
+          git apply --3way "$RUNNER_TEMP/vision.patch"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/myra/assistant/service/MyraVoiceService.kt')
+          s = p.read_text()
+          old = "For an explicit visible-target request, call perform_screen_action so Android accessibility selects and verifies the existing UI target; never invent coordinates or claim success before verification."
+          new = "For an explicit visible-target request, call perform_screen_action. Android always tries Accessibility first. Only if the newest user-authorized action screenshot shows one uniquely clear target that Accessibility cannot represent may you include normalized visual coordinates for that target. Never guess coordinates and never use coordinate fallback for ambiguous, payment, permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. Android must revalidate the foreground and verify the result before success is reported."
+          if old not in s:
+              raise SystemExit('screen action system-prompt contract not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+      - name: Unit tests and debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Commit final source and remove staging files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/vision-coordinate-fallback.patch.gz.b64
+          rm -f .github/workflows/apply-vision-coordinate-fallback.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "Add safe accessibility-first visual coordinate fallback"
+          git push origin HEAD:agent/myra-phase-1
