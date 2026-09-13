@@ -40,10 +40,11 @@ object AiriEventSegmenter {
     const val REVIEW_CONTEXT_EVENTS = 5
     const val TARGET_EVENTS_PER_SEGMENT = 12
 
-    fun plan(messages: List<ConversationTruthEntity>, eof: Boolean): SegmentationPlan {
+    fun plan(messages: List<ConversationTruthEntity>, eof: Boolean,
+        embeddingProvider: LocalEmbeddingProvider = FeatureHashEmbeddingProvider): SegmentationPlan {
         if (messages.isEmpty()) return SegmentationPlan(emptyList(), null, emptyList())
         val sorted = messages.sortedBy { it.sequence }
-        val vectors = sorted.map { FeatureHashEmbeddingProvider.embed(it.content) }
+        val vectors = sorted.map { embeddingProvider.embed(it.content) }
         val hardBoundaries = sorted.zipWithNext().mapNotNull { (left, right) ->
             val gap = right.committedAt - left.committedAt
             when {
@@ -131,12 +132,16 @@ object AiriEventSegmenter {
 }
 
 interface LocalEmbeddingProvider {
+    val modelId: String
+    val version: Int
     val dimensions: Int
     fun embed(text: String): DoubleArray
 }
 
 /** Free, private feature-hashing vector lane. No network and no paid model. */
 object FeatureHashEmbeddingProvider : LocalEmbeddingProvider {
+    override val modelId = "lyra-feature-hash"
+    override val version = 1
     override val dimensions = 64
     override fun embed(text: String): DoubleArray {
         val vector = DoubleArray(dimensions)
@@ -149,12 +154,17 @@ object FeatureHashEmbeddingProvider : LocalEmbeddingProvider {
         return DoubleArray(dimensions) { vector[it] / norm }
     }
 
-    fun encode(vector: DoubleArray) = vector.joinToString(",") { "%.5f".format(Locale.ROOT, it) }
-    fun decode(value: String): DoubleArray? = runCatching {
-        value.split(',').map(String::toDouble).toDoubleArray().takeIf { it.size == dimensions }
-    }.getOrNull()
+    fun encode(vector: DoubleArray) = LocalVectorCodec.encode(vector)
+    fun decode(value: String): DoubleArray? = LocalVectorCodec.decode(value, dimensions)
     fun cosine(left: DoubleArray, right: DoubleArray): Double =
         if (left.size != right.size) 0.0 else left.indices.sumOf { left[it] * right[it] }.coerceIn(-1.0, 1.0)
+}
+
+object LocalVectorCodec {
+    fun encode(vector: DoubleArray) = vector.joinToString(",") { "%.7f".format(Locale.ROOT, it) }
+    fun decode(value: String, dimensions: Int): DoubleArray? = runCatching {
+        value.split(',').map(String::toDouble).toDoubleArray().takeIf { it.size == dimensions }
+    }.getOrNull()
 }
 
 object ReciprocalRankFusion {

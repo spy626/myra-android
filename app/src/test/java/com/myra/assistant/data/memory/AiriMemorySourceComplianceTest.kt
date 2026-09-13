@@ -74,7 +74,7 @@ class AiriMemorySourceComplianceTest {
     @Test fun plastMemTablesAndNoParallelTruthTablesAreDeclared() {
         val db = File(root, "data/memory/LyraMemoryDatabase.kt").readText()
         val entities = File(root, "data/memory/MemoryEntity.kt").readText()
-        assertTrue(db.contains("version = 8"))
+        assertTrue(db.contains("version = 9"))
         val coordinator = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
         assertTrue(coordinator.contains("segmentCommittedConversation(evidence.sessionId, eof = false)"))
         assertFalse(coordinator.contains("segmentCommittedConversation(evidence.sessionId, eof = true)"))
@@ -89,6 +89,8 @@ class AiriMemorySourceComplianceTest {
         val spark = File(root, "agent/SparkRuntime.kt").readText()
         val unified = File(root, "agent/UnifiedLyraAgent.kt").readText()
         assertTrue(unified.contains("val sparkRuntime = LyraSparkRuntime"))
+        assertTrue(unified.contains("val sparkNotifyScheduler = SparkNotifyScheduler"))
+        assertTrue(unified.contains("fun handleSparkNotify"))
         assertFalse(spark.contains("AiriMemoryDao")); assertFalse(spark.contains("RoomAiriMemoryStore"))
         assertFalse(spark.contains("insertSemantic")); assertFalse(spark.contains("addSemantic"))
     }

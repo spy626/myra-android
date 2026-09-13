@@ -77,7 +77,10 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
         // A process can die after transcript commit but before the in-process
         // timeout fires. Recover only stale source-owned conversations; fresh
         // claims remain protected by the generation/claim guard below.
-        if (recoverOnInit) backgroundScope.launch { recoverAbandonedConversations() }
+        if (recoverOnInit) backgroundScope.launch {
+            recoverAbandonedConversations()
+            store.reembedStale(32)
+        }
     }
 
     suspend fun prepareFinalTurn(evidence: AuthoritativeMemoryTurnEvidence, staged: List<MemorySemanticFrame>, semanticConsistent: Boolean = true): FinalMemoryTurnPlan {

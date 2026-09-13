@@ -7,7 +7,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /** AIRI/plast-mem Android completion: durable semantic truth with retained history. */
-@Entity(tableName = "airi_semantic_memory", indices = [Index(value = ["semanticKey", "active"]), Index(value = ["category", "active"]), Index(value = ["subjectEntityId"]), Index(value = ["updatedAt"]), Index(value = ["lastAccessed"])])
+@Entity(tableName = "airi_semantic_memory", indices = [Index(value = ["semanticKey", "active"]), Index(value = ["category", "active"]), Index(value = ["subjectEntityId"]), Index(value = ["updatedAt"]), Index(value = ["lastAccessed"]), Index(value = ["embeddingModel", "embeddingVersion"])])
 data class SemanticMemoryEntity(
     @PrimaryKey val memoryId: String, val semanticKey: String, val category: String,
     val statement: String, val normalizedStatement: String, val subjectEntityId: String? = null,
@@ -17,7 +17,9 @@ data class SemanticMemoryEntity(
     val createdAt: Long, val updatedAt: Long, val lastAccessed: Long,
     val accessCount: Int = 0, val deletedAt: Long? = null,
     val conversationId: String = "default", val validAt: Long = createdAt,
-    val invalidAt: Long? = null, val embedding: String = ""
+    val invalidAt: Long? = null, val embedding: String = "",
+    val embeddingModel: String = "lyra-feature-hash", val embeddingVersion: Int = 1,
+    val embeddingDimensions: Int = 64
 )
 
 @Entity(tableName = "airi_people", indices = [Index(value = ["canonicalName"]), Index(value = ["active"])])
@@ -42,7 +44,7 @@ data class RelationshipEntity(
     val lastAccessed: Long, val accessCount: Int = 0, val deletedAt: Long? = null
 )
 
-@Entity(tableName = "airi_episodes", indices = [Index(value = ["eventType"]), Index(value = ["occurredAt"]), Index(value = ["sourceTurnId"])])
+@Entity(tableName = "airi_episodes", indices = [Index(value = ["eventType"]), Index(value = ["occurredAt"]), Index(value = ["sourceTurnId"]), Index(value = ["embeddingModel", "embeddingVersion"])])
 data class EpisodicMemoryEntity(
     @PrimaryKey val episodeId: String, val eventType: String, val summary: String,
     val normalizedSummary: String, val temporalScope: String, val occurredAt: Long,
@@ -54,7 +56,9 @@ data class EpisodicMemoryEntity(
     val content: String = summary, val classification: String = "INFORMATIVE",
     val embedding: String = "", val stability: Double = 1.0, val difficulty: Double = 5.0,
     val surprise: Double = 0.0, val consolidatedAt: Long? = null,
-    val lastReviewedAt: Long? = null, val isFlashbulb: Boolean = false
+    val lastReviewedAt: Long? = null, val isFlashbulb: Boolean = false,
+    val embeddingModel: String = "lyra-feature-hash", val embeddingVersion: Int = 1,
+    val embeddingDimensions: Int = 64
 )
 
 @Entity(tableName = "airi_episode_participants", primaryKeys = ["episodeId", "entityId"], foreignKeys = [ForeignKey(entity = EpisodicMemoryEntity::class, parentColumns = ["episodeId"], childColumns = ["episodeId"], onDelete = ForeignKey.CASCADE), ForeignKey(entity = PersonEntity::class, parentColumns = ["entityId"], childColumns = ["entityId"], onDelete = ForeignKey.CASCADE)], indices = [Index(value = ["entityId"])])

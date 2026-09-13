@@ -16,12 +16,20 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
             while (sparkCommands.size > 32) sparkCommands.removeFirst()
         }
     })
+    val sparkNotifyScheduler = SparkNotifyScheduler(sparkRuntime)
 
     /** Commands remain proposals until the unified agent/service consumes and verifies them. */
     fun pendingSparkCommands(): List<SparkCommand> = synchronized(sparkCommands) { sparkCommands.toList() }
     fun takeSparkCommand(): SparkCommand? = synchronized(sparkCommands) {
         if (sparkCommands.isEmpty()) null else sparkCommands.removeFirst()
     }
+
+    /** Spark Notify is evaluated by LYRA Core; downstream commands re-enter the same queue. */
+    fun handleSparkNotify(
+        event: SparkNotifyEvent,
+        control: SparkNotifyResponseControl = SparkNotifyResponseControl(),
+        policy: (SparkNotifyEvent) -> SparkNotifyDecision
+    ): SparkNotifyDecision = sparkRuntime.notify(event, control, policy)
 
     fun currentTask(): AgentTask? = active
 

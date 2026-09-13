@@ -59,12 +59,14 @@ interface AiriMemoryStore {
     suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int = 0
     suspend fun enqueueEpisodeReview(conversationId: String, episodeIds: List<String>, query: String): Boolean = false
     suspend fun appendSparkTrace(row: SparkTraceEntity): Boolean = false
+    suspend fun reembedStale(limit: Int): Int = 0
 }
 
 class RoomAiriMemoryStore(
     private val database: LyraMemoryDatabase,
     private val dao: AiriMemoryDao = database.airiMemoryDao(),
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val embeddingProvider: LocalEmbeddingProvider = FeatureHashEmbeddingProvider
 ) : AiriMemoryStore {
     override suspend fun <T> transaction(block: suspend AiriMemoryStore.() -> T): T =
         database.withTransaction { block(this@RoomAiriMemoryStore) }
@@ -144,12 +146,14 @@ class RoomAiriMemoryStore(
             )
             return current.memoryId
         }
-        val embedding = FeatureHashEmbeddingProvider.encode(FeatureHashEmbeddingProvider.embed(statement))
+        val embedding = LocalVectorCodec.encode(embeddingProvider.embed(statement))
         val row = SemanticMemoryEntity(id, key, frame.category?.name ?: MemoryCategory.PREFERENCE.name,
             statement, AiriText.normalize(statement), frame.resolvedEntityId, temporal.name, frame.confidence,
             importance = 6, explicit = true, provenance = "FINAL_USER_TURN", sourceTurnId = evidence.turnId,
             sourceUtteranceId = evidence.utteranceId, createdAt = now, updatedAt = now, lastAccessed = now,
-            conversationId = evidence.sessionId, validAt = now, embedding = embedding)
+            conversationId = evidence.sessionId, validAt = now, embedding = embedding,
+            embeddingModel = embeddingProvider.modelId, embeddingVersion = embeddingProvider.version,
+            embeddingDimensions = embeddingProvider.dimensions)
         return database.withTransaction {
             if (temporal == MemoryTemporalScope.CURRENT && frame.intent in setOf(
                     MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT
@@ -169,7 +173,7 @@ class RoomAiriMemoryStore(
         val summary = payload.summary.trim().takeIf { it.length in 3..500 } ?: return null
         val now = clock(); val id = UUID.randomUUID().toString()
         return database.withTransaction {
-            val embedding = FeatureHashEmbeddingProvider.encode(FeatureHashEmbeddingProvider.embed(summary))
+            val embedding = LocalVectorCodec.encode(embeddingProvider.embed(summary))
             val surprise = payload.importance.coerceIn(0.0, 1.0)
             val fsrs = AiriFsrs.initial(reviewedAt = now)
             dao.insertEpisode(EpisodicMemoryEntity(id, AiriText.semanticKey(payload.eventType), summary,
@@ -179,6 +183,8 @@ class RoomAiriMemoryStore(
                 title = payload.eventType.ifBlank { "Conversation episode" }, content = summary,
                 embedding = embedding, stability = fsrs.stability, difficulty = fsrs.difficulty,
                 surprise = surprise, lastReviewedAt = fsrs.lastReviewedAt,
+                embeddingModel = embeddingProvider.modelId, embeddingVersion = embeddingProvider.version,
+                embeddingDimensions = embeddingProvider.dimensions,
                 isFlashbulb = FlashbulbPolicy.isFlashbulb(surprise, false)))
             dao.insertEpisodeParticipants(participantIds.distinct().map { EpisodeParticipantEntity(id, it) })
             dao.insertEpisodeFts(EpisodicMemoryFtsEntity(id.stableRowId(), id, "${payload.eventType} $summary"))
@@ -259,7 +265,7 @@ class RoomAiriMemoryStore(
         val title = messages.firstOrNull { it.role == "user" }?.content?.take(96)?.ifBlank { "Conversation episode" }
             ?: "Conversation episode"
         val created = messages.minOf { it.committedAt }; val ended = messages.maxOf { it.committedAt }
-        val embedding = FeatureHashEmbeddingProvider.encode(FeatureHashEmbeddingProvider.embed("$title $content"))
+        val embedding = LocalVectorCodec.encode(embeddingProvider.embed("$title $content"))
         val fsrs = AiriFsrs.initial(reviewedAt = clock())
         return database.withTransaction {
             runCatching {
@@ -272,7 +278,9 @@ class RoomAiriMemoryStore(
                     startSequence = span.startSequence, endSequence = span.endSequence, title = title,
                     content = content, classification = span.classification, embedding = embedding,
                     stability = fsrs.stability, difficulty = fsrs.difficulty,
-                    lastReviewedAt = fsrs.lastReviewedAt
+                    lastReviewedAt = fsrs.lastReviewedAt,
+                    embeddingModel = embeddingProvider.modelId, embeddingVersion = embeddingProvider.version,
+                    embeddingDimensions = embeddingProvider.dimensions
                 ))
                 dao.insertEpisodeFts(EpisodicMemoryFtsEntity(id.stableRowId(), id, "$title $content"))
                 id
@@ -336,6 +344,24 @@ class RoomAiriMemoryStore(
         return dao.enqueueReview(row) != -1L
     }
     override suspend fun appendSparkTrace(row: SparkTraceEntity) = dao.appendSparkTrace(row) != -1L
+    override suspend fun reembedStale(limit: Int): Int {
+        val bounded = limit.coerceIn(1, 64); var changed = 0
+        database.withTransaction {
+            dao.staleSemanticEmbeddings(embeddingProvider.modelId, embeddingProvider.version,
+                embeddingProvider.dimensions, bounded).forEach { row ->
+                changed += dao.updateSemanticEmbedding(row.memoryId,
+                    LocalVectorCodec.encode(embeddingProvider.embed(row.statement)),
+                    embeddingProvider.modelId, embeddingProvider.version, embeddingProvider.dimensions)
+            }
+            dao.staleEpisodeEmbeddings(embeddingProvider.modelId, embeddingProvider.version,
+                embeddingProvider.dimensions, bounded).forEach { row ->
+                changed += dao.updateEpisodeEmbedding(row.episodeId,
+                    LocalVectorCodec.encode(embeddingProvider.embed("${row.title} ${row.content}")),
+                    embeddingProvider.modelId, embeddingProvider.version, embeddingProvider.dimensions)
+            }
+        }
+        return changed
+    }
 
     private suspend fun semanticCards(limit: Int) = dao.activeSemantic(limit).map { row -> MemoryEntity(
         row.memoryId, row.semanticKey, row.category, row.statement, row.confidence, row.provenance,
@@ -374,16 +400,16 @@ class RoomAiriMemoryStore(
         // and vector leg before RRF. The final public result remains bounded.
         val semanticPool = dao.activeSemantic(RETRIEVAL_CANDIDATE_LIMIT)
         val episodePool = dao.recentEpisodes(RETRIEVAL_CANDIDATE_LIMIT)
-        val queryVector = FeatureHashEmbeddingProvider.embed(query)
+        val queryVector = embeddingProvider.embed(query)
         val semanticLexical = runCatching { dao.searchSemanticFts(fts, RETRIEVAL_CANDIDATE_LIMIT) }.getOrDefault(emptyList())
         val semanticVector = semanticPool.sortedByDescending {
-            FeatureHashEmbeddingProvider.decode(it.embedding)?.let { v -> FeatureHashEmbeddingProvider.cosine(queryVector, v) } ?: 0.0
+            vectorSimilarity(queryVector, it.embedding, it.embeddingModel, it.embeddingVersion, it.embeddingDimensions)
         }.take(RETRIEVAL_CANDIDATE_LIMIT)
         val semantic = ReciprocalRankFusion.merge(listOf(semanticLexical, semanticVector), { it.memoryId }, RETRIEVAL_CANDIDATE_LIMIT)
             .map { semanticCard(it.first) }
         val episodeLexical = runCatching { dao.searchEpisodeFts(fts, RETRIEVAL_CANDIDATE_LIMIT) }.getOrDefault(emptyList())
         val episodeVector = episodePool.sortedByDescending {
-            FeatureHashEmbeddingProvider.decode(it.embedding)?.let { v -> FeatureHashEmbeddingProvider.cosine(queryVector, v) } ?: 0.0
+            vectorSimilarity(queryVector, it.embedding, it.embeddingModel, it.embeddingVersion, it.embeddingDimensions)
         }.take(RETRIEVAL_CANDIDATE_LIMIT)
         val now = clock()
         val episodeRanked = ReciprocalRankFusion.merge(listOf(episodeLexical, episodeVector), { it.episodeId }, RETRIEVAL_CANDIDATE_LIMIT)
@@ -410,6 +436,11 @@ class RoomAiriMemoryStore(
         return tokens.count(haystack::contains) * 10 + row.importance
     }
     private fun String.stableRowId(): Int = (hashCode() and Int.MAX_VALUE).coerceAtLeast(1)
+
+    private fun vectorSimilarity(query: DoubleArray, encoded: String, model: String, version: Int, dimensions: Int): Double {
+        if (model != embeddingProvider.modelId || version != embeddingProvider.version || dimensions != embeddingProvider.dimensions) return 0.0
+        return LocalVectorCodec.decode(encoded, dimensions)?.let { FeatureHashEmbeddingProvider.cosine(query, it) } ?: 0.0
+    }
 
     companion object { private const val RETRIEVAL_CANDIDATE_LIMIT = 100 }
 }

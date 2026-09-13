@@ -11,6 +11,7 @@ enum class SparkInterrupt { FORCE, SOFT, NONE }
 enum class SparkGuidanceType { PROPOSAL, INSTRUCTION, MEMORY_RECALL }
 enum class SparkRisk { HIGH, MEDIUM, LOW, NONE }
 enum class SparkPersonaStrength { VERY_HIGH, HIGH, MEDIUM, LOW, VERY_LOW }
+enum class SparkUrgency { IMMEDIATE, SOON, LATER }
 
 data class SparkGuidanceOption(
     val label: String, val steps: List<String>, val rationale: String? = null,
@@ -45,7 +46,8 @@ data class SparkNotifyEvent(
     val eventId: String = UUID.randomUUID().toString(), val parentEventId: String? = null,
     val source: String, val lane: String, val headline: String,
     val priority: SparkPriority = SparkPriority.NORMAL, val destinations: List<String> = listOf("character"),
-    val payload: Map<String, String> = emptyMap(), val createdAt: Long = System.currentTimeMillis()
+    val urgency: SparkUrgency = SparkUrgency.SOON, val payload: Map<String, String> = emptyMap(),
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 data class SparkNotifyResponseControl(
@@ -132,4 +134,68 @@ class LyraSparkRuntime(
             (routing.include.isEmpty() || routing.include.any { it in commandDestinations }) &&
                 routing.exclude.none { it in commandDestinations }
     }
+}
+
+private data class ScheduledSparkNotify(
+    val event: SparkNotifyEvent,
+    val control: SparkNotifyResponseControl,
+    val nextRunAt: Long,
+    val attempts: Int,
+    val maxAttempts: Int
+)
+
+/**
+ * Android-equivalent of AIRI's character-orchestrator attention queue. Hosts
+ * call tick from their lifecycle scheduler; the queue itself is deterministic,
+ * bounded, deduplicated, and independently testable.
+ */
+class SparkNotifyScheduler(
+    private val runtime: LyraSparkRuntime,
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val requeueDelayMs: Long = 30_000,
+    private val maxAttempts: Int = 3,
+    private val capacity: Int = 64
+) {
+    private val scheduled = mutableListOf<ScheduledSparkNotify>()
+
+    @Synchronized fun enqueue(event: SparkNotifyEvent, control: SparkNotifyResponseControl = SparkNotifyResponseControl()): Boolean {
+        if (scheduled.any { it.event.eventId == event.eventId }) return false
+        if (scheduled.size >= capacity) scheduled.removeAt(0)
+        scheduled += ScheduledSparkNotify(event, control, nextRun(event, 0), 0, maxAttempts)
+        return true
+    }
+
+    @Synchronized fun pendingCount() = scheduled.size
+
+    fun handleIncoming(
+        event: SparkNotifyEvent,
+        control: SparkNotifyResponseControl = SparkNotifyResponseControl(),
+        policy: (SparkNotifyEvent) -> SparkNotifyDecision
+    ): SparkNotifyDecision? = if (event.urgency == SparkUrgency.IMMEDIATE) {
+        runtime.notify(event, control, policy)
+    } else {
+        enqueue(event, control); null
+    }
+
+    fun tick(policy: (SparkNotifyEvent) -> SparkNotifyDecision): SparkNotifyDecision? {
+        val item = synchronized(this) {
+            val index = scheduled.indexOfFirst { it.nextRunAt <= clock() }
+            if (index < 0) null else scheduled.removeAt(index)
+        } ?: return null
+        return runCatching { runtime.notify(item.event, item.control, policy) }.getOrElse {
+            if (item.attempts + 1 < item.maxAttempts) synchronized(this) {
+                scheduled += item.copy(
+                    attempts = item.attempts + 1,
+                    nextRunAt = nextRun(item.event, item.attempts + 1)
+                )
+            }
+            null
+        }
+    }
+
+    private fun nextRun(event: SparkNotifyEvent, attempts: Int): Long = clock() + when (event.urgency) {
+        SparkUrgency.IMMEDIATE -> 0
+        SparkUrgency.SOON -> 10_000
+        SparkUrgency.LATER -> 60_000
+    } + attempts * requeueDelayMs
 }

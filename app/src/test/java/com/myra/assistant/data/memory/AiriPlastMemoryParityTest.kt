@@ -180,6 +180,24 @@ class AiriPlastMemoryParityTest {
             SparkNotifyResponseControl(forceTextResponse = true)) { SparkNotifyDecision.Commands(emptyList()) })
     }
 
+    @Test fun sparkNotifyAttentionQueueDeduplicatesSchedulesAndRetries() {
+        var now = 1_000L; val runtime = LyraSparkRuntime(LyraContextRegistry(), commandSink = { })
+        val scheduler = SparkNotifyScheduler(runtime, clock = { now }, requeueDelayMs = 5, maxAttempts = 2)
+        val event = SparkNotifyEvent(eventId = "queued", source = "task", lane = "reminder",
+            headline = "due", urgency = SparkUrgency.SOON)
+        assertTrue(scheduler.enqueue(event)); assertFalse(scheduler.enqueue(event))
+        assertNull(scheduler.tick { SparkNotifyDecision.TextReaction("early") })
+        now += 10_000
+        assertEquals("ready", (scheduler.tick { SparkNotifyDecision.TextReaction("ready") } as SparkNotifyDecision.TextReaction).text)
+        val retry = event.copy(eventId = "retry", urgency = SparkUrgency.IMMEDIATE)
+        scheduler.enqueue(retry); var calls = 0
+        scheduler.tick { calls++; error("temporary") }
+        assertEquals(1, scheduler.pendingCount())
+        now += 5
+        scheduler.tick { calls++; SparkNotifyDecision.NoResponse }
+        assertEquals(2, calls); assertEquals(0, scheduler.pendingCount())
+    }
+
     private suspend fun execute(owner: MemoryBrainCoordinator, e: AuthoritativeMemoryTurnEvidence, frame: MemorySemanticFrame) {
         val plan = owner.prepareFinalTurn(e, listOf(frame.copy(sourceTurnId = e.turnId)))
         val out = owner.executeFinalTurnPlan(plan, e)

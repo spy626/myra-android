@@ -110,7 +110,10 @@ object FinalTurnSourceSpanAuthorizer {
     internal fun groundedLiteral(literal: String, final: AuthoritativeMemoryTurnEvidence): Boolean {
         val normalized = normalize(literal)
         if (normalized.isBlank()) return false
-        if (normalized.any(Char::isDigit)) return final.variants.any { normalize(it).split(' ').contains(normalized) }
+        if (normalized.any(Char::isDigit)) return final.variants.any { variant ->
+            val actual = normalize(variant)
+            actual == normalized || " $actual ".contains(" $normalized ")
+        }
         val candidates = final.protectedCanonicalNames + final.protectedDisplayNames + final.variants.flatMap { normalize(it).split(' ').windowed(1, 1) { w -> w.joinToString("") } + normalize(it).split(' ').windowed(2, 1) { w -> w.joinToString("") } + normalize(it).split(' ').windowed(3, 1) { w -> w.joinToString("") } }
         return candidates.any { lexicalEquivalent(normalized.replace(" ", ""), normalize(it).replace(" ", "")) }
     }

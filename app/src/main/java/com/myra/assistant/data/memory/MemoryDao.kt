@@ -52,6 +52,10 @@ interface AiriMemoryDao {
     suspend fun deleteSemantic(id: String, at: Long): Int
     @Query("UPDATE airi_semantic_memory SET lastAccessed = :at, accessCount = accessCount + 1 WHERE memoryId IN (:ids)")
     suspend fun touchSemantic(ids: List<String>, at: Long)
+    @Query("SELECT * FROM airi_semantic_memory WHERE deletedAt IS NULL AND (embeddingModel != :model OR embeddingVersion != :version OR embeddingDimensions != :dimensions) ORDER BY updatedAt DESC LIMIT :limit")
+    suspend fun staleSemanticEmbeddings(model: String, version: Int, dimensions: Int, limit: Int): List<SemanticMemoryEntity>
+    @Query("UPDATE airi_semantic_memory SET embedding = :embedding, embeddingModel = :model, embeddingVersion = :version, embeddingDimensions = :dimensions WHERE memoryId = :id")
+    suspend fun updateSemanticEmbedding(id: String, embedding: String, model: String, version: Int, dimensions: Int): Int
 
     @Query("SELECT * FROM airi_people WHERE active = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT :limit")
     suspend fun activePeople(limit: Int): List<PersonEntity>
@@ -95,6 +99,10 @@ interface AiriMemoryDao {
     suspend fun episodesFor(entityId: String, limit: Int): List<EpisodicMemoryEntity>
     @Query("UPDATE airi_episodes SET lastAccessed = :at, accessCount = accessCount + 1 WHERE episodeId IN (:ids)")
     suspend fun touchEpisodes(ids: List<String>, at: Long)
+    @Query("SELECT * FROM airi_episodes WHERE deletedAt IS NULL AND (embeddingModel != :model OR embeddingVersion != :version OR embeddingDimensions != :dimensions) ORDER BY occurredAt DESC LIMIT :limit")
+    suspend fun staleEpisodeEmbeddings(model: String, version: Int, dimensions: Int, limit: Int): List<EpisodicMemoryEntity>
+    @Query("UPDATE airi_episodes SET embedding = :embedding, embeddingModel = :model, embeddingVersion = :version, embeddingDimensions = :dimensions WHERE episodeId = :id")
+    suspend fun updateEpisodeEmbedding(id: String, embedding: String, model: String, version: Int, dimensions: Int): Int
     @Query("UPDATE airi_episodes SET deletedAt = :at WHERE episodeId = :id AND deletedAt IS NULL")
     suspend fun deleteEpisode(id: String, at: Long): Int
     @Query("UPDATE airi_episodes SET stability = :stability, difficulty = :difficulty, lastReviewedAt = :reviewedAt WHERE episodeId = :id AND deletedAt IS NULL")
