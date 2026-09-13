@@ -251,7 +251,7 @@ class AiriPlastMemoryParityTest {
             execute(owner, e, fact(MemorySemanticIntent.ADD_FACT, "Speaker has unrelated preference $index", "noise:$index", e.displayText))
         }
         val candidates = store.semanticCandidatesForEpisode("parity", "Aurora project planning with Aarav", 20)
-        assertEquals("project:aurora", candidates.first().semanticKey)
+        assertEquals(AiriText.semanticKey("project:aurora"), candidates.first().semanticKey)
     }
 
     @Test fun backgroundRelationshipAndGoalConvergeIntoFastStructuredRecall() = runBlocking {
