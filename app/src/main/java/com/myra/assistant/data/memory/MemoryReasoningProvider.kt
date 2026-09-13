@@ -49,6 +49,21 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
     private val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS).callTimeout(90, TimeUnit.SECONDS).build()
 
+    override suspend fun classifyPrimitive(messages: List<ConversationTruthEntity>): SegmentClassification? {
+        val schema = JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("classification", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("LOW_INFO", "INFORMATIVE")))))
+            .put("required", JSONArray(listOf("classification")))
+        return SegmentClassification.valueOf(generate(
+            "Classify this complete message segment. LOW_INFO is acknowledgements, backchannels, thin coordination, bookkeeping, or weak retrieval value. INFORMATIVE is durable facts, plans, decisions, events, constraints, preferences, or commitments.",
+            messageInput(messages), schema).getString("classification"))
+    }
+
+    override suspend fun splitPrimitive(messages: List<ConversationTruthEntity>): List<Long> = splitStarts(
+        "Return the first message sequence of each later child segment at meaningful topic, intent, activity, or surprise discontinuities. Do not return the first sequence.", messages, emptyList())
+
+    override suspend fun resegmentInformative(messages: List<ConversationTruthEntity>, softBoundaries: List<Long>): List<Long> = splitStarts(
+        "All messages are informative. Re-segment across soft temporal boundaries, retaining only meaningful topic, intent, activity, or surprise discontinuities. Do not return the first sequence.", messages, softBoundaries)
+
     override suspend fun reviewBoundaries(messages: List<ConversationTruthEntity>, candidates: List<SegmentBoundary>): List<ReviewedBoundary> {
         if (candidates.isEmpty()) return emptyList()
         val candidateIds = candidates.map { it.afterSequence }.toSet()
@@ -194,17 +209,3 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 }
-    override suspend fun classifyPrimitive(messages: List<ConversationTruthEntity>): SegmentClassification? {
-        val schema = JSONObject().put("type", "OBJECT").put("properties", JSONObject()
-            .put("classification", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("LOW_INFO", "INFORMATIVE")))))
-            .put("required", JSONArray(listOf("classification")))
-        return SegmentClassification.valueOf(generate(
-            "Classify this complete message segment. LOW_INFO is acknowledgements, backchannels, thin coordination, bookkeeping, or weak retrieval value. INFORMATIVE is durable facts, plans, decisions, events, constraints, preferences, or commitments.",
-            messageInput(messages), schema).getString("classification"))
-    }
-
-    override suspend fun splitPrimitive(messages: List<ConversationTruthEntity>): List<Long> = splitStarts(
-        "Return the first message sequence of each later child segment at meaningful topic, intent, activity, or surprise discontinuities. Do not return the first sequence.", messages, emptyList())
-
-    override suspend fun resegmentInformative(messages: List<ConversationTruthEntity>, softBoundaries: List<Long>): List<Long> = splitStarts(
-        "All messages are informative. Re-segment across soft temporal boundaries, retaining only meaningful topic, intent, activity, or surprise discontinuities. Do not return the first sequence.", messages, softBoundaries)

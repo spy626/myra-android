@@ -9,7 +9,7 @@ object E5InputBuilder {
     fun build(ids: LongArray) = E5ModelInputs(arrayOf(ids), arrayOf(LongArray(ids.size) { 1L }), arrayOf(LongArray(ids.size)))
 }
 object E5Pooling {
-    fun meanNormalized(tokens: Array<FloatArray>, dimensions: Int): DoubleArray {
+    fun meanNormalized(tokens: Array<out FloatArray>, dimensions: Int): DoubleArray {
         val result = DoubleArray(dimensions)
         if (tokens.isEmpty()) return result
         tokens.forEach { token -> for (index in 0 until minOf(dimensions, token.size)) result[index] += token[index].toDouble() }
