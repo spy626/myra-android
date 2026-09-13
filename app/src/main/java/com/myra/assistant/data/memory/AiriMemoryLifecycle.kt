@@ -21,8 +21,105 @@ data class SegmentBoundary(
 data class SegmentationPlan(
     val finalized: List<LongRange>,
     val carriedTail: LongRange?,
-    val boundaries: List<SegmentBoundary>
+    val boundaries: List<SegmentBoundary>,
+    val classifications: Map<LongRange, SegmentClassification> = emptyMap()
 )
+
+private enum class ActiveBoundaryOrigin { RULE_SOFT, RULE_HARD, MODEL_LOCKED }
+private data class ActiveReviewedSegment(val range: LongRange, val classification: SegmentClassification)
+private data class ActiveReviewedBoundary(val leftEnd: Long, val rightStart: Long, val origin: ActiveBoundaryOrigin)
+
+/** Native equivalent of the legacy-named pipeline invoked by Plast-Mem's current production worker. */
+object AiriActiveSegmentationPipeline {
+    suspend fun plan(messages: List<ConversationTruthEntity>, eof: Boolean,
+        reasoning: MemoryReasoningProvider): SegmentationPlan {
+        if (messages.isEmpty()) return SegmentationPlan(emptyList(), null, emptyList())
+        val sorted = messages.sortedBy { it.sequence }
+        val temporal = sorted.zipWithNext().mapNotNull { (left, right) ->
+            val gap = right.committedAt - left.committedAt
+            if (gap < AiriEventSegmenter.SOFT_GAP_MS) null else ActiveReviewedBoundary(left.sequence, right.sequence,
+                if (gap > AiriEventSegmenter.HARD_GAP_MS) ActiveBoundaryOrigin.RULE_HARD else ActiveBoundaryOrigin.RULE_SOFT)
+        }
+        val bucketRanges = splitRanges(sorted, temporal.map { it.rightStart })
+        val primitive = mutableListOf<ActiveReviewedSegment>()
+        val boundaries = mutableListOf<ActiveReviewedBoundary>()
+        bucketRanges.forEachIndexed { bucketIndex, range ->
+            val bucketMessages = sorted.filter { it.sequence in range }
+            val children = primitiveReview(bucketMessages, reasoning)
+            if (bucketIndex > 0) boundaries += temporal[bucketIndex - 1].copy(
+                leftEnd = primitive.last().range.last, rightStart = children.first().range.first)
+            children.zipWithNext().forEach { (left, right) -> boundaries += ActiveReviewedBoundary(
+                left.range.last, right.range.first, ActiveBoundaryOrigin.MODEL_LOCKED) }
+            primitive += children
+        }
+        val finalSegments = informativeReview(sorted, primitive, boundaries, reasoning)
+        val ranges = finalSegments.map { it.range }
+        val finalized = if (eof) ranges else ranges.dropLast(1)
+        val tail = if (eof) null else ranges.lastOrNull()
+        val publicBoundaries = boundaries.map { boundary -> SegmentBoundary(boundary.leftEnd,
+            boundary.origin == ActiveBoundaryOrigin.RULE_HARD,
+            when (boundary.origin) {
+                ActiveBoundaryOrigin.RULE_HARD -> SegmentBoundaryReason.HARD_TIME_GAP
+                ActiveBoundaryOrigin.RULE_SOFT -> SegmentBoundaryReason.SOFT_TIME_GAP
+                ActiveBoundaryOrigin.MODEL_LOCKED -> SegmentBoundaryReason.STRUCTURAL_CUE
+            }) }
+        return SegmentationPlan(finalized, tail, publicBoundaries,
+            finalSegments.associate { it.range to it.classification })
+    }
+
+    private suspend fun primitiveReview(messages: List<ConversationTruthEntity>, reasoning: MemoryReasoningProvider): List<ActiveReviewedSegment> {
+        val whole = messages.first().sequence..messages.last().sequence
+        if (messages.size <= AiriEventSegmenter.SMALL_REVIEW_LIMIT) {
+            val classification = reasoning.classifyPrimitive(messages)
+                ?: SegmentClassification.INFORMATIVE // deterministic degraded recovery; never length-based
+            return listOf(ActiveReviewedSegment(whole, classification))
+        }
+        if (messages.size <= AiriEventSegmenter.PRIMITIVE_KEEP_LIMIT) return listOf(ActiveReviewedSegment(whole, SegmentClassification.INFORMATIVE))
+        val starts = reasoning.splitPrimitive(messages).filter { candidate -> messages.drop(1).any { it.sequence == candidate } }
+        val ranges = splitRanges(messages, starts)
+        return ranges.map { range ->
+            val child = messages.filter { it.sequence in range }
+            val classification = if (child.size <= AiriEventSegmenter.SMALL_REVIEW_LIMIT)
+                reasoning.classifyPrimitive(child) ?: SegmentClassification.INFORMATIVE
+            else SegmentClassification.INFORMATIVE
+            ActiveReviewedSegment(range, classification)
+        }
+    }
+
+    private suspend fun informativeReview(messages: List<ConversationTruthEntity>, primitive: List<ActiveReviewedSegment>,
+        boundaries: List<ActiveReviewedBoundary>, reasoning: MemoryReasoningProvider): List<ActiveReviewedSegment> {
+        val output = mutableListOf<ActiveReviewedSegment>(); var index = 0
+        while (index < primitive.size) {
+            val current = primitive[index]
+            if (current.classification != SegmentClassification.INFORMATIVE) { output += current; index++; continue }
+            var end = index; var count = countMessages(messages, current.range)
+            while (count < AiriEventSegmenter.INFORMATIVE_GROUP_LIMIT && end + 1 < primitive.size) {
+                val boundary = boundaries.getOrNull(end) ?: break
+                val next = primitive[end + 1]
+                if (boundary.origin != ActiveBoundaryOrigin.RULE_SOFT || next.classification != SegmentClassification.INFORMATIVE) break
+                count += countMessages(messages, next.range); end++
+            }
+            if (end > index) {
+                val mergedMessages = messages.filter { it.sequence in primitive[index].range.first..primitive[end].range.last }
+                val softStarts = boundaries.subList(index, end).map { it.rightStart }
+                val starts = reasoning.resegmentInformative(mergedMessages, softStarts)
+                splitRanges(mergedMessages, starts).forEach { output += ActiveReviewedSegment(it, SegmentClassification.INFORMATIVE) }
+            } else output += current
+            index = end + 1
+        }
+        return output
+    }
+
+    private fun splitRanges(messages: List<ConversationTruthEntity>, starts: List<Long>): List<LongRange> {
+        val sorted = messages.sortedBy { it.sequence }; val allowed = sorted.drop(1).map { it.sequence }.toSet()
+        val cuts = starts.filter(allowed::contains).distinct().sorted(); val ranges = mutableListOf<LongRange>()
+        var start = sorted.first().sequence
+        cuts.forEach { cut -> val left = sorted.last { it.sequence < cut }.sequence; ranges += start..left; start = cut }
+        ranges += start..sorted.last().sequence
+        return ranges
+    }
+    private fun countMessages(messages: List<ConversationTruthEntity>, range: LongRange) = messages.count { it.sequence in range }
+}
 
 /**
  * Android port of Plast-Mem's stateful event-boundary pipeline. It mirrors the
@@ -166,6 +263,11 @@ interface LocalEmbeddingProvider {
     val isNeuralReady: Boolean get() = false
     fun embed(text: String): DoubleArray
     fun embedQuery(text: String): DoubleArray = embed(text)
+}
+
+object EmbeddingCompatibility {
+    fun matches(provider: LocalEmbeddingProvider, model: String, version: Int, dimensions: Int, encoded: String) =
+        encoded.isNotBlank() && model == provider.modelId && version == provider.version && dimensions == provider.dimensions
 }
 
 /** Free, private feature-hashing vector lane. No network and no paid model. */

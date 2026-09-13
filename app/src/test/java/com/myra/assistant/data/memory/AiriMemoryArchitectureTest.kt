@@ -116,8 +116,10 @@ class AiriMemoryArchitectureTest {
 
     @Test fun conversationTruthProjectionContextRegistryTaskMemoryAndBufferFollowAiriContracts() = runBlocking {
         val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store)
-        (20L..24L).forEach { owner.captureConversation(evidence(it, "turn $it", "turn $it"), "reply $it") }
-        assertEquals(10, store.conversationCount("test")); assertEquals(4, store.promptProjection("test", 4).size)
+        (20L..24L).forEach { owner.appendConversationTruth(evidence(it, "turn $it", "turn $it"), "reply $it") }
+        assertEquals(10, store.conversationCount("test")); val projection = store.promptProjection("test", 4)
+        assertEquals(5, projection.size); assertEquals("PROMPT_PROJECTION", projection.first().source)
+        assertEquals(10, store.conversationCount("test"))
         val registry = LyraContextRegistry(perBucketLimit = 2)
         assertTrue(registry.ingest(ContextEntry("screen", "one", 1, 1), ContextMutation.REPLACE_SELF))
         registry.ingest(ContextEntry("person", "Asha", 1, 1), ContextMutation.REPLACE_SELF)

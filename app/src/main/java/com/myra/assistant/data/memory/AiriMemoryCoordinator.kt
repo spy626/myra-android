@@ -77,9 +77,11 @@ class MemoryBrainCoordinator(
     private val ownedSessions = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inactivityJobs = ConcurrentHashMap<String, Job>()
+    private val segmentationRetryAttempts = ConcurrentHashMap<String, Int>()
     private val consolidationJobs = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     private val consolidationAttempts = ConcurrentHashMap<String, Int>()
     private val consolidationQueue = Channel<String>(capacity = 32)
+    private val consolidationDrainScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
     private val reviewWorkerRunning = java.util.concurrent.atomic.AtomicBoolean(false)
 
     init {
@@ -98,6 +100,7 @@ class MemoryBrainCoordinator(
                 }
                 consolidationAttempts.remove(episodeId)
                 consolidationJobs.remove(episodeId)
+                scheduleConsolidationDrain()
             }
         }
         // A process can die after transcript commit but before the in-process
@@ -289,18 +292,22 @@ class MemoryBrainCoordinator(
     }
 
     suspend fun captureConversation(evidence: AuthoritativeMemoryTurnEvidence, assistantText: String?) {
+        appendConversationTruth(evidence, assistantText)
+        backgroundScope.launch { segmentCommittedConversation(evidence.sessionId, eof = false) }
+        scheduleInactivityClose(evidence.sessionId)
+    }
+
+    internal suspend fun appendConversationTruth(evidence: AuthoritativeMemoryTurnEvidence, assistantText: String?) {
         val now = System.currentTimeMillis(); val base = evidence.turnId * 2
         store.appendConversation(ConversationTruthEntity("${evidence.utteranceId}:user", evidence.sessionId, base,
             evidence.turnId, evidence.utteranceId, "user", evidence.canonicalText, now,
             rawText = evidence.canonicalText, canonicalText = evidence.canonicalText,
-            displayText = evidence.displayText, source = "FINAL_USER_TURN", finalized = true))
+            displayText = evidence.displayText, source = "FINAL_USER_TURN", finalized = true,
+            provenanceMetadata = (evidence.protectedCanonicalNames + evidence.protectedDisplayNames)
+                .distinct().joinToString("\u001F").takeIf(String::isNotEmpty)))
         assistantText?.takeIf(String::isNotBlank)?.let { store.appendConversation(ConversationTruthEntity(
             "${evidence.utteranceId}:assistant", evidence.sessionId, base + 1, evidence.turnId,
             evidence.utteranceId, "assistant", it, now, source = "VERIFIED_RESPONSE", finalized = true)) }
-        // A finalized turn is not conversation EOF. Keep the unresolved tail so
-        // related turns can become one coherent episode.
-        segmentCommittedConversation(evidence.sessionId, eof = false)
-        scheduleInactivityClose(evidence.sessionId)
     }
 
     /** Source-owned lifecycle close. Safe to call while the voice scope is stopping. */
@@ -357,14 +364,11 @@ class MemoryBrainCoordinator(
         ))
         return runCatching {
             val messages = store.conversationRange(conversationId, old.nextSegmentStartSequence, end)
-            val localPlan = AiriEventSegmenter.plan(messages, eof)
-            val reviewable = localPlan.boundaries.filterNot { it.hard }
-            val modelReview = runCatching { reasoningProvider.reviewBoundaries(messages, reviewable) }.getOrDefault(emptyList())
-            val plan = AiriEventSegmenter.applyReview(messages, eof, localPlan, modelReview)
+            val plan = AiriActiveSegmentationPipeline.plan(messages, eof, reasoningProvider)
             var committed = 0
             plan.finalized.forEach { range ->
                 val segmentMessages = messages.filter { it.sequence in range }
-                val classification = AiriEventSegmenter.classify(segmentMessages)
+                val classification = plan.classifications[range] ?: SegmentClassification.INFORMATIVE
                 val reason = when {
                     plan.boundaries.any { it.afterSequence == range.last && it.hard } -> "HARD_TIME_GAP"
                     plan.boundaries.any { it.afterSequence == range.last } ->
@@ -399,6 +403,7 @@ class MemoryBrainCoordinator(
                 conversationStatus = if (eof) "CLOSED" else "ACTIVE",
                 eofReason = old.eofReason, lastActivityAt = now
             ))
+            segmentationRetryAttempts.remove(conversationId)
             committed
         }.getOrElse {
             store.saveSegmentationState(old.copy(
@@ -406,6 +411,11 @@ class MemoryBrainCoordinator(
                 activeSegmentStartSequence = null, activeSegmentEndSequence = null,
                 activeSince = null, claimId = null, generation = old.generation + 1
             ))
+            val attempt = segmentationRetryAttempts.merge(conversationId, 1) { prior, one -> prior + one } ?: 1
+            if (attempt < 3) backgroundScope.launch {
+                delay(attempt * 2_000L)
+                segmentCommittedConversation(conversationId, eof)
+            }
             0
         }
     }
@@ -418,13 +428,24 @@ class MemoryBrainCoordinator(
         if (consolidationQueue.trySend(episodeId).isFailure) {
             consolidationJobs.remove(episodeId)
             log("MEMORY_CONSOLIDATION_BACKPRESSURE episode=${episodeId.hashCode()}")
+            scheduleConsolidationDrain()
+        }
+    }
+
+    private fun scheduleConsolidationDrain() {
+        if (!consolidationDrainScheduled.compareAndSet(false, true)) return
+        backgroundScope.launch {
+            delay(1_000L)
+            try { store.unconsolidatedEpisodes(32).forEach { scheduleEpisodeConsolidation(it.episodeId) } }
+            finally { consolidationDrainScheduled.set(false) }
         }
     }
 
     internal suspend fun consolidateEpisode(episodeId: String): Int {
         val episode = store.unconsolidatedEpisodes(32).firstOrNull { it.episodeId == episodeId } ?: return 0
         val messages = store.episodeMessages(episode)
-        val candidates = store.semanticCandidates(episode.conversationId, 20)
+        val candidates = store.semanticCandidatesForEpisode(episode.conversationId,
+            "${episode.title} ${episode.content}", 20)
         val supplied = candidates.map { ConsolidationCandidate(it.memoryId, it.statement, it.category) }
         val predictStarted = System.nanoTime()
         val prediction = if (supplied.isEmpty()) null else reasoningProvider.predict(episode.title, supplied).takeIf(String::isNotBlank)
@@ -440,8 +461,10 @@ class MemoryBrainCoordinator(
         val last = userMessages.lastOrNull() ?: return 0
         val canonicalEvidence = userMessages.joinToString("\n") { it.canonicalText }
         val displayEvidence = userMessages.joinToString("\n") { it.displayText }
+        val protectedNames = userMessages.flatMap { it.provenanceMetadata?.split('\u001F').orEmpty() }
+            .filter(String::isNotBlank).distinct()
         val evidence = AuthoritativeMemoryTurnEvidence(last.turnId, canonicalEvidence, displayEvidence,
-            sessionId = episode.conversationId, utteranceId = last.utteranceId)
+            protectedNames, protectedNames, episode.conversationId, last.utteranceId)
         var applied = 0
         store.transaction {
             actions.forEach { action ->
@@ -452,7 +475,7 @@ class MemoryBrainCoordinator(
                 if (action.kind != SemanticConsolidationAction.NEW && target == null) return@forEach
                 val fact = action.fact.trim()
                 if (action.kind !in setOf(SemanticConsolidationAction.INVALIDATE, SemanticConsolidationAction.REINFORCE) && fact.length !in 3..500) return@forEach
-                if (!criticalLiteralsSupported(fact, evidence.variants)) return@forEach
+                if (!criticalLiteralsSupported(action, evidence, target)) return@forEach
                 val frame = MemorySemanticFrame(
                     intent = when (action.kind) {
                         SemanticConsolidationAction.NEW -> MemorySemanticIntent.ADD_FACT
@@ -467,6 +490,28 @@ class MemoryBrainCoordinator(
                     sourceEpisodeIds = listOf(episodeId)
                 )
                 if (AiriMemorySafetyPolicy.rejectReason(frame, evidence, false) != null) return@forEach
+                if (category == MemoryCategory.PERSON && action.kind in setOf(SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE)) {
+                    val personName = action.person ?: return@forEach
+                    val relationship = action.relationship?.let { runCatching { PersonRelationship.valueOf(it) }.getOrNull() }
+                        ?: return@forEach
+                    val person = store.ensurePerson(personName, last.turnId)
+                    store.addRelationship(person.entityId, relationship, evidence, action.confidence)?.let { id ->
+                        store.recordConsolidationAction(frame.copy(intent = MemorySemanticIntent.ADD_RELATIONSHIP,
+                            person = personName, relationship = relationship), evidence, id); applied++
+                    }
+                    return@forEach
+                }
+                if (category == MemoryCategory.GOAL && action.kind in setOf(SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE)) {
+                    val title = action.goalTitle ?: return@forEach
+                    val goalFrame = frame.copy(intent = if (action.kind == SemanticConsolidationAction.UPDATE)
+                        MemorySemanticIntent.UPDATE_GOAL else MemorySemanticIntent.ADD_GOAL,
+                        stableKey = target?.semanticKey ?: "goal:${AiriText.semanticKey(title)}",
+                        goal = GoalMemoryPayload(title, fact))
+                    store.addGoal(goalFrame, evidence)?.let { id ->
+                        store.recordConsolidationAction(goalFrame, evidence, id); applied++
+                    }
+                    return@forEach
+                }
                 when (action.kind) {
                     SemanticConsolidationAction.REINFORCE -> if (store.reinforceSemantic(target!!.memoryId, episodeId, .03)) applied++
                     SemanticConsolidationAction.INVALIDATE -> if (store.invalidateSemantic(target!!.semanticKey)) {
@@ -545,16 +590,27 @@ class MemoryBrainCoordinator(
         else -> null
     }
 
-    private fun criticalLiteralsSupported(fact: String, authoritativeVariants: List<String>): Boolean {
-        val source = authoritativeVariants.joinToString(" ")
-        val critical = Regex("(?<![\\p{L}\\p{N}])(?:\\d[\\d.,:/-]*|[A-Z][A-Z0-9_-]{2,})(?![\\p{L}\\p{N}])")
+    private fun criticalLiteralsSupported(action: EpisodeSemanticAction, evidence: AuthoritativeMemoryTurnEvidence,
+        target: SemanticMemoryEntity?): Boolean {
+        val fact = action.fact
+        val exact = Regex("(?<![\\p{L}\\p{N}])(?:\\d[\\d.,:/-]*|[A-Z][A-Z0-9_-]{2,})(?![\\p{L}\\p{N}])")
             .findAll(fact).map { it.value }.toSet()
-        return critical.all { literal -> source.contains(literal, ignoreCase = true) }
+        val proper = Regex("(?<![\\p{L}])\\p{Lu}[\\p{Ll}]{2,}(?:[ -]\\p{Lu}[\\p{Ll}]{2,})*")
+            .findAll(fact).map { it.value }.filterNot { it in ROLE_LABELS }.toSet()
+        val declared = action.criticalLiterals.map(String::trim).filter(String::isNotEmpty).toSet()
+        val required = exact + proper + declared + listOfNotNull(action.person)
+        return required.all { literal ->
+            if (literal.any(Char::isDigit)) evidence.variants.any { variant ->
+                Regex("(?<![\\p{L}\\p{N}])${Regex.escape(literal)}(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE).containsMatchIn(variant)
+            } else FinalTurnSourceSpanAuthorizer.groundedLiteral(literal, evidence) ||
+                target?.statement?.contains(literal, ignoreCase = true) == true
+        }
     }
 
     companion object {
         private const val SEGMENT_CLAIM_TIMEOUT_MS = 15L * 60L * 1000L
         private const val CONVERSATION_INACTIVITY_EOF_MS = 30L * 60L * 1000L
+        private val ROLE_LABELS = setOf("Speaker", "User", "Assistant", "Zopy", "Lyra")
         private val SEMANTIC_CONSOLIDATION_INTENTS = setOf(
             MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.ADD_LINKED_FACT,
             MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT,

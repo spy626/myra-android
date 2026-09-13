@@ -29,6 +29,17 @@ review ratings without joining the voice-response session or acquiring
 response ownership. Android remains the sole authorization, transaction,
 provenance, stale-update, safety, and verification owner.
 
+At the audited Plast-Mem revision, the production EventSegmentationJob still
+invokes the temporal, primitive-review, and informative-resegmentation
+functions located in `crates/event_segmentation/src/legacy.rs`. LYRA therefore
+uses that active 4/20/30-message model-review flow; the separate embedding
+candidate segmenter is not represented as the production upstream path. E5 is
+used for semantic/episodic retrieval and relevant-fact selection, not to
+replace the active upstream segmentation reasoning contract.
+
+See `AIRI_MEMORY_ARCHITECTURE.md` for the immediate/background lane split. In
+particular, segmentation and Predict/Calibrate never gate the Live response.
+
 At these revisions, Flashbulb Memory remains an upstream documented TODO.
 LYRA's guarded high-significance episode flag and retrieval floor are an
 Android completion of that TODO, not a claim of upstream production support.

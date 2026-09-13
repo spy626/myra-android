@@ -2,6 +2,21 @@ package com.myra.assistant.data.memory
 
 import java.text.Normalizer
 import org.json.JSONObject
+import kotlin.math.sqrt
+
+data class E5ModelInputs(val ids: Array<LongArray>, val attentionMask: Array<LongArray>, val tokenTypes: Array<LongArray>)
+object E5InputBuilder {
+    fun build(ids: LongArray) = E5ModelInputs(arrayOf(ids), arrayOf(LongArray(ids.size) { 1L }), arrayOf(LongArray(ids.size)))
+}
+object E5Pooling {
+    fun meanNormalized(tokens: Array<FloatArray>, dimensions: Int): DoubleArray {
+        val result = DoubleArray(dimensions)
+        if (tokens.isEmpty()) return result
+        tokens.forEach { token -> for (index in 0 until minOf(dimensions, token.size)) result[index] += token[index].toDouble() }
+        val norm = sqrt(result.sumOf { it * it })
+        return if (norm == 0.0) result else DoubleArray(dimensions) { result[it] / norm }
+    }
+}
 
 /** Deterministic XLM-R/SentencePiece unigram inference for the pinned E5 tokenizer. */
 class XlmRobertaUnigramTokenizer private constructor(private val root: Node, private val unknownId: Long) {

@@ -143,7 +143,10 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     }
     override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear(); provenance.clear(); consolidationActions.clear(); pendingReviews.clear() }
     override suspend fun appendConversation(row: ConversationTruthEntity): Boolean { if (conversation.any { it.messageId == row.messageId }) return false; conversation += row; return true }
-    override suspend fun promptProjection(sessionId: String, limit: Int) = conversation.filter { it.sessionId == sessionId }.takeLast(limit)
+    override suspend fun promptProjection(sessionId: String, limit: Int): List<ConversationTruthEntity> {
+        val all = conversation.filter { it.sessionId == sessionId }
+        return ConversationProjection.compact(sessionId, all.takeLast(limit), all.size, limit)
+    }
     override suspend fun conversationCount(sessionId: String) = conversation.count { it.sessionId == sessionId }
     override suspend fun lastConversationSequence(sessionId: String) = conversation.filter { it.sessionId == sessionId }.maxOfOrNull { it.sequence }
     override suspend fun segmentationState(conversationId: String) = segmentation[conversationId]
@@ -208,6 +211,12 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         it.sessionId == episode.conversationId && it.sequence in episode.startSequence..episode.endSequence
     }
     override suspend fun semanticCandidates(conversationId: String, limit: Int) = semantic.filter { it.active && it.deletedAt == null }.take(limit)
+    override suspend fun semanticCandidatesForEpisode(conversationId: String, query: String, limit: Int): List<SemanticMemoryEntity> {
+        val tokens = AiriText.normalize(query).split(' ').filter { it.length >= 2 }.toSet()
+        return semantic.filter { it.active && it.deletedAt == null }.sortedByDescending { row ->
+            AiriText.normalize(row.statement).split(' ').count(tokens::contains) * 10 + row.importance
+        }.take(limit)
+    }
     override suspend fun semanticById(id: String) = semantic.firstOrNull { it.memoryId == id }
     override suspend fun nearEquivalentSemantic(statement: String, category: String, limit: Int) = semantic
         .asSequence().filter { it.active && it.category == category }

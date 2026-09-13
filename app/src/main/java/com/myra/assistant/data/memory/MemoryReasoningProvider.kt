@@ -19,9 +19,13 @@ data class ReviewedBoundary(val afterSequence: Long, val keep: Boolean, val conf
 data class ConsolidationCandidate(val memoryId: String, val fact: String, val category: String)
 data class EpisodeSemanticAction(val kind: SemanticConsolidationAction, val fact: String,
     val category: String, val targetFactId: String?, val confidence: Double,
-    val assertionMode: String = "USER_ASSERTED")
+    val assertionMode: String = "USER_ASSERTED", val criticalLiterals: List<String> = emptyList(),
+    val person: String? = null, val relationship: String? = null, val goalTitle: String? = null)
 
 interface MemoryReasoningProvider {
+    suspend fun classifyPrimitive(messages: List<ConversationTruthEntity>): SegmentClassification?
+    suspend fun splitPrimitive(messages: List<ConversationTruthEntity>): List<Long>
+    suspend fun resegmentInformative(messages: List<ConversationTruthEntity>, softBoundaries: List<Long>): List<Long>
     suspend fun reviewBoundaries(messages: List<ConversationTruthEntity>, candidates: List<SegmentBoundary>): List<ReviewedBoundary>
     suspend fun predict(title: String, facts: List<ConsolidationCandidate>): String
     suspend fun calibrate(title: String, content: String, prediction: String?, facts: List<ConsolidationCandidate>): List<EpisodeSemanticAction>
@@ -29,6 +33,9 @@ interface MemoryReasoningProvider {
 }
 
 object UnavailableMemoryReasoningProvider : MemoryReasoningProvider {
+    override suspend fun classifyPrimitive(messages: List<ConversationTruthEntity>) = null
+    override suspend fun splitPrimitive(messages: List<ConversationTruthEntity>) = emptyList<Long>()
+    override suspend fun resegmentInformative(messages: List<ConversationTruthEntity>, softBoundaries: List<Long>) = emptyList<Long>()
     override suspend fun reviewBoundaries(messages: List<ConversationTruthEntity>, candidates: List<SegmentBoundary>) = emptyList<ReviewedBoundary>()
     override suspend fun predict(title: String, facts: List<ConsolidationCandidate>) = ""
     override suspend fun calibrate(title: String, content: String, prediction: String?, facts: List<ConsolidationCandidate>) = emptyList<EpisodeSemanticAction>()
@@ -87,20 +94,31 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
             .put("target_fact_id", JSONObject().put("type", "STRING"))
             .put("confidence", JSONObject().put("type", "NUMBER"))
             .put("assertion_mode", JSONObject().put("type", "STRING").put("enum",
-                JSONArray(listOf("USER_ASSERTED", "HYPOTHETICAL", "REPORTED", "UNCERTAIN")))))
-            .put("required", JSONArray(listOf("kind", "fact", "category", "target_fact_id", "confidence", "assertion_mode")))
+                JSONArray(listOf("USER_ASSERTED", "HYPOTHETICAL", "REPORTED", "UNCERTAIN"))))
+            .put("critical_literals", JSONObject().put("type", "ARRAY").put("items", JSONObject().put("type", "STRING")))
+            .put("person", JSONObject().put("type", "STRING"))
+            .put("relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("", "FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
+            .put("goal_title", JSONObject().put("type", "STRING")))
+            .put("required", JSONArray(listOf("kind", "fact", "category", "target_fact_id", "confidence", "assertion_mode", "critical_literals", "person", "relationship", "goal_title")))
         val schema = JSONObject().put("type", "OBJECT").put("properties", JSONObject()
             .put("actions", JSONObject().put("type", "ARRAY").put("maxItems", 20).put("items", action)))
             .put("required", JSONArray(listOf("actions")))
-        val prompt = "Produce durable atomic semantic actions only. Cold start permits NEW only. REINFORCE/UPDATE/INVALIDATE must use an exact supplied target_fact_id. INVALIDATE fact must be empty. Skip secrets, hypothetical/reported speech, temporary chatter, and uncertain claims."
-        return generate(prompt, input, schema).optJSONArray("actions").objects().mapNotNull { row ->
+        val prompt = "Produce durable atomic semantic actions only. Cold start permits NEW only. REINFORCE/UPDATE/INVALIDATE must use an exact supplied target_fact_id. INVALIDATE fact must be empty. Mark hypothetical, reported, or uncertain claims accurately. critical_literals MUST contain every person, location, project/product, username, number, date, amount, or ID in the fact. For RELATIONSHIP provide person and relationship. For GOAL provide goal_title. Skip secrets and temporary chatter."
+        val parsed = generate(prompt, input, schema).optJSONArray("actions").objects().mapNotNull { row ->
             val kind = runCatching { SemanticConsolidationAction.valueOf(row.optString("kind")) }.getOrNull() ?: return@mapNotNull null
             val target = row.optString("target_fact_id").takeIf(String::isNotBlank)
             if (kind != SemanticConsolidationAction.NEW && target !in suppliedIds) return@mapNotNull null
             if (facts.isEmpty() && kind != SemanticConsolidationAction.NEW) return@mapNotNull null
             EpisodeSemanticAction(kind, row.optString("fact").trim(), row.optString("category"), target,
-                row.optDouble("confidence", 0.0).coerceIn(0.0, 1.0), row.optString("assertion_mode"))
+                row.optDouble("confidence", 0.0).coerceIn(0.0, 1.0), row.optString("assertion_mode"),
+                row.optJSONArray("critical_literals").strings(), row.optString("person").takeIf(String::isNotBlank),
+                row.optString("relationship").takeIf(String::isNotBlank), row.optString("goal_title").takeIf(String::isNotBlank))
         }
+        val untargeted = parsed.filter { it.targetFactId == null }
+        val targeted = parsed.filter { it.targetFactId != null }.groupBy { it.targetFactId!! }.values.map { group ->
+            group.maxBy { actionPriority(it.kind) }
+        }
+        return (untargeted + targeted).take(20)
     }
 
     override suspend fun rateEpisodes(context: List<ConversationTruthEntity>, episodes: List<MemoryEntity>, queries: Map<String, List<String>>): Map<String, EpisodeReviewRating> {
@@ -148,9 +166,45 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
     }
 
     private fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).mapNotNull(::optJSONObject)
+    private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun messageInput(messages: List<ConversationTruthEntity>) = JSONObject().put("messages", JSONArray(messages.map {
+        JSONObject().put("sequence", it.sequence).put("role", it.role).put("text", it.content.take(1500))
+    }))
+
+    private suspend fun splitStarts(system: String, messages: List<ConversationTruthEntity>, hints: List<Long>): List<Long> {
+        if (messages.size <= 1) return emptyList()
+        val allowed = messages.drop(1).map { it.sequence }.toSet()
+        val input = messageInput(messages).put("soft_boundary_right_starts", JSONArray(hints))
+        val schema = JSONObject().put("type", "OBJECT").put("properties", JSONObject().put("split_start_sequences",
+            JSONObject().put("type", "ARRAY").put("maxItems", messages.size - 1).put("items", JSONObject().put("type", "INTEGER"))))
+            .put("required", JSONArray(listOf("split_start_sequences")))
+        val output = generate(system, input, schema).optJSONArray("split_start_sequences") ?: return emptyList()
+        return (0 until output.length()).map { output.optLong(it) }.filter(allowed::contains).distinct().sorted()
+    }
+    private fun actionPriority(kind: SemanticConsolidationAction) = when (kind) {
+        SemanticConsolidationAction.NEW -> 0
+        SemanticConsolidationAction.REINFORCE -> 1
+        SemanticConsolidationAction.INVALIDATE -> 2
+        SemanticConsolidationAction.UPDATE -> 3
+    }
 
     companion object {
         private const val MODEL = "gemini-2.5-flash"
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 }
+    override suspend fun classifyPrimitive(messages: List<ConversationTruthEntity>): SegmentClassification? {
+        val schema = JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("classification", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("LOW_INFO", "INFORMATIVE")))))
+            .put("required", JSONArray(listOf("classification")))
+        return SegmentClassification.valueOf(generate(
+            "Classify this complete message segment. LOW_INFO is acknowledgements, backchannels, thin coordination, bookkeeping, or weak retrieval value. INFORMATIVE is durable facts, plans, decisions, events, constraints, preferences, or commitments.",
+            messageInput(messages), schema).getString("classification"))
+    }
+
+    override suspend fun splitPrimitive(messages: List<ConversationTruthEntity>): List<Long> = splitStarts(
+        "Return the first message sequence of each later child segment at meaningful topic, intent, activity, or surprise discontinuities. Do not return the first sequence.", messages, emptyList())
+
+    override suspend fun resegmentInformative(messages: List<ConversationTruthEntity>, softBoundaries: List<Long>): List<Long> = splitStarts(
+        "All messages are informative. Re-segment across soft temporal boundaries, retaining only meaningful topic, intent, activity, or surprise discontinuities. Do not return the first sequence.", messages, softBoundaries)

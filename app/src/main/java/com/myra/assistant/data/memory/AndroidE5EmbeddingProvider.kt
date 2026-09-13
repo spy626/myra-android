@@ -12,7 +12,6 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.sqrt
 
 /**
  * Lazy Android neural embedding lane for multilingual-e5-small.
@@ -63,8 +62,8 @@ class AndroidE5EmbeddingProvider(context: Context, private val onReady: () -> Un
         }
     }
 
-    override fun embed(text: String): DoubleArray = embedInternal("passage: $text")
-    override fun embedQuery(text: String): DoubleArray = embedInternal("query: $text")
+    override fun embed(text: String): DoubleArray = embedInternal(passageInput(text))
+    override fun embedQuery(text: String): DoubleArray = embedInternal(queryInput(text))
 
     private fun embedInternal(text: String): DoubleArray {
         val tokenEncoder = tokenizer
@@ -73,9 +72,8 @@ class AndroidE5EmbeddingProvider(context: Context, private val onReady: () -> Un
             initializeAsync()
             return FeatureHashEmbeddingProvider.embed(text)
         }
-        val clipped = arrayOf(tokenEncoder.encode(text, MAX_TOKENS))
-        val mask = clipped.map { LongArray(it.size) { 1L } }.toTypedArray()
-        val types = clipped.map { LongArray(it.size) }.toTypedArray()
+        val inputs = E5InputBuilder.build(tokenEncoder.encode(text, MAX_TOKENS))
+        val clipped = inputs.ids; val mask = inputs.attentionMask; val types = inputs.tokenTypes
         val hidden = OnnxTensor.createTensor(environment, clipped).use { idTensor ->
             OnnxTensor.createTensor(environment, mask).use { maskTensor ->
                 OnnxTensor.createTensor(environment, types).use { typeTensor ->
@@ -84,12 +82,8 @@ class AndroidE5EmbeddingProvider(context: Context, private val onReady: () -> Un
                 }
             }
         }
-        val result = DoubleArray(DIMENSIONS)
         val tokens = hidden.firstOrNull().orEmpty()
-        if (tokens.isEmpty()) return result
-        tokens.forEach { token -> for (i in 0 until minOf(DIMENSIONS, token.size)) result[i] += token[i].toDouble() }
-        val norm = sqrt(result.sumOf { it * it })
-        return if (norm == 0.0) result else DoubleArray(DIMENSIONS) { result[it] / norm }
+        return E5Pooling.meanNormalized(tokens, DIMENSIONS)
     }
 
     private fun verifiedFile(file: File, bytes: Long, digest: String): File? =
@@ -158,5 +152,7 @@ class AndroidE5EmbeddingProvider(context: Context, private val onReady: () -> Un
         const val TOKENIZER_URL = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/$MODEL_REVISION/onnx/tokenizer.json"
         private const val MAX_TOKENS = 256
         private const val TAG = "LyraAiriMemory"
+        internal fun queryInput(text: String) = "query: $text"
+        internal fun passageInput(text: String) = "passage: $text"
     }
 }

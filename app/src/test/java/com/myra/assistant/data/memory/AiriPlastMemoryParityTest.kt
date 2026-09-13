@@ -22,7 +22,8 @@ class AiriPlastMemoryParityTest {
     @Test fun ownerCommitsConversationSegmentationAndEpisodeIdempotently() = runBlocking {
         val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store)
         val evidence = evidence(4, "We investigated a renderer failure", "We investigated a renderer failure")
-        owner.captureConversation(evidence, "The renderer fix was verified")
+        owner.appendConversationTruth(evidence, "The renderer fix was verified")
+        owner.segmentCommittedConversation("parity", eof = false)
         assertEquals(2, store.conversationCount("parity"))
         assertTrue(store.spans.isEmpty())
         assertEquals(1, owner.flushConversation("parity", "TEST_EOF"))
@@ -36,9 +37,10 @@ class AiriPlastMemoryParityTest {
 
     @Test fun threeRelatedTurnsRemainOneUnresolvedTailUntilRealEof() = runBlocking {
         val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store)
-        owner.captureConversation(evidence(30, "I went to the market today", "I went to the market today"), "What happened there?")
-        owner.captureConversation(evidence(31, "I met Devansh there", "I met Devansh there", listOf("Devansh")), "Nice")
-        owner.captureConversation(evidence(32, "Then we had coffee", "Then we had coffee"), "Sounds good")
+        owner.appendConversationTruth(evidence(30, "I went to the market today", "I went to the market today"), "What happened there?")
+        owner.appendConversationTruth(evidence(31, "I met Devansh there", "I met Devansh there", listOf("Devansh")), "Nice")
+        owner.appendConversationTruth(evidence(32, "Then we had coffee", "Then we had coffee"), "Sounds good")
+        owner.segmentCommittedConversation("parity", eof = false)
         assertTrue(store.spans.isEmpty())
         assertNotNull(store.segmentation["parity"])
         assertFalse(store.segmentation.getValue("parity").eofIdentified)
@@ -52,7 +54,7 @@ class AiriPlastMemoryParityTest {
         val turn = evidence(40, "I prefer concise technical summaries", "I prefer concise technical summaries")
         execute(owner, turn, fact(MemorySemanticIntent.ADD_FACT,
             "User prefers concise technical summaries", "response:detail", turn.displayText))
-        owner.captureConversation(turn, "Understood")
+        owner.appendConversationTruth(turn, "Understood")
         owner.flushConversation("parity", "TEST_EOF")
         val episode = store.episodes.single { it.first.eventType == "conversation_segment" }.first
         assertNotNull(episode.consolidatedAt)
@@ -210,6 +212,92 @@ class AiriPlastMemoryParityTest {
         assertTrue(rejected.boundaries.all { it.hard })
     }
 
+    @Test fun activeProductionSegmentationMatchesPrimitiveSoftHardAndCarryContracts() = runBlocking {
+        val tiny = listOf(message(0, 0, "user", "ok"), message(1, 1, "assistant", "noted"))
+        val low = AiriActiveSegmentationPipeline.plan(tiny, true,
+            FakeReasoningProvider(primitiveClassification = SegmentClassification.LOW_INFO))
+        assertEquals(SegmentClassification.LOW_INFO, low.classifications.values.single())
+        val informative = AiriActiveSegmentationPipeline.plan(tiny, true,
+            FakeReasoningProvider(primitiveClassification = SegmentClassification.INFORMATIVE))
+        assertEquals(SegmentClassification.INFORMATIVE, informative.classifications.values.single())
+
+        val long = (0L..24L).map { message(it, it * 1_000, if (it % 2L == 0L) "user" else "assistant", "message $it") }
+        val split = AiriActiveSegmentationPipeline.plan(long, true,
+            FakeReasoningProvider(primitiveSplits = listOf(12)))
+        assertEquals(listOf(0L..11L, 12L..24L), split.finalized)
+
+        val soft = (0L..9L).map { sequence -> message(sequence,
+            if (sequence < 5) sequence * 1_000 else AiriEventSegmenter.SOFT_GAP_MS + sequence * 1_000,
+            if (sequence % 2L == 0L) "user" else "assistant", "informative $sequence") }
+        assertEquals(1, AiriActiveSegmentationPipeline.plan(soft, true,
+            FakeReasoningProvider(resegmentSplits = emptyList())).finalized.size)
+        assertEquals(2, AiriActiveSegmentationPipeline.plan(soft, true,
+            FakeReasoningProvider(resegmentSplits = listOf(5))).finalized.size)
+        val hard = soft.map { if (it.sequence < 5) it else it.copy(committedAt = AiriEventSegmenter.HARD_GAP_MS + it.sequence * 1_000 + 1) }
+        val hardPlan = AiriActiveSegmentationPipeline.plan(hard, true, FakeReasoningProvider())
+        assertEquals(2, hardPlan.finalized.size)
+        assertTrue(hardPlan.boundaries.any { it.hard })
+        val open = AiriActiveSegmentationPipeline.plan(long, false,
+            FakeReasoningProvider(primitiveSplits = listOf(12)))
+        assertEquals(listOf(0L..11L), open.finalized); assertEquals(12L..24L, open.carriedTail)
+    }
+
+    @Test fun relevantEpisodeCandidatesPreferOldMatchingFactOverRecentNoise() = runBlocking {
+        val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
+        val old = evidence(500, "Aarav works on the Aurora project", "Aarav works on the Aurora project", listOf("Aarav", "Aurora"))
+        execute(owner, old, fact(MemorySemanticIntent.ADD_FACT, "Aarav works on the Aurora project", "project:aurora", old.displayText))
+        repeat(25) { index ->
+            val e = evidence(501L + index, "Unrelated preference $index", "Unrelated preference $index")
+            execute(owner, e, fact(MemorySemanticIntent.ADD_FACT, "Speaker has unrelated preference $index", "noise:$index", e.displayText))
+        }
+        val candidates = store.semanticCandidatesForEpisode("parity", "Aurora project planning with Aarav", 20)
+        assertEquals("project:aurora", candidates.first().semanticKey)
+    }
+
+    @Test fun backgroundRelationshipAndGoalConvergeIntoFastStructuredRecall() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        suspend fun episode(sequence: Long, text: String, action: EpisodeSemanticAction) {
+            val row = ConversationTruthEntity("bg-$sequence", "c", sequence, sequence, "bg:$sequence", "user",
+                text, sequence, canonicalText = text, displayText = text,
+                provenanceMetadata = action.criticalLiterals.joinToString("\u001F"))
+            store.appendConversation(row)
+            val span = EpisodeSpanEntity("bg-span-$sequence", "c", sequence, sequence,
+                SegmentClassification.INFORMATIVE.name, "EOF", sequence)
+            store.saveEpisodeSpan(span); val id = store.ensureEpisodeForSpan(span, listOf(row))!!
+            assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false).consolidateEpisode(id))
+        }
+        episode(600, "Devansh is my very good friend", EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+            "Devansh is the speaker's good friend", "RELATIONSHIP", null, .96,
+            criticalLiterals = listOf("Devansh"), person = "Devansh", relationship = "GOOD_FRIEND"))
+        episode(601, "My goal is to complete Aurora", EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+            "Speaker aims to complete Aurora", "GOAL", null, .96,
+            criticalLiterals = listOf("Aurora"), goalTitle = "Complete Aurora"))
+        val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
+        assertEquals("Devansh", owner.recall("friends", type = MemoryRecallType.FRIENDS).rows.single().entityName)
+        assertTrue(owner.recall("goals", type = MemoryRecallType.GOALS).rows.single().fact.contains("Aurora"))
+        assertTrue(store.semantic.isEmpty())
+    }
+
+    @Test fun e5ContractUsesPrefixesMasksBoundsAndRejectsIncompatibleVectors() {
+        val json = """{"model":{"type":"Unigram","unk_id":3,"vocab":[["<s>",0],["<pad>",0],["</s>",0],["<unk>",-10],["▁query",5],[":",4],["▁hello",5]]}}"""
+        val tokenizer = XlmRobertaUnigramTokenizer.fromJson(json)
+        assertArrayEquals(longArrayOf(0, 4, 5, 6, 2), tokenizer.encode(AndroidE5EmbeddingProvider.queryInput("hello"), 8))
+        assertEquals("passage: hello", AndroidE5EmbeddingProvider.passageInput("hello"))
+        assertEquals(4, tokenizer.encode("hello hello hello", 4).size)
+        val inputs = E5InputBuilder.build(longArrayOf(0, 6, 2))
+        assertArrayEquals(longArrayOf(1, 1, 1), inputs.attentionMask.single())
+        assertArrayEquals(longArrayOf(0, 0, 0), inputs.tokenTypes.single())
+        val pooled = E5Pooling.meanNormalized(arrayOf(floatArrayOf(3f, 0f), floatArrayOf(1f, 0f)), 2)
+        assertEquals(1.0, pooled[0], 1e-9); assertEquals(0.0, pooled[1], 1e-9)
+        val provider = object : LocalEmbeddingProvider {
+            override val modelId = "e5"; override val version = 2; override val dimensions = 384
+            override val isNeuralReady = true; override fun embed(text: String) = DoubleArray(384)
+        }
+        assertTrue(EmbeddingCompatibility.matches(provider, "e5", 2, 384, "0.1"))
+        assertFalse(EmbeddingCompatibility.matches(provider, "lyra-feature-hash", 1, 64, "0.1"))
+        assertFalse(EmbeddingCompatibility.matches(provider, "e5", 1, 384, "0.1"))
+    }
+
     @Test fun episodeDrivenColdStartCreatesFactAndMarksConsolidatedOnlyAfterAtomicApply() = runBlocking {
         val store = InMemoryAiriMemoryStore()
         val user = message(0, 1, "user", "I build accessible Android software")
@@ -260,6 +348,9 @@ class AiriPlastMemoryParityTest {
             "Speaker will move next year", "EXPERIENCE", null, .95, "HYPOTHETICAL")).semantic.isEmpty())
         assertTrue(run(EpisodeSemanticAction(SemanticConsolidationAction.NEW,
             "Speaker departs on 2047-09-11", "EXPERIENCE", null, .95)).semantic.isEmpty())
+        assertTrue(run(EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+            "Speaker lives in Valencia", "IDENTITY", null, .95,
+            criticalLiterals = listOf("Valencia"))).semantic.isEmpty())
     }
 
     @Test fun nearEquivalentNewActionReinforcesInsteadOfDuplicating() = runBlocking {
@@ -301,8 +392,14 @@ class AiriPlastMemoryParityTest {
 
 private class FakeReasoningProvider(
     private val actions: List<EpisodeSemanticAction> = emptyList(),
-    private val ratings: Map<String, EpisodeReviewRating> = emptyMap()
+    private val ratings: Map<String, EpisodeReviewRating> = emptyMap(),
+    private val primitiveClassification: SegmentClassification? = SegmentClassification.INFORMATIVE,
+    private val primitiveSplits: List<Long> = emptyList(),
+    private val resegmentSplits: List<Long> = emptyList()
 ) : MemoryReasoningProvider {
+    override suspend fun classifyPrimitive(messages: List<ConversationTruthEntity>) = primitiveClassification
+    override suspend fun splitPrimitive(messages: List<ConversationTruthEntity>) = primitiveSplits
+    override suspend fun resegmentInformative(messages: List<ConversationTruthEntity>, softBoundaries: List<Long>) = resegmentSplits
     override suspend fun reviewBoundaries(messages: List<ConversationTruthEntity>, candidates: List<SegmentBoundary>) =
         candidates.map { ReviewedBoundary(it.afterSequence, true, .9, "model-reviewed") }
     override suspend fun predict(title: String, facts: List<ConsolidationCandidate>) = "prediction"

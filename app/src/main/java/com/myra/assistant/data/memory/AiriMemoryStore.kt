@@ -63,6 +63,8 @@ interface AiriMemoryStore {
     suspend fun unconsolidatedEpisodes(limit: Int): List<EpisodicMemoryEntity> = emptyList()
     suspend fun episodeMessages(episode: EpisodicMemoryEntity): List<ConversationTruthEntity> = emptyList()
     suspend fun semanticCandidates(conversationId: String, limit: Int): List<SemanticMemoryEntity> = emptyList()
+    suspend fun semanticCandidatesForEpisode(conversationId: String, query: String, limit: Int): List<SemanticMemoryEntity> =
+        semanticCandidates(conversationId, limit)
     suspend fun semanticById(id: String): SemanticMemoryEntity? = null
     suspend fun nearEquivalentSemantic(statement: String, category: String, limit: Int = 20): SemanticMemoryEntity? = null
     suspend fun reinforceSemantic(id: String, episodeId: String, boost: Double): Boolean = false
@@ -254,7 +256,11 @@ class RoomAiriMemoryStore(
     }
     override suspend fun clearAll() = database.withTransaction { dao.clearAllMemory() }
     override suspend fun appendConversation(row: ConversationTruthEntity) = dao.appendConversation(row) != -1L
-    override suspend fun promptProjection(sessionId: String, limit: Int) = dao.recentConversation(sessionId, limit.coerceIn(1, 32)).reversed()
+    override suspend fun promptProjection(sessionId: String, limit: Int): List<ConversationTruthEntity> {
+        val bounded = limit.coerceIn(1, 32)
+        return ConversationProjection.compact(sessionId, dao.recentConversation(sessionId, bounded).reversed(),
+            dao.conversationCount(sessionId), bounded)
+    }
     override suspend fun conversationCount(sessionId: String) = dao.conversationCount(sessionId)
     override suspend fun lastConversationSequence(sessionId: String) = dao.lastConversationSequence(sessionId)
     override suspend fun behavior(key: String) = dao.behavior(key)
@@ -272,7 +278,7 @@ class RoomAiriMemoryStore(
         if (messages.isEmpty() || span.classification != SegmentClassification.INFORMATIVE.name) return null
         val id = "episode:${span.conversationId}:${span.startSequence}:${span.endSequence}"
         dao.episodeById(id)?.let { return it.episodeId }
-        val content = messages.joinToString("\n") { "${it.role}: ${it.content}" }.take(2_000)
+        val content = messages.joinToString("\n") { "${it.role}: ${it.content}" }.take(12_000)
         val title = messages.firstOrNull { it.role == "user" }?.content?.take(96)?.ifBlank { "Conversation episode" }
             ?: "Conversation episode"
         val created = messages.minOf { it.committedAt }; val ended = messages.maxOf { it.committedAt }
@@ -378,6 +384,31 @@ class RoomAiriMemoryStore(
         dao.conversationRange(episode.conversationId, episode.startSequence, episode.endSequence)
     override suspend fun semanticCandidates(conversationId: String, limit: Int) =
         dao.activeSemanticForConversation(conversationId, limit.coerceIn(1, 20)).ifEmpty { dao.activeSemantic(limit.coerceIn(1, 20)) }
+    override suspend fun semanticCandidatesForEpisode(conversationId: String, query: String, limit: Int): List<SemanticMemoryEntity> {
+        val bounded = limit.coerceIn(1, 20)
+        val pool = dao.activeSemanticForConversation(conversationId, RETRIEVAL_CANDIDATE_LIMIT)
+            .ifEmpty { dao.activeSemantic(RETRIEVAL_CANDIDATE_LIMIT) }
+        if (pool.isEmpty()) return emptyList()
+        val normalized = AiriText.normalize(query)
+        val ftsQuery = normalized.split(' ').filter { it.length >= 2 }.take(8)
+            .joinToString(" OR ") { "\"${it.replace("\"", "")}\"" }
+        val allowed = pool.map { it.memoryId }.toSet()
+        val lexical = if (ftsQuery.isBlank()) emptyList() else runCatching {
+            dao.searchSemanticFts(ftsQuery, RETRIEVAL_CANDIDATE_LIMIT).filter { it.memoryId in allowed }
+        }.getOrDefault(emptyList())
+        val vector = if (!embeddingProvider.isNeuralReady) emptyList() else {
+            val queryVector = embeddingProvider.embedQuery(query)
+            pool.filter(::compatibleEmbedding).sortedByDescending {
+                vectorSimilarity(queryVector, it.embedding, it.embeddingModel, it.embeddingVersion, it.embeddingDimensions)
+            }
+        }
+        val fused = ReciprocalRankFusion.merge(listOf(lexical, vector), { it.memoryId }, RETRIEVAL_CANDIDATE_LIMIT)
+            .map { it.first }
+        val ranked = if (fused.isEmpty()) pool.sortedByDescending { lexicalSemanticScore(normalized, it) } else fused
+        val guidelines = ranked.filter { it.category == MemoryCategory.WORKFLOW.name }.take(3)
+        val guidelineIds = guidelines.map { it.memoryId }.toSet()
+        return (guidelines + ranked.filterNot { it.memoryId in guidelineIds }).distinctBy { it.memoryId }.take(bounded)
+    }
     override suspend fun semanticById(id: String) = dao.semanticById(id)
     override suspend fun nearEquivalentSemantic(statement: String, category: String, limit: Int): SemanticMemoryEntity? {
         val normalized = AiriText.normalize(statement)
@@ -441,13 +472,13 @@ class RoomAiriMemoryStore(
         val episodePool = dao.recentEpisodes(RETRIEVAL_CANDIDATE_LIMIT)
         val queryVector = embeddingProvider.embedQuery(query)
         val semanticLexical = runCatching { dao.searchSemanticFts(fts, RETRIEVAL_CANDIDATE_LIMIT) }.getOrDefault(emptyList())
-        val semanticVector = semanticPool.sortedByDescending {
+        val semanticVector = semanticPool.filter(::compatibleEmbedding).sortedByDescending {
             vectorSimilarity(queryVector, it.embedding, it.embeddingModel, it.embeddingVersion, it.embeddingDimensions)
         }.take(RETRIEVAL_CANDIDATE_LIMIT)
         val semantic = ReciprocalRankFusion.merge(listOf(semanticLexical, semanticVector), { it.memoryId }, RETRIEVAL_CANDIDATE_LIMIT)
             .map { semanticCard(it.first) }
         val episodeLexical = runCatching { dao.searchEpisodeFts(fts, RETRIEVAL_CANDIDATE_LIMIT) }.getOrDefault(emptyList())
-        val episodeVector = episodePool.sortedByDescending {
+        val episodeVector = episodePool.filter(::compatibleEmbedding).sortedByDescending {
             vectorSimilarity(queryVector, it.embedding, it.embeddingModel, it.embeddingVersion, it.embeddingDimensions)
         }.take(RETRIEVAL_CANDIDATE_LIMIT)
         val now = clock()
@@ -480,6 +511,15 @@ class RoomAiriMemoryStore(
         if (model != embeddingProvider.modelId || version != embeddingProvider.version || dimensions != embeddingProvider.dimensions) return 0.0
         return LocalVectorCodec.decode(encoded, dimensions)?.let { FeatureHashEmbeddingProvider.cosine(query, it) } ?: 0.0
     }
+    private fun compatibleEmbedding(row: SemanticMemoryEntity) = EmbeddingCompatibility.matches(embeddingProvider,
+        row.embeddingModel, row.embeddingVersion, row.embeddingDimensions, row.embedding)
+    private fun compatibleEmbedding(row: EpisodicMemoryEntity) = EmbeddingCompatibility.matches(embeddingProvider,
+        row.embeddingModel, row.embeddingVersion, row.embeddingDimensions, row.embedding)
+    private fun lexicalSemanticScore(query: String, row: SemanticMemoryEntity): Int {
+        val tokens = query.split(' ').filter { it.length >= 2 }.toSet()
+        val rowTokens = (row.normalizedStatement + " " + AiriText.normalize(row.semanticKey)).split(' ').toSet()
+        return tokens.count(rowTokens::contains) * 10 + row.importance
+    }
 
     companion object { private const val RETRIEVAL_CANDIDATE_LIMIT = 100 }
 }
@@ -491,5 +531,17 @@ object AiriText {
     fun semanticKey(value: String) = normalize(value).replace(' ', '_').take(96)
     fun displayName(value: String) = value.trim().replace(Regex("\\s+"), " ").split(' ').joinToString(" ") {
         it.lowercase(Locale.ROOT).replaceFirstChar(Char::titlecase)
+    }
+}
+
+object ConversationProjection {
+    fun compact(sessionId: String, recent: List<ConversationTruthEntity>, total: Int, recentLimit: Int): List<ConversationTruthEntity> {
+        if (total <= recentLimit) return recent
+        val removed = total - recentLimit
+        val first = recent.firstOrNull()?.sequence ?: 0L
+        val summary = ConversationTruthEntity("projection:$sessionId:$first", sessionId, first - 1,
+            0, "projection:$sessionId", "event", "Compacted $removed older messages; authoritative conversation truth remains stored.",
+            recent.firstOrNull()?.committedAt ?: 0L, source = "PROMPT_PROJECTION", finalized = true)
+        return listOf(summary) + recent
     }
 }
