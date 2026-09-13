@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
 enum class MemoryDecision { IGNORE, RECALL, SAVE, UPDATE, DELETE, TRANSIENT, NEEDS_CLARIFICATION, REJECT }
@@ -77,9 +78,28 @@ class MemoryBrainCoordinator(
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inactivityJobs = ConcurrentHashMap<String, Job>()
     private val consolidationJobs = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private val consolidationAttempts = ConcurrentHashMap<String, Int>()
+    private val consolidationQueue = Channel<String>(capacity = 32)
     private val reviewWorkerRunning = java.util.concurrent.atomic.AtomicBoolean(false)
 
     init {
+        backgroundScope.launch {
+            for (episodeId in consolidationQueue) {
+                try { consolidateEpisode(episodeId) }
+                catch (error: Throwable) {
+                    log("MEMORY_CONSOLIDATION_RETRY episode=${episodeId.hashCode()} reason=${error.javaClass.simpleName}")
+                    consolidationJobs.remove(episodeId)
+                    val attempt = consolidationAttempts.merge(episodeId, 1) { old, one -> old + one } ?: 1
+                    if (attempt < 3) {
+                        delay(attempt * 2_000L)
+                        scheduleEpisodeConsolidation(episodeId)
+                    }
+                    continue
+                }
+                consolidationAttempts.remove(episodeId)
+                consolidationJobs.remove(episodeId)
+            }
+        }
         // A process can die after transcript commit but before the in-process
         // timeout fires. Recover only stale source-owned conversations; fresh
         // claims remain protected by the generation/claim guard below.
@@ -395,10 +415,9 @@ class MemoryBrainCoordinator(
 
     private fun scheduleEpisodeConsolidation(episodeId: String) {
         if (!consolidationJobs.add(episodeId)) return
-        backgroundScope.launch {
-            try { consolidateEpisode(episodeId) }
-            catch (error: Throwable) { log("MEMORY_CONSOLIDATION_RETRY episode=${episodeId.hashCode()} reason=${error.javaClass.simpleName}") }
-            finally { consolidationJobs.remove(episodeId) }
+        if (consolidationQueue.trySend(episodeId).isFailure) {
+            consolidationJobs.remove(episodeId)
+            log("MEMORY_CONSOLIDATION_BACKPRESSURE episode=${episodeId.hashCode()}")
         }
     }
 
@@ -417,18 +436,23 @@ class MemoryBrainCoordinator(
             return 0
         }
         val candidateById = candidates.associateBy { it.memoryId }
-        val last = messages.lastOrNull { it.role == "user" } ?: return 0
-        val evidence = AuthoritativeMemoryTurnEvidence(last.turnId, last.canonicalText, last.displayText,
+        val userMessages = messages.filter { it.role == "user" }
+        val last = userMessages.lastOrNull() ?: return 0
+        val canonicalEvidence = userMessages.joinToString("\n") { it.canonicalText }
+        val displayEvidence = userMessages.joinToString("\n") { it.displayText }
+        val evidence = AuthoritativeMemoryTurnEvidence(last.turnId, canonicalEvidence, displayEvidence,
             sessionId = episode.conversationId, utteranceId = last.utteranceId)
         var applied = 0
         store.transaction {
             actions.forEach { action ->
                 if (action.confidence < .65) return@forEach
+                if (action.assertionMode != "USER_ASSERTED") return@forEach
                 val category = action.category.toMemoryCategory() ?: return@forEach
                 val target = action.targetFactId?.let(candidateById::get)
                 if (action.kind != SemanticConsolidationAction.NEW && target == null) return@forEach
                 val fact = action.fact.trim()
                 if (action.kind !in setOf(SemanticConsolidationAction.INVALIDATE, SemanticConsolidationAction.REINFORCE) && fact.length !in 3..500) return@forEach
+                if (!criticalLiteralsSupported(fact, evidence.variants)) return@forEach
                 val frame = MemorySemanticFrame(
                     intent = when (action.kind) {
                         SemanticConsolidationAction.NEW -> MemorySemanticIntent.ADD_FACT
@@ -448,7 +472,15 @@ class MemoryBrainCoordinator(
                     SemanticConsolidationAction.INVALIDATE -> if (store.invalidateSemantic(target!!.semanticKey)) {
                         store.linkSemanticProvenance(target.memoryId, episodeId); applied++
                     }
-                    else -> store.addSemantic(frame, evidence)?.let { id ->
+                    SemanticConsolidationAction.NEW -> {
+                        val duplicate = store.nearEquivalentSemantic(fact, category.name)
+                        if (duplicate != null) {
+                            if (store.reinforceSemantic(duplicate.memoryId, episodeId, .03)) applied++
+                        } else store.addSemantic(frame, evidence)?.let { id ->
+                            store.linkSemanticProvenance(id, episodeId); store.recordConsolidationAction(frame, evidence, id); applied++
+                        }
+                    }
+                    SemanticConsolidationAction.UPDATE -> store.addSemantic(frame, evidence)?.let { id ->
                         store.linkSemanticProvenance(id, episodeId); store.recordConsolidationAction(frame, evidence, id); applied++
                     }
                 }
@@ -472,8 +504,14 @@ class MemoryBrainCoordinator(
                     val episodes = store.episodeCards(queryMap.keys.toList())
                     val context = store.promptProjection(conversationId, 32)
                     val ratings = reasoningProvider.rateEpisodes(context, episodes, queryMap)
-                    if (ratings.isNotEmpty()) store.reviewEpisodes(conversationId, ratings, System.currentTimeMillis())
-                    store.deletePendingReviews(pending.map { it.reviewId })
+                    if (ratings.isNotEmpty()) {
+                        store.reviewEpisodes(conversationId, ratings, System.currentTimeMillis())
+                        val completedEpisodes = ratings.keys
+                        val completedReviews = pending.filter { row ->
+                            row.episodeIds.split(',').filter(String::isNotBlank).all(completedEpisodes::contains)
+                        }.map { it.reviewId }
+                        if (completedReviews.isNotEmpty()) store.deletePendingReviews(completedReviews)
+                    }
                 }
             } catch (error: Throwable) {
                 log("MEMORY_REVIEW_RETRY reason=${error.javaClass.simpleName}")
@@ -505,6 +543,13 @@ class MemoryBrainCoordinator(
         "GOAL" -> MemoryCategory.GOAL
         "GUIDELINE" -> MemoryCategory.WORKFLOW
         else -> null
+    }
+
+    private fun criticalLiteralsSupported(fact: String, authoritativeVariants: List<String>): Boolean {
+        val source = authoritativeVariants.joinToString(" ")
+        val critical = Regex("(?<![\\p{L}\\p{N}])(?:\\d[\\d.,:/-]*|[A-Z][A-Z0-9_-]{2,})(?![\\p{L}\\p{N}])")
+            .findAll(fact).map { it.value }.toSet()
+        return critical.all { literal -> source.contains(literal, ignoreCase = true) }
     }
 
     companion object {

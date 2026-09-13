@@ -243,6 +243,44 @@ class AiriPlastMemoryParityTest {
         assertTrue(store.semantic.single().active)
     }
 
+    @Test fun episodeConsolidationRejectsNonUserAssertionsAndInventedCriticalNumbers() = runBlocking {
+        suspend fun run(action: EpisodeSemanticAction): InMemoryAiriMemoryStore {
+            val store = InMemoryAiriMemoryStore()
+            val user = message(401, 10, "user", "I discussed a future travel idea")
+            store.appendConversation(user)
+            val span = EpisodeSpanEntity("guard-${action.assertionMode}-${action.fact.hashCode()}", "c", 401, 401,
+                SegmentClassification.INFORMATIVE.name, "EOF", 11)
+            store.saveEpisodeSpan(span)
+            val episode = store.ensureEpisodeForSpan(span, listOf(user))!!
+            val owner = MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), recoverOnInit = false)
+            assertEquals(0, owner.consolidateEpisode(episode))
+            return store
+        }
+        assertTrue(run(EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+            "Speaker will move next year", "EXPERIENCE", null, .95, "HYPOTHETICAL")).semantic.isEmpty())
+        assertTrue(run(EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+            "Speaker departs on 2047-09-11", "EXPERIENCE", null, .95)).semantic.isEmpty())
+    }
+
+    @Test fun nearEquivalentNewActionReinforcesInsteadOfDuplicating() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        val e = evidence(94, "I value accessible design", "I value accessible design")
+        execute(MemoryBrainCoordinator(store, recoverOnInit = false), e,
+            fact(MemorySemanticIntent.ADD_FACT, "Speaker values accessible design", "design:accessibility", e.displayText))
+        val user = ConversationTruthEntity("dedup-user", "parity", 402, 95, "pc:95", "user",
+            "I value accessible design", 12)
+        store.appendConversation(user)
+        val span = EpisodeSpanEntity("dedup-span", "parity", 402, 402,
+            SegmentClassification.INFORMATIVE.name, "EOF", 13)
+        store.saveEpisodeSpan(span); val episode = store.ensureEpisodeForSpan(span, listOf(user))!!
+        val action = EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+            "Speaker values accessible design", "PREFERENCE", null, .95)
+        val owner = MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), recoverOnInit = false)
+        assertEquals(1, owner.consolidateEpisode(episode))
+        assertEquals(1, store.semantic.count { it.active })
+        assertEquals(1, store.provenance.count { it.episodeId == episode })
+    }
+
     private suspend fun execute(owner: MemoryBrainCoordinator, e: AuthoritativeMemoryTurnEvidence, frame: MemorySemanticFrame) {
         val plan = owner.prepareFinalTurn(e, listOf(frame.copy(sourceTurnId = e.turnId)))
         val out = owner.executeFinalTurnPlan(plan, e)

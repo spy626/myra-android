@@ -46,22 +46,22 @@ is not counted as parity.
 | `crates/entities/src/conversation_message.rs` + migration 01 | Conversation schema/indexes | Room truth entity/DAO | ANDROID-EQUIVALENT PORT | schema tests | SQLite types |
 | `crates/core/src/segmentation_state.rs` + migration 02 | Claim/progress/EOF state | `SegmentationStateEntity` | ANDROID-EQUIVALENT PORT | claim/recovery tests | Android lifecycle fields added |
 | `crates/entities/src/episode_span.rs` + migration 03 | Immutable committed spans | `EpisodeSpanEntity` | ANDROID-EQUIVALENT PORT | idempotent span tests | Deterministic string ID |
-| `crates/event_segmentation/src/event_segmenter.rs` | Embedding candidate geometry, boundary budget, recursive review | `AiriEventSegmenter` | BLOCKED | soft/hard/tail tests | Candidate geometry ported; neural embeddings and LLM boundary review are not |
-| `crates/event_segmentation/src/legacy.rs` | Production worker temporal/primitive/resegmentation stages | `AiriEventSegmenter` | ANDROID-EQUIVALENT PORT | temporal/tail tests | Local boundary classifier replaces worker LLM review |
+| `crates/event_segmentation/src/event_segmenter.rs` | Embedding candidate geometry, boundary budget, model review | `AiriEventSegmenter`, `GeminiMemoryReasoningProvider` | ANDROID-EQUIVALENT PORT | soft/hard/tail/model-review tests | Pinned E5 geometry after lazy initialization; hard gaps remain deterministic; oversized groups are bounded locally |
+| `crates/event_segmentation/src/legacy.rs` | Temporal/primitive/resegmentation stages retained upstream for compatibility | `AiriEventSegmenter` | ANDROID-EQUIVALENT PORT | temporal/tail tests | Android uses the current candidate-review path, not upstream's legacy compatibility implementation |
 | `crates/worker/src/jobs/event_segmentation.rs` | Claim, stale recovery, abort, tail, EOF, enqueue | coordinator segmentation lane | ANDROID-EQUIVALENT PORT | stale/process recovery tests | Coroutine jobs, not Apalis |
 | `crates/worker/src/jobs/episode_creation.rs` | Deterministic episode, rendered content, embedding, FSRS init | `ensureEpisodeForSpan`, `AiriFsrs.initial` | ANDROID-EQUIVALENT PORT | episode/idempotency/FSRS tests | Local renderer; feature-hash fallback |
 | `crates/entities/src/episodic_memory.rs` + migration 05 | Episode/FSRS/search schema | `EpisodicMemoryEntity`, FTS entity | ANDROID-EQUIVALENT PORT | Room/source tests | SQLite vector encoding |
-| `crates/worker/src/jobs/predict_calibrate.rs` | Related-fact Predict/Calibrate and atomic actions | central transaction plus consolidation journal/provenance reconciliation | BLOCKED | NEW/REINFORCE/UPDATE/INVALIDATE tests | Explicit final-turn actions reconcile to episodes; autonomous episode LLM Predict/Calibrate is not yet present |
+| `crates/worker/src/jobs/predict_calibrate.rs` | Related-fact Predict/Calibrate and atomic actions | `GeminiMemoryReasoningProvider`, coordinator consolidation queue | ANDROID-EQUIVALENT PORT | cold-start, target-ID, assertion/literal, dedup tests | Existing Gemini provider/key is used through a bounded background adapter; Android additionally enforces safety and current-source literals |
 | `crates/entities/src/semantic_memory.rs` + migration 06 | Semantic fact lifecycle/provenance | `SemanticMemoryEntity`, `SemanticProvenanceEntity` | ANDROID-EQUIVALENT PORT | lifecycle/provenance tests | SQLite schema plus stable entity index |
-| `crates/core/src/memory/semantic.rs` | BM25/vector/RRF active semantic retrieval | Room FTS + vector lane + `ReciprocalRankFusion` | BLOCKED | RRF/retrieval tests | RRF/candidates match; vector lane is feature-hash, not neural |
-| `crates/core/src/memory/episodic.rs` | BM25/vector/RRF plus FSRS rerank | `hybridRetrieve` | BLOCKED | retrieval/FSRS tests | Exact FSRS and RRF; feature-hash vector lane |
+| `crates/core/src/memory/semantic.rs` | BM25/vector/RRF active semantic retrieval | Room FTS + E5 vector lane + `ReciprocalRankFusion` | ANDROID-EQUIVALENT PORT | RRF/retrieval/version tests | Neural model is lazily downloaded and verified; structured/FTS recall remains available offline |
+| `crates/core/src/memory/episodic.rs` | BM25/vector/RRF plus FSRS rerank | `hybridRetrieve` | ANDROID-EQUIVALENT PORT | retrieval/FSRS tests | Native Room candidates and locally encoded vectors replace pgvector SQL |
 | `crates/core/src/memory/retrieval.rs` | Bounded result rendering | `MemoryEntity` projection/formatter | ANDROID-EQUIVALENT PORT | bounded recall tests | Native response formatter |
-| `crates/ai/src/embed*.rs`, cosine | Configured/versioned semantic embedding provider | `LocalEmbeddingProvider`, model/version/dimension metadata, bounded re-embedding, feature-hash fallback | BLOCKED | codec/version/fallback tests | No redistributable multilingual neural model is bundled |
+| `crates/ai/src/embed*.rs`, cosine | Configured/versioned semantic embedding provider | `AndroidE5EmbeddingProvider`, model/version/dimension metadata, bounded re-embedding | ANDROID-EQUIVALENT PORT | codec/version/fallback/tokenizer tests | MIT multilingual-e5-small is pinned, checksum-verified, and cached in app-private storage; feature hash is an explicitly labelled warm-up/offline fallback |
 | `crates/core/src/pending_review_queue.rs` + migration 04 | Retrieval review side effect | `PendingReviewEntity` | ANDROID-EQUIVALENT PORT | review enqueue tests | SQLite queue |
-| `crates/worker/src/jobs/memory_review.rs` | Aggregate/review/rate/update | owner review lane | BLOCKED | exact state tests | Rating application exists; asynchronous LLM rating worker is not equivalent |
+| `crates/worker/src/jobs/memory_review.rs` | Aggregate/review/rate/update | owner review queue + Gemini ratings | ANDROID-EQUIVALENT PORT | exact state/queue tests | Durable Room queue and startup recovery replace Apalis; partial ratings remain pending |
 | `fsrs` 5.2.0 dependency | FSRS-6 inference | `AiriFsrs` | DIRECT PORT | pinned numeric conformance tests | Training APIs are not needed on device |
 | `crates/server/src/api/*` | HTTP API surface | owner Kotlin API | NOT APPLICABLE | service boundary tests | No localhost server required |
-| `crates/migration/*` | PostgreSQL schema migration | Room v8 destructive pre-release cutover | ANDROID-EQUIVALENT PORT | schema/static tests | Clean reinstall required |
+| `crates/migration/*` | PostgreSQL schema migration | Room v10 destructive pre-release cutover | ANDROID-EQUIVALENT PORT | schema/static tests | Clean reinstall required |
 | `docs/todo/flashbulb_memory.md` | Documented high-significance TODO | `FlashbulbPolicy`, episode fields | COMPLETED UPSTREAM WIP | policy tests | LYRA extension, not upstream production parity |
 | `docs/todo/semantic_memory_confidence.md` | Proposed semantic confidence evolution | explicit/inferred confidence metadata | COMPLETED UPSTREAM WIP | behavior/safety tests | Conservative LYRA policy |
 | `docs/architecture/graph_memory.md` | Graph direction | stable people/aliases/relationships | ANDROID-EQUIVALENT PORT | entity tests | LYRA-specific assistant identity graph |
@@ -69,8 +69,9 @@ is not counted as parity.
 
 ## Completion truth
 
-The matrix intentionally records remaining blocked parity seams. Until those
-rows are resolved, this repository must not describe the implementation as
-full AIRI/Plast-Mem parity. The production system nevertheless remains one
-owner, one Room truth, one fast local recall path, and contains no JARVIS or
-Memory V2 fallback.
+All applicable runtime rows are directly ported or represented by a documented
+Android equivalent. Server deployment APIs remain not applicable. The neural
+lane intentionally degrades to labelled structured/FTS/feature-hash retrieval
+until the pinned model is available; this degraded mode is not described as
+neural parity. The production system remains one owner, one Room truth, one
+fast local recall path, and contains no JARVIS or Memory V2 fallback.

@@ -209,6 +209,9 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     }
     override suspend fun semanticCandidates(conversationId: String, limit: Int) = semantic.filter { it.active && it.deletedAt == null }.take(limit)
     override suspend fun semanticById(id: String) = semantic.firstOrNull { it.memoryId == id }
+    override suspend fun nearEquivalentSemantic(statement: String, category: String, limit: Int) = semantic
+        .asSequence().filter { it.active && it.category == category }
+        .firstOrNull { it.normalizedStatement == AiriText.normalize(statement) }
     override suspend fun reinforceSemantic(id: String, episodeId: String, boost: Double): Boolean {
         var changed = false
         semantic.replaceAll { if (it.memoryId == id && it.active) { changed = true; it.copy(confidence = (it.confidence + boost).coerceAtMost(1.0)) } else it }

@@ -64,6 +64,7 @@ interface AiriMemoryStore {
     suspend fun episodeMessages(episode: EpisodicMemoryEntity): List<ConversationTruthEntity> = emptyList()
     suspend fun semanticCandidates(conversationId: String, limit: Int): List<SemanticMemoryEntity> = emptyList()
     suspend fun semanticById(id: String): SemanticMemoryEntity? = null
+    suspend fun nearEquivalentSemantic(statement: String, category: String, limit: Int = 20): SemanticMemoryEntity? = null
     suspend fun reinforceSemantic(id: String, episodeId: String, boost: Double): Boolean = false
     suspend fun linkSemanticProvenance(id: String, episodeId: String): Boolean = false
     suspend fun pendingReviewConversations(limit: Int): List<String> = emptyList()
@@ -378,6 +379,15 @@ class RoomAiriMemoryStore(
     override suspend fun semanticCandidates(conversationId: String, limit: Int) =
         dao.activeSemanticForConversation(conversationId, limit.coerceIn(1, 20)).ifEmpty { dao.activeSemantic(limit.coerceIn(1, 20)) }
     override suspend fun semanticById(id: String) = dao.semanticById(id)
+    override suspend fun nearEquivalentSemantic(statement: String, category: String, limit: Int): SemanticMemoryEntity? {
+        val normalized = AiriText.normalize(statement)
+        val candidates = dao.activeSemanticByCategory(category, limit.coerceIn(1, 20))
+        candidates.firstOrNull { it.normalizedStatement == normalized }?.let { return it }
+        if (!embeddingProvider.isNeuralReady) return null
+        val vector = embeddingProvider.embed(statement)
+        return candidates.asSequence().map { it to vectorSimilarity(vector, it.embedding, it.embeddingModel,
+            it.embeddingVersion, it.embeddingDimensions) }.filter { it.second >= .95 }.maxByOrNull { it.second }?.first
+    }
     override suspend fun reinforceSemantic(id: String, episodeId: String, boost: Double): Boolean = database.withTransaction {
         val changed = dao.reinforceSemantic(id, boost.coerceIn(0.0, .1), clock()) == 1
         if (changed) dao.insertSemanticProvenance(listOf(SemanticProvenanceEntity(id, episodeId)))

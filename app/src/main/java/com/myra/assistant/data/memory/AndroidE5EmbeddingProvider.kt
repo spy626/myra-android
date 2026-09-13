@@ -98,15 +98,25 @@ class AndroidE5EmbeddingProvider(context: Context, private val onReady: () -> Un
     private fun download(url: String, destination: File, bytes: Long, digest: String): File {
         destination.parentFile?.mkdirs()
         val partial = File(destination.parentFile, "${destination.name}.partial")
+        if (partial.length() > bytes) partial.delete()
+        if (partial.length() == bytes && sha256(partial) == digest) return install(partial, destination)
+        val offset = partial.length()
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000; readTimeout = 60_000; instanceFollowRedirects = true
+            if (offset > 0L) setRequestProperty("Range", "bytes=$offset-")
         }
         try {
             if (connection.responseCode !in 200..299) error("embedding download HTTP ${connection.responseCode}")
-            connection.inputStream.use { input -> FileOutputStream(partial, false).use { output -> input.copyTo(output, 256 * 1024) } }
+            val append = offset > 0L && connection.responseCode == HttpURLConnection.HTTP_PARTIAL
+            connection.inputStream.use { input -> FileOutputStream(partial, append).use { output -> input.copyTo(output, 256 * 1024) } }
         } finally { connection.disconnect() }
         check(partial.length() == bytes) { "embedding component length mismatch" }
         check(sha256(partial) == digest) { "embedding component digest mismatch" }
+        return install(partial, destination)
+    }
+
+    private fun install(partial: File, destination: File): File {
+        if (destination.exists()) check(destination.delete()) { "embedding destination replacement failed" }
         check(partial.renameTo(destination)) { "embedding model atomic install failed" }
         return destination
     }
@@ -119,8 +129,19 @@ class AndroidE5EmbeddingProvider(context: Context, private val onReady: () -> Un
         digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun toHidden(value: Any): Array<Array<FloatArray>> = value as? Array<Array<FloatArray>>
-        ?: error("unsupported encoder output")
+    private fun toHidden(value: Any): Array<Array<FloatArray>> {
+        val batches = value as? Array<*> ?: error("unsupported encoder output")
+        return Array(batches.size) { batchIndex ->
+            val tokens = batches[batchIndex] as? Array<*> ?: error("unsupported encoder batch")
+            Array(tokens.size) { tokenIndex ->
+                when (val token = tokens[tokenIndex]) {
+                    is FloatArray -> token
+                    is Array<*> -> FloatArray(token.size) { i -> (token[i] as Number).toFloat() }
+                    else -> error("unsupported encoder token")
+                }
+            }
+        }
+    }
 
     companion object {
         const val MODEL_ID = "intfloat/multilingual-e5-small"

@@ -18,7 +18,8 @@ import java.util.concurrent.TimeUnit
 data class ReviewedBoundary(val afterSequence: Long, val keep: Boolean, val confidence: Double, val reason: String)
 data class ConsolidationCandidate(val memoryId: String, val fact: String, val category: String)
 data class EpisodeSemanticAction(val kind: SemanticConsolidationAction, val fact: String,
-    val category: String, val targetFactId: String?, val confidence: Double)
+    val category: String, val targetFactId: String?, val confidence: Double,
+    val assertionMode: String = "USER_ASSERTED")
 
 interface MemoryReasoningProvider {
     suspend fun reviewBoundaries(messages: List<ConversationTruthEntity>, candidates: List<SegmentBoundary>): List<ReviewedBoundary>
@@ -84,8 +85,10 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
             .put("fact", JSONObject().put("type", "STRING"))
             .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("IDENTITY", "PREFERENCE", "INTEREST", "PERSONALITY", "RELATIONSHIP", "EXPERIENCE", "GOAL", "GUIDELINE"))))
             .put("target_fact_id", JSONObject().put("type", "STRING"))
-            .put("confidence", JSONObject().put("type", "NUMBER")))
-            .put("required", JSONArray(listOf("kind", "fact", "category", "target_fact_id", "confidence")))
+            .put("confidence", JSONObject().put("type", "NUMBER"))
+            .put("assertion_mode", JSONObject().put("type", "STRING").put("enum",
+                JSONArray(listOf("USER_ASSERTED", "HYPOTHETICAL", "REPORTED", "UNCERTAIN")))))
+            .put("required", JSONArray(listOf("kind", "fact", "category", "target_fact_id", "confidence", "assertion_mode")))
         val schema = JSONObject().put("type", "OBJECT").put("properties", JSONObject()
             .put("actions", JSONObject().put("type", "ARRAY").put("maxItems", 20).put("items", action)))
             .put("required", JSONArray(listOf("actions")))
@@ -96,7 +99,7 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
             if (kind != SemanticConsolidationAction.NEW && target !in suppliedIds) return@mapNotNull null
             if (facts.isEmpty() && kind != SemanticConsolidationAction.NEW) return@mapNotNull null
             EpisodeSemanticAction(kind, row.optString("fact").trim(), row.optString("category"), target,
-                row.optDouble("confidence", 0.0).coerceIn(0.0, 1.0))
+                row.optDouble("confidence", 0.0).coerceIn(0.0, 1.0), row.optString("assertion_mode"))
         }
     }
 

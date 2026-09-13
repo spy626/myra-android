@@ -14,11 +14,20 @@ responsibilities are derived from AIRI's MIT-licensed project. Stateful
 multi-turn event segmentation, episodic memory, semantic
 NEW/REINFORCE/UPDATE/INVALIDATE, BM25/vector/RRF retrieval, and episodic FSRS
 review follow Plast-Mem's current architecture and contracts. Kotlin, Room,
-the currently deployed local feature-hash vector lane, the stable
-person/entity index, Android lifecycle integration, and stronger LYRA secret
-policy are Android-native equivalents. The feature-hash lane is an offline
-fallback and is not represented as neural embedding parity with Plast-Mem's
-configured embedding provider.
+the local ONNX Runtime lane using the MIT-licensed pinned
+`intfloat/multilingual-e5-small@614241f622f53c4eeff9890bdc4f31cfecc418b3`
+(384 dimensions), the stable person/entity index, Android lifecycle
+integration, and stronger LYRA secret policy are Android-native equivalents.
+Model and tokenizer downloads are length/SHA-256 verified and cached only in
+app-private storage. The feature-hash lane is an explicitly labelled
+warm-up/offline fallback and is not represented as neural parity while active.
+
+Plast-Mem's provider-agnostic model boundary is completed on Android by a
+bounded background reasoning adapter using LYRA's existing Gemini key and
+provider. It performs boundary review, episode Predict/Calibrate, and episodic
+review ratings without joining the voice-response session or acquiring
+response ownership. Android remains the sole authorization, transaction,
+provenance, stale-update, safety, and verification owner.
 
 At these revisions, Flashbulb Memory remains an upstream documented TODO.
 LYRA's guarded high-significance episode flag and retrieval floor are an

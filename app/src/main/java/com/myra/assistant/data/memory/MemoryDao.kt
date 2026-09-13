@@ -28,6 +28,8 @@ interface AiriMemoryDao {
 
     @Query("SELECT * FROM airi_semantic_memory WHERE active = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT :limit")
     suspend fun activeSemantic(limit: Int): List<SemanticMemoryEntity>
+    @Query("SELECT * FROM airi_semantic_memory WHERE category = :category AND active = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT :limit")
+    suspend fun activeSemanticByCategory(category: String, limit: Int): List<SemanticMemoryEntity>
     @Query("SELECT * FROM airi_semantic_memory WHERE semanticKey = :key AND active = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT 1")
     suspend fun currentSemantic(key: String): SemanticMemoryEntity?
     @Query("SELECT * FROM airi_semantic_memory WHERE memoryId = :id LIMIT 1")
