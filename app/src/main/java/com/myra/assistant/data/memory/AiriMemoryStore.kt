@@ -1,6 +1,7 @@
 package com.myra.assistant.data.memory
 
 import androidx.room.withTransaction
+import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.Locale
 import java.util.UUID
@@ -20,6 +21,7 @@ enum class MemoryFailureReason {
 }
 
 interface AiriMemoryStore {
+    suspend fun <T> transaction(block: suspend AiriMemoryStore.() -> T): T = block()
     suspend fun peopleByName(name: String): List<PersonEntity>
     suspend fun allPeople(limit: Int = 100): List<PersonEntity>
     suspend fun ensurePerson(name: String, turnId: Long): PersonEntity
@@ -51,6 +53,7 @@ interface AiriMemoryStore {
     suspend fun saveEpisodeSpan(row: EpisodeSpanEntity): Boolean = false
     suspend fun ensureEpisodeForSpan(span: EpisodeSpanEntity, messages: List<ConversationTruthEntity>): String? = null
     suspend fun linkEpisodeProvenance(episodeId: String, conversationId: String, start: Long, end: Long): Int = 0
+    suspend fun recordConsolidationAction(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence, memoryId: String?) = Unit
     suspend fun markEpisodeConsolidated(id: String, at: Long): Boolean = false
     suspend fun episodeSpans(conversationId: String): List<EpisodeSpanEntity> = emptyList()
     suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int = 0
@@ -63,6 +66,8 @@ class RoomAiriMemoryStore(
     private val dao: AiriMemoryDao = database.airiMemoryDao(),
     private val clock: () -> Long = System::currentTimeMillis
 ) : AiriMemoryStore {
+    override suspend fun <T> transaction(block: suspend AiriMemoryStore.() -> T): T =
+        database.withTransaction { block(this@RoomAiriMemoryStore) }
     override suspend fun peopleByName(name: String) = dao.peopleByNormalizedName(AiriText.normalizeName(name))
     override suspend fun allPeople(limit: Int) = dao.activePeople(limit.coerceIn(1, 500))
 
@@ -281,10 +286,34 @@ class RoomAiriMemoryStore(
         end: Long
     ): Int {
         val memoryIds = dao.semanticIdsForConversationRange(conversationId, start, end)
-        if (memoryIds.isEmpty()) return 0
         val rows = memoryIds.distinct().map { SemanticProvenanceEntity(it, episodeId) }
-        dao.insertSemanticProvenance(rows)
+        if (rows.isNotEmpty()) dao.insertSemanticProvenance(rows)
+        dao.calibrateActionsForRange(conversationId, start, end, episodeId, clock())
         return rows.size
+    }
+    override suspend fun recordConsolidationAction(
+        frame: MemorySemanticFrame,
+        evidence: AuthoritativeMemoryTurnEvidence,
+        memoryId: String?
+    ) {
+        val action = when (frame.intent) {
+            MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT -> SemanticConsolidationAction.UPDATE
+            MemorySemanticIntent.INVALIDATE_FACT -> SemanticConsolidationAction.INVALIDATE
+            else -> {
+                val existing = memoryId?.let { dao.semanticById(it) }
+                if (existing != null && existing.sourceTurnId != evidence.turnId) SemanticConsolidationAction.REINFORCE
+                else SemanticConsolidationAction.NEW
+            }
+        }
+        val key = frame.stableKey?.let(AiriText::semanticKey)
+        val evidenceHash = MessageDigest.getInstance("SHA-256")
+            .digest(frame.sourceSpan.toByteArray()).take(8).joinToString("") { "%02x".format(it) }
+        dao.upsertConsolidationAction(ConsolidationActionEntity(
+            actionId = "${evidence.sessionId}:${evidence.turnId}:${frame.intent}:${key.orEmpty()}",
+            conversationId = evidence.sessionId, turnId = evidence.turnId, memoryId = memoryId,
+            semanticKey = key, action = action.name, sourceEvidenceHash = evidenceHash,
+            createdAt = clock()
+        ))
     }
     override suspend fun markEpisodeConsolidated(id: String, at: Long) = dao.markEpisodeConsolidated(id, at) > 0
     override suspend fun episodeSpans(conversationId: String) = dao.episodeSpans(conversationId)

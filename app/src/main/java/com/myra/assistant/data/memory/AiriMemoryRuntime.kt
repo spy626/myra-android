@@ -7,7 +7,8 @@ import java.util.Collections
 
 enum class ContextMutation { REPLACE_SELF, APPEND_SELF }
 data class ContextEntry(val source: String, val value: String, val turnId: Long, val generation: Long,
-    val createdAt: Long = System.currentTimeMillis(), val expiresAt: Long? = null)
+    val createdAt: Long = System.currentTimeMillis(), val expiresAt: Long? = null,
+    val metadata: Map<String, String> = emptyMap())
 
 /** Direct Kotlin port of AIRI's source-owned replace-self/append-self registry. */
 class LyraContextRegistry(private val perBucketLimit: Int = 8, private val historyLimit: Int = 400,

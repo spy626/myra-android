@@ -219,7 +219,9 @@ object AiriFsrs {
         val deltaDifficulty = -W[6] * (ratingValue - 3.0)
         val damped = (10.0 - difficulty) / 9.0 * deltaDifficulty
         val rawDifficulty = difficulty + damped
-        val nextDifficulty = (W[7] * initialDifficulty(4) + (1.0 - W[7]) * rawDifficulty)
+        // FSRS mean_reversion uses the unclamped rating-4 initialization and
+        // clamps only the final difficulty tensor.
+        val nextDifficulty = (W[7] * rawInitialDifficulty(4) + (1.0 - W[7]) * rawDifficulty)
             .coerceIn(D_MIN, D_MAX)
         return FsrsState(nextStability, nextDifficulty, reviewedAt)
     }
@@ -228,8 +230,8 @@ object AiriFsrs {
         val factor = .9.pow(1.0 / -DECAY) - 1.0
         return (days / stability * factor + 1.0).pow(-DECAY)
     }
-    private fun initialDifficulty(rating: Int) =
-        (W[4] - exp(W[5] * (rating - 1.0)) + 1.0).coerceIn(D_MIN, D_MAX)
+    private fun rawInitialDifficulty(rating: Int) = W[4] - exp(W[5] * (rating - 1.0)) + 1.0
+    private fun initialDifficulty(rating: Int) = rawInitialDifficulty(rating).coerceIn(D_MIN, D_MAX)
     private fun stabilityAfterSuccess(stability: Double, retrievability: Double, difficulty: Double, rating: Int): Double {
         val hardPenalty = if (rating == 2) W[15] else 1.0
         val easyBonus = if (rating == 4) W[16] else 1.0

@@ -14,8 +14,33 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     val segmentation = linkedMapOf<String, SegmentationStateEntity>()
     val spans = mutableListOf<EpisodeSpanEntity>()
     val provenance = mutableListOf<SemanticProvenanceEntity>()
+    val consolidationActions = mutableListOf<ConsolidationActionEntity>()
     private var now = 1_000L
     private fun time() = ++now
+
+    override suspend fun <T> transaction(block: suspend AiriMemoryStore.() -> T): T {
+        val snapshot = listOf(
+            people.toMap(), aliases.mapValues { it.value.toMutableSet() }, relationships.toList(),
+            semantic.toList(), episodes.toList(), goals.toMap(), behavior.toMap(), conversation.toList(),
+            segmentation.toMap(), spans.toList(), provenance.toList(), consolidationActions.toList(), now
+        )
+        return try { block(this) } catch (failure: Throwable) {
+            people.clear(); people.putAll(snapshot[0] as Map<String, PersonEntity>)
+            aliases.clear(); aliases.putAll(snapshot[1] as Map<String, MutableSet<String>>)
+            relationships.clear(); relationships.addAll(snapshot[2] as List<RelationshipEntity>)
+            semantic.clear(); semantic.addAll(snapshot[3] as List<SemanticMemoryEntity>)
+            episodes.clear(); episodes.addAll(snapshot[4] as List<Pair<EpisodicMemoryEntity, List<String>>>)
+            goals.clear(); goals.putAll(snapshot[5] as Map<String, GoalMemoryEntity>)
+            behavior.clear(); behavior.putAll(snapshot[6] as Map<String, BehaviorObservationEntity>)
+            conversation.clear(); conversation.addAll(snapshot[7] as List<ConversationTruthEntity>)
+            segmentation.clear(); segmentation.putAll(snapshot[8] as Map<String, SegmentationStateEntity>)
+            spans.clear(); spans.addAll(snapshot[9] as List<EpisodeSpanEntity>)
+            provenance.clear(); provenance.addAll(snapshot[10] as List<SemanticProvenanceEntity>)
+            consolidationActions.clear(); consolidationActions.addAll(snapshot[11] as List<ConsolidationActionEntity>)
+            now = snapshot[12] as Long
+            throw failure
+        }
+    }
 
     override suspend fun peopleByName(name: String): List<PersonEntity> {
         val n = AiriText.normalizeName(name)
@@ -114,7 +139,7 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         "BEHAVIOR" -> behavior.remove(card.stableKey) != null
         else -> { var changed = false; semantic.replaceAll { if (it.memoryId == card.id && it.active) { changed = true; it.copy(active = false, deletedAt = time()) } else it }; changed }
     }
-    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear(); provenance.clear() }
+    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear(); provenance.clear(); consolidationActions.clear() }
     override suspend fun appendConversation(row: ConversationTruthEntity): Boolean { if (conversation.any { it.messageId == row.messageId }) return false; conversation += row; return true }
     override suspend fun promptProjection(sessionId: String, limit: Int) = conversation.filter { it.sessionId == sessionId }.takeLast(limit)
     override suspend fun conversationCount(sessionId: String) = conversation.count { it.sessionId == sessionId }
@@ -155,7 +180,20 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         val rows = semantic.filter { it.sourceTurnId in turnIds }
             .map { SemanticProvenanceEntity(it.memoryId, episodeId) }
         provenance += rows.filterNot { it in provenance }
+        consolidationActions.replaceAll { action -> if (action.turnId in turnIds && action.calibratedAt == null)
+            action.copy(episodeId = episodeId, calibratedAt = time()) else action }
         return rows.size
+    }
+    override suspend fun recordConsolidationAction(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence, memoryId: String?) {
+        val existing = memoryId?.let { id -> semantic.firstOrNull { it.memoryId == id } }
+        val action = when (frame.intent) {
+            MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT -> SemanticConsolidationAction.UPDATE
+            MemorySemanticIntent.INVALIDATE_FACT -> SemanticConsolidationAction.INVALIDATE
+            else -> if (existing != null && existing.sourceTurnId != evidence.turnId) SemanticConsolidationAction.REINFORCE else SemanticConsolidationAction.NEW
+        }
+        consolidationActions += ConsolidationActionEntity("${evidence.sessionId}:${evidence.turnId}:${frame.intent}:${frame.stableKey.orEmpty()}",
+            evidence.sessionId, evidence.turnId, memoryId, frame.stableKey, action.name,
+            frame.sourceSpan.hashCode().toString(), time())
     }
     override suspend fun markEpisodeConsolidated(id: String, at: Long): Boolean {
         var changed = false; episodes.replaceAll { pair ->

@@ -20,6 +20,7 @@ interface AiriMemoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSegmentationState(row: SegmentationStateEntity)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertEpisodeSpan(row: EpisodeSpanEntity): Long
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertSemanticProvenance(rows: List<SemanticProvenanceEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertConsolidationAction(row: ConsolidationActionEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertSemanticFts(row: SemanticMemoryFtsEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertEpisodeFts(row: EpisodicMemoryFtsEntity)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun enqueueReview(row: PendingReviewEntity): Long
@@ -37,6 +38,8 @@ interface AiriMemoryDao {
     suspend fun activeSemanticForConversation(conversationId: String, limit: Int): List<SemanticMemoryEntity>
     @Query("SELECT DISTINCT s.memoryId FROM airi_semantic_memory s JOIN airi_conversation_truth c ON c.sessionId = :conversationId AND c.turnId = s.sourceTurnId WHERE c.sequence BETWEEN :start AND :end")
     suspend fun semanticIdsForConversationRange(conversationId: String, start: Long, end: Long): List<String>
+    @Query("UPDATE airi_consolidation_actions SET episodeId = :episodeId, calibratedAt = :at WHERE conversationId = :conversationId AND turnId IN (SELECT turnId FROM airi_conversation_truth WHERE sessionId = :conversationId AND sequence BETWEEN :start AND :end) AND calibratedAt IS NULL")
+    suspend fun calibrateActionsForRange(conversationId: String, start: Long, end: Long, episodeId: String, at: Long): Int
     @Query("SELECT s.* FROM airi_semantic_memory s JOIN airi_semantic_fts f ON s.memoryId = f.memoryId WHERE airi_semantic_fts MATCH :query AND s.active = 1 AND s.invalidAt IS NULL AND s.deletedAt IS NULL LIMIT :limit")
     suspend fun searchSemanticFts(query: String, limit: Int): List<SemanticMemoryEntity>
     @Query("UPDATE airi_semantic_memory SET active = 0, supersededById = :replacementId, updatedAt = :at WHERE semanticKey = :key AND active = 1")
@@ -139,12 +142,13 @@ interface AiriMemoryDao {
     @Query("DELETE FROM airi_episode_spans") suspend fun clearEpisodeSpans()
     @Query("DELETE FROM airi_pending_review") suspend fun clearReviewQueue()
     @Query("DELETE FROM airi_semantic_provenance") suspend fun clearSemanticProvenance()
+    @Query("DELETE FROM airi_consolidation_actions") suspend fun clearConsolidationActions()
     @Query("DELETE FROM airi_semantic_fts") suspend fun clearSemanticFts()
     @Query("DELETE FROM airi_episode_fts") suspend fun clearEpisodeFts()
     @Query("DELETE FROM airi_spark_trace") suspend fun clearSparkTrace()
 
     @Transaction suspend fun clearAllMemory() {
-        clearSemanticFts(); clearEpisodeFts(); clearSemanticProvenance(); clearReviewQueue(); clearEpisodeSpans()
+        clearSemanticFts(); clearEpisodeFts(); clearSemanticProvenance(); clearConsolidationActions(); clearReviewQueue(); clearEpisodeSpans()
         clearSegmentationState(); clearSemantic(); clearPeople(); clearEpisodes(); clearGoals(); clearBehavior()
         clearConversation(); clearSparkTrace()
     }

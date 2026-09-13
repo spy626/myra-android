@@ -60,6 +60,13 @@ sealed class MemoryBrainOutcome {
     data class Rejected(val reason: String, val code: MemoryFailureReason) : MemoryBrainOutcome()
 }
 
+private data class MutationBatch(
+    val lastId: String? = null,
+    val deleted: Boolean = false,
+    val transient: Boolean = false
+)
+private class MemoryMutationAbort(val reasonCode: MemoryFailureReason) : RuntimeException(reasonCode.name)
+
 /** One final-turn owner. It is the only class allowed to authorize consolidated writes. */
 class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: Boolean = true) {
     private val ownedSessions = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
@@ -139,49 +146,66 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
         if (plan.decision == MemoryDecision.RECALL) {
             val frame = plan.operations.first(); return recall(frame.fact.orEmpty(), 8, recallType(frame))
         }
-        var lastId: String? = null; var deleted = false; var transient = false
-        for (frame in plan.operations) {
-            if (frame.temporalScope == MemoryTemporalScope.TEMPORARY) {
-                transient = AiriWorkingMemory.transient(turn, frame.fact ?: plan.sourceText)
-                continue
-            }
-            when (frame.intent) {
-                MemorySemanticIntent.TRANSIENT_CONTEXT -> { transient = AiriWorkingMemory.transient(turn, frame.fact ?: plan.sourceText) }
-                MemorySemanticIntent.ADD_RELATIONSHIP -> {
-                    val name = frame.person ?: return reject(turn.turnId, MemoryFailureReason.AMBIGUOUS_ENTITY)
-                    val person = store.ensurePerson(name, turn.turnId)
-                    lastId = store.addRelationship(person.entityId, frame.relationship ?: return reject(turn.turnId, MemoryFailureReason.UNSUPPORTED_OPERATION), turn, frame.confidence)
+        val batch = try { store.transaction {
+            var lastId: String? = null; var deleted = false; var transient = false
+            for (frame in plan.operations) {
+                if (frame.temporalScope == MemoryTemporalScope.TEMPORARY) {
+                    transient = AiriWorkingMemory.transient(turn, frame.fact ?: plan.sourceText)
+                    continue
                 }
-                MemorySemanticIntent.REMOVE_RELATIONSHIP -> deleted = store.endRelationship(frame.resolvedEntityId!!,
-                    frame.relationship ?: return reject(turn.turnId, MemoryFailureReason.UNSUPPORTED_OPERATION))
-                MemorySemanticIntent.REPLACE_RELATIONSHIP -> lastId = store.addRelationship(frame.resolvedEntityId!!,
-                    frame.replacementRelationship ?: return reject(turn.turnId, MemoryFailureReason.UNSUPPORTED_OPERATION), turn, frame.confidence)
-                MemorySemanticIntent.RENAME_ENTITY -> {
-                    val replacement = frame.replacementPerson ?: return reject(turn.turnId, MemoryFailureReason.AMBIGUOUS_ENTITY)
-                    if (!store.renamePerson(frame.resolvedEntityId!!, replacement, turn.turnId)) return reject(turn.turnId, MemoryFailureReason.VERIFY_FAILED)
-                    lastId = frame.resolvedEntityId
-                }
-                MemorySemanticIntent.DELETE_ENTITY -> deleted = store.deletePerson(frame.resolvedEntityId!!)
-                MemorySemanticIntent.ADD_EPISODE -> {
-                    val ids = frame.episode?.participants.orEmpty().map { store.ensurePerson(it, turn.turnId).entityId }
-                    lastId = store.addEpisode(frame, turn, ids)
-                }
-                MemorySemanticIntent.ADD_GOAL, MemorySemanticIntent.UPDATE_GOAL -> lastId = store.addGoal(frame, turn)
-                MemorySemanticIntent.INVALIDATE_FACT -> deleted = frame.stableKey?.let { store.invalidateSemantic(it) } == true
-                MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT,
-                MemorySemanticIntent.SUPERSEDE_FACT, MemorySemanticIntent.ADD_LINKED_FACT,
-                MemorySemanticIntent.ADD_IDEA, MemorySemanticIntent.ADD_PROJECT,
-                MemorySemanticIntent.ADD_SOLUTION, MemorySemanticIntent.ADD_WORKFLOW -> {
-                    val provenance = frame.sourceEpisodeIds.ifEmpty {
-                        listOf("episode:${turn.sessionId}:${turn.turnId * 2}:${turn.turnId * 2 + 1}")
+                when (frame.intent) {
+                    MemorySemanticIntent.TRANSIENT_CONTEXT -> transient = AiriWorkingMemory.transient(turn, frame.fact ?: plan.sourceText)
+                    MemorySemanticIntent.ADD_RELATIONSHIP -> {
+                        val name = frame.person ?: throw MemoryMutationAbort(MemoryFailureReason.AMBIGUOUS_ENTITY)
+                        val person = store.ensurePerson(name, turn.turnId)
+                        val relationship = frame.relationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
+                        lastId = store.addRelationship(person.entityId, relationship, turn, frame.confidence)
                     }
-                    lastId = store.addSemantic(frame.copy(sourceEpisodeIds = provenance), turn)
+                    MemorySemanticIntent.REMOVE_RELATIONSHIP -> {
+                        val relationship = frame.relationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
+                        deleted = store.endRelationship(frame.resolvedEntityId!!, relationship)
+                    }
+                    MemorySemanticIntent.REPLACE_RELATIONSHIP -> {
+                        val relationship = frame.replacementRelationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
+                        lastId = store.addRelationship(frame.resolvedEntityId!!, relationship, turn, frame.confidence)
+                    }
+                    MemorySemanticIntent.RENAME_ENTITY -> {
+                        val replacement = frame.replacementPerson ?: throw MemoryMutationAbort(MemoryFailureReason.AMBIGUOUS_ENTITY)
+                        if (!store.renamePerson(frame.resolvedEntityId!!, replacement, turn.turnId))
+                            throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
+                        lastId = frame.resolvedEntityId
+                    }
+                    MemorySemanticIntent.DELETE_ENTITY -> deleted = store.deletePerson(frame.resolvedEntityId!!)
+                    MemorySemanticIntent.ADD_EPISODE -> {
+                        val ids = frame.episode?.participants.orEmpty().map { store.ensurePerson(it, turn.turnId).entityId }
+                        lastId = store.addEpisode(frame, turn, ids)
+                    }
+                    MemorySemanticIntent.ADD_GOAL, MemorySemanticIntent.UPDATE_GOAL -> lastId = store.addGoal(frame, turn)
+                    MemorySemanticIntent.INVALIDATE_FACT -> {
+                        deleted = frame.stableKey?.let { store.invalidateSemantic(it) } == true
+                        if (deleted) store.recordConsolidationAction(frame, turn, null)
+                    }
+                    MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.UPDATE_FACT,
+                    MemorySemanticIntent.SUPERSEDE_FACT, MemorySemanticIntent.ADD_LINKED_FACT,
+                    MemorySemanticIntent.ADD_IDEA, MemorySemanticIntent.ADD_PROJECT,
+                    MemorySemanticIntent.ADD_SOLUTION, MemorySemanticIntent.ADD_WORKFLOW -> {
+                        // The explicit fact fast path may run before multi-turn
+                        // segmentation commits an episode. Never manufacture a
+                        // one-turn episode ID; the committed span reconciles real
+                        // provenance transactionally in linkEpisodeProvenance().
+                        lastId = store.addSemantic(frame, turn)
+                        if (lastId != null) store.recordConsolidationAction(frame, turn, lastId)
+                    }
+                    MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY, MemorySemanticIntent.NONE -> Unit
                 }
-                MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY, MemorySemanticIntent.NONE -> Unit
+                if (!transient && !deleted && frame.intent !in setOf(
+                        MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY, MemorySemanticIntent.NONE
+                    ) && lastId == null
+                ) throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
             }
-            if (!transient && !deleted && frame.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY, MemorySemanticIntent.NONE) && lastId == null)
-                return reject(turn.turnId, MemoryFailureReason.VERIFY_FAILED)
-        }
+            MutationBatch(lastId, deleted, transient)
+        } } catch (abort: MemoryMutationAbort) { return reject(turn.turnId, abort.reasonCode) }
+        val lastId = batch.lastId; val deleted = batch.deleted; val transient = batch.transient
         val status = if (transient && lastId == null && !deleted) MemoryTransactionStatus.TRANSIENT else MemoryTransactionStatus.SUCCEEDED
         if (plan.operations.any { it.intent in SEMANTIC_CONSOLIDATION_INTENTS }) {
             AiriMemoryRuntime.markConsolidated(turn.sessionId, turn.turnId)

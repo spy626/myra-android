@@ -58,6 +58,9 @@ class AiriPlastMemoryParityTest {
         assertNotNull(episode.consolidatedAt)
         assertEquals(listOf(SemanticProvenanceEntity(store.semantic.single().memoryId, episode.episodeId)),
             store.provenance)
+        assertEquals(SemanticConsolidationAction.NEW.name, store.consolidationActions.single().action)
+        assertEquals(episode.episodeId, store.consolidationActions.single().episodeId)
+        assertNotNull(store.consolidationActions.single().calibratedAt)
     }
 
     @Test fun staleSegmentationClaimIsRecoveredButFreshClaimIsNotStolen() = runBlocking {
@@ -155,7 +158,15 @@ class AiriPlastMemoryParityTest {
         assertTrue(runtime.dispatch(SparkCommand(eventId = "stale", destinations = listOf("memory-lane"),
             contexts = listOf(SparkContextPatch("memory", "recall", ContextMutation.APPEND_SELF, "old", 0)))).stale)
         assertEquals(SparkGuidanceType.MEMORY_RECALL, SparkGuidance(SparkGuidanceType.MEMORY_RECALL,
+            persona = mapOf("cautiousness" to SparkPersonaStrength.HIGH),
             options = listOf(SparkGuidanceOption("friends", listOf("retrieve locally")))).type)
+        runtime.dispatch(SparkCommand(eventId = "routed", destinations = listOf("memory-lane"), contexts = listOf(
+            SparkContextPatch("memory", "detail", ContextMutation.REPLACE_SELF, "base", 3,
+                ideas = listOf("structured query"), hints = listOf("stay local"),
+                destinations = SparkContextDestinations.Filter(include = listOf("memory-lane")),
+                metadata = mapOf("network" to false)))))
+        assertTrue(registry.bucket("memory:detail").single().value.contains("structured query"))
+        assertEquals("false", registry.bucket("memory:detail").single().metadata["network"])
     }
 
     @Test fun sparkNotifySupportsNoResponseTextAndCommandWithParentLinkage() {
@@ -165,6 +176,8 @@ class AiriPlastMemoryParityTest {
         assertEquals("hello", (runtime.notify(event) { SparkNotifyDecision.TextReaction("hello") } as SparkNotifyDecision.TextReaction).text)
         runtime.notify(event) { SparkNotifyDecision.Commands(listOf(SparkCommand(eventId = "", destinations = listOf("phone-lane")))) }
         assertEquals("root", commands.single().eventId); assertEquals("root", commands.single().parentEventId)
+        assertSame(SparkNotifyDecision.NoResponse, runtime.notify(event,
+            SparkNotifyResponseControl(forceTextResponse = true)) { SparkNotifyDecision.Commands(emptyList()) })
     }
 
     private suspend fun execute(owner: MemoryBrainCoordinator, e: AuthoritativeMemoryTurnEvidence, frame: MemorySemanticFrame) {

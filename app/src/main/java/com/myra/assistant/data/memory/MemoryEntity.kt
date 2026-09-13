@@ -120,6 +120,22 @@ data class PendingReviewEntity(
     indices = [Index(value = ["episodeId"])])
 data class SemanticProvenanceEntity(val memoryId: String, val episodeId: String)
 
+/**
+ * Metadata-only Predict/Calibrate journal. Explicit final-turn facts can be
+ * verified immediately, then reconciled to the real committed multi-turn
+ * episode without inventing a provisional episode or duplicating semantic truth.
+ */
+@Entity(tableName = "airi_consolidation_actions", indices = [
+    Index(value = ["conversationId", "turnId"]), Index(value = ["episodeId", "calibratedAt"]),
+    Index(value = ["memoryId"])
+])
+data class ConsolidationActionEntity(
+    @PrimaryKey val actionId: String, val conversationId: String, val turnId: Long,
+    val memoryId: String?, val semanticKey: String?, val action: String,
+    val sourceEvidenceHash: String, val createdAt: Long,
+    val episodeId: String? = null, val calibratedAt: Long? = null
+)
+
 /** Metadata-only durable trace for Spark notify/command parentage and outcome. */
 @Entity(tableName = "airi_spark_trace", indices = [Index(value = ["eventId"]), Index(value = ["createdAt"])])
 data class SparkTraceEntity(

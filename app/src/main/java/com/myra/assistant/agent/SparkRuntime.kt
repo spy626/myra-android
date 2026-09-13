@@ -10,6 +10,7 @@ enum class SparkPriority { CRITICAL, HIGH, NORMAL, LOW }
 enum class SparkInterrupt { FORCE, SOFT, NONE }
 enum class SparkGuidanceType { PROPOSAL, INSTRUCTION, MEMORY_RECALL }
 enum class SparkRisk { HIGH, MEDIUM, LOW, NONE }
+enum class SparkPersonaStrength { VERY_HIGH, HIGH, MEDIUM, LOW, VERY_LOW }
 
 data class SparkGuidanceOption(
     val label: String, val steps: List<String>, val rationale: String? = null,
@@ -17,12 +18,19 @@ data class SparkGuidanceOption(
     val fallback: List<String> = emptyList(), val triggers: List<String> = emptyList()
 )
 data class SparkGuidance(
-    val type: SparkGuidanceType, val persona: Map<String, String> = emptyMap(),
+    val type: SparkGuidanceType, val persona: Map<String, SparkPersonaStrength> = emptyMap(),
     val options: List<SparkGuidanceOption>
 )
+sealed interface SparkContextDestinations {
+    data object All : SparkContextDestinations
+    data class ListOf(val values: List<String>) : SparkContextDestinations
+    data class Filter(val include: List<String> = emptyList(), val exclude: List<String> = emptyList()) : SparkContextDestinations
+}
 data class SparkContextPatch(
     val source: String, val lane: String, val strategy: ContextMutation,
-    val text: String, val generation: Long, val metadata: Map<String, String> = emptyMap()
+    val text: String, val generation: Long, val ideas: List<String> = emptyList(),
+    val hints: List<String> = emptyList(), val destinations: SparkContextDestinations? = null,
+    val metadata: Map<String, Any?> = emptyMap()
 )
 data class SparkCommand(
     val commandId: String = UUID.randomUUID().toString(), val eventId: String,
@@ -38,6 +46,15 @@ data class SparkNotifyEvent(
     val source: String, val lane: String, val headline: String,
     val priority: SparkPriority = SparkPriority.NORMAL, val destinations: List<String> = listOf("character"),
     val payload: Map<String, String> = emptyMap(), val createdAt: Long = System.currentTimeMillis()
+)
+
+data class SparkNotifyResponseControl(
+    val forceResponse: Boolean = false,
+    val forceTextResponse: Boolean = false,
+    val forceSparkCommandResponse: Boolean = false,
+    val appendSystemInstructions: List<String> = emptyList(),
+    val appendUserSections: List<String> = emptyList(),
+    val replaceUserMessage: String? = null
 )
 
 sealed interface SparkNotifyDecision {
@@ -64,6 +81,7 @@ class LyraSparkRuntime(
     @Synchronized fun dispatch(command: SparkCommand): SparkDispatchResult {
         if (command.destinations.isEmpty()) return SparkDispatchResult(false, reason = "MISSING_DESTINATION")
         command.contexts.forEach { patch ->
+            if (!patch.appliesTo(command.destinations)) return@forEach
             val key = "${patch.source}:${patch.lane}"
             val current = latestGeneration[key] ?: Long.MIN_VALUE
             if (patch.generation < current) {
@@ -71,15 +89,31 @@ class LyraSparkRuntime(
                 return SparkDispatchResult(false, stale = true, reason = "STALE_CONTEXT")
             }
             latestGeneration[key] = patch.generation
-            contexts.ingest(ContextEntry(key, patch.text, 0, patch.generation), patch.strategy)
+            val value = buildList {
+                add(patch.text)
+                patch.ideas.take(8).forEach { add("idea: $it") }
+                patch.hints.take(8).forEach { add("hint: $it") }
+            }.joinToString("\n")
+            contexts.ingest(ContextEntry(key, value, 0, patch.generation,
+                metadata = patch.metadata.mapValues { it.value?.toString().orEmpty() }), patch.strategy)
         }
         commandSink(command)
         trace(command.eventId, command.parentEventId, "spark-command", command.destinations.joinToString(","), command.intent.name, "DISPATCHED")
         return SparkDispatchResult(true)
     }
 
-    fun notify(event: SparkNotifyEvent, policy: (SparkNotifyEvent) -> SparkNotifyDecision): SparkNotifyDecision {
-        val decision = policy(event)
+    fun notify(
+        event: SparkNotifyEvent,
+        control: SparkNotifyResponseControl = SparkNotifyResponseControl(),
+        policy: (SparkNotifyEvent) -> SparkNotifyDecision
+    ): SparkNotifyDecision {
+        val proposed = policy(event)
+        val decision = when {
+            control.forceTextResponse && proposed !is SparkNotifyDecision.TextReaction -> SparkNotifyDecision.NoResponse
+            control.forceSparkCommandResponse && proposed !is SparkNotifyDecision.Commands -> SparkNotifyDecision.NoResponse
+            control.forceResponse && proposed is SparkNotifyDecision.NoResponse -> SparkNotifyDecision.NoResponse
+            else -> proposed
+        }
         when (decision) {
             SparkNotifyDecision.NoResponse -> trace(event.eventId, event.parentEventId, event.source, event.lane, "NOTIFY", "NO_RESPONSE")
             is SparkNotifyDecision.TextReaction -> trace(event.eventId, event.parentEventId, event.source, event.lane, "NOTIFY", "TEXT_REACTION")
@@ -89,5 +123,13 @@ class LyraSparkRuntime(
             }
         }
         return decision
+    }
+
+    private fun SparkContextPatch.appliesTo(commandDestinations: List<String>): Boolean = when (val routing = destinations) {
+        null, SparkContextDestinations.All -> true
+        is SparkContextDestinations.ListOf -> routing.values.any { it in commandDestinations }
+        is SparkContextDestinations.Filter ->
+            (routing.include.isEmpty() || routing.include.any { it in commandDestinations }) &&
+                routing.exclude.none { it in commandDestinations }
     }
 }

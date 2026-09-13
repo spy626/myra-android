@@ -21,9 +21,10 @@ import androidx.room.RoomDatabase
         GoalMemoryEntity::class, BehaviorObservationEntity::class, ConversationTruthEntity::class,
         SegmentationStateEntity::class, EpisodeSpanEntity::class, PendingReviewEntity::class,
         SemanticProvenanceEntity::class, SparkTraceEntity::class,
+        ConsolidationActionEntity::class,
         SemanticMemoryFtsEntity::class, EpisodicMemoryFtsEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class LyraMemoryDatabase : RoomDatabase() {
