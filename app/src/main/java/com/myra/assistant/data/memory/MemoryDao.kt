@@ -35,6 +35,8 @@ interface AiriMemoryDao {
     suspend fun semanticByEntity(entityId: String): List<SemanticMemoryEntity>
     @Query("SELECT * FROM airi_semantic_memory WHERE conversationId = :conversationId AND invalidAt IS NULL AND active = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT :limit")
     suspend fun activeSemanticForConversation(conversationId: String, limit: Int): List<SemanticMemoryEntity>
+    @Query("SELECT DISTINCT s.memoryId FROM airi_semantic_memory s JOIN airi_conversation_truth c ON c.sessionId = :conversationId AND c.turnId = s.sourceTurnId WHERE c.sequence BETWEEN :start AND :end")
+    suspend fun semanticIdsForConversationRange(conversationId: String, start: Long, end: Long): List<String>
     @Query("SELECT s.* FROM airi_semantic_memory s JOIN airi_semantic_fts f ON s.memoryId = f.memoryId WHERE airi_semantic_fts MATCH :query AND s.active = 1 AND s.invalidAt IS NULL AND s.deletedAt IS NULL LIMIT :limit")
     suspend fun searchSemanticFts(query: String, limit: Int): List<SemanticMemoryEntity>
     @Query("UPDATE airi_semantic_memory SET active = 0, supersededById = :replacementId, updatedAt = :at WHERE semanticKey = :key AND active = 1")
@@ -119,6 +121,8 @@ interface AiriMemoryDao {
     suspend fun conversationRange(sessionId: String, start: Long, end: Long): List<ConversationTruthEntity>
     @Query("SELECT * FROM airi_segmentation_state WHERE conversationId = :conversationId LIMIT 1")
     suspend fun segmentationState(conversationId: String): SegmentationStateEntity?
+    @Query("SELECT * FROM airi_segmentation_state WHERE conversationStatus != 'CLOSED' AND lastActivityAt <= :before ORDER BY lastActivityAt LIMIT :limit")
+    suspend fun abandonedSegmentationStates(before: Long, limit: Int): List<SegmentationStateEntity>
     @Query("SELECT * FROM airi_episode_spans WHERE conversationId = :conversationId ORDER BY startSequence")
     suspend fun episodeSpans(conversationId: String): List<EpisodeSpanEntity>
     @Query("SELECT * FROM airi_pending_review WHERE conversationId = :conversationId ORDER BY createdAt LIMIT :limit")

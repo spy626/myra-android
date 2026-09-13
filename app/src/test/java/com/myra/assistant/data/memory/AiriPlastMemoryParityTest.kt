@@ -24,11 +24,40 @@ class AiriPlastMemoryParityTest {
         val evidence = evidence(4, "We investigated a renderer failure", "We investigated a renderer failure")
         owner.captureConversation(evidence, "The renderer fix was verified")
         assertEquals(2, store.conversationCount("parity"))
+        assertTrue(store.spans.isEmpty())
+        assertEquals(1, owner.flushConversation("parity", "TEST_EOF"))
         assertEquals(1, store.spans.size)
         assertEquals(1, store.episodes.count { it.first.eventType == "conversation_segment" })
-        owner.segmentCommittedConversation("parity", eof = true)
+        owner.flushConversation("parity", "TEST_EOF")
         assertEquals(1, store.spans.size)
         assertNull(store.segmentation["parity"]?.claimId)
+        assertEquals("CLOSED", store.segmentation["parity"]?.conversationStatus)
+    }
+
+    @Test fun threeRelatedTurnsRemainOneUnresolvedTailUntilRealEof() = runBlocking {
+        val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store)
+        owner.captureConversation(evidence(30, "I went to the market today", "I went to the market today"), "What happened there?")
+        owner.captureConversation(evidence(31, "I met Devansh there", "I met Devansh there", listOf("Devansh")), "Nice")
+        owner.captureConversation(evidence(32, "Then we had coffee", "Then we had coffee"), "Sounds good")
+        assertTrue(store.spans.isEmpty())
+        assertNotNull(store.segmentation["parity"])
+        assertFalse(store.segmentation.getValue("parity").eofIdentified)
+        owner.flushConversation("parity", "TEST_EOF")
+        assertEquals(1, store.spans.size)
+        assertEquals(1, store.episodes.count { it.first.eventType == "conversation_segment" })
+    }
+
+    @Test fun committedEpisodeLinksVerifiedSemanticFactsBeforeConsolidatedMarker() = runBlocking {
+        val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store)
+        val turn = evidence(40, "I prefer concise technical summaries", "I prefer concise technical summaries")
+        execute(owner, turn, fact(MemorySemanticIntent.ADD_FACT,
+            "User prefers concise technical summaries", "response:detail", turn.displayText))
+        owner.captureConversation(turn, "Understood")
+        owner.flushConversation("parity", "TEST_EOF")
+        val episode = store.episodes.single { it.first.eventType == "conversation_segment" }.first
+        assertNotNull(episode.consolidatedAt)
+        assertEquals(listOf(SemanticProvenanceEntity(store.semantic.single().memoryId, episode.episodeId)),
+            store.provenance)
     }
 
     @Test fun staleSegmentationClaimIsRecoveredButFreshClaimIsNotStolen() = runBlocking {
@@ -39,6 +68,17 @@ class AiriPlastMemoryParityTest {
         assertEquals(0, owner.segmentCommittedConversation("c", true))
         store.segmentation["c"] = store.segmentation.getValue("c").copy(activeSince = 0)
         assertEquals(1, owner.segmentCommittedConversation("c", true))
+    }
+
+    @Test fun abandonedOpenConversationIsRecoveredAfterProcessRestart() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        store.appendConversation(message(0, 1, "user", "A committed message survived process death"))
+        store.segmentation["c"] = SegmentationStateEntity("c", 0, false, 0,
+            conversationStatus = "ACTIVE", lastActivityAt = 1)
+        val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
+        assertEquals(1, owner.recoverAbandonedConversations(System.currentTimeMillis()))
+        assertEquals("CLOSED", store.segmentation.getValue("c").conversationStatus)
+        assertEquals(1, store.spans.size)
     }
 
     @Test fun semanticNewReinforceUpdateInvalidateLifecycleIsDistinct() = runBlocking {
@@ -87,6 +127,16 @@ class AiriPlastMemoryParityTest {
         assertTrue(reviewed.stability > 1.0)
         assertEquals(reviewed, AiriFsrs.review(reviewed, EpisodeReviewRating.AGAIN, 100_000_001))
         assertTrue(FlashbulbPolicy.retrievalMultiplier(.1, true, .9) > FlashbulbPolicy.retrievalMultiplier(.1, false, 0.0))
+    }
+
+    @Test fun fsrsSixDefaultParametersMatchPinnedUpstreamInference() {
+        val initial = AiriFsrs.initial(EpisodeReviewRating.GOOD, 86_400_000L)
+        assertEquals(2.3065, initial.stability, 0.000001)
+        assertEquals(2.118103970459015, initial.difficulty, 0.000001)
+        assertEquals(.9, AiriFsrs.retrievability(FsrsState(1.0, 5.0, 0), 86_400_000L), 0.000001)
+        val next = AiriFsrs.review(initial, EpisodeReviewRating.GOOD, 2 * 86_400_000L)
+        assertEquals(7.315300744077282, next.stability, 0.000001)
+        assertEquals(2.1112142357853942, next.difficulty, 0.000001)
     }
 
     @Test fun sparkCommandAllIntentsContextIsolationAndStaleGuard() {

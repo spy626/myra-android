@@ -8,7 +8,7 @@ import androidx.room.RoomDatabase
 /**
  * The single local storage truth for the AIRI/Plast-Mem Android port.
  *
- * Version 6 is an explicit pre-release destructive memory cutover. Versions 1-5
+ * Version 7 is an explicit pre-release destructive memory cutover. Versions 1-6
  * contained incompatible Memory V2 or JARVIS test schemas and are intentionally
  * not imported. App UI/preferences are outside this database. A clean reinstall
  * is required for phone acceptance and future production releases must replace
@@ -23,7 +23,7 @@ import androidx.room.RoomDatabase
         SemanticProvenanceEntity::class, SparkTraceEntity::class,
         SemanticMemoryFtsEntity::class, EpisodicMemoryFtsEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class LyraMemoryDatabase : RoomDatabase() {

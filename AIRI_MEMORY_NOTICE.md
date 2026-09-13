@@ -1,19 +1,24 @@
 # AIRI memory architecture attribution
 
 LYRA's native memory runtime ports applicable architecture contracts from
-[moeru-ai/airi](https://github.com/moeru-ai/airi), inspected at revision
-`553d8a0da4ef131441a1de77d556c6df6cab3026`, and from
+[moeru-ai/airi](https://github.com/moeru-ai/airi), inspected from a complete
+current checkout at revision `00c6867b7fd8064938de1805814578db8273dafe`
+(superseding the previous `553d8a0da4ef131441a1de77d556c6df6cab3026`
+pin), and from
 [moeru-ai/plast-mem](https://github.com/moeru-ai/plast-mem), inspected at
 revision `611103456d953c9a74452f4239817b3468f94bba`.
 
 The source-owned context registry, bounded/stale task-memory merge, transcript
 truth/projection, transcript buffering, Spark Command, and Spark Notify
-responsibilities are derived from AIRI's MIT-licensed project. Stateful event
-segmentation, episodic memory, semantic NEW/REINFORCE/UPDATE/INVALIDATE,
-BM25/vector/RRF retrieval, and episodic FSRS review follow Plast-Mem's current
-architecture and contracts. Kotlin, Room, local feature-hash embeddings, the
-stable person/entity index, Android lifecycle integration, and stronger LYRA
-secret policy are Android-native equivalents.
+responsibilities are derived from AIRI's MIT-licensed project. Stateful
+multi-turn event segmentation, episodic memory, semantic
+NEW/REINFORCE/UPDATE/INVALIDATE, BM25/vector/RRF retrieval, and episodic FSRS
+review follow Plast-Mem's current architecture and contracts. Kotlin, Room,
+the currently deployed local feature-hash vector lane, the stable
+person/entity index, Android lifecycle integration, and stronger LYRA secret
+policy are Android-native equivalents. The feature-hash lane is an offline
+fallback and is not represented as neural embedding parity with Plast-Mem's
+configured embedding provider.
 
 At these revisions, Flashbulb Memory remains an upstream documented TODO.
 LYRA's guarded high-significance episode flag and retrieval floor are an
@@ -21,6 +26,38 @@ Android completion of that TODO, not a claim of upstream production support.
 No agent/runtime subsystem named Pulse exists in the inspected AIRI source;
 Spark Notify is therefore the ported proactive event lane and no synthetic
 "AIRI Pulse" subsystem was introduced.
+
+The episodic review equations and default FSRS-6 parameter set are ported from
+`open-spaced-repetition/fsrs-rs` 5.2.0 (`aca2838bfbdc6f15ca3f7a0c96a99fae466c9e9c`),
+the exact dependency pinned by Plast-Mem. That project is BSD-3-Clause:
+
+Copyright (c) 2023, Open Spaced Repetition
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software without
+specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
 
 MIT License
 

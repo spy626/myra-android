@@ -45,10 +45,12 @@ interface AiriMemoryStore {
     suspend fun behaviorByKind(kind: String, limit: Int = 100): List<BehaviorObservationEntity>
     suspend fun deleteBehavior(key: String): Boolean
     suspend fun segmentationState(conversationId: String): SegmentationStateEntity? = null
+    suspend fun abandonedSegmentationStates(before: Long, limit: Int): List<SegmentationStateEntity> = emptyList()
     suspend fun saveSegmentationState(row: SegmentationStateEntity) = Unit
     suspend fun conversationRange(conversationId: String, start: Long, end: Long): List<ConversationTruthEntity> = emptyList()
     suspend fun saveEpisodeSpan(row: EpisodeSpanEntity): Boolean = false
     suspend fun ensureEpisodeForSpan(span: EpisodeSpanEntity, messages: List<ConversationTruthEntity>): String? = null
+    suspend fun linkEpisodeProvenance(episodeId: String, conversationId: String, start: Long, end: Long): Int = 0
     suspend fun markEpisodeConsolidated(id: String, at: Long): Boolean = false
     suspend fun episodeSpans(conversationId: String): List<EpisodeSpanEntity> = emptyList()
     suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int = 0
@@ -164,12 +166,14 @@ class RoomAiriMemoryStore(
         return database.withTransaction {
             val embedding = FeatureHashEmbeddingProvider.encode(FeatureHashEmbeddingProvider.embed(summary))
             val surprise = payload.importance.coerceIn(0.0, 1.0)
+            val fsrs = AiriFsrs.initial(reviewedAt = now)
             dao.insertEpisode(EpisodicMemoryEntity(id, AiriText.semanticKey(payload.eventType), summary,
                 AiriText.normalize(summary), frame.temporalScope.name, now, frame.confidence,
                 (payload.importance * 10).toInt().coerceIn(1, 10), "FINAL_USER_TURN", evidence.turnId,
                 evidence.utteranceId, now, now, conversationId = evidence.sessionId,
                 title = payload.eventType.ifBlank { "Conversation episode" }, content = summary,
-                embedding = embedding, surprise = surprise,
+                embedding = embedding, stability = fsrs.stability, difficulty = fsrs.difficulty,
+                surprise = surprise, lastReviewedAt = fsrs.lastReviewedAt,
                 isFlashbulb = FlashbulbPolicy.isFlashbulb(surprise, false)))
             dao.insertEpisodeParticipants(participantIds.distinct().map { EpisodeParticipantEntity(id, it) })
             dao.insertEpisodeFts(EpisodicMemoryFtsEntity(id.stableRowId(), id, "${payload.eventType} $summary"))
@@ -236,6 +240,8 @@ class RoomAiriMemoryStore(
     override suspend fun behaviorByKind(kind: String, limit: Int) = dao.behaviorByKind(kind, limit)
     override suspend fun deleteBehavior(key: String) = dao.deleteBehavior(key) > 0
     override suspend fun segmentationState(conversationId: String) = dao.segmentationState(conversationId)
+    override suspend fun abandonedSegmentationStates(before: Long, limit: Int) =
+        dao.abandonedSegmentationStates(before, limit.coerceIn(1, 32))
     override suspend fun saveSegmentationState(row: SegmentationStateEntity) = dao.upsertSegmentationState(row)
     override suspend fun conversationRange(conversationId: String, start: Long, end: Long) =
         dao.conversationRange(conversationId, start, end)
@@ -249,6 +255,7 @@ class RoomAiriMemoryStore(
             ?: "Conversation episode"
         val created = messages.minOf { it.committedAt }; val ended = messages.maxOf { it.committedAt }
         val embedding = FeatureHashEmbeddingProvider.encode(FeatureHashEmbeddingProvider.embed("$title $content"))
+        val fsrs = AiriFsrs.initial(reviewedAt = clock())
         return database.withTransaction {
             runCatching {
                 dao.insertEpisode(EpisodicMemoryEntity(
@@ -258,12 +265,26 @@ class RoomAiriMemoryStore(
                     sourceTurnId = messages.last().turnId, sourceUtteranceId = messages.last().utteranceId,
                     createdAt = created, lastAccessed = created, conversationId = span.conversationId,
                     startSequence = span.startSequence, endSequence = span.endSequence, title = title,
-                    content = content, classification = span.classification, embedding = embedding
+                    content = content, classification = span.classification, embedding = embedding,
+                    stability = fsrs.stability, difficulty = fsrs.difficulty,
+                    lastReviewedAt = fsrs.lastReviewedAt
                 ))
                 dao.insertEpisodeFts(EpisodicMemoryFtsEntity(id.stableRowId(), id, "$title $content"))
                 id
             }.getOrNull()
         }
+    }
+    override suspend fun linkEpisodeProvenance(
+        episodeId: String,
+        conversationId: String,
+        start: Long,
+        end: Long
+    ): Int {
+        val memoryIds = dao.semanticIdsForConversationRange(conversationId, start, end)
+        if (memoryIds.isEmpty()) return 0
+        val rows = memoryIds.distinct().map { SemanticProvenanceEntity(it, episodeId) }
+        dao.insertSemanticProvenance(rows)
+        return rows.size
     }
     override suspend fun markEpisodeConsolidated(id: String, at: Long) = dao.markEpisodeConsolidated(id, at) > 0
     override suspend fun episodeSpans(conversationId: String) = dao.episodeSpans(conversationId)
@@ -320,26 +341,31 @@ class RoomAiriMemoryStore(
         if (normalizedQuery.isBlank()) return semanticCards(limit)
         val fts = normalizedQuery.split(' ').filter { it.length >= 2 }.take(8)
             .joinToString(" OR ") { "\"${it.replace("\"", "") }\"" }
-        val semanticPool = dao.activeSemantic(80)
-        val episodePool = dao.recentEpisodes(40)
+        // Plast-Mem retrieves 100 candidates independently from each lexical
+        // and vector leg before RRF. The final public result remains bounded.
+        val semanticPool = dao.activeSemantic(RETRIEVAL_CANDIDATE_LIMIT)
+        val episodePool = dao.recentEpisodes(RETRIEVAL_CANDIDATE_LIMIT)
         val queryVector = FeatureHashEmbeddingProvider.embed(query)
-        val semanticLexical = runCatching { dao.searchSemanticFts(fts, 24) }.getOrDefault(emptyList())
+        val semanticLexical = runCatching { dao.searchSemanticFts(fts, RETRIEVAL_CANDIDATE_LIMIT) }.getOrDefault(emptyList())
         val semanticVector = semanticPool.sortedByDescending {
             FeatureHashEmbeddingProvider.decode(it.embedding)?.let { v -> FeatureHashEmbeddingProvider.cosine(queryVector, v) } ?: 0.0
-        }.take(24)
-        val semantic = ReciprocalRankFusion.merge(listOf(semanticLexical, semanticVector), { it.memoryId }, 24)
+        }.take(RETRIEVAL_CANDIDATE_LIMIT)
+        val semantic = ReciprocalRankFusion.merge(listOf(semanticLexical, semanticVector), { it.memoryId }, RETRIEVAL_CANDIDATE_LIMIT)
             .map { semanticCard(it.first) }
-        val episodeLexical = runCatching { dao.searchEpisodeFts(fts, 16) }.getOrDefault(emptyList())
+        val episodeLexical = runCatching { dao.searchEpisodeFts(fts, RETRIEVAL_CANDIDATE_LIMIT) }.getOrDefault(emptyList())
         val episodeVector = episodePool.sortedByDescending {
             FeatureHashEmbeddingProvider.decode(it.embedding)?.let { v -> FeatureHashEmbeddingProvider.cosine(queryVector, v) } ?: 0.0
-        }.take(16)
+        }.take(RETRIEVAL_CANDIDATE_LIMIT)
         val now = clock()
-        val episodes = ReciprocalRankFusion.merge(listOf(episodeLexical, episodeVector), { it.episodeId }, 16)
+        val episodeRanked = ReciprocalRankFusion.merge(listOf(episodeLexical, episodeVector), { it.episodeId }, RETRIEVAL_CANDIDATE_LIMIT)
             .sortedByDescending { (row, score) ->
                 val base = AiriFsrs.retrievability(FsrsState(row.stability, row.difficulty, row.lastReviewedAt), now)
                 score * FlashbulbPolicy.retrievalMultiplier(base, row.isFlashbulb, row.surprise)
-            }.map { episodeCard(it.first) }
-        enqueueEpisodeReview("default", episodes.map { it.id }, query)
+            }
+        val episodes = episodeRanked.map { episodeCard(it.first) }
+        episodeRanked.map { it.first }.groupBy { it.conversationId }.forEach { (conversationId, rows) ->
+            enqueueEpisodeReview(conversationId, rows.map { it.episodeId }, query)
+        }
         val structured = semantic + episodes + activeRelationships(PersonRelationship.entries.toSet(), 24) + dao.activeGoals(16).map(::goalCard)
         return structured.distinctBy { it.id }.take(limit)
     }
@@ -355,6 +381,8 @@ class RoomAiriMemoryStore(
         return tokens.count(haystack::contains) * 10 + row.importance
     }
     private fun String.stableRowId(): Int = (hashCode() and Int.MAX_VALUE).coerceAtLeast(1)
+
+    companion object { private const val RETRIEVAL_CANDIDATE_LIMIT = 100 }
 }
 
 object AiriText {

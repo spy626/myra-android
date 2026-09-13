@@ -5,6 +5,12 @@ import android.content.Context
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 enum class MemoryDecision { IGNORE, RECALL, SAVE, UPDATE, DELETE, TRANSIENT, NEEDS_CLARIFICATION, REJECT }
 enum class MemoryRecallType { GENERAL, PREFERENCES, FRIENDS, BEST_FRIEND, LAST_TRANSACTION, EPISODES, GOALS, PROJECTS }
@@ -55,8 +61,17 @@ sealed class MemoryBrainOutcome {
 }
 
 /** One final-turn owner. It is the only class allowed to authorize consolidated writes. */
-class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
+class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: Boolean = true) {
     private val ownedSessions = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val inactivityJobs = ConcurrentHashMap<String, Job>()
+
+    init {
+        // A process can die after transcript commit but before the in-process
+        // timeout fires. Recover only stale source-owned conversations; fresh
+        // claims remain protected by the generation/claim guard below.
+        if (recoverOnInit) backgroundScope.launch { recoverAbandonedConversations() }
+    }
 
     suspend fun prepareFinalTurn(evidence: AuthoritativeMemoryTurnEvidence, staged: List<MemorySemanticFrame>, semanticConsistent: Boolean = true): FinalMemoryTurnPlan {
         if (ownedSessions.add(evidence.sessionId)) {
@@ -219,7 +234,42 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
         assistantText?.takeIf(String::isNotBlank)?.let { store.appendConversation(ConversationTruthEntity(
             "${evidence.utteranceId}:assistant", evidence.sessionId, base + 1, evidence.turnId,
             evidence.utteranceId, "assistant", it, now, source = "VERIFIED_RESPONSE", finalized = true)) }
-        segmentCommittedConversation(evidence.sessionId, eof = true)
+        // A finalized turn is not conversation EOF. Keep the unresolved tail so
+        // related turns can become one coherent episode.
+        segmentCommittedConversation(evidence.sessionId, eof = false)
+        scheduleInactivityClose(evidence.sessionId)
+    }
+
+    /** Source-owned lifecycle close. Safe to call while the voice scope is stopping. */
+    fun closeConversation(conversationId: String, reason: String) {
+        inactivityJobs.remove(conversationId)?.cancel()
+        backgroundScope.launch { flushConversation(conversationId, reason) }
+    }
+
+    suspend fun flushConversation(conversationId: String, reason: String): Int {
+        inactivityJobs.remove(conversationId)?.cancel()
+        val committed = segmentCommittedConversation(conversationId, eof = true)
+        store.segmentationState(conversationId)?.let { state ->
+            store.saveSegmentationState(state.copy(
+                eofIdentified = true, conversationStatus = "CLOSED",
+                eofReason = reason, lastActivityAt = System.currentTimeMillis()
+            ))
+        }
+        return committed
+    }
+
+    private fun scheduleInactivityClose(conversationId: String) {
+        inactivityJobs.remove(conversationId)?.cancel()
+        inactivityJobs[conversationId] = backgroundScope.launch {
+            delay(CONVERSATION_INACTIVITY_EOF_MS)
+            inactivityJobs.remove(conversationId)
+            flushConversation(conversationId, "INACTIVITY_TIMEOUT")
+        }
+    }
+
+    suspend fun recoverAbandonedConversations(now: Long = System.currentTimeMillis()): Int {
+        val abandoned = store.abandonedSegmentationStates(now - CONVERSATION_INACTIVITY_EOF_MS, 16)
+        return abandoned.sumOf { state -> flushConversation(state.conversationId, "PROCESS_RECOVERY") }
     }
 
     /**
@@ -229,7 +279,7 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
     suspend fun segmentCommittedConversation(conversationId: String, eof: Boolean): Int {
         val now = System.currentTimeMillis()
         val old = store.segmentationState(conversationId)
-            ?: SegmentationStateEntity(conversationId, -1, eof, 0)
+            ?: SegmentationStateEntity(conversationId, -1, eof, 0, lastActivityAt = now)
         val staleClaim = old.activeSince?.let { now - it > SEGMENT_CLAIM_TIMEOUT_MS } == true
         if (old.claimId != null && !staleClaim) return 0
         val end = store.lastConversationSequence(conversationId) ?: return 0
@@ -239,7 +289,8 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
             lastMessageSequence = end, eofIdentified = eof,
             activeSegmentStartSequence = old.nextSegmentStartSequence,
             activeSegmentEndSequence = end, activeSince = now, claimId = claim,
-            generation = old.generation + 1
+            generation = old.generation + 1, conversationStatus = if (eof) "CLOSING" else "ACTIVE",
+            eofReason = old.eofReason, lastActivityAt = now
         ))
         return runCatching {
             val messages = store.conversationRange(conversationId, old.nextSegmentStartSequence, end)
@@ -250,8 +301,9 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
                 val classification = AiriEventSegmenter.classify(segmentMessages)
                 val reason = when {
                     plan.boundaries.any { it.afterSequence == range.last && it.hard } -> "HARD_TIME_GAP"
-                    plan.boundaries.any { it.afterSequence == range.last } -> "SOFT_TIME_GAP"
-                    eof -> "END_OF_FINALIZED_TURN"
+                    plan.boundaries.any { it.afterSequence == range.last } ->
+                        plan.boundaries.first { it.afterSequence == range.last }.reason.name
+                    eof -> "CONVERSATION_EOF"
                     else -> "INFORMATIVE_BOUNDARY"
                 }
                 val spanId = "span:$conversationId:${range.first}:${range.last}"
@@ -259,15 +311,23 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
                     classification.name, reason, now)
                 val inserted = store.saveEpisodeSpan(span)
                 val episodeId = store.ensureEpisodeForSpan(span, segmentMessages)
-                val sourceTurn = segmentMessages.lastOrNull { it.role == "user" }?.turnId
-                if (episodeId != null && sourceTurn != null && AiriMemoryRuntime.wasConsolidated(conversationId, sourceTurn)) {
+                val sourceTurns = segmentMessages.filter { it.role == "user" }.map { it.turnId }.distinct()
+                if (episodeId != null && sourceTurns.isNotEmpty() &&
+                    sourceTurns.all { AiriMemoryRuntime.wasConsolidated(conversationId, it) }
+                ) {
+                    // The structured final-turn actions have already been verified. Link
+                    // their durable facts to the committed episode before declaring the
+                    // episode consolidated; a span alone is never semantic truth.
+                    store.linkEpisodeProvenance(episodeId, conversationId, range.first, range.last)
                     store.markEpisodeConsolidated(episodeId, now)
                 }
                 if (inserted) committed++
             }
             val next = plan.carriedTail?.first ?: (plan.finalized.lastOrNull()?.last?.plus(1) ?: old.nextSegmentStartSequence)
             store.saveSegmentationState(SegmentationStateEntity(
-                conversationId, end, eof, next, generation = old.generation + 1
+                conversationId, end, eof, next, generation = old.generation + 1,
+                conversationStatus = if (eof) "CLOSED" else "ACTIVE",
+                eofReason = old.eofReason, lastActivityAt = now
             ))
             committed
         }.getOrElse {
@@ -300,6 +360,7 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore) {
 
     companion object {
         private const val SEGMENT_CLAIM_TIMEOUT_MS = 15L * 60L * 1000L
+        private const val CONVERSATION_INACTIVITY_EOF_MS = 30L * 60L * 1000L
         private val SEMANTIC_CONSOLIDATION_INTENTS = setOf(
             MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.ADD_LINKED_FACT,
             MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT,

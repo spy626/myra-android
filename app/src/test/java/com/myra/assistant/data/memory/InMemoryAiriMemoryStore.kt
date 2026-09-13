@@ -13,6 +13,7 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     val conversation = mutableListOf<ConversationTruthEntity>()
     val segmentation = linkedMapOf<String, SegmentationStateEntity>()
     val spans = mutableListOf<EpisodeSpanEntity>()
+    val provenance = mutableListOf<SemanticProvenanceEntity>()
     private var now = 1_000L
     private fun time() = ++now
 
@@ -72,7 +73,9 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     }
     override suspend fun addEpisode(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence, participantIds: List<String>): String? {
         val p = frame.episode ?: return null; val id = UUID.randomUUID().toString(); val t = time()
-        episodes += EpisodicMemoryEntity(id, p.eventType, p.summary, AiriText.normalize(p.summary), frame.temporalScope.name, t, frame.confidence, 5, "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, t, t) to participantIds
+        val fsrs = AiriFsrs.initial(reviewedAt = t)
+        episodes += EpisodicMemoryEntity(id, p.eventType, p.summary, AiriText.normalize(p.summary), frame.temporalScope.name, t, frame.confidence, 5, "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, t, t,
+            stability = fsrs.stability, difficulty = fsrs.difficulty, lastReviewedAt = fsrs.lastReviewedAt) to participantIds
         return id
     }
     override suspend fun invalidateSemantic(key: String): Boolean {
@@ -111,12 +114,15 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         "BEHAVIOR" -> behavior.remove(card.stableKey) != null
         else -> { var changed = false; semantic.replaceAll { if (it.memoryId == card.id && it.active) { changed = true; it.copy(active = false, deletedAt = time()) } else it }; changed }
     }
-    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear() }
+    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear(); provenance.clear() }
     override suspend fun appendConversation(row: ConversationTruthEntity): Boolean { if (conversation.any { it.messageId == row.messageId }) return false; conversation += row; return true }
     override suspend fun promptProjection(sessionId: String, limit: Int) = conversation.filter { it.sessionId == sessionId }.takeLast(limit)
     override suspend fun conversationCount(sessionId: String) = conversation.count { it.sessionId == sessionId }
     override suspend fun lastConversationSequence(sessionId: String) = conversation.filter { it.sessionId == sessionId }.maxOfOrNull { it.sequence }
     override suspend fun segmentationState(conversationId: String) = segmentation[conversationId]
+    override suspend fun abandonedSegmentationStates(before: Long, limit: Int) = segmentation.values
+        .filter { it.conversationStatus != "CLOSED" && it.lastActivityAt <= before }
+        .sortedBy { it.lastActivityAt }.take(limit)
     override suspend fun saveSegmentationState(row: SegmentationStateEntity) { segmentation[row.conversationId] = row }
     override suspend fun conversationRange(conversationId: String, start: Long, end: Long) = conversation
         .filter { it.sessionId == conversationId && it.sequence in start..end }.sortedBy { it.sequence }
@@ -129,12 +135,27 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         val id = "episode:${span.conversationId}:${span.startSequence}:${span.endSequence}"
         if (episodes.any { it.first.episodeId == id }) return id
         val t = time(); val content = messages.joinToString("\n") { "${it.role}: ${it.content}" }
+        val fsrs = AiriFsrs.initial(reviewedAt = t)
         episodes += EpisodicMemoryEntity(id, "conversation_segment", messages.first().content.take(96),
             AiriText.normalize(content), MemoryTemporalScope.HISTORICAL.name, t, 1.0, 4,
             "CONVERSATION_SEGMENTATION", messages.last().turnId, messages.last().utteranceId, t, t,
             conversationId = span.conversationId, startSequence = span.startSequence, endSequence = span.endSequence,
-            title = messages.first().content.take(96), content = content, classification = span.classification) to emptyList()
+            title = messages.first().content.take(96), content = content, classification = span.classification,
+            stability = fsrs.stability, difficulty = fsrs.difficulty, lastReviewedAt = fsrs.lastReviewedAt) to emptyList()
         return id
+    }
+    override suspend fun linkEpisodeProvenance(
+        episodeId: String,
+        conversationId: String,
+        start: Long,
+        end: Long
+    ): Int {
+        val turnIds = conversation.filter { it.sessionId == conversationId && it.sequence in start..end }
+            .map { it.turnId }.toSet()
+        val rows = semantic.filter { it.sourceTurnId in turnIds }
+            .map { SemanticProvenanceEntity(it.memoryId, episodeId) }
+        provenance += rows.filterNot { it in provenance }
+        return rows.size
     }
     override suspend fun markEpisodeConsolidated(id: String, at: Long): Boolean {
         var changed = false; episodes.replaceAll { pair ->

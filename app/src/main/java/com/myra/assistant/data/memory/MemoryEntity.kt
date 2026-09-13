@@ -90,12 +90,14 @@ data class ConversationTruthEntity(
 )
 
 /** Plast-Mem current stateful segmentation claim, scoped by conversation. */
-@Entity(tableName = "airi_segmentation_state")
+@Entity(tableName = "airi_segmentation_state", indices = [Index(value = ["conversationStatus", "lastActivityAt"])])
 data class SegmentationStateEntity(
     @PrimaryKey val conversationId: String, val lastMessageSequence: Long,
     val eofIdentified: Boolean, val nextSegmentStartSequence: Long,
     val activeSegmentStartSequence: Long? = null, val activeSegmentEndSequence: Long? = null,
-    val activeSince: Long? = null, val claimId: String? = null, val generation: Long = 0
+    val activeSince: Long? = null, val claimId: String? = null, val generation: Long = 0,
+    val conversationStatus: String = "ACTIVE", val eofReason: String? = null,
+    val lastActivityAt: Long = 0
 )
 
 /** Immutable committed segmentation range. The unresolved tail is not written here. */
