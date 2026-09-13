@@ -109,6 +109,8 @@ interface AiriMemoryDao {
     suspend fun updateEpisodeReview(id: String, stability: Double, difficulty: Double, reviewedAt: Long): Int
     @Query("UPDATE airi_episodes SET consolidatedAt = :at WHERE episodeId = :id AND consolidatedAt IS NULL")
     suspend fun markEpisodeConsolidated(id: String, at: Long): Int
+    @Query("SELECT * FROM airi_episodes WHERE consolidatedAt IS NULL AND deletedAt IS NULL ORDER BY createdAt LIMIT :limit")
+    suspend fun unconsolidatedEpisodes(limit: Int): List<EpisodicMemoryEntity>
 
     @Query("SELECT * FROM airi_goals WHERE deletedAt IS NULL AND status NOT IN ('COMPLETED','ABANDONED') ORDER BY priority DESC, updatedAt DESC LIMIT :limit")
     suspend fun activeGoals(limit: Int): List<GoalMemoryEntity>
@@ -138,6 +140,8 @@ interface AiriMemoryDao {
     suspend fun episodeSpans(conversationId: String): List<EpisodeSpanEntity>
     @Query("SELECT * FROM airi_pending_review WHERE conversationId = :conversationId ORDER BY createdAt LIMIT :limit")
     suspend fun pendingReviews(conversationId: String, limit: Int): List<PendingReviewEntity>
+    @Query("SELECT DISTINCT conversationId FROM airi_pending_review ORDER BY createdAt LIMIT :limit")
+    suspend fun pendingReviewConversations(limit: Int): List<String>
     @Query("DELETE FROM airi_pending_review WHERE reviewId IN (:ids)") suspend fun deleteReviews(ids: List<String>): Int
 
     @Query("DELETE FROM airi_semantic_memory") suspend fun clearSemantic()

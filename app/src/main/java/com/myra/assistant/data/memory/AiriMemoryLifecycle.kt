@@ -102,6 +102,34 @@ object AiriEventSegmenter {
         return if (lexical < 12) SegmentClassification.LOW_INFO else SegmentClassification.INFORMATIVE
     }
 
+    /** Rebuild ranges from model-reviewed candidates while retaining hard time boundaries. */
+    fun applyReview(messages: List<ConversationTruthEntity>, eof: Boolean, base: SegmentationPlan,
+        review: List<ReviewedBoundary>): SegmentationPlan {
+        if (messages.isEmpty() || review.isEmpty()) return base
+        val approved = review.filter { it.keep && it.confidence >= .5 }.associateBy { it.afterSequence }
+        val boundaries = base.boundaries.filter { it.hard || it.afterSequence in approved }.map { boundary ->
+            approved[boundary.afterSequence]?.let { boundary.copy(
+                reason = SegmentBoundaryReason.STRUCTURAL_CUE,
+                confidence = it.confidence
+            ) } ?: boundary
+        }.sortedBy { it.afterSequence }
+        val sorted = messages.sortedBy { it.sequence }; val ranges = mutableListOf<LongRange>()
+        var start = sorted.first().sequence
+        boundaries.forEach { ranges += start..it.afterSequence; start = it.afterSequence + 1 }
+        ranges += start..sorted.last().sequence
+        val merged = mutableListOf<LongRange>()
+        ranges.forEach { range ->
+            if (merged.isNotEmpty() && range.last - range.first + 1 < MIN_SEGMENT_EVENTS) {
+                val previous = merged.removeAt(merged.lastIndex); merged += previous.first..range.last
+            } else merged += range
+        }
+        return when {
+            eof -> SegmentationPlan(merged, null, boundaries)
+            merged.size == 1 -> SegmentationPlan(emptyList(), merged.single(), boundaries)
+            else -> SegmentationPlan(merged.dropLast(1), merged.last(), boundaries)
+        }
+    }
+
     fun boundaryBudget(eventCount: Int): Int {
         if (eventCount < TARGET_EVENTS_PER_SEGMENT * 2) return 0
         return ((eventCount / TARGET_EVENTS_PER_SEGMENT) - 1).coerceAtMost((eventCount / 24).coerceIn(1, 12))
@@ -135,7 +163,9 @@ interface LocalEmbeddingProvider {
     val modelId: String
     val version: Int
     val dimensions: Int
+    val isNeuralReady: Boolean get() = false
     fun embed(text: String): DoubleArray
+    fun embedQuery(text: String): DoubleArray = embed(text)
 }
 
 /** Free, private feature-hashing vector lane. No network and no paid model. */

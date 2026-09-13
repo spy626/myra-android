@@ -60,6 +60,16 @@ interface AiriMemoryStore {
     suspend fun enqueueEpisodeReview(conversationId: String, episodeIds: List<String>, query: String): Boolean = false
     suspend fun appendSparkTrace(row: SparkTraceEntity): Boolean = false
     suspend fun reembedStale(limit: Int): Int = 0
+    suspend fun unconsolidatedEpisodes(limit: Int): List<EpisodicMemoryEntity> = emptyList()
+    suspend fun episodeMessages(episode: EpisodicMemoryEntity): List<ConversationTruthEntity> = emptyList()
+    suspend fun semanticCandidates(conversationId: String, limit: Int): List<SemanticMemoryEntity> = emptyList()
+    suspend fun semanticById(id: String): SemanticMemoryEntity? = null
+    suspend fun reinforceSemantic(id: String, episodeId: String, boost: Double): Boolean = false
+    suspend fun linkSemanticProvenance(id: String, episodeId: String): Boolean = false
+    suspend fun pendingReviewConversations(limit: Int): List<String> = emptyList()
+    suspend fun pendingReviews(conversationId: String, limit: Int): List<PendingReviewEntity> = emptyList()
+    suspend fun episodeCards(ids: List<String>): List<MemoryEntity> = emptyList()
+    suspend fun deletePendingReviews(ids: List<String>): Int = 0
 }
 
 class RoomAiriMemoryStore(
@@ -340,7 +350,7 @@ class RoomAiriMemoryStore(
     override suspend fun enqueueEpisodeReview(conversationId: String, episodeIds: List<String>, query: String): Boolean {
         if (episodeIds.isEmpty()) return false
         val row = PendingReviewEntity(UUID.randomUUID().toString(), conversationId,
-            episodeIds.distinct().take(8).joinToString(","), AiriText.semanticKey(query).hashCode().toString(), clock())
+            episodeIds.distinct().take(8).joinToString(","), query.take(500), clock())
         return dao.enqueueReview(row) != -1L
     }
     override suspend fun appendSparkTrace(row: SparkTraceEntity) = dao.appendSparkTrace(row) != -1L
@@ -362,6 +372,25 @@ class RoomAiriMemoryStore(
         }
         return changed
     }
+    override suspend fun unconsolidatedEpisodes(limit: Int) = dao.unconsolidatedEpisodes(limit.coerceIn(1, 32))
+    override suspend fun episodeMessages(episode: EpisodicMemoryEntity) =
+        dao.conversationRange(episode.conversationId, episode.startSequence, episode.endSequence)
+    override suspend fun semanticCandidates(conversationId: String, limit: Int) =
+        dao.activeSemanticForConversation(conversationId, limit.coerceIn(1, 20)).ifEmpty { dao.activeSemantic(limit.coerceIn(1, 20)) }
+    override suspend fun semanticById(id: String) = dao.semanticById(id)
+    override suspend fun reinforceSemantic(id: String, episodeId: String, boost: Double): Boolean = database.withTransaction {
+        val changed = dao.reinforceSemantic(id, boost.coerceIn(0.0, .1), clock()) == 1
+        if (changed) dao.insertSemanticProvenance(listOf(SemanticProvenanceEntity(id, episodeId)))
+        changed
+    }
+    override suspend fun linkSemanticProvenance(id: String, episodeId: String): Boolean {
+        dao.insertSemanticProvenance(listOf(SemanticProvenanceEntity(id, episodeId)))
+        return true
+    }
+    override suspend fun pendingReviewConversations(limit: Int) = dao.pendingReviewConversations(limit.coerceIn(1, 16))
+    override suspend fun pendingReviews(conversationId: String, limit: Int) = dao.pendingReviews(conversationId, limit.coerceIn(1, 64))
+    override suspend fun episodeCards(ids: List<String>) = ids.distinct().take(32).mapNotNull { dao.episodeById(it)?.let(::episodeCard) }
+    override suspend fun deletePendingReviews(ids: List<String>) = if (ids.isEmpty()) 0 else dao.deleteReviews(ids)
 
     private suspend fun semanticCards(limit: Int) = dao.activeSemantic(limit).map { row -> MemoryEntity(
         row.memoryId, row.semanticKey, row.category, row.statement, row.confidence, row.provenance,
@@ -400,7 +429,7 @@ class RoomAiriMemoryStore(
         // and vector leg before RRF. The final public result remains bounded.
         val semanticPool = dao.activeSemantic(RETRIEVAL_CANDIDATE_LIMIT)
         val episodePool = dao.recentEpisodes(RETRIEVAL_CANDIDATE_LIMIT)
-        val queryVector = embeddingProvider.embed(query)
+        val queryVector = embeddingProvider.embedQuery(query)
         val semanticLexical = runCatching { dao.searchSemanticFts(fts, RETRIEVAL_CANDIDATE_LIMIT) }.getOrDefault(emptyList())
         val semanticVector = semanticPool.sortedByDescending {
             vectorSimilarity(queryVector, it.embedding, it.embeddingModel, it.embeddingVersion, it.embeddingDimensions)

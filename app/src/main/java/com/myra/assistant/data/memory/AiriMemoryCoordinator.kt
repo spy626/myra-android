@@ -68,10 +68,16 @@ private data class MutationBatch(
 private class MemoryMutationAbort(val reasonCode: MemoryFailureReason) : RuntimeException(reasonCode.name)
 
 /** One final-turn owner. It is the only class allowed to authorize consolidated writes. */
-class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: Boolean = true) {
+class MemoryBrainCoordinator(
+    private val store: AiriMemoryStore,
+    private val reasoningProvider: MemoryReasoningProvider = UnavailableMemoryReasoningProvider,
+    recoverOnInit: Boolean = true
+) {
     private val ownedSessions = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inactivityJobs = ConcurrentHashMap<String, Job>()
+    private val consolidationJobs = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private val reviewWorkerRunning = java.util.concurrent.atomic.AtomicBoolean(false)
 
     init {
         // A process can die after transcript commit but before the in-process
@@ -80,6 +86,8 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
         if (recoverOnInit) backgroundScope.launch {
             recoverAbandonedConversations()
             store.reembedStale(32)
+            store.unconsolidatedEpisodes(32).forEach { scheduleEpisodeConsolidation(it.episodeId) }
+            schedulePendingReviews()
         }
     }
 
@@ -221,6 +229,7 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
         val started = System.nanoTime()
         val answer = if (type == MemoryRecallType.LAST_TRANSACTION) AiriWorkingMemory.transactionAnswer() else null
         val rows = if (answer != null) emptyList() else store.retrieve(query, type, limit)
+        if (rows.any { it.kind == "EPISODE" }) schedulePendingReviews()
         return MemoryBrainOutcome.Recalled(rows, answer, type, (System.nanoTime() - started) / 1_000_000)
     }
 
@@ -251,6 +260,13 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
     suspend fun clearMemories(): Boolean { store.clearAll(); return store.activeCards(1).isEmpty() }
     suspend fun recordBehaviorObservation(signal: BehaviorSignal): MemoryWriteResult? = BehaviorMemoryLearner(store).observe(signal)
     suspend fun reviewInferredMemory(now: Long) = BehaviorMemoryLearner(store).decay(now)
+
+    fun scheduleNeuralReindex() {
+        backgroundScope.launch {
+            var changed: Int
+            do { changed = store.reembedStale(16) } while (changed > 0)
+        }
+    }
 
     suspend fun captureConversation(evidence: AuthoritativeMemoryTurnEvidence, assistantText: String?) {
         val now = System.currentTimeMillis(); val base = evidence.turnId * 2
@@ -321,7 +337,10 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
         ))
         return runCatching {
             val messages = store.conversationRange(conversationId, old.nextSegmentStartSequence, end)
-            val plan = AiriEventSegmenter.plan(messages, eof)
+            val localPlan = AiriEventSegmenter.plan(messages, eof)
+            val reviewable = localPlan.boundaries.filterNot { it.hard }
+            val modelReview = runCatching { reasoningProvider.reviewBoundaries(messages, reviewable) }.getOrDefault(emptyList())
+            val plan = AiriEventSegmenter.applyReview(messages, eof, localPlan, modelReview)
             var committed = 0
             plan.finalized.forEach { range ->
                 val segmentMessages = messages.filter { it.sequence in range }
@@ -340,13 +359,17 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
                 val episodeId = store.ensureEpisodeForSpan(span, segmentMessages)
                 val sourceTurns = segmentMessages.filter { it.role == "user" }.map { it.turnId }.distinct()
                 if (episodeId != null && sourceTurns.isNotEmpty() &&
-                    sourceTurns.all { AiriMemoryRuntime.wasConsolidated(conversationId, it) }
-                ) {
+                    sourceTurns.all { AiriMemoryRuntime.wasConsolidated(conversationId, it) }) {
                     // The structured final-turn actions have already been verified. Link
                     // their durable facts to the committed episode before declaring the
                     // episode consolidated; a span alone is never semantic truth.
                     store.linkEpisodeProvenance(episodeId, conversationId, range.first, range.last)
-                    store.markEpisodeConsolidated(episodeId, now)
+                    if (reasoningProvider === UnavailableMemoryReasoningProvider) {
+                        store.markEpisodeConsolidated(episodeId, now)
+                    }
+                }
+                if (episodeId != null && reasoningProvider !== UnavailableMemoryReasoningProvider) {
+                    scheduleEpisodeConsolidation(episodeId)
                 }
                 if (inserted) committed++
             }
@@ -370,6 +393,94 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
     suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int =
         store.reviewEpisodes(conversationId, ratings, reviewedAt)
 
+    private fun scheduleEpisodeConsolidation(episodeId: String) {
+        if (!consolidationJobs.add(episodeId)) return
+        backgroundScope.launch {
+            try { consolidateEpisode(episodeId) }
+            catch (error: Throwable) { log("MEMORY_CONSOLIDATION_RETRY episode=${episodeId.hashCode()} reason=${error.javaClass.simpleName}") }
+            finally { consolidationJobs.remove(episodeId) }
+        }
+    }
+
+    internal suspend fun consolidateEpisode(episodeId: String): Int {
+        val episode = store.unconsolidatedEpisodes(32).firstOrNull { it.episodeId == episodeId } ?: return 0
+        val messages = store.episodeMessages(episode)
+        val candidates = store.semanticCandidates(episode.conversationId, 20)
+        val supplied = candidates.map { ConsolidationCandidate(it.memoryId, it.statement, it.category) }
+        val predictStarted = System.nanoTime()
+        val prediction = if (supplied.isEmpty()) null else reasoningProvider.predict(episode.title, supplied).takeIf(String::isNotBlank)
+        val predictMs = (System.nanoTime() - predictStarted) / 1_000_000
+        val actions = reasoningProvider.calibrate(episode.title, episode.content, prediction, supplied).take(20)
+        if (actions.isEmpty()) {
+            store.markEpisodeConsolidated(episodeId, System.currentTimeMillis())
+            log("MEMORY_CONSOLIDATION_RESULT episode=${episodeId.hashCode()} actions=0 predictMs=$predictMs verified=true")
+            return 0
+        }
+        val candidateById = candidates.associateBy { it.memoryId }
+        val last = messages.lastOrNull { it.role == "user" } ?: return 0
+        val evidence = AuthoritativeMemoryTurnEvidence(last.turnId, last.canonicalText, last.displayText,
+            sessionId = episode.conversationId, utteranceId = last.utteranceId)
+        var applied = 0
+        store.transaction {
+            actions.forEach { action ->
+                if (action.confidence < .65) return@forEach
+                val category = action.category.toMemoryCategory() ?: return@forEach
+                val target = action.targetFactId?.let(candidateById::get)
+                if (action.kind != SemanticConsolidationAction.NEW && target == null) return@forEach
+                val fact = action.fact.trim()
+                if (action.kind !in setOf(SemanticConsolidationAction.INVALIDATE, SemanticConsolidationAction.REINFORCE) && fact.length !in 3..500) return@forEach
+                val frame = MemorySemanticFrame(
+                    intent = when (action.kind) {
+                        SemanticConsolidationAction.NEW -> MemorySemanticIntent.ADD_FACT
+                        SemanticConsolidationAction.REINFORCE -> MemorySemanticIntent.ADD_FACT
+                        SemanticConsolidationAction.UPDATE -> MemorySemanticIntent.UPDATE_FACT
+                        SemanticConsolidationAction.INVALIDATE -> MemorySemanticIntent.INVALIDATE_FACT
+                    }, fact = fact.takeIf(String::isNotBlank) ?: target?.statement,
+                    category = category, stableKey = target?.semanticKey
+                        ?: "pc:${category.name}:${AiriText.semanticKey(fact).take(64)}",
+                    confidence = action.confidence, sourceSpan = episode.content,
+                    sourceTurnId = last.turnId, sourceSessionId = episode.conversationId,
+                    sourceEpisodeIds = listOf(episodeId)
+                )
+                if (AiriMemorySafetyPolicy.rejectReason(frame, evidence, false) != null) return@forEach
+                when (action.kind) {
+                    SemanticConsolidationAction.REINFORCE -> if (store.reinforceSemantic(target!!.memoryId, episodeId, .03)) applied++
+                    SemanticConsolidationAction.INVALIDATE -> if (store.invalidateSemantic(target!!.semanticKey)) {
+                        store.linkSemanticProvenance(target.memoryId, episodeId); applied++
+                    }
+                    else -> store.addSemantic(frame, evidence)?.let { id ->
+                        store.linkSemanticProvenance(id, episodeId); store.recordConsolidationAction(frame, evidence, id); applied++
+                    }
+                }
+            }
+            check(store.markEpisodeConsolidated(episodeId, System.currentTimeMillis())) { "episode consolidation marker failed" }
+        }
+        log("MEMORY_CONSOLIDATION_RESULT episode=${episodeId.hashCode()} actions=$applied predictMs=$predictMs verified=true")
+        return applied
+    }
+
+    private fun schedulePendingReviews() {
+        if (!reviewWorkerRunning.compareAndSet(false, true)) return
+        backgroundScope.launch {
+            try {
+                store.pendingReviewConversations(16).forEach { conversationId ->
+                    val pending = store.pendingReviews(conversationId, 64)
+                    val queryMap = linkedMapOf<String, MutableList<String>>()
+                    pending.forEach { row -> row.episodeIds.split(',').filter(String::isNotBlank).forEach { id ->
+                        queryMap.getOrPut(id) { mutableListOf() }.add(row.matchedQuery)
+                    } }
+                    val episodes = store.episodeCards(queryMap.keys.toList())
+                    val context = store.promptProjection(conversationId, 32)
+                    val ratings = reasoningProvider.rateEpisodes(context, episodes, queryMap)
+                    if (ratings.isNotEmpty()) store.reviewEpisodes(conversationId, ratings, System.currentTimeMillis())
+                    store.deletePendingReviews(pending.map { it.reviewId })
+                }
+            } catch (error: Throwable) {
+                log("MEMORY_REVIEW_RETRY reason=${error.javaClass.simpleName}")
+            } finally { reviewWorkerRunning.set(false) }
+        }
+    }
+
     suspend fun traceSpark(eventId: String, parentEventId: String?, source: String, lane: String, kind: String, outcome: String) =
         store.appendSparkTrace(SparkTraceEntity(UUID.randomUUID().toString(), eventId, parentEventId,
             source, lane, kind, outcome, System.currentTimeMillis()))
@@ -385,6 +496,17 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
     }
     private fun log(value: String) = runCatching { Log.d("LyraAiriMemory", value) }
 
+    private fun String.toMemoryCategory(): MemoryCategory? = when (uppercase()) {
+        "IDENTITY", "PERSONALITY" -> MemoryCategory.IDENTITY
+        "PREFERENCE" -> MemoryCategory.PREFERENCE
+        "INTEREST" -> MemoryCategory.CURRENT_INTEREST
+        "RELATIONSHIP" -> MemoryCategory.PERSON
+        "EXPERIENCE" -> MemoryCategory.LIFE_EVENT
+        "GOAL" -> MemoryCategory.GOAL
+        "GUIDELINE" -> MemoryCategory.WORKFLOW
+        else -> null
+    }
+
     companion object {
         private const val SEGMENT_CLAIM_TIMEOUT_MS = 15L * 60L * 1000L
         private const val CONVERSATION_INACTIVITY_EOF_MS = 30L * 60L * 1000L
@@ -397,8 +519,15 @@ class MemoryBrainCoordinator(private val store: AiriMemoryStore, recoverOnInit: 
         )
         @Volatile private var shared: MemoryBrainCoordinator? = null
         fun get(context: Context): MemoryBrainCoordinator = shared ?: synchronized(this) {
-            shared ?: MemoryBrainCoordinator(RoomAiriMemoryStore(LyraMemoryDatabase.get(context.applicationContext)))
-                .also { shared = it }
+            shared ?: run {
+                val holder = arrayOfNulls<MemoryBrainCoordinator>(1)
+                val provider = AndroidE5EmbeddingProvider(context.applicationContext) {
+                    holder[0]?.scheduleNeuralReindex()
+                }
+                MemoryBrainCoordinator(RoomAiriMemoryStore(
+                    LyraMemoryDatabase.get(context.applicationContext), embeddingProvider = provider
+                ), GeminiMemoryReasoningProvider(context.applicationContext)).also { holder[0] = it; shared = it }
+            }
         }
     }
 }

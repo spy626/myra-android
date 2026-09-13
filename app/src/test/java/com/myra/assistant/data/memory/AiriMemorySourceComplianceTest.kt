@@ -74,7 +74,7 @@ class AiriMemorySourceComplianceTest {
     @Test fun plastMemTablesAndNoParallelTruthTablesAreDeclared() {
         val db = File(root, "data/memory/LyraMemoryDatabase.kt").readText()
         val entities = File(root, "data/memory/MemoryEntity.kt").readText()
-        assertTrue(db.contains("version = 9"))
+        assertTrue(db.contains("version = 10"))
         val coordinator = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
         assertTrue(coordinator.contains("segmentCommittedConversation(evidence.sessionId, eof = false)"))
         assertFalse(coordinator.contains("segmentCommittedConversation(evidence.sessionId, eof = true)"))

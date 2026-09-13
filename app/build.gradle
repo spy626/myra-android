@@ -88,6 +88,9 @@ dependencies {
     implementation 'androidx.room:room-ktx:2.6.1'
     kapt 'androidx.room:room-compiler:2.6.1'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // Local multilingual E5 inference. The 235 MB encoder is downloaded once,
+    // SHA-256 verified, and cached; the tokenizer graph is bundled with LYRA.
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.23.0'
     implementation 'com.google.android.filament:filament-android:1.75.0'
     implementation 'com.google.android.filament:gltfio-android:1.75.0'
     implementation 'com.google.android.filament:filament-utils-android:1.75.0'

@@ -198,6 +198,51 @@ class AiriPlastMemoryParityTest {
         assertEquals(2, calls); assertEquals(0, scheduler.pendingCount())
     }
 
+    @Test fun modelReviewedBoundariesKeepHardBoundaryAndRejectUnapprovedCandidates() {
+        val messages = (0L..25L).map { message(it, it * 1_000, if (it % 2L == 0L) "user" else "assistant", "topic ${it / 8} message $it") }
+        val base = AiriEventSegmenter.plan(messages, eof = true)
+        val candidate = base.boundaries.first()
+        val reviewed = AiriEventSegmenter.applyReview(messages, true, base,
+            listOf(ReviewedBoundary(candidate.afterSequence, true, .91, "topic changed")))
+        assertTrue(reviewed.boundaries.any { it.afterSequence == candidate.afterSequence && it.confidence == .91 })
+        val rejected = AiriEventSegmenter.applyReview(messages, true, base,
+            base.boundaries.map { ReviewedBoundary(it.afterSequence, false, .99, "same event") })
+        assertTrue(rejected.boundaries.all { it.hard })
+    }
+
+    @Test fun episodeDrivenColdStartCreatesFactAndMarksConsolidatedOnlyAfterAtomicApply() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        val user = message(0, 1, "user", "I build accessible Android software")
+        store.appendConversation(user)
+        val span = EpisodeSpanEntity("span", "c", 0, 0, SegmentClassification.INFORMATIVE.name, "EOF", 2)
+        store.saveEpisodeSpan(span)
+        val episodeId = store.ensureEpisodeForSpan(span, listOf(user))!!
+        val provider = FakeReasoningProvider(actions = listOf(EpisodeSemanticAction(
+            SemanticConsolidationAction.NEW, "Speaker builds accessible Android software", "IDENTITY", null, .95)))
+        val owner = MemoryBrainCoordinator(store, provider, recoverOnInit = false)
+        assertEquals(1, owner.consolidateEpisode(episodeId))
+        assertEquals(1, store.semantic.count { it.active })
+        assertEquals(episodeId, store.provenance.single().episodeId)
+        assertNotNull(store.episodes.single().first.consolidatedAt)
+    }
+
+    @Test fun predictCalibrateRejectsHallucinatedTargetIds() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        val e = evidence(91, "I prefer clear summaries", "I prefer clear summaries")
+        execute(MemoryBrainCoordinator(store, recoverOnInit = false), e,
+            fact(MemorySemanticIntent.ADD_FACT, "Speaker prefers clear summaries", "response:clarity", e.displayText))
+        val message = ConversationTruthEntity("pc-user", "parity", 300, 92, "pc:92", "user",
+            "I still prefer clear summaries", 5)
+        store.appendConversation(message)
+        val span = EpisodeSpanEntity("pc-span", "parity", 300, 300, SegmentClassification.INFORMATIVE.name, "EOF", 6)
+        store.saveEpisodeSpan(span); val episode = store.ensureEpisodeForSpan(span, listOf(message))!!
+        val provider = FakeReasoningProvider(actions = listOf(EpisodeSemanticAction(
+            SemanticConsolidationAction.INVALIDATE, "", "PREFERENCE", "invented-id", .99)))
+        val owner = MemoryBrainCoordinator(store, provider, recoverOnInit = false)
+        assertEquals(0, owner.consolidateEpisode(episode))
+        assertTrue(store.semantic.single().active)
+    }
+
     private suspend fun execute(owner: MemoryBrainCoordinator, e: AuthoritativeMemoryTurnEvidence, frame: MemorySemanticFrame) {
         val plan = owner.prepareFinalTurn(e, listOf(frame.copy(sourceTurnId = e.turnId)))
         val out = owner.executeFinalTurnPlan(plan, e)
@@ -214,4 +259,15 @@ class AiriPlastMemoryParityTest {
     private fun message(sequence: Long, at: Long, role: String, text: String) = ConversationTruthEntity(
         "m$sequence", "c", sequence, sequence, "u$sequence", role, text, at
     )
+}
+
+private class FakeReasoningProvider(
+    private val actions: List<EpisodeSemanticAction> = emptyList(),
+    private val ratings: Map<String, EpisodeReviewRating> = emptyMap()
+) : MemoryReasoningProvider {
+    override suspend fun reviewBoundaries(messages: List<ConversationTruthEntity>, candidates: List<SegmentBoundary>) =
+        candidates.map { ReviewedBoundary(it.afterSequence, true, .9, "model-reviewed") }
+    override suspend fun predict(title: String, facts: List<ConsolidationCandidate>) = "prediction"
+    override suspend fun calibrate(title: String, content: String, prediction: String?, facts: List<ConsolidationCandidate>) = actions
+    override suspend fun rateEpisodes(context: List<ConversationTruthEntity>, episodes: List<MemoryEntity>, queries: Map<String, List<String>>) = ratings
 }

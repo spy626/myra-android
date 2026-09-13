@@ -116,7 +116,7 @@ data class EpisodeSpanEntity(
 @Entity(tableName = "airi_pending_review", indices = [Index(value = ["conversationId", "createdAt"])])
 data class PendingReviewEntity(
     @PrimaryKey val reviewId: String, val conversationId: String,
-    val episodeIds: String, val queryFingerprint: String, val createdAt: Long
+    val episodeIds: String, val matchedQuery: String, val createdAt: Long
 )
 
 /** Many-to-many semantic provenance matching Plast-Mem source_episodic_ids. */

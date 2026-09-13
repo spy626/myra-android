@@ -15,6 +15,7 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     val spans = mutableListOf<EpisodeSpanEntity>()
     val provenance = mutableListOf<SemanticProvenanceEntity>()
     val consolidationActions = mutableListOf<ConsolidationActionEntity>()
+    val pendingReviews = mutableListOf<PendingReviewEntity>()
     private var now = 1_000L
     private fun time() = ++now
 
@@ -22,7 +23,7 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         val snapshot = listOf(
             people.toMap(), aliases.mapValues { it.value.toMutableSet() }, relationships.toList(),
             semantic.toList(), episodes.toList(), goals.toMap(), behavior.toMap(), conversation.toList(),
-            segmentation.toMap(), spans.toList(), provenance.toList(), consolidationActions.toList(), now
+            segmentation.toMap(), spans.toList(), provenance.toList(), consolidationActions.toList(), pendingReviews.toList(), now
         )
         return try { block(this) } catch (failure: Throwable) {
             people.clear(); people.putAll(snapshot[0] as Map<String, PersonEntity>)
@@ -37,7 +38,8 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
             spans.clear(); spans.addAll(snapshot[9] as List<EpisodeSpanEntity>)
             provenance.clear(); provenance.addAll(snapshot[10] as List<SemanticProvenanceEntity>)
             consolidationActions.clear(); consolidationActions.addAll(snapshot[11] as List<ConsolidationActionEntity>)
-            now = snapshot[12] as Long
+            pendingReviews.clear(); pendingReviews.addAll(snapshot[12] as List<PendingReviewEntity>)
+            now = snapshot[13] as Long
             throw failure
         }
     }
@@ -139,7 +141,7 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         "BEHAVIOR" -> behavior.remove(card.stableKey) != null
         else -> { var changed = false; semantic.replaceAll { if (it.memoryId == card.id && it.active) { changed = true; it.copy(active = false, deletedAt = time()) } else it }; changed }
     }
-    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear(); provenance.clear(); consolidationActions.clear() }
+    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear(); provenance.clear(); consolidationActions.clear(); pendingReviews.clear() }
     override suspend fun appendConversation(row: ConversationTruthEntity): Boolean { if (conversation.any { it.messageId == row.messageId }) return false; conversation += row; return true }
     override suspend fun promptProjection(sessionId: String, limit: Int) = conversation.filter { it.sessionId == sessionId }.takeLast(limit)
     override suspend fun conversationCount(sessionId: String) = conversation.count { it.sessionId == sessionId }
@@ -199,6 +201,37 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         var changed = false; episodes.replaceAll { pair ->
             if (pair.first.episodeId == id && pair.first.consolidatedAt == null) { changed = true; pair.first.copy(consolidatedAt = at) to pair.second } else pair
         }; return changed
+    }
+    override suspend fun unconsolidatedEpisodes(limit: Int) = episodes.map { it.first }
+        .filter { it.consolidatedAt == null && it.deletedAt == null }.take(limit)
+    override suspend fun episodeMessages(episode: EpisodicMemoryEntity) = conversation.filter {
+        it.sessionId == episode.conversationId && it.sequence in episode.startSequence..episode.endSequence
+    }
+    override suspend fun semanticCandidates(conversationId: String, limit: Int) = semantic.filter { it.active && it.deletedAt == null }.take(limit)
+    override suspend fun semanticById(id: String) = semantic.firstOrNull { it.memoryId == id }
+    override suspend fun reinforceSemantic(id: String, episodeId: String, boost: Double): Boolean {
+        var changed = false
+        semantic.replaceAll { if (it.memoryId == id && it.active) { changed = true; it.copy(confidence = (it.confidence + boost).coerceAtMost(1.0)) } else it }
+        if (changed) linkSemanticProvenance(id, episodeId)
+        return changed
+    }
+    override suspend fun linkSemanticProvenance(id: String, episodeId: String): Boolean {
+        val row = SemanticProvenanceEntity(id, episodeId); if (row !in provenance) provenance += row
+        return true
+    }
+    override suspend fun enqueueEpisodeReview(conversationId: String, episodeIds: List<String>, query: String): Boolean {
+        if (episodeIds.isEmpty()) return false
+        pendingReviews += PendingReviewEntity(UUID.randomUUID().toString(), conversationId, episodeIds.joinToString(","), query, time())
+        return true
+    }
+    override suspend fun pendingReviewConversations(limit: Int) = pendingReviews.map { it.conversationId }.distinct().take(limit)
+    override suspend fun pendingReviews(conversationId: String, limit: Int) = pendingReviews.filter { it.conversationId == conversationId }.take(limit)
+    override suspend fun episodeCards(ids: List<String>) = episodes.map { it.first }.filter { it.episodeId in ids }.map {
+        MemoryEntity(it.episodeId, "episode:${it.eventType}", MemoryCategory.LIFE_EVENT.name, it.summary,
+            it.confidence, it.provenance, it.createdAt, it.occurredAt, kind = "EPISODE")
+    }
+    override suspend fun deletePendingReviews(ids: List<String>): Int {
+        val before = pendingReviews.size; pendingReviews.removeAll { it.reviewId in ids }; return before - pendingReviews.size
     }
     override suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int {
         var changed = 0; episodes.replaceAll { pair ->
