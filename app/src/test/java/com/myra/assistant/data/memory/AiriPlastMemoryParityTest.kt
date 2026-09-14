@@ -270,6 +270,7 @@ class AiriPlastMemoryParityTest {
         episode(600, "Devansh is my very good friend", EpisodeSemanticAction(SemanticConsolidationAction.NEW,
             "Devansh is the speaker's good friend", "RELATIONSHIP", null, .96,
             criticalLiterals = listOf("Devansh"), person = "Devansh", relationship = "GOOD_FRIEND",
+            semanticRelationship = "GOOD_FRIEND",
             sourceMessageSequences = listOf(600), sourceSpans = listOf("Devansh is my very good friend")))
         val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
         assertEquals("Devansh", owner.recall("friends", type = MemoryRecallType.FRIENDS).rows.single().entityName)
@@ -283,11 +284,11 @@ class AiriPlastMemoryParityTest {
             val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
             val first = evidence(sequence, initialText, initialText, listOf("Aarav"))
             execute(owner, first, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP,
-                person = "Aarav", relationship = type, sourceSpan = initialText,
+                person = "Aarav", relationship = type, semanticRelationship = type, sourceSpan = initialText,
                 sourceTurnId = first.turnId, confidence = .96, criticalLiterals = listOf("Aarav")))
             val other = evidence(sequence + 1, "Meera is my friend", "Meera is my friend", listOf("Meera"))
             execute(owner, other, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP,
-                person = "Meera", relationship = PersonRelationship.FRIEND, sourceSpan = other.displayText,
+                person = "Meera", relationship = PersonRelationship.FRIEND, semanticRelationship = PersonRelationship.FRIEND, sourceSpan = other.displayText,
                 sourceTurnId = other.turnId, confidence = .96, criticalLiterals = listOf("Meera")))
             val person = store.peopleByName("Aarav").single()
             val target = store.semantic.single { it.active && it.subjectEntityId == person.entityId }
@@ -301,8 +302,8 @@ class AiriPlastMemoryParityTest {
                 removeSequence, SegmentClassification.INFORMATIVE.name, "EOF", removeSequence)
             store.saveEpisodeSpan(span); val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
             val action = EpisodeSemanticAction(SemanticConsolidationAction.INVALIDATE, "", "RELATIONSHIP",
-                target.memoryId, .97, criticalLiterals = listOf("Aarav"), person = "Aarav",
-                relationship = "FRIEND", sourceMessageSequences = listOf(removeSequence),
+                target.memoryId, .97, criticalLiterals = listOf("Aarav"),
+                sourceMessageSequences = listOf(removeSequence),
                 sourceSpans = listOf(removeText))
             assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false)
                 .consolidateEpisode(episode))
@@ -329,13 +330,36 @@ class AiriPlastMemoryParityTest {
         val inflated = EpisodeSemanticAction(SemanticConsolidationAction.NEW,
             "Ritesh is the speaker's best friend", "RELATIONSHIP", null, .98,
             criticalLiterals = listOf("Ritesh"), person = "Ritesh", relationship = "BEST_FRIEND",
+            semanticRelationship = "FRIEND",
             sourceMessageSequences = listOf(825), sourceSpans = listOf(text))
-        assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(inflated)), false)
+        assertEquals(0, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(inflated)), false)
             .consolidateEpisode(episode))
-        val person = store.peopleByName("Ritesh").single()
-        assertEquals(PersonRelationship.FRIEND.name, store.currentRelationship(person.entityId)?.relationshipType)
-        assertTrue(store.semantic.single().statement.endsWith("friend"))
-        assertFalse(store.semantic.single().statement.contains("best friend"))
+        assertTrue(store.peopleByName("Ritesh").isEmpty())
+        assertTrue(store.semantic.isEmpty())
+    }
+
+    @Test fun canonicalRelationshipReinforceNeedsNoRestatedEnumOrPerson() = runBlocking {
+        val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
+        val first = evidence(826, "Anika is my good friend", "Anika is my good friend", listOf("Anika"))
+        execute(owner, first, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP,
+            person = "Anika", relationship = PersonRelationship.GOOD_FRIEND,
+            semanticRelationship = PersonRelationship.GOOD_FRIEND, sourceSpan = first.displayText,
+            sourceTurnId = 826, confidence = .96, criticalLiterals = listOf("Anika")))
+        val target = store.semantic.single { it.active }
+        val text = "That relationship is still true"
+        val row = ConversationTruthEntity("reinforce-relationship", "strength", 827, 827,
+            "strength:827", "user", text, 827, canonicalText = text, displayText = text)
+        store.appendConversation(row)
+        val span = EpisodeSpanEntity("reinforce-relationship-span", "strength", 827, 827,
+            SegmentClassification.INFORMATIVE.name, "EOF", 827)
+        store.saveEpisodeSpan(span); val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
+        val action = EpisodeSemanticAction(SemanticConsolidationAction.REINFORCE, "", "RELATIONSHIP",
+            target.memoryId, .96, sourceMessageSequences = listOf(827), sourceSpans = listOf(text))
+        assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false)
+            .consolidateEpisode(episode))
+        assertEquals(1, store.relationships.count { it.active })
+        assertEquals(PersonRelationship.GOOD_FRIEND.name, store.currentRelationship(target.subjectEntityId!!)?.relationshipType)
+        assertEquals(2, store.provenance.count { it.memoryId == target.memoryId })
     }
 
     @Test fun relationshipAndGoalProjectionFailuresRollbackCanonicalInvalidation() = runBlocking {
@@ -358,12 +382,12 @@ class AiriPlastMemoryParityTest {
         val relationshipOwner = MemoryBrainCoordinator(relationshipStore, recoverOnInit = false)
         val relationEvidence = evidence(830, "Tara is my good friend", "Tara is my good friend", listOf("Tara"))
         execute(relationshipOwner, relationEvidence, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP,
-            person = "Tara", relationship = PersonRelationship.GOOD_FRIEND, sourceSpan = relationEvidence.displayText,
+            person = "Tara", relationship = PersonRelationship.GOOD_FRIEND, semanticRelationship = PersonRelationship.GOOD_FRIEND, sourceSpan = relationEvidence.displayText,
             sourceTurnId = 830, confidence = .96, criticalLiterals = listOf("Tara")))
         val relationshipFact = relationshipStore.semantic.single { it.active }
         assertTrue(background(relationshipStore, 831, "Tara is not my friend anymore",
             EpisodeSemanticAction(SemanticConsolidationAction.INVALIDATE, "", "RELATIONSHIP",
-                relationshipFact.memoryId, .97, person = "Tara", relationship = "FRIEND",
+                relationshipFact.memoryId, .97,
                 sourceMessageSequences = listOf(831), sourceSpans = listOf("Tara is not my friend anymore"))).isFailure)
         assertTrue(relationshipStore.semantic.single { it.memoryId == relationshipFact.memoryId }.active)
         assertNotNull(relationshipStore.currentRelationship(relationshipFact.subjectEntityId!!))
@@ -407,7 +431,7 @@ class AiriPlastMemoryParityTest {
         // Same durable store, fresh owner: equivalent to process restart. No
         // user turn is needed and the row is completed exactly once.
         val restartedOwner = MemoryBrainCoordinator(store, recoverOnInit = false, wakeScheduler = wake)
-        assertEquals(0, restartedOwner.runDurableBackgroundWork(pending.nextEligibleAt))
+        assertEquals(1, restartedOwner.runDurableBackgroundWork(pending.nextEligibleAt))
         assertFalse("TEST:future" in store.backgroundWork)
         assertFalse(store.completeBackgroundWork("TEST:future"))
 
@@ -417,6 +441,63 @@ class AiriPlastMemoryParityTest {
             assertTrue(store.retryBackgroundWork("TEST:bounded", attempt + 1, "FAIL", 2_000L + attempt))
         }
         assertEquals(8, store.backgroundWork.getValue("TEST:bounded").attemptCount)
+    }
+
+    @Test fun expiredRunningLeaseRecoversButFreshLeaseCannotBeStolen() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        assertTrue(store.enqueueBackgroundWork("TEST", "lease", 1_000))
+        assertTrue(store.claimBackgroundWork("TEST:lease", 2_000))
+        assertEquals(0, store.recoverExpiredBackgroundLeases(2_500, 1_000))
+        assertFalse(store.claimBackgroundWork("TEST:lease", 2_500))
+        assertEquals(1, store.recoverExpiredBackgroundLeases(3_001, 1_000))
+        assertEquals("PENDING", store.backgroundWork.getValue("TEST:lease").state)
+        assertEquals(1, MemoryBrainCoordinator(store, recoverOnInit = false)
+            .runDurableBackgroundWork(3_001))
+        assertFalse("TEST:lease" in store.backgroundWork)
+    }
+
+    @Test fun reclaimedProductionWorkKindsAreAwaitedAndIdempotent() = runBlocking {
+        val lease = MemoryBrainCoordinator.BACKGROUND_LEASE_MS
+
+        val consolidation = InMemoryAiriMemoryStore()
+        val user = message(900, 1, "user", "I build durable systems")
+        consolidation.appendConversation(user)
+        val span = EpisodeSpanEntity("lease-span", "c", 900, 900,
+            SegmentClassification.INFORMATIVE.name, "EOF", 2)
+        consolidation.saveEpisodeSpan(span)
+        val episodeId = consolidation.ensureEpisodeForSpan(span, listOf(user))!!
+        consolidation.enqueueBackgroundWork("CONSOLIDATION", episodeId, 10)
+        consolidation.claimBackgroundWork("CONSOLIDATION:$episodeId", 20)
+        val first = MemoryBrainCoordinator(consolidation, FakeReasoningProvider(), false)
+        assertEquals(1, first.runDurableBackgroundWork(20 + lease + 1))
+        assertNotNull(consolidation.episodes.single().first.consolidatedAt)
+        assertEquals(0, MemoryBrainCoordinator(consolidation, FakeReasoningProvider(), false)
+            .runDurableBackgroundWork(20 + lease + 2))
+
+        val review = InMemoryAiriMemoryStore()
+        review.appendConversation(user)
+        review.saveEpisodeSpan(span)
+        val reviewEpisode = review.ensureEpisodeForSpan(span, listOf(user))!!
+        review.enqueueEpisodeReview("c", listOf(reviewEpisode), "durability")
+        review.enqueueBackgroundWork("REVIEW", "c", 30)
+        review.claimBackgroundWork("REVIEW:c", 40)
+        val reviewOwner = MemoryBrainCoordinator(review,
+            FakeReasoningProvider(ratings = mapOf(reviewEpisode to EpisodeReviewRating.GOOD)), false)
+        assertEquals(1, reviewOwner.runDurableBackgroundWork(40 + lease + 1))
+        assertTrue(review.pendingReviews.isEmpty())
+        assertFalse("REVIEW:c" in review.backgroundWork)
+
+        var reindexCalls = 0
+        val reindex = object : InMemoryAiriMemoryStore() {
+            override suspend fun neuralEmbeddingReady() = true
+            override suspend fun reembedStale(limit: Int): Int = if (reindexCalls++ == 0) 1 else 0
+        }
+        reindex.enqueueBackgroundWork("REINDEX", "e5", 50)
+        reindex.claimBackgroundWork("REINDEX:e5", 60)
+        assertEquals(1, MemoryBrainCoordinator(reindex, recoverOnInit = false)
+            .runDurableBackgroundWork(60 + lease + 1))
+        assertEquals(2, reindexCalls)
+        assertFalse("REINDEX:e5" in reindex.backgroundWork)
     }
 
     @Test fun backgroundGoalConvergesIntoFastStructuredRecall() = runBlocking {
