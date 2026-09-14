@@ -134,20 +134,12 @@ object FinalTurnSourceSpanAuthorizer {
 
 /** Cross-checks two structured semantic fields after authoritative source-span validation. */
 object RelationshipStrengthAuthorizer {
-    fun authorize(requested: PersonRelationship, semantic: PersonRelationship?): PersonRelationship? {
-        val verified = semantic ?: return null
-        // An inflated requested operation fails closed. A weaker requested
-        // operation cannot silently erase the independently interpreted user
-        // meaning: the verified semantic strength owns the projection.
-        return verified.takeIf { rank(requested) <= rank(verified) }
-    }
-
-    private fun rank(value: PersonRelationship) = when (value) {
-        PersonRelationship.FRIEND -> 1
-        PersonRelationship.GOOD_FRIEND -> 2
-        PersonRelationship.BEST_FRIEND -> 3
-    }
-
+    /**
+     * One semantic authority: the source-grounded interpretation itself.
+     * Android verifies its turn, span, person, assertion mode, literals and
+     * confidence elsewhere; no duplicate model enum is treated as evidence.
+     */
+    fun authorize(semantic: PersonRelationship?): PersonRelationship? = semantic
 }
 
 /** Central AIRI-owner safety policy. Read-only questions are permitted but never persisted. */
@@ -199,7 +191,6 @@ object MemoryOperationContractValidator {
         val reason = when (frame.intent) {
             MemorySemanticIntent.ADD_RELATIONSHIP -> when {
                 frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
-                frame.relationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
                 frame.semanticRelationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
                 else -> null
             }
@@ -207,7 +198,6 @@ object MemoryOperationContractValidator {
                 MemoryFailureReason.MISSING_REQUIRED_ENTITY.takeIf { frame.person.isNullOrBlank() }
             MemorySemanticIntent.REPLACE_RELATIONSHIP -> when {
                 frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
-                frame.replacementRelationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
                 frame.semanticRelationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
                 else -> null
             }
