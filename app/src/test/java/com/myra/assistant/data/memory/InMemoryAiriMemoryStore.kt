@@ -96,8 +96,10 @@ open class InMemoryAiriMemoryStore : AiriMemoryStore {
             return current.memoryId
         }
         val id = UUID.randomUUID().toString()
-        if (frame.temporalScope == MemoryTemporalScope.CURRENT && frame.intent in setOf(MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT)) semantic.replaceAll { if (it.semanticKey == normalizedKey && it.active) it.copy(active = false, supersededById = id, invalidAt = t) else it }
-        semantic += SemanticMemoryEntity(id, normalizedKey, frame.category?.name ?: "PREFERENCE", fact, AiriText.normalize(fact), frame.resolvedEntityId, frame.temporalScope.name, frame.confidence, 6, true, "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, createdAt = t, updatedAt = t, lastAccessed = t, conversationId = evidence.sessionId)
+        val temporal = frame.temporalScope.takeUnless { it == MemoryTemporalScope.UNSPECIFIED }
+            ?: MemoryTemporalScope.CURRENT
+        if (temporal == MemoryTemporalScope.CURRENT && frame.intent in setOf(MemorySemanticIntent.UPDATE_FACT, MemorySemanticIntent.SUPERSEDE_FACT)) semantic.replaceAll { if (it.semanticKey == normalizedKey && it.active) it.copy(active = false, supersededById = id, invalidAt = t) else it }
+        semantic += SemanticMemoryEntity(id, normalizedKey, frame.category?.name ?: "PREFERENCE", fact, AiriText.normalize(fact), frame.resolvedEntityId, temporal.name, frame.confidence, 6, true, "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, createdAt = t, updatedAt = t, lastAccessed = t, conversationId = evidence.sessionId)
         return id
     }
     override suspend fun addEpisode(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence, participantIds: List<String>): String? {
