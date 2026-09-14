@@ -162,7 +162,7 @@ object RelationshipStrengthAuthorizer {
     // combining marks is not safe multilingual normalization: Devanagari
     // matras are semantic characters, not optional Latin-style accents.
     private fun normalize(value: String) = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)
-        .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+        .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ").trim()
 
     private val FRIENDSHIP = Regex("(?:\\bfrien[\\p{L}]*\\b|\\bdost[\\p{L}]*\\b|दोस्त|मित्र)")
     private val BEST = Regex("(?:\\bbest[\\p{L}]*\\b|\\bsabse\\s+(?:ach+a|ac+h+a|karibi|close[\\p{L}]*)\\b|सबसे\\s+(?:अच्छा|करीबी))")
