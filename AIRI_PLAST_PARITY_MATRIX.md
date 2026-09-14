@@ -2,7 +2,7 @@
 
 Audit date: 2026-09-14
 
-- AIRI: `moeru-ai/airi@42e3e9e8573d3159d40e637fa11a21e13398ebda`
+- AIRI: `moeru-ai/airi@9f30a1977e09b3d68759492c5f8f775eb4502184`
 - Previous AIRI pin: `00c6867b7fd8064938de1805814578db8273dafe`
 - Plast-Mem: `moeru-ai/plast-mem@611103456d953c9a74452f4239817b3468f94bba`
 - FSRS dependency: `open-spaced-repetition/fsrs-rs@aca2838bfbdc6f15ca3f7a0c96a99fae466c9e9c` (5.2.0)
@@ -56,12 +56,12 @@ APPLICABLE`. There are no unresolved applicable runtime rows in this revision.
 | `crates/core/src/memory/retrieval.rs` | Bounded result rendering | `MemoryEntity` projection/formatter | ANDROID-NATIVE EQUIVALENT | bounded recall tests | Native response formatter |
 | `crates/ai/src/embed*.rs`, cosine | Configured/versioned semantic embedding provider | `AndroidE5EmbeddingProvider`, immutable `EmbeddingResult` provenance, bounded re-embedding | ANDROID-NATIVE EQUIVALENT | codec/version/fallback/tokenizer/atomic-readiness tests | MIT multilingual-e5-small is pinned, checksum-verified, and cached in app-private storage; hash fallback cannot overwrite or relabel E5 rows |
 | `crates/core/src/pending_review_queue.rs` + migration 04 | Retrieval review side effect | `PendingReviewEntity` | ANDROID-NATIVE EQUIVALENT | review enqueue tests | SQLite queue |
-| `crates/worker/src/jobs/memory_review.rs` | Aggregate/review/rate/update | owner review queue + Gemini ratings + durable work tokens | ANDROID-NATIVE EQUIVALENT | exact state/queue/retry tests | Durable Room tokens plus startup/WorkManager wake recovery replace Apalis; partial ratings remain pending |
+| `crates/worker/src/jobs/memory_review.rs` | Aggregate/review/rate/update | owner review queue + Gemini ratings + durable work tokens | ANDROID-NATIVE EQUIVALENT | exact state/queue/retry tests | Durable Room tokens plus startup recovery and an APPEND_OR_REPLACE WorkManager wake chain replace Apalis; future eligibility is rescheduled from Room and partial ratings remain pending |
 | `fsrs` 5.2.0 dependency | FSRS-6 inference | `AiriFsrs` | EXACT PORT | pinned numeric conformance tests | Training APIs are not needed on device |
 | `crates/migration/*` | PostgreSQL schema migration | Room v12 destructive pre-release cutover; goal projection links canonical semantic lifecycle | ANDROID-NATIVE EQUIVALENT | schema/static tests | Clean reinstall required |
 | `docs/todo/flashbulb_memory.md` | Documented high-significance TODO, not production-invoked upstream | `FlashbulbPolicy`, episode fields | UPSTREAM TODO | policy tests | LYRA completion of upstream documented TODO |
 | `docs/todo/semantic_memory_confidence.md` | Proposed confidence evolution, not production-invoked upstream | explicit/inferred confidence metadata | UPSTREAM TODO | behavior/safety tests | LYRA completion uses conservative policy |
-| `docs/architecture/graph_memory.md` | Graph direction | stable people/aliases/relationships | ANDROID-NATIVE EQUIVALENT | entity tests | LYRA-specific assistant identity graph |
+| `docs/architecture/graph_memory.md` | Graph direction | stable people/aliases/relationships | ANDROID-NATIVE EQUIVALENT | entity/lifecycle tests | LYRA-specific assistant identity graph; canonical target identity closes the actual current projection, and relationship strength is monotonically bounded by USER evidence |
 
 ## Completion truth
 
