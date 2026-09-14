@@ -62,8 +62,8 @@ object MemorySemanticIdentity {
 object StagedMemoryProposalPolicy {
     fun merge(existing: List<MemorySemanticFrame>, incoming: List<MemorySemanticFrame>, limit: Int = 4): List<MemorySemanticFrame> =
         (existing + incoming).distinctBy {
-            listOf(it.intent, it.person, it.replacementPerson, it.relationship, it.semanticRelationship,
-                it.replacementRelationship, it.stableKey, it.fact).joinToString("|")
+            listOf(it.intent, it.person, it.replacementPerson, it.semanticRelationship,
+                it.stableKey, it.fact).joinToString("|")
         }.take(limit)
 }
 
@@ -75,8 +75,6 @@ object GeminiMemoryOperationParser {
             val value = values.optJSONObject(index) ?: return@mapNotNull null
             val intent = runCatching { MemorySemanticIntent.valueOf(value.optString("intent")) }.getOrNull()
                 ?: return@mapNotNull null
-            val relationship = value.enumValue<PersonRelationship>("relationship")
-            val replacementRelationship = value.enumValue<PersonRelationship>("replacement_relationship")
             val temporal = value.enumValue<MemoryTemporalScope>("temporal_scope") ?: MemoryTemporalScope.UNSPECIFIED
             val category = value.enumValue<MemoryCategory>("category")
             val assertionMode = value.enumValue<MemoryAssertionMode>("assertion_mode") ?: MemoryAssertionMode.USER_ASSERTED
@@ -87,9 +85,10 @@ object GeminiMemoryOperationParser {
                 intent = intent,
                 person = value.optString("person").trim().takeIf(String::isNotEmpty),
                 replacementPerson = value.optString("replacement_person").trim().takeIf(String::isNotEmpty),
-                relationship = relationship,
+                // Legacy duplicate enum fields are deliberately ignored. The
+                // source-grounded semantic field is the sole strength authority;
+                // the coordinator derives the persistence operation from it.
                 semanticRelationship = value.enumValue<PersonRelationship>("semantic_relationship"),
-                replacementRelationship = replacementRelationship,
                 temporalScope = temporal,
                 fact = fact,
                 category = category,
