@@ -78,18 +78,18 @@ class AiriMemoryCompletionTest {
             return MemoryBrainCoordinator(InMemoryAiriMemoryStore(), recoverOnInit = false)
                 .prepareFinalTurn(e, listOf(frame)).operations.singleOrNull()?.relationship
         }
-        assertEquals(PersonRelationship.FRIEND,
-            resolved("Ishaan is my friend", PersonRelationship.BEST_FRIEND, 1090))
-        assertEquals(PersonRelationship.FRIEND,
-            resolved("Ishaan mera dost hai", PersonRelationship.GOOD_FRIEND, 1091))
-        assertEquals(PersonRelationship.GOOD_FRIEND,
-            resolved("Ishaan mera bahuta accha dosta hai", PersonRelationship.GOOD_FRIEND, 1092))
-        assertEquals(PersonRelationship.GOOD_FRIEND,
-            resolved("ईशान मेरा बहुत अच्छा दोस्त है", PersonRelationship.GOOD_FRIEND, 1093))
-        assertEquals(PersonRelationship.BEST_FRIEND,
-            resolved("Ishaan is my best friend", PersonRelationship.BEST_FRIEND, 1094))
-        assertEquals(PersonRelationship.BEST_FRIEND,
-            resolved("ईशान मेरा सबसे अच्छा दोस्त है", PersonRelationship.BEST_FRIEND, 1095))
+        val actual = listOf(
+            resolved("Ishaan is my friend", PersonRelationship.BEST_FRIEND, 1090),
+            resolved("Ishaan mera dost hai", PersonRelationship.GOOD_FRIEND, 1091),
+            resolved("Ishaan mera bahuta accha dosta hai", PersonRelationship.GOOD_FRIEND, 1092),
+            resolved("ईशान मेरा बहुत अच्छा दोस्त है", PersonRelationship.GOOD_FRIEND, 1093),
+            resolved("Ishaan is my best friend", PersonRelationship.BEST_FRIEND, 1094),
+            resolved("ईशान मेरा सबसे अच्छा दोस्त है", PersonRelationship.BEST_FRIEND, 1095)
+        )
+        assertEquals("strength authorization must be monotonic across approved scripts",
+            listOf(PersonRelationship.FRIEND, PersonRelationship.FRIEND,
+                PersonRelationship.GOOD_FRIEND, PersonRelationship.GOOD_FRIEND,
+                PersonRelationship.BEST_FRIEND, PersonRelationship.BEST_FRIEND), actual)
     }
 
     @Test fun explicitOrdinaryFriendRemovalClosesStrongerCurrentProjection() = runBlocking {
