@@ -359,7 +359,7 @@ class AiriPlastMemoryParityTest {
             .consolidateEpisode(episode))
         assertEquals(1, store.relationships.count { it.active })
         assertEquals(PersonRelationship.GOOD_FRIEND.name, store.currentRelationship(target.subjectEntityId!!)?.relationshipType)
-        assertEquals(2, store.provenance.count { it.memoryId == target.memoryId })
+        assertEquals(listOf(episode), store.provenance.filter { it.memoryId == target.memoryId }.map { it.episodeId })
     }
 
     @Test fun relationshipAndGoalProjectionFailuresRollbackCanonicalInvalidation() = runBlocking {
