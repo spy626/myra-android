@@ -64,7 +64,21 @@ class AiriMemorySourceComplianceTest {
         assertTrue(ui.contains("memoryOwner.deleteMemory")); assertTrue(ui.contains("memoryOwner.renameFromManualUi"))
         val wake = File(root, "data/memory/AiriMemoryWakeWorker.kt").readText()
         assertTrue(wake.contains("MemoryBrainCoordinator.get(applicationContext).runDurableBackgroundWork()"))
+        assertTrue(wake.contains("ExistingWorkPolicy.APPEND_OR_REPLACE"))
+        assertFalse(wake.contains("ExistingWorkPolicy.KEEP"))
         assertFalse(wake.contains("AiriMemoryDao")); assertFalse(wake.contains("RoomAiriMemoryStore"))
+    }
+
+    @Test fun structuredProjectionClosuresAreCanonicalAndVerifiedInRoom() {
+        val dao = File(root, "data/memory/MemoryDao.kt").readText()
+        val owner = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
+        assertTrue(dao.contains("suspend fun endCurrentRelationship"))
+        assertTrue(dao.contains("targetEntityId = :entityId AND active = 1 AND deletedAt IS NULL"))
+        assertTrue(dao.contains("semanticMemoryId = :semanticMemoryId"))
+        assertTrue(dao.contains("suspend fun closeLinkedGoal"))
+        assertTrue(owner.contains("store.endCurrentRelationship(person.entityId)"))
+        assertTrue(owner.contains("store.closeGoal(target.semanticKey, target.memoryId"))
+        assertTrue(owner.contains("throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)"))
     }
 
     @Test fun entityAnchorsAreNotStoredAsUserFacingCards() {
