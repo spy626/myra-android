@@ -22,9 +22,10 @@ flowchart TD
 The immediate lane never waits for segmentation, Predict/Calibrate, neural
 model download, reindexing, or episodic review. Clear structured recall is
 read-only and local. The background lane uses Room episode, pending-review,
-and durable work-token state as its recovery truth; bounded coroutine channels
-only accelerate execution. WorkManager wakes the coordinator and never writes
-memory directly.
+and durable work-token state as its recovery truth. Local coroutines and
+WorkManager are wake sources only: both enter the same atomic Room claim before
+Predict/Calibrate. WorkManager wakes the coordinator and never writes memory
+directly.
 
 Embedding metadata is captured atomically with every vector. A warm-up hash
 result cannot be relabelled as E5 if readiness changes after the operation, and
@@ -48,7 +49,9 @@ cross-checks the requested operation against that verified meaning: inflation
 fails closed and a weaker requested enum cannot erase a clearly stronger
 interpretation. No production relationship-language vocabulary parser remains.
 REINFORCE and INVALIDATE use the canonical target fact and stable entity and do
-not require a restated relationship enum.
+not require a restated relationship enum. NEW and UPDATE have one relationship
+strength authority: source-grounded `semantic_relationship`; duplicate operation
+enums are ignored and cannot serve as self-verification.
 
 Durable retry time remains in `airi_background_work`. WorkManager uses one
 APPEND_OR_REPLACE wake chain, so a delayed retry requested by an in-flight
