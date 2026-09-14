@@ -64,14 +64,16 @@ data class EpisodicMemoryEntity(
 @Entity(tableName = "airi_episode_participants", primaryKeys = ["episodeId", "entityId"], foreignKeys = [ForeignKey(entity = EpisodicMemoryEntity::class, parentColumns = ["episodeId"], childColumns = ["episodeId"], onDelete = ForeignKey.CASCADE), ForeignKey(entity = PersonEntity::class, parentColumns = ["entityId"], childColumns = ["entityId"], onDelete = ForeignKey.CASCADE)], indices = [Index(value = ["entityId"])])
 data class EpisodeParticipantEntity(val episodeId: String, val entityId: String)
 
-@Entity(tableName = "airi_goals", indices = [Index(value = ["stableKey", "status"]), Index(value = ["updatedAt"]), Index(value = ["parentGoalId"])])
+@Entity(tableName = "airi_goals", indices = [Index(value = ["stableKey", "status"]), Index(value = ["semanticMemoryId"]), Index(value = ["updatedAt"]), Index(value = ["parentGoalId"])])
 data class GoalMemoryEntity(
     @PrimaryKey val goalId: String, val stableKey: String, val title: String,
     val description: String?, val status: String, val priority: Int, val progress: Int,
     val deadline: Long? = null, val parentGoalId: String? = null, val category: String,
     val provenance: String, val sourceTurnId: Long, val sourceUtteranceId: String,
     val createdAt: Long, val updatedAt: Long, val lastAccessed: Long,
-    val accessCount: Int = 0, val deletedAt: Long? = null
+    val accessCount: Int = 0, val deletedAt: Long? = null,
+    /** Canonical semantic lifecycle row represented by this structured index. */
+    val semanticMemoryId: String? = null
 )
 
 @Entity(tableName = "airi_behavior_patterns", indices = [Index(value = ["stableKey"], unique = true), Index(value = ["kind", "lastObservedAt"]), Index(value = ["state"])])
