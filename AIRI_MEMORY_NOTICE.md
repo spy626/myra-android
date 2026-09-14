@@ -2,9 +2,10 @@
 
 LYRA's native memory runtime ports applicable architecture contracts from
 [moeru-ai/airi](https://github.com/moeru-ai/airi), inspected from a complete
-current checkout at revision `00c6867b7fd8064938de1805814578db8273dafe`
-(superseding the previous `553d8a0da4ef131441a1de77d556c6df6cab3026`
-pin), and from
+current checkout at revision `42e3e9e8573d3159d40e637fa11a21e13398ebda`
+(superseding `00c6867b7fd8064938de1805814578db8273dafe`; the intervening
+upstream changes are stage/UI-only and do not alter memory, task, context, or
+Spark contracts), and from
 [moeru-ai/plast-mem](https://github.com/moeru-ai/plast-mem), inspected at
 revision `611103456d953c9a74452f4239817b3468f94bba`.
 
@@ -21,13 +22,19 @@ integration, and stronger LYRA secret policy are Android-native equivalents.
 Model and tokenizer downloads are length/SHA-256 verified and cached only in
 app-private storage. The feature-hash lane is an explicitly labelled
 warm-up/offline fallback and is not represented as neural parity while active.
+Every persisted vector carries an immutable per-operation `EmbeddingResult`,
+so E5 readiness changes cannot relabel a hash vector or downgrade a neural
+one. Neural reindexing is durably queued and waits for a neural snapshot.
 
 Plast-Mem's provider-agnostic model boundary is completed on Android by a
 bounded background reasoning adapter using LYRA's existing Gemini key and
 provider. It performs boundary review, episode Predict/Calibrate, and episodic
 review ratings without joining the voice-response session or acquiring
 response ownership. Android remains the sole authorization, transaction,
-provenance, stale-update, safety, and verification owner.
+provenance, stale-update, safety, and verification owner. Background semantic
+actions require exact user-message sequence provenance and a grounded source
+span; relationship and goal rows are transactionally derived projections of
+canonical semantic lifecycle facts, not a second truth.
 
 At the audited Plast-Mem revision, the production EventSegmentationJob still
 invokes the temporal, primitive-review, and informative-resegmentation
