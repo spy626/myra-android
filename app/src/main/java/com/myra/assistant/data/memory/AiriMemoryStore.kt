@@ -33,7 +33,8 @@ interface AiriMemoryStore {
     suspend fun addSemantic(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence): String?
     suspend fun invalidateSemantic(key: String): Boolean = false
     suspend fun addEpisode(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence, participantIds: List<String>): String?
-    suspend fun addGoal(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence): String?
+    suspend fun addGoal(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence,
+        semanticMemoryId: String? = null): String?
     suspend fun closeGoal(stableKey: String, status: String): Boolean = false
     suspend fun retrieve(query: String, type: MemoryRecallType, limit: Int): List<MemoryEntity>
     suspend fun activeCards(limit: Int = 200): List<MemoryEntity>
@@ -215,7 +216,8 @@ class RoomAiriMemoryStore(
         }
     }
 
-    override suspend fun addGoal(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence): String? {
+    override suspend fun addGoal(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence,
+        semanticMemoryId: String?): String? {
         val goal = frame.goal ?: return null
         val title = goal.title.trim().takeIf { it.length in 2..200 } ?: return null
         val key = AiriText.semanticKey(frame.stableKey ?: title); val old = dao.goalByKey(key)
@@ -223,7 +225,8 @@ class RoomAiriMemoryStore(
         dao.upsertGoal(GoalMemoryEntity(id, key, title, goal.description, goal.status, goal.priority.coerceIn(0, 10),
             goal.progress.coerceIn(0, 100), goal.deadline, goal.parentGoalId, MemoryCategory.GOAL.name,
             "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, old?.createdAt ?: now, now,
-            old?.lastAccessed ?: now, old?.accessCount ?: 0))
+            old?.lastAccessed ?: now, old?.accessCount ?: 0,
+            semanticMemoryId = semanticMemoryId ?: old?.semanticMemoryId))
         return dao.goalByKey(key)?.goalId.takeIf { it == id }
     }
     override suspend fun closeGoal(stableKey: String, status: String): Boolean =
