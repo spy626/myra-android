@@ -264,7 +264,8 @@ class AiriPlastMemoryParityTest {
             val span = EpisodeSpanEntity("bg-span-$sequence", "c", sequence, sequence,
                 SegmentClassification.INFORMATIVE.name, "EOF", sequence)
             store.saveEpisodeSpan(span); val id = store.ensureEpisodeForSpan(span, listOf(row))!!
-            assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false).consolidateEpisode(id))
+            val applied = MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false).consolidateEpisode(id)
+            assertEquals("action=${action.category}/${action.kind} semantic=${store.semantic.size} goals=${store.goals.size} relationships=${store.relationships.size}", 1, applied)
         }
         episode(600, "Devansh is my very good friend", EpisodeSemanticAction(SemanticConsolidationAction.NEW,
             "Devansh is the speaker's good friend", "RELATIONSHIP", null, .96,
