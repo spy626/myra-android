@@ -275,7 +275,9 @@ class AiriPlastMemoryParityTest {
         val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
         assertEquals("Devansh", owner.recall("friends", type = MemoryRecallType.FRIENDS).rows.single().entityName)
         assertTrue(owner.recall("goals", type = MemoryRecallType.GOALS).rows.single().fact.contains("Aurora"))
-        assertTrue(store.semantic.isEmpty())
+        // Relationship and goal cards are structured projections of canonical
+        // semantic facts, so both remain available to general retrieval too.
+        assertEquals(2, store.semantic.count { it.active })
     }
 
     @Test fun e5ContractUsesPrefixesMasksBoundsAndRejectsIncompatibleVectors() {
@@ -293,9 +295,33 @@ class AiriPlastMemoryParityTest {
             override val modelId = "e5"; override val version = 2; override val dimensions = 384
             override val isNeuralReady = true; override fun embed(text: String) = DoubleArray(384)
         }
-        assertTrue(EmbeddingCompatibility.matches(provider, "e5", 2, 384, "0.1"))
-        assertFalse(EmbeddingCompatibility.matches(provider, "lyra-feature-hash", 1, 64, "0.1"))
-        assertFalse(EmbeddingCompatibility.matches(provider, "e5", 1, 384, "0.1"))
+        val encoded = LocalVectorCodec.encode(DoubleArray(384))
+        assertTrue(EmbeddingCompatibility.matches(provider, "e5", 2, 384, encoded))
+        assertFalse(EmbeddingCompatibility.matches(provider, "lyra-feature-hash", 1, 64, encoded))
+        assertFalse(EmbeddingCompatibility.matches(provider, "e5", 1, 384, encoded))
+    }
+
+    @Test fun embeddingResultKeepsAtomicBackendProvenanceAcrossReadinessChange() {
+        var neural = false
+        val provider = object : LocalEmbeddingProvider {
+            override val modelId get() = if (neural) "e5" else "hash"
+            override val version get() = if (neural) 2 else 1
+            override val dimensions get() = if (neural) 384 else 64
+            override val isNeuralReady get() = neural
+            override fun embed(text: String) = DoubleArray(dimensions)
+            override fun embedResult(text: String): EmbeddingResult {
+                val readyAtStart = neural
+                val result = if (readyAtStart) EmbeddingResult(DoubleArray(384), "e5", 2, 384, "E5_NEURAL", true)
+                else EmbeddingResult(DoubleArray(64), "hash", 1, 64, "FEATURE_HASH", false)
+                neural = true // readiness flips after the vector was produced
+                return result
+            }
+        }
+        val hash = provider.embedResult("first")
+        assertFalse(hash.neural); assertEquals(64, hash.vector.size); assertEquals("hash", hash.modelId)
+        val e5 = provider.embedResult("second")
+        assertTrue(e5.neural); assertEquals(384, e5.vector.size); assertEquals("e5", e5.modelId)
+        assertFalse(EmbeddingCompatibility.matches(e5, "hash", 1, 64, LocalVectorCodec.encode(hash.vector)))
     }
 
     @Test fun episodeDrivenColdStartCreatesFactAndMarksConsolidatedOnlyAfterAtomicApply() = runBlocking {
@@ -312,6 +338,21 @@ class AiriPlastMemoryParityTest {
         assertEquals(1, store.semantic.count { it.active })
         assertEquals(episodeId, store.provenance.single().episodeId)
         assertNotNull(store.episodes.single().first.consolidatedAt)
+    }
+
+    @Test fun backgroundConsolidationRejectsActionsWithoutFinalUserProvenance() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        val user = message(410, 10, "user", "I prefer compact summaries")
+        store.appendConversation(user)
+        val span = EpisodeSpanEntity("ungrounded", "c", 410, 410,
+            SegmentClassification.INFORMATIVE.name, "EOF", 11)
+        store.saveEpisodeSpan(span)
+        val episode = store.ensureEpisodeForSpan(span, listOf(user))!!
+        val provider = FakeReasoningProvider(actions = listOf(EpisodeSemanticAction(
+            SemanticConsolidationAction.NEW, "Speaker prefers compact summaries", "PREFERENCE", null, .95
+        )), preserveMissingProvenance = true)
+        assertEquals(0, MemoryBrainCoordinator(store, provider, recoverOnInit = false).consolidateEpisode(episode))
+        assertTrue(store.semantic.isEmpty())
     }
 
     @Test fun predictCalibrateRejectsHallucinatedTargetIds() = runBlocking {
@@ -395,7 +436,8 @@ private class FakeReasoningProvider(
     private val ratings: Map<String, EpisodeReviewRating> = emptyMap(),
     private val primitiveClassification: SegmentClassification? = SegmentClassification.INFORMATIVE,
     private val primitiveSplits: List<Long> = emptyList(),
-    private val resegmentSplits: List<Long> = emptyList()
+    private val resegmentSplits: List<Long> = emptyList(),
+    private val preserveMissingProvenance: Boolean = false
 ) : MemoryReasoningProvider {
     override suspend fun classifyPrimitive(messages: List<ConversationTruthEntity>) = primitiveClassification
     override suspend fun splitPrimitive(messages: List<ConversationTruthEntity>) = primitiveSplits
@@ -404,5 +446,14 @@ private class FakeReasoningProvider(
         candidates.map { ReviewedBoundary(it.afterSequence, true, .9, "model-reviewed") }
     override suspend fun predict(title: String, facts: List<ConsolidationCandidate>) = "prediction"
     override suspend fun calibrate(title: String, content: String, prediction: String?, facts: List<ConsolidationCandidate>) = actions
+    override suspend fun calibrate(title: String, content: String, prediction: String?, facts: List<ConsolidationCandidate>,
+        sourceMessages: List<ConversationTruthEntity>) = actions.map { action ->
+        if (preserveMissingProvenance || action.sourceMessageSequences.isNotEmpty() || action.sourceSpans.isNotEmpty()) action
+        else {
+            val user = sourceMessages.lastOrNull { it.role == "user" }
+            action.copy(sourceMessageSequences = user?.let { listOf(it.sequence) }.orEmpty(),
+                sourceSpans = user?.canonicalText?.let(::listOf).orEmpty())
+        }
+    }
     override suspend fun rateEpisodes(context: List<ConversationTruthEntity>, episodes: List<MemoryEntity>, queries: Map<String, List<String>>) = ratings
 }
