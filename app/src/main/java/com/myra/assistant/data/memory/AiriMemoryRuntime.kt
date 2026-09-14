@@ -132,24 +132,14 @@ object FinalTurnSourceSpanAuthorizer {
     private fun editDistance(a: String, b: String): Int { var prev = IntArray(b.length + 1) { it }; for (i in a.indices) { val cur = IntArray(b.length + 1); cur[0] = i + 1; for (j in b.indices) cur[j + 1] = minOf(cur[j] + 1, prev[j + 1] + 1, prev[j] + if (a[i] == b[j]) 0 else 1); prev = cur }; return prev[b.length] }
 }
 
-/**
- * Monotonic authorization for the small structured relationship enum. Gemini
- * interprets meaning, but it cannot promote FRIEND to a stronger projection
- * than the authoritative USER evidence supports. This is deliberately not a
- * general language parser and never creates an operation or an entity.
- */
+/** Cross-checks two structured semantic fields after authoritative source-span validation. */
 object RelationshipStrengthAuthorizer {
-    fun authorize(requested: PersonRelationship, evidence: AuthoritativeMemoryTurnEvidence): PersonRelationship? {
-        val supported = evidence.variants.mapNotNull(::supportedBy).maxByOrNull(::rank) ?: return null
-        return if (rank(requested) <= rank(supported)) requested else supported
-    }
-
-    private fun supportedBy(value: String): PersonRelationship? {
-        val text = normalize(value)
-        if (!FRIENDSHIP.containsMatchIn(text)) return null
-        if (BEST.containsMatchIn(text)) return PersonRelationship.BEST_FRIEND
-        if (GOOD.containsMatchIn(text)) return PersonRelationship.GOOD_FRIEND
-        return PersonRelationship.FRIEND
+    fun authorize(requested: PersonRelationship, semantic: PersonRelationship?): PersonRelationship? {
+        val verified = semantic ?: return null
+        // An inflated requested operation fails closed. A weaker requested
+        // operation cannot silently erase the independently interpreted user
+        // meaning: the verified semantic strength owns the projection.
+        return verified.takeIf { rank(requested) <= rank(verified) }
     }
 
     private fun rank(value: PersonRelationship) = when (value) {
@@ -158,15 +148,6 @@ object RelationshipStrengthAuthorizer {
         PersonRelationship.BEST_FRIEND -> 3
     }
 
-    // NFKC keeps meaningful Indic vowel signs intact. Globally deleting
-    // combining marks is not safe multilingual normalization: Devanagari
-    // matras are semantic characters, not optional Latin-style accents.
-    private fun normalize(value: String) = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)
-        .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ").trim()
-
-    private val FRIENDSHIP = Regex("(?:\\bfrien[\\p{L}]*\\b|\\bdost[\\p{L}]*\\b|दोस्त|मित्र)")
-    private val BEST = Regex("(?:\\bbest[\\p{L}]*\\b|\\bsabse\\s+(?:ach+a|ac+h+a|karibi|close[\\p{L}]*)\\b|सबसे\\s+(?:अच्छा|करीबी))")
-    private val GOOD = Regex("(?:\\bgood\\b|\\bclose[\\p{L}]*\\b|\\b(?:ach+a|ac+h+a|karibi|gahra)\\b|अच्छा|करीबी|गहरा)")
 }
 
 /** Central AIRI-owner safety policy. Read-only questions are permitted but never persisted. */
@@ -216,14 +197,18 @@ object MemoryOperationContractValidator {
             if (participants.isNotEmpty()) frame = frame.copy(episode = initialEpisode.copy(participants = participants))
         }
         val reason = when (frame.intent) {
-            MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.REMOVE_RELATIONSHIP -> when {
+            MemorySemanticIntent.ADD_RELATIONSHIP -> when {
                 frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
                 frame.relationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
+                frame.semanticRelationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
                 else -> null
             }
+            MemorySemanticIntent.REMOVE_RELATIONSHIP ->
+                MemoryFailureReason.MISSING_REQUIRED_ENTITY.takeIf { frame.person.isNullOrBlank() }
             MemorySemanticIntent.REPLACE_RELATIONSHIP -> when {
                 frame.person.isNullOrBlank() -> MemoryFailureReason.MISSING_REQUIRED_ENTITY
                 frame.replacementRelationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
+                frame.semanticRelationship == null -> MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP
                 else -> null
             }
             MemorySemanticIntent.RENAME_ENTITY -> when {
