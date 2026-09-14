@@ -67,6 +67,24 @@ class AiriMemorySourceComplianceTest {
         assertTrue(wake.contains("ExistingWorkPolicy.APPEND_OR_REPLACE"))
         assertFalse(wake.contains("ExistingWorkPolicy.KEEP"))
         assertFalse(wake.contains("AiriMemoryDao")); assertFalse(wake.contains("RoomAiriMemoryStore"))
+        val dao = File(root, "data/memory/MemoryDao.kt").readText()
+        val owner = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
+        assertTrue(dao.contains("state = 'RUNNING' AND updatedAt <= :expiredBefore"))
+        assertTrue(dao.contains("state IN ('PENDING', 'RUNNING')"))
+        assertTrue(owner.contains("recoverExpiredBackgroundLeases"))
+        assertTrue(owner.contains("consolidateEpisode(work.subjectId)"))
+    }
+
+    @Test fun relationshipStrengthIsStructuredSemanticEvidenceNotLanguageParsing() {
+        val runtime = File(root, "data/memory/AiriMemoryRuntime.kt").readText()
+        val owner = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
+        val reasoning = File(root, "data/memory/MemoryReasoningProvider.kt").readText()
+        assertTrue(runtime.contains("fun authorize(requested: PersonRelationship, semantic: PersonRelationship?)"))
+        assertFalse(runtime.contains("private val FRIENDSHIP"))
+        assertFalse(runtime.contains("private val GOOD"))
+        assertFalse(runtime.contains("private val BEST"))
+        assertTrue(reasoning.contains("semantic_relationship"))
+        assertTrue(owner.contains("canonical target owns REINFORCE/INVALIDATE"))
     }
 
     @Test fun structuredProjectionClosuresAreCanonicalAndVerifiedInRoom() {
