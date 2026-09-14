@@ -278,6 +278,147 @@ class AiriPlastMemoryParityTest {
         assertEquals(1, store.semantic.count { it.active })
     }
 
+    @Test fun backgroundRelationshipInvalidationClosesCurrentProjectionByCanonicalEntity() = runBlocking {
+        suspend fun scenario(type: PersonRelationship, initialText: String, sequence: Long) {
+            val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
+            val first = evidence(sequence, initialText, initialText, listOf("Aarav"))
+            execute(owner, first, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP,
+                person = "Aarav", relationship = type, sourceSpan = initialText,
+                sourceTurnId = first.turnId, confidence = .96, criticalLiterals = listOf("Aarav")))
+            val other = evidence(sequence + 1, "Meera is my friend", "Meera is my friend", listOf("Meera"))
+            execute(owner, other, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP,
+                person = "Meera", relationship = PersonRelationship.FRIEND, sourceSpan = other.displayText,
+                sourceTurnId = other.turnId, confidence = .96, criticalLiterals = listOf("Meera")))
+            val person = store.peopleByName("Aarav").single()
+            val target = store.semantic.single { it.active && it.subjectEntityId == person.entityId }
+            val removeSequence = sequence + 2
+            val removeText = "Aarav is not my friend anymore"
+            val row = ConversationTruthEntity("remove-$sequence", first.sessionId, removeSequence,
+                removeSequence, "remove:$sequence", "user", removeText, removeSequence,
+                canonicalText = removeText, displayText = removeText, provenanceMetadata = "Aarav")
+            store.appendConversation(row)
+            val span = EpisodeSpanEntity("remove-span-$sequence", first.sessionId, removeSequence,
+                removeSequence, SegmentClassification.INFORMATIVE.name, "EOF", removeSequence)
+            store.saveEpisodeSpan(span); val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
+            val action = EpisodeSemanticAction(SemanticConsolidationAction.INVALIDATE, "", "RELATIONSHIP",
+                target.memoryId, .97, criticalLiterals = listOf("Aarav"), person = "Aarav",
+                relationship = "FRIEND", sourceMessageSequences = listOf(removeSequence),
+                sourceSpans = listOf(removeText))
+            assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false)
+                .consolidateEpisode(episode))
+            assertFalse(store.semantic.single { it.memoryId == target.memoryId }.active)
+            assertNull(store.currentRelationship(person.entityId))
+            assertTrue(store.peopleByName("Aarav").single().active)
+            assertEquals(listOf("Meera"), owner.recall("friends", type = MemoryRecallType.FRIENDS)
+                .rows.mapNotNull { it.entityName })
+        }
+        scenario(PersonRelationship.FRIEND, "Aarav is my friend", 800)
+        scenario(PersonRelationship.GOOD_FRIEND, "Aarav is my very good friend", 810)
+        scenario(PersonRelationship.BEST_FRIEND, "Aarav is my best friend", 820)
+    }
+
+    @Test fun backgroundModelCannotPromoteRelationshipBeyondUserEvidence() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        val text = "Ritesh mera dost hai"
+        val row = ConversationTruthEntity("strength-user", "strength", 825, 825, "strength:825",
+            "user", text, 825, canonicalText = text, displayText = text, provenanceMetadata = "Ritesh")
+        store.appendConversation(row)
+        val span = EpisodeSpanEntity("strength-span", "strength", 825, 825,
+            SegmentClassification.INFORMATIVE.name, "EOF", 825)
+        store.saveEpisodeSpan(span); val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
+        val inflated = EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+            "Ritesh is the speaker's best friend", "RELATIONSHIP", null, .98,
+            criticalLiterals = listOf("Ritesh"), person = "Ritesh", relationship = "BEST_FRIEND",
+            sourceMessageSequences = listOf(825), sourceSpans = listOf(text))
+        assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(inflated)), false)
+            .consolidateEpisode(episode))
+        val person = store.peopleByName("Ritesh").single()
+        assertEquals(PersonRelationship.FRIEND.name, store.currentRelationship(person.entityId)?.relationshipType)
+        assertTrue(store.semantic.single().statement.endsWith("friend"))
+        assertFalse(store.semantic.single().statement.contains("best friend"))
+    }
+
+    @Test fun relationshipAndGoalProjectionFailuresRollbackCanonicalInvalidation() = runBlocking {
+        suspend fun background(store: InMemoryAiriMemoryStore, sequence: Long, text: String,
+            action: EpisodeSemanticAction): Result<Int> {
+            val row = ConversationTruthEntity("rollback-$sequence", "rollback", sequence, sequence,
+                "rollback:$sequence", "user", text, sequence, canonicalText = text,
+                displayText = text, provenanceMetadata = action.person ?: "")
+            store.appendConversation(row)
+            val span = EpisodeSpanEntity("rollback-span-$sequence", "rollback", sequence, sequence,
+                SegmentClassification.INFORMATIVE.name, "EOF", sequence)
+            store.saveEpisodeSpan(span); val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
+            return runCatching { MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false)
+                .consolidateEpisode(episode) }
+        }
+
+        val relationshipStore = object : InMemoryAiriMemoryStore() {
+            override suspend fun endCurrentRelationship(entityId: String) = false
+        }
+        val relationshipOwner = MemoryBrainCoordinator(relationshipStore, recoverOnInit = false)
+        val relationEvidence = evidence(830, "Tara is my good friend", "Tara is my good friend", listOf("Tara"))
+        execute(relationshipOwner, relationEvidence, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP,
+            person = "Tara", relationship = PersonRelationship.GOOD_FRIEND, sourceSpan = relationEvidence.displayText,
+            sourceTurnId = 830, confidence = .96, criticalLiterals = listOf("Tara")))
+        val relationshipFact = relationshipStore.semantic.single { it.active }
+        assertTrue(background(relationshipStore, 831, "Tara is not my friend anymore",
+            EpisodeSemanticAction(SemanticConsolidationAction.INVALIDATE, "", "RELATIONSHIP",
+                relationshipFact.memoryId, .97, person = "Tara", relationship = "FRIEND",
+                sourceMessageSequences = listOf(831), sourceSpans = listOf("Tara is not my friend anymore"))).isFailure)
+        assertTrue(relationshipStore.semantic.single { it.memoryId == relationshipFact.memoryId }.active)
+        assertNotNull(relationshipStore.currentRelationship(relationshipFact.subjectEntityId!!))
+
+        val goalStore = object : InMemoryAiriMemoryStore() {
+            override suspend fun closeGoal(stableKey: String, semanticMemoryId: String, status: String) = false
+        }
+        val goalOwner = MemoryBrainCoordinator(goalStore, recoverOnInit = false)
+        val goalEvidence = evidence(840, "My goal is the Vega launch", "My goal is the Vega launch", listOf("Vega"))
+        execute(goalOwner, goalEvidence, MemorySemanticFrame(MemorySemanticIntent.ADD_GOAL,
+            fact = "Speaker aims for the Vega launch", category = MemoryCategory.GOAL,
+            stableKey = "goal:vega_launch", goal = GoalMemoryPayload("Vega launch", "Speaker aims for the Vega launch"),
+            sourceSpan = goalEvidence.displayText, sourceTurnId = 840, confidence = .96,
+            criticalLiterals = listOf("Vega")))
+        val goalFact = goalStore.semantic.single { it.active }
+        assertTrue(background(goalStore, 841, "That goal is no longer relevant",
+            EpisodeSemanticAction(SemanticConsolidationAction.INVALIDATE, "", "GOAL",
+                goalFact.memoryId, .97, goalStatus = "ABANDONED", sourceMessageSequences = listOf(841),
+                sourceSpans = listOf("That goal is no longer relevant"))).isFailure)
+        assertTrue(goalStore.semantic.single { it.memoryId == goalFact.memoryId }.active)
+        assertEquals("ACTIVE", goalStore.goals.values.single().status)
+    }
+
+    @Test fun durableRetryAlwaysPlansFutureWakeAndRoomClaimPreventsDuplicateExecution() = runBlocking {
+        class RecordingWake : AiriMemoryWakeScheduler {
+            val delays = mutableListOf<Long>()
+            override fun wake(delayMs: Long) { delays += delayMs }
+        }
+        val store = InMemoryAiriMemoryStore(); val wake = RecordingWake()
+        assertTrue(store.enqueueBackgroundWork("TEST", "future", 1_000))
+        assertTrue(store.claimBackgroundWork("TEST:future", 1_000))
+        assertFalse(store.claimBackgroundWork("TEST:future", 1_000))
+        assertTrue(store.retryBackgroundWork("TEST:future", 1, "TEMPORARY_FAILURE", 1_000))
+        val pending = store.backgroundWork.getValue("TEST:future")
+        assertEquals("PENDING", pending.state); assertTrue(pending.nextEligibleAt > 1_000)
+
+        val firstWorkerOwner = MemoryBrainCoordinator(store, recoverOnInit = false, wakeScheduler = wake)
+        assertEquals(0, firstWorkerOwner.runDurableBackgroundWork(2_000))
+        assertEquals(AiriMemoryWakePlanner.delayUntil(2_000, pending.nextEligibleAt), wake.delays.single())
+
+        // Same durable store, fresh owner: equivalent to process restart. No
+        // user turn is needed and the row is completed exactly once.
+        val restartedOwner = MemoryBrainCoordinator(store, recoverOnInit = false, wakeScheduler = wake)
+        assertEquals(0, restartedOwner.runDurableBackgroundWork(pending.nextEligibleAt))
+        assertFalse("TEST:future" in store.backgroundWork)
+        assertFalse(store.completeBackgroundWork("TEST:future"))
+
+        assertTrue(store.enqueueBackgroundWork("TEST", "bounded", 2_000))
+        repeat(12) { attempt ->
+            assertTrue(store.claimBackgroundWork("TEST:bounded", store.backgroundWork.getValue("TEST:bounded").nextEligibleAt))
+            assertTrue(store.retryBackgroundWork("TEST:bounded", attempt + 1, "FAIL", 2_000L + attempt))
+        }
+        assertEquals(8, store.backgroundWork.getValue("TEST:bounded").attemptCount)
+    }
+
     @Test fun backgroundGoalConvergesIntoFastStructuredRecall() = runBlocking {
         val store = InMemoryAiriMemoryStore()
         val row = ConversationTruthEntity("bg-goal", "c", 601, 601, "bg:601", "user",
