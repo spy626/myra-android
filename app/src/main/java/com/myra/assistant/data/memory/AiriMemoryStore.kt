@@ -29,13 +29,15 @@ interface AiriMemoryStore {
     suspend fun deletePerson(entityId: String): Boolean
     suspend fun addRelationship(entityId: String, type: PersonRelationship, evidence: AuthoritativeMemoryTurnEvidence, confidence: Double): String?
     suspend fun endRelationship(entityId: String, type: PersonRelationship): Boolean
+    suspend fun currentRelationship(entityId: String): RelationshipEntity? = null
+    suspend fun endCurrentRelationship(entityId: String): Boolean = false
     suspend fun activeRelationships(types: Set<PersonRelationship>, limit: Int): List<MemoryEntity>
     suspend fun addSemantic(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence): String?
     suspend fun invalidateSemantic(key: String): Boolean = false
     suspend fun addEpisode(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence, participantIds: List<String>): String?
     suspend fun addGoal(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence,
         semanticMemoryId: String? = null): String?
-    suspend fun closeGoal(stableKey: String, status: String): Boolean = false
+    suspend fun closeGoal(stableKey: String, semanticMemoryId: String, status: String): Boolean = false
     suspend fun retrieve(query: String, type: MemoryRecallType, limit: Int): List<MemoryEntity>
     suspend fun activeCards(limit: Int = 200): List<MemoryEntity>
     suspend fun forgetCard(card: MemoryEntity): Boolean
@@ -82,6 +84,7 @@ interface AiriMemoryStore {
     suspend fun claimBackgroundWork(workId: String, now: Long): Boolean = false
     suspend fun completeBackgroundWork(workId: String): Boolean = false
     suspend fun retryBackgroundWork(workId: String, attempt: Int, failure: String, now: Long): Boolean = false
+    suspend fun earliestPendingBackgroundWorkAt(): Long? = null
 }
 
 class RoomAiriMemoryStore(
@@ -146,6 +149,9 @@ class RoomAiriMemoryStore(
 
     override suspend fun endRelationship(entityId: String, type: PersonRelationship): Boolean =
         dao.endRelationship(entityId, type.name, clock()) > 0
+    override suspend fun currentRelationship(entityId: String) = dao.activeRelationshipForEntity(entityId)
+    override suspend fun endCurrentRelationship(entityId: String): Boolean =
+        dao.endCurrentRelationship(entityId, clock()) == 1
 
     override suspend fun activeRelationships(types: Set<PersonRelationship>, limit: Int): List<MemoryEntity> {
         val allowed = types.map { it.name }.toSet()
@@ -229,8 +235,8 @@ class RoomAiriMemoryStore(
             semanticMemoryId = semanticMemoryId ?: old?.semanticMemoryId))
         return dao.goalByKey(key)?.goalId.takeIf { it == id }
     }
-    override suspend fun closeGoal(stableKey: String, status: String): Boolean =
-        dao.closeGoal(AiriText.semanticKey(stableKey), status, clock()) > 0
+    override suspend fun closeGoal(stableKey: String, semanticMemoryId: String, status: String): Boolean =
+        dao.closeLinkedGoal(AiriText.semanticKey(stableKey), semanticMemoryId, status, clock()) == 1
 
     override suspend fun retrieve(query: String, type: MemoryRecallType, limit: Int): List<MemoryEntity> {
         val bounded = limit.coerceIn(1, 8); val normalizedQuery = AiriText.normalize(query)
@@ -465,6 +471,7 @@ class RoomAiriMemoryStore(
         val delayMs = (1L shl attempt.coerceIn(0, 8)) * 30_000L
         return dao.retryBackgroundWork(workId, now + delayMs, failure.take(120), now) == 1
     }
+    override suspend fun earliestPendingBackgroundWorkAt() = dao.earliestPendingBackgroundWorkAt()
 
     private suspend fun semanticCards(limit: Int) = dao.activeSemantic(limit).map { row -> MemoryEntity(
         row.memoryId, row.semanticKey, row.category, row.statement, row.confidence, row.provenance,
