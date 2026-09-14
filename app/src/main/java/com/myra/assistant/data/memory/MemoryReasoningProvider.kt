@@ -124,17 +124,18 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
                 JSONArray(listOf("USER_ASSERTED", "HYPOTHETICAL", "REPORTED", "UNCERTAIN"))))
             .put("critical_literals", JSONObject().put("type", "ARRAY").put("items", JSONObject().put("type", "STRING")))
             .put("person", JSONObject().put("type", "STRING"))
-            .put("relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("", "FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
-            .put("semantic_relationship", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("", "FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
+            .put("semantic_relationship", JSONObject().put("type", "STRING").put("description",
+                "The single canonical relationship strength expressed by the exact USER source span. Required only for RELATIONSHIP NEW/UPDATE.")
+                .put("enum", JSONArray(listOf("", "FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
             .put("goal_title", JSONObject().put("type", "STRING"))
             .put("goal_status", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("", "ACTIVE", "COMPLETED", "ABANDONED"))))
             .put("source_message_sequences", JSONObject().put("type", "ARRAY").put("minItems", 1).put("items", JSONObject().put("type", "INTEGER")))
             .put("source_spans", JSONObject().put("type", "ARRAY").put("minItems", 1).put("items", JSONObject().put("type", "STRING"))))
-            .put("required", JSONArray(listOf("kind", "fact", "category", "target_fact_id", "confidence", "assertion_mode", "critical_literals", "person", "relationship", "semantic_relationship", "goal_title", "goal_status", "source_message_sequences", "source_spans")))
+            .put("required", JSONArray(listOf("kind", "fact", "category", "target_fact_id", "confidence", "assertion_mode", "critical_literals", "person", "semantic_relationship", "goal_title", "goal_status", "source_message_sequences", "source_spans")))
         val schema = JSONObject().put("type", "OBJECT").put("properties", JSONObject()
             .put("actions", JSONObject().put("type", "ARRAY").put("maxItems", 20).put("items", action)))
             .put("required", JSONArray(listOf("actions")))
-        val prompt = "Produce durable atomic semantic actions only. Cold start permits NEW only. REINFORCE/UPDATE/INVALIDATE must use an exact supplied target_fact_id. INVALIDATE fact must be empty. Mark hypothetical, reported, or uncertain claims accurately. critical_literals MUST contain every person, location, project/product, username, number, date, amount, or ID in every structured field. For RELATIONSHIP NEW/UPDATE provide person, requested relationship, and semantic_relationship independently classified from the exact USER source spans. semantic_relationship is the actual expressed strength; never inflate or weaken it to agree with another field. REINFORCE/INVALIDATE use the canonical target and may leave relationship and person empty. For GOAL provide goal_title and goal_status: ACTIVE unless the supported user evidence explicitly completes or abandons it. source_message_sequences and source_spans must identify exact USER messages/spans supporting this action. Skip secrets and temporary chatter."
+        val prompt = "Produce durable atomic semantic actions only. Cold start permits NEW only. REINFORCE/UPDATE/INVALIDATE must use an exact supplied target_fact_id. INVALIDATE fact must be empty. Mark hypothetical, reported, or uncertain claims accurately. critical_literals MUST contain every person, location, project/product, username, number, date, amount, or ID in every structured field. For RELATIONSHIP NEW/UPDATE provide person and semantic_relationship classified from the exact USER source spans. semantic_relationship is the single canonical expressed strength; there is no second model enum to compare against it. REINFORCE/INVALIDATE use the canonical target and may leave semantic_relationship and person empty. For GOAL provide goal_title and goal_status: ACTIVE unless the supported user evidence explicitly completes or abandons it. source_message_sequences and source_spans must identify exact USER messages/spans supporting this action. Skip secrets and temporary chatter."
         val parsed = generate(prompt, input, schema).optJSONArray("actions").objects().mapNotNull { row ->
             val kind = runCatching { SemanticConsolidationAction.valueOf(row.optString("kind")) }.getOrNull() ?: return@mapNotNull null
             val target = row.optString("target_fact_id").takeIf(String::isNotBlank)
@@ -143,7 +144,7 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
             EpisodeSemanticAction(kind, row.optString("fact").trim(), row.optString("category"), target,
                 row.optDouble("confidence", 0.0).coerceIn(0.0, 1.0), row.optString("assertion_mode"),
                 row.optJSONArray("critical_literals").strings(), row.optString("person").takeIf(String::isNotBlank),
-                row.optString("relationship").takeIf(String::isNotBlank),
+                null,
                 row.optString("semantic_relationship").takeIf(String::isNotBlank),
                 row.optString("goal_title").takeIf(String::isNotBlank),
                 row.optString("goal_status").takeIf(String::isNotBlank),
