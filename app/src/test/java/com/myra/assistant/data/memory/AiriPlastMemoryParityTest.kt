@@ -332,10 +332,12 @@ class AiriPlastMemoryParityTest {
             criticalLiterals = listOf("Ritesh"), person = "Ritesh", relationship = "BEST_FRIEND",
             semanticRelationship = "FRIEND",
             sourceMessageSequences = listOf(825), sourceSpans = listOf(text))
-        assertEquals(0, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(inflated)), false)
+        assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(inflated)), false)
             .consolidateEpisode(episode))
-        assertTrue(store.peopleByName("Ritesh").isEmpty())
-        assertTrue(store.semantic.isEmpty())
+        val person = store.peopleByName("Ritesh").single()
+        assertEquals(PersonRelationship.FRIEND.name, store.currentRelationship(person.entityId)?.relationshipType)
+        assertEquals(PersonRelationship.FRIEND.name,
+            store.semantic.single { it.active }.statement.substringAfterLast(' ').uppercase())
     }
 
     @Test fun canonicalRelationshipReinforceNeedsNoRestatedEnumOrPerson() = runBlocking {
