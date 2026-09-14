@@ -293,6 +293,113 @@ class AiriPlastMemoryParityTest {
         val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
         val applied = MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false).consolidateEpisode(episode)
         assertEquals("semantic=${store.semantic.size} goals=${store.goals.size}", 1, applied)
+        val semantic = store.semantic.single { it.active }
+        val projection = store.goals.values.single()
+        assertEquals(semantic.memoryId, projection.semanticMemoryId)
+        assertEquals(semantic.semanticKey, projection.stableKey)
+        assertEquals(1, MemoryBrainCoordinator(store, recoverOnInit = false)
+            .recall("current goals", type = MemoryRecallType.GOALS).rows.size)
+    }
+
+    @Test fun backgroundGoalPredictCalibrateLifecycleUsesOneCanonicalProjection() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        suspend fun consolidate(sequence: Long, text: String, action: EpisodeSemanticAction): Int {
+            val row = ConversationTruthEntity("goal-$sequence", "goals", sequence, sequence, "goal:$sequence",
+                "user", text, sequence, canonicalText = text, displayText = text,
+                provenanceMetadata = "Orion")
+            store.appendConversation(row)
+            val span = EpisodeSpanEntity("goal-span-$sequence", "goals", sequence, sequence,
+                SegmentClassification.INFORMATIVE.name, "EOF", sequence)
+            store.saveEpisodeSpan(span)
+            val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
+            return MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false)
+                .consolidateEpisode(episode)
+        }
+        assertEquals(1, consolidate(710, "My goal is to finish the Orion memory engine",
+            EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+                "Speaker aims to finish the Orion memory engine", "GOAL", null, .96,
+                criticalLiterals = listOf("Orion"), goalTitle = "Orion memory engine",
+                sourceMessageSequences = listOf(710), sourceSpans = listOf("My goal is to finish the Orion memory engine"))))
+        val first = store.semantic.single { it.active }
+        assertEquals(first.memoryId, store.goals.values.single().semanticMemoryId)
+        assertTrue(store.semanticCandidatesForEpisode("goals", "working on Orion memory engine", 20)
+            .any { it.memoryId == first.memoryId })
+
+        assertEquals(1, consolidate(711, "I am still working on the Orion memory engine",
+            EpisodeSemanticAction(SemanticConsolidationAction.REINFORCE, "", "GOAL", first.memoryId, .95,
+                goalTitle = "Orion memory engine", sourceMessageSequences = listOf(711),
+                sourceSpans = listOf("I am still working on the Orion memory engine"))))
+        assertEquals(1, store.semantic.count { it.active })
+        assertEquals(1, store.goals.size)
+        assertEquals(2, store.provenance.count { it.memoryId == first.memoryId })
+
+        assertEquals(1, consolidate(712, "I completed the Orion memory engine",
+            EpisodeSemanticAction(SemanticConsolidationAction.UPDATE,
+                "Speaker completed the Orion memory engine", "GOAL", first.memoryId, .97,
+                criticalLiterals = listOf("Orion"), goalTitle = "Orion memory engine", goalStatus = "COMPLETED",
+                sourceMessageSequences = listOf(712), sourceSpans = listOf("I completed the Orion memory engine"))))
+        val current = store.semantic.single { it.active }
+        assertNotEquals(first.memoryId, current.memoryId)
+        assertFalse(store.semantic.single { it.memoryId == first.memoryId }.active)
+        assertEquals(current.memoryId, store.goals.values.single().semanticMemoryId)
+        assertEquals("COMPLETED", store.goals.values.single().status)
+        assertTrue(MemoryBrainCoordinator(store, recoverOnInit = false)
+            .recall("current goals", type = MemoryRecallType.GOALS).rows.isEmpty())
+    }
+
+    @Test fun backgroundGoalInvalidationPreservesHistoryAndClosesProjection() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        val e = evidence(720, "My goal is the Atlas release", "My goal is the Atlas release", listOf("Atlas"))
+        val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
+        val frame = MemorySemanticFrame(MemorySemanticIntent.ADD_GOAL, fact = "Speaker aims for the Atlas release",
+            category = MemoryCategory.GOAL, stableKey = "goal:atlas_release", confidence = .95,
+            sourceSpan = e.displayText, criticalLiterals = listOf("Atlas"),
+            goal = GoalMemoryPayload("Atlas release", "Speaker aims for the Atlas release"))
+        execute(owner, e, frame)
+        val target = store.semantic.single { it.active }
+        val row = ConversationTruthEntity("goal-invalidate", "parity", 721, 721, "goal:721", "user",
+            "That goal is no longer relevant", 721, canonicalText = "That goal is no longer relevant",
+            displayText = "That goal is no longer relevant")
+        store.appendConversation(row)
+        val span = EpisodeSpanEntity("goal-invalidate-span", "parity", 721, 721,
+            SegmentClassification.INFORMATIVE.name, "EOF", 721)
+        store.saveEpisodeSpan(span); val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
+        val action = EpisodeSemanticAction(SemanticConsolidationAction.INVALIDATE, "", "GOAL",
+            target.memoryId, .96, goalStatus = "ABANDONED", sourceMessageSequences = listOf(721),
+            sourceSpans = listOf("That goal is no longer relevant"))
+        assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false)
+            .consolidateEpisode(episode))
+        assertFalse(store.semantic.single { it.memoryId == target.memoryId }.active)
+        assertEquals("ABANDONED", store.goals.values.single().status)
+        assertTrue(store.semantic.any { it.memoryId == target.memoryId })
+        assertTrue(owner.recall("current goals", type = MemoryRecallType.GOALS).rows.isEmpty())
+    }
+
+    @Test fun goalProjectionRejectsInventedTitleAndRollsBackBothHalves() = runBlocking {
+        suspend fun attempt(store: InMemoryAiriMemoryStore, title: String): Int {
+            val text = "My goal is to finish the Android application"
+            val row = ConversationTruthEntity("goal-guard-$title", "guard", 730, 730, "goal:730", "user",
+                text, 730, canonicalText = text, displayText = text)
+            store.appendConversation(row)
+            val span = EpisodeSpanEntity("goal-guard-span-$title", "guard", 730, 730,
+                SegmentClassification.INFORMATIVE.name, "EOF", 730)
+            store.saveEpisodeSpan(span); val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
+            val action = EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+                "Speaker aims to finish the Android application", "GOAL", null, .96,
+                goalTitle = title, sourceMessageSequences = listOf(730), sourceSpans = listOf(text))
+            return MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false)
+                .consolidateEpisode(episode)
+        }
+        val invented = InMemoryAiriMemoryStore()
+        assertEquals(0, attempt(invented, "Launch Project Aurora"))
+        assertTrue(invented.semantic.isEmpty()); assertTrue(invented.goals.isEmpty())
+
+        val failing = object : InMemoryAiriMemoryStore() {
+            override suspend fun addGoal(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence,
+                semanticMemoryId: String?): String? = null
+        }
+        runCatching { attempt(failing, "Android application") }
+        assertTrue(failing.semantic.isEmpty()); assertTrue(failing.goals.isEmpty())
     }
 
     @Test fun e5ContractUsesPrefixesMasksBoundsAndRejectsIncompatibleVectors() {
