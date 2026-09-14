@@ -73,17 +73,24 @@ class AiriMemorySourceComplianceTest {
         assertTrue(dao.contains("state IN ('PENDING', 'RUNNING')"))
         assertTrue(owner.contains("recoverExpiredBackgroundLeases"))
         assertTrue(owner.contains("consolidateEpisode(work.subjectId)"))
+        assertFalse(owner.contains("consolidationQueue"))
+        assertFalse(owner.contains("for (episodeId in consolidationQueue)"))
+        assertEquals(2, Regex("consolidateEpisode\\(").findAll(owner).count())
+        assertTrue(owner.indexOf("claimBackgroundWork(work.workId, now)") <
+            owner.indexOf("consolidateEpisode(work.subjectId)"))
     }
 
     @Test fun relationshipStrengthIsStructuredSemanticEvidenceNotLanguageParsing() {
         val runtime = File(root, "data/memory/AiriMemoryRuntime.kt").readText()
         val owner = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
         val reasoning = File(root, "data/memory/MemoryReasoningProvider.kt").readText()
-        assertTrue(runtime.contains("fun authorize(requested: PersonRelationship, semantic: PersonRelationship?)"))
+        assertTrue(runtime.contains("fun authorize(semantic: PersonRelationship?)"))
         assertFalse(runtime.contains("private val FRIENDSHIP"))
         assertFalse(runtime.contains("private val GOOD"))
         assertFalse(runtime.contains("private val BEST"))
         assertTrue(reasoning.contains("semantic_relationship"))
+        assertFalse(reasoning.contains(".put(\"relationship\""))
+        assertFalse(reasoning.contains("requested relationship"))
         assertTrue(owner.contains("canonical target owns REINFORCE/INVALIDATE"))
     }
 
