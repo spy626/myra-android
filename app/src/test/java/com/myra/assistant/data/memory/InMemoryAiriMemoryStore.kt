@@ -16,6 +16,7 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     val provenance = mutableListOf<SemanticProvenanceEntity>()
     val consolidationActions = mutableListOf<ConsolidationActionEntity>()
     val pendingReviews = mutableListOf<PendingReviewEntity>()
+    val backgroundWork = linkedMapOf<String, MemoryBackgroundWorkEntity>()
     private var now = 1_000L
     private fun time() = ++now
 
@@ -23,7 +24,7 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         val snapshot = listOf(
             people.toMap(), aliases.mapValues { it.value.toMutableSet() }, relationships.toList(),
             semantic.toList(), episodes.toList(), goals.toMap(), behavior.toMap(), conversation.toList(),
-            segmentation.toMap(), spans.toList(), provenance.toList(), consolidationActions.toList(), pendingReviews.toList(), now
+            segmentation.toMap(), spans.toList(), provenance.toList(), consolidationActions.toList(), pendingReviews.toList(), backgroundWork.toMap(), now
         )
         return try { block(this) } catch (failure: Throwable) {
             people.clear(); people.putAll(snapshot[0] as Map<String, PersonEntity>)
@@ -39,7 +40,8 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
             provenance.clear(); provenance.addAll(snapshot[10] as List<SemanticProvenanceEntity>)
             consolidationActions.clear(); consolidationActions.addAll(snapshot[11] as List<ConsolidationActionEntity>)
             pendingReviews.clear(); pendingReviews.addAll(snapshot[12] as List<PendingReviewEntity>)
-            now = snapshot[13] as Long
+            backgroundWork.clear(); backgroundWork.putAll(snapshot[13] as Map<String, MemoryBackgroundWorkEntity>)
+            now = snapshot[14] as Long
             throw failure
         }
     }
@@ -114,6 +116,10 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         val g = frame.goal ?: return null; val key = AiriText.semanticKey(frame.stableKey ?: g.title); val t = time(); val id = goals[key]?.goalId ?: UUID.randomUUID().toString()
         goals[key] = GoalMemoryEntity(id, key, g.title, g.description, g.status, g.priority, g.progress, g.deadline, g.parentGoalId, "GOAL", "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, goals[key]?.createdAt ?: t, t, t); return id
     }
+    override suspend fun closeGoal(stableKey: String, status: String): Boolean {
+        val key = AiriText.semanticKey(stableKey); val old = goals[key] ?: return false
+        goals[key] = old.copy(status = status, updatedAt = time()); return true
+    }
     override suspend fun retrieve(query: String, type: MemoryRecallType, limit: Int): List<MemoryEntity> {
         val result = when (type) {
             MemoryRecallType.FRIENDS -> activeRelationships(PersonRelationship.entries.toSet(), limit)
@@ -141,7 +147,7 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         "BEHAVIOR" -> behavior.remove(card.stableKey) != null
         else -> { var changed = false; semantic.replaceAll { if (it.memoryId == card.id && it.active) { changed = true; it.copy(active = false, deletedAt = time()) } else it }; changed }
     }
-    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear(); provenance.clear(); consolidationActions.clear(); pendingReviews.clear() }
+    override suspend fun clearAll() { people.clear(); aliases.clear(); relationships.clear(); semantic.clear(); episodes.clear(); goals.clear(); behavior.clear(); conversation.clear(); segmentation.clear(); spans.clear(); provenance.clear(); consolidationActions.clear(); pendingReviews.clear(); backgroundWork.clear() }
     override suspend fun appendConversation(row: ConversationTruthEntity): Boolean { if (conversation.any { it.messageId == row.messageId }) return false; conversation += row; return true }
     override suspend fun promptProjection(sessionId: String, limit: Int): List<ConversationTruthEntity> {
         val all = conversation.filter { it.sessionId == sessionId }
@@ -244,6 +250,24 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
     }
     override suspend fun deletePendingReviews(ids: List<String>): Int {
         val before = pendingReviews.size; pendingReviews.removeAll { it.reviewId in ids }; return before - pendingReviews.size
+    }
+    override suspend fun enqueueBackgroundWork(kind: String, subjectId: String, now: Long): Boolean {
+        val id = "$kind:$subjectId"; if (id in backgroundWork) return false
+        backgroundWork[id] = MemoryBackgroundWorkEntity(id, kind, subjectId, createdAt = now, updatedAt = now); return true
+    }
+    override suspend fun dueBackgroundWork(now: Long, limit: Int) = backgroundWork.values
+        .filter { it.state == "PENDING" && it.nextEligibleAt <= now }.take(limit)
+    override suspend fun claimBackgroundWork(workId: String, now: Long): Boolean {
+        val old = backgroundWork[workId] ?: return false
+        if (old.state != "PENDING" || old.nextEligibleAt > now) return false
+        backgroundWork[workId] = old.copy(state = "RUNNING", updatedAt = now); return true
+    }
+    override suspend fun completeBackgroundWork(workId: String) = backgroundWork.remove(workId) != null
+    override suspend fun retryBackgroundWork(workId: String, attempt: Int, failure: String, now: Long): Boolean {
+        val old = backgroundWork[workId] ?: return false
+        backgroundWork[workId] = old.copy(state = "PENDING", attemptCount = old.attemptCount + 1,
+            nextEligibleAt = now + (1L shl attempt.coerceIn(0, 8)) * 30_000L, lastFailure = failure, updatedAt = now)
+        return true
     }
     override suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int {
         var changed = 0; episodes.replaceAll { pair ->
