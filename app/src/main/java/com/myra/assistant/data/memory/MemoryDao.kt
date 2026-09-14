@@ -159,8 +159,10 @@ interface AiriMemoryDao {
     @Query("DELETE FROM airi_background_work WHERE workId = :id") suspend fun completeBackgroundWork(id: String): Int
     @Query("UPDATE airi_background_work SET state = 'PENDING', attemptCount = MIN(8, attemptCount + 1), nextEligibleAt = :nextAt, lastFailure = :failure, updatedAt = :at WHERE workId = :id")
     suspend fun retryBackgroundWork(id: String, nextAt: Long, failure: String, at: Long): Int
-    @Query("SELECT MIN(nextEligibleAt) FROM airi_background_work WHERE state = 'PENDING'")
-    suspend fun earliestPendingBackgroundWorkAt(): Long?
+    @Query("UPDATE airi_background_work SET state = 'PENDING', attemptCount = MIN(8, attemptCount + 1), nextEligibleAt = :now, lastFailure = 'LEASE_EXPIRED', updatedAt = :now WHERE state = 'RUNNING' AND updatedAt <= :expiredBefore")
+    suspend fun recoverExpiredBackgroundLeases(expiredBefore: Long, now: Long): Int
+    @Query("SELECT MIN(CASE WHEN state = 'PENDING' THEN nextEligibleAt ELSE updatedAt + :leaseMs END) FROM airi_background_work WHERE state IN ('PENDING', 'RUNNING')")
+    suspend fun earliestRecoverableBackgroundWorkAt(leaseMs: Long): Long?
 
     @Query("DELETE FROM airi_semantic_memory") suspend fun clearSemantic()
     @Query("DELETE FROM airi_people") suspend fun clearPeople()
