@@ -2,10 +2,10 @@
 
 LYRA's native memory runtime ports applicable architecture contracts from
 [moeru-ai/airi](https://github.com/moeru-ai/airi), inspected from a complete
-current checkout at revision `9f30a1977e09b3d68759492c5f8f775eb4502184`
-(superseding `42e3e9e8573d3159d40e637fa11a21e13398ebda`; the intervening
-upstream changes are stage/UI-only and do not alter memory, task, context, or
-Spark contracts), and from
+current checkout at revision `1a79f8b1ca11414039843a60e0e7ea1c526b4b3f`
+(superseding `9f30a1977e09b3d68759492c5f8f775eb4502184`; the single intervening
+commit is Safari stage-layout UI-only and does not alter memory, task, context,
+or Spark contracts), and from
 [moeru-ai/plast-mem](https://github.com/moeru-ai/plast-mem), inspected at
 revision `611103456d953c9a74452f4239817b3468f94bba`.
 
