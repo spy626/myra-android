@@ -42,15 +42,21 @@ Relationship UPDATE/INVALIDATE resolves the structured projection through the
 canonical semantic target's stable entity ID. Closing a relationship or goal
 projection is verified inside the same Room transaction as canonical semantic
 invalidation; a missing or mismatched projection aborts the transaction.
-Relationship strength is a monotonic structured authorization: model output
-may be downgraded to the strongest level supported by finalized USER evidence,
-but cannot promote ordinary friendship evidence.
+Relationship strength is a semantic model result with an independent
+`semantic_relationship` field grounded to finalized USER spans. Android
+cross-checks the requested operation against that verified meaning: inflation
+fails closed and a weaker requested enum cannot erase a clearly stronger
+interpretation. No production relationship-language vocabulary parser remains.
+REINFORCE and INVALIDATE use the canonical target fact and stable entity and do
+not require a restated relationship enum.
 
 Durable retry time remains in `airi_background_work`. WorkManager uses one
 APPEND_OR_REPLACE wake chain, so a delayed retry requested by an in-flight
-worker survives that worker's completion. Each wake returns to the sole
-coordinator, Room claims prevent duplicate execution, and the owner schedules
-the earliest remaining pending eligibility without waiting for new user input.
+worker survives that worker's completion. RUNNING is a bounded Room lease:
+fresh claims cannot be stolen, expired claims return atomically to PENDING, and
+the WorkManager drain awaits consolidation, review, or reindex execution in the
+sole coordinator before completing its token. The owner schedules the earliest
+PENDING eligibility or RUNNING lease expiry without polling or user input.
 Goal rows are transactionally maintained structured indexes of the canonical
 semantic GOAL lifecycle. Each projection records its current semantic memory
 ID; NEW/UPDATE refresh that link, REINFORCE adds episode provenance without a
