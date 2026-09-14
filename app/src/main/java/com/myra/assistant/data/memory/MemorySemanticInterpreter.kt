@@ -23,6 +23,8 @@ data class MemorySemanticFrame(
     val person: String? = null,
     val replacementPerson: String? = null,
     val relationship: PersonRelationship? = null,
+    /** Independently interpreted strength grounded by [sourceSpan]. */
+    val semanticRelationship: PersonRelationship? = null,
     val replacementRelationship: PersonRelationship? = null,
     val temporalScope: MemoryTemporalScope = MemoryTemporalScope.UNSPECIFIED,
     val fact: String? = null,
@@ -60,7 +62,7 @@ object MemorySemanticIdentity {
 object StagedMemoryProposalPolicy {
     fun merge(existing: List<MemorySemanticFrame>, incoming: List<MemorySemanticFrame>, limit: Int = 4): List<MemorySemanticFrame> =
         (existing + incoming).distinctBy {
-            listOf(it.intent, it.person, it.replacementPerson, it.relationship,
+            listOf(it.intent, it.person, it.replacementPerson, it.relationship, it.semanticRelationship,
                 it.replacementRelationship, it.stableKey, it.fact).joinToString("|")
         }.take(limit)
 }
@@ -86,6 +88,7 @@ object GeminiMemoryOperationParser {
                 person = value.optString("person").trim().takeIf(String::isNotEmpty),
                 replacementPerson = value.optString("replacement_person").trim().takeIf(String::isNotEmpty),
                 relationship = relationship,
+                semanticRelationship = value.enumValue<PersonRelationship>("semantic_relationship"),
                 replacementRelationship = replacementRelationship,
                 temporalScope = temporal,
                 fact = fact,
