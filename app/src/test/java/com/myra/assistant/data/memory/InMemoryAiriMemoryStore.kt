@@ -282,8 +282,16 @@ open class InMemoryAiriMemoryStore : AiriMemoryStore {
             nextEligibleAt = now + (1L shl attempt.coerceIn(0, 8)) * 30_000L, lastFailure = failure, updatedAt = now)
         return true
     }
-    override suspend fun earliestPendingBackgroundWorkAt() = backgroundWork.values
-        .filter { it.state == "PENDING" }.minOfOrNull { it.nextEligibleAt }
+    override suspend fun recoverExpiredBackgroundLeases(now: Long, leaseMs: Long): Int {
+        val expired = backgroundWork.values.filter { it.state == "RUNNING" && it.updatedAt <= now - leaseMs }
+        expired.forEach { row -> backgroundWork[row.workId] = row.copy(state = "PENDING",
+            attemptCount = (row.attemptCount + 1).coerceAtMost(8), nextEligibleAt = now,
+            lastFailure = "LEASE_EXPIRED", updatedAt = now) }
+        return expired.size
+    }
+    override suspend fun earliestRecoverableBackgroundWorkAt(leaseMs: Long) = backgroundWork.values
+        .filter { it.state in setOf("PENDING", "RUNNING") }
+        .minOfOrNull { if (it.state == "PENDING") it.nextEligibleAt else it.updatedAt + leaseMs }
     override suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int {
         var changed = 0; episodes.replaceAll { pair ->
             val rating = ratings[pair.first.episodeId]
