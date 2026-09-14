@@ -444,7 +444,7 @@ class MemoryBrainCoordinator(
     suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int =
         store.reviewEpisodes(conversationId, ratings, reviewedAt)
 
-    private fun scheduleEpisodeConsolidation(episodeId: String) {
+    internal fun scheduleEpisodeConsolidation(episodeId: String) {
         backgroundScope.launch {
             // The local coroutine is a wake hint only. It never calls
             // consolidateEpisode directly: every execution first owns the
