@@ -62,15 +62,19 @@ class AndroidE5EmbeddingProvider(context: Context, private val onReady: () -> Un
         }
     }
 
-    override fun embed(text: String): DoubleArray = embedInternal(passageInput(text))
-    override fun embedQuery(text: String): DoubleArray = embedInternal(queryInput(text))
+    override fun embed(text: String): DoubleArray = embedResult(text).vector
+    override fun embedQuery(text: String): DoubleArray = embedQueryResult(text).vector
+    override fun embedResult(text: String): EmbeddingResult = embedSnapshot(passageInput(text))
+    override fun embedQueryResult(text: String): EmbeddingResult = embedSnapshot(queryInput(text))
 
-    private fun embedInternal(text: String): DoubleArray {
+    private fun embedSnapshot(text: String): EmbeddingResult {
         val tokenEncoder = tokenizer
         val encoderSession = encoder
         if (tokenEncoder == null || encoderSession == null) {
             initializeAsync()
-            return FeatureHashEmbeddingProvider.embed(text)
+            // Capture the fallback result now.  Readiness can flip immediately
+            // after this branch, but the returned provenance remains hash/64.
+            return FeatureHashEmbeddingProvider.embedResult(text)
         }
         val inputs = E5InputBuilder.build(tokenEncoder.encode(text, MAX_TOKENS))
         val clipped = inputs.ids; val mask = inputs.attentionMask; val types = inputs.tokenTypes
@@ -83,7 +87,8 @@ class AndroidE5EmbeddingProvider(context: Context, private val onReady: () -> Un
             }
         }
         val tokens = hidden.firstOrNull().orEmpty()
-        return E5Pooling.meanNormalized(tokens, DIMENSIONS)
+        return EmbeddingResult(E5Pooling.meanNormalized(tokens, DIMENSIONS), MODEL_ID, MODEL_VERSION,
+            DIMENSIONS, BACKEND_KIND, neural = true)
     }
 
     private fun verifiedFile(file: File, bytes: Long, digest: String): File? =
@@ -142,6 +147,7 @@ class AndroidE5EmbeddingProvider(context: Context, private val onReady: () -> Un
         const val MODEL_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
         const val MODEL_VERSION = 1
         const val DIMENSIONS = 384
+        const val BACKEND_KIND = "E5_NEURAL"
         const val MODEL_BYTES = 235_052_531L
         const val MODEL_SHA256 = "4654c156f3e4171abc9c716cdb771bf9116455d15ac1aab364aeeede0e3205b0"
         const val MODEL_FILENAME = "multilingual-e5-small-o4.onnx"
