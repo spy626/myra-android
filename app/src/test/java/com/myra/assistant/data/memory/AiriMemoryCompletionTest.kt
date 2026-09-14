@@ -70,7 +70,7 @@ class AiriMemoryCompletionTest {
         assertEquals(PersonRelationship.FRIEND.name, store.relationships.single { it.active && it.targetEntityId == id }.relationshipType)
     }
 
-    @Test fun strongerOperationThanSemanticEvidenceIsRejected() = runBlocking { assertNull(
+    @Test fun duplicateOperationEnumCannotOverrideSemanticAuthority() = runBlocking { assertEquals(PersonRelationship.FRIEND,
         resolvedStrength("Ishaan is my friend", PersonRelationship.BEST_FRIEND, PersonRelationship.FRIEND, 1090)) }
     @Test fun romanFriendCannotBePromoted() = runBlocking { assertEquals(PersonRelationship.FRIEND,
         resolvedStrength("Ishaan mera dost hai", PersonRelationship.FRIEND, PersonRelationship.FRIEND, 1091)) }
