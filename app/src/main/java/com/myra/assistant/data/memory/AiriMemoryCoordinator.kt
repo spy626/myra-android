@@ -78,7 +78,6 @@ class MemoryBrainCoordinator(
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inactivityJobs = ConcurrentHashMap<String, Job>()
     private val segmentationRetryAttempts = ConcurrentHashMap<String, Int>()
-    private val consolidationDrainScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
     private val reviewWorkerRunning = java.util.concurrent.atomic.AtomicBoolean(false)
 
     init {
