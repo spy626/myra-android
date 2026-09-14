@@ -85,10 +85,14 @@ interface AiriMemoryDao {
     suspend fun relationshipsFor(entityId: String): List<RelationshipEntity>
     @Query("SELECT * FROM airi_relationships WHERE targetEntityId = :entityId AND relationshipType = :type AND active = 1 AND deletedAt IS NULL LIMIT 1")
     suspend fun currentRelationship(entityId: String, type: String): RelationshipEntity?
+    @Query("SELECT * FROM airi_relationships WHERE targetEntityId = :entityId AND active = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT 1")
+    suspend fun activeRelationshipForEntity(entityId: String): RelationshipEntity?
     @Query("UPDATE airi_relationships SET active = 0, supersededById = :replacementId, updatedAt = :at WHERE targetEntityId = :entityId AND active = 1")
     suspend fun supersedeRelationships(entityId: String, replacementId: String, at: Long): Int
     @Query("UPDATE airi_relationships SET active = 0, deletedAt = :at, updatedAt = :at WHERE targetEntityId = :entityId AND relationshipType = :type AND active = 1")
     suspend fun endRelationship(entityId: String, type: String, at: Long): Int
+    @Query("UPDATE airi_relationships SET active = 0, deletedAt = :at, updatedAt = :at WHERE targetEntityId = :entityId AND active = 1 AND deletedAt IS NULL")
+    suspend fun endCurrentRelationship(entityId: String, at: Long): Int
     @Query("UPDATE airi_relationships SET lastAccessed = :at, accessCount = accessCount + 1 WHERE relationshipId IN (:ids)")
     suspend fun touchRelationships(ids: List<String>, at: Long)
 
@@ -119,8 +123,8 @@ interface AiriMemoryDao {
     suspend fun activeGoals(limit: Int): List<GoalMemoryEntity>
     @Query("SELECT * FROM airi_goals WHERE stableKey = :key AND deletedAt IS NULL LIMIT 1")
     suspend fun goalByKey(key: String): GoalMemoryEntity?
-    @Query("UPDATE airi_goals SET status = :status, updatedAt = :at WHERE stableKey = :key AND deletedAt IS NULL")
-    suspend fun closeGoal(key: String, status: String, at: Long): Int
+    @Query("UPDATE airi_goals SET status = :status, updatedAt = :at WHERE stableKey = :key AND semanticMemoryId = :semanticMemoryId AND deletedAt IS NULL")
+    suspend fun closeLinkedGoal(key: String, semanticMemoryId: String, status: String, at: Long): Int
     @Query("UPDATE airi_goals SET lastAccessed = :at, accessCount = accessCount + 1 WHERE goalId IN (:ids)")
     suspend fun touchGoals(ids: List<String>, at: Long)
     @Query("UPDATE airi_goals SET deletedAt = :at, updatedAt = :at WHERE goalId = :id AND deletedAt IS NULL")
@@ -155,6 +159,8 @@ interface AiriMemoryDao {
     @Query("DELETE FROM airi_background_work WHERE workId = :id") suspend fun completeBackgroundWork(id: String): Int
     @Query("UPDATE airi_background_work SET state = 'PENDING', attemptCount = MIN(8, attemptCount + 1), nextEligibleAt = :nextAt, lastFailure = :failure, updatedAt = :at WHERE workId = :id")
     suspend fun retryBackgroundWork(id: String, nextAt: Long, failure: String, at: Long): Int
+    @Query("SELECT MIN(nextEligibleAt) FROM airi_background_work WHERE state = 'PENDING'")
+    suspend fun earliestPendingBackgroundWorkAt(): Long?
 
     @Query("DELETE FROM airi_semantic_memory") suspend fun clearSemantic()
     @Query("DELETE FROM airi_people") suspend fun clearPeople()
