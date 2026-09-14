@@ -83,7 +83,7 @@ class AiriMemoryArchitectureTest {
         val compound = evidence(14, "Aaj Mira ke saath game khela, vo meri dost hai", "Aaj Mira ke saath game khela, vo meri dost hai", listOf("Mira"))
         val frames = listOf(
             episode.copy(sourceSpan = "Aaj Mira ke saath game khela", sourceTurnId = 14, criticalLiterals = listOf("Mira"), episode = EpisodicMemoryPayload("ACTIVITY", "Played a game with Mira", listOf("Mira"))),
-            MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP, person = "Mira", relationship = PersonRelationship.FRIEND,
+            MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP, person = "Mira", relationship = PersonRelationship.FRIEND, semanticRelationship = PersonRelationship.FRIEND,
                 confidence = .96, sourceSpan = "vo meri dost hai", sourceTurnId = 14, criticalLiterals = listOf("Mira"))
         )
         val plan = owner.prepareFinalTurn(compound, frames)
@@ -145,7 +145,7 @@ class AiriMemoryArchitectureTest {
     }
 
     private suspend fun relationship(owner: MemoryBrainCoordinator, e: AuthoritativeMemoryTurnEvidence, name: String, type: PersonRelationship) {
-        assertSaved(owner, e, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP, person = name, relationship = type,
+        assertSaved(owner, e, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP, person = name, relationship = type, semanticRelationship = type,
             confidence = .96, sourceSpan = e.displayText, sourceTurnId = e.turnId, criticalLiterals = listOf(name)))
     }
     private suspend fun assertSaved(owner: MemoryBrainCoordinator, e: AuthoritativeMemoryTurnEvidence, frame: MemorySemanticFrame) {
