@@ -268,10 +268,12 @@ class AiriPlastMemoryParityTest {
         }
         episode(600, "Devansh is my very good friend", EpisodeSemanticAction(SemanticConsolidationAction.NEW,
             "Devansh is the speaker's good friend", "RELATIONSHIP", null, .96,
-            criticalLiterals = listOf("Devansh"), person = "Devansh", relationship = "GOOD_FRIEND"))
+            criticalLiterals = listOf("Devansh"), person = "Devansh", relationship = "GOOD_FRIEND",
+            sourceMessageSequences = listOf(600), sourceSpans = listOf("Devansh is my very good friend")))
         episode(601, "My goal is to complete Aurora", EpisodeSemanticAction(SemanticConsolidationAction.NEW,
             "Speaker aims to complete Aurora", "GOAL", null, .96,
-            criticalLiterals = listOf("Aurora"), goalTitle = "Complete Aurora"))
+            criticalLiterals = listOf("Aurora"), goalTitle = "Complete Aurora",
+            sourceMessageSequences = listOf(601), sourceSpans = listOf("My goal is to complete Aurora")))
         val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
         assertEquals("Devansh", owner.recall("friends", type = MemoryRecallType.FRIENDS).rows.single().entityName)
         assertTrue(owner.recall("goals", type = MemoryRecallType.GOALS).rows.single().fact.contains("Aurora"))
