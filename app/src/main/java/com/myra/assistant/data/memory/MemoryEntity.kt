@@ -119,6 +119,18 @@ data class PendingReviewEntity(
     val episodeIds: String, val matchedQuery: String, val createdAt: Long
 )
 
+/** Durable wake contract. WorkManager may wake it, but only the coordinator executes it. */
+@Entity(tableName = "airi_background_work", indices = [
+    Index(value = ["kind", "subjectId"], unique = true),
+    Index(value = ["state", "nextEligibleAt"])
+])
+data class MemoryBackgroundWorkEntity(
+    @PrimaryKey val workId: String, val kind: String, val subjectId: String,
+    val state: String = "PENDING", val attemptCount: Int = 0,
+    val nextEligibleAt: Long = 0, val lastFailure: String? = null,
+    val createdAt: Long, val updatedAt: Long
+)
+
 /** Many-to-many semantic provenance matching Plast-Mem source_episodic_ids. */
 @Entity(tableName = "airi_semantic_provenance", primaryKeys = ["memoryId", "episodeId"],
     indices = [Index(value = ["episodeId"])])
