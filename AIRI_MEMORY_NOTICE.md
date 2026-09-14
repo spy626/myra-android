@@ -36,6 +36,10 @@ actions require exact user-message sequence provenance and a grounded source
 span; relationship and goal rows are transactionally derived projections of
 canonical semantic lifecycle facts, not a second truth.
 
+Bounded durable-work lease recovery and independent structured relationship
+strength cross-validation are Android-native LYRA safety/lifecycle extensions;
+they are not represented as copied upstream production implementations.
+
 At the audited Plast-Mem revision, the production EventSegmentationJob still
 invokes the temporal, primitive-review, and informative-resegmentation
 functions located in `crates/event_segmentation/src/legacy.rs`. LYRA therefore
