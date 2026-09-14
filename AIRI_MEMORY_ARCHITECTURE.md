@@ -37,6 +37,20 @@ state to LYRA Core. Spark Notify supplies proactive events and may produce no
 response, a verified text reaction, or a Spark Command. Spark Command routes
 structured work to existing phone/browser/screen/search/memory lanes but cannot
 bypass memory authorization or Room ownership.
+
+Relationship UPDATE/INVALIDATE resolves the structured projection through the
+canonical semantic target's stable entity ID. Closing a relationship or goal
+projection is verified inside the same Room transaction as canonical semantic
+invalidation; a missing or mismatched projection aborts the transaction.
+Relationship strength is a monotonic structured authorization: model output
+may be downgraded to the strongest level supported by finalized USER evidence,
+but cannot promote ordinary friendship evidence.
+
+Durable retry time remains in `airi_background_work`. WorkManager uses one
+APPEND_OR_REPLACE wake chain, so a delayed retry requested by an in-flight
+worker survives that worker's completion. Each wake returns to the sole
+coordinator, Room claims prevent duplicate execution, and the owner schedules
+the earliest remaining pending eligibility without waiting for new user input.
 Goal rows are transactionally maintained structured indexes of the canonical
 semantic GOAL lifecycle. Each projection records its current semantic memory
 ID; NEW/UPDATE refresh that link, REINFORCE adds episode provenance without a
