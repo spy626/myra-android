@@ -132,6 +132,40 @@ object FinalTurnSourceSpanAuthorizer {
     private fun editDistance(a: String, b: String): Int { var prev = IntArray(b.length + 1) { it }; for (i in a.indices) { val cur = IntArray(b.length + 1); cur[0] = i + 1; for (j in b.indices) cur[j + 1] = minOf(cur[j] + 1, prev[j + 1] + 1, prev[j] + if (a[i] == b[j]) 0 else 1); prev = cur }; return prev[b.length] }
 }
 
+/**
+ * Monotonic authorization for the small structured relationship enum. Gemini
+ * interprets meaning, but it cannot promote FRIEND to a stronger projection
+ * than the authoritative USER evidence supports. This is deliberately not a
+ * general language parser and never creates an operation or an entity.
+ */
+object RelationshipStrengthAuthorizer {
+    fun authorize(requested: PersonRelationship, evidence: AuthoritativeMemoryTurnEvidence): PersonRelationship? {
+        val supported = evidence.variants.mapNotNull(::supportedBy).maxByOrNull(::rank) ?: return null
+        return if (rank(requested) <= rank(supported)) requested else supported
+    }
+
+    private fun supportedBy(value: String): PersonRelationship? {
+        val text = normalize(value)
+        if (!FRIENDSHIP.containsMatchIn(text)) return null
+        if (BEST.containsMatchIn(text)) return PersonRelationship.BEST_FRIEND
+        if (GOOD.containsMatchIn(text)) return PersonRelationship.GOOD_FRIEND
+        return PersonRelationship.FRIEND
+    }
+
+    private fun rank(value: PersonRelationship) = when (value) {
+        PersonRelationship.FRIEND -> 1
+        PersonRelationship.GOOD_FRIEND -> 2
+        PersonRelationship.BEST_FRIEND -> 3
+    }
+
+    private fun normalize(value: String) = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKD)
+        .replace(Regex("\\p{M}+"), "").replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+
+    private val FRIENDSHIP = Regex("(?:\\bfrien[\\p{L}]*\\b|\\bdost[\\p{L}]*\\b|दोस्त|मित्र)")
+    private val BEST = Regex("(?:\\bbest[\\p{L}]*\\b|\\bsabse\\s+(?:ach+a|ac+h+a|karibi|close[\\p{L}]*)\\b|सबसे\\s+(?:अच्छा|करीबी))")
+    private val GOOD = Regex("(?:\\bgood\\b|\\bclose[\\p{L}]*\\b|\\b(?:ach+a|ac+h+a|karibi|gahra)\\b|अच्छा|करीबी|गहरा)")
+}
+
 /** Central AIRI-owner safety policy. Read-only questions are permitted but never persisted. */
 object AiriMemorySafetyPolicy {
     private val credential = Regex("\\b(otp|one[ -]?time password|password|passcode|pin|cvv|security code|verification code|recovery code|auth(?:entication)? token|api key|private key|seed phrase)\\b", RegexOption.IGNORE_CASE)
