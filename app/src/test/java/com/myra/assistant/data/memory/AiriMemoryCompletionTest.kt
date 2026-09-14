@@ -69,6 +69,44 @@ class AiriMemoryCompletionTest {
         assertEquals(PersonRelationship.FRIEND.name, store.relationships.single { it.active && it.targetEntityId == id }.relationshipType)
     }
 
+    @Test fun relationshipStrengthCannotExceedAuthoritativeUserEvidence() = runBlocking {
+        suspend fun resolved(text: String, requested: PersonRelationship, turn: Long): PersonRelationship? {
+            val e = evidence(turn, text, text, listOf("Ishaan"))
+            val frame = MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP, person = "Ishaan",
+                relationship = requested, sourceSpan = text, sourceTurnId = turn, confidence = .96,
+                criticalLiterals = listOf("Ishaan"))
+            return MemoryBrainCoordinator(InMemoryAiriMemoryStore(), recoverOnInit = false)
+                .prepareFinalTurn(e, listOf(frame)).operations.singleOrNull()?.relationship
+        }
+        assertEquals(PersonRelationship.FRIEND,
+            resolved("Ishaan is my friend", PersonRelationship.BEST_FRIEND, 1090))
+        assertEquals(PersonRelationship.FRIEND,
+            resolved("Ishaan mera dost hai", PersonRelationship.GOOD_FRIEND, 1091))
+        assertEquals(PersonRelationship.GOOD_FRIEND,
+            resolved("Ishaan mera bahuta accha dosta hai", PersonRelationship.GOOD_FRIEND, 1092))
+        assertEquals(PersonRelationship.GOOD_FRIEND,
+            resolved("ईशान मेरा बहुत अच्छा दोस्त है", PersonRelationship.GOOD_FRIEND, 1093))
+        assertEquals(PersonRelationship.BEST_FRIEND,
+            resolved("Ishaan is my best friend", PersonRelationship.BEST_FRIEND, 1094))
+        assertEquals(PersonRelationship.BEST_FRIEND,
+            resolved("ईशान मेरा सबसे अच्छा दोस्त है", PersonRelationship.BEST_FRIEND, 1095))
+    }
+
+    @Test fun explicitOrdinaryFriendRemovalClosesStrongerCurrentProjection() = runBlocking {
+        val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
+        relationship(owner, evidence(1096, "Diya is my best friend", "Diya is my best friend", listOf("Diya")),
+            "Diya", PersonRelationship.BEST_FRIEND)
+        val person = store.peopleByName("Diya").single()
+        val removeEvidence = evidence(1097, "Diya is not my friend anymore", "Diya is not my friend anymore", listOf("Diya"))
+        val remove = MemorySemanticFrame(MemorySemanticIntent.REMOVE_RELATIONSHIP, person = "Diya",
+            relationship = PersonRelationship.FRIEND, sourceSpan = removeEvidence.displayText,
+            sourceTurnId = 1097, confidence = .97, criticalLiterals = listOf("Diya"))
+        assertTrue(execute(owner, removeEvidence, remove) is MemoryBrainOutcome.Deleted)
+        assertNull(store.currentRelationship(person.entityId))
+        assertTrue(store.peopleByName("Diya").single().active)
+        assertTrue(owner.recall("friends", type = MemoryRecallType.FRIENDS).rows.isEmpty())
+    }
+
     @Test fun strongestCredentialGovernmentAndFinancialSafetyBlocksWritesButNotQuestions() = runBlocking {
         val owner = MemoryBrainCoordinator(InMemoryAiriMemoryStore())
         listOf(
