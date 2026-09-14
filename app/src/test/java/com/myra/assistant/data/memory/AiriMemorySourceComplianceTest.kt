@@ -62,6 +62,9 @@ class AiriMemorySourceComplianceTest {
         assertTrue(passive.contains("owner.recordBehaviorObservation"))
         assertFalse(ui.contains(".forgetCard(")); assertFalse(ui.contains(".renamePerson(")); assertFalse(ui.contains(".clearAll("))
         assertTrue(ui.contains("memoryOwner.deleteMemory")); assertTrue(ui.contains("memoryOwner.renameFromManualUi"))
+        val wake = File(root, "data/memory/AiriMemoryWakeWorker.kt").readText()
+        assertTrue(wake.contains("MemoryBrainCoordinator.get(applicationContext).runDurableBackgroundWork()"))
+        assertFalse(wake.contains("AiriMemoryDao")); assertFalse(wake.contains("RoomAiriMemoryStore"))
     }
 
     @Test fun entityAnchorsAreNotStoredAsUserFacingCards() {
@@ -74,7 +77,7 @@ class AiriMemorySourceComplianceTest {
     @Test fun plastMemTablesAndNoParallelTruthTablesAreDeclared() {
         val db = File(root, "data/memory/LyraMemoryDatabase.kt").readText()
         val entities = File(root, "data/memory/MemoryEntity.kt").readText()
-        assertTrue(db.contains("version = 10"))
+        assertTrue(db.contains("version = 11"))
         val coordinator = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
         assertTrue(coordinator.contains("segmentCommittedConversation(evidence.sessionId, eof = false)"))
         assertFalse(coordinator.contains("segmentCommittedConversation(evidence.sessionId, eof = true)"))
@@ -82,6 +85,7 @@ class AiriMemorySourceComplianceTest {
             "airi_episodes", "airi_semantic_memory", "airi_pending_review",
             "airi_semantic_fts", "airi_episode_fts").forEach { assertTrue(it, entities.contains(it)) }
         assertTrue(entities.contains("airi_consolidation_actions"))
+        assertTrue(entities.contains("airi_background_work"))
         assertFalse(db.contains("Jarvis")); assertFalse(db.contains("abstract fun jarvisDao"))
     }
 
