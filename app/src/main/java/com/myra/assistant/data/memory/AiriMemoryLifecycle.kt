@@ -256,18 +256,46 @@ object AiriEventSegmenter {
     }
 }
 
+/**
+ * Immutable provenance for one embedding operation.  Callers must persist this
+ * object as a unit: provider readiness is allowed to change after this result
+ * exists, but can never relabel the vector that was actually produced.
+ */
+data class EmbeddingResult(
+    val vector: DoubleArray,
+    val modelId: String,
+    val version: Int,
+    val dimensions: Int,
+    val backendKind: String,
+    val neural: Boolean
+) {
+    init { require(vector.size == dimensions) { "embedding dimensions do not match result metadata" } }
+}
+
 interface LocalEmbeddingProvider {
+    /** Current preferred backend only; never use these properties to label a prior result. */
     val modelId: String
     val version: Int
     val dimensions: Int
     val isNeuralReady: Boolean get() = false
     fun embed(text: String): DoubleArray
     fun embedQuery(text: String): DoubleArray = embed(text)
+    /** Legacy providers receive a snapshot before returning; production E5 overrides this. */
+    fun embedResult(text: String): EmbeddingResult = EmbeddingResult(embed(text), modelId, version, dimensions,
+        if (isNeuralReady) "NEURAL" else "FEATURE_HASH", isNeuralReady)
+    fun embedQueryResult(text: String): EmbeddingResult = EmbeddingResult(embedQuery(text), modelId, version, dimensions,
+        if (isNeuralReady) "NEURAL" else "FEATURE_HASH", isNeuralReady)
 }
 
 object EmbeddingCompatibility {
+    fun matches(result: EmbeddingResult, model: String, version: Int, dimensions: Int, encoded: String): Boolean {
+        val decoded = LocalVectorCodec.decode(encoded, dimensions) ?: return false
+        return decoded.size == dimensions && result.modelId == model &&
+            result.version == version && result.dimensions == dimensions
+    }
+
     fun matches(provider: LocalEmbeddingProvider, model: String, version: Int, dimensions: Int, encoded: String) =
-        encoded.isNotBlank() && model == provider.modelId && version == provider.version && dimensions == provider.dimensions
+        matches(provider.embedResult("embedding compatibility probe"), model, version, dimensions, encoded)
 }
 
 /** Free, private feature-hashing vector lane. No network and no paid model. */
@@ -275,16 +303,21 @@ object FeatureHashEmbeddingProvider : LocalEmbeddingProvider {
     override val modelId = "lyra-feature-hash"
     override val version = 1
     override val dimensions = 64
-    override fun embed(text: String): DoubleArray {
+    override fun embedResult(text: String): EmbeddingResult {
         val vector = DoubleArray(dimensions)
         AiriText.normalize(text).split(' ').filter { it.length >= 2 }.forEach { token ->
             val digest = MessageDigest.getInstance("SHA-256").digest(token.toByteArray())
             val slot = ((digest[0].toInt() and 0xff) shl 8 or (digest[1].toInt() and 0xff)) % dimensions
             vector[slot] += if ((digest[2].toInt() and 1) == 0) 1.0 else -1.0
         }
-        val norm = sqrt(vector.sumOf { it * it }).takeIf { it > 0.0 } ?: return vector
-        return DoubleArray(dimensions) { vector[it] / norm }
+        val normalized = sqrt(vector.sumOf { it * it }).takeIf { it > 0.0 }
+            ?.let { norm -> DoubleArray(dimensions) { vector[it] / norm } } ?: vector
+        return EmbeddingResult(normalized, modelId, version, dimensions, BACKEND_KIND, neural = false)
     }
+
+    override fun embed(text: String): DoubleArray = embedResult(text).vector
+
+    const val BACKEND_KIND = "FEATURE_HASH"
 
     fun encode(vector: DoubleArray) = LocalVectorCodec.encode(vector)
     fun decode(value: String): DoubleArray? = LocalVectorCodec.decode(value, dimensions)
