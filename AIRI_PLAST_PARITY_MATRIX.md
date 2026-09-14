@@ -2,8 +2,8 @@
 
 Audit date: 2026-09-14
 
-- AIRI: `moeru-ai/airi@9f30a1977e09b3d68759492c5f8f775eb4502184`
-- Previous AIRI pin: `00c6867b7fd8064938de1805814578db8273dafe`
+- AIRI: `moeru-ai/airi@1a79f8b1ca11414039843a60e0e7ea1c526b4b3f`
+- Previous AIRI pin: `9f30a1977e09b3d68759492c5f8f775eb4502184`
 - Plast-Mem: `moeru-ai/plast-mem@611103456d953c9a74452f4239817b3468f94bba`
 - FSRS dependency: `open-spaced-repetition/fsrs-rs@aca2838bfbdc6f15ca3f7a0c96a99fae466c9e9c` (5.2.0)
 
@@ -61,7 +61,7 @@ APPLICABLE`. There are no unresolved applicable runtime rows in this revision.
 | `crates/migration/*` | PostgreSQL schema migration | Room v12 destructive pre-release cutover; goal projection links canonical semantic lifecycle | ANDROID-NATIVE EQUIVALENT | schema/static tests | Clean reinstall required |
 | `docs/todo/flashbulb_memory.md` | Documented high-significance TODO, not production-invoked upstream | `FlashbulbPolicy`, episode fields | UPSTREAM TODO | policy tests | LYRA completion of upstream documented TODO |
 | `docs/todo/semantic_memory_confidence.md` | Proposed confidence evolution, not production-invoked upstream | explicit/inferred confidence metadata | UPSTREAM TODO | behavior/safety tests | LYRA completion uses conservative policy |
-| `docs/architecture/graph_memory.md` | Graph direction | stable people/aliases/relationships | ANDROID-NATIVE EQUIVALENT | entity/lifecycle and multilingual semantic-contract tests | Canonical target identity owns REINFORCE/INVALIDATE. NEW/UPDATE strength comes from source-grounded structured semantic evidence; no production vocabulary parser remains |
+| `docs/architecture/graph_memory.md` | Graph direction | stable people/aliases/relationships | ANDROID-NATIVE EQUIVALENT | entity/lifecycle and multilingual semantic-contract tests | Canonical target identity owns REINFORCE/INVALIDATE. NEW/UPDATE strength comes from the single source-grounded `semantic_relationship` authority; duplicate model operation enums are ignored and no production vocabulary parser remains |
 
 ## Completion truth
 
@@ -70,4 +70,6 @@ Android equivalent. Server deployment APIs remain not applicable. The neural
 lane intentionally degrades to labelled structured/FTS/feature-hash retrieval
 until the pinned model is available; this degraded mode is not described as
 neural parity. The production system remains one owner, one Room truth, one
-fast local recall path, and contains no JARVIS or Memory V2 fallback.
+fast local recall path, and contains no JARVIS or Memory V2 fallback. Every
+durable consolidation execution acquires the same Room token/lease; local and
+WorkManager wakes cannot execute Predict/Calibrate concurrently for one episode.
