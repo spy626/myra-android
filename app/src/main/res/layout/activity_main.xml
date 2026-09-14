@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#020609">
+
+    <com.myra.assistant.ui.main.LyraCharacterView
+        android:id="@+id/characterSurface"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:contentDescription="Interactive animated LYRA character"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <com.myra.assistant.ui.main.OrbAnimationView
+        android:id="@+id/orb"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:visibility="invisible"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/deviceText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="24dp"
+        android:text="91%\n3GB"
+        android:textColor="#B8E9C0"
+        android:textSize="9sp"
+        android:fontFamily="monospace"
+        android:shadowColor="#C0000000"
+        android:shadowRadius="4"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <LinearLayout
+        android:id="@+id/brandBlock"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:layout_marginTop="20dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="LYRA"
+            android:textColor="#C9FFD0"
+            android:textSize="23sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.27"
+            android:shadowColor="#D0000000"
+            android:shadowRadius="6" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
+            android:text="A I  C O M P A N I O N"
+            android:textColor="#A4D8AC"
+            android:textSize="7sp"
+            android:fontFamily="monospace"
+            android:shadowColor="#D0000000"
+            android:shadowRadius="4" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/timeText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="66dp"
+        android:layout_marginTop="38dp"
+        android:text="04:08 PM"
+        android:textColor="#B8E9C0"
+        android:textSize="9sp"
+        android:fontFamily="monospace"
+        android:shadowColor="#C0000000"
+        android:shadowRadius="4"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <ImageButton
+        android:id="@+id/settingsButton"
+        android:layout_width="46dp"
+        android:layout_height="46dp"
+        android:layout_marginEnd="14dp"
+        android:layout_marginTop="20dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Settings"
+        android:src="@android:drawable/ic_menu_preferences"
+        android:tint="#9DEAAA"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/screenVisionButton"
+        android:layout_width="46dp"
+        android:layout_height="32dp"
+        android:layout_marginEnd="14dp"
+        android:layout_marginTop="2dp"
+        android:background="@drawable/bg_field"
+        android:contentDescription="Screen Vision"
+        android:gravity="center"
+        android:text="OFF"
+        android:textColor="#9DEAAA"
+        android:textSize="9sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/settingsButton" />
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:text="Tap the mic to wake LYRA"
+        android:textColor="#D8F6DD"
+        android:textSize="12sp"
+        android:shadowColor="#E0000000"
+        android:shadowRadius="5"
+        app:layout_constraintBottom_toTopOf="@id/chatScroll"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <ScrollView
+        android:id="@+id/chatScroll"
+        android:layout_width="0dp"
+        android:layout_height="270dp"
+        android:layout_marginHorizontal="22dp"
+        android:layout_marginBottom="10dp"
+        android:fillViewport="true"
+        android:scrollbars="none"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/composer">
+        <LinearLayout
+            android:id="@+id/chatContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="bottom"
+            android:paddingVertical="4dp" />
+    </ScrollView>
+
+    <ImageButton
+        android:id="@+id/chatToggleButton"
+        android:layout_width="54dp"
+        android:layout_height="54dp"
+        android:layout_marginStart="22dp"
+        android:background="@drawable/bg_circle_outline"
+        android:contentDescription="Open text chat"
+        android:padding="13dp"
+        android:src="@drawable/ic_lyra_sparkle"
+        android:tint="#A8FFB2"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/controlRow" />
+
+    <LinearLayout
+        android:id="@+id/composer"
+        android:layout_width="0dp"
+        android:visibility="invisible"
+        android:layout_height="54dp"
+        android:layout_marginHorizontal="22dp"
+        android:orientation="horizontal"
+        android:background="@drawable/bg_field"
+        android:gravity="center_vertical"
+        android:paddingLeft="7dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/controlRow">
+        <ImageButton
+            android:id="@+id/attachImageButton"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Attach screenshot"
+            android:src="@android:drawable/ic_menu_gallery"
+            android:tint="#B8E9C0" />
+        <EditText
+            android:id="@+id/textInput"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@android:color/transparent"
+            android:hint="Type a message to LYRA…"
+            android:singleLine="true"
+            android:textColor="#F1FFF3"
+            android:textColorHint="#A1BFA6"
+            android:textSize="14sp" />
+        <ImageButton
+            android:id="@+id/sendButton"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Send"
+            android:src="@android:drawable/ic_menu_send"
+            android:tint="#A8FFB2" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/controlRow"
+        android:layout_width="wrap_content"
+        android:layout_height="96dp"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginBottom="2dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+        <ImageButton
+            android:id="@+id/muteButton"
+            android:layout_width="54dp"
+            android:layout_height="54dp"
+            android:layout_marginEnd="28dp"
+            android:background="@drawable/bg_circle_outline"
+            android:alpha="0.85"
+            android:contentDescription="Mute"
+            android:src="@android:drawable/ic_lock_silent_mode"
+            android:tint="#A8FFB2" />
+        <ImageButton
+            android:id="@+id/connectButton"
+            android:layout_width="84dp"
+            android:layout_height="84dp"
+            android:background="@drawable/bg_circle_outline"
+            android:contentDescription="Connect microphone"
+            android:padding="22dp"
+            android:src="@android:drawable/ic_btn_speak_now"
+            android:tint="#FFFFFF" />
+        <ImageButton
+            android:id="@+id/stopButton"
+            android:layout_width="54dp"
+            android:layout_height="54dp"
+            android:layout_marginStart="28dp"
+            android:background="@drawable/bg_circle_outline"
+            android:alpha="0.85"
+            android:contentDescription="Stop LYRA"
+            android:src="@android:drawable/ic_media_pause"
+            android:tint="#A8FFB2" />
+    </LinearLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>
