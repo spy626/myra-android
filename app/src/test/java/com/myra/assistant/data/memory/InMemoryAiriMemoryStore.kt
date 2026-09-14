@@ -2,7 +2,7 @@ package com.myra.assistant.data.memory
 
 import java.util.UUID
 
-class InMemoryAiriMemoryStore : AiriMemoryStore {
+open class InMemoryAiriMemoryStore : AiriMemoryStore {
     val people = linkedMapOf<String, PersonEntity>()
     val aliases = linkedMapOf<String, MutableSet<String>>()
     val relationships = mutableListOf<RelationshipEntity>()
@@ -112,9 +112,10 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
         semantic.replaceAll { if (it.semanticKey == normalized && it.active) { changed = true; it.copy(active = false, invalidAt = t, updatedAt = t) } else it }
         return changed
     }
-    override suspend fun addGoal(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence): String? {
+    override suspend fun addGoal(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence,
+        semanticMemoryId: String?): String? {
         val g = frame.goal ?: return null; val key = AiriText.semanticKey(frame.stableKey ?: g.title); val t = time(); val id = goals[key]?.goalId ?: UUID.randomUUID().toString()
-        goals[key] = GoalMemoryEntity(id, key, g.title, g.description, g.status, g.priority, g.progress, g.deadline, g.parentGoalId, "GOAL", "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, goals[key]?.createdAt ?: t, t, t); return id
+        goals[key] = GoalMemoryEntity(id, key, g.title, g.description, g.status, g.priority, g.progress, g.deadline, g.parentGoalId, "GOAL", "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, goals[key]?.createdAt ?: t, t, t, semanticMemoryId = semanticMemoryId ?: goals[key]?.semanticMemoryId); return id
     }
     override suspend fun closeGoal(stableKey: String, status: String): Boolean {
         val key = AiriText.semanticKey(stableKey); val old = goals[key] ?: return false
@@ -125,7 +126,7 @@ class InMemoryAiriMemoryStore : AiriMemoryStore {
             MemoryRecallType.FRIENDS -> activeRelationships(PersonRelationship.entries.toSet(), limit)
             MemoryRecallType.BEST_FRIEND -> activeRelationships(setOf(PersonRelationship.BEST_FRIEND), limit)
             MemoryRecallType.EPISODES -> episodes.takeLast(limit).reversed().map { MemoryEntity(it.first.episodeId, "episode:${it.first.eventType}", "LIFE_EVENT", it.first.summary, it.first.confidence, it.first.provenance, it.first.createdAt, it.first.occurredAt, lastRecalledAt = it.first.lastAccessed, kind = "EPISODE") }
-            MemoryRecallType.GOALS -> goals.values.take(limit).map { MemoryEntity(it.goalId, it.stableKey, "GOAL", it.description ?: it.title, 1.0, it.provenance, it.createdAt, it.updatedAt, lastRecalledAt = it.lastAccessed, kind = "GOAL") }
+            MemoryRecallType.GOALS -> goals.values.filter { it.deletedAt == null && it.status !in setOf("COMPLETED", "ABANDONED") }.take(limit).map { MemoryEntity(it.goalId, it.stableKey, "GOAL", it.description ?: it.title, 1.0, it.provenance, it.createdAt, it.updatedAt, lastRecalledAt = it.lastAccessed, kind = "GOAL") }
             MemoryRecallType.PREFERENCES -> semantic.filter { it.active && it.category in setOf("PREFERENCE", "COMMUNICATION_STYLE") }.take(limit).map(::semanticCard)
             else -> semantic.filter { it.active }.take(limit).map(::semanticCard)
         }
