@@ -72,7 +72,8 @@ private class MemoryMutationAbort(val reasonCode: MemoryFailureReason) : Runtime
 class MemoryBrainCoordinator(
     private val store: AiriMemoryStore,
     private val reasoningProvider: MemoryReasoningProvider = UnavailableMemoryReasoningProvider,
-    recoverOnInit: Boolean = true
+    recoverOnInit: Boolean = true,
+    private val wakeScheduler: AiriMemoryWakeScheduler = NoopAiriMemoryWakeScheduler
 ) {
     private val ownedSessions = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -92,14 +93,13 @@ class MemoryBrainCoordinator(
                     log("MEMORY_CONSOLIDATION_RETRY episode=${episodeId.hashCode()} reason=${error.javaClass.simpleName}")
                     consolidationJobs.remove(episodeId)
                     val attempt = consolidationAttempts.merge(episodeId, 1) { old, one -> old + one } ?: 1
-                    if (attempt < 3) {
-                        delay(attempt * 2_000L)
-                        scheduleEpisodeConsolidation(episodeId)
-                    }
+                    store.retryBackgroundWork("CONSOLIDATION:$episodeId", attempt, error.javaClass.simpleName, System.currentTimeMillis())
+                    wakeScheduler.wake(retryDelayMs(attempt))
                     continue
                 }
                 consolidationAttempts.remove(episodeId)
                 consolidationJobs.remove(episodeId)
+                store.completeBackgroundWork("CONSOLIDATION:$episodeId")
                 scheduleConsolidationDrain()
             }
         }
@@ -109,6 +109,7 @@ class MemoryBrainCoordinator(
         if (recoverOnInit) backgroundScope.launch {
             recoverAbandonedConversations()
             store.reembedStale(32)
+            runDurableBackgroundWork()
             store.unconsolidatedEpisodes(32).forEach { scheduleEpisodeConsolidation(it.episodeId) }
             schedulePendingReviews()
         }
@@ -193,15 +194,28 @@ class MemoryBrainCoordinator(
                         val name = frame.person ?: throw MemoryMutationAbort(MemoryFailureReason.AMBIGUOUS_ENTITY)
                         val person = store.ensurePerson(name, turn.turnId)
                         val relationship = frame.relationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
-                        lastId = store.addRelationship(person.entityId, relationship, turn, frame.confidence)
+                        val canonical = relationshipCanonicalFrame(frame, person, relationship, MemorySemanticIntent.ADD_FACT)
+                        lastId = store.addSemantic(canonical, turn)
+                            ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
+                        store.addRelationship(person.entityId, relationship, turn, frame.confidence)
+                            ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
+                        store.recordConsolidationAction(canonical, turn, lastId)
                     }
                     MemorySemanticIntent.REMOVE_RELATIONSHIP -> {
                         val relationship = frame.relationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
                         deleted = store.endRelationship(frame.resolvedEntityId!!, relationship)
+                        if (deleted) store.invalidateSemantic(relationshipSemanticKey(frame.resolvedEntityId))
                     }
                     MemorySemanticIntent.REPLACE_RELATIONSHIP -> {
                         val relationship = frame.replacementRelationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
-                        lastId = store.addRelationship(frame.resolvedEntityId!!, relationship, turn, frame.confidence)
+                        val person = store.allPeople(500).singleOrNull { it.entityId == frame.resolvedEntityId }
+                            ?: throw MemoryMutationAbort(MemoryFailureReason.TARGET_NOT_FOUND)
+                        val canonical = relationshipCanonicalFrame(frame, person, relationship, MemorySemanticIntent.UPDATE_FACT)
+                        lastId = store.addSemantic(canonical, turn)
+                            ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
+                        store.addRelationship(person.entityId, relationship, turn, frame.confidence)
+                            ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
+                        store.recordConsolidationAction(canonical, turn, lastId)
                     }
                     MemorySemanticIntent.RENAME_ENTITY -> {
                         val replacement = frame.replacementPerson ?: throw MemoryMutationAbort(MemoryFailureReason.AMBIGUOUS_ENTITY)
@@ -214,7 +228,14 @@ class MemoryBrainCoordinator(
                         val ids = frame.episode?.participants.orEmpty().map { store.ensurePerson(it, turn.turnId).entityId }
                         lastId = store.addEpisode(frame, turn, ids)
                     }
-                    MemorySemanticIntent.ADD_GOAL, MemorySemanticIntent.UPDATE_GOAL -> lastId = store.addGoal(frame, turn)
+                    MemorySemanticIntent.ADD_GOAL, MemorySemanticIntent.UPDATE_GOAL -> {
+                        val canonical = goalCanonicalFrame(frame)
+                        lastId = store.addSemantic(canonical, turn)
+                            ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
+                        store.addGoal(canonical, turn)
+                            ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
+                        store.recordConsolidationAction(canonical, turn, lastId)
+                    }
                     MemorySemanticIntent.INVALIDATE_FACT -> {
                         deleted = frame.stableKey?.let { store.invalidateSemantic(it) } == true
                         if (deleted) store.recordConsolidationAction(frame, turn, null)
@@ -286,8 +307,19 @@ class MemoryBrainCoordinator(
 
     fun scheduleNeuralReindex() {
         backgroundScope.launch {
+            store.enqueueBackgroundWork("REINDEX", "e5")
+            wakeScheduler.wake()
+            if (!store.neuralEmbeddingReady()) {
+                // A cold process must keep its feature-hash rows intact.  The
+                // durable token is retried after E5 is ready instead of being
+                // falsely completed with a fallback snapshot.
+                store.retryBackgroundWork("REINDEX:e5", 1, "NEURAL_NOT_READY", System.currentTimeMillis())
+                wakeScheduler.wake(retryDelayMs(1))
+                return@launch
+            }
             var changed: Int
             do { changed = store.reembedStale(16) } while (changed > 0)
+            store.completeBackgroundWork("REINDEX:e5")
         }
     }
 
@@ -425,10 +457,16 @@ class MemoryBrainCoordinator(
 
     private fun scheduleEpisodeConsolidation(episodeId: String) {
         if (!consolidationJobs.add(episodeId)) return
-        if (consolidationQueue.trySend(episodeId).isFailure) {
-            consolidationJobs.remove(episodeId)
-            log("MEMORY_CONSOLIDATION_BACKPRESSURE episode=${episodeId.hashCode()}")
-            scheduleConsolidationDrain()
+        backgroundScope.launch {
+            store.enqueueBackgroundWork("CONSOLIDATION", episodeId)
+            wakeScheduler.wake()
+            if (consolidationQueue.trySend(episodeId).isFailure) {
+                consolidationJobs.remove(episodeId)
+                log("MEMORY_CONSOLIDATION_BACKPRESSURE episode=${episodeId.hashCode()}")
+                store.retryBackgroundWork("CONSOLIDATION:$episodeId", 1, "CHANNEL_BACKPRESSURE", System.currentTimeMillis())
+                wakeScheduler.wake(retryDelayMs(1))
+                scheduleConsolidationDrain()
+            }
         }
     }
 
@@ -441,6 +479,35 @@ class MemoryBrainCoordinator(
         }
     }
 
+    /** Called by the WorkManager wake layer; it dispatches, never mutates directly. */
+    suspend fun runDurableBackgroundWork(now: Long = System.currentTimeMillis()): Int {
+        var dispatched = 0
+        store.dueBackgroundWork(now, 32).forEach { work ->
+            if (!store.claimBackgroundWork(work.workId, now)) return@forEach
+            when (work.kind) {
+                "CONSOLIDATION" -> {
+                    consolidationJobs.remove(work.subjectId)
+                    scheduleEpisodeConsolidation(work.subjectId); dispatched++
+                }
+                "REVIEW" -> {
+                    // Recreate a fresh claim in the review lane; the wake work
+                    // itself is only a scheduler token, never a second owner.
+                    store.completeBackgroundWork(work.workId); schedulePendingReviews(); dispatched++
+                }
+                "REINDEX" -> {
+                    if (store.neuralEmbeddingReady()) {
+                        scheduleNeuralReindex(); dispatched++
+                    } else {
+                        store.retryBackgroundWork(work.workId, work.attemptCount + 1, "NEURAL_NOT_READY", now)
+                        wakeScheduler.wake(retryDelayMs(work.attemptCount + 1))
+                    }
+                }
+                else -> store.completeBackgroundWork(work.workId)
+            }
+        }
+        return dispatched
+    }
+
     internal suspend fun consolidateEpisode(episodeId: String): Int {
         val episode = store.unconsolidatedEpisodes(32).firstOrNull { it.episodeId == episodeId } ?: return 0
         val messages = store.episodeMessages(episode)
@@ -450,7 +517,7 @@ class MemoryBrainCoordinator(
         val predictStarted = System.nanoTime()
         val prediction = if (supplied.isEmpty()) null else reasoningProvider.predict(episode.title, supplied).takeIf(String::isNotBlank)
         val predictMs = (System.nanoTime() - predictStarted) / 1_000_000
-        val actions = reasoningProvider.calibrate(episode.title, episode.content, prediction, supplied).take(20)
+        val actions = reasoningProvider.calibrate(episode.title, episode.content, prediction, supplied, messages).take(20)
         if (actions.isEmpty()) {
             store.markEpisodeConsolidated(episodeId, System.currentTimeMillis())
             log("MEMORY_CONSOLIDATION_RESULT episode=${episodeId.hashCode()} actions=0 predictMs=$predictMs verified=true")
@@ -475,6 +542,7 @@ class MemoryBrainCoordinator(
                 if (action.kind != SemanticConsolidationAction.NEW && target == null) return@forEach
                 val fact = action.fact.trim()
                 if (action.kind !in setOf(SemanticConsolidationAction.INVALIDATE, SemanticConsolidationAction.REINFORCE) && fact.length !in 3..500) return@forEach
+                if (!actionEvidenceSupported(action, userMessages)) return@forEach
                 if (!criticalLiteralsSupported(action, evidence, target)) return@forEach
                 val frame = MemorySemanticFrame(
                     intent = when (action.kind) {
@@ -490,25 +558,56 @@ class MemoryBrainCoordinator(
                     sourceEpisodeIds = listOf(episodeId)
                 )
                 if (AiriMemorySafetyPolicy.rejectReason(frame, evidence, false) != null) return@forEach
-                if (category == MemoryCategory.PERSON && action.kind in setOf(SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE)) {
+                if (category == MemoryCategory.PERSON) {
                     val personName = action.person ?: return@forEach
                     val relationship = action.relationship?.let { runCatching { PersonRelationship.valueOf(it) }.getOrNull() }
                         ?: return@forEach
-                    val person = store.ensurePerson(personName, last.turnId)
-                    store.addRelationship(person.entityId, relationship, evidence, action.confidence)?.let { id ->
-                        store.recordConsolidationAction(frame.copy(intent = MemorySemanticIntent.ADD_RELATIONSHIP,
-                            person = personName, relationship = relationship), evidence, id); applied++
+                    val matches = store.peopleByName(personName)
+                    val person = when (action.kind) {
+                        SemanticConsolidationAction.NEW -> store.ensurePerson(personName, last.turnId)
+                        else -> matches.singleOrNull() ?: return@forEach
+                    }
+                    val relationshipFrame = relationshipCanonicalFrame(frame.copy(
+                        stableKey = target?.semanticKey ?: relationshipSemanticKey(person.entityId),
+                        resolvedEntityId = person.entityId, person = personName, relationship = relationship
+                    ), person, relationship, if (action.kind == SemanticConsolidationAction.UPDATE)
+                        MemorySemanticIntent.UPDATE_FACT else MemorySemanticIntent.ADD_FACT)
+                    when (action.kind) {
+                        SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE -> {
+                            val id = store.addSemantic(relationshipFrame, evidence) ?: return@forEach
+                            store.addRelationship(person.entityId, relationship, evidence, action.confidence) ?: return@forEach
+                            store.linkSemanticProvenance(id, episodeId)
+                            store.recordConsolidationAction(relationshipFrame, evidence, id); applied++
+                        }
+                        SemanticConsolidationAction.REINFORCE -> if (store.reinforceSemantic(target!!.memoryId, episodeId, .03)) applied++
+                        SemanticConsolidationAction.INVALIDATE -> if (store.invalidateSemantic(target!!.semanticKey)) {
+                            store.endRelationship(person.entityId, relationship)
+                            store.linkSemanticProvenance(target.memoryId, episodeId); applied++
+                        }
                     }
                     return@forEach
                 }
-                if (category == MemoryCategory.GOAL && action.kind in setOf(SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE)) {
-                    val title = action.goalTitle ?: return@forEach
-                    val goalFrame = frame.copy(intent = if (action.kind == SemanticConsolidationAction.UPDATE)
-                        MemorySemanticIntent.UPDATE_GOAL else MemorySemanticIntent.ADD_GOAL,
+                if (category == MemoryCategory.GOAL) {
+                    val title = action.goalTitle ?: target?.statement ?: return@forEach
+                    val goalFrame = frame.copy(
+                        intent = if (action.kind == SemanticConsolidationAction.UPDATE) MemorySemanticIntent.UPDATE_GOAL else MemorySemanticIntent.ADD_GOAL,
                         stableKey = target?.semanticKey ?: "goal:${AiriText.semanticKey(title)}",
-                        goal = GoalMemoryPayload(title, fact))
-                    store.addGoal(goalFrame, evidence)?.let { id ->
-                        store.recordConsolidationAction(goalFrame, evidence, id); applied++
+                        goal = GoalMemoryPayload(title, fact.takeIf(String::isNotBlank) ?: title,
+                            status = if (action.kind == SemanticConsolidationAction.INVALIDATE) "COMPLETED" else "ACTIVE")
+                    )
+                    when (action.kind) {
+                        SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE -> {
+                            val canonical = goalCanonicalFrame(goalFrame)
+                            val id = store.addSemantic(canonical, evidence) ?: return@forEach
+                            store.addGoal(canonical, evidence) ?: return@forEach
+                            store.linkSemanticProvenance(id, episodeId)
+                            store.recordConsolidationAction(canonical, evidence, id); applied++
+                        }
+                        SemanticConsolidationAction.REINFORCE -> if (store.reinforceSemantic(target!!.memoryId, episodeId, .03)) applied++
+                        SemanticConsolidationAction.INVALIDATE -> if (store.invalidateSemantic(target!!.semanticKey)) {
+                            store.closeGoal(target.semanticKey, "COMPLETED")
+                            store.linkSemanticProvenance(target.memoryId, episodeId); applied++
+                        }
                     }
                     return@forEach
                 }
@@ -541,21 +640,34 @@ class MemoryBrainCoordinator(
         backgroundScope.launch {
             try {
                 store.pendingReviewConversations(16).forEach { conversationId ->
-                    val pending = store.pendingReviews(conversationId, 64)
-                    val queryMap = linkedMapOf<String, MutableList<String>>()
-                    pending.forEach { row -> row.episodeIds.split(',').filter(String::isNotBlank).forEach { id ->
-                        queryMap.getOrPut(id) { mutableListOf() }.add(row.matchedQuery)
-                    } }
-                    val episodes = store.episodeCards(queryMap.keys.toList())
-                    val context = store.promptProjection(conversationId, 32)
-                    val ratings = reasoningProvider.rateEpisodes(context, episodes, queryMap)
-                    if (ratings.isNotEmpty()) {
-                        store.reviewEpisodes(conversationId, ratings, System.currentTimeMillis())
-                        val completedEpisodes = ratings.keys
-                        val completedReviews = pending.filter { row ->
-                            row.episodeIds.split(',').filter(String::isNotBlank).all(completedEpisodes::contains)
-                        }.map { it.reviewId }
-                        if (completedReviews.isNotEmpty()) store.deletePendingReviews(completedReviews)
+                    val workId = "REVIEW:$conversationId"
+                    store.enqueueBackgroundWork("REVIEW", conversationId)
+                    if (!store.claimBackgroundWork(workId, System.currentTimeMillis())) return@forEach
+                    try {
+                        val pending = store.pendingReviews(conversationId, 64)
+                        val queryMap = linkedMapOf<String, MutableList<String>>()
+                        pending.forEach { row -> row.episodeIds.split(',').filter(String::isNotBlank).forEach { id ->
+                            queryMap.getOrPut(id) { mutableListOf() }.add(row.matchedQuery)
+                        } }
+                        val episodes = store.episodeCards(queryMap.keys.toList())
+                        val context = store.promptProjection(conversationId, 32)
+                        val ratings = reasoningProvider.rateEpisodes(context, episodes, queryMap)
+                        if (ratings.isNotEmpty()) {
+                            store.reviewEpisodes(conversationId, ratings, System.currentTimeMillis())
+                            val completedEpisodes = ratings.keys
+                            val completedReviews = pending.filter { row ->
+                                row.episodeIds.split(',').filter(String::isNotBlank).all(completedEpisodes::contains)
+                            }.map { it.reviewId }
+                            if (completedReviews.isNotEmpty()) store.deletePendingReviews(completedReviews)
+                        }
+                        if (store.pendingReviews(conversationId, 1).isEmpty()) store.completeBackgroundWork(workId)
+                        else {
+                            store.retryBackgroundWork(workId, 1, "NO_RATINGS", System.currentTimeMillis())
+                            wakeScheduler.wake(retryDelayMs(1))
+                        }
+                    } catch (error: Throwable) {
+                        store.retryBackgroundWork(workId, 1, error.javaClass.simpleName, System.currentTimeMillis())
+                        wakeScheduler.wake(retryDelayMs(1)); throw error
                     }
                 }
             } catch (error: Throwable) {
@@ -578,6 +690,7 @@ class MemoryBrainCoordinator(
         return MemoryBrainOutcome.Rejected(reason.name.lowercase().replace('_', ' '), reason)
     }
     private fun log(value: String) = runCatching { Log.d("LyraAiriMemory", value) }
+    private fun retryDelayMs(attempt: Int) = (1L shl attempt.coerceIn(0, 8)) * 30_000L
 
     private fun String.toMemoryCategory(): MemoryCategory? = when (uppercase()) {
         "IDENTITY", "PERSONALITY" -> MemoryCategory.IDENTITY
@@ -592,19 +705,50 @@ class MemoryBrainCoordinator(
 
     private fun criticalLiteralsSupported(action: EpisodeSemanticAction, evidence: AuthoritativeMemoryTurnEvidence,
         target: SemanticMemoryEntity?): Boolean {
-        val fact = action.fact
+        val structured = listOf(action.fact, action.person.orEmpty(), action.goalTitle.orEmpty()) + action.criticalLiterals
         val exact = Regex("(?<![\\p{L}\\p{N}])(?:\\d[\\d.,:/-]*|[A-Z][A-Z0-9_-]{2,})(?![\\p{L}\\p{N}])")
-            .findAll(fact).map { it.value }.toSet()
+            .findAll(structured.joinToString(" ")).map { it.value }.toSet()
         val proper = Regex("(?<![\\p{L}])\\p{Lu}[\\p{Ll}]{2,}(?:[ -]\\p{Lu}[\\p{Ll}]{2,})*")
-            .findAll(fact).map { it.value }.filterNot { it in ROLE_LABELS }.toSet()
+            .findAll(structured.joinToString(" ")).map { it.value }.filterNot { it in ROLE_LABELS }.toSet()
         val declared = action.criticalLiterals.map(String::trim).filter(String::isNotEmpty).toSet()
-        val required = exact + proper + declared + listOfNotNull(action.person)
+        val required = exact + proper + declared + listOfNotNull(action.person, action.goalTitle)
         return required.all { literal ->
             if (literal.any(Char::isDigit)) evidence.variants.any { variant ->
                 Regex("(?<![\\p{L}\\p{N}])${Regex.escape(literal)}(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE).containsMatchIn(variant)
             } else FinalTurnSourceSpanAuthorizer.groundedLiteral(literal, evidence) ||
                 target?.statement?.contains(literal, ignoreCase = true) == true
         }
+    }
+
+    private fun actionEvidenceSupported(action: EpisodeSemanticAction, userMessages: List<ConversationTruthEntity>): Boolean {
+        if (action.sourceMessageSequences.isEmpty() || action.sourceSpans.isEmpty()) return false
+        val supported = userMessages.filter { it.sequence in action.sourceMessageSequences }
+        if (supported.size != action.sourceMessageSequences.distinct().size) return false
+        return action.sourceSpans.all { span -> supported.any { message ->
+            FinalTurnSourceSpanAuthorizer.groundedSpan(span, message.canonicalText, message.displayText)
+        } }
+    }
+
+    /** Structured rows are projections of these canonical semantic facts. */
+    private fun relationshipSemanticKey(entityId: String) = "relationship:$entityId"
+    private fun relationshipCanonicalFrame(source: MemorySemanticFrame, person: PersonEntity,
+        relationship: PersonRelationship, intent: MemorySemanticIntent) = source.copy(
+        intent = intent,
+        fact = "${person.canonicalName} is Zopy's ${relationship.name.lowercase().replace('_', ' ')}",
+        category = MemoryCategory.PERSON,
+        stableKey = relationshipSemanticKey(person.entityId),
+        resolvedEntityId = person.entityId
+    )
+    private fun goalCanonicalFrame(source: MemorySemanticFrame): MemorySemanticFrame {
+        val goal = source.goal ?: throw MemoryMutationAbort(MemoryFailureReason.MISSING_REQUIRED_GOAL)
+        val key = source.stableKey?.takeIf(String::isNotBlank) ?: "goal:${AiriText.semanticKey(goal.title)}"
+        return source.copy(
+            intent = if (source.intent == MemorySemanticIntent.UPDATE_GOAL) MemorySemanticIntent.UPDATE_FACT else MemorySemanticIntent.ADD_FACT,
+            fact = goal.description?.takeIf(String::isNotBlank) ?: goal.title,
+            category = MemoryCategory.GOAL,
+            stableKey = key,
+            goal = goal
+        )
     }
 
     companion object {
@@ -627,7 +771,7 @@ class MemoryBrainCoordinator(
                 }
                 MemoryBrainCoordinator(RoomAiriMemoryStore(
                     LyraMemoryDatabase.get(context.applicationContext), embeddingProvider = provider
-                ), GeminiMemoryReasoningProvider(context.applicationContext)).also { holder[0] = it; shared = it }
+                ), GeminiMemoryReasoningProvider(context.applicationContext), wakeScheduler = WorkManagerAiriMemoryWakeScheduler(context.applicationContext)).also { holder[0] = it; shared = it }
             }
         }
     }
