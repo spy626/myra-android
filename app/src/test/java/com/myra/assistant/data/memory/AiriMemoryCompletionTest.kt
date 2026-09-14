@@ -69,28 +69,18 @@ class AiriMemoryCompletionTest {
         assertEquals(PersonRelationship.FRIEND.name, store.relationships.single { it.active && it.targetEntityId == id }.relationshipType)
     }
 
-    @Test fun relationshipStrengthCannotExceedAuthoritativeUserEvidence() = runBlocking {
-        suspend fun resolved(text: String, requested: PersonRelationship, turn: Long): PersonRelationship? {
-            val e = evidence(turn, text, text, listOf("Ishaan"))
-            val frame = MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP, person = "Ishaan",
-                relationship = requested, sourceSpan = text, sourceTurnId = turn, confidence = .96,
-                criticalLiterals = listOf("Ishaan"))
-            return MemoryBrainCoordinator(InMemoryAiriMemoryStore(), recoverOnInit = false)
-                .prepareFinalTurn(e, listOf(frame)).operations.singleOrNull()?.relationship
-        }
-        val actual = listOf(
-            resolved("Ishaan is my friend", PersonRelationship.BEST_FRIEND, 1090),
-            resolved("Ishaan mera dost hai", PersonRelationship.GOOD_FRIEND, 1091),
-            resolved("Ishaan mera bahuta accha dosta hai", PersonRelationship.GOOD_FRIEND, 1092),
-            resolved("ईशान मेरा बहुत अच्छा दोस्त है", PersonRelationship.GOOD_FRIEND, 1093),
-            resolved("Ishaan is my best friend", PersonRelationship.BEST_FRIEND, 1094),
-            resolved("ईशान मेरा सबसे अच्छा दोस्त है", PersonRelationship.BEST_FRIEND, 1095)
-        )
-        assertEquals("strength authorization must be monotonic across approved scripts",
-            listOf(PersonRelationship.FRIEND, PersonRelationship.FRIEND,
-                PersonRelationship.GOOD_FRIEND, PersonRelationship.GOOD_FRIEND,
-                PersonRelationship.BEST_FRIEND, PersonRelationship.BEST_FRIEND), actual)
-    }
+    @Test fun englishFriendCannotBePromoted() = runBlocking { assertEquals(PersonRelationship.FRIEND,
+        resolvedStrength("Ishaan is my friend", PersonRelationship.BEST_FRIEND, 1090)) }
+    @Test fun romanFriendCannotBePromoted() = runBlocking { assertEquals(PersonRelationship.FRIEND,
+        resolvedStrength("Ishaan mera dost hai", PersonRelationship.GOOD_FRIEND, 1091)) }
+    @Test fun romanAsrGoodFriendIsAuthorized() = runBlocking { assertEquals(PersonRelationship.GOOD_FRIEND,
+        resolvedStrength("Ishaan mera bahuta accha dosta hai", PersonRelationship.GOOD_FRIEND, 1092)) }
+    @Test fun devanagariGoodFriendIsAuthorized() = runBlocking { assertEquals(PersonRelationship.GOOD_FRIEND,
+        resolvedStrength("ईशान मेरा बहुत अच्छा दोस्त है", PersonRelationship.GOOD_FRIEND, 1093)) }
+    @Test fun englishBestFriendIsAuthorized() = runBlocking { assertEquals(PersonRelationship.BEST_FRIEND,
+        resolvedStrength("Ishaan is my best friend", PersonRelationship.BEST_FRIEND, 1094)) }
+    @Test fun devanagariBestFriendIsAuthorized() = runBlocking { assertEquals(PersonRelationship.BEST_FRIEND,
+        resolvedStrength("ईशान मेरा सबसे अच्छा दोस्त है", PersonRelationship.BEST_FRIEND, 1095)) }
 
     @Test fun explicitOrdinaryFriendRemovalClosesStrongerCurrentProjection() = runBlocking {
         val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
@@ -222,6 +212,14 @@ class AiriMemoryCompletionTest {
         MemorySemanticIntent.ADD_FACT, temporalScope = MemoryTemporalScope.CURRENT, fact = value,
         category = MemoryCategory.PREFERENCE, stableKey = key, sourceSpan = e.displayText,
         sourceTurnId = e.turnId, confidence = .96)
+    private suspend fun resolvedStrength(text: String, requested: PersonRelationship, turn: Long): PersonRelationship? {
+        val e = evidence(turn, text, text, listOf("Ishaan"))
+        val frame = MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP, person = "Ishaan",
+            relationship = requested, sourceSpan = text, sourceTurnId = turn, confidence = .96,
+            criticalLiterals = listOf("Ishaan"))
+        return MemoryBrainCoordinator(InMemoryAiriMemoryStore(), recoverOnInit = false)
+            .prepareFinalTurn(e, listOf(frame)).operations.singleOrNull()?.relationship
+    }
     private fun evidence(turn: Long, canonical: String, display: String, names: List<String> = emptyList()): AuthoritativeMemoryTurnEvidence {
         val session = "completion-${turn / 100}"
         AiriMemoryRuntime.claimTurn(session, turn)
