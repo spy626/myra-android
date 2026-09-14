@@ -84,7 +84,8 @@ interface AiriMemoryStore {
     suspend fun claimBackgroundWork(workId: String, now: Long): Boolean = false
     suspend fun completeBackgroundWork(workId: String): Boolean = false
     suspend fun retryBackgroundWork(workId: String, attempt: Int, failure: String, now: Long): Boolean = false
-    suspend fun earliestPendingBackgroundWorkAt(): Long? = null
+    suspend fun recoverExpiredBackgroundLeases(now: Long, leaseMs: Long): Int = 0
+    suspend fun earliestRecoverableBackgroundWorkAt(leaseMs: Long): Long? = null
 }
 
 class RoomAiriMemoryStore(
@@ -471,7 +472,10 @@ class RoomAiriMemoryStore(
         val delayMs = (1L shl attempt.coerceIn(0, 8)) * 30_000L
         return dao.retryBackgroundWork(workId, now + delayMs, failure.take(120), now) == 1
     }
-    override suspend fun earliestPendingBackgroundWorkAt() = dao.earliestPendingBackgroundWorkAt()
+    override suspend fun recoverExpiredBackgroundLeases(now: Long, leaseMs: Long) =
+        dao.recoverExpiredBackgroundLeases(now - leaseMs.coerceAtLeast(1L), now)
+    override suspend fun earliestRecoverableBackgroundWorkAt(leaseMs: Long) =
+        dao.earliestRecoverableBackgroundWorkAt(leaseMs.coerceAtLeast(1L))
 
     private suspend fun semanticCards(limit: Int) = dao.activeSemantic(limit).map { row -> MemoryEntity(
         row.memoryId, row.semanticKey, row.category, row.statement, row.confidence, row.provenance,
