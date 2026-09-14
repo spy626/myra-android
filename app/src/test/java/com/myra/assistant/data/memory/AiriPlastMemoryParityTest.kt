@@ -254,7 +254,7 @@ class AiriPlastMemoryParityTest {
         assertEquals(AiriText.semanticKey("project:aurora"), candidates.first().semanticKey)
     }
 
-    @Test fun backgroundRelationshipAndGoalConvergeIntoFastStructuredRecall() = runBlocking {
+    @Test fun backgroundRelationshipConvergesIntoFastStructuredRecall() = runBlocking {
         val store = InMemoryAiriMemoryStore()
         suspend fun episode(sequence: Long, text: String, action: EpisodeSemanticAction) {
             val row = ConversationTruthEntity("bg-$sequence", "c", sequence, sequence, "bg:$sequence", "user",
@@ -271,16 +271,30 @@ class AiriPlastMemoryParityTest {
             "Devansh is the speaker's good friend", "RELATIONSHIP", null, .96,
             criticalLiterals = listOf("Devansh"), person = "Devansh", relationship = "GOOD_FRIEND",
             sourceMessageSequences = listOf(600), sourceSpans = listOf("Devansh is my very good friend")))
-        episode(601, "My goal is to complete Aurora", EpisodeSemanticAction(SemanticConsolidationAction.NEW,
-            "Speaker aims to complete Aurora", "GOAL", null, .96,
-            criticalLiterals = listOf("Aurora"), goalTitle = "Complete Aurora",
-            sourceMessageSequences = listOf(601), sourceSpans = listOf("My goal is to complete Aurora")))
         val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
         assertEquals("Devansh", owner.recall("friends", type = MemoryRecallType.FRIENDS).rows.single().entityName)
-        assertTrue(owner.recall("goals", type = MemoryRecallType.GOALS).rows.single().fact.contains("Aurora"))
         // Relationship and goal cards are structured projections of canonical
         // semantic facts, so both remain available to general retrieval too.
-        assertEquals(2, store.semantic.count { it.active })
+        assertEquals(1, store.semantic.count { it.active })
+    }
+
+    @Test fun backgroundGoalConvergesIntoFastStructuredRecall() = runBlocking {
+        val store = InMemoryAiriMemoryStore()
+        val row = ConversationTruthEntity("bg-goal", "c", 601, 601, "bg:601", "user",
+            "My goal is to complete Aurora", 601, canonicalText = "My goal is to complete Aurora",
+            displayText = "My goal is to complete Aurora", provenanceMetadata = "Aurora")
+        store.appendConversation(row)
+        val span = EpisodeSpanEntity("bg-goal-span", "c", 601, 601, SegmentClassification.INFORMATIVE.name, "EOF", 601)
+        store.saveEpisodeSpan(span)
+        val action = EpisodeSemanticAction(SemanticConsolidationAction.NEW,
+            "Speaker aims to complete Aurora", "GOAL", null, .96, criticalLiterals = listOf("Aurora"),
+            goalTitle = "Complete Aurora", sourceMessageSequences = listOf(601),
+            sourceSpans = listOf("My goal is to complete Aurora"))
+        val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
+        assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false).consolidateEpisode(episode))
+        val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
+        assertTrue(owner.recall("goals", type = MemoryRecallType.GOALS).rows.single().fact.contains("Aurora"))
+        assertEquals(1, store.semantic.count { it.active })
     }
 
     @Test fun e5ContractUsesPrefixesMasksBoundsAndRejectsIncompatibleVectors() {
