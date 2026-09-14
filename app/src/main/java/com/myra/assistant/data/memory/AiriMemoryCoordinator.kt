@@ -138,7 +138,20 @@ class MemoryBrainCoordinator(
                     clarify(evidence, structuralReason)
                 else FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT, rejectionReason = structuralReason.name)
             }
-            val frame = contract.frame!!.copy(sourceSessionId = evidence.sessionId)
+            var frame = contract.frame!!.copy(sourceSessionId = evidence.sessionId)
+            if (frame.intent == MemorySemanticIntent.ADD_RELATIONSHIP) {
+                val requested = frame.relationship ?: return FinalMemoryTurnPlan(evidence.sourceText,
+                    decision = MemoryDecision.REJECT, rejectionReason = MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP.name)
+                frame = frame.copy(relationship = RelationshipStrengthAuthorizer.authorize(requested, evidence)
+                    ?: return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT,
+                        rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name))
+            } else if (frame.intent == MemorySemanticIntent.REPLACE_RELATIONSHIP) {
+                val requested = frame.replacementRelationship ?: return FinalMemoryTurnPlan(evidence.sourceText,
+                    decision = MemoryDecision.REJECT, rejectionReason = MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP.name)
+                frame = frame.copy(replacementRelationship = RelationshipStrengthAuthorizer.authorize(requested, evidence)
+                    ?: return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT,
+                        rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name))
+            }
             if (contract.recoveredEntity) log(
                 "MEMORY_ENTITY_RESOLUTION turnId=${evidence.turnId} operation=${frame.intent} " +
                     "source=CURRENT_FINAL_TURN candidateCount=1 resolved=true"
@@ -202,9 +215,10 @@ class MemoryBrainCoordinator(
                         store.recordConsolidationAction(canonical, turn, lastId)
                     }
                     MemorySemanticIntent.REMOVE_RELATIONSHIP -> {
-                        val relationship = frame.relationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
-                        deleted = store.endRelationship(frame.resolvedEntityId!!, relationship)
-                        if (deleted) store.invalidateSemantic(relationshipSemanticKey(frame.resolvedEntityId))
+                        frame.relationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
+                        deleted = store.endCurrentRelationship(frame.resolvedEntityId!!)
+                        if (deleted && !store.invalidateSemantic(relationshipSemanticKey(frame.resolvedEntityId)))
+                            throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
                     }
                     MemorySemanticIntent.REPLACE_RELATIONSHIP -> {
                         val relationship = frame.replacementRelationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
@@ -505,6 +519,12 @@ class MemoryBrainCoordinator(
                 else -> store.completeBackgroundWork(work.workId)
             }
         }
+        // Startup or a prior wake may arrive before a retry becomes eligible.
+        // Persisted Room time is authoritative; append a future WorkManager
+        // wake even when no new transcript or UI event occurs.
+        store.earliestPendingBackgroundWorkAt()?.let { earliest ->
+            wakeScheduler.wake(AiriMemoryWakePlanner.delayUntil(now, earliest))
+        }
         return dispatched
     }
 
@@ -561,13 +581,26 @@ class MemoryBrainCoordinator(
                 if (AiriMemorySafetyPolicy.rejectReason(frame, evidence, false) != null) return@forEach
                 if (category == MemoryCategory.PERSON) {
                     val personName = action.person ?: return@forEach
-                    val relationship = action.relationship?.let { runCatching { PersonRelationship.valueOf(it) }.getOrNull() }
+                    val requestedRelationship = action.relationship?.let { runCatching { PersonRelationship.valueOf(it) }.getOrNull() }
                         ?: return@forEach
+                    // Strength is a critical structured literal. Authorize it
+                    // before ensurePerson() so rejected model promotion cannot
+                    // leave even an infrastructure-only person projection.
+                    val authorizedRelationship = when (action.kind) {
+                        SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE ->
+                            RelationshipStrengthAuthorizer.authorize(requestedRelationship, evidence) ?: return@forEach
+                        else -> requestedRelationship
+                    }
                     val matches = store.peopleByName(personName)
                     val person = when (action.kind) {
                         SemanticConsolidationAction.NEW -> store.ensurePerson(personName, last.turnId)
-                        else -> matches.singleOrNull() ?: return@forEach
+                        else -> target?.subjectEntityId?.let { targetId ->
+                            val resolved = store.allPeople(500).singleOrNull { it.entityId == targetId } ?: return@forEach
+                            if (matches.none { it.entityId == targetId }) return@forEach
+                            resolved
+                        } ?: matches.singleOrNull() ?: return@forEach
                     }
+                    val relationship = authorizedRelationship
                     val relationshipFrame = relationshipCanonicalFrame(frame.copy(
                         stableKey = target?.semanticKey ?: relationshipSemanticKey(person.entityId),
                         resolvedEntityId = person.entityId, person = personName, relationship = relationship
@@ -575,14 +608,17 @@ class MemoryBrainCoordinator(
                         MemorySemanticIntent.UPDATE_FACT else MemorySemanticIntent.ADD_FACT)
                     when (action.kind) {
                         SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE -> {
-                            val id = store.addSemantic(relationshipFrame, evidence) ?: return@forEach
-                            store.addRelationship(person.entityId, relationship, evidence, action.confidence) ?: return@forEach
+                            val id = store.addSemantic(relationshipFrame, evidence)
+                                ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
+                            store.addRelationship(person.entityId, relationship, evidence, action.confidence)
+                                ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
                             store.linkSemanticProvenance(id, episodeId)
                             store.recordConsolidationAction(relationshipFrame, evidence, id); applied++
                         }
                         SemanticConsolidationAction.REINFORCE -> if (store.reinforceSemantic(target!!.memoryId, episodeId, .03)) applied++
                         SemanticConsolidationAction.INVALIDATE -> if (store.invalidateSemantic(target!!.semanticKey)) {
-                            store.endRelationship(person.entityId, relationship)
+                            if (!store.endCurrentRelationship(person.entityId))
+                                throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
                             store.linkSemanticProvenance(target.memoryId, episodeId); applied++
                         }
                     }
@@ -611,7 +647,8 @@ class MemoryBrainCoordinator(
                         }
                         SemanticConsolidationAction.REINFORCE -> if (store.reinforceSemantic(target!!.memoryId, episodeId, .03)) applied++
                         SemanticConsolidationAction.INVALIDATE -> if (store.invalidateSemantic(target!!.semanticKey)) {
-                            store.closeGoal(target.semanticKey, action.goalStatus ?: "ABANDONED")
+                            if (!store.closeGoal(target.semanticKey, target.memoryId, action.goalStatus ?: "ABANDONED"))
+                                throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
                             store.linkSemanticProvenance(target.memoryId, episodeId); applied++
                         }
                     }
