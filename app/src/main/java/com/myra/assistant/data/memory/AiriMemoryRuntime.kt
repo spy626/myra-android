@@ -117,6 +117,10 @@ object FinalTurnSourceSpanAuthorizer {
         val candidates = final.protectedCanonicalNames + final.protectedDisplayNames + final.variants.flatMap { normalize(it).split(' ').windowed(1, 1) { w -> w.joinToString("") } + normalize(it).split(' ').windowed(2, 1) { w -> w.joinToString("") } + normalize(it).split(' ').windowed(3, 1) { w -> w.joinToString("") } }
         return candidates.any { lexicalEquivalent(normalized.replace(" ", ""), normalize(it).replace(" ", "")) }
     }
+    internal fun groundedSpan(span: String, canonical: String, display: String): Boolean {
+        val normalized = normalize(span)
+        return normalized.isNotBlank() && listOf(canonical, display).any { containsSpan(normalize(it), normalized) }
+    }
     private fun lexicalEquivalent(a: String, b: String): Boolean {
         if (a == b) return true
         if (a.any(Char::isDigit) || b.any(Char::isDigit) || minOf(a.length, b.length) < 4) return false
