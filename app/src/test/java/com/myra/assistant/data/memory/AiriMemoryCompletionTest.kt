@@ -11,6 +11,7 @@ class AiriMemoryCompletionTest {
         val e = evidence(101, "Mera dost Leena hai", "Mera dost Leena hai", listOf("Leena"))
         val parsed = GeminiMemoryOperationParser.parse(JSONObject().put("operations", JSONArray().put(
             JSONObject().put("intent", "ADD_RELATIONSHIP").put("relationship", "FRIEND")
+                .put("semantic_relationship", "FRIEND")
                 .put("source_span", "Mera dost Leena hai").put("confidence", .96)
                 .put("critical_literals", JSONArray().put("Leena"))
         ))).single().copy(sourceTurnId = e.turnId)
@@ -58,7 +59,7 @@ class AiriMemoryCompletionTest {
         assertEquals(2, owner.recall("friends", type = MemoryRecallType.FRIENDS).rows.size)
         val id = store.peopleByName("Zoya").single().entityId
         fun replacement(e: AuthoritativeMemoryTurnEvidence, type: PersonRelationship) = MemorySemanticFrame(
-            MemorySemanticIntent.REPLACE_RELATIONSHIP, person = "Zoya", replacementRelationship = type,
+            MemorySemanticIntent.REPLACE_RELATIONSHIP, person = "Zoya", replacementRelationship = type, semanticRelationship = type,
             sourceSpan = e.displayText, sourceTurnId = e.turnId, confidence = .96, criticalLiterals = listOf("Zoya"))
         val best = evidence(107, "Zoya is now my best friend", "Zoya is now my best friend", listOf("Zoya"))
         assertTrue(execute(owner, best, replacement(best, PersonRelationship.BEST_FRIEND)) is MemoryBrainOutcome.Mutated)
@@ -69,18 +70,20 @@ class AiriMemoryCompletionTest {
         assertEquals(PersonRelationship.FRIEND.name, store.relationships.single { it.active && it.targetEntityId == id }.relationshipType)
     }
 
-    @Test fun englishFriendCannotBePromoted() = runBlocking { assertEquals(PersonRelationship.FRIEND,
-        resolvedStrength("Ishaan is my friend", PersonRelationship.BEST_FRIEND, 1090)) }
+    @Test fun strongerOperationThanSemanticEvidenceIsRejected() = runBlocking { assertNull(
+        resolvedStrength("Ishaan is my friend", PersonRelationship.BEST_FRIEND, PersonRelationship.FRIEND, 1090)) }
     @Test fun romanFriendCannotBePromoted() = runBlocking { assertEquals(PersonRelationship.FRIEND,
-        resolvedStrength("Ishaan mera dost hai", PersonRelationship.GOOD_FRIEND, 1091)) }
+        resolvedStrength("Ishaan mera dost hai", PersonRelationship.FRIEND, PersonRelationship.FRIEND, 1091)) }
     @Test fun romanAsrGoodFriendIsAuthorized() = runBlocking { assertEquals(PersonRelationship.GOOD_FRIEND,
-        resolvedStrength("Ishaan mera bahuta accha dosta hai", PersonRelationship.GOOD_FRIEND, 1092)) }
+        resolvedStrength("Ishaan mera bahuta accha dosta hai", PersonRelationship.GOOD_FRIEND, PersonRelationship.GOOD_FRIEND, 1092)) }
     @Test fun devanagariGoodFriendIsAuthorized() = runBlocking { assertEquals(PersonRelationship.GOOD_FRIEND,
-        resolvedStrength("ईशान मेरा बहुत अच्छा दोस्त है", PersonRelationship.GOOD_FRIEND, 1093)) }
+        resolvedStrength("ईशान मेरा बहुत अच्छा दोस्त है", PersonRelationship.GOOD_FRIEND, PersonRelationship.GOOD_FRIEND, 1093)) }
     @Test fun englishBestFriendIsAuthorized() = runBlocking { assertEquals(PersonRelationship.BEST_FRIEND,
-        resolvedStrength("Ishaan is my best friend", PersonRelationship.BEST_FRIEND, 1094)) }
+        resolvedStrength("Ishaan is my best friend", PersonRelationship.BEST_FRIEND, PersonRelationship.BEST_FRIEND, 1094)) }
     @Test fun devanagariBestFriendIsAuthorized() = runBlocking { assertEquals(PersonRelationship.BEST_FRIEND,
-        resolvedStrength("ईशान मेरा सबसे अच्छा दोस्त है", PersonRelationship.BEST_FRIEND, 1095)) }
+        resolvedStrength("ईशान मेरा सबसे अच्छा दोस्त है", PersonRelationship.BEST_FRIEND, PersonRelationship.BEST_FRIEND, 1095)) }
+    @Test fun weakerOperationCannotOverrideVerifiedStrongerMeaning() = runBlocking { assertEquals(PersonRelationship.BEST_FRIEND,
+        resolvedStrength("Ishaan is my closest friend", PersonRelationship.FRIEND, PersonRelationship.BEST_FRIEND, 1096)) }
 
     @Test fun explicitOrdinaryFriendRemovalClosesStrongerCurrentProjection() = runBlocking {
         val store = InMemoryAiriMemoryStore(); val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
@@ -201,7 +204,7 @@ class AiriMemoryCompletionTest {
 
     private suspend fun relationship(owner: MemoryBrainCoordinator, e: AuthoritativeMemoryTurnEvidence, name: String, type: PersonRelationship) {
         assertTrue(execute(owner, e, MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP,
-            person = name, relationship = type, sourceSpan = e.displayText, sourceTurnId = e.turnId,
+            person = name, relationship = type, semanticRelationship = type, sourceSpan = e.displayText, sourceTurnId = e.turnId,
             confidence = .96, criticalLiterals = listOf(name))) is MemoryBrainOutcome.Mutated)
     }
     private suspend fun execute(owner: MemoryBrainCoordinator, e: AuthoritativeMemoryTurnEvidence, frame: MemorySemanticFrame): MemoryBrainOutcome {
@@ -212,10 +215,11 @@ class AiriMemoryCompletionTest {
         MemorySemanticIntent.ADD_FACT, temporalScope = MemoryTemporalScope.CURRENT, fact = value,
         category = MemoryCategory.PREFERENCE, stableKey = key, sourceSpan = e.displayText,
         sourceTurnId = e.turnId, confidence = .96)
-    private suspend fun resolvedStrength(text: String, requested: PersonRelationship, turn: Long): PersonRelationship? {
+    private suspend fun resolvedStrength(text: String, requested: PersonRelationship,
+        semantic: PersonRelationship, turn: Long): PersonRelationship? {
         val e = evidence(turn, text, text, listOf("Ishaan"))
         val frame = MemorySemanticFrame(MemorySemanticIntent.ADD_RELATIONSHIP, person = "Ishaan",
-            relationship = requested, sourceSpan = text, sourceTurnId = turn, confidence = .96,
+            relationship = requested, semanticRelationship = semantic, sourceSpan = text, sourceTurnId = turn, confidence = .96,
             criticalLiterals = listOf("Ishaan"))
         return MemoryBrainCoordinator(InMemoryAiriMemoryStore(), recoverOnInit = false)
             .prepareFinalTurn(e, listOf(frame)).operations.singleOrNull()?.relationship
