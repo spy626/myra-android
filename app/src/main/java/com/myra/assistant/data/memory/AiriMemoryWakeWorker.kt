@@ -32,7 +32,15 @@ class WorkManagerAiriMemoryWakeScheduler(private val context: Context) : AiriMem
             .setInitialDelay(delayMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
             .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.KEEP, request)
+        // APPEND_OR_REPLACE guarantees that a delayed retry requested by the
+        // currently RUNNING worker remains queued behind it. Room claims still
+        // serialize execution through the one coordinator/store owner.
+        WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
     }
     companion object { private const val WORK_NAME = "lyra-airi-memory-wake" }
+}
+
+object AiriMemoryWakePlanner {
+    fun delayUntil(now: Long, earliestEligibleAt: Long): Long =
+        (earliestEligibleAt - now).coerceAtLeast(0L)
 }
