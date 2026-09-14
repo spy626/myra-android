@@ -446,8 +446,8 @@ class MemoryBrainCoordinator(
 
     internal fun scheduleEpisodeConsolidation(episodeId: String) {
         backgroundScope.launch {
-            // The local coroutine is a wake hint only. It never calls
-            // consolidateEpisode directly: every execution first owns the
+            // The local coroutine is a wake hint only. It never runs
+            // consolidation directly: every execution first owns the
             // canonical Room-backed durable claim used by WorkManager.
             store.enqueueBackgroundWork("CONSOLIDATION", episodeId)
             wakeScheduler.wake()
