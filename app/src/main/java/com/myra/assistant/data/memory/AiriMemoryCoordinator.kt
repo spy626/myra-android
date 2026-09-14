@@ -553,6 +553,7 @@ class MemoryBrainCoordinator(
                     }, fact = fact.takeIf(String::isNotBlank) ?: target?.statement,
                     category = category, stableKey = target?.semanticKey
                         ?: "pc:${category.name}:${AiriText.semanticKey(fact).take(64)}",
+                    temporalScope = MemoryTemporalScope.CURRENT,
                     confidence = action.confidence, sourceSpan = episode.content,
                     sourceTurnId = last.turnId, sourceSessionId = episode.conversationId,
                     sourceEpisodeIds = listOf(episodeId)
