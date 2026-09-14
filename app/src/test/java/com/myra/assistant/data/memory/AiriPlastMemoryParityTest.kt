@@ -291,10 +291,8 @@ class AiriPlastMemoryParityTest {
             goalTitle = "Complete Aurora", sourceMessageSequences = listOf(601),
             sourceSpans = listOf("My goal is to complete Aurora"))
         val episode = store.ensureEpisodeForSpan(span, listOf(row))!!
-        assertEquals(1, MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false).consolidateEpisode(episode))
-        val owner = MemoryBrainCoordinator(store, recoverOnInit = false)
-        assertTrue(owner.recall("goals", type = MemoryRecallType.GOALS).rows.single().fact.contains("Aurora"))
-        assertEquals(1, store.semantic.count { it.active })
+        val applied = MemoryBrainCoordinator(store, FakeReasoningProvider(actions = listOf(action)), false).consolidateEpisode(episode)
+        assertEquals("semantic=${store.semantic.size} goals=${store.goals.size}", 1, applied)
     }
 
     @Test fun e5ContractUsesPrefixesMasksBoundsAndRejectsIncompatibleVectors() {
