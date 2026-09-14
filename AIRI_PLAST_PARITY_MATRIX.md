@@ -1,15 +1,15 @@
 # AIRI / Plast-Mem Android source-parity matrix
 
-Audit date: 2026-09-13
+Audit date: 2026-09-14
 
-- AIRI: `moeru-ai/airi@00c6867b7fd8064938de1805814578db8273dafe`
-- Previous AIRI pin: `553d8a0da4ef131441a1de77d556c6df6cab3026`
+- AIRI: `moeru-ai/airi@42e3e9e8573d3159d40e637fa11a21e13398ebda`
+- Previous AIRI pin: `00c6867b7fd8064938de1805814578db8273dafe`
 - Plast-Mem: `moeru-ai/plast-mem@611103456d953c9a74452f4239817b3468f94bba`
 - FSRS dependency: `open-spaced-repetition/fsrs-rs@aca2838bfbdc6f15ca3f7a0c96a99fae466c9e9c` (5.2.0)
 
 Status vocabulary is deliberately closed: `EXACT PORT`, `ANDROID-NATIVE
-EQUIVALENT`, `UPSTREAM TODO`, `INTENTIONAL LYRA SAFETY EXTENSION`, or
-`BLOCKED`. There are no blocked applicable runtime rows in this revision.
+EQUIVALENT`, `UPSTREAM TODO`, `INTENTIONAL LYRA SAFETY EXTENSION`, or `NOT
+APPLICABLE`. There are no unresolved applicable runtime rows in this revision.
 
 ## AIRI
 
@@ -49,16 +49,16 @@ EQUIVALENT`, `UPSTREAM TODO`, `INTENTIONAL LYRA SAFETY EXTENSION`, or
 | `crates/worker/src/jobs/event_segmentation.rs` | **Actively invoked:** claim validation, active legacy pipeline, commit/abort/re-enqueue | coordinator background segmentation lane | ANDROID-NATIVE EQUIVALENT | stale/process/model-failure/carry tests | Room is durable state; bounded coroutine jobs replace Apalis |
 | `crates/worker/src/jobs/episode_creation.rs` | Deterministic episode, rendered content, embedding, FSRS init | `ensureEpisodeForSpan`, `AiriFsrs.initial` | ANDROID-NATIVE EQUIVALENT | episode/idempotency/FSRS tests | Local renderer; feature-hash fallback |
 | `crates/entities/src/episodic_memory.rs` + migration 05 | Episode/FSRS/search schema | `EpisodicMemoryEntity`, FTS entity | ANDROID-NATIVE EQUIVALENT | Room/source tests | SQLite vector encoding |
-| `crates/worker/src/jobs/predict_calibrate.rs` | **Actively invoked:** hybrid relevant-fact load, Predict/Calibrate, action normalization, atomic apply | `GeminiMemoryReasoningProvider`, coordinator consolidation queue | ANDROID-NATIVE EQUIVALENT | relevance, cold-start, target-ID, assertion/literal, dedup tests | Missing UPDATE targets are rejected, an intentional stricter safety choice |
+| `crates/worker/src/jobs/predict_calibrate.rs` | **Actively invoked:** hybrid relevant-fact load, Predict/Calibrate, action normalization, atomic apply | `GeminiMemoryReasoningProvider`, coordinator consolidation queue | ANDROID-NATIVE EQUIVALENT | relevance, cold-start, target-ID, assertion/literal, source-provenance, dedup tests | Every action requires user-message sequence plus grounded span; missing UPDATE targets are rejected as stricter safety |
 | `crates/entities/src/semantic_memory.rs` + migration 06 | Semantic fact lifecycle/provenance | `SemanticMemoryEntity`, `SemanticProvenanceEntity` | ANDROID-NATIVE EQUIVALENT | lifecycle/provenance tests | SQLite schema plus stable entity index |
 | `crates/core/src/memory/semantic.rs` | BM25/vector/RRF active semantic retrieval | Room FTS + E5 vector lane + `ReciprocalRankFusion` | ANDROID-NATIVE EQUIVALENT | RRF/retrieval/version tests | Neural model is lazily downloaded and verified; structured/FTS recall remains available offline |
 | `crates/core/src/memory/episodic.rs` | BM25/vector/RRF plus FSRS rerank | `hybridRetrieve` | ANDROID-NATIVE EQUIVALENT | retrieval/FSRS tests | Native Room candidates and locally encoded vectors replace pgvector SQL |
 | `crates/core/src/memory/retrieval.rs` | Bounded result rendering | `MemoryEntity` projection/formatter | ANDROID-NATIVE EQUIVALENT | bounded recall tests | Native response formatter |
-| `crates/ai/src/embed*.rs`, cosine | Configured/versioned semantic embedding provider | `AndroidE5EmbeddingProvider`, model/version/dimension metadata, bounded re-embedding | ANDROID-NATIVE EQUIVALENT | codec/version/fallback/tokenizer tests | MIT multilingual-e5-small is pinned, checksum-verified, and cached in app-private storage; feature hash is an explicitly labelled warm-up/offline fallback |
+| `crates/ai/src/embed*.rs`, cosine | Configured/versioned semantic embedding provider | `AndroidE5EmbeddingProvider`, immutable `EmbeddingResult` provenance, bounded re-embedding | ANDROID-NATIVE EQUIVALENT | codec/version/fallback/tokenizer/atomic-readiness tests | MIT multilingual-e5-small is pinned, checksum-verified, and cached in app-private storage; hash fallback cannot overwrite or relabel E5 rows |
 | `crates/core/src/pending_review_queue.rs` + migration 04 | Retrieval review side effect | `PendingReviewEntity` | ANDROID-NATIVE EQUIVALENT | review enqueue tests | SQLite queue |
-| `crates/worker/src/jobs/memory_review.rs` | Aggregate/review/rate/update | owner review queue + Gemini ratings | ANDROID-NATIVE EQUIVALENT | exact state/queue tests | Durable Room queue and startup recovery replace Apalis; partial ratings remain pending |
+| `crates/worker/src/jobs/memory_review.rs` | Aggregate/review/rate/update | owner review queue + Gemini ratings + durable work tokens | ANDROID-NATIVE EQUIVALENT | exact state/queue/retry tests | Durable Room tokens plus startup/WorkManager wake recovery replace Apalis; partial ratings remain pending |
 | `fsrs` 5.2.0 dependency | FSRS-6 inference | `AiriFsrs` | EXACT PORT | pinned numeric conformance tests | Training APIs are not needed on device |
-| `crates/migration/*` | PostgreSQL schema migration | Room v10 destructive pre-release cutover | ANDROID-NATIVE EQUIVALENT | schema/static tests | Clean reinstall required |
+| `crates/migration/*` | PostgreSQL schema migration | Room v11 destructive pre-release cutover | ANDROID-NATIVE EQUIVALENT | schema/static tests | Clean reinstall required |
 | `docs/todo/flashbulb_memory.md` | Documented high-significance TODO, not production-invoked upstream | `FlashbulbPolicy`, episode fields | UPSTREAM TODO | policy tests | LYRA completion of upstream documented TODO |
 | `docs/todo/semantic_memory_confidence.md` | Proposed confidence evolution, not production-invoked upstream | explicit/inferred confidence metadata | UPSTREAM TODO | behavior/safety tests | LYRA completion uses conservative policy |
 | `docs/architecture/graph_memory.md` | Graph direction | stable people/aliases/relationships | ANDROID-NATIVE EQUIVALENT | entity tests | LYRA-specific assistant identity graph |
