@@ -21,9 +21,16 @@ flowchart TD
 
 The immediate lane never waits for segmentation, Predict/Calibrate, neural
 model download, reindexing, or episodic review. Clear structured recall is
-read-only and local. The background lane uses Room episode and pending-review
-state as its durable queue truth; bounded coroutine channels only accelerate
-execution.
+read-only and local. The background lane uses Room episode, pending-review,
+and durable work-token state as its recovery truth; bounded coroutine channels
+only accelerate execution. WorkManager wakes the coordinator and never writes
+memory directly.
+
+Embedding metadata is captured atomically with every vector. A warm-up hash
+result cannot be relabelled as E5 if readiness changes after the operation, and
+reindex work waits for a real E5 snapshot. Relationship and goal cards are
+structured projections of canonical semantic facts, with the same lifecycle
+and provenance available to general semantic retrieval.
 
 The source-owned Context Registry and Task Memory contribute bounded current
 state to LYRA Core. Spark Notify supplies proactive events and may produce no
