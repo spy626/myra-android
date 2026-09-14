@@ -142,13 +142,13 @@ class MemoryBrainCoordinator(
             if (frame.intent == MemorySemanticIntent.ADD_RELATIONSHIP) {
                 val requested = frame.relationship ?: return FinalMemoryTurnPlan(evidence.sourceText,
                     decision = MemoryDecision.REJECT, rejectionReason = MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP.name)
-                frame = frame.copy(relationship = RelationshipStrengthAuthorizer.authorize(requested, evidence)
+                frame = frame.copy(relationship = RelationshipStrengthAuthorizer.authorize(requested, frame.semanticRelationship)
                     ?: return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT,
                         rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name))
             } else if (frame.intent == MemorySemanticIntent.REPLACE_RELATIONSHIP) {
                 val requested = frame.replacementRelationship ?: return FinalMemoryTurnPlan(evidence.sourceText,
                     decision = MemoryDecision.REJECT, rejectionReason = MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP.name)
-                frame = frame.copy(replacementRelationship = RelationshipStrengthAuthorizer.authorize(requested, evidence)
+                frame = frame.copy(replacementRelationship = RelationshipStrengthAuthorizer.authorize(requested, frame.semanticRelationship)
                     ?: return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT,
                         rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name))
             }
@@ -215,7 +215,6 @@ class MemoryBrainCoordinator(
                         store.recordConsolidationAction(canonical, turn, lastId)
                     }
                     MemorySemanticIntent.REMOVE_RELATIONSHIP -> {
-                        frame.relationship ?: throw MemoryMutationAbort(MemoryFailureReason.UNSUPPORTED_OPERATION)
                         deleted = store.endCurrentRelationship(frame.resolvedEntityId!!)
                         if (deleted && !store.invalidateSemantic(relationshipSemanticKey(frame.resolvedEntityId)))
                             throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
@@ -495,37 +494,43 @@ class MemoryBrainCoordinator(
 
     /** Called by the WorkManager wake layer; it dispatches, never mutates directly. */
     suspend fun runDurableBackgroundWork(now: Long = System.currentTimeMillis()): Int {
-        var dispatched = 0
+        store.recoverExpiredBackgroundLeases(now, BACKGROUND_LEASE_MS)
+        var completed = 0
         store.dueBackgroundWork(now, 32).forEach { work ->
             if (!store.claimBackgroundWork(work.workId, now)) return@forEach
-            when (work.kind) {
-                "CONSOLIDATION" -> {
-                    consolidationJobs.remove(work.subjectId)
-                    scheduleEpisodeConsolidation(work.subjectId); dispatched++
-                }
-                "REVIEW" -> {
-                    // Recreate a fresh claim in the review lane; the wake work
-                    // itself is only a scheduler token, never a second owner.
-                    store.completeBackgroundWork(work.workId); schedulePendingReviews(); dispatched++
-                }
-                "REINDEX" -> {
-                    if (store.neuralEmbeddingReady()) {
-                        scheduleNeuralReindex(); dispatched++
-                    } else {
-                        store.retryBackgroundWork(work.workId, work.attemptCount + 1, "NEURAL_NOT_READY", now)
-                        wakeScheduler.wake(retryDelayMs(work.attemptCount + 1))
+            try {
+                val done = when (work.kind) {
+                    "CONSOLIDATION" -> {
+                        consolidationJobs.remove(work.subjectId)
+                        consolidateEpisode(work.subjectId)
+                        true
                     }
+                    "REVIEW" -> processReviewWork(work.subjectId)
+                    "REINDEX" -> if (store.neuralEmbeddingReady()) {
+                        var changed: Int
+                        do { changed = store.reembedStale(16) } while (changed > 0)
+                        true
+                    } else false
+                    else -> true
                 }
-                else -> store.completeBackgroundWork(work.workId)
+                if (done) {
+                    check(store.completeBackgroundWork(work.workId)) { "durable completion verification failed" }
+                    completed++
+                } else {
+                    store.retryBackgroundWork(work.workId, work.attemptCount + 1, "NOT_READY", now)
+                }
+            } catch (error: Throwable) {
+                store.retryBackgroundWork(work.workId, work.attemptCount + 1,
+                    error.javaClass.simpleName, System.currentTimeMillis())
+                log("MEMORY_DURABLE_RETRY kind=${work.kind} reason=${error.javaClass.simpleName}")
             }
         }
-        // Startup or a prior wake may arrive before a retry becomes eligible.
-        // Persisted Room time is authoritative; append a future WorkManager
-        // wake even when no new transcript or UI event occurs.
-        store.earliestPendingBackgroundWorkAt()?.let { earliest ->
+        // Both a future PENDING retry and a fresh RUNNING lease have a durable
+        // next wake time. No user interaction or polling loop is required.
+        store.earliestRecoverableBackgroundWorkAt(BACKGROUND_LEASE_MS)?.let { earliest ->
             wakeScheduler.wake(AiriMemoryWakePlanner.delayUntil(now, earliest))
         }
-        return dispatched
+        return completed
     }
 
     internal suspend fun consolidateEpisode(episodeId: String): Int {
@@ -580,37 +585,37 @@ class MemoryBrainCoordinator(
                 )
                 if (AiriMemorySafetyPolicy.rejectReason(frame, evidence, false) != null) return@forEach
                 if (category == MemoryCategory.PERSON) {
-                    val personName = action.person ?: return@forEach
-                    val requestedRelationship = action.relationship?.let { runCatching { PersonRelationship.valueOf(it) }.getOrNull() }
-                        ?: return@forEach
-                    // Strength is a critical structured literal. Authorize it
-                    // before ensurePerson() so rejected model promotion cannot
-                    // leave even an infrastructure-only person projection.
-                    val authorizedRelationship = when (action.kind) {
-                        SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE ->
-                            RelationshipStrengthAuthorizer.authorize(requestedRelationship, evidence) ?: return@forEach
-                        else -> requestedRelationship
+                    val personName = action.person
+                    val matches = personName?.let { store.peopleByName(it) }.orEmpty()
+                    val requested = action.relationship?.let { runCatching { PersonRelationship.valueOf(it) }.getOrNull() }
+                    val semantic = action.semanticRelationship?.let { runCatching { PersonRelationship.valueOf(it) }.getOrNull() }
+                    val relationship = when (action.kind) {
+                        SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE -> {
+                            val operation = requested ?: return@forEach
+                            RelationshipStrengthAuthorizer.authorize(operation, semantic) ?: return@forEach
+                        }
+                        else -> null // canonical target owns REINFORCE/INVALIDATE
                     }
-                    val matches = store.peopleByName(personName)
                     val person = when (action.kind) {
-                        SemanticConsolidationAction.NEW -> store.ensurePerson(personName, last.turnId)
+                        SemanticConsolidationAction.NEW -> store.ensurePerson(personName ?: return@forEach, last.turnId)
                         else -> target?.subjectEntityId?.let { targetId ->
                             val resolved = store.allPeople(500).singleOrNull { it.entityId == targetId } ?: return@forEach
-                            if (matches.none { it.entityId == targetId }) return@forEach
+                            if (personName != null && matches.none { it.entityId == targetId }) return@forEach
                             resolved
                         } ?: matches.singleOrNull() ?: return@forEach
                     }
-                    val relationship = authorizedRelationship
-                    val relationshipFrame = relationshipCanonicalFrame(frame.copy(
-                        stableKey = target?.semanticKey ?: relationshipSemanticKey(person.entityId),
-                        resolvedEntityId = person.entityId, person = personName, relationship = relationship
-                    ), person, relationship, if (action.kind == SemanticConsolidationAction.UPDATE)
-                        MemorySemanticIntent.UPDATE_FACT else MemorySemanticIntent.ADD_FACT)
                     when (action.kind) {
                         SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE -> {
+                            val authorizedRelationship = relationship ?: return@forEach
+                            val relationshipFrame = relationshipCanonicalFrame(frame.copy(
+                                stableKey = target?.semanticKey ?: relationshipSemanticKey(person.entityId),
+                                resolvedEntityId = person.entityId, person = personName,
+                                relationship = authorizedRelationship, semanticRelationship = semantic
+                            ), person, authorizedRelationship, if (action.kind == SemanticConsolidationAction.UPDATE)
+                                MemorySemanticIntent.UPDATE_FACT else MemorySemanticIntent.ADD_FACT)
                             val id = store.addSemantic(relationshipFrame, evidence)
                                 ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
-                            store.addRelationship(person.entityId, relationship, evidence, action.confidence)
+                            store.addRelationship(person.entityId, authorizedRelationship, evidence, action.confidence)
                                 ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
                             store.linkSemanticProvenance(id, episodeId)
                             store.recordConsolidationAction(relationshipFrame, evidence, id); applied++
@@ -687,23 +692,7 @@ class MemoryBrainCoordinator(
                     store.enqueueBackgroundWork("REVIEW", conversationId)
                     if (!store.claimBackgroundWork(workId, System.currentTimeMillis())) return@forEach
                     try {
-                        val pending = store.pendingReviews(conversationId, 64)
-                        val queryMap = linkedMapOf<String, MutableList<String>>()
-                        pending.forEach { row -> row.episodeIds.split(',').filter(String::isNotBlank).forEach { id ->
-                            queryMap.getOrPut(id) { mutableListOf() }.add(row.matchedQuery)
-                        } }
-                        val episodes = store.episodeCards(queryMap.keys.toList())
-                        val context = store.promptProjection(conversationId, 32)
-                        val ratings = reasoningProvider.rateEpisodes(context, episodes, queryMap)
-                        if (ratings.isNotEmpty()) {
-                            store.reviewEpisodes(conversationId, ratings, System.currentTimeMillis())
-                            val completedEpisodes = ratings.keys
-                            val completedReviews = pending.filter { row ->
-                                row.episodeIds.split(',').filter(String::isNotBlank).all(completedEpisodes::contains)
-                            }.map { it.reviewId }
-                            if (completedReviews.isNotEmpty()) store.deletePendingReviews(completedReviews)
-                        }
-                        if (store.pendingReviews(conversationId, 1).isEmpty()) store.completeBackgroundWork(workId)
+                        if (processReviewWork(conversationId)) store.completeBackgroundWork(workId)
                         else {
                             store.retryBackgroundWork(workId, 1, "NO_RATINGS", System.currentTimeMillis())
                             wakeScheduler.wake(retryDelayMs(1))
@@ -717,6 +706,27 @@ class MemoryBrainCoordinator(
                 log("MEMORY_REVIEW_RETRY reason=${error.javaClass.simpleName}")
             } finally { reviewWorkerRunning.set(false) }
         }
+    }
+
+    private suspend fun processReviewWork(conversationId: String): Boolean {
+        val pending = store.pendingReviews(conversationId, 64)
+        if (pending.isEmpty()) return true
+        val queryMap = linkedMapOf<String, MutableList<String>>()
+        pending.forEach { row -> row.episodeIds.split(',').filter(String::isNotBlank).forEach { id ->
+            queryMap.getOrPut(id) { mutableListOf() }.add(row.matchedQuery)
+        } }
+        val episodes = store.episodeCards(queryMap.keys.toList())
+        val context = store.promptProjection(conversationId, 32)
+        val ratings = reasoningProvider.rateEpisodes(context, episodes, queryMap)
+        if (ratings.isNotEmpty()) {
+            store.reviewEpisodes(conversationId, ratings, System.currentTimeMillis())
+            val completed = ratings.keys
+            val reviewIds = pending.filter { row ->
+                row.episodeIds.split(',').filter(String::isNotBlank).all(completed::contains)
+            }.map { it.reviewId }
+            if (reviewIds.isNotEmpty()) store.deletePendingReviews(reviewIds)
+        }
+        return store.pendingReviews(conversationId, 1).isEmpty()
     }
 
     suspend fun traceSpark(eventId: String, parentEventId: String?, source: String, lane: String, kind: String, outcome: String) =
@@ -802,6 +812,7 @@ class MemoryBrainCoordinator(
     }
 
     companion object {
+        internal const val BACKGROUND_LEASE_MS = 15L * 60L * 1000L
         private const val SEGMENT_CLAIM_TIMEOUT_MS = 15L * 60L * 1000L
         private const val CONVERSATION_INACTIVITY_EOF_MS = 30L * 60L * 1000L
         private val ROLE_LABELS = setOf("Speaker", "User", "Assistant", "Zopy", "Lyra")
