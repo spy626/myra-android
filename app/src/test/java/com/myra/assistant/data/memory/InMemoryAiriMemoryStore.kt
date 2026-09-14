@@ -79,6 +79,15 @@ open class InMemoryAiriMemoryStore : AiriMemoryStore {
     override suspend fun endRelationship(entityId: String, type: PersonRelationship): Boolean {
         var changed = false; relationships.replaceAll { if (it.targetEntityId == entityId && it.relationshipType == type.name && it.active) { changed = true; it.copy(active = false, deletedAt = time()) } else it }; return changed
     }
+    override suspend fun currentRelationship(entityId: String) = relationships
+        .filter { it.targetEntityId == entityId && it.active && it.deletedAt == null }.maxByOrNull { it.updatedAt }
+    override suspend fun endCurrentRelationship(entityId: String): Boolean {
+        val active = relationships.filter { it.targetEntityId == entityId && it.active && it.deletedAt == null }
+        if (active.size != 1) return false
+        val at = time(); relationships.replaceAll { if (it.relationshipId == active.single().relationshipId)
+            it.copy(active = false, deletedAt = at, updatedAt = at) else it }
+        return true
+    }
     override suspend fun activeRelationships(types: Set<PersonRelationship>, limit: Int): List<MemoryEntity> {
         val allowed = types.map { it.name }.toSet()
         val selected = relationships.filter { it.active && it.relationshipType in allowed }.take(limit)
@@ -119,8 +128,9 @@ open class InMemoryAiriMemoryStore : AiriMemoryStore {
         val g = frame.goal ?: return null; val key = AiriText.semanticKey(frame.stableKey ?: g.title); val t = time(); val id = goals[key]?.goalId ?: UUID.randomUUID().toString()
         goals[key] = GoalMemoryEntity(id, key, g.title, g.description, g.status, g.priority, g.progress, g.deadline, g.parentGoalId, "GOAL", "FINAL_USER_TURN", evidence.turnId, evidence.utteranceId, goals[key]?.createdAt ?: t, t, t, semanticMemoryId = semanticMemoryId ?: goals[key]?.semanticMemoryId); return id
     }
-    override suspend fun closeGoal(stableKey: String, status: String): Boolean {
+    override suspend fun closeGoal(stableKey: String, semanticMemoryId: String, status: String): Boolean {
         val key = AiriText.semanticKey(stableKey); val old = goals[key] ?: return false
+        if (old.semanticMemoryId != semanticMemoryId) return false
         goals[key] = old.copy(status = status, updatedAt = time()); return true
     }
     override suspend fun retrieve(query: String, type: MemoryRecallType, limit: Int): List<MemoryEntity> {
@@ -268,10 +278,12 @@ open class InMemoryAiriMemoryStore : AiriMemoryStore {
     override suspend fun completeBackgroundWork(workId: String) = backgroundWork.remove(workId) != null
     override suspend fun retryBackgroundWork(workId: String, attempt: Int, failure: String, now: Long): Boolean {
         val old = backgroundWork[workId] ?: return false
-        backgroundWork[workId] = old.copy(state = "PENDING", attemptCount = old.attemptCount + 1,
+        backgroundWork[workId] = old.copy(state = "PENDING", attemptCount = (old.attemptCount + 1).coerceAtMost(8),
             nextEligibleAt = now + (1L shl attempt.coerceIn(0, 8)) * 30_000L, lastFailure = failure, updatedAt = now)
         return true
     }
+    override suspend fun earliestPendingBackgroundWorkAt() = backgroundWork.values
+        .filter { it.state == "PENDING" }.minOfOrNull { it.nextEligibleAt }
     override suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int {
         var changed = 0; episodes.replaceAll { pair ->
             val rating = ratings[pair.first.episodeId]
