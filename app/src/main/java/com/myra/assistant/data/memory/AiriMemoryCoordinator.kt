@@ -232,7 +232,7 @@ class MemoryBrainCoordinator(
                         val canonical = goalCanonicalFrame(frame)
                         lastId = store.addSemantic(canonical, turn)
                             ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
-                        store.addGoal(canonical, turn)
+                        store.addGoal(canonical, turn, lastId)
                             ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
                         store.recordConsolidationAction(canonical, turn, lastId)
                     }
@@ -593,19 +593,24 @@ class MemoryBrainCoordinator(
                         intent = if (action.kind == SemanticConsolidationAction.UPDATE) MemorySemanticIntent.UPDATE_GOAL else MemorySemanticIntent.ADD_GOAL,
                         stableKey = target?.semanticKey ?: "goal:${AiriText.semanticKey(title)}",
                         goal = GoalMemoryPayload(title, fact.takeIf(String::isNotBlank) ?: title,
-                            status = if (action.kind == SemanticConsolidationAction.INVALIDATE) "COMPLETED" else "ACTIVE")
+                            status = when (action.kind) {
+                                SemanticConsolidationAction.INVALIDATE -> action.goalStatus ?: "ABANDONED"
+                                else -> action.goalStatus ?: "ACTIVE"
+                            })
                     )
                     when (action.kind) {
                         SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE -> {
                             val canonical = goalCanonicalFrame(goalFrame)
-                            val id = store.addSemantic(canonical, evidence) ?: return@forEach
-                            store.addGoal(canonical, evidence) ?: return@forEach
+                            val id = store.addSemantic(canonical, evidence)
+                                ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
+                            store.addGoal(canonical, evidence, id)
+                                ?: throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)
                             store.linkSemanticProvenance(id, episodeId)
                             store.recordConsolidationAction(canonical, evidence, id); applied++
                         }
                         SemanticConsolidationAction.REINFORCE -> if (store.reinforceSemantic(target!!.memoryId, episodeId, .03)) applied++
                         SemanticConsolidationAction.INVALIDATE -> if (store.invalidateSemantic(target!!.semanticKey)) {
-                            store.closeGoal(target.semanticKey, "COMPLETED")
+                            store.closeGoal(target.semanticKey, action.goalStatus ?: "ABANDONED")
                             store.linkSemanticProvenance(target.memoryId, episodeId); applied++
                         }
                     }
@@ -705,11 +710,18 @@ class MemoryBrainCoordinator(
 
     private fun criticalLiteralsSupported(action: EpisodeSemanticAction, evidence: AuthoritativeMemoryTurnEvidence,
         target: SemanticMemoryEntity?): Boolean {
+        // A structured goal title is an Android projection literal, not model
+        // commentary. It must stand on current USER episode evidence itself.
+        if (action.goalTitle?.let { !FinalTurnSourceSpanAuthorizer.groundedLiteral(it, evidence) } == true) return false
+        // Structured fields are independent evidence domains. Never concatenate
+        // them before extracting literals: adjacent fields can otherwise fuse
+        // into a synthetic proper name which the user never said.
         val structured = listOf(action.fact, action.person.orEmpty(), action.goalTitle.orEmpty()) + action.criticalLiterals
         val exact = Regex("(?<![\\p{L}\\p{N}])(?:\\d[\\d.,:/-]*|[A-Z][A-Z0-9_-]{2,})(?![\\p{L}\\p{N}])")
-            .findAll(structured.joinToString(" ")).map { it.value }.toSet()
+            .let { pattern -> structured.flatMap { pattern.findAll(it).map(MatchResult::value).toList() } }.toSet()
         val proper = Regex("(?<![\\p{L}])\\p{Lu}[\\p{Ll}]{2,}(?:[ -]\\p{Lu}[\\p{Ll}]{2,})*")
-            .findAll(structured.joinToString(" ")).map { it.value }.filterNot { it in ROLE_LABELS }.toSet()
+            .let { pattern -> structured.flatMap { pattern.findAll(it).map(MatchResult::value).toList() } }
+            .filterNot { it in ROLE_LABELS }.toSet()
         val declared = action.criticalLiterals.map(String::trim).filter(String::isNotEmpty).toSet()
         val required = exact + proper + declared + listOfNotNull(action.person, action.goalTitle)
         return required.all { literal ->
