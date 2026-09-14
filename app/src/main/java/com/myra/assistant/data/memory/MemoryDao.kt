@@ -24,6 +24,7 @@ interface AiriMemoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertSemanticFts(row: SemanticMemoryFtsEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertEpisodeFts(row: EpisodicMemoryFtsEntity)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun enqueueReview(row: PendingReviewEntity): Long
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertBackgroundWork(row: MemoryBackgroundWorkEntity): Long
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun appendSparkTrace(row: SparkTraceEntity): Long
 
     @Query("SELECT * FROM airi_semantic_memory WHERE active = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC LIMIT :limit")
@@ -118,6 +119,8 @@ interface AiriMemoryDao {
     suspend fun activeGoals(limit: Int): List<GoalMemoryEntity>
     @Query("SELECT * FROM airi_goals WHERE stableKey = :key AND deletedAt IS NULL LIMIT 1")
     suspend fun goalByKey(key: String): GoalMemoryEntity?
+    @Query("UPDATE airi_goals SET status = :status, updatedAt = :at WHERE stableKey = :key AND deletedAt IS NULL")
+    suspend fun closeGoal(key: String, status: String, at: Long): Int
     @Query("UPDATE airi_goals SET lastAccessed = :at, accessCount = accessCount + 1 WHERE goalId IN (:ids)")
     suspend fun touchGoals(ids: List<String>, at: Long)
     @Query("UPDATE airi_goals SET deletedAt = :at, updatedAt = :at WHERE goalId = :id AND deletedAt IS NULL")
@@ -145,6 +148,13 @@ interface AiriMemoryDao {
     @Query("SELECT DISTINCT conversationId FROM airi_pending_review ORDER BY createdAt LIMIT :limit")
     suspend fun pendingReviewConversations(limit: Int): List<String>
     @Query("DELETE FROM airi_pending_review WHERE reviewId IN (:ids)") suspend fun deleteReviews(ids: List<String>): Int
+    @Query("SELECT * FROM airi_background_work WHERE state = 'PENDING' AND nextEligibleAt <= :now ORDER BY nextEligibleAt, createdAt LIMIT :limit")
+    suspend fun dueBackgroundWork(now: Long, limit: Int): List<MemoryBackgroundWorkEntity>
+    @Query("UPDATE airi_background_work SET state = 'RUNNING', updatedAt = :at WHERE workId = :id AND state = 'PENDING' AND nextEligibleAt <= :at")
+    suspend fun claimBackgroundWork(id: String, at: Long): Int
+    @Query("DELETE FROM airi_background_work WHERE workId = :id") suspend fun completeBackgroundWork(id: String): Int
+    @Query("UPDATE airi_background_work SET state = 'PENDING', attemptCount = MIN(8, attemptCount + 1), nextEligibleAt = :nextAt, lastFailure = :failure, updatedAt = :at WHERE workId = :id")
+    suspend fun retryBackgroundWork(id: String, nextAt: Long, failure: String, at: Long): Int
 
     @Query("DELETE FROM airi_semantic_memory") suspend fun clearSemantic()
     @Query("DELETE FROM airi_people") suspend fun clearPeople()
@@ -160,10 +170,11 @@ interface AiriMemoryDao {
     @Query("DELETE FROM airi_semantic_fts") suspend fun clearSemanticFts()
     @Query("DELETE FROM airi_episode_fts") suspend fun clearEpisodeFts()
     @Query("DELETE FROM airi_spark_trace") suspend fun clearSparkTrace()
+    @Query("DELETE FROM airi_background_work") suspend fun clearBackgroundWork()
 
     @Transaction suspend fun clearAllMemory() {
         clearSemanticFts(); clearEpisodeFts(); clearSemanticProvenance(); clearConsolidationActions(); clearReviewQueue(); clearEpisodeSpans()
-        clearSegmentationState(); clearSemantic(); clearPeople(); clearEpisodes(); clearGoals(); clearBehavior()
+        clearSegmentationState(); clearSemantic(); clearPeople(); clearEpisodes(); clearGoals(); clearBehavior(); clearBackgroundWork()
         clearConversation(); clearSparkTrace()
     }
 }
