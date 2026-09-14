@@ -58,7 +58,7 @@ APPLICABLE`. There are no unresolved applicable runtime rows in this revision.
 | `crates/core/src/pending_review_queue.rs` + migration 04 | Retrieval review side effect | `PendingReviewEntity` | ANDROID-NATIVE EQUIVALENT | review enqueue tests | SQLite queue |
 | `crates/worker/src/jobs/memory_review.rs` | Aggregate/review/rate/update | owner review queue + Gemini ratings + durable work tokens | ANDROID-NATIVE EQUIVALENT | exact state/queue/retry tests | Durable Room tokens plus startup/WorkManager wake recovery replace Apalis; partial ratings remain pending |
 | `fsrs` 5.2.0 dependency | FSRS-6 inference | `AiriFsrs` | EXACT PORT | pinned numeric conformance tests | Training APIs are not needed on device |
-| `crates/migration/*` | PostgreSQL schema migration | Room v11 destructive pre-release cutover | ANDROID-NATIVE EQUIVALENT | schema/static tests | Clean reinstall required |
+| `crates/migration/*` | PostgreSQL schema migration | Room v12 destructive pre-release cutover; goal projection links canonical semantic lifecycle | ANDROID-NATIVE EQUIVALENT | schema/static tests | Clean reinstall required |
 | `docs/todo/flashbulb_memory.md` | Documented high-significance TODO, not production-invoked upstream | `FlashbulbPolicy`, episode fields | UPSTREAM TODO | policy tests | LYRA completion of upstream documented TODO |
 | `docs/todo/semantic_memory_confidence.md` | Proposed confidence evolution, not production-invoked upstream | explicit/inferred confidence metadata | UPSTREAM TODO | behavior/safety tests | LYRA completion uses conservative policy |
 | `docs/architecture/graph_memory.md` | Graph direction | stable people/aliases/relationships | ANDROID-NATIVE EQUIVALENT | entity tests | LYRA-specific assistant identity graph |
