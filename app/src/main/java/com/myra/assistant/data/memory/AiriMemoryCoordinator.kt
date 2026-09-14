@@ -10,7 +10,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
 enum class MemoryDecision { IGNORE, RECALL, SAVE, UPDATE, DELETE, TRANSIENT, NEEDS_CLARIFICATION, REJECT }
@@ -79,30 +78,10 @@ class MemoryBrainCoordinator(
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inactivityJobs = ConcurrentHashMap<String, Job>()
     private val segmentationRetryAttempts = ConcurrentHashMap<String, Int>()
-    private val consolidationJobs = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
-    private val consolidationAttempts = ConcurrentHashMap<String, Int>()
-    private val consolidationQueue = Channel<String>(capacity = 32)
     private val consolidationDrainScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
     private val reviewWorkerRunning = java.util.concurrent.atomic.AtomicBoolean(false)
 
     init {
-        backgroundScope.launch {
-            for (episodeId in consolidationQueue) {
-                try { consolidateEpisode(episodeId) }
-                catch (error: Throwable) {
-                    log("MEMORY_CONSOLIDATION_RETRY episode=${episodeId.hashCode()} reason=${error.javaClass.simpleName}")
-                    consolidationJobs.remove(episodeId)
-                    val attempt = consolidationAttempts.merge(episodeId, 1) { old, one -> old + one } ?: 1
-                    store.retryBackgroundWork("CONSOLIDATION:$episodeId", attempt, error.javaClass.simpleName, System.currentTimeMillis())
-                    wakeScheduler.wake(retryDelayMs(attempt))
-                    continue
-                }
-                consolidationAttempts.remove(episodeId)
-                consolidationJobs.remove(episodeId)
-                store.completeBackgroundWork("CONSOLIDATION:$episodeId")
-                scheduleConsolidationDrain()
-            }
-        }
         // A process can die after transcript commit but before the in-process
         // timeout fires. Recover only stale source-owned conversations; fresh
         // claims remain protected by the generation/claim guard below.
@@ -140,17 +119,15 @@ class MemoryBrainCoordinator(
             }
             var frame = contract.frame!!.copy(sourceSessionId = evidence.sessionId)
             if (frame.intent == MemorySemanticIntent.ADD_RELATIONSHIP) {
-                val requested = frame.relationship ?: return FinalMemoryTurnPlan(evidence.sourceText,
-                    decision = MemoryDecision.REJECT, rejectionReason = MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP.name)
-                frame = frame.copy(relationship = RelationshipStrengthAuthorizer.authorize(requested, frame.semanticRelationship)
+                val strength = RelationshipStrengthAuthorizer.authorize(frame.semanticRelationship)
                     ?: return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT,
-                        rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name))
+                        rejectionReason = MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP.name)
+                frame = frame.copy(relationship = strength)
             } else if (frame.intent == MemorySemanticIntent.REPLACE_RELATIONSHIP) {
-                val requested = frame.replacementRelationship ?: return FinalMemoryTurnPlan(evidence.sourceText,
-                    decision = MemoryDecision.REJECT, rejectionReason = MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP.name)
-                frame = frame.copy(replacementRelationship = RelationshipStrengthAuthorizer.authorize(requested, frame.semanticRelationship)
+                val strength = RelationshipStrengthAuthorizer.authorize(frame.semanticRelationship)
                     ?: return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT,
-                        rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name))
+                        rejectionReason = MemoryFailureReason.MISSING_REQUIRED_RELATIONSHIP.name)
+                frame = frame.copy(replacementRelationship = strength)
             }
             if (contract.recoveredEntity) log(
                 "MEMORY_ENTITY_RESOLUTION turnId=${evidence.turnId} operation=${frame.intent} " +
@@ -469,26 +446,13 @@ class MemoryBrainCoordinator(
         store.reviewEpisodes(conversationId, ratings, reviewedAt)
 
     private fun scheduleEpisodeConsolidation(episodeId: String) {
-        if (!consolidationJobs.add(episodeId)) return
         backgroundScope.launch {
+            // The local coroutine is a wake hint only. It never calls
+            // consolidateEpisode directly: every execution first owns the
+            // canonical Room-backed durable claim used by WorkManager.
             store.enqueueBackgroundWork("CONSOLIDATION", episodeId)
             wakeScheduler.wake()
-            if (consolidationQueue.trySend(episodeId).isFailure) {
-                consolidationJobs.remove(episodeId)
-                log("MEMORY_CONSOLIDATION_BACKPRESSURE episode=${episodeId.hashCode()}")
-                store.retryBackgroundWork("CONSOLIDATION:$episodeId", 1, "CHANNEL_BACKPRESSURE", System.currentTimeMillis())
-                wakeScheduler.wake(retryDelayMs(1))
-                scheduleConsolidationDrain()
-            }
-        }
-    }
-
-    private fun scheduleConsolidationDrain() {
-        if (!consolidationDrainScheduled.compareAndSet(false, true)) return
-        backgroundScope.launch {
-            delay(1_000L)
-            try { store.unconsolidatedEpisodes(32).forEach { scheduleEpisodeConsolidation(it.episodeId) } }
-            finally { consolidationDrainScheduled.set(false) }
+            runDurableBackgroundWork()
         }
     }
 
@@ -501,7 +465,6 @@ class MemoryBrainCoordinator(
             try {
                 val done = when (work.kind) {
                     "CONSOLIDATION" -> {
-                        consolidationJobs.remove(work.subjectId)
                         consolidateEpisode(work.subjectId)
                         true
                     }
@@ -587,13 +550,10 @@ class MemoryBrainCoordinator(
                 if (category == MemoryCategory.PERSON) {
                     val personName = action.person
                     val matches = personName?.let { store.peopleByName(it) }.orEmpty()
-                    val requested = action.relationship?.let { runCatching { PersonRelationship.valueOf(it) }.getOrNull() }
                     val semantic = action.semanticRelationship?.let { runCatching { PersonRelationship.valueOf(it) }.getOrNull() }
                     val relationship = when (action.kind) {
-                        SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE -> {
-                            val operation = requested ?: return@forEach
-                            RelationshipStrengthAuthorizer.authorize(operation, semantic) ?: return@forEach
-                        }
+                        SemanticConsolidationAction.NEW, SemanticConsolidationAction.UPDATE ->
+                            RelationshipStrengthAuthorizer.authorize(semantic) ?: return@forEach
                         else -> null // canonical target owns REINFORCE/INVALIDATE
                     }
                     val person = when (action.kind) {
