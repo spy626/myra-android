@@ -53,6 +53,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         binding.taskPause.setOnClickListener { guardUnsavedBrief { togglePause() } }
         binding.taskInspect.setOnClickListener { inspectProject() }
         binding.taskSource.setOnClickListener { reviewSource() }
+        binding.taskContext.setOnClickListener { prepareLocalContext() }
         binding.taskFiles.setOnClickListener {
             guardUnsavedBrief { startActivity(WorkspaceEditorActivity.intent(this, projectId)) }
         }
@@ -64,9 +65,10 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 updateStatus()
-                // Neither previously displayed read-only view is fresh after task edits.
+                // Previously displayed views are stale after unsaved spec edits.
                 binding.taskInspection.visibility = View.GONE
                 binding.taskSourcePreview.visibility = View.GONE
+                binding.taskContextPreview.visibility = View.GONE
             }
             override fun afterTextChanged(s: Editable?) = Unit
         }
@@ -86,7 +88,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
 
     private fun leaveTask() = guardUnsavedBrief { finish() }
 
-    /** Keep confirmations and the source chooser in LYRA's readable dark-green palette. */
+    /** Keep confirmations and both file choosers in LYRA's readable dark-green palette. */
     private fun AlertDialog.Builder.showTaskConfirmation() {
         val dialog = create()
         dialog.show()
@@ -247,6 +249,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         runCatching { WorkspaceProjectInspection.scan(files, projectId) }
             .onSuccess {
                 binding.taskSourcePreview.visibility = View.GONE
+                binding.taskContextPreview.visibility = View.GONE
                 binding.taskInspection.text = it.displayText()
                 binding.taskInspection.visibility = View.VISIBLE
             }.onFailure {
@@ -292,11 +295,57 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         runCatching { WorkspaceSourcePreview.read(files, projectId, selectedPath) }
             .onSuccess {
                 binding.taskInspection.visibility = View.GONE
+                binding.taskContextPreview.visibility = View.GONE
                 binding.taskSourcePreview.text = it.displayText()
                 binding.taskSourcePreview.visibility = View.VISIBLE
             }.onFailure {
                 binding.taskSourcePreview.visibility = View.GONE
                 Toast.makeText(this, it.message ?: "File cannot be previewed", Toast.LENGTH_LONG).show()
+            }
+    }
+
+    /** Explicit file selection and conservative full-source scan; nothing is sent to a model. */
+    private fun prepareLocalContext() {
+        val saved = currentSavedForInspection() ?: return
+        if (!WorkspaceTaskContract.isSpecApproved(saved) || saved.status == WorkspaceTaskStatus.PAUSED) {
+            Toast.makeText(this, "Approve the saved spec and resume before preparing context", Toast.LENGTH_LONG).show()
+            return
+        }
+        runCatching { WorkspaceSourceContext.choices(files, projectId) }
+            .onSuccess { choices ->
+                if (choices.isEmpty()) {
+                    binding.taskContextPreview.visibility = View.GONE
+                    Toast.makeText(this, "No allowed project text files to prepare", Toast.LENGTH_LONG).show()
+                    return@onSuccess
+                }
+                val adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, choices) {
+                    override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+                        super.getView(position, convertView, parent).also { view ->
+                            (view as TextView).setTextColor(Color.rgb(217, 243, 222))
+                        }
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("Choose one file for local context (not sent)")
+                    .setAdapter(adapter) { _, which -> showLocalContext(choices[which], saved) }
+                    .setNegativeButton("Cancel", null)
+                    .showTaskConfirmation()
+            }.onFailure {
+                binding.taskContextPreview.visibility = View.GONE
+                Toast.makeText(this, "Cannot list context files", Toast.LENGTH_LONG).show()
+            }
+    }
+
+    private fun showLocalContext(selectedPath: String, expected: WorkspaceTask) {
+        if (currentSavedForInspection() == null) return
+        runCatching { WorkspaceSourceContext.prepare(files, tasks, projectId, expected, selectedPath) }
+            .onSuccess {
+                binding.taskInspection.visibility = View.GONE
+                binding.taskSourcePreview.visibility = View.GONE
+                binding.taskContextPreview.text = it.displayText()
+                binding.taskContextPreview.visibility = View.VISIBLE
+            }.onFailure {
+                binding.taskContextPreview.visibility = View.GONE
+                Toast.makeText(this, it.message ?: "Context blocked; review file locally", Toast.LENGTH_LONG).show()
             }
     }
 
@@ -314,6 +363,9 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         binding.taskSpecApproval.visibility = if (ready) View.VISIBLE else View.GONE
         binding.taskSpecApproval.text = if (task != null && WorkspaceTaskContract.isSpecApproved(task))
             "Revoke spec planning approval" else "Approve saved spec (planning only)"
+        binding.taskContext.visibility = if (ready && task != null && WorkspaceTaskContract.isSpecApproved(task) &&
+            task.status != WorkspaceTaskStatus.PAUSED) View.VISIBLE else View.GONE
+        if (binding.taskContext.visibility != View.VISIBLE) binding.taskContextPreview.visibility = View.GONE
         binding.taskApprovalState.text = when {
             isDirty() -> "Unsaved edits are not approved. Save them first."
             task == null || task.acceptanceCriteria.isBlank() -> "Planning approval pending: save a complete specification."
@@ -344,6 +396,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         }
         binding.taskInspection.visibility = View.GONE
         binding.taskSourcePreview.visibility = View.GONE
+        binding.taskContextPreview.visibility = View.GONE
         updateStatus()
         binding.taskPlan.text = WorkspaceTaskContract.steps(project.type).mapIndexed { i, step ->
             "${i + 1}. ${step.intent}\n   ${step.lane.name.lowercase().replace('_', ' ')}  •  ${if (step.approvalRequired) "Approval required" else "Evidence required"}"
