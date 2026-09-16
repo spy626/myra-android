@@ -3,6 +3,7 @@ package com.myra.assistant.ui.workspace
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -14,6 +15,7 @@ import java.util.Date
 class WorkspaceProjectActivity : AppCompatActivity() {
     companion object {
         private const val EXTRA_PROJECT_ID = "workspace_project_id"
+        private const val STATE_INFO_EXPANDED = "workspace_info_expanded"
 
         fun intent(context: Context, projectId: String): Intent =
             Intent(context, WorkspaceProjectActivity::class.java)
@@ -25,6 +27,7 @@ class WorkspaceProjectActivity : AppCompatActivity() {
         WorkspaceProjectStore(File(filesDir, "workspace/projects"))
     }
     private var projectId: String? = null
+    private var infoExpanded = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,6 +36,10 @@ class WorkspaceProjectActivity : AppCompatActivity() {
 
         binding.backButton.setOnClickListener { finish() }
         binding.deleteProjectButton.setOnClickListener { confirmDeleteProject() }
+        binding.projectInfoToggle.setOnClickListener {
+            infoExpanded = !infoExpanded
+            renderProjectInfo()
+        }
 
         projectId = intent.getStringExtra(EXTRA_PROJECT_ID)
         val project = projectId?.let(projectStore::markOpened)
@@ -42,6 +49,21 @@ class WorkspaceProjectActivity : AppCompatActivity() {
             return
         }
         bindProject(project)
+        infoExpanded = savedInstanceState?.getBoolean(STATE_INFO_EXPANDED) ?: false
+        renderProjectInfo()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(STATE_INFO_EXPANDED, infoExpanded)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun renderProjectInfo() {
+        binding.projectInfoPanel.visibility = if (infoExpanded) View.VISIBLE else View.GONE
+        binding.projectInfoToggle.text =
+            if (infoExpanded) "Hide project information  ▴" else "Project information  ▾"
+        binding.projectInfoToggle.contentDescription =
+            if (infoExpanded) "Hide project information" else "Show project information"
     }
 
     private fun bindProject(project: WorkspaceProject) {

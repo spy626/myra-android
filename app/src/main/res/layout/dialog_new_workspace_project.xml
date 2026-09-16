@@ -2,80 +2,154 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:background="@drawable/bg_workspace_dialog"
     android:orientation="vertical"
-    android:paddingStart="20dp"
-    android:paddingTop="8dp"
-    android:paddingEnd="20dp"
-    android:paddingBottom="8dp">
+    android:paddingStart="22dp"
+    android:paddingTop="24dp"
+    android:paddingEnd="22dp"
+    android:paddingBottom="20dp">
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Project name"
-        android:textColor="#CBE7D0"
-        android:textSize="12sp"
+        android:letterSpacing="0.14"
+        android:text="NEW WORKSPACE"
+        android:textColor="#91C99B"
+        android:textSize="10sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="7dp"
+        android:text="Create a project"
+        android:textColor="#F2FFF4"
+        android:textSize="23sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="5dp"
+        android:text="Start with a name and choose what to build."
+        android:textColor="#91AB97"
+        android:textSize="12sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="25dp"
+        android:text="PROJECT NAME"
+        android:letterSpacing="0.09"
+        android:textColor="#B7DABE"
+        android:textSize="11sp"
         android:textStyle="bold" />
 
     <EditText
         android:id="@+id/projectNameInput"
         android:layout_width="match_parent"
-        android:layout_height="52dp"
-        android:layout_marginTop="8dp"
-        android:background="@drawable/bg_field"
+        android:layout_height="54dp"
+        android:layout_marginTop="9dp"
+        android:background="@drawable/bg_workspace_dialog_input"
         android:hint="e.g. Minicoy Market"
         android:imeOptions="actionDone"
         android:inputType="textCapSentences"
         android:maxLength="80"
-        android:paddingStart="14dp"
-        android:paddingEnd="14dp"
+        android:paddingStart="15dp"
+        android:paddingEnd="15dp"
         android:singleLine="true"
         android:textColor="#F1FFF3"
-        android:textColorHint="#6F8E76"
+        android:textColorHint="#74917C"
         android:textSize="15sp" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="22dp"
-        android:text="Project type"
-        android:textColor="#CBE7D0"
-        android:textSize="12sp"
+        android:layout_marginTop="24dp"
+        android:letterSpacing="0.09"
+        android:text="PROJECT TYPE"
+        android:textColor="#B7DABE"
+        android:textSize="11sp"
         android:textStyle="bold" />
 
     <RadioGroup
         android:id="@+id/projectTypeGroup"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
+        android:layout_marginTop="10dp"
         android:orientation="vertical">
 
         <RadioButton
             android:id="@+id/projectTypeWebsite"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:buttonTint="#8FE49A"
+            android:layout_height="58dp"
+            android:background="@drawable/bg_workspace_dialog_input"
+            android:buttonTint="#A2ECAA"
             android:checked="true"
-            android:text="Website  •  HTML / CSS / JavaScript"
-            android:textColor="#D8F6DD"
-            android:textSize="14sp" />
+            android:gravity="center_vertical"
+            android:paddingStart="13dp"
+            android:paddingEnd="8dp"
+            android:text="  Website  ·  HTML / CSS / JS"
+            android:textColor="#E4F8E8"
+            android:textSize="13sp" />
 
         <RadioButton
             android:id="@+id/projectTypeAndroid"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:buttonTint="#8FE49A"
-            android:text="Android App  •  Native Android"
-            android:textColor="#D8F6DD"
-            android:textSize="14sp" />
+            android:layout_height="58dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_workspace_dialog_input"
+            android:buttonTint="#A2ECAA"
+            android:gravity="center_vertical"
+            android:paddingStart="13dp"
+            android:paddingEnd="8dp"
+            android:text="  Android App  ·  Native Android"
+            android:textColor="#E4F8E8"
+            android:textSize="13sp" />
     </RadioGroup>
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="15dp"
         android:lineSpacingExtra="2dp"
-        android:text="Project files stay in LYRA's private Workspace storage and remain separate from personal AIRI memory."
-        android:textColor="#78957F"
+        android:text="Projects are stored privately in Workspace, separate from personal memory."
+        android:textColor="#87A38D"
         android:textSize="11sp" />
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="25dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/cancelProjectButton"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="Cancel"
+            android:textColor="#B1CCB6"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/createProjectButton"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_field"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="Create project  →"
+            android:textColor="#E4FFE8"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 </LinearLayout>

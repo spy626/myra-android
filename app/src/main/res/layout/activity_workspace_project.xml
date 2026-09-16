@@ -24,11 +24,10 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="23dp"
-        android:fontFamily="monospace"
-        android:letterSpacing="0.12"
-        android:text="PROJECT"
-        android:textColor="#8CC895"
-        android:textSize="11sp"
+        android:letterSpacing="0.15"
+        android:text="WORKSPACE / PROJECT"
+        android:textColor="#91C99B"
+        android:textSize="10sp"
         android:textStyle="bold"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -37,8 +36,9 @@
     <ScrollView
         android:layout_width="0dp"
         android:layout_height="0dp"
-        android:layout_marginTop="18dp"
+        android:layout_marginTop="23dp"
         android:fillViewport="true"
+        android:clipToPadding="false"
         android:paddingBottom="28dp"
         android:scrollbars="none"
         app:layout_constraintBottom_toBottomOf="parent"
@@ -57,78 +57,44 @@
                 android:id="@+id/projectTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="2"
                 android:textColor="#F1FFF3"
-                android:textSize="26sp"
+                android:textSize="27sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/projectType"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:textColor="#91B698"
+                android:layout_marginTop="7dp"
+                android:textColor="#A1C4A8"
                 android:textSize="12sp" />
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:background="@drawable/bg_sheet"
+                android:layout_marginTop="27dp"
+                android:background="@drawable/bg_workspace_project_card"
                 android:orientation="vertical"
-                android:padding="18dp">
-
-                <TextView
-                    android:id="@+id/projectIdText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:lineSpacingExtra="3dp"
-                    android:textColor="#CBE7D0"
-                    android:textSize="11sp" />
-
-                <TextView
-                    android:id="@+id/projectStorageText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:fontFamily="monospace"
-                    android:lineSpacingExtra="3dp"
-                    android:textColor="#CBE7D0"
-                    android:textSize="11sp" />
-
-                <TextView
-                    android:id="@+id/projectCreatedText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:lineSpacingExtra="3dp"
-                    android:textColor="#9DB8A2"
-                    android:textSize="11sp" />
-
-                <TextView
-                    android:id="@+id/projectUpdatedText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:lineSpacingExtra="3dp"
-                    android:textColor="#9DB8A2"
-                    android:textSize="11sp" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:background="@drawable/bg_field"
-                android:orientation="vertical"
-                android:padding="18dp">
+                android:padding="21dp">
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Foundation ready"
-                    android:textColor="#D8F6DD"
-                    android:textSize="15sp"
+                    android:letterSpacing="0.11"
+                    android:text="PROJECT HOME"
+                    android:textColor="#98D4A1"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="Ready to build"
+                    android:textColor="#F1FFF3"
+                    android:textSize="20sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -136,34 +102,97 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="7dp"
                     android:lineSpacingExtra="3dp"
-                    android:text="This stable project root is ready for Phase 3 file tree and code editor. Project state stays scoped to Workspace."
-                    android:textColor="#8FAE95"
+                    android:text="Your project is saved. Files and the code editor are coming in the next Workspace phase."
+                    android:textColor="#B2C9B7"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="19dp"
+                    android:text="●  Saved locally  ·  Private project"
+                    android:textColor="#96C99F"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/projectInfoToggle"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginTop="19dp"
+                android:background="@drawable/bg_workspace_dialog_input"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:paddingStart="18dp"
+                android:paddingEnd="18dp"
+                android:text="Project information  ▾"
+                android:textColor="#DAF2DF"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:id="@+id/projectInfoPanel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_workspace_project_card"
+                android:orientation="vertical"
+                android:padding="18dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/projectCreatedText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingExtra="3dp"
+                    android:textColor="#B9D2BF"
                     android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/projectUpdatedText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:lineSpacingExtra="3dp"
+                    android:textColor="#B9D2BF"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/projectIdText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:fontFamily="monospace"
+                    android:lineSpacingExtra="3dp"
+                    android:textColor="#99B9A0"
+                    android:textIsSelectable="true"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/projectStorageText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:fontFamily="monospace"
+                    android:lineSpacingExtra="3dp"
+                    android:textColor="#99B9A0"
+                    android:textIsSelectable="true"
+                    android:textSize="11sp" />
             </LinearLayout>
 
             <TextView
                 android:id="@+id/deleteProjectButton"
                 android:layout_width="match_parent"
-                android:layout_height="54dp"
-                android:layout_marginTop="26dp"
-                android:background="@drawable/bg_field"
+                android:layout_height="52dp"
+                android:layout_marginTop="31dp"
+                android:background="?attr/selectableItemBackground"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
-                android:text="Delete Project"
-                android:textColor="#FF9C9C"
-                android:textSize="13sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="22dp"
-                android:gravity="center"
-                android:text="PHASE 2  •  STABLE PROJECT IDENTITY"
-                android:textColor="#62876A"
-                android:textSize="9sp" />
+                android:text="Delete project"
+                android:textColor="#E5A0A0"
+                android:textSize="13sp" />
         </LinearLayout>
     </ScrollView>
-
 </androidx.constraintlayout.widget.ConstraintLayout>
