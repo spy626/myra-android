@@ -59,6 +59,14 @@
                 android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_project_card"
                 android:padding="18dp" android:lineSpacingExtra="3dp" android:textColor="#D9F3DE"
                 android:textSize="12sp" android:visibility="gone" />
+            <TextView android:id="@+id/taskSource" android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_dialog_input"
+                android:gravity="center" android:text="Review one source file (read-only)" android:textColor="#D4F8D9"
+                android:textSize="13sp" android:clickable="true" android:focusable="true" android:visibility="gone" />
+            <TextView android:id="@+id/taskSourcePreview" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_project_card"
+                android:padding="18dp" android:lineSpacingExtra="3dp" android:textColor="#D9F3DE"
+                android:textSize="12sp" android:visibility="gone" android:textIsSelectable="true" />
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="28dp" android:text="EXECUTION CHECKLIST" android:letterSpacing="0.11"
                 android:textColor="#9BD9A6" android:textSize="11sp" android:textStyle="bold" />
