@@ -10,7 +10,10 @@ import android.text.Editable
 import android.text.Spannable
 import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
+import android.view.Gravity
 import android.view.View
+import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -52,6 +55,9 @@ class WorkspaceEditorActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityWorkspaceEditorBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        // Three or four rows are enough while browsing. The editor owns the remaining height.
+        binding.fileTreeScroll.layoutParams = binding.fileTreeScroll.layoutParams.apply { height = dp(136) }
         id = intent.getStringExtra(EXTRA_PROJECT_ID).orEmpty()
         val project = projects.getProject(id)
         if (project == null) {
@@ -62,9 +68,13 @@ class WorkspaceEditorActivity : AppCompatActivity() {
         binding.editorHeading.text = project.name
         binding.backButton.setOnClickListener { attemptClose() }
         binding.filesButton.setOnClickListener {
-            treeOpen = !treeOpen
-            binding.fileTreeScroll.visibility = if (treeOpen) View.VISIBLE else View.GONE
-            if (treeOpen) renderTree()
+            val nextOpen = WorkspaceEditorPanelPolicy.afterFilesButton(treeOpen)
+            if (nextOpen) {
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.hideSoftInputFromWindow(binding.codeEditor.windowToken, 0)
+                binding.filesButton.requestFocus()
+            }
+            setTreeOpen(nextOpen)
         }
         binding.newFileButton.setOnClickListener { withSavedChanges { showPathDialog(false) } }
         binding.newFolderButton.setOnClickListener { withSavedChanges { showPathDialog(true) } }
@@ -77,6 +87,12 @@ class WorkspaceEditorActivity : AppCompatActivity() {
                     openFile("index.html")
                 } catch (error: Exception) { toast(error.message ?: "Starter could not be created") }
             }
+        }
+        binding.codeEditor.setOnFocusChangeListener { _, focused ->
+            if (focused && treeOpen) setTreeOpen(WorkspaceEditorPanelPolicy.afterEditorFocus(treeOpen))
+        }
+        binding.codeEditor.setOnClickListener {
+            if (treeOpen) setTreeOpen(WorkspaceEditorPanelPolicy.afterEditorFocus(treeOpen))
         }
         binding.codeEditor.setOnScrollChangeListener { _, _, scrollY, _, _ ->
             binding.lineNumbers.scrollTo(0, scrollY)
@@ -93,7 +109,7 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             }
         })
         savedInstanceState?.getStringArrayList(STATE_TABS)?.forEach { tabs.add(it) }
-        renderTree()
+        setTreeOpen(false)
         val restored = project.activeFilePath
         if (restored != null) openFile(restored)
         else renderStatus()
@@ -115,6 +131,14 @@ class WorkspaceEditorActivity : AppCompatActivity() {
 
     private fun attemptClose() = withSavedChanges { finish() }
 
+    private fun setTreeOpen(open: Boolean) {
+        treeOpen = open
+        binding.fileTreeScroll.visibility = if (open) View.VISIBLE else View.GONE
+        binding.filesButton.text = if (open) "▾  Files" else "▸  Files"
+        binding.filesButton.contentDescription = if (open) "Hide project files" else "Show project files"
+        if (open) renderTree() else binding.starterButton.visibility = View.GONE
+    }
+
     private fun withSavedChanges(next: () -> Unit) {
         if (!dirty) { next(); return }
         val dialog = AlertDialog.Builder(this)
@@ -134,7 +158,10 @@ class WorkspaceEditorActivity : AppCompatActivity() {
     }
 
     private fun openFile(path: String) {
-        if (path == currentPath) return
+        if (path == currentPath) {
+            setTreeOpen(WorkspaceEditorPanelPolicy.afterFileSelected(treeOpen))
+            return
+        }
         try {
             val text = files.readFile(id, path)
             files.rememberActive(id, path)
@@ -148,6 +175,7 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             binding.codeEditor.isEnabled = true
             loading = false
             dirty = false
+            setTreeOpen(WorkspaceEditorPanelPolicy.afterFileSelected(treeOpen))
             renderStatus()
             renderTabs()
             handler.removeCallbacks(recolor)
@@ -179,21 +207,42 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             toast(it.message ?: "Could not load files"); return
         }
         binding.fileTreeContainer.removeAllViews()
-        binding.starterButton.visibility = if (entries.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.WEBSITE) View.VISIBLE else View.GONE
+        binding.starterButton.visibility = if (treeOpen && entries.isEmpty() &&
+            projects.getProject(id)?.type == WorkspaceProjectType.WEBSITE) View.VISIBLE else View.GONE
         if (entries.isEmpty()) {
             binding.fileTreeContainer.addView(makeRow("No files yet · create a file or use website starter", false, 0))
         }
         entries.filter { entry -> collapsed.none { entry.path.startsWith("$it/") } }.forEach { entry ->
             val label = (if (entry.folder) if (entry.path in collapsed) "▸  " else "▾  " else "◇  ") + entry.path.substringAfterLast('/')
-            val row = makeRow(label, entry.path == currentPath, entry.depth)
-            row.contentDescription = (if (entry.folder) "Folder " else "Open file ") + entry.path
-            row.setOnClickListener {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minHeight = dp(48)
+                if (entry.path == currentPath) setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            }
+            val name = makeRow(label, entry.path == currentPath, entry.depth)
+            name.contentDescription = (if (entry.folder) "Folder " else "Open file ") + entry.path
+            name.setOnClickListener {
                 if (entry.folder) {
                     if (!collapsed.add(entry.path)) collapsed.remove(entry.path)
                     renderTree()
                 } else requestOpen(entry.path)
             }
-            row.setOnLongClickListener { withSavedChanges { showEntryActions(entry) }; true }
+            name.setOnLongClickListener { withSavedChanges { showEntryActions(entry) }; true }
+            row.addView(name, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val actions = TextView(this).apply {
+                text = "⋮"
+                textSize = 24f
+                gravity = Gravity.CENTER
+                setTextColor(Color.parseColor("#B6F3C1"))
+                minWidth = dp(48)
+                minHeight = dp(48)
+                isClickable = true
+                isFocusable = true
+                contentDescription = "More actions for ${entry.path}"
+                setOnClickListener { withSavedChanges { showEntryActions(entry) } }
+            }
+            row.addView(actions, LinearLayout.LayoutParams(dp(48), dp(48)))
             binding.fileTreeContainer.addView(row)
         }
     }
@@ -203,8 +252,7 @@ class WorkspaceEditorActivity : AppCompatActivity() {
         textSize = 13f
         setTextColor(Color.parseColor(if (active) "#E8FFEA" else "#A8D3B0"))
         setPadding(dp(12 + depth * 14), dp(10), dp(8), dp(10))
-        if (active) setBackgroundResource(R.drawable.bg_workspace_dialog_input)
-        minHeight = dp(43)
+        minHeight = dp(48)
         isClickable = true
         isFocusable = true
     }
@@ -269,9 +317,7 @@ class WorkspaceEditorActivity : AppCompatActivity() {
                 try {
                     if (folder) files.createFolder(id, path) else files.createFile(id, path)
                     dialog.dismiss()
-                    treeOpen = true
-                    binding.fileTreeScroll.visibility = View.VISIBLE
-                    renderTree()
+                    setTreeOpen(true)
                     if (!folder) openFile(path)
                 } catch (error: Exception) { input.error = error.message ?: "Invalid path" }
             }
