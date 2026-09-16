@@ -2,6 +2,7 @@ package com.myra.assistant.ui.workspace
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
@@ -9,6 +10,7 @@ import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivityWorkspaceTaskBinding
 import java.io.File
 
@@ -72,6 +74,15 @@ class WorkspaceTaskActivity : AppCompatActivity() {
 
     private fun leaveTask() = guardUnsavedBrief { finish() }
 
+    /** Keep both task confirmations in LYRA's dark-green palette with legible actions. */
+    private fun AlertDialog.Builder.showTaskConfirmation() {
+        val dialog = create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(R.drawable.bg_workspace_dialog)
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(Color.rgb(190, 255, 202))
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.rgb(255, 190, 180))
+    }
+
     /** A visible but unsaved brief is never silently replaced by an older saved brief. */
     private fun guardUnsavedBrief(next: () -> Unit) {
         if (!WorkspaceTaskDraftPolicy.isDirty(binding.taskGoalInput.text.toString(), currentTask?.goal)) {
@@ -86,7 +97,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
                 binding.taskGoalInput.setText(currentTask?.goal.orEmpty())
                 next()
             }
-            .show()
+            .showTaskConfirmation()
     }
 
     private fun saveGoal() {
@@ -102,7 +113,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
                 .setMessage("The previous task brief will be replaced. Project files and personal memory stay unchanged.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Replace") { _, _ -> persistGoal(normalized, true) }
-                .show()
+                .showTaskConfirmation()
         } else if (existing == null) persistGoal(normalized, false)
         else {
             binding.taskGoalInput.setText(existing.goal)
