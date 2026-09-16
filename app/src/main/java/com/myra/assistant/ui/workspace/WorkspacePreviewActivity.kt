@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.webkit.PermissionRequest
@@ -52,7 +53,10 @@ class WorkspacePreviewActivity : AppCompatActivity() {
             startActivity(WorkspaceEditorActivity.intent(this, projectId))
         }
         binding.previewWebView.apply {
-            setBackgroundColor(android.graphics.Color.parseColor("#0B1210"))
+            // A website without its own background uses the browser's white canvas,
+            // not LYRA's dark chrome. Keep the website's own CSS colours authoritative.
+            setBackgroundColor(android.graphics.Color.WHITE)
+            settings.disableAutomaticDarkening()
             settings.javaScriptEnabled = true // User's local website JavaScript, never an Android bridge.
             settings.domStorageEnabled = true
             settings.allowFileAccess = false
@@ -102,6 +106,16 @@ class WorkspacePreviewActivity : AppCompatActivity() {
             binding.previewStatus.text = "Preview unavailable: ${error.message ?: "Cannot start"}"
             binding.previewChrome.isEnabled = false
             binding.previewRefresh.isEnabled = false
+        }
+    }
+
+    /** Android 13+ uses algorithmic darkening; Android 10–12 use the legacy force-dark setting. */
+    @Suppress("DEPRECATION")
+    private fun WebSettings.disableAutomaticDarkening() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setAlgorithmicDarkeningAllowed(false)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            setForceDark(WebSettings.FORCE_DARK_OFF)
         }
     }
 

@@ -108,7 +108,7 @@
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:layout_marginTop="4dp"
-        android:background="#0B1210"
+        android:background="#FFFFFF"
         app:layout_constraintTop_toBottomOf="@id/previewStatus"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
