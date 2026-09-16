@@ -6,9 +6,11 @@ import android.graphics.Color
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -35,6 +37,8 @@ class WorkspaceTaskActivity : AppCompatActivity() {
     private var currentTask: WorkspaceTask? = null
     /** Ephemeral screen-only draft, never stored in task JSON or sent to a provider. */
     private var localContext: WorkspaceSourceContext.Draft? = null
+    private lateinit var localPlanButton: TextView
+    private lateinit var localPlanPreview: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,6 +52,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             return
         }
         project = found
+        installLocalPlanUi()
         binding.taskBack.setOnClickListener { leaveTask() }
         binding.taskHeading.text = project.name
         binding.taskSave.setOnClickListener { saveGoal() }
@@ -78,6 +83,40 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         binding.taskGoalInput.addTextChangedListener(statusWatcher)
         binding.taskAcceptanceInput.addTextChangedListener(statusWatcher)
         render()
+    }
+
+    /** Place the optional plan review alongside the existing context controls, without a new screen or executor. */
+    private fun installLocalPlanUi() {
+        val column = binding.taskContextRecheck.parent as LinearLayout
+        val insertAt = column.indexOfChild(binding.taskContextRecheck) + 1
+        fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
+        localPlanButton = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
+                topMargin = dp(10)
+            }
+            setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            gravity = Gravity.CENTER
+            text = "Draft project plan (local only)"
+            setTextColor(Color.rgb(212, 248, 217))
+            textSize = 13f
+            isClickable = true
+            isFocusable = true
+            visibility = View.GONE
+            setOnClickListener { showLocalPlan() }
+        }
+        column.addView(localPlanButton, insertAt)
+        localPlanPreview = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
+            setBackgroundResource(R.drawable.bg_workspace_project_card)
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            setLineSpacing(dp(3).toFloat(), 1f)
+            setTextColor(Color.rgb(217, 243, 222))
+            textSize = 12f
+            setTextIsSelectable(true)
+            visibility = View.GONE
+        }
+        column.addView(localPlanPreview, insertAt + 1)
     }
 
     override fun onResume() {
@@ -338,11 +377,18 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             }
     }
 
+    private fun clearLocalPlan() {
+        localPlanPreview.text = ""
+        localPlanPreview.visibility = View.GONE
+    }
+
     private fun clearLocalContext() {
         localContext = null
         binding.taskContextPreview.text = ""
         binding.taskContextPreview.visibility = View.GONE
         binding.taskContextRecheck.visibility = View.GONE
+        localPlanButton.visibility = View.GONE
+        clearLocalPlan()
     }
 
     private fun showLocalContext(selectedPath: String, expected: WorkspaceTask) {
@@ -351,10 +397,12 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             .onSuccess {
                 binding.taskInspection.visibility = View.GONE
                 binding.taskSourcePreview.visibility = View.GONE
+                clearLocalPlan()
                 localContext = it
                 binding.taskContextPreview.text = it.displayText()
                 binding.taskContextPreview.visibility = View.VISIBLE
                 binding.taskContextRecheck.visibility = View.VISIBLE
+                localPlanButton.visibility = View.VISIBLE
             }.onFailure {
                 clearLocalContext()
                 Toast.makeText(this, it.message ?: "Context blocked; review file locally", Toast.LENGTH_LONG).show()
@@ -369,6 +417,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             Toast.makeText(this, "Task edits are unsaved; prepare context again", Toast.LENGTH_LONG).show()
             return
         }
+        clearLocalPlan()
         if (WorkspaceContextFreshness.check(files, tasks, projectId, draft) ==
             WorkspaceContextFreshness.Result.SAME_CONTENT_AND_SPEC) {
             binding.taskContextPreview.text = draft.displayText() +
@@ -378,6 +427,25 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             binding.taskContextPreview.text = "Context changed or blocked. Prepare a new local context draft before any future use. Nothing was sent."
             binding.taskContextPreview.visibility = View.VISIBLE
         }
+    }
+
+    /** Show a template bound to the current approved spec and one fresh file; never request a model. */
+    private fun showLocalPlan() {
+        val draft = localContext ?: return
+        if (isDirty()) {
+            clearLocalContext()
+            Toast.makeText(this, "Unsaved task edits; prepare context again", Toast.LENGTH_LONG).show()
+            return
+        }
+        runCatching { WorkspaceProjectPlanDraft.prepare(files, tasks, projectId, project.type, draft) }
+            .onSuccess {
+                localPlanPreview.text = it.displayText()
+                localPlanPreview.visibility = View.VISIBLE
+            }.onFailure {
+                clearLocalContext()
+                binding.taskContextPreview.text = "Context changed or blocked. Prepare a fresh local context before reviewing a plan. Nothing was sent."
+                binding.taskContextPreview.visibility = View.VISIBLE
+            }
     }
 
     private fun updateStatus() {
