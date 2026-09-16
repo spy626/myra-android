@@ -1,5 +1,7 @@
 package com.myra.assistant.ui.workspace
 
+import java.security.MessageDigest
+
 /** Project-local coding work. This contract is NOT another LYRA brain, memory owner or executor. */
 enum class WorkspaceTaskStatus { DRAFT, PAUSED }
 enum class WorkspacePlanLane { CODING, BROWSER_DOM, TERMINAL, HUMAN }
@@ -25,6 +27,11 @@ data class WorkspaceTask(
     val createdAtMs: Long,
     val updatedAtMs: Long,
     val acceptanceCriteria: String = "",
+    /** Changes only on a new or edited specification; pause/resume does not change it. */
+    val specRevision: String = "",
+    /** Local, explicit planning consent for this exact saved revision and text; NOT tool permission. */
+    val approvedSpecToken: String? = null,
+    val approvedAtMs: Long? = null,
 )
 
 /** Evidence must be supplied by the future trusted LYRA executor/verification gate, never by a model claim. */
@@ -50,6 +57,18 @@ object WorkspaceTaskContract {
         }
         return clean
     }
+
+    /** Version-bound local record, not a cryptographic identity or authorization for execution. */
+    fun specToken(task: WorkspaceTask): String {
+        val fields = listOf(task.projectId, task.taskId, task.specRevision, task.goal, task.acceptanceCriteria)
+        val digest = MessageDigest.getInstance("SHA-256").digest(fields.joinToString("\u0000").toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    }
+
+    fun isSpecApproved(task: WorkspaceTask): Boolean = task.acceptanceCriteria.isNotBlank() &&
+        task.specRevision.isNotBlank() && task.approvedAtMs != null &&
+        task.approvedAtMs >= task.createdAtMs && task.approvedAtMs <= task.updatedAtMs &&
+        task.approvedSpecToken == specToken(task)
 
     /** Bounded process template, NOT a model-generated implementation plan or authorization to edit. */
     fun steps(type: WorkspaceProjectType): List<WorkspacePlanStep> = listOf(

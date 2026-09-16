@@ -17,7 +17,7 @@ class WorkspaceTaskSpecificationTest {
         val store = WorkspaceTaskStore(projects, nowMillis = { 100L }, idFactory = { "task_one" })
         val first = store.create("site_one", "Build site", rawAcceptanceCriteria = "  Search   works ")
         assertEquals("Search works", first.acceptanceCriteria)
-        assertEquals(2, JSONObject(File(root, "site_one/.lyra/task.json").readText()).getInt("schemaVersion"))
+        assertEquals(3, JSONObject(File(root, "site_one/.lyra/task.json").readText()).getInt("schemaVersion"))
         val paused = store.setPaused("site_one", true)
         val updated = store.updateAcceptanceCriteria("site_one", "Cards fit on phone")
         assertEquals(first.taskId, updated.taskId)
@@ -40,7 +40,7 @@ class WorkspaceTaskSpecificationTest {
         assertEquals("Existing goal", store.get("site_one")!!.goal)
         assertEquals(1, JSONObject(file.readText()).getInt("schemaVersion"))
         store.updateAcceptanceCriteria("site_one", "Visible result")
-        assertEquals(2, JSONObject(file.readText()).getInt("schemaVersion"))
+        assertEquals(3, JSONObject(file.readText()).getInt("schemaVersion"))
         assertEquals("old_task", store.get("site_one")!!.taskId)
         assertEquals(WorkspaceTaskStatus.PAUSED, store.get("site_one")!!.status)
     }

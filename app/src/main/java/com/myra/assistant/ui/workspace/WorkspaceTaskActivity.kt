@@ -17,7 +17,7 @@ import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivityWorkspaceTaskBinding
 import java.io.File
 
-/** Phase 5 task entry: saved spec and opt-in local inspection, NOT an autonomous coding executor. */
+/** Phase 5 task entry: saved spec, local planning consent and opt-in inspection; NOT an AI executor. */
 class WorkspaceTaskActivity : AppCompatActivity() {
     companion object {
         private const val EXTRA_PROJECT_ID = "workspace_project_id"
@@ -49,6 +49,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         binding.taskBack.setOnClickListener { leaveTask() }
         binding.taskHeading.text = project.name
         binding.taskSave.setOnClickListener { saveGoal() }
+        binding.taskSpecApproval.setOnClickListener { changeSpecApproval() }
         binding.taskPause.setOnClickListener { guardUnsavedBrief { togglePause() } }
         binding.taskInspect.setOnClickListener { inspectProject() }
         binding.taskSource.setOnClickListener { reviewSource() }
@@ -132,7 +133,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         if (existing != null && existing.goal != normalized) {
             AlertDialog.Builder(this)
                 .setTitle("Replace saved task?")
-                .setMessage("The previous task brief and acceptance criteria will be replaced. Project files and personal memory stay unchanged.")
+                .setMessage("The previous task brief, acceptance criteria and planning approval will be replaced. Project files and personal memory stay unchanged.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Replace") { _, _ -> persistGoal(normalized, criteria, true) }
                 .showTaskConfirmation()
@@ -142,7 +143,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
                 .onSuccess {
                     binding.taskGoalInput.setText(it.goal)
                     binding.taskAcceptanceInput.setText(it.acceptanceCriteria)
-                    Toast.makeText(this, "Acceptance criteria saved locally", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Criteria saved; previous spec approval cleared", Toast.LENGTH_SHORT).show()
                     render()
                 }.onFailure { Toast.makeText(this, it.message ?: "Criteria could not be saved", Toast.LENGTH_LONG).show() }
         } else {
@@ -161,6 +162,56 @@ class WorkspaceTaskActivity : AppCompatActivity() {
                 Toast.makeText(this, "Task brief saved locally", Toast.LENGTH_SHORT).show()
                 render()
             }.onFailure { Toast.makeText(this, it.message ?: "Task could not be saved", Toast.LENGTH_LONG).show() }
+    }
+
+    /** Only the visible, saved, unedited revision can be approved or revoked. */
+    private fun changeSpecApproval() {
+        if (isDirty()) {
+            Toast.makeText(this, "Save or discard edits before approval", Toast.LENGTH_LONG).show()
+            return
+        }
+        val saved = tasks.get(projectId)
+        if (saved == null || saved.taskId != currentTask?.taskId ||
+            saved.specRevision != currentTask?.specRevision || saved.goal != currentTask?.goal ||
+            saved.acceptanceCriteria != currentTask?.acceptanceCriteria ||
+            saved.approvedSpecToken != currentTask?.approvedSpecToken) {
+            render()
+            Toast.makeText(this, "Saved spec changed; review it before approval", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (WorkspaceTaskContract.isSpecApproved(saved)) {
+            persistSpecApproval(saved, false)
+            return
+        }
+        if (saved.acceptanceCriteria.isBlank()) {
+            Toast.makeText(this, "Add and save acceptance criteria first", Toast.LENGTH_LONG).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Approve saved spec for planning?")
+            .setMessage("Goal: ${saved.goal}\n\nAcceptance criteria: ${saved.acceptanceCriteria}\n\nPlanning consent only. No AI runs, file edits, builds, tool permissions or payments are authorized.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Approve spec") { _, _ -> persistSpecApproval(saved, true) }
+            .showTaskConfirmation()
+    }
+
+    private fun persistSpecApproval(expected: WorkspaceTask, approve: Boolean) {
+        if (isDirty()) {
+            Toast.makeText(this, "Save or discard edits before approval", Toast.LENGTH_LONG).show()
+            return
+        }
+        runCatching {
+            tasks.setSpecificationApproved(projectId, expected.taskId,
+                WorkspaceTaskContract.specToken(expected), approve)
+        }.onSuccess {
+            render()
+            Toast.makeText(this,
+                if (approve) "Saved spec approved for planning only" else "Planning approval revoked",
+                Toast.LENGTH_SHORT).show()
+        }.onFailure {
+            render()
+            Toast.makeText(this, it.message ?: "Spec approval could not be updated", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun togglePause() {
@@ -258,6 +309,17 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             currentTask?.acceptanceCriteria.isNullOrBlank() -> "Saved draft  •  Add acceptance criteria before execution"
             else -> "Saved spec  •  Awaiting LYRA coding worker"
         }
+        val task = currentTask
+        val ready = task != null && task.acceptanceCriteria.isNotBlank() && !isDirty()
+        binding.taskSpecApproval.visibility = if (ready) View.VISIBLE else View.GONE
+        binding.taskSpecApproval.text = if (task != null && WorkspaceTaskContract.isSpecApproved(task))
+            "Revoke spec planning approval" else "Approve saved spec (planning only)"
+        binding.taskApprovalState.text = when {
+            isDirty() -> "Unsaved edits are not approved. Save them first."
+            task == null || task.acceptanceCriteria.isBlank() -> "Planning approval pending: save a complete specification."
+            WorkspaceTaskContract.isSpecApproved(task) -> "Saved spec approved for planning only. No AI work or file edits authorized."
+            else -> "Planning approval pending. No AI work or file edits authorized."
+        }
     }
 
     private fun render() {
@@ -286,6 +348,6 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         binding.taskPlan.text = WorkspaceTaskContract.steps(project.type).mapIndexed { i, step ->
             "${i + 1}. ${step.intent}\n   ${step.lane.name.lowercase().replace('_', ' ')}  •  ${if (step.approvalRequired) "Approval required" else "Evidence required"}"
         }.joinToString("\n\n")
-        binding.taskNotice.text = "Planning checklist only. No AI edits or builds run yet. LYRA must inspect the project, obtain approval and verify real results before reporting completion."
+        binding.taskNotice.text = "Planning checklist only. No AI edits or builds run yet. LYRA must inspect the project, obtain separate action approval and verify real results before reporting completion."
     }
 }
