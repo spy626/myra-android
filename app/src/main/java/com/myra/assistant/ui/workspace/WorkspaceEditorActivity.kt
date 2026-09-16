@@ -275,7 +275,7 @@ class WorkspaceEditorActivity : AppCompatActivity() {
         }
         val scroll = ScrollView(this).apply {
             isFillViewport = false
-            addView(rows, ScrollView.LayoutParams(-1, -2))
+            addView(rows, android.widget.FrameLayout.LayoutParams(-1, -2))
         }
         val frame = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
