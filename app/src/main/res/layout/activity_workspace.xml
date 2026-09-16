@@ -84,7 +84,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:lineSpacingExtra="3dp"
-                android:text="Create and open coding projects here. Project files and task state stay inside Workspace, separate from LYRA's personal memory."
+                android:text="Create and reopen coding projects here. Each project has its own stable identity and private project root, separate from LYRA's personal memory."
                 android:textColor="#A9C8AE"
                 android:textSize="13sp" />
 
@@ -124,13 +124,14 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="34dp"
+                android:letterSpacing="0.12"
                 android:text="RECENT PROJECTS"
                 android:textColor="#85B98D"
                 android:textSize="10sp"
-                android:textStyle="bold"
-                android:letterSpacing="0.12" />
+                android:textStyle="bold" />
 
             <LinearLayout
+                android:id="@+id/emptyRecentState"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
@@ -153,10 +154,18 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="7dp"
                     android:gravity="center"
-                    android:text="Project creation and persistence come in the next Workspace phase."
+                    android:text="Create a Website or Android App project to start."
                     android:textColor="#8FAE95"
                     android:textSize="12sp" />
             </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/recentProjectsContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
 
             <TextView
                 android:layout_width="match_parent"
@@ -164,7 +173,7 @@
                 android:layout_marginTop="24dp"
                 android:fontFamily="monospace"
                 android:gravity="center"
-                android:text="PHASE 1  •  WORKSPACE SHELL"
+                android:text="PHASE 2  •  PROJECT FOUNDATION"
                 android:textColor="#62876A"
                 android:textSize="9sp" />
         </LinearLayout>
