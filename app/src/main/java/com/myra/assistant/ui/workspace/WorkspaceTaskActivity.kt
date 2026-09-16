@@ -220,9 +220,10 @@ class WorkspaceTaskActivity : AppCompatActivity() {
                             (view as TextView).setTextColor(Color.rgb(217, 243, 222))
                         }
                 }
+                // AlertDialog shows its message instead of its adapter list when both are supplied.
+                // Put the read-only notice in the title so the actual file choices remain visible.
                 AlertDialog.Builder(this)
-                    .setTitle("Choose a project file")
-                    .setMessage("Read-only, local text preview. Up to 20 files are listed.")
+                    .setTitle("Choose a project file (read-only)")
                     .setAdapter(adapter) { _, which -> showSourcePreview(choices[which], saved) }
                     .setNegativeButton("Cancel", null)
                     .showTaskConfirmation()
