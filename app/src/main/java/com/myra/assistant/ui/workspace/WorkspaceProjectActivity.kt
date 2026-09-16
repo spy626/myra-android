@@ -4,9 +4,13 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
+import android.graphics.Color
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivityWorkspaceProjectBinding
 import java.io.File
 import java.text.DateFormat
@@ -55,8 +59,31 @@ class WorkspaceProjectActivity : AppCompatActivity() {
             return
         }
         bindProject(project)
+        addTaskEntry()
         infoExpanded = savedInstanceState?.getBoolean(STATE_INFO_EXPANDED) ?: false
         renderProjectInfo()
+    }
+
+    /** A single entry to the project-scoped task brief; no duplicate planner or AI executor. */
+    private fun addTaskEntry() {
+        val parent = binding.openPreviewButton.parent as LinearLayout
+        val button = TextView(this).apply {
+            text = "✦   Task brief & plan   ›"
+            contentDescription = "Open project task brief and plan"
+            gravity = android.view.Gravity.CENTER
+            setTextColor(Color.parseColor("#D4F8D9"))
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { projectId?.let { id -> startActivity(WorkspaceTaskActivity.intent(this@WorkspaceProjectActivity, id)) } }
+        }
+        val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+            (56 * resources.displayMetrics.density + 0.5f).toInt()).apply {
+            topMargin = (10 * resources.displayMetrics.density + 0.5f).toInt()
+        }
+        parent.addView(button, parent.indexOfChild(binding.openPreviewButton) + 1, params)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
