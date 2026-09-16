@@ -14,7 +14,7 @@ import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivityWorkspaceTaskBinding
 import java.io.File
 
-/** Phase 5 task entry: saved specification guidance, NOT an autonomous coding executor. */
+/** Phase 5 task entry: saved specification and read-only inventory, NOT an autonomous coding executor. */
 class WorkspaceTaskActivity : AppCompatActivity() {
     companion object {
         private const val EXTRA_PROJECT_ID = "workspace_project_id"
@@ -25,6 +25,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
     private lateinit var binding: ActivityWorkspaceTaskBinding
     private val projects by lazy { WorkspaceProjectStore(File(filesDir, "workspace/projects")) }
     private val tasks by lazy { WorkspaceTaskStore(projects) }
+    private val files by lazy { WorkspaceFileStore(projects) }
     private lateinit var projectId: String
     private lateinit var project: WorkspaceProject
     private var loadedBrief = false
@@ -46,6 +47,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         binding.taskHeading.text = project.name
         binding.taskSave.setOnClickListener { saveGoal() }
         binding.taskPause.setOnClickListener { guardUnsavedBrief { togglePause() } }
+        binding.taskInspect.setOnClickListener { inspectProject() }
         binding.taskFiles.setOnClickListener {
             guardUnsavedBrief { startActivity(WorkspaceEditorActivity.intent(this, projectId)) }
         }
@@ -55,7 +57,11 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         }
         val statusWatcher = object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateStatus() }
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                updateStatus()
+                // An already displayed inventory is never presented as a fresh snapshot after edits.
+                binding.taskInspection.visibility = View.GONE
+            }
             override fun afterTextChanged(s: Editable?) = Unit
         }
         binding.taskGoalInput.addTextChangedListener(statusWatcher)
@@ -159,6 +165,33 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             .onFailure { Toast.makeText(this, it.message ?: "Cannot update task", Toast.LENGTH_SHORT).show() }
     }
 
+    /** Read existing project-local names only; do not grant approval or persist fake tool evidence. */
+    private fun inspectProject() {
+        if (isDirty()) {
+            Toast.makeText(this, "Save or discard your task edits before inspecting", Toast.LENGTH_LONG).show()
+            return
+        }
+        val saved = tasks.get(projectId)
+        if (saved == null) {
+            Toast.makeText(this, "Save a task brief before inspecting", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (saved.taskId != currentTask?.taskId || saved.goal != currentTask?.goal ||
+            saved.acceptanceCriteria != currentTask?.acceptanceCriteria) {
+            render()
+            Toast.makeText(this, "Saved task changed; review it before inspecting", Toast.LENGTH_LONG).show()
+            return
+        }
+        runCatching { WorkspaceProjectInspection.scan(files, projectId) }
+            .onSuccess {
+                binding.taskInspection.text = it.displayText()
+                binding.taskInspection.visibility = View.VISIBLE
+            }.onFailure {
+                binding.taskInspection.visibility = View.GONE
+                Toast.makeText(this, it.message ?: "Project could not be inspected", Toast.LENGTH_LONG).show()
+            }
+    }
+
     private fun updateStatus() {
         binding.taskStatus.text = when {
             isDirty() && currentTask == null -> "Unsaved brief  •  Tap Save task brief"
@@ -181,12 +214,16 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         }
         if (task == null) {
             binding.taskPause.visibility = View.GONE
+            binding.taskInspect.visibility = View.GONE
             binding.taskSave.text = "Save task brief"
         } else {
             binding.taskSave.text = "Update task brief"
             binding.taskPause.visibility = View.VISIBLE
+            binding.taskInspect.visibility = View.VISIBLE
             binding.taskPause.text = if (task.status == WorkspaceTaskStatus.PAUSED) "Resume task" else "Pause task"
         }
+        // File inventory is a tap-time snapshot, never a persisted plan step or success claim.
+        binding.taskInspection.visibility = View.GONE
         updateStatus()
         binding.taskPlan.text = WorkspaceTaskContract.steps(project.type).mapIndexed { i, step ->
             "${i + 1}. ${step.intent}\n   ${step.lane.name.lowercase().replace('_', ' ')}  •  ${if (step.approvalRequired) "Approval required" else "Evidence required"}"
