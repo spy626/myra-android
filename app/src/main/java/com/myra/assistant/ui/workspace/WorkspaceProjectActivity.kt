@@ -36,6 +36,9 @@ class WorkspaceProjectActivity : AppCompatActivity() {
 
         binding.backButton.setOnClickListener { finish() }
         binding.deleteProjectButton.setOnClickListener { confirmDeleteProject() }
+        binding.openEditorButton.setOnClickListener {
+            projectId?.let { startActivity(WorkspaceEditorActivity.intent(this, it)) }
+        }
         binding.projectInfoToggle.setOnClickListener {
             infoExpanded = !infoExpanded
             renderProjectInfo()
@@ -56,6 +59,11 @@ class WorkspaceProjectActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(STATE_INFO_EXPANDED, infoExpanded)
         super.onSaveInstanceState(outState)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        projectId?.let { id -> projectStore.getProject(id)?.let(::bindProject) }
     }
 
     private fun renderProjectInfo() {

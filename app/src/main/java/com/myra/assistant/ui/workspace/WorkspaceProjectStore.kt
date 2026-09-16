@@ -7,16 +7,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.UUID
 
-/**
- * App-private, project-scoped storage for Workspace metadata.
- *
- * Each project owns exactly one authoritative manifest at:
- *   <projectsRoot>/<projectId>/.lyra/project.json
- *
- * There is intentionally no second database or duplicate recent-project index.
- * Listing/opening is derived from those manifests, so Workspace project truth
- * cannot become another personal-memory owner.
- */
+/** Workspace project manifests are the sole project/session metadata truth, independent from AIRI memory. */
 class WorkspaceProjectStore(
     private val projectsRoot: File,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
@@ -30,9 +21,7 @@ class WorkspaceProjectStore(
     }
 
     init {
-        require(projectsRoot.mkdirs() || projectsRoot.isDirectory) {
-            "Workspace project root is unavailable"
-        }
+        require(projectsRoot.mkdirs() || projectsRoot.isDirectory) { "Workspace project root is unavailable" }
     }
 
     fun createProject(rawName: String, type: WorkspaceProjectType): WorkspaceProject {
@@ -40,10 +29,8 @@ class WorkspaceProjectStore(
         val projectId = nextProjectId()
         val projectDir = safeProjectDir(projectId)
         check(projectDir.mkdir()) { "Unable to create Workspace project root" }
-
         val metadataDir = File(projectDir, METADATA_DIR)
         check(metadataDir.mkdir()) { "Unable to create Workspace metadata directory" }
-
         val now = nowMillis()
         val project = WorkspaceProject(
             projectId = projectId,
@@ -60,15 +47,12 @@ class WorkspaceProjectStore(
 
     fun listProjects(): List<WorkspaceProject> {
         val root = canonicalProjectsRoot()
-        val children = root.listFiles().orEmpty()
-        return children.asSequence()
+        return root.listFiles().orEmpty().asSequence()
             .filter { it.isDirectory }
             .mapNotNull { loadProjectFromDirectory(it) }
-            .sortedWith(
-                compareByDescending<WorkspaceProject> { it.lastOpenedAtMs }
-                    .thenByDescending { it.updatedAtMs }
-                    .thenBy { it.name.lowercase() },
-            )
+            .sortedWith(compareByDescending<WorkspaceProject> { it.lastOpenedAtMs }
+                .thenByDescending { it.updatedAtMs }
+                .thenBy { it.name.lowercase() })
             .toList()
     }
 
@@ -82,10 +66,25 @@ class WorkspaceProjectStore(
         return opened
     }
 
+    /** Update the existing manifest; do not create a second editor-session database or index. */
+    fun setActiveFile(projectId: String, path: String?): WorkspaceProject {
+        val existing = requireNotNull(getProject(projectId)) { "Workspace project is unavailable" }
+        if (path != null) require(isSafeRelativeFilePath(path)) { "Invalid active-file path" }
+        val updated = existing.copy(activeFilePath = path, updatedAtMs = maxOf(existing.updatedAtMs, nowMillis()))
+        writeManifest(updated)
+        return updated
+    }
+
+    fun touchProject(projectId: String): WorkspaceProject {
+        val existing = requireNotNull(getProject(projectId)) { "Workspace project is unavailable" }
+        val updated = existing.copy(updatedAtMs = maxOf(existing.updatedAtMs, nowMillis()))
+        writeManifest(updated)
+        return updated
+    }
+
     fun deleteProject(projectId: String): Boolean {
         val projectDir = runCatching { safeProjectDir(projectId) }.getOrNull() ?: return false
-        if (!projectDir.exists()) return false
-        if (getProject(projectId) == null) return false
+        if (!projectDir.exists() || getProject(projectId) == null) return false
         return deleteTreeSafely(projectDir)
     }
 
@@ -102,9 +101,7 @@ class WorkspaceProjectStore(
     private fun normalizeProjectName(rawName: String): String {
         val normalized = rawName.trim().replace(Regex("\\s+"), " ")
         require(normalized.isNotBlank()) { "Project name is required" }
-        require(normalized.length <= MAX_PROJECT_NAME_LENGTH) {
-            "Project name must be $MAX_PROJECT_NAME_LENGTH characters or fewer"
-        }
+        require(normalized.length <= MAX_PROJECT_NAME_LENGTH) { "Project name must be 80 characters or fewer" }
         require(normalized.none { it.isISOControl() }) { "Project name contains invalid characters" }
         return normalized
     }
@@ -112,49 +109,32 @@ class WorkspaceProjectStore(
     private fun loadProjectFromDirectory(projectDir: File): WorkspaceProject? {
         val root = canonicalProjectsRoot()
         val canonicalDir = projectDir.canonicalFile
-        if (canonicalDir.parentFile?.canonicalFile != root) return null
+        if (canonicalDir.parentFile?.canonicalFile != root || Files.isSymbolicLink(projectDir.toPath())) return null
         val projectId = canonicalDir.name
         if (!SAFE_ID.matches(projectId)) return null
-
         val manifest = File(File(canonicalDir, METADATA_DIR), MANIFEST_FILE)
-        if (!manifest.isFile) return null
-
+        if (!manifest.isFile || Files.isSymbolicLink(manifest.toPath())) return null
         return runCatching {
             val json = JSONObject(manifest.readText(Charsets.UTF_8))
             val schemaVersion = json.getInt("schemaVersion")
             if (schemaVersion != WorkspaceProject.CURRENT_SCHEMA_VERSION) return null
-
             val manifestId = json.getString("projectId")
             if (manifestId != projectId || !SAFE_ID.matches(manifestId)) return null
-
             val name = normalizeProjectName(json.getString("name"))
             val type = WorkspaceProjectType.fromStorage(json.getString("projectType")) ?: return null
             val rootRelativePath = json.getString("rootRelativePath")
             if (rootRelativePath != projectId) return null
-
             val activeFilePath = if (json.has("activeFilePath") && !json.isNull("activeFilePath")) {
-                json.getString("activeFilePath").also {
-                    if (!isSafeRelativeFilePath(it)) return null
-                }
-            } else {
-                null
-            }
-
+                json.getString("activeFilePath").also { if (!isSafeRelativeFilePath(it)) return null }
+            } else null
             val createdAt = json.getLong("createdAtMs")
             val updatedAt = json.getLong("updatedAtMs")
             val lastOpenedAt = json.getLong("lastOpenedAtMs")
             if (createdAt < 0L || updatedAt < createdAt || lastOpenedAt < 0L) return null
-
             WorkspaceProject(
-                schemaVersion = schemaVersion,
-                projectId = manifestId,
-                name = name,
-                type = type,
-                rootRelativePath = rootRelativePath,
-                activeFilePath = activeFilePath,
-                createdAtMs = createdAt,
-                updatedAtMs = updatedAt,
-                lastOpenedAtMs = lastOpenedAt,
+                schemaVersion = schemaVersion, projectId = manifestId, name = name, type = type,
+                rootRelativePath = rootRelativePath, activeFilePath = activeFilePath,
+                createdAtMs = createdAt, updatedAtMs = updatedAt, lastOpenedAtMs = lastOpenedAt,
             )
         }.getOrNull()
     }
@@ -162,15 +142,11 @@ class WorkspaceProjectStore(
     private fun writeManifest(project: WorkspaceProject) {
         require(SAFE_ID.matches(project.projectId)) { "Invalid Workspace project ID" }
         require(project.rootRelativePath == project.projectId) { "Workspace root identity mismatch" }
-        project.activeFilePath?.let {
-            require(isSafeRelativeFilePath(it)) { "Invalid active-file path" }
-        }
-
+        project.activeFilePath?.let { require(isSafeRelativeFilePath(it)) { "Invalid active-file path" } }
         val projectDir = safeProjectDir(project.projectId)
         require(projectDir.isDirectory) { "Workspace project root is missing" }
         val metadataDir = File(projectDir, METADATA_DIR)
         require(metadataDir.mkdirs() || metadataDir.isDirectory) { "Workspace metadata directory is unavailable" }
-
         val manifest = File(metadataDir, MANIFEST_FILE)
         val temp = File(metadataDir, "$MANIFEST_FILE.tmp")
         val json = JSONObject()
@@ -183,15 +159,9 @@ class WorkspaceProjectStore(
             .put("createdAtMs", project.createdAtMs)
             .put("updatedAtMs", project.updatedAtMs)
             .put("lastOpenedAtMs", project.lastOpenedAtMs)
-
         temp.writeText(json.toString(2), Charsets.UTF_8)
         try {
-            Files.move(
-                temp.toPath(),
-                manifest.toPath(),
-                StandardCopyOption.REPLACE_EXISTING,
-                StandardCopyOption.ATOMIC_MOVE,
-            )
+            Files.move(temp.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         } catch (_: AtomicMoveNotSupportedException) {
             Files.move(temp.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
@@ -200,9 +170,10 @@ class WorkspaceProjectStore(
     private fun safeProjectDir(projectId: String): File {
         require(SAFE_ID.matches(projectId)) { "Invalid Workspace project ID" }
         val root = canonicalProjectsRoot()
-        val candidate = File(root, projectId).canonicalFile
-        require(candidate.parentFile?.canonicalFile == root) { "Workspace project escaped its root" }
-        return candidate
+        val candidate = File(root, projectId)
+        require(!Files.isSymbolicLink(candidate.toPath())) { "Project root link is forbidden" }
+        require(candidate.canonicalFile.parentFile?.canonicalFile == root) { "Workspace project escaped its root" }
+        return candidate.canonicalFile
     }
 
     private fun canonicalProjectsRoot(): File {
@@ -211,18 +182,17 @@ class WorkspaceProjectStore(
     }
 
     private fun isSafeRelativeFilePath(path: String): Boolean {
-        if (path.isBlank() || File(path).isAbsolute) return false
-        return path.replace('\\', '/').split('/').none { it == ".." || it == "." || it.isBlank() }
+        if (path.isBlank() || File(path).isAbsolute || '\\' in path || ':' in path) return false
+        return path.split('/').all { it.isNotBlank() && it != "." && it != ".." && it != ".lyra" && !it.startsWith(".lyra-write-") }
     }
 
     private fun deleteTreeSafely(file: File): Boolean {
+        if (Files.isSymbolicLink(file.toPath())) return false
         val root = canonicalProjectsRoot().toPath()
         val canonical = file.canonicalFile
         if (!canonical.toPath().startsWith(root) || canonical == canonicalProjectsRoot()) return false
         if (canonical.isDirectory) {
-            for (child in canonical.listFiles().orEmpty()) {
-                if (!deleteTreeSafely(child)) return false
-            }
+            for (child in canonical.listFiles().orEmpty()) if (!deleteTreeSafely(child)) return false
         }
         return canonical.delete()
     }
