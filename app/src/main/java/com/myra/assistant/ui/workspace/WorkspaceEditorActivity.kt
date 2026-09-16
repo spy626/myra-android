@@ -217,7 +217,7 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                minHeight = dp(48)
+                minimumHeight = dp(48)
                 if (entry.path == currentPath) setBackgroundResource(R.drawable.bg_workspace_dialog_input)
             }
             val name = makeRow(label, entry.path == currentPath, entry.depth)
