@@ -15,7 +15,9 @@ import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -24,11 +26,10 @@ import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivityWorkspaceEditorBinding
 import java.io.File
 
-/** Native, phone-first Workspace editor; no model, browser, preview or personal memory dependency. */
+/** Phone-first Workspace editor. Project files, not personal AIRI memory, own its state. */
 class WorkspaceEditorActivity : AppCompatActivity() {
     companion object {
         private const val EXTRA_PROJECT_ID = "workspace_project_id"
-        private const val STATE_TABS = "workspace_editor_tabs"
         fun intent(context: Context, projectId: String): Intent =
             Intent(context, WorkspaceEditorActivity::class.java).putExtra(EXTRA_PROJECT_ID, projectId)
     }
@@ -37,13 +38,14 @@ class WorkspaceEditorActivity : AppCompatActivity() {
     private val projects by lazy { WorkspaceProjectStore(File(filesDir, "workspace/projects")) }
     private val files by lazy { WorkspaceFileStore(projects) }
     private lateinit var id: String
-    private val tabs = linkedSetOf<String>()
+    private var entries = emptyList<WorkspaceFileStore.Entry>()
     private val collapsed = mutableSetOf<String>()
+    private var pickerDialog: AlertDialog? = null
+    private var pickerRows: LinearLayout? = null
     private val handler = Handler(Looper.getMainLooper())
     private var currentPath: String? = null
     private var dirty = false
     private var loading = false
-    private var treeOpen = false
     private val spans = mutableListOf<ForegroundColorSpan>()
     private val keywords = Regex("\\b(?:fun|class|val|var|const|let|function|return|if|else|for|while|import|package|public|private|true|false|null|new|async|await|interface|object|override)\\b")
     private val tags = Regex("</?[A-Za-z][^>]*>")
@@ -56,8 +58,6 @@ class WorkspaceEditorActivity : AppCompatActivity() {
         binding = ActivityWorkspaceEditorBinding.inflate(layoutInflater)
         setContentView(binding.root)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        // Three or four rows are enough while browsing. The editor owns the remaining height.
-        binding.fileTreeScroll.layoutParams = binding.fileTreeScroll.layoutParams.apply { height = dp(136) }
         id = intent.getStringExtra(EXTRA_PROJECT_ID).orEmpty()
         val project = projects.getProject(id)
         if (project == null) {
@@ -66,34 +66,16 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             return
         }
         binding.editorHeading.text = project.name
+        // The old inline tree is deliberately never shown. All project files are tabs above code.
+        binding.fileTreeScroll.visibility = View.GONE
+        binding.filesButton.text = "☷  Files"
+        binding.filesButton.contentDescription = "Browse project folders"
         binding.backButton.setOnClickListener { attemptClose() }
-        binding.filesButton.setOnClickListener {
-            val nextOpen = WorkspaceEditorPanelPolicy.afterFilesButton(treeOpen)
-            if (nextOpen) {
-                (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-                    ?.hideSoftInputFromWindow(binding.codeEditor.windowToken, 0)
-                binding.filesButton.requestFocus()
-            }
-            setTreeOpen(nextOpen)
-        }
+        binding.filesButton.setOnClickListener { showFilesPicker() }
         binding.newFileButton.setOnClickListener { withSavedChanges { showPathDialog(false) } }
         binding.newFolderButton.setOnClickListener { withSavedChanges { showPathDialog(true) } }
         binding.saveButton.setOnClickListener { saveCurrent() }
-        binding.starterButton.setOnClickListener {
-            withSavedChanges {
-                try {
-                    files.addWebsiteStarter(id)
-                    renderTree()
-                    openFile("index.html")
-                } catch (error: Exception) { toast(error.message ?: "Starter could not be created") }
-            }
-        }
-        binding.codeEditor.setOnFocusChangeListener { _, focused ->
-            if (focused && treeOpen) setTreeOpen(WorkspaceEditorPanelPolicy.afterEditorFocus(treeOpen))
-        }
-        binding.codeEditor.setOnClickListener {
-            if (treeOpen) setTreeOpen(WorkspaceEditorPanelPolicy.afterEditorFocus(treeOpen))
-        }
+        binding.starterButton.setOnClickListener { withSavedChanges { createWebsiteStarter() } }
         binding.codeEditor.setOnScrollChangeListener { _, _, scrollY, _, _ ->
             binding.lineNumbers.scrollTo(0, scrollY)
         }
@@ -102,28 +84,31 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(s: Editable?) {
                 if (loading || currentPath == null) return
+                val firstChange = !dirty
                 dirty = true
                 renderStatus()
+                if (firstChange) renderTabs()
                 handler.removeCallbacks(recolor)
                 handler.postDelayed(recolor, 180)
             }
         })
-        savedInstanceState?.getStringArrayList(STATE_TABS)?.forEach { tabs.add(it) }
-        setTreeOpen(false)
-        val restored = project.activeFilePath
-        if (restored != null) openFile(restored)
+        refreshFileUi()
+        val remembered = project.activeFilePath
+        val first = WorkspaceEditorTabs.files(entries).firstOrNull()
+        if (remembered != null) openFile(remembered)
+        else if (first != null) openFile(first)
         else renderStatus()
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        outState.putStringArrayList(STATE_TABS, ArrayList(tabs))
-        super.onSaveInstanceState(outState)
-    }
-
     override fun onPause() {
-        // The current on-disk file is the recoverable session truth if Android backgrounds/kills us.
+        // Save user code before Android backgrounds or kills the editor; failed saves remain dirty.
         if (dirty) saveCurrent()
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(recolor)
+        super.onDestroy()
     }
 
     @Deprecated("Back callback for existing AppCompat navigation")
@@ -131,12 +116,24 @@ class WorkspaceEditorActivity : AppCompatActivity() {
 
     private fun attemptClose() = withSavedChanges { finish() }
 
-    private fun setTreeOpen(open: Boolean) {
-        treeOpen = open
-        binding.fileTreeScroll.visibility = if (open) View.VISIBLE else View.GONE
-        binding.filesButton.text = if (open) "▾  Files" else "▸  Files"
-        binding.filesButton.contentDescription = if (open) "Hide project files" else "Show project files"
-        if (open) renderTree() else binding.starterButton.visibility = View.GONE
+    private fun discardCurrent(): Boolean {
+        val path = currentPath ?: return true
+        return try {
+            val saved = files.readFile(id, path)
+            loading = true
+            binding.codeEditor.setText(saved)
+            loading = false
+            dirty = false
+            renderStatus()
+            renderTabs()
+            handler.removeCallbacks(recolor)
+            handler.post(recolor)
+            true
+        } catch (error: Exception) {
+            loading = false
+            toast(error.message ?: "Could not restore saved code")
+            false
+        }
     }
 
     private fun withSavedChanges(next: () -> Unit) {
@@ -145,7 +142,7 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             .setTitle("Unsaved changes")
             .setMessage("Save changes to ${currentPath ?: "this file"} before continuing?")
             .setPositiveButton("Save", null)
-            .setNeutralButton("Discard") { _, _ -> dirty = false; next() }
+            .setNeutralButton("Discard", null)
             .setNegativeButton("Cancel", null)
             .create()
         dialog.setOnShowListener {
@@ -153,21 +150,19 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 if (saveCurrent()) { dialog.dismiss(); next() }
             }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                if (discardCurrent()) { dialog.dismiss(); next() }
+            }
         }
         dialog.show()
     }
 
     private fun openFile(path: String) {
-        if (path == currentPath) {
-            setTreeOpen(WorkspaceEditorPanelPolicy.afterFileSelected(treeOpen))
-            return
-        }
+        if (path == currentPath) return
         try {
             val text = files.readFile(id, path)
             files.rememberActive(id, path)
             currentPath = path
-            tabs.add(path)
-            while (tabs.size > 8) tabs.remove(tabs.first())
             loading = true
             spans.clear()
             binding.codeEditor.setText(text)
@@ -175,7 +170,6 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             binding.codeEditor.isEnabled = true
             loading = false
             dirty = false
-            setTreeOpen(WorkspaceEditorPanelPolicy.afterFileSelected(treeOpen))
             renderStatus()
             renderTabs()
             handler.removeCallbacks(recolor)
@@ -195,6 +189,7 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             files.saveFile(id, path, binding.codeEditor.text.toString())
             dirty = false
             renderStatus()
+            renderTabs()
             true
         } catch (error: Exception) {
             toast(error.message ?: "Could not save file")
@@ -202,76 +197,56 @@ class WorkspaceEditorActivity : AppCompatActivity() {
         }
     }
 
-    private fun renderTree() {
-        val entries = runCatching { files.list(id) }.getOrElse {
-            toast(it.message ?: "Could not load files"); return
+    private fun refreshFileUi() {
+        entries = runCatching { files.list(id) }.getOrElse {
+            toast(it.message ?: "Could not load project files")
+            emptyList()
         }
-        binding.fileTreeContainer.removeAllViews()
-        binding.starterButton.visibility = if (treeOpen && entries.isEmpty() &&
+        binding.starterButton.visibility = if (entries.isEmpty() &&
             projects.getProject(id)?.type == WorkspaceProjectType.WEBSITE) View.VISIBLE else View.GONE
-        if (entries.isEmpty()) {
-            binding.fileTreeContainer.addView(makeRow("No files yet · create a file or use website starter", false, 0))
-        }
-        entries.filter { entry -> collapsed.none { entry.path.startsWith("$it/") } }.forEach { entry ->
-            val label = (if (entry.folder) if (entry.path in collapsed) "▸  " else "▾  " else "◇  ") + entry.path.substringAfterLast('/')
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                minimumHeight = dp(48)
-                if (entry.path == currentPath) setBackgroundResource(R.drawable.bg_workspace_dialog_input)
-            }
-            val name = makeRow(label, entry.path == currentPath, entry.depth)
-            name.contentDescription = (if (entry.folder) "Folder " else "Open file ") + entry.path
-            name.setOnClickListener {
-                if (entry.folder) {
-                    if (!collapsed.add(entry.path)) collapsed.remove(entry.path)
-                    renderTree()
-                } else requestOpen(entry.path)
-            }
-            name.setOnLongClickListener { withSavedChanges { showEntryActions(entry) }; true }
-            row.addView(name, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            val actions = TextView(this).apply {
-                text = "⋮"
-                textSize = 24f
-                gravity = Gravity.CENTER
-                setTextColor(Color.parseColor("#B6F3C1"))
-                minWidth = dp(48)
-                minHeight = dp(48)
-                isClickable = true
-                isFocusable = true
-                contentDescription = "More actions for ${entry.path}"
-                setOnClickListener { withSavedChanges { showEntryActions(entry) } }
-            }
-            row.addView(actions, LinearLayout.LayoutParams(dp(48), dp(48)))
-            binding.fileTreeContainer.addView(row)
-        }
-    }
-
-    private fun makeRow(label: String, active: Boolean, depth: Int): TextView = TextView(this).apply {
-        text = label
-        textSize = 13f
-        setTextColor(Color.parseColor(if (active) "#E8FFEA" else "#A8D3B0"))
-        setPadding(dp(12 + depth * 14), dp(10), dp(8), dp(10))
-        minHeight = dp(48)
-        isClickable = true
-        isFocusable = true
+        renderTabs()
+        pickerRows?.let { renderPickerTree(it) }
     }
 
     private fun renderTabs() {
         binding.tabsContainer.removeAllViews()
-        tabs.forEach { path ->
-            val chip = TextView(this).apply {
-                text = path.substringAfterLast('/') + if (path == currentPath && dirty) " •" else ""
+        val paths = (WorkspaceEditorTabs.files(entries) + listOfNotNull(currentPath)).distinct()
+        if (paths.isEmpty()) {
+            binding.tabsContainer.addView(TextView(this).apply {
+                text = "No files yet · + File or create website starter"
                 textSize = 12f
-                setTextColor(Color.parseColor(if (path == currentPath) "#F1FFF3" else "#92B99B"))
-                setPadding(dp(12), dp(9), dp(12), dp(9))
-                setBackgroundResource(if (path == currentPath) R.drawable.bg_field else R.drawable.bg_workspace_dialog_input)
+                setTextColor(Color.parseColor("#83AA8C"))
+                gravity = Gravity.CENTER_VERTICAL
+            })
+            return
+        }
+        paths.forEach { path ->
+            val selected = path == currentPath
+            val chip = TextView(this).apply {
+                text = WorkspaceEditorTabs.label(path, paths) + if (selected && dirty) " •" else ""
+                textSize = 12f
+                maxWidth = dp(230)
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setTextColor(Color.parseColor(if (selected) "#F1FFF3" else "#92B99B"))
+                setPadding(dp(13), dp(10), dp(13), dp(10))
+                setBackgroundResource(if (selected) R.drawable.bg_field else R.drawable.bg_workspace_dialog_input)
+                minimumHeight = dp(40)
+                isClickable = true
+                isFocusable = true
+                contentDescription = "Open $path; long press for Rename or Delete"
                 setOnClickListener { requestOpen(path) }
-                contentDescription = "Open tab $path"
+                setOnLongClickListener {
+                    val entry = entries.firstOrNull { !it.folder && it.path == path }
+                    if (entry != null) withSavedChanges { showEntryActions(entry) }
+                    true
+                }
             }
-            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.marginEnd = dp(6)
+            val params = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(7) }
             binding.tabsContainer.addView(chip, params)
+            if (selected) (binding.tabsContainer.parent as? HorizontalScrollView)?.post {
+                (binding.tabsContainer.parent as? HorizontalScrollView)?.smoothScrollTo(chip.left - dp(12), 0)
+            }
         }
     }
 
@@ -287,7 +262,111 @@ class WorkspaceEditorActivity : AppCompatActivity() {
         val column = prefix.length - prefix.lastIndexOf('\n')
         binding.lineNumbers.text = if (path == null) "" else (1..(text.count { it == '\n' } + 1).coerceAtMost(2500)).joinToString("\n")
         binding.editorStatus.text = if (path == null) "UTF-8  •  App-private Workspace" else "Ln $line, Col $column  •  UTF-8  •  ${if (dirty) "Unsaved" else "Saved"}"
-        renderTabs()
+    }
+
+    private fun showFilesPicker() {
+        if (pickerDialog?.isShowing == true) return
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(binding.codeEditor.windowToken, 0)
+        binding.filesButton.requestFocus()
+        val rows = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(7), dp(10), dp(7))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = false
+            addView(rows, ScrollView.LayoutParams(-1, -2))
+        }
+        val frame = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#0B1210"))
+            setPadding(dp(10), dp(3), dp(10), dp(10))
+            addView(scroll, LinearLayout.LayoutParams(-1, dp(390)))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Project files")
+            .setView(frame)
+            .setNegativeButton("Close", null)
+            .create()
+        pickerRows = rows
+        pickerDialog = dialog
+        dialog.setOnShowListener { styleDialog(dialog) }
+        dialog.setOnDismissListener {
+            if (pickerDialog === dialog) { pickerDialog = null; pickerRows = null }
+        }
+        renderPickerTree(rows)
+        dialog.show()
+    }
+
+    private fun renderPickerTree(container: LinearLayout) {
+        container.removeAllViews()
+        if (entries.isEmpty()) {
+            container.addView(makeRow("No files yet. Use + File to create one.", false, 0))
+            if (projects.getProject(id)?.type == WorkspaceProjectType.WEBSITE) {
+                container.addView(makeRow("＋ Create website starter files", false, 0).apply {
+                    setOnClickListener {
+                        withSavedChanges {
+                            pickerDialog?.dismiss()
+                            createWebsiteStarter()
+                        }
+                    }
+                })
+            }
+            return
+        }
+        entries.filter { entry -> collapsed.none { entry.path.startsWith("$it/") } }.forEach { entry ->
+            val label = (if (entry.folder) if (entry.path in collapsed) "▸  " else "▾  " else "◇  ") + entry.path.substringAfterLast('/')
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(48)
+                if (entry.path == currentPath) setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            }
+            val name = makeRow(label, entry.path == currentPath, entry.depth)
+            name.contentDescription = (if (entry.folder) "Folder " else "Open file ") + entry.path
+            name.setOnClickListener {
+                if (entry.folder) {
+                    if (!collapsed.add(entry.path)) collapsed.remove(entry.path)
+                    renderPickerTree(container)
+                } else {
+                    pickerDialog?.dismiss()
+                    requestOpen(entry.path)
+                }
+            }
+            name.setOnLongClickListener { withSavedChanges { showEntryActions(entry) }; true }
+            row.addView(name, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(TextView(this).apply {
+                text = "⋮"
+                textSize = 24f
+                gravity = Gravity.CENTER
+                setTextColor(Color.parseColor("#B6F3C1"))
+                minimumWidth = dp(48)
+                minimumHeight = dp(48)
+                isClickable = true
+                isFocusable = true
+                contentDescription = "More actions for ${entry.path}"
+                setOnClickListener { withSavedChanges { showEntryActions(entry) } }
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            container.addView(row)
+        }
+    }
+
+    private fun makeRow(label: String, active: Boolean, depth: Int): TextView = TextView(this).apply {
+        text = label
+        textSize = 13f
+        setTextColor(Color.parseColor(if (active) "#E8FFEA" else "#A8D3B0"))
+        setPadding(dp(12 + depth * 14), dp(10), dp(8), dp(10))
+        minimumHeight = dp(48)
+        isClickable = true
+        isFocusable = true
+    }
+
+    private fun createWebsiteStarter() {
+        try {
+            files.addWebsiteStarter(id)
+            refreshFileUi()
+            openFile("index.html")
+        } catch (error: Exception) { toast(error.message ?: "Starter could not be created") }
     }
 
     private fun showPathDialog(folder: Boolean) {
@@ -317,8 +396,8 @@ class WorkspaceEditorActivity : AppCompatActivity() {
                 try {
                     if (folder) files.createFolder(id, path) else files.createFile(id, path)
                     dialog.dismiss()
-                    setTreeOpen(true)
-                    if (!folder) openFile(path)
+                    refreshFileUi()
+                    if (folder) showFilesPicker() else openFile(path)
                 } catch (error: Exception) { input.error = error.message ?: "Invalid path" }
             }
         }
@@ -355,14 +434,14 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
                     val path = files.rename(id, entry.path, input.text.toString().trim())
-                    val old = entry.path
-                    val renamed = tabs.map { if (it == old || it.startsWith("$old/")) path + it.removePrefix(old) else it }
-                    tabs.clear(); tabs.addAll(renamed)
-                    if (currentPath == old || currentPath?.startsWith("$old/") == true) {
+                    val previous = currentPath
+                    val remapped = WorkspaceEditorTabs.remap(previous, entry.path, path)
+                    dialog.dismiss()
+                    refreshFileUi()
+                    if (remapped != previous) {
                         currentPath = null
-                        openFile(projects.getProject(id)?.activeFilePath ?: path)
-                    }
-                    dialog.dismiss(); renderTree(); renderTabs()
+                        if (remapped != null) openFile(remapped) else renderStatus()
+                    } else renderStatus()
                 } catch (error: Exception) { input.error = error.message ?: "Rename failed" }
             }
         }
@@ -376,16 +455,19 @@ class WorkspaceEditorActivity : AppCompatActivity() {
             .setPositiveButton("Delete") { _, _ ->
                 try {
                     files.delete(id, entry.path)
-                    tabs.removeAll { it == entry.path || it.startsWith("${entry.path}/") }
-                    if (currentPath == entry.path || currentPath?.startsWith("${entry.path}/") == true) {
+                    val deletedCurrent = WorkspaceEditorTabs.removed(currentPath, entry.path)
+                    if (deletedCurrent) {
                         currentPath = null
                         loading = true
                         binding.codeEditor.setText("")
                         loading = false
                         dirty = false
-                        files.rememberActive(id, null)
                     }
-                    renderTree(); renderStatus()
+                    refreshFileUi()
+                    if (deletedCurrent) {
+                        val next = WorkspaceEditorTabs.files(entries).firstOrNull()
+                        if (next != null) openFile(next) else renderStatus()
+                    } else renderStatus()
                 } catch (error: Exception) { toast(error.message ?: "Delete failed") }
             }.create()
         dialog.setOnShowListener { styleDialog(dialog) }
