@@ -29,6 +29,17 @@
                 android:maxLength="500" android:minLines="3" android:maxLines="7"
                 android:hint="e.g. Make a mobile-first food delivery homepage"
                 android:textColor="#F1FFF3" android:textColorHint="#8CA795" android:textSize="15sp" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="22dp" android:text="HOW WILL WE KNOW IT WORKS?"
+                android:letterSpacing="0.12" android:textSize="11sp" android:textStyle="bold"
+                android:textColor="#9BD9A6" />
+            <EditText android:id="@+id/taskAcceptanceInput" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:minHeight="86dp" android:layout_marginTop="12dp"
+                android:background="@drawable/bg_workspace_dialog_input" android:padding="17dp"
+                android:inputType="textMultiLine|textCapSentences" android:gravity="top|start"
+                android:maxLength="500" android:minLines="2" android:maxLines="6"
+                android:hint="e.g. Search works and cards fit on my phone"
+                android:textColor="#F1FFF3" android:textColorHint="#8CA795" android:textSize="15sp" />
             <TextView android:id="@+id/taskSave" android:layout_width="match_parent" android:layout_height="54dp"
                 android:layout_marginTop="13dp" android:background="@drawable/bg_field"
                 android:gravity="center" android:text="Save task brief" android:textColor="#F1FFF3"

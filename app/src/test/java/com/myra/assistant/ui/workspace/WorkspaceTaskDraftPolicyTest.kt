@@ -17,4 +17,11 @@ class WorkspaceTaskDraftPolicyTest {
         assertTrue(WorkspaceTaskDraftPolicy.isDirty("Build a website ", "Build a website"))
         assertFalse(WorkspaceTaskDraftPolicy.isDirty("Build a website", "Build a website"))
     }
+
+    @Test fun criteriaOnlyEditsCannotBypassNavigationGuard() {
+        assertTrue(WorkspaceTaskDraftPolicy.isDirty("Same goal", "Same goal", "New criteria", "Old criteria"))
+        assertTrue(WorkspaceTaskDraftPolicy.isDirty("Same goal", "Same goal", "", "Old criteria"))
+        assertTrue(WorkspaceTaskDraftPolicy.isDirty("Same goal", "Same goal", "New criteria", null))
+        assertFalse(WorkspaceTaskDraftPolicy.isDirty("Same goal", "Same goal", "Expected result", "Expected result"))
+    }
 }

@@ -14,7 +14,7 @@ import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivityWorkspaceTaskBinding
 import java.io.File
 
-/** Phase 5 task entry: saved plan guidance, NOT an autonomous coding executor. */
+/** Phase 5 task entry: saved specification guidance, NOT an autonomous coding executor. */
 class WorkspaceTaskActivity : AppCompatActivity() {
     companion object {
         private const val EXTRA_PROJECT_ID = "workspace_project_id"
@@ -27,7 +27,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
     private val tasks by lazy { WorkspaceTaskStore(projects) }
     private lateinit var projectId: String
     private lateinit var project: WorkspaceProject
-    private var loadedGoal = false
+    private var loadedBrief = false
     private var currentTask: WorkspaceTask? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,13 +53,13 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         binding.taskPreview.setOnClickListener {
             guardUnsavedBrief { startActivity(WorkspacePreviewActivity.intent(this, projectId)) }
         }
-        binding.taskGoalInput.addTextChangedListener(object : TextWatcher {
+        val statusWatcher = object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                updateStatus()
-            }
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateStatus() }
             override fun afterTextChanged(s: Editable?) = Unit
-        })
+        }
+        binding.taskGoalInput.addTextChangedListener(statusWatcher)
+        binding.taskAcceptanceInput.addTextChangedListener(statusWatcher)
         render()
     }
 
@@ -83,49 +83,70 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.rgb(255, 190, 180))
     }
 
-    /** A visible but unsaved brief is never silently replaced by an older saved brief. */
+    private fun isDirty() = WorkspaceTaskDraftPolicy.isDirty(
+        binding.taskGoalInput.text.toString(), currentTask?.goal,
+        binding.taskAcceptanceInput.text.toString(), currentTask?.acceptanceCriteria,
+    )
+
+    /** Neither visible field may be silently lost on back, navigation or pause. */
     private fun guardUnsavedBrief(next: () -> Unit) {
-        if (!WorkspaceTaskDraftPolicy.isDirty(binding.taskGoalInput.text.toString(), currentTask?.goal)) {
+        if (!isDirty()) {
             next()
             return
         }
         AlertDialog.Builder(this)
             .setTitle("Unsaved task brief")
-            .setMessage("Save the brief first, or discard these edits and keep the last saved task unchanged.")
+            .setMessage("Save the brief and acceptance criteria first, or discard these edits and keep the last saved task unchanged.")
             .setNegativeButton("Keep editing", null)
             .setPositiveButton("Discard edits") { _, _ ->
                 binding.taskGoalInput.setText(currentTask?.goal.orEmpty())
+                binding.taskAcceptanceInput.setText(currentTask?.acceptanceCriteria.orEmpty())
                 next()
             }
             .showTaskConfirmation()
     }
 
     private fun saveGoal() {
-        val text = binding.taskGoalInput.text.toString()
-        val normalized = runCatching { WorkspaceTaskContract.normalizeGoal(text) }.getOrElse {
+        val normalized = runCatching { WorkspaceTaskContract.normalizeGoal(binding.taskGoalInput.text.toString()) }.getOrElse {
             binding.taskGoalInput.error = it.message
+            return
+        }
+        val criteria = runCatching {
+            WorkspaceTaskContract.normalizeAcceptanceCriteria(binding.taskAcceptanceInput.text.toString())
+        }.getOrElse {
+            binding.taskAcceptanceInput.error = it.message
             return
         }
         val existing = tasks.get(projectId)
         if (existing != null && existing.goal != normalized) {
             AlertDialog.Builder(this)
                 .setTitle("Replace saved task?")
-                .setMessage("The previous task brief will be replaced. Project files and personal memory stay unchanged.")
+                .setMessage("The previous task brief and acceptance criteria will be replaced. Project files and personal memory stay unchanged.")
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Replace") { _, _ -> persistGoal(normalized, true) }
+                .setPositiveButton("Replace") { _, _ -> persistGoal(normalized, criteria, true) }
                 .showTaskConfirmation()
-        } else if (existing == null) persistGoal(normalized, false)
-        else {
+        } else if (existing == null) persistGoal(normalized, criteria, false)
+        else if (existing.acceptanceCriteria != criteria) {
+            runCatching { tasks.updateAcceptanceCriteria(projectId, criteria) }
+                .onSuccess {
+                    binding.taskGoalInput.setText(it.goal)
+                    binding.taskAcceptanceInput.setText(it.acceptanceCriteria)
+                    Toast.makeText(this, "Acceptance criteria saved locally", Toast.LENGTH_SHORT).show()
+                    render()
+                }.onFailure { Toast.makeText(this, it.message ?: "Criteria could not be saved", Toast.LENGTH_LONG).show() }
+        } else {
             binding.taskGoalInput.setText(existing.goal)
+            binding.taskAcceptanceInput.setText(existing.acceptanceCriteria)
             Toast.makeText(this, "Task is already saved", Toast.LENGTH_SHORT).show()
             render()
         }
     }
 
-    private fun persistGoal(goal: String, replace: Boolean) {
-        runCatching { tasks.create(projectId, goal, replaceExisting = replace) }
+    private fun persistGoal(goal: String, criteria: String, replace: Boolean) {
+        runCatching { tasks.create(projectId, goal, replaceExisting = replace, rawAcceptanceCriteria = criteria) }
             .onSuccess {
                 binding.taskGoalInput.setText(it.goal)
+                binding.taskAcceptanceInput.setText(it.acceptanceCriteria)
                 Toast.makeText(this, "Task brief saved locally", Toast.LENGTH_SHORT).show()
                 render()
             }.onFailure { Toast.makeText(this, it.message ?: "Task could not be saved", Toast.LENGTH_LONG).show() }
@@ -139,23 +160,24 @@ class WorkspaceTaskActivity : AppCompatActivity() {
     }
 
     private fun updateStatus() {
-        val dirty = WorkspaceTaskDraftPolicy.isDirty(binding.taskGoalInput.text.toString(), currentTask?.goal)
         binding.taskStatus.text = when {
-            dirty && currentTask == null -> "Unsaved brief  •  Tap Save task brief"
-            dirty -> "Unsaved edits  •  Last saved task is unchanged"
+            isDirty() && currentTask == null -> "Unsaved brief  •  Tap Save task brief"
+            isDirty() -> "Unsaved edits  •  Last saved task is unchanged"
             currentTask == null -> "No task saved yet"
             currentTask?.status == WorkspaceTaskStatus.PAUSED -> "Paused  •  Project task stays saved"
-            else -> "Saved draft  •  Awaiting LYRA coding worker"
+            currentTask?.acceptanceCriteria.isNullOrBlank() -> "Saved draft  •  Add acceptance criteria before execution"
+            else -> "Saved spec  •  Awaiting LYRA coding worker"
         }
     }
 
     private fun render() {
         currentTask = tasks.get(projectId)
         val task = currentTask
-        // Never overwrite an unsaved edit on returning from another app or after a pause/resume.
-        if (!loadedGoal) {
+        // Returning from Files or Preview must not overwrite either unsaved text field.
+        if (!loadedBrief) {
             binding.taskGoalInput.setText(task?.goal.orEmpty())
-            loadedGoal = true
+            binding.taskAcceptanceInput.setText(task?.acceptanceCriteria.orEmpty())
+            loadedBrief = true
         }
         if (task == null) {
             binding.taskPause.visibility = View.GONE

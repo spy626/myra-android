@@ -12,12 +12,20 @@ Status key: `INTEGRATED` = demonstrably in LYRA; `BORROW` = concept to implement
 - $0 authority: no card, AutoPay, surprise overage, paid fallback or silent provider switching to a billable route. If all verified-free routes fail, checkpoint and wait.
 - Phase 5 first slice is a task brief + plan/evidence *contract*, NOT working autonomous AI coding. No independent model client, automatic file mutation or extra personal memory DB is introduced.
 
+## Phase 5 second slice: project-local acceptance criteria (2026-09-16)
+
+- Source: `github/spec-kit` README at `45db690bab85924ce53f85a9377076abaca6f1fb` (MIT): separate what/why and verifiable specification from implementation. BORROW concept only; no source code, CLI, agent, dependency, permissions or billable provider copied/installed.
+- Match/duplicate check: LYRA already has one `WorkspaceTaskContract` (step templates, allowed tools, evidence/approval guard) and one project task JSON; do not add a second planner or execution worker. MERGED acceptance criteria into this same task model and existing screen, not personal memory or project files.
+- Persistence/safety: task JSON v2 reads legacy v1, criteria edit preserves task ID and PAUSED state, goal replacement still requires confirmation, both fields receive unsaved-edit guard; empty criteria stays an incomplete specification, never approval or verified evidence.
+- Verification: JVM tests for v1 compatibility, persisted criteria, task identity and PAUSED preservation, rejection without mutation, guidance bounds and unsaved criteria; Android CI lint/unit tests/APK required. Physical-phone UI acceptance remains pending until real test.
+- Deferred: automatic plan generation, executor, external tools, approval capture, provenance of tool evidence, router and final verification remain future slices; no auto-file edits, provider usage, fees or new permissions in this slice.
+
 ## Collected repositories and concepts
 
 | Repo / source | Useful idea and exact destination | Phase | Status |
 |---|---|---:|---|
 | moeru-ai/airi + moeru-ai/plast-mem | One-owner memory; source-owned context; bounded task state; transcript truth/projection; Spark; coding-memory ownership boundary; PlanSpec `allowedTools`/`expectedEvidence`, reconciler, approval and verification authority | 5, 10, 18 | INTEGRATED memory; BORROW planning contract |
-| github/spec-kit | Per-feature constitution, specify, plan, tasks, implement, converge; separate bug/idea entry points | 5–6, 18 | BORROW |
+| github/spec-kit | Per-feature constitution, specify, plan, tasks, implement, converge; separate bug/idea entry points | 5–6, 18 | BORROW; acceptance criteria concept MERGED in Phase 5 slice 2 |
 | addyosmani/agent-skills | Meta-skill routing, DEFINE/PLAN/BUILD/VERIFY/REVIEW/SHIP, mechanical QA, bounded adversarial review | 5, 14–18 | BORROW |
 | Shubhamsaboo/awesome-llm-apps | Scope-creep checks, one-mutation improvement, skill admission/security/evals, provider-specific cost audit | 5, 14–18 | BORROW |
 | browser-use | Real browser worker, observe/action/verify and permission boundaries | 13 | BORROW |

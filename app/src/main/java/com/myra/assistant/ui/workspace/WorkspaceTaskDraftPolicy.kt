@@ -1,6 +1,7 @@
 package com.myra.assistant.ui.workspace
 
-/** Compare the visible draft against the saved project task; never treat an edit as a saved task. */
+/** Compare both visible fields against saved project data; neither edit is an approval or a saved task. */
 object WorkspaceTaskDraftPolicy {
-    fun isDirty(visibleDraft: String, savedGoal: String?): Boolean = visibleDraft != savedGoal.orEmpty()
+    fun isDirty(visibleDraft: String, savedGoal: String?, visibleCriteria: String = "", savedCriteria: String? = ""): Boolean =
+        visibleDraft != savedGoal.orEmpty() || visibleCriteria != savedCriteria.orEmpty()
 }
