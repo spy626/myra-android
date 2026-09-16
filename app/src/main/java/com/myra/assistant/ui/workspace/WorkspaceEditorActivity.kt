@@ -255,6 +255,8 @@ class WorkspaceEditorActivity : AppCompatActivity() {
         binding.editorFileName.text = if (path == null) "No file open" else path + if (dirty) "  •  Unsaved" else "  •  Saved"
         binding.saveButton.isEnabled = path != null
         binding.codeEditor.isEnabled = path != null
+        // Empty, already-open files must look like empty code, not like an unopened editor.
+        binding.codeEditor.hint = if (path == null) "Open or create a file to start coding" else ""
         val text = binding.codeEditor.text.toString()
         val cursor = binding.codeEditor.selectionStart.coerceIn(0, text.length)
         val prefix = text.take(cursor)
@@ -448,9 +450,36 @@ class WorkspaceEditorActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    private fun referenceWarning(entry: WorkspaceFileStore.Entry): String {
+        // Advisory, bounded scan of common text sources; unrecognized references may still exist.
+        val referencers = entries.asSequence()
+            .filter { candidate ->
+                !candidate.folder && !WorkspaceEditorTabs.removed(candidate.path, entry.path) &&
+                    listOf(".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".ts", ".tsx")
+                        .any { candidate.path.endsWith(it, ignoreCase = true) }
+            }
+            .sortedWith(compareBy<WorkspaceFileStore.Entry> {
+                if (it.path == "index.html") 0 else if (it.path.endsWith(".html", true)) 1 else 2
+            }.thenBy { it.path })
+            .take(40)
+            .mapNotNull { candidate ->
+                val source = runCatching { files.readFile(id, candidate.path) }.getOrNull()
+                if (source != null && WorkspaceDeleteReferencePolicy.referencesTarget(candidate.path, source, entry.path))
+                    candidate.path else null
+            }
+            .take(3)
+            .toList()
+        return if (referencers.isEmpty()) {
+            "Other files may reference it. References are not automatically updated."
+        } else {
+            "Referenced by: ${referencers.joinToString(", ")}. Deleting may break your project. References are not automatically updated."
+        }
+    }
+
     private fun confirmDelete(entry: WorkspaceFileStore.Entry) {
+        val warning = referenceWarning(entry)
         val dialog = AlertDialog.Builder(this).setTitle("Delete ${entry.path}?")
-            .setMessage("This permanently deletes the selected ${if (entry.folder) "folder and all its files" else "file"}. Personal memory is unaffected.")
+            .setMessage("This permanently deletes the selected ${if (entry.folder) "folder and all its files" else "file"}.\n\n$warning\n\nPersonal memory is unaffected.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
                 try {
