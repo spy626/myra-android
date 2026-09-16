@@ -36,7 +36,6 @@ class WorkspaceActivity : AppCompatActivity() {
 
         binding.backButton.setOnClickListener { finish() }
         binding.newProjectButton.setOnClickListener { showNewProjectDialog() }
-        binding.openProjectButton.setOnClickListener { showOpenProjectDialog() }
     }
 
     override fun onResume() {
@@ -81,21 +80,6 @@ class WorkspaceActivity : AppCompatActivity() {
         nameInput.requestFocus()
     }
 
-    private fun showOpenProjectDialog() {
-        val projects = projectStore.listProjects()
-        if (projects.isEmpty()) {
-            Toast.makeText(this, "No Workspace projects yet", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val labels = projects.map { "${it.name}\n${it.type.displayName}" }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Open Project")
-            .setItems(labels) { _, index -> openProject(projects[index].projectId) }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
     private fun renderRecentProjects() {
         val projects = projectStore.listProjects()
         binding.recentProjectsContainer.removeAllViews()
@@ -106,9 +90,9 @@ class WorkspaceActivity : AppCompatActivity() {
             val row = LayoutInflater.from(this)
                 .inflate(R.layout.item_workspace_project, binding.recentProjectsContainer, false)
             row.findViewById<TextView>(R.id.projectNameText).text = project.name
-            row.findViewById<TextView>(R.id.projectMetaText).text = buildString {
-                append(project.type.displayName)
-                append("  •  Last opened ")
+            row.findViewById<TextView>(R.id.projectTypeText).text = project.type.displayName
+            row.findViewById<TextView>(R.id.projectLastOpenedText).text = buildString {
+                append("Last opened ")
                 append(DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(project.lastOpenedAtMs)))
             }
             row.contentDescription = "Open ${project.name}, ${project.type.displayName}"
