@@ -39,6 +39,9 @@ class WorkspaceProjectActivity : AppCompatActivity() {
         binding.openEditorButton.setOnClickListener {
             projectId?.let { startActivity(WorkspaceEditorActivity.intent(this, it)) }
         }
+        binding.openPreviewButton.setOnClickListener {
+            projectId?.let { startActivity(WorkspacePreviewActivity.intent(this, it)) }
+        }
         binding.projectInfoToggle.setOnClickListener {
             infoExpanded = !infoExpanded
             renderProjectInfo()
@@ -77,6 +80,8 @@ class WorkspaceProjectActivity : AppCompatActivity() {
     private fun bindProject(project: WorkspaceProject) {
         binding.projectTitle.text = project.name
         binding.projectType.text = "${project.type.displayName}  •  ${project.type.subtitle}"
+        binding.openPreviewButton.visibility =
+            if (project.type == WorkspaceProjectType.WEBSITE) View.VISIBLE else View.GONE
         binding.projectIdText.text = "Project ID\n${project.projectId}"
         binding.projectStorageText.text = "Project root\nPrivate Workspace storage / ${project.rootRelativePath}"
         binding.projectCreatedText.text = "Created\n${formatDate(project.createdAtMs)}"

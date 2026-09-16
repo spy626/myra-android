@@ -22,7 +22,8 @@
         android:allowBackup="true"
         android:label="LYRA"
         android:theme="@style/Theme.Myra"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="false"
+        android:networkSecurityConfig="@xml/workspace_network_security">
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -38,6 +39,7 @@
         <activity android:name=".ui.settings.ApiCloudSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.DeepResearchSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.VoiceAiSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
+        <activity android:name=".ui.workspace.WorkspacePreviewActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.workspace.WorkspaceEditorActivity" android:exported="false" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".ui.workspace.WorkspaceProjectActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.workspace.WorkspaceActivity" android:exported="false" android:screenOrientation="portrait" />
