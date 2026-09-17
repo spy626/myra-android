@@ -6,8 +6,10 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputFilter
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -37,6 +39,9 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
     private val projects by lazy { WorkspaceProjectStore(File(filesDir, "workspace/projects")) }
     private val tasks by lazy { WorkspaceTaskStore(projects) }
     private val files by lazy { WorkspaceFileStore(projects) }
+    private val savedSuggestions by lazy {
+        WorkspaceAiSuggestionDraftStore(File(noBackupFilesDir, "workspace-ai-drafts"))
+    }
     private lateinit var projectId: String
     private lateinit var status: TextView
     private lateinit var handoffButton: TextView
@@ -44,6 +49,8 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
     private lateinit var copyPromptButton: TextView
     private lateinit var freeKeyInput: EditText
     private lateinit var freeSuggestionButton: TextView
+    private lateinit var restoreButton: TextView
+    private lateinit var discardButton: TextView
     private lateinit var jsonInput: EditText
     private lateinit var preview: TextView
     private lateinit var validateButton: TextView
@@ -129,7 +136,9 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                 "Enter a key from a free account with no billing/card. Key stays in this screen's memory " +
                 "for one request, is never saved and is cleared when leaving. Free quota and privacy-compatible " +
                 "providers may be unavailable: LYRA stops instead of switching to paid or relaxing privacy. " +
-                "Do not use confidential source; privacy-pattern screening cannot catch everything."
+                "Do not use confidential source; privacy-pattern screening cannot catch everything. " +
+                "A locally validated suggestion can be kept for up to 24 hours in app-private no-backup storage; " +
+                "the patch itself may contain source text. Discard it when finished."
         ))
         freeKeyInput = EditText(this).apply {
             hint = "OpenRouter FREE account API key (session-only)"
@@ -139,10 +148,13 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             setBackgroundResource(R.drawable.bg_workspace_dialog_input)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             filters = arrayOf(InputFilter.LengthFilter(256))
+            isSaveEnabled = false // Android must not put a session-only key in saved instance state.
             setPadding(dp(14), dp(12), dp(14), dp(12))
         }
         column.addView(freeKeyInput)
         freeSuggestionButton = button("Review & request ONE free AI suggestion").also(column::addView)
+        restoreButton = button("Restore saved AI patch (offline review)").also(column::addView)
+        discardButton = button("Discard saved AI patch").also(column::addView)
         column.addView(label(
             "Paste exactly ONE JSON response from an AI or type it yourself. No provider reply is " +
                 "trusted until LYRA rechecks the current file, source SHA, task and privacy.\n\n" +
@@ -161,6 +173,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             filters = arrayOf(InputFilter.LengthFilter(6000))
             minLines = 7
             maxLines = 14
+            isSaveEnabled = false // Recovered drafts must be revalidated, not restored by Android.
             setPadding(dp(14), dp(12), dp(14), dp(12))
         }
         column.addView(jsonInput)
@@ -173,7 +186,13 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         handoffButton.setOnClickListener { selectHandoffFile() }
         copyPromptButton.setOnClickListener { confirmCopyPrompt() }
         freeSuggestionButton.setOnClickListener { confirmFreeSuggestion() }
-        jsonInput.setOnFocusChangeListener { _, _ -> clearDraft() }
+        restoreButton.setOnClickListener { restoreSuggestion() }
+        discardButton.setOnClickListener { confirmDiscardSuggestion() }
+        jsonInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = clearDraft()
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
         validateButton.setOnClickListener { validateDraft() }
         applyButton.setOnClickListener { confirmApply() }
         undoButton.setOnClickListener {
@@ -184,6 +203,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                 .setPositiveButton("Undo") { _, _ ->
                     runCatching { WorkspaceScopedEdit.undo(files, projects, projectId) }
                         .onSuccess {
+                            runCatching { savedSuggestions.discard(projectId) }
                             Toast.makeText(this, "Original restored and checked", Toast.LENGTH_LONG).show()
                             render()
                         }.onFailure(::error)
@@ -197,6 +217,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                 .setPositiveButton("Keep change") { _, _ ->
                     runCatching { WorkspaceScopedEdit.keep(files, projects, projectId) }
                         .onSuccess {
+                            runCatching { savedSuggestions.discard(projectId) }
                             Toast.makeText(this, "Change kept; rollback cleared", Toast.LENGTH_LONG).show()
                             render()
                         }.onFailure {
@@ -219,7 +240,9 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         activeRequest?.cancel()
         activeRequest = null
         if (::freeKeyInput.isInitialized) freeKeyInput.text?.clear()
+        if (::jsonInput.isInitialized) jsonInput.text?.clear()
         if (::handoffPreview.isInitialized) clearHandoff()
+        if (::preview.isInitialized) clearDraft()
         super.onStop()
     }
 
@@ -238,7 +261,9 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
 
     private fun render() {
         clearDraft()
-        clearHandoff() // Leaving/re-entering never retains a source-bearing prompt on screen.
+        clearHandoff() // Source-bearing prompt never survives leaving and returning.
+        restoreButton.visibility = View.GONE
+        discardButton.visibility = View.GONE
         val pending = runCatching { WorkspaceScopedEdit.pending(projects, projectId) }
         if (pending.isFailure) {
             status.text = "Rollback data needs attention. No new write or prompt will be attempted."
@@ -253,6 +278,8 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         }
         val backup = pending.getOrNull()
         if (backup != null) {
+            // A protected edit takes precedence over any older suggestion.
+            runCatching { savedSuggestions.discard(projectId) }
             status.text = "PENDING PROTECTED EDIT\nFile: ${backup.path}\n" +
                 "Undo or Keep before another patch. No build/browser verification claimed."
             handoffButton.visibility = View.GONE
@@ -269,21 +296,70 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         val task = tasks.get(projectId)
         val ready = task != null && WorkspaceTaskContract.isSpecApproved(task) &&
             task.status != WorkspaceTaskStatus.PAUSED
-        status.text = if (ready)
-            "Choose a file → review a local AI prompt → opt in to one $0 suggestion OR copy manually. " +
+        val recovered = runCatching { savedSuggestions.recover(files, tasks, projects, projectId) }
+        val hasSaved = recovered.getOrNull() is WorkspaceAiSuggestionDraftStore.Recovery.Ready
+        status.text = when {
+            recovered.isFailure -> "Private draft storage needs attention; no saved suggestion opened."
+            hasSaved -> "Saved AI patch available for offline review. Restore or discard it before another request. " +
+                "No source has been changed."
+            recovered.getOrNull() == WorkspaceAiSuggestionDraftStore.Recovery.Rejected ->
+                "Saved AI patch expired or failed current-file/task checks and was discarded. No edit made."
+            ready -> "Choose a file → review a local AI prompt → opt in to one $0 suggestion OR copy manually. " +
                 "Then preview and separately approve a safe edit."
-        else
-            "Save, approve and resume the task brief first. No source sharing, AI request or write is authorized."
-        handoffButton.visibility = if (ready) View.VISIBLE else View.GONE
-        freeKeyInput.visibility = if (ready) View.VISIBLE else View.GONE
-        freeSuggestionButton.visibility = if (ready) View.VISIBLE else View.GONE
+            else -> "Save, approve and resume the task brief first. No source sharing, AI request or write is authorized."
+        }
+        handoffButton.visibility = if (ready && !hasSaved) View.VISIBLE else View.GONE
+        freeKeyInput.visibility = if (ready && !hasSaved) View.VISIBLE else View.GONE
+        freeSuggestionButton.visibility = if (ready && !hasSaved) View.VISIBLE else View.GONE
+        restoreButton.visibility = if (hasSaved) View.VISIBLE else View.GONE
+        discardButton.visibility = if (hasSaved) View.VISIBLE else View.GONE
         jsonInput.visibility = if (ready) View.VISIBLE else View.GONE
         validateButton.visibility = if (ready) View.VISIBLE else View.GONE
+    }
+
+    private fun restoreSuggestion() {
+        if (activeRequest != null) return
+        when (val saved = runCatching {
+            savedSuggestions.recover(files, tasks, projects, projectId)
+        }.getOrElse { error(it); return }) {
+            is WorkspaceAiSuggestionDraftStore.Recovery.Ready -> {
+                jsonInput.setText(saved.reply)
+                draft = saved.draft
+                preview.text = saved.draft.displayText()
+                preview.visibility = View.VISIBLE
+                applyButton.visibility = View.VISIBLE
+                status.text = "Saved AI patch restored and freshly validated. UNTRUSTED preview only; separate write approval required."
+            }
+            WorkspaceAiSuggestionDraftStore.Recovery.Missing -> render()
+            WorkspaceAiSuggestionDraftStore.Recovery.Rejected -> {
+                render()
+                status.text = "Saved AI patch expired or failed current-file/task checks; discarded. No edit made."
+            }
+        }
+    }
+
+    private fun confirmDiscardSuggestion() {
+        showDialog(AlertDialog.Builder(this)
+            .setTitle("Discard saved AI patch?")
+            .setMessage("Remove this project's temporary suggestion? No file will be changed and no provider contacted.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Discard patch") { _, _ ->
+                runCatching { savedSuggestions.discard(projectId) }
+                    .onSuccess {
+                        jsonInput.text?.clear()
+                        render()
+                        status.text = "Saved AI patch discarded. No file changed or provider contacted."
+                    }.onFailure(::error)
+            })
     }
 
     private fun selectHandoffFile() {
         if (activeRequest != null) {
             Toast.makeText(this, "Finish this free suggestion request first", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (savedSuggestions.recover(files, tasks, projects, projectId) is WorkspaceAiSuggestionDraftStore.Recovery.Ready) {
+            status.text = "Restore or discard the saved AI patch before preparing another request."
             return
         }
         val choices = runCatching { WorkspaceSourceContext.choices(files, projectId) }
@@ -342,6 +418,12 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             Toast.makeText(this, "Free AI request already in progress", Toast.LENGTH_SHORT).show()
             return
         }
+        val savedState = runCatching { savedSuggestions.recover(files, tasks, projects, projectId) }
+            .getOrElse { error(it); return }
+        if (savedState is WorkspaceAiSuggestionDraftStore.Recovery.Ready) {
+            status.text = "Restore or discard the saved AI patch first; no new request sent."
+            return
+        }
         val prepared = handoff ?: run {
             Toast.makeText(this, "Prepare and review one file's local prompt first", Toast.LENGTH_LONG).show()
             return
@@ -372,6 +454,10 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 if (activeRequest != null) return@setPositiveButton
+                if (savedSuggestions.recover(files, tasks, projects, projectId) is WorkspaceAiSuggestionDraftStore.Recovery.Ready) {
+                    status.text = "Saved AI patch exists; no new request sent."
+                    return@setPositiveButton
+                }
                 freeKeyInput.text?.clear()
                 clearDraft()
                 val generation = ++requestGeneration
@@ -410,12 +496,20 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                                         clearDraft()
                                         status.text = "AI suggestion changed file or scope; refused. No edit made."
                                     } else {
+                                        val saved = runCatching {
+                                            savedSuggestions.save(files, tasks, projects, projectId, reply, candidate)
+                                        }
                                         jsonInput.setText(reply)
                                         draft = candidate
                                         preview.text = candidate.displayText()
                                         preview.visibility = View.VISIBLE
                                         applyButton.visibility = View.VISIBLE
-                                        status.text = "Free AI suggested one edit. UNTRUSTED preview only; separately approve any write."
+                                        restoreButton.visibility = if (saved.isSuccess) View.VISIBLE else View.GONE
+                                        discardButton.visibility = if (saved.isSuccess) View.VISIBLE else View.GONE
+                                        status.text = if (saved.isSuccess)
+                                            "Free AI suggested one edit. Private 24h draft saved; UNTRUSTED preview only. Separately approve any write."
+                                        else
+                                            "Free AI suggested one edit, but private save failed. Preview only; keep this screen open. No edit made."
                                     }
                                 }.onFailure {
                                     clearDraft()
@@ -469,6 +563,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                 runCatching {
                     WorkspaceScopedEdit.apply(files, tasks, projects, fresh.context, fresh.proposal)
                 }.onSuccess {
+                    runCatching { savedSuggestions.discard(projectId) }
                     Toast.makeText(this, "Structured edit saved and checked; Undo available", Toast.LENGTH_LONG).show()
                     render()
                 }.onFailure {
