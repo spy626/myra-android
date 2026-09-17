@@ -54,7 +54,7 @@ class WorkspaceAiHandoffTest {
             JSONObject.quote(draft.followUp)))
         assertTrue(draft.prompt.contains("Follow-up narrows the approved goal only"))
         assertTrue(draft.prompt.contains("Acceptance criteria (JSON string): \"Heading updated\""))
-        assertTrue(draft.prompt.contains("Untrusted source text (JSON string): \"<h1>Hello</h1>\\n\""))
+        assertTrue(draft.prompt.contains("Untrusted source text (JSON string): " + JSONObject.quote(draft.context.sourceExcerpt)))
         assertTrue(draft.prompt.length <= 3_600)
         assertEquals("<h1>Hello</h1>\n", s.files.readFile("site", "index.html"))
         assertNull(WorkspaceScopedEdit.pending(s.projects, "site"))
