@@ -11,8 +11,8 @@ class WorkspaceTaskDialogAppearanceTest {
     @Test fun taskConfirmationsAndBothFileChoosersUseReadableLyraPalette() {
         val activity = File("src/main/java/com/myra/assistant/ui/workspace/WorkspaceTaskActivity.kt").readText()
         val background = File("src/main/res/drawable/bg_workspace_dialog.xml").readText()
-        // Unsaved guard, task replacement, source chooser, spec approval, local-context chooser.
-        assertEquals(5, Regex("\\.showTaskConfirmation\\(\\)").findAll(activity).count() - 1)
+        // Unsaved guard, task replacement, source chooser, spec approval, context chooser, review note.
+        assertEquals(6, Regex("\\.showTaskConfirmation\\(\\)").findAll(activity).count() - 1)
         assertTrue(activity.contains("setBackgroundDrawableResource(R.drawable.bg_workspace_dialog)"))
         assertTrue(activity.contains("Color.rgb(190, 255, 202)"))
         assertTrue(activity.contains("Color.rgb(255, 190, 180)"))
@@ -20,6 +20,7 @@ class WorkspaceTaskDialogAppearanceTest {
         assertTrue(activity.contains("Color.rgb(217, 243, 222)"))
         assertTrue(activity.contains(".setTitle(\"Approve saved spec for planning?\")"))
         assertTrue(activity.contains("No AI runs, file edits, builds, tool permissions or payments are authorized."))
+        assertTrue(activity.contains("Plan scope note (screen only; not saved)"))
         assertTrue(background.contains("#07110F"))
     }
 
@@ -31,7 +32,7 @@ class WorkspaceTaskDialogAppearanceTest {
         assertFalse(chooser.contains(".setMessage("))
         assertTrue(chooser.contains(".setTitle(\"Choose a project file (read-only)\")"))
         val contextChooser = activity.substringAfter("private fun prepareLocalContext()")
-            .substringBefore("private fun showLocalContext(")
+            .substringBefore("private fun clearLocalPlan()")
         assertTrue(contextChooser.contains(".setAdapter(adapter)"))
         assertFalse(contextChooser.contains(".setMessage("))
         assertTrue(contextChooser.contains(".setTitle(\"Choose one file for local context (not sent)\")"))
