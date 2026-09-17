@@ -2,7 +2,6 @@ package com.myra.assistant.ui.workspace
 
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Protocol
-import okhttp3.RequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
@@ -36,28 +35,60 @@ class WorkspaceFreeAiSuggestionTest {
         assertFalse(WorkspaceFreeAiSuggestion.client.followRedirects)
     }
 
+    private fun reply(finishReason: String?, content: Any? = "sensitive source text should not appear"): String {
+        val choice = JSONObject().put("message", JSONObject().put("content", content))
+        if (finishReason != null) choice.put("finish_reason", finishReason)
+        return JSONObject().put("choices", JSONArray().put(choice)).toString()
+    }
+
     @Test fun validReplyIsOnlyUntrustedTextAndMalformedOrPartialRepliesFailClosed() {
         val patch = """{"schemaVersion":1,"operation":"replace_exact_once"}"""
-        val response = JSONObject().put("choices", JSONArray().put(JSONObject()
-            .put("finish_reason", "stop")
-            .put("message", JSONObject().put("content", patch)))).toString()
-        assertEquals(patch, WorkspaceFreeAiSuggestion.parseResponse(response))
+        assertEquals(patch, WorkspaceFreeAiSuggestion.parseResponse(reply("stop", patch)))
         assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse("not json") }.isFailure)
-        assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse("{}") }.isFailure)
-        assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse(response.replace("\"stop\"", "\"length\"")) }.isFailure)
         assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse("x".repeat(33_000)) }.isFailure)
+        assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse(reply("stop", "")) }.isFailure)
+        assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse(reply("stop", JSONObject())) }.isFailure)
+    }
+
+    @Test fun responseReasonIsActionableButNeverEchoesProviderTextOrClaimsAWrite() {
+        val cases = listOf(
+            "length" to "output-token limit",
+            "content_filter" to "filtered",
+            "tool_calls" to "tool instead of a patch",
+            "custom-provider-status-SECRET" to "without a complete suggestion",
+        )
+        for ((reason, expected) in cases) {
+            val message = runCatching { WorkspaceFreeAiSuggestion.parseResponse(reply(reason)) }
+                .exceptionOrNull()?.message.orEmpty()
+            assertTrue("Reason $reason should have safe category: $message", message.contains(expected))
+            assertTrue(message.contains("no edit made"))
+            assertFalse(message.contains("sensitive source text"))
+            assertFalse(message.contains("SECRET"))
+        }
+        assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse(reply(null)) }
+            .exceptionOrNull()?.message.orEmpty().contains("without a complete suggestion"))
+        assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse("{}") }
+            .exceptionOrNull()?.message.orEmpty().contains("no suggestion"))
+        val remoteError = JSONObject().put("error", JSONObject().put("message", "PRIVATE_SOURCE_SHOULD_NOT_APPEAR"))
+            .toString()
+        val error = runCatching { WorkspaceFreeAiSuggestion.parseResponse(remoteError) }
+            .exceptionOrNull()?.message.orEmpty()
+        assertTrue(error.contains("provider returned an error"))
+        assertFalse(error.contains("PRIVATE_SOURCE_SHOULD_NOT_APPEAR"))
     }
 
     @Test fun httpErrorCannotLeakProviderBodyAndNoAutomaticRetryOrPaidFallback() {
         val request = WorkspaceFreeAiSuggestion.request("key", "harmless test")
-        val response = Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
-            .code(402).message("Payment required")
-            .body("PRIVATE_SOURCE_SHOULD_NOT_APPEAR".toResponseBody("text/plain".toMediaType()))
-            .build()
-        val error = runCatching { WorkspaceFreeAiSuggestion.readResponse(response) }.exceptionOrNull()
-        assertNotNull(error)
-        assertTrue(error!!.message.orEmpty().contains("payment will NOT be attempted"))
-        assertFalse(error.message.orEmpty().contains("PRIVATE_SOURCE_SHOULD_NOT_APPEAR"))
+        for ((status, fragment) in listOf(402 to "payment will NOT be attempted", 429 to "limit or timeout")) {
+            val response = Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(status).message("Provider message may be private")
+                .body("PRIVATE_SOURCE_SHOULD_NOT_APPEAR".toResponseBody("text/plain".toMediaType()))
+                .build()
+            val error = runCatching { WorkspaceFreeAiSuggestion.readResponse(response) }.exceptionOrNull()
+            assertNotNull(error)
+            assertTrue(error!!.message.orEmpty().contains(fragment))
+            assertFalse(error.message.orEmpty().contains("PRIVATE_SOURCE_SHOULD_NOT_APPEAR"))
+        }
     }
 
     @Test fun invalidKeyAndOversizedPromptNeverCreateRequest() {
