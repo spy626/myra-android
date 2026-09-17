@@ -61,6 +61,7 @@ class WorkspaceProjectActivity : AppCompatActivity() {
         bindProject(project)
         addTaskEntry()
         addScopedEditEntry()
+        addStructuredEditEntry()
         infoExpanded = savedInstanceState?.getBoolean(STATE_INFO_EXPANDED) ?: false
         renderProjectInfo()
     }
@@ -108,6 +109,29 @@ class WorkspaceProjectActivity : AppCompatActivity() {
             topMargin = (10 * resources.displayMetrics.density + 0.5f).toInt()
         }
         parent.addView(button, parent.indexOfChild(binding.openPreviewButton) + 2, params)
+    }
+
+    /** Offline model-output boundary; structured data stays untrusted until local checks and explicit write approval. */
+    private fun addStructuredEditEntry() {
+        val parent = binding.openPreviewButton.parent as LinearLayout
+        val button = TextView(this).apply {
+            text = "✦   Structured AI patch (offline trial)   ›"
+            contentDescription = "Open offline structured AI patch validation trial"
+            gravity = android.view.Gravity.CENTER
+            setTextColor(Color.parseColor("#D4F8D9"))
+            textSize = 14f
+            setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                projectId?.let { id -> startActivity(WorkspaceStructuredEditActivity.intent(this@WorkspaceProjectActivity, id)) }
+            }
+        }
+        val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+            (52 * resources.displayMetrics.density + 0.5f).toInt()).apply {
+            topMargin = (10 * resources.displayMetrics.density + 0.5f).toInt()
+        }
+        parent.addView(button, parent.indexOfChild(binding.openPreviewButton) + 3, params)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
