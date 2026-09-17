@@ -72,17 +72,24 @@ internal object WorkspaceFreeAiSuggestion {
         }
     }
 
+    /** Report a fixed, actionable category only. Never surface provider-supplied strings or partial code. */
     fun parseResponse(raw: String): String {
-        require(raw.length in 1..32_768) { "Free AI response missing or too large" }
+        require(raw.length in 1..32_768) { "Free AI response missing or too large; no edit made" }
         val root = runCatching { JSONObject(raw) }
-            .getOrElse { throw IllegalArgumentException("Free AI returned an invalid response") }
+            .getOrElse { throw IllegalArgumentException("Free AI returned an invalid response; no edit made") }
+        require(!root.has("error")) { "Free AI provider returned an error; no edit made" }
         val choice = root.optJSONArray("choices")?.optJSONObject(0)
-        require(choice != null && choice.optString("finish_reason") == "stop") {
-            "Free AI response was incomplete or unavailable; no edit made"
+        require(choice != null) { "Free AI returned no suggestion; no edit made" }
+        when (choice.optString("finish_reason")) {
+            "stop" -> Unit
+            "length" -> throw IllegalArgumentException("Free AI reached its output-token limit; incomplete suggestion, no edit made")
+            "content_filter" -> throw IllegalArgumentException("Free AI provider filtered the reply; no edit made")
+            "tool_calls", "function_call" -> throw IllegalArgumentException("Free AI requested a tool instead of a patch; no edit made")
+            else -> throw IllegalArgumentException("Free AI stopped without a complete suggestion; no edit made")
         }
         val content = choice.optJSONObject("message")?.opt("content")
         require(content is String && content.trim().length in 1..MAX_SUGGESTION_CHARS) {
-            "Free AI did not return a bounded text suggestion; no edit made"
+            "Free AI returned no usable bounded text suggestion; no edit made"
         }
         return content.trim()
     }
