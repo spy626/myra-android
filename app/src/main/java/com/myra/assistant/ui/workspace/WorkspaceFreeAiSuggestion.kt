@@ -9,12 +9,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/** A single, user-authorized transport for an untrusted suggestion, NOT a second agent or file writer.
- * Only the published $0 OpenRouter free-model router is addressable here. No retry or paid fallback.
- */
+/** One user-authorized, untrusted suggestion; not a second agent or file writer. No retry or paid fallback. */
 internal object WorkspaceFreeAiSuggestion {
     const val MODEL = "openrouter/free"
     const val ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+    // A 750-token cap produced finish_reason=length on a real phone. Allow room for the
+    // free router's possible reasoning while still bounding response size and edit literals.
+    const val MAX_OUTPUT_TOKENS = 2_048
     private const val MAX_RESPONSE_BYTES = 32_768L
     private const val MAX_SUGGESTION_CHARS = 6_000
 
@@ -30,14 +31,14 @@ internal object WorkspaceFreeAiSuggestion {
         return JSONObject()
             .put("model", MODEL)
             .put("stream", false)
-            .put("max_tokens", 750)
+            .put("max_tokens", MAX_OUTPUT_TOKENS)
             .put("temperature", 0.2)
             .put("provider", JSONObject().put("zdr", true).put("data_collection", "deny"))
             .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", prompt)))
             .toString()
     }
 
-    /** The key is supplied for this one call only: never saved, included in the URL or logged. */
+    /** Key is supplied for this one call only: never saved, included in URL/body or logged. */
     fun request(key: String, prompt: String): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "Enter a valid session-only OpenRouter API key"
@@ -50,7 +51,7 @@ internal object WorkspaceFreeAiSuggestion {
             .build()
     }
 
-    /** Bound response size; do not surface error bodies (they can echo submitted source or credentials). */
+    /** Bound response size; never show error bodies (may echo user source or credentials). */
     fun readResponse(response: Response): String {
         response.use {
             require(it.isSuccessful) {
@@ -72,7 +73,7 @@ internal object WorkspaceFreeAiSuggestion {
         }
     }
 
-    /** Report a fixed, actionable category only. Never surface provider-supplied strings or partial code. */
+    /** Report a fixed category only. Never surface provider text or accept a partial patch. */
     fun parseResponse(raw: String): String {
         require(raw.length in 1..32_768) { "Free AI response missing or too large; no edit made" }
         val root = runCatching { JSONObject(raw) }
