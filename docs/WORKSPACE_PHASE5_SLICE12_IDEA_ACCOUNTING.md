@@ -1,6 +1,6 @@
 # LYRA Workspace Phase 5 slice 12 — scoped manual edit, approval and rollback
 
-Date: 2026-09-17. Base: `10b5c96aa1f9e4de1203c92fec65e4fb05152cfd` (Slice 11 recorded phone flow accepted). Phase 5 remains OPEN; this batch needs CI and actual phone acceptance.
+Date: 2026-09-17. Base: `10b5c96aa1f9e4de1203c92fec65e4fb05152cfd` (Slice 11 recorded phone flow accepted). Final Slice 12 implementation commit: `5c4b9a63931be6b5793274b6a309f0199010f0ca`. Phase 5 remains OPEN.
 
 ## Ideas checked; exact implementation match
 
@@ -9,7 +9,9 @@ Date: 2026-09-17. Base: `10b5c96aa1f9e4de1203c92fec65e4fb05152cfd` (Slice 11 rec
 - Each write requires an additional explicit confirmation with exact file, original SHA and old/new text. Planning consent alone cannot write. The app rechecks approved/resumed task and full-file freshness at apply time; saves an original full-file copy in protected private `.lyra/scoped-edit-backup.json` before calling the existing project-confined `WorkspaceFileStore.saveFile`; verifies post-write SHA-256. One pending backup per project. If a crash happens before the write, Undo can clear the original-state backup; if after the write, Undo restores the original only when file hash matches the expected changed hash. Later edits cause a conflict and are never overwritten.
 - Undo is available even after Pause/Revoke; Keep explicitly drops rollback and preserves the edited file, but only if its exact expected result is unchanged. A corrupted rollback slot fails closed rather than disappearing. All outputs are local. Project task/AIRI memory untouched. No source files or privacy values sent to any provider.
 
-## Status and limits
+## Validation and phone acceptance
 
-- **This is a human-typed literal edit trial, NOT AI-generated code, AI authorization, autonomous work, a build, browser verification or completed Phase 5.** A successful readback hash proves bytes were saved, not that the website works. Android CI unit tests and APK must pass before distributing. Phone tests must check explicit permission, one-file change, undo after reopening, paused/revoked undo, and refusal after an intervening manual edit.
+- CI #1587 passed Android lint step, JVM unit tests, debug APK build and prerelease publication for `5c4b9a63931be6b5793274b6a309f0199010f0ca`.
+- Physical Android acceptance completed 2026-09-17 across recorded flows: preview did not write; exact file-specific confirmation applied the edit; reopening exposed the protected rollback; Undo restored the original; Undo remained available after planning Revoke and after Pause; and a later manual Files save caused Undo to refuse rather than overwrite newer work. No visible crash was observed in those requested flows.
+- **This is a human-typed literal edit trial, NOT AI-generated code, AI authorization, autonomous work, a build, browser verification or completed Phase 5.** A successful readback hash proves bytes were saved, not that the website works.
 - Pattern screening is conservative, not guaranteed. The exact-phrase approach is for safe first mutation only; real AI-produced patches, multiple-file transaction, separate persistent plan approval, provider-send consent/verified recurring-$0 no-card route, agent tool execution, trusted browser/build checks, checkpoints and verified final status remain DEFERRED, not dropped. Do not add another personal-memory database, model router, coordinator or hidden paid route.
