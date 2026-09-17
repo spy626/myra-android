@@ -35,6 +35,19 @@ class WorkspaceTaskDialogAppearanceTest {
             .substringBefore("private fun clearLocalPlan()")
         assertTrue(contextChooser.contains(".setAdapter(adapter)"))
         assertFalse(contextChooser.contains(".setMessage("))
-        assertTrue(contextChooser.contains(".setTitle(\"Choose one file for local context (not sent)\")"))
+        assertTrue(contextChooser.contains(".setTitle(\"Choose one file for local review (not sent)\")"))
+    }
+
+    @Test fun selectedFileDirectlyDisplaysBothLocalDraftsWithoutAnotherPlanTap() {
+        val activity = File("src/main/java/com/myra/assistant/ui/workspace/WorkspaceTaskActivity.kt").readText()
+        val selected = activity.substringAfter("private fun showLocalContext(")
+            .substringBefore("private fun recheckLocalContext()")
+        assertTrue(activity.contains("binding.taskContext.text = \"Prepare local review (context + plan)\""))
+        assertTrue(selected.contains("WorkspaceLocalReview.prepare("))
+        assertTrue(selected.contains("localContext = it.context"))
+        assertTrue(selected.contains("localPlan = it.plan"))
+        assertTrue(selected.contains("localPlanPreview.text = it.plan.displayText()"))
+        assertTrue(selected.contains("localPlanPreview.visibility = View.VISIBLE"))
+        assertTrue(selected.contains("localReviewButton.visibility = View.VISIBLE"))
     }
 }
