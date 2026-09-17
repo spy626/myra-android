@@ -67,6 +67,8 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         binding.taskPause.setOnClickListener { guardUnsavedBrief { togglePause() } }
         binding.taskInspect.setOnClickListener { inspectProject() }
         binding.taskSource.setOnClickListener { reviewSource() }
+        // One opt-in file selection prepares both bounded context and the existing review-only plan.
+        binding.taskContext.text = "Prepare local review (context + plan)"
         binding.taskContext.setOnClickListener { prepareLocalContext() }
         binding.taskContextRecheck.setOnClickListener { recheckLocalContext() }
         binding.taskFiles.setOnClickListener {
@@ -103,7 +105,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             }
             setBackgroundResource(R.drawable.bg_workspace_dialog_input)
             gravity = Gravity.CENTER
-            text = "Draft project plan (local only)"
+            text = "Refresh review plan (local only)"
             setTextColor(Color.rgb(212, 248, 217))
             textSize = 13f
             isClickable = true
@@ -357,7 +359,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
                     .setAdapter(adapter) { _, which -> showSourcePreview(choices[which], saved) }
                     .setNegativeButton("Cancel", null)
                     .showTaskConfirmation()
-            }.onFailure { Toast.makeText(this, it.message ?: "Cannot list project files", Toast.LENGTH_LONG).show() }
+            }.onFailure { Toast.makeText(this, "Cannot list project files", Toast.LENGTH_LONG).show() }
     }
 
     private fun showSourcePreview(selectedPath: String, expected: WorkspaceTask) {
@@ -401,7 +403,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
                         }
                 }
                 AlertDialog.Builder(this)
-                    .setTitle("Choose one file for local context (not sent)")
+                    .setTitle("Choose one file for local review (not sent)")
                     .setAdapter(adapter) { _, which -> showLocalContext(choices[which], saved) }
                     .setNegativeButton("Cancel", null)
                     .showTaskConfirmation()
@@ -431,21 +433,26 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         clearLocalPlan()
     }
 
+    /** One explicitly selected file prepares both read-only outputs; fail closed without a partial plan. */
     private fun showLocalContext(selectedPath: String, expected: WorkspaceTask) {
         if (currentSavedForInspection() == null) return
-        runCatching { WorkspaceSourceContext.prepare(files, tasks, projectId, expected, selectedPath) }
+        runCatching { WorkspaceLocalReview.prepare(files, tasks, projectId, project.type, expected, selectedPath) }
             .onSuccess {
                 binding.taskInspection.visibility = View.GONE
                 binding.taskSourcePreview.visibility = View.GONE
-                clearLocalPlan()
-                localContext = it
-                binding.taskContextPreview.text = it.displayText()
+                clearLocalContext()
+                localContext = it.context
+                localPlan = it.plan
+                binding.taskContextPreview.text = it.context.displayText()
                 binding.taskContextPreview.visibility = View.VISIBLE
                 binding.taskContextRecheck.visibility = View.VISIBLE
                 localPlanButton.visibility = View.VISIBLE
+                localPlanPreview.text = it.plan.displayText()
+                localPlanPreview.visibility = View.VISIBLE
+                localReviewButton.visibility = View.VISIBLE
             }.onFailure {
                 clearLocalContext()
-                Toast.makeText(this, it.message ?: "Context blocked; review file locally", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, it.message ?: "Local review blocked; inspect file locally", Toast.LENGTH_LONG).show()
             }
     }
 
