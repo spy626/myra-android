@@ -48,7 +48,8 @@ object WorkspaceSourceContext {
             name.substringAfterLast('.', "").lowercase() in allowedExtensions
     }
 
-    private fun looksSensitive(text: String): Boolean =
+    /** Shared conservative pattern screen for source, specification and explicit one-turn follow-up. */
+    fun containsPossibleSecret(text: String): Boolean =
         keyAssignment.containsMatchIn(text) || keyMaterial.containsMatchIn(text)
 
     /** Read only one explicitly selected, project-confined source; re-check spec and full-file freshness. */
@@ -72,7 +73,8 @@ object WorkspaceSourceContext {
         val hash = MessageDigest.getInstance("SHA-256").digest(fullText.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
         require(hash == preview.fullFileSha256) { "Source changed while reading; reopen it" }
-        require(!looksSensitive(fullText) && !looksSensitive(current.goal) && !looksSensitive(current.acceptanceCriteria)) {
+        require(!containsPossibleSecret(fullText) && !containsPossibleSecret(current.goal) &&
+            !containsPossibleSecret(current.acceptanceCriteria)) {
             "Possible secret detected; source context was blocked. Review it locally instead"
         }
         approvedCurrent()
