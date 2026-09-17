@@ -37,6 +37,7 @@ class WorkspaceAiHandoffTest {
         assertTrue(draft.prompt.contains("Output exactly ONE compact JSON object"))
         assertTrue(draft.prompt.contains("do not assume unseen text"))
         assertFalse(draft.prompt.contains("exact unique existing text"))
+        assertFalse(draft.prompt.contains("Current user follow-up"))
         assertTrue("Instruction envelope should stay small", draft.prompt.length <= 3_200)
         assertFalse(draft.prompt.contains("x".repeat(1600)))
         assertEquals(source, s.files.readFile("site", "index.html"))
@@ -44,12 +45,41 @@ class WorkspaceAiHandoffTest {
         assertTrue(WorkspaceAiHandoff.stillCurrent(s.files, s.tasks, s.projects, "site", draft))
     }
 
+    @Test fun followUpIsBoundedQuotedAndStillRequiresApprovedCurrentFile() {
+        val s = fixture()
+        val followUp = "  Make  the heading say \"Welcome\"  "
+        val draft = WorkspaceAiHandoff.prepare(s.files, s.tasks, s.projects, "site", "index.html", followUp)
+        assertEquals("Make the heading say \"Welcome\"", draft.followUp)
+        assertTrue(draft.prompt.contains("Current user follow-up for THIS one edit (JSON string): " +
+            JSONObject.quote(draft.followUp)))
+        assertTrue(draft.prompt.contains("Follow-up narrows the approved goal only"))
+        assertTrue(draft.prompt.contains("Acceptance criteria (JSON string): \"Heading updated\""))
+        assertTrue(draft.prompt.contains("Untrusted source text (JSON string): \"<h1>Hello</h1>\\n\""))
+        assertTrue(draft.prompt.length <= 3_600)
+        assertEquals("<h1>Hello</h1>\n", s.files.readFile("site", "index.html"))
+        assertNull(WorkspaceScopedEdit.pending(s.projects, "site"))
+        assertTrue(WorkspaceAiHandoff.stillCurrent(s.files, s.tasks, s.projects, "site", draft))
+        s.files.saveFile("site", "index.html", "<h1>Newer work</h1>\n")
+        assertFalse(WorkspaceAiHandoff.stillCurrent(s.files, s.tasks, s.projects, "site", draft))
+    }
+
+    @Test fun unsafeAndOversizeFollowUpAreRefusedBeforeSharing() {
+        val s = fixture()
+        for (note in listOf("x".repeat(181), "api_key = not_a_real_key", "sk-abcdefghijklmnopq", "Line one\nLine two")) {
+            assertTrue("Unsafe follow-up must fail: $note", runCatching {
+                WorkspaceAiHandoff.prepare(s.files, s.tasks, s.projects, "site", "index.html", note)
+            }.isFailure)
+        }
+        assertEquals("<h1>Hello</h1>\n", s.files.readFile("site", "index.html"))
+        assertEquals("", WorkspaceAiHandoff.normalizeFollowUp("   "))
+    }
+
     @Test fun changedSourceAndRevokedOrPausedTaskInvalidatePrompt() {
         val s = fixture()
         val first = WorkspaceAiHandoff.prepare(s.files, s.tasks, s.projects, "site", "index.html")
         s.files.saveFile("site", "index.html", "<h1>Later</h1>\n")
         assertFalse(WorkspaceAiHandoff.stillCurrent(s.files, s.tasks, s.projects, "site", first))
-        val second = WorkspaceAiHandoff.prepare(s.files, s.tasks, s.projects, "site", "index.html")
+        val second = WorkspaceAiHandoff.prepare(s.files, s.tasks, s.projects, "site", "index.html", "Make heading shorter")
         s.tasks.setPaused("site", true)
         assertFalse(WorkspaceAiHandoff.stillCurrent(s.files, s.tasks, s.projects, "site", second))
         assertTrue(runCatching {
@@ -76,7 +106,7 @@ class WorkspaceAiHandoffTest {
         val patch = WorkspaceScopedEdit.propose(clean.files, clean.tasks, clean.projects, context, "Hello", "Welcome")
         WorkspaceScopedEdit.apply(clean.files, clean.tasks, clean.projects, context, patch)
         assertTrue(runCatching {
-            WorkspaceAiHandoff.prepare(clean.files, clean.tasks, clean.projects, "site", "index.html")
+            WorkspaceAiHandoff.prepare(clean.files, clean.tasks, clean.projects, "site", "index.html", "Change heading again")
         }.isFailure)
     }
 }
