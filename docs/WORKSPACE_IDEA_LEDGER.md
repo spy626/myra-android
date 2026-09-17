@@ -15,8 +15,9 @@ Status key: `INTEGRATED` = demonstrably in LYRA; `BORROW` = concept to implement
 ## Latest Phase 5 integration status (2026-09-17)
 
 - Slice 12's single-file exact edit, separate write confirmation, private rollback, Undo/Keep and newer-manual-work protection are implemented and the requested physical-phone flows are accepted. It remains a human-typed mutation trial, not AI coding or build verification.
-- Slice 13 now introduces a strict **offline structured model-output boundary**. Structured JSON is untrusted; LYRA independently re-establishes the approved/resumed task, eligible path, privacy screen and current full-file SHA before preview. It reuses Slice 12 as the only write/rollback executor and still requires a separate exact-file confirmation.
-- The structured tool/output concept collected from `microsoft/generative-ai-for-beginners` is MERGED into this boundary. Broader RAG/evaluation/model-selection ideas remain future work. No provider is connected by Slice 13; all free-route rows below remain `REVERIFY` until their exact current route/account/privacy/cost terms are audited.
+- Slice 13's offline structured model-output boundary is implemented and its requested physical-phone flows were accepted. Structured JSON is untrusted; LYRA independently re-establishes the approved/resumed task, eligible path, privacy screen and current full-file SHA before preview. It reuses Slice 12 as the only write/rollback executor and still requires a separate exact-file confirmation.
+- Slice 14 adds a **user-mediated prompt handoff** in the existing structured-edit screen: choose one eligible file, inspect bounded current task/source context, then explicitly approve copy to Android clipboard and choose an external AI yourself. It never sends or runs a provider in LYRA, does not verify any external service is free, and requires the same untrusted JSON review/write consent/rollback on return. Its single-JSON parser now consumes the full input and rejects two concatenated objects; final-head CI and physical-phone acceptance remain separate gates. See `WORKSPACE_PHASE5_SLICE14_IDEA_ACCOUNTING.md` for scope, tests and privacy risks.
+- The structured tool/output concept collected from `microsoft/generative-ai-for-beginners` is MERGED into this boundary. Broader RAG/evaluation/model-selection ideas remain future work. No provider is connected by Slices 13–14; all free-route rows below remain `REVERIFY` until their exact current route/account/privacy/cost terms are audited.
 
 ## Phase 5 second slice: project-local acceptance criteria (2026-09-16)
 
@@ -67,7 +68,7 @@ Status key: `INTEGRATED` = demonstrably in LYRA; `BORROW` = concept to implement
 | huggingface/speech-to-speech; k2-fsa/OmniVoice | Modular streaming VAD/STT/LLM/TTS, turn cancellation and voice fallback under one core | 16 | BORROW/REVIEW |
 | calesthio/OpenMontage; ComfyUI; Remotion; FFmpeg | Declarative storyboard, bounded resources, approved creative rendering and QA | 17 | BORROW; free/license check |
 | AI-For-Brokies | Free-first discovery/deployment concepts, not blanket free-route claim | 12 | BORROW selectively |
-| user CodeAI recording / SPCK workflow | Top tabs, safe file edits, task chat/preview loop; no full UI copy | 3–6 | INTEGRATED editor ideas; BORROW chat loop |
+| user CodeAI recording / SPCK workflow | Top tabs, safe file edits, task chat/preview loop; no full UI copy | 3–6 | INTEGRATED editor ideas; BORROW chat loop, prompt handoff MERGED in Slice 14 |
 
 ## Collected free model/provider *candidates*, NOT current free certifications
 
