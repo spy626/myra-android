@@ -1,6 +1,7 @@
 package com.myra.assistant.ui.workspace
 
 import org.json.JSONObject
+import org.json.JSONTokener
 
 /** Strict model-style edit envelope. It never writes files or calls a provider.
  * The current task, file, privacy scan and source fingerprint are independently re-established locally.
@@ -52,8 +53,19 @@ object WorkspaceStructuredEdit {
             "Approve and resume the saved specification before importing an edit"
         }
 
-        val json = runCatching { JSONObject(rawJson) }
-            .getOrElse { throw IllegalArgumentException("Structured edit must be valid JSON") }
+        // JSONObject(String) accepts a valid prefix on some Android JSON implementations.
+        // Consume the entire input so two pasted objects or trailing text cannot be silently ignored.
+        val json = runCatching {
+            val tokens = JSONTokener(rawJson)
+            val root = tokens.nextValue()
+            require(root is JSONObject && tokens.nextClean() == '\u0000') {
+                "Structured edit must contain exactly one JSON object, without trailing text"
+            }
+            root
+        }.getOrElse {
+            if (it is IllegalArgumentException) throw it
+            throw IllegalArgumentException("Structured edit must be valid JSON", it)
+        }
         require(json.keys().asSequence().toSet().all { it in allowedKeys }) {
             "Structured edit contains unsupported fields"
         }
