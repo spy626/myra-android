@@ -21,10 +21,10 @@ object WorkspaceAiHandoff {
     }
 
     fun normalizeFollowUp(raw: String): String {
-        val clean = raw.trim().replace(Regex("\\s+"), " ")
-        require(clean.length <= MAX_FOLLOW_UP_CHARS && clean.none { it.isISOControl() }) {
+        require(raw.length <= MAX_FOLLOW_UP_CHARS && raw.none { it.isISOControl() }) {
             "Follow-up must be 180 characters or fewer and contain no control characters"
         }
+        val clean = raw.trim().replace(Regex("\\s+"), " ")
         require(!WorkspaceSourceContext.containsPossibleSecret(clean)) {
             "Possible secret in follow-up; do not send it to AI"
         }
