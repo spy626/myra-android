@@ -5,11 +5,14 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.text.Editable
+import android.text.InputFilter
+import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -37,8 +40,12 @@ class WorkspaceTaskActivity : AppCompatActivity() {
     private var currentTask: WorkspaceTask? = null
     /** Ephemeral screen-only draft, never stored in task JSON or sent to a provider. */
     private var localContext: WorkspaceSourceContext.Draft? = null
+    private var localPlan: WorkspaceProjectPlanDraft.Draft? = null
+    private var localReviewNote: WorkspacePlanReviewNote? = null
     private lateinit var localPlanButton: TextView
     private lateinit var localPlanPreview: TextView
+    private lateinit var localReviewButton: TextView
+    private lateinit var localReviewPreview: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,7 +92,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         render()
     }
 
-    /** Place the optional plan review alongside the existing context controls, without a new screen or executor. */
+    /** Keep optional plan and notes next to the existing context controls; no new execution screen. */
     private fun installLocalPlanUi() {
         val column = binding.taskContextRecheck.parent as LinearLayout
         val insertAt = column.indexOfChild(binding.taskContextRecheck) + 1
@@ -117,6 +124,33 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             visibility = View.GONE
         }
         column.addView(localPlanPreview, insertAt + 1)
+        localReviewButton = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
+                topMargin = dp(10)
+            }
+            setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            gravity = Gravity.CENTER
+            text = "Add plan scope note (screen only)"
+            setTextColor(Color.rgb(212, 248, 217))
+            textSize = 13f
+            isClickable = true
+            isFocusable = true
+            visibility = View.GONE
+            setOnClickListener { addLocalPlanReviewNote() }
+        }
+        column.addView(localReviewButton, insertAt + 2)
+        localReviewPreview = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
+            setBackgroundResource(R.drawable.bg_workspace_project_card)
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            setLineSpacing(dp(3).toFloat(), 1f)
+            setTextColor(Color.rgb(217, 243, 222))
+            textSize = 12f
+            setTextIsSelectable(true)
+            visibility = View.GONE
+        }
+        column.addView(localReviewPreview, insertAt + 3)
     }
 
     override fun onResume() {
@@ -378,8 +412,14 @@ class WorkspaceTaskActivity : AppCompatActivity() {
     }
 
     private fun clearLocalPlan() {
+        localPlan = null
+        localReviewNote = null
         localPlanPreview.text = ""
         localPlanPreview.visibility = View.GONE
+        localReviewButton.visibility = View.GONE
+        localReviewButton.text = "Add plan scope note (screen only)"
+        localReviewPreview.text = ""
+        localReviewPreview.visibility = View.GONE
     }
 
     private fun clearLocalContext() {
@@ -439,13 +479,72 @@ class WorkspaceTaskActivity : AppCompatActivity() {
         }
         runCatching { WorkspaceProjectPlanDraft.prepare(files, tasks, projectId, project.type, draft) }
             .onSuccess {
+                clearLocalPlan()
+                localPlan = it
                 localPlanPreview.text = it.displayText()
                 localPlanPreview.visibility = View.VISIBLE
+                localReviewButton.visibility = View.VISIBLE
             }.onFailure {
                 clearLocalContext()
                 binding.taskContextPreview.text = "Context changed or blocked. Prepare a fresh local context before reviewing a plan. Nothing was sent."
                 binding.taskContextPreview.visibility = View.VISIBLE
             }
+    }
+
+    /** A screen-only user note, not a saved plan, consent, action approval or model prompt. */
+    private fun addLocalPlanReviewNote() {
+        val context = localContext ?: return
+        val plan = localPlan ?: return
+        if (isDirty()) {
+            clearLocalContext()
+            Toast.makeText(this, "Save or discard task edits; prepare the plan again", Toast.LENGTH_LONG).show()
+            return
+        }
+        val density = resources.displayMetrics.density
+        fun dp(value: Int) = (value * density + 0.5f).toInt()
+        val input = EditText(this).apply {
+            setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            setTextColor(Color.rgb(241, 255, 243))
+            setHintTextColor(Color.rgb(140, 167, 149))
+            hint = "e.g. Only change the header; keep existing buttons"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            filters = arrayOf(InputFilter.LengthFilter(500))
+            minLines = 3
+            maxLines = 6
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setText(localReviewNote?.note.orEmpty())
+        }
+        val wrapper = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(10), dp(18), dp(8))
+            addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Plan scope note (screen only; not saved)")
+            .setView(wrapper)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Show note") { _, _ ->
+                runCatching {
+                    WorkspacePlanReviewNote.prepare(files, tasks, projectId, project.type,
+                        context, plan, input.text.toString())
+                }.onSuccess {
+                    localReviewNote = it
+                    localReviewPreview.text = it.displayText()
+                    localReviewPreview.visibility = View.VISIBLE
+                    localReviewButton.text = "Edit plan scope note (screen only)"
+                }.onFailure {
+                    if (WorkspaceContextFreshness.check(files, tasks, projectId, context) !=
+                        WorkspaceContextFreshness.Result.SAME_CONTENT_AND_SPEC) {
+                        clearLocalContext()
+                        Toast.makeText(this, "Plan changed; prepare fresh local context", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(this, it.message ?: "Review note was not accepted", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .showTaskConfirmation()
     }
 
     private fun updateStatus() {
