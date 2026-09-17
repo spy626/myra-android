@@ -65,6 +65,21 @@ class WorkspaceStructuredEditTest {
         }.isFailure)
     }
 
+    @Test fun concatenatedObjectsTrailingTextAndArrayAreRejectedBeforeAnyWrite() {
+        val s = fixture()
+        val original = s.files.readFile("site", "index.html")
+        for (invalid in listOf(json() + "\n" + json(), json() + " trailing", "[" + json() + "]")) {
+            val result = runCatching {
+                WorkspaceStructuredEdit.prepare(s.files, s.tasks, s.projects, "site", invalid)
+            }
+            assertTrue("Must reject extra document/trailing text: $invalid", result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("exactly one JSON object"))
+        }
+        assertEquals(original, s.files.readFile("site", "index.html"))
+        assertNull(WorkspaceScopedEdit.pending(s.projects, "site"))
+        assertNotNull(WorkspaceStructuredEdit.prepare(s.files, s.tasks, s.projects, "site", "\n " + json() + " \n"))
+    }
+
     @Test fun pauseAndRevocationBlockImportedPatch() {
         val s = fixture()
         s.tasks.setPaused("site", true)
