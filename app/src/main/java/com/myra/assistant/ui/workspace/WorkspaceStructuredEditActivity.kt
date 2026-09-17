@@ -1,5 +1,7 @@
 package com.myra.assistant.ui.workspace
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -19,7 +21,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import java.io.File
 
-/** Offline contract trial: validates model-style structured output, then reuses the proven Safe Edit write/rollback path. */
+/** User-mediated model prompt, then untrusted patch validation and the existing Safe Edit executor. */
 class WorkspaceStructuredEditActivity : AppCompatActivity() {
     companion object {
         private const val EXTRA_PROJECT_ID = "workspace_project_id"
@@ -33,12 +35,16 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
     private val files by lazy { WorkspaceFileStore(projects) }
     private lateinit var projectId: String
     private lateinit var status: TextView
+    private lateinit var handoffButton: TextView
+    private lateinit var handoffPreview: TextView
+    private lateinit var copyPromptButton: TextView
     private lateinit var jsonInput: EditText
     private lateinit var preview: TextView
     private lateinit var validateButton: TextView
     private lateinit var applyButton: TextView
     private lateinit var undoButton: TextView
     private lateinit var keepButton: TextView
+    private var handoff: WorkspaceAiHandoff.Draft? = null
     private var draft: WorkspaceStructuredEdit.Draft? = null
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density + .5f).toInt()
@@ -98,23 +104,28 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         setContentView(root)
 
         column.addView(button("←  Back to project").apply { setOnClickListener { finish() } })
-        column.addView(label("STRUCTURED PATCH TRIAL  •  ${project.name}").apply {
+        column.addView(label("AI PATCH HANDOFF  •  ${project.name}").apply {
             textSize = 20f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         column.addView(label(
-            "Paste a model-style JSON edit. LYRA treats every field as untrusted data, " +
-                "re-reads the current project locally, and refuses stale or blocked scope. " +
-                "This screen makes NO network request and gives NO automatic write authority."
+            "Choose a source file and inspect a bounded prompt. You choose whether to copy it to another AI app. " +
+                "LYRA does not call a model, confirm a provider's free tier or send data automatically. " +
+                "Bring one JSON proposal back here for local validation and separate write approval."
         ))
         status = panel().also(column::addView)
+        handoffButton = button("Prepare one-file AI prompt (local)").also(column::addView)
+        handoffPreview = panel().also(column::addView)
+        copyPromptButton = button("Review privacy & copy prompt").also(column::addView)
         column.addView(label(
-            "JSON format:\n" +
+            "Paste exactly ONE JSON response from your chosen AI or type it yourself. " +
+                "External AI services may store content or charge; use only a route you have checked.\n\n" +
+                "JSON format:\n" +
                 "{\"schemaVersion\":1,\"operation\":\"replace_exact_once\",\"path\":\"index.html\"," +
                 "\"oldText\":\"Hello\",\"newText\":\"Welcome\",\"rationale\":\"Why this matches the saved spec\"}"
         ))
         jsonInput = EditText(this).apply {
-            hint = "Paste structured edit JSON"
+            hint = "Paste a single structured edit JSON object"
             setTextColor(Color.rgb(241, 255, 243))
             setHintTextColor(Color.rgb(140, 167, 149))
             textSize = 13f
@@ -133,6 +144,8 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         undoButton = button("Undo protected edit").also(column::addView)
         keepButton = button("Keep change & clear rollback").also(column::addView)
 
+        handoffButton.setOnClickListener { selectHandoffFile() }
+        copyPromptButton.setOnClickListener { confirmCopyPrompt() }
         jsonInput.setOnFocusChangeListener { _, _ -> clearDraft() }
         validateButton.setOnClickListener { validateDraft() }
         applyButton.setOnClickListener { confirmApply() }
@@ -177,11 +190,20 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         applyButton.visibility = View.GONE
     }
 
+    private fun clearHandoff() {
+        handoff = null
+        handoffPreview.text = ""
+        handoffPreview.visibility = View.GONE
+        copyPromptButton.visibility = View.GONE
+    }
+
     private fun render() {
         clearDraft()
+        clearHandoff() // Leaving/re-entering never retains a source-bearing prompt on screen.
         val pending = runCatching { WorkspaceScopedEdit.pending(projects, projectId) }
         if (pending.isFailure) {
-            status.text = "Rollback data needs attention. No new write will be attempted."
+            status.text = "Rollback data needs attention. No new write or prompt will be attempted."
+            handoffButton.visibility = View.GONE
             jsonInput.visibility = View.GONE
             validateButton.visibility = View.GONE
             undoButton.visibility = View.GONE
@@ -192,6 +214,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         if (backup != null) {
             status.text = "PENDING PROTECTED EDIT\nFile: ${backup.path}\n" +
                 "Undo or Keep before another structured patch. No build/preview verification claimed."
+            handoffButton.visibility = View.GONE
             jsonInput.visibility = View.GONE
             validateButton.visibility = View.GONE
             undoButton.visibility = View.VISIBLE
@@ -204,11 +227,66 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         val ready = task != null && WorkspaceTaskContract.isSpecApproved(task) &&
             task.status != WorkspaceTaskStatus.PAUSED
         status.text = if (ready)
-            "Ready for an offline structured edit proposal. Provider send is NOT enabled in this slice."
+            "Choose a file → review/copy a local AI prompt → paste one JSON patch below. " +
+                "No automatic provider request, fee or file write."
         else
-            "Save, approve and resume the task brief first. No patch or write is authorized."
+            "Save, approve and resume the task brief first. No source sharing, patch or write is authorized."
+        handoffButton.visibility = if (ready) View.VISIBLE else View.GONE
         jsonInput.visibility = if (ready) View.VISIBLE else View.GONE
         validateButton.visibility = if (ready) View.VISIBLE else View.GONE
+    }
+
+    private fun selectHandoffFile() {
+        val choices = runCatching { WorkspaceSourceContext.choices(files, projectId) }
+            .getOrElse { error(it); return }
+        if (choices.isEmpty()) {
+            Toast.makeText(this, "No eligible project text files to share", Toast.LENGTH_LONG).show()
+            return
+        }
+        showDialog(AlertDialog.Builder(this)
+            .setTitle("Choose ONE file for a local prompt")
+            .setItems(choices.toTypedArray()) { _, which ->
+                runCatching { WorkspaceAiHandoff.prepare(files, tasks, projects, projectId, choices[which]) }
+                    .onSuccess {
+                        handoff = it
+                        handoffPreview.text = it.displayText()
+                        handoffPreview.visibility = View.VISIBLE
+                        copyPromptButton.visibility = View.VISIBLE
+                    }.onFailure {
+                        clearHandoff()
+                        error(it)
+                    }
+            }
+            .setNegativeButton("Cancel", null))
+    }
+
+    private fun confirmCopyPrompt() {
+        val prepared = handoff ?: return
+        if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+            clearHandoff()
+            Toast.makeText(this, "Source or task changed; prepare a fresh prompt", Toast.LENGTH_LONG).show()
+            return
+        }
+        showDialog(AlertDialog.Builder(this)
+            .setTitle("Copy this source to Android clipboard?")
+            .setMessage(
+                "Selected file: ${prepared.context.path}\n" +
+                    "The prompt includes its ${if (prepared.context.truncated) "first 1500 source characters" else "complete source"}, " +
+                    "your goal and acceptance criteria. Other apps may read your clipboard; privacy patterns cannot catch every secret. " +
+                    "Choose where to paste it, check that external AI service's privacy and recurring-free terms, " +
+                    "and clear the clipboard afterward. No provider is contacted by LYRA."
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Copy this prompt") { _, _ ->
+                if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+                    clearHandoff()
+                    Toast.makeText(this, "Source or task changed; nothing copied", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("LYRA one-file AI prompt", prepared.prompt))
+                Toast.makeText(this, "Prompt copied by choice; paste only in an AI you trust", Toast.LENGTH_LONG).show()
+            })
     }
 
     private fun validateDraft() {
