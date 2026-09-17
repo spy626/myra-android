@@ -19,9 +19,13 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
 import java.io.File
+import java.io.IOException
 
-/** User-mediated model prompt, then untrusted patch validation and the existing Safe Edit executor. */
+/** One Workspace editing boundary: manual JSON or an opt-in free AI suggestion; only Safe Edit writes. */
 class WorkspaceStructuredEditActivity : AppCompatActivity() {
     companion object {
         private const val EXTRA_PROJECT_ID = "workspace_project_id"
@@ -38,6 +42,8 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
     private lateinit var handoffButton: TextView
     private lateinit var handoffPreview: TextView
     private lateinit var copyPromptButton: TextView
+    private lateinit var freeKeyInput: EditText
+    private lateinit var freeSuggestionButton: TextView
     private lateinit var jsonInput: EditText
     private lateinit var preview: TextView
     private lateinit var validateButton: TextView
@@ -46,6 +52,8 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
     private lateinit var keepButton: TextView
     private var handoff: WorkspaceAiHandoff.Draft? = null
     private var draft: WorkspaceStructuredEdit.Draft? = null
+    private var activeRequest: Call? = null
+    private var requestGeneration = 0L
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density + .5f).toInt()
     private fun button(text: String) = TextView(this).apply {
@@ -94,7 +102,6 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             finish()
             return
         }
-
         val root = ScrollView(this).apply { setBackgroundColor(Color.rgb(2, 6, 9)) }
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -109,17 +116,36 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         column.addView(label(
-            "Choose a source file and inspect a bounded prompt. You choose whether to copy it to another AI app. " +
-                "LYRA does not call a model, confirm a provider's free tier or send data automatically. " +
-                "Bring one JSON proposal back here for local validation and separate write approval."
+            "Choose one file and inspect a bounded source prompt. Copy it manually OR explicitly request " +
+                "one free AI suggestion. No automatic send, paid fallback, source write or completion claim. " +
+                "Every AI response remains an untrusted patch with separate write approval."
         ))
         status = panel().also(column::addView)
         handoffButton = button("Prepare one-file AI prompt (local)").also(column::addView)
         handoffPreview = panel().also(column::addView)
         copyPromptButton = button("Review privacy & copy prompt").also(column::addView)
         column.addView(label(
-            "Paste exactly ONE JSON response from your chosen AI or type it yourself. " +
-                "External AI services may store content or charge; use only a route you have checked.\n\n" +
+            "OPTIONAL NATIVE AI: OpenRouter's published $0 free-model router only. " +
+                "Enter a key from a free account with no billing/card. Key stays in this screen's memory " +
+                "for one request, is never saved and is cleared when leaving. Free quota and privacy-compatible " +
+                "providers may be unavailable: LYRA stops instead of switching to paid or relaxing privacy. " +
+                "Do not use confidential source; privacy-pattern screening cannot catch everything."
+        ))
+        freeKeyInput = EditText(this).apply {
+            hint = "OpenRouter FREE account API key (session-only)"
+            setTextColor(Color.rgb(241, 255, 243))
+            setHintTextColor(Color.rgb(140, 167, 149))
+            textSize = 14f
+            setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            filters = arrayOf(InputFilter.LengthFilter(256))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        column.addView(freeKeyInput)
+        freeSuggestionButton = button("Review & request ONE free AI suggestion").also(column::addView)
+        column.addView(label(
+            "Paste exactly ONE JSON response from an AI or type it yourself. No provider reply is " +
+                "trusted until LYRA rechecks the current file, source SHA, task and privacy.\n\n" +
                 "JSON format:\n" +
                 "{\"schemaVersion\":1,\"operation\":\"replace_exact_once\",\"path\":\"index.html\"," +
                 "\"oldText\":\"Hello\",\"newText\":\"Welcome\",\"rationale\":\"Why this matches the saved spec\"}"
@@ -146,6 +172,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
 
         handoffButton.setOnClickListener { selectHandoffFile() }
         copyPromptButton.setOnClickListener { confirmCopyPrompt() }
+        freeSuggestionButton.setOnClickListener { confirmFreeSuggestion() }
         jsonInput.setOnFocusChangeListener { _, _ -> clearDraft() }
         validateButton.setOnClickListener { validateDraft() }
         applyButton.setOnClickListener { confirmApply() }
@@ -172,7 +199,10 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                         .onSuccess {
                             Toast.makeText(this, "Change kept; rollback cleared", Toast.LENGTH_LONG).show()
                             render()
-                        }.onFailure(::error)
+                        }.onFailure {
+                            render()
+                            error(it)
+                        }
                 })
         }
         render()
@@ -183,13 +213,22 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         if (::status.isInitialized) render()
     }
 
+    override fun onStop() {
+        // No background AI processing or persistent key. Late callbacks cannot update a new screen.
+        requestGeneration++
+        activeRequest?.cancel()
+        activeRequest = null
+        if (::freeKeyInput.isInitialized) freeKeyInput.text?.clear()
+        if (::handoffPreview.isInitialized) clearHandoff()
+        super.onStop()
+    }
+
     private fun clearDraft() {
         draft = null
         preview.text = ""
         preview.visibility = View.GONE
         applyButton.visibility = View.GONE
     }
-
     private fun clearHandoff() {
         handoff = null
         handoffPreview.text = ""
@@ -204,6 +243,8 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         if (pending.isFailure) {
             status.text = "Rollback data needs attention. No new write or prompt will be attempted."
             handoffButton.visibility = View.GONE
+            freeKeyInput.visibility = View.GONE
+            freeSuggestionButton.visibility = View.GONE
             jsonInput.visibility = View.GONE
             validateButton.visibility = View.GONE
             undoButton.visibility = View.GONE
@@ -213,8 +254,10 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         val backup = pending.getOrNull()
         if (backup != null) {
             status.text = "PENDING PROTECTED EDIT\nFile: ${backup.path}\n" +
-                "Undo or Keep before another structured patch. No build/preview verification claimed."
+                "Undo or Keep before another patch. No build/browser verification claimed."
             handoffButton.visibility = View.GONE
+            freeKeyInput.visibility = View.GONE
+            freeSuggestionButton.visibility = View.GONE
             jsonInput.visibility = View.GONE
             validateButton.visibility = View.GONE
             undoButton.visibility = View.VISIBLE
@@ -227,16 +270,22 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         val ready = task != null && WorkspaceTaskContract.isSpecApproved(task) &&
             task.status != WorkspaceTaskStatus.PAUSED
         status.text = if (ready)
-            "Choose a file → review/copy a local AI prompt → paste one JSON patch below. " +
-                "No automatic provider request, fee or file write."
+            "Choose a file → review a local AI prompt → opt in to one $0 suggestion OR copy manually. " +
+                "Then preview and separately approve a safe edit."
         else
-            "Save, approve and resume the task brief first. No source sharing, patch or write is authorized."
+            "Save, approve and resume the task brief first. No source sharing, AI request or write is authorized."
         handoffButton.visibility = if (ready) View.VISIBLE else View.GONE
+        freeKeyInput.visibility = if (ready) View.VISIBLE else View.GONE
+        freeSuggestionButton.visibility = if (ready) View.VISIBLE else View.GONE
         jsonInput.visibility = if (ready) View.VISIBLE else View.GONE
         validateButton.visibility = if (ready) View.VISIBLE else View.GONE
     }
 
     private fun selectHandoffFile() {
+        if (activeRequest != null) {
+            Toast.makeText(this, "Finish this free suggestion request first", Toast.LENGTH_SHORT).show()
+            return
+        }
         val choices = runCatching { WorkspaceSourceContext.choices(files, projectId) }
             .getOrElse { error(it); return }
         if (choices.isEmpty()) {
@@ -273,8 +322,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                 "Selected file: ${prepared.context.path}\n" +
                     "The prompt includes its ${if (prepared.context.truncated) "first 1500 source characters" else "complete source"}, " +
                     "your goal and acceptance criteria. Other apps may read your clipboard; privacy patterns cannot catch every secret. " +
-                    "Choose where to paste it, check that external AI service's privacy and recurring-free terms, " +
-                    "and clear the clipboard afterward. No provider is contacted by LYRA."
+                    "Choose where to paste it and clear the clipboard afterward. No provider is contacted by Copy."
             )
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Copy this prompt") { _, _ ->
@@ -286,6 +334,97 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("LYRA one-file AI prompt", prepared.prompt))
                 Toast.makeText(this, "Prompt copied by choice; paste only in an AI you trust", Toast.LENGTH_LONG).show()
+            })
+    }
+
+    private fun confirmFreeSuggestion() {
+        if (activeRequest != null) {
+            Toast.makeText(this, "Free AI request already in progress", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val prepared = handoff ?: run {
+            Toast.makeText(this, "Prepare and review one file's local prompt first", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+            clearHandoff()
+            Toast.makeText(this, "Source or task changed; prepare a fresh prompt", Toast.LENGTH_LONG).show()
+            return
+        }
+        val key = freeKeyInput.text.toString().trim()
+        val request = runCatching { WorkspaceFreeAiSuggestion.request(key, prepared.prompt) }
+            .getOrElse { error(it); return }
+        showDialog(AlertDialog.Builder(this)
+            .setTitle("SEND one source prompt to FREE AI?")
+            .setMessage(
+                "Send selected ${prepared.context.path} (${if (prepared.context.truncated) "first 1500 characters" else "entire selected source"}), " +
+                    "the saved goal and acceptance criteria to OpenRouter's $0 openrouter/free route? " +
+                    "Other services will process the text. LYRA requires provider zero retention and denies " +
+                    "provider data collection; if no matching free endpoint exists, the call FAILS. " +
+                    "Only use a no-billing free account and non-confidential source. " +
+                    "One request, no automatic retry, no paid fallback and NO file write."
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Send THIS one free request") { _, _ ->
+                if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+                    clearHandoff()
+                    Toast.makeText(this, "Source or task changed; nothing sent", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                if (activeRequest != null) return@setPositiveButton
+                freeKeyInput.text?.clear()
+                clearDraft()
+                val generation = ++requestGeneration
+                val call = WorkspaceFreeAiSuggestion.client.newCall(request)
+                activeRequest = call
+                status.text = "One free suggestion requested. No file will be changed without separate approval."
+                call.enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        runOnUiThread {
+                            if (generation != requestGeneration || isFinishing || isDestroyed) return@runOnUiThread
+                            activeRequest = null
+                            status.text = "Free AI network unavailable. No edit made and no paid retry attempted."
+                        }
+                    }
+                    override fun onResponse(call: Call, response: Response) {
+                        val result = runCatching { WorkspaceFreeAiSuggestion.readResponse(response) }
+                        runOnUiThread {
+                            if (generation != requestGeneration || isFinishing || isDestroyed) return@runOnUiThread
+                            activeRequest = null
+                            if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+                                clearHandoff()
+                                clearDraft()
+                                status.text = "Source, task or approval changed; AI reply discarded. No edit made."
+                                return@runOnUiThread
+                            }
+                            result.onFailure {
+                                status.text = it.message ?: "Free AI response refused; no edit made."
+                            }.onSuccess { reply ->
+                                runCatching {
+                                    WorkspaceStructuredEdit.prepare(files, tasks, projects, projectId, reply)
+                                }.onSuccess { candidate ->
+                                    if (candidate.context.path != prepared.context.path ||
+                                        candidate.context.fileSha256 != prepared.context.fileSha256 ||
+                                        candidate.context.specToken != prepared.context.specToken ||
+                                        candidate.context.taskId != prepared.context.taskId) {
+                                        clearDraft()
+                                        status.text = "AI suggestion changed file or scope; refused. No edit made."
+                                    } else {
+                                        jsonInput.setText(reply)
+                                        draft = candidate
+                                        preview.text = candidate.displayText()
+                                        preview.visibility = View.VISIBLE
+                                        applyButton.visibility = View.VISIBLE
+                                        status.text = "Free AI suggested one edit. UNTRUSTED preview only; separately approve any write."
+                                    }
+                                }.onFailure {
+                                    clearDraft()
+                                    status.text = "Free AI suggestion rejected by local checks: ${it.message ?: "invalid patch"}. No edit made."
+                                }
+                            }
+                        }
+                    }
+                })
             })
     }
 
