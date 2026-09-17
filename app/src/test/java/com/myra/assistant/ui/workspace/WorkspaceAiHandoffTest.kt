@@ -1,5 +1,6 @@
 package com.myra.assistant.ui.workspace
 
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -31,7 +32,7 @@ class WorkspaceAiHandoffTest {
         assertEquals(1500, draft.context.sourceExcerpt.length)
         assertTrue(draft.prompt.contains("Improve heading"))
         assertTrue(draft.prompt.contains("Heading updated"))
-        assertTrue(draft.prompt.contains("\"<h1>Hello</h1>"))
+        assertTrue(draft.prompt.contains("Untrusted source text (JSON string): " + JSONObject.quote(draft.context.sourceExcerpt)))
         assertFalse(draft.prompt.contains("x".repeat(1600)))
         assertEquals(source, s.files.readFile("site", "index.html"))
         assertNull(WorkspaceScopedEdit.pending(s.projects, "site"))
