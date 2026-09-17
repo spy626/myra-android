@@ -26,6 +26,8 @@ class WorkspaceFreeAiSuggestionTest {
         assertFalse(request.url.toString().contains(key))
         assertEquals("openrouter/free", json.getString("model"))
         assertFalse(json.getBoolean("stream"))
+        assertEquals(2048, WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS)
+        assertEquals(WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS, json.getInt("max_tokens"))
         assertTrue(json.getJSONObject("provider").getBoolean("zdr"))
         assertEquals("deny", json.getJSONObject("provider").getString("data_collection"))
         val messages = json.getJSONArray("messages")
@@ -33,6 +35,7 @@ class WorkspaceFreeAiSuggestionTest {
         assertEquals(prompt, messages.getJSONObject(0).getString("content"))
         assertFalse(WorkspaceFreeAiSuggestion.client.retryOnConnectionFailure)
         assertFalse(WorkspaceFreeAiSuggestion.client.followRedirects)
+        assertFalse(WorkspaceFreeAiSuggestion.client.followSslRedirects)
     }
 
     private fun reply(finishReason: String?, content: Any? = "sensitive source text should not appear"): String {
@@ -44,6 +47,8 @@ class WorkspaceFreeAiSuggestionTest {
     @Test fun validReplyIsOnlyUntrustedTextAndMalformedOrPartialRepliesFailClosed() {
         val patch = """{"schemaVersion":1,"operation":"replace_exact_once"}"""
         assertEquals(patch, WorkspaceFreeAiSuggestion.parseResponse(reply("stop", patch)))
+        // Even a plausible, complete-looking patch MUST be refused when the provider reports truncation.
+        assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse(reply("length", patch)) }.isFailure)
         assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse("not json") }.isFailure)
         assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse("x".repeat(33_000)) }.isFailure)
         assertTrue(runCatching { WorkspaceFreeAiSuggestion.parseResponse(reply("stop", "")) }.isFailure)
