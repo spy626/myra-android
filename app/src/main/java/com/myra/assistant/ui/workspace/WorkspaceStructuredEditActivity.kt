@@ -44,6 +44,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
     }
     private lateinit var projectId: String
     private lateinit var status: TextView
+    private lateinit var followUpInput: EditText
     private lateinit var handoffButton: TextView
     private lateinit var handoffPreview: TextView
     private lateinit var copyPromptButton: TextView
@@ -128,6 +129,20 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                 "Every AI response remains an untrusted patch with separate write approval."
         ))
         status = panel().also(column::addView)
+        column.addView(label("OPTIONAL: What should LYRA change next in this same approved task and one file? " +
+            "Leave blank to use the saved goal. A follow-up never changes the approved spec or grants edit permission."))
+        followUpInput = EditText(this).apply {
+            hint = "e.g. Make the heading shorter (one small change)"
+            setTextColor(Color.rgb(241, 255, 243))
+            setHintTextColor(Color.rgb(140, 167, 149))
+            textSize = 14f
+            setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            filters = arrayOf(InputFilter.LengthFilter(180))
+            isSaveEnabled = false // One-turn instruction is never restored by Android.
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        column.addView(followUpInput)
         handoffButton = button("Prepare one-file AI prompt (local)").also(column::addView)
         handoffPreview = panel().also(column::addView)
         copyPromptButton = button("Review privacy & copy prompt").also(column::addView)
@@ -188,6 +203,11 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         freeSuggestionButton.setOnClickListener { confirmFreeSuggestion() }
         restoreButton.setOnClickListener { restoreSuggestion() }
         discardButton.setOnClickListener { confirmDiscardSuggestion() }
+        followUpInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = clearHandoff()
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
         jsonInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = clearDraft()
@@ -240,6 +260,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         activeRequest?.cancel()
         activeRequest = null
         if (::freeKeyInput.isInitialized) freeKeyInput.text?.clear()
+        if (::followUpInput.isInitialized) followUpInput.text?.clear()
         if (::jsonInput.isInitialized) jsonInput.text?.clear()
         if (::handoffPreview.isInitialized) clearHandoff()
         if (::preview.isInitialized) clearDraft()
@@ -259,6 +280,11 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         copyPromptButton.visibility = View.GONE
     }
 
+    private fun handoffCurrent(prepared: WorkspaceAiHandoff.Draft): Boolean =
+        handoff === prepared && WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared) &&
+            runCatching { WorkspaceAiHandoff.normalizeFollowUp(followUpInput.text.toString()) == prepared.followUp }
+                .getOrDefault(false)
+
     private fun render() {
         clearDraft()
         clearHandoff() // Source-bearing prompt never survives leaving and returning.
@@ -268,6 +294,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         if (pending.isFailure) {
             status.text = "Rollback data needs attention. No new write or prompt will be attempted."
             handoffButton.visibility = View.GONE
+            followUpInput.visibility = View.GONE
             freeKeyInput.visibility = View.GONE
             freeSuggestionButton.visibility = View.GONE
             jsonInput.visibility = View.GONE
@@ -283,6 +310,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             status.text = "PENDING PROTECTED EDIT\nFile: ${backup.path}\n" +
                 "Undo or Keep before another patch. No build/browser verification claimed."
             handoffButton.visibility = View.GONE
+            followUpInput.visibility = View.GONE
             freeKeyInput.visibility = View.GONE
             freeSuggestionButton.visibility = View.GONE
             jsonInput.visibility = View.GONE
@@ -309,6 +337,7 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             else -> "Save, approve and resume the task brief first. No source sharing, AI request or write is authorized."
         }
         handoffButton.visibility = if (ready && !hasSaved) View.VISIBLE else View.GONE
+        followUpInput.visibility = if (ready && !hasSaved) View.VISIBLE else View.GONE
         freeKeyInput.visibility = if (ready && !hasSaved) View.VISIBLE else View.GONE
         freeSuggestionButton.visibility = if (ready && !hasSaved) View.VISIBLE else View.GONE
         restoreButton.visibility = if (hasSaved) View.VISIBLE else View.GONE
@@ -358,10 +387,14 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             Toast.makeText(this, "Finish this free suggestion request first", Toast.LENGTH_SHORT).show()
             return
         }
-        if (savedSuggestions.recover(files, tasks, projects, projectId) is WorkspaceAiSuggestionDraftStore.Recovery.Ready) {
+        val savedState = runCatching { savedSuggestions.recover(files, tasks, projects, projectId) }
+            .getOrElse { error(it); return }
+        if (savedState is WorkspaceAiSuggestionDraftStore.Recovery.Ready) {
             status.text = "Restore or discard the saved AI patch before preparing another request."
             return
         }
+        val followUp = runCatching { WorkspaceAiHandoff.normalizeFollowUp(followUpInput.text.toString()) }
+            .getOrElse { error(it); return }
         val choices = runCatching { WorkspaceSourceContext.choices(files, projectId) }
             .getOrElse { error(it); return }
         if (choices.isEmpty()) {
@@ -371,25 +404,29 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
         showDialog(AlertDialog.Builder(this)
             .setTitle("Choose ONE file for a local prompt")
             .setItems(choices.toTypedArray()) { _, which ->
-                runCatching { WorkspaceAiHandoff.prepare(files, tasks, projects, projectId, choices[which]) }
-                    .onSuccess {
-                        handoff = it
-                        handoffPreview.text = it.displayText()
-                        handoffPreview.visibility = View.VISIBLE
-                        copyPromptButton.visibility = View.VISIBLE
-                    }.onFailure {
-                        clearHandoff()
-                        error(it)
+                runCatching {
+                    require(WorkspaceAiHandoff.normalizeFollowUp(followUpInput.text.toString()) == followUp) {
+                        "Follow-up changed; choose the file again"
                     }
+                    WorkspaceAiHandoff.prepare(files, tasks, projects, projectId, choices[which], followUp)
+                }.onSuccess {
+                    handoff = it
+                    handoffPreview.text = it.displayText()
+                    handoffPreview.visibility = View.VISIBLE
+                    copyPromptButton.visibility = View.VISIBLE
+                }.onFailure {
+                    clearHandoff()
+                    error(it)
+                }
             }
             .setNegativeButton("Cancel", null))
     }
 
     private fun confirmCopyPrompt() {
         val prepared = handoff ?: return
-        if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+        if (!handoffCurrent(prepared)) {
             clearHandoff()
-            Toast.makeText(this, "Source or task changed; prepare a fresh prompt", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Source, task or follow-up changed; prepare a fresh prompt", Toast.LENGTH_LONG).show()
             return
         }
         showDialog(AlertDialog.Builder(this)
@@ -397,14 +434,14 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             .setMessage(
                 "Selected file: ${prepared.context.path}\n" +
                     "The prompt includes its ${if (prepared.context.truncated) "first 1500 source characters" else "complete source"}, " +
-                    "your goal and acceptance criteria. Other apps may read your clipboard; privacy patterns cannot catch every secret. " +
+                    "your goal, acceptance criteria and any follow-up. Other apps may read your clipboard; privacy patterns cannot catch every secret. " +
                     "Choose where to paste it and clear the clipboard afterward. No provider is contacted by Copy."
             )
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Copy this prompt") { _, _ ->
-                if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+                if (!handoffCurrent(prepared)) {
                     clearHandoff()
-                    Toast.makeText(this, "Source or task changed; nothing copied", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Source, task or follow-up changed; nothing copied", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -428,9 +465,9 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             Toast.makeText(this, "Prepare and review one file's local prompt first", Toast.LENGTH_LONG).show()
             return
         }
-        if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+        if (!handoffCurrent(prepared)) {
             clearHandoff()
-            Toast.makeText(this, "Source or task changed; prepare a fresh prompt", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Source, task or follow-up changed; prepare a fresh prompt", Toast.LENGTH_LONG).show()
             return
         }
         val key = freeKeyInput.text.toString().trim()
@@ -440,21 +477,23 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
             .setTitle("SEND one source prompt to FREE AI?")
             .setMessage(
                 "Send selected ${prepared.context.path} (${if (prepared.context.truncated) "first 1500 characters" else "entire selected source"}), " +
-                    "the saved goal and acceptance criteria to OpenRouter's $0 openrouter/free route? " +
-                    "Other services will process the text. LYRA requires provider zero retention and denies " +
-                    "provider data collection; if no matching free endpoint exists, the call FAILS. " +
-                    "Only use a no-billing free account and non-confidential source. " +
+                    "the saved goal, acceptance criteria${if (prepared.followUp.isNotBlank()) " and this follow-up: ${prepared.followUp}" else ""} " +
+                    "to OpenRouter's $0 openrouter/free route? Other services will process the text. " +
+                    "LYRA requires provider zero retention and denies provider data collection; if no matching free " +
+                    "endpoint exists, the call FAILS. Only use a no-billing free account and non-confidential source. " +
                     "One request, no automatic retry, no paid fallback and NO file write."
             )
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Send THIS one free request") { _, _ ->
-                if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+                if (!handoffCurrent(prepared)) {
                     clearHandoff()
-                    Toast.makeText(this, "Source or task changed; nothing sent", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Source, task or follow-up changed; nothing sent", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
                 if (activeRequest != null) return@setPositiveButton
-                if (savedSuggestions.recover(files, tasks, projects, projectId) is WorkspaceAiSuggestionDraftStore.Recovery.Ready) {
+                val currentSaved = runCatching { savedSuggestions.recover(files, tasks, projects, projectId) }
+                    .getOrElse { error(it); return@setPositiveButton }
+                if (currentSaved is WorkspaceAiSuggestionDraftStore.Recovery.Ready) {
                     status.text = "Saved AI patch exists; no new request sent."
                     return@setPositiveButton
                 }
@@ -477,10 +516,10 @@ class WorkspaceStructuredEditActivity : AppCompatActivity() {
                         runOnUiThread {
                             if (generation != requestGeneration || isFinishing || isDestroyed) return@runOnUiThread
                             activeRequest = null
-                            if (!WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
+                            if (!handoffCurrent(prepared)) {
                                 clearHandoff()
                                 clearDraft()
-                                status.text = "Source, task or approval changed; AI reply discarded. No edit made."
+                                status.text = "Source, task, approval or follow-up changed; AI reply discarded. No edit made."
                                 return@runOnUiThread
                             }
                             result.onFailure {
