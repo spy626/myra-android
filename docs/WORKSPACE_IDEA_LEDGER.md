@@ -1,6 +1,6 @@
 # LYRA Workspace — repo/idea and free-route ledger
 
-Updated 2026-09-16. This is an **accounting register**, not a declaration that every upstream repo, model or feature was installed or freshly audited. Before each implementation slice, inspect current upstream source, existing LYRA code, license, permissions, cost and regression impact. One LYRA Core; no duplicate planner, memory owner, model router or unreviewed code copying.
+Updated 2026-09-17. This is an **accounting register**, not a declaration that every upstream repo, model or feature was installed or freshly audited. Before each implementation slice, inspect current upstream source, existing LYRA code, license, permissions, cost and regression impact. One LYRA Core; no duplicate planner, memory owner, model router or unreviewed code copying.
 
 Status key: `INTEGRATED` = demonstrably in LYRA; `BORROW` = concept to implement in the stated phase; `REVIEW` = re-audit before a decision; `REJECT` = do not integrate under current constraints. A row can contain deferred ideas; no silent dropping. Any newly supplied repo/provider gets a row before use.
 
@@ -11,6 +11,12 @@ Status key: `INTEGRATED` = demonstrably in LYRA; `BORROW` = concept to implement
 - `SPECIFY → PLAN → TASKS → IMPLEMENT → OBSERVE → VERIFY → RECONCILE`; a plan or model reply cannot assert completion. Preserve checkpoint/resume, regression tests and safe rollback.
 - $0 authority: no card, AutoPay, surprise overage, paid fallback or silent provider switching to a billable route. If all verified-free routes fail, checkpoint and wait.
 - Phase 5 first slice is a task brief + plan/evidence *contract*, NOT working autonomous AI coding. No independent model client, automatic file mutation or extra personal memory DB is introduced.
+
+## Latest Phase 5 integration status (2026-09-17)
+
+- Slice 12's single-file exact edit, separate write confirmation, private rollback, Undo/Keep and newer-manual-work protection are implemented and the requested physical-phone flows are accepted. It remains a human-typed mutation trial, not AI coding or build verification.
+- Slice 13 now introduces a strict **offline structured model-output boundary**. Structured JSON is untrusted; LYRA independently re-establishes the approved/resumed task, eligible path, privacy screen and current full-file SHA before preview. It reuses Slice 12 as the only write/rollback executor and still requires a separate exact-file confirmation.
+- The structured tool/output concept collected from `microsoft/generative-ai-for-beginners` is MERGED into this boundary. Broader RAG/evaluation/model-selection ideas remain future work. No provider is connected by Slice 13; all free-route rows below remain `REVERIFY` until their exact current route/account/privacy/cost terms are audited.
 
 ## Phase 5 second slice: project-local acceptance criteria (2026-09-16)
 
@@ -24,7 +30,7 @@ Status key: `INTEGRATED` = demonstrably in LYRA; `BORROW` = concept to implement
 
 | Repo / source | Useful idea and exact destination | Phase | Status |
 |---|---|---:|---|
-| moeru-ai/airi + moeru-ai/plast-mem | One-owner memory; source-owned context; bounded task state; transcript truth/projection; Spark; coding-memory ownership boundary; PlanSpec `allowedTools`/`expectedEvidence`, reconciler, approval and verification authority | 5, 10, 18 | INTEGRATED memory; BORROW planning contract |
+| moeru-ai/airi + moeru-ai/plast-mem | One-owner memory; source-owned context; bounded task state; transcript truth/projection; Spark; coding-memory ownership boundary; PlanSpec `allowedTools`/`expectedEvidence`, reconciler, approval and verification authority | 5, 10, 18 | INTEGRATED memory; MERGED scoped approval/rollback boundary; broader planning contract continues |
 | github/spec-kit | Per-feature constitution, specify, plan, tasks, implement, converge; separate bug/idea entry points | 5–6, 18 | BORROW; acceptance criteria concept MERGED in Phase 5 slice 2 |
 | addyosmani/agent-skills | Meta-skill routing, DEFINE/PLAN/BUILD/VERIFY/REVIEW/SHIP, mechanical QA, bounded adversarial review | 5, 14–18 | BORROW |
 | Shubhamsaboo/awesome-llm-apps | Scope-creep checks, one-mutation improvement, skill admission/security/evals, provider-specific cost audit | 5, 14–18 | BORROW |
@@ -50,7 +56,7 @@ Status key: `INTEGRATED` = demonstrably in LYRA; `BORROW` = concept to implement
 | apple/coreai-models | Canonical capability registry, resource-aware execution/cache concepts; no Apple runtime on Android | 12 | BORROW concepts |
 | karpathy/nanochat | TTFT/TPOT, evals, simple model registry; no costly training/rented GPU | 12, 18 | BORROW concepts |
 | AirLLM | Layer/demand paging as resource idea; no impractical phone inference backbone | 12 | BORROW concepts |
-| microsoft/generative-ai-for-beginners | Structured tool calls, RAG, evaluation and model selection | 5, 10, 18 | BORROW concepts |
+| microsoft/generative-ai-for-beginners | Structured tool calls, RAG, evaluation and model selection | 5, 10, 18 | MERGED structured-output authority concept in Phase 5 slice 13; broader concepts deferred |
 | awesome-generative-ai-guide | Discovery/benchmark/security bibliography; inspect each original | 12, 18 | BORROW as references |
 | langchain-ai/langchain | Tool/schema orchestration concepts if nonduplicative; avoid parallel framework brain | 5, 13 | REVIEW |
 | msitarzewski/agency-agents | Role-oriented workers under ONE core with explicit authority and tests | 5, 15 | REVIEW |
