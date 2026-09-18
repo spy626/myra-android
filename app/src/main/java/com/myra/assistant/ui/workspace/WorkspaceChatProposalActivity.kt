@@ -261,35 +261,28 @@ class WorkspaceChatProposalActivity : AppCompatActivity() {
     }
 
     private fun confirmSend(prepared: WorkspaceAiHandoff.Draft) {
-        val options = WorkspaceChatGateway.Provider.values().filter { provider ->
-            runCatching { keys.get(if (provider == WorkspaceChatGateway.Provider.OPENROUTER_FREE)
-                ApiKeyStore.OPENROUTER else ApiKeyStore.GEMINI).isNotBlank() }.getOrDefault(false)
-        }
-        if (options.isEmpty()) {
+        val key = runCatching { keys.get(ApiKeyStore.OPENROUTER) }.getOrElse { alert(it); return }
+        if (key.isBlank()) {
             AlertDialog.Builder(this).setTitle("No configured Workspace provider")
-                .setMessage("Save a Gemini or OpenRouter key in API & Cloud Settings first. No request has been made.")
+                .setMessage("Save an OpenRouter key in API & Cloud Settings first. No request has been made.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Open settings") { _, _ ->
                     startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
                 }.show()
             return
         }
-        AlertDialog.Builder(this).setTitle("Choose provider for this one-file proposal")
-            .setItems(options.map { if (it == WorkspaceChatGateway.Provider.OPENROUTER_FREE)
-                "OpenRouter $0 free router" else "Gemini 2.5 Flash · free-tier account only" }.toTypedArray()) { _, index ->
-                val provider = options[index]
-                AlertDialog.Builder(this).setTitle("Share reviewed source with provider?")
-                    .setMessage("Provider: $provider\nProject: ${projects.getProject(projectId)?.name}\nFile: ${prepared.context.path}\n\n" +
-                        "Your approved task, latest Chat instruction and up to 1,500 source characters will be shared. " +
-                        "A privacy-pattern screen cannot detect all secrets. Verify the prompt above. " +
-                        "Gemini free tier depends on YOUR account and billing setup; no automatic paid fallback, provider switch or file write. Proceed once?")
-                    .setNegativeButton("Keep local", null)
-                    .setPositiveButton("Send once") { _, _ -> send(prepared, provider) }
-                    .show()
-            }.show()
+        AlertDialog.Builder(this).setTitle("Share reviewed source with OpenRouter?")
+            .setMessage("Provider: OpenRouter $0 free-model router\nProject: ${projects.getProject(projectId)?.name}\nFile: ${prepared.context.path}\n\n" +
+                "Your approved task, latest Chat instruction and up to 1,500 source characters will be shared. " +
+                "A privacy-pattern screen cannot detect all secrets. Verify the prompt above. " +
+                "Free-model availability and privacy-compatible routing depend on the provider. " +
+                "No automatic paid fallback, provider switch or file write. Proceed once?")
+            .setNegativeButton("Keep local", null)
+            .setPositiveButton("Send once") { _, _ -> send(prepared, key) }
+            .show()
     }
 
-    private fun send(prepared: WorkspaceAiHandoff.Draft, provider: WorkspaceChatGateway.Provider) {
+    private fun send(prepared: WorkspaceAiHandoff.Draft, key: String) {
         if (activeRequest != null || handoff !== prepared ||
             !WorkspaceAiHandoff.stillCurrent(files, tasks, projects, projectId, prepared)) {
             message = "Task or file changed. Reopen a fresh prompt; nothing was sent."
@@ -297,10 +290,9 @@ class WorkspaceChatProposalActivity : AppCompatActivity() {
             render()
             return
         }
-        val key = runCatching { keys.get(if (provider == WorkspaceChatGateway.Provider.OPENROUTER_FREE)
-            ApiKeyStore.OPENROUTER else ApiKeyStore.GEMINI) }.getOrElse { alert(it); return }
         val messages = listOf(WorkspaceConversationStore.Message("one-time-prompt", "user", prepared.prompt,
             System.currentTimeMillis()))
+        val provider = WorkspaceChatGateway.Provider.OPENROUTER_FREE
         val request = runCatching { WorkspaceChatGateway.request(provider, key, messages) }
             .getOrElse { alert(it); return }
         val serial = ++generation

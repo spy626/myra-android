@@ -379,18 +379,14 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }
 
-    /** Choose only one configured route; never silently switch providers or use a paid fallback. */
-    private fun selectedProvider(): WorkspaceChatGateway.Provider? {
-        val openRouter = keys.get(ApiKeyStore.OPENROUTER)
-        if (openRouter.isNotBlank()) return WorkspaceChatGateway.Provider.OPENROUTER_FREE
-        val gemini = keys.get(ApiKeyStore.GEMINI)
-        if (gemini.isNotBlank()) return WorkspaceChatGateway.Provider.GEMINI_FREE_TIER
-        return null
-    }
+    /** The voice-only credential is never considered for Workspace routing. No silent fallback. */
+    private fun selectedProvider(): WorkspaceChatGateway.Provider? =
+        if (keys.get(ApiKeyStore.OPENROUTER).isNotBlank())
+            WorkspaceChatGateway.Provider.OPENROUTER_FREE else null
 
-    private fun keyFor(provider: WorkspaceChatGateway.Provider): String =
-        keys.get(if (provider == WorkspaceChatGateway.Provider.OPENROUTER_FREE)
-            ApiKeyStore.OPENROUTER else ApiKeyStore.GEMINI)
+    private fun keyFor(provider: WorkspaceChatGateway.Provider): String = when (provider) {
+        WorkspaceChatGateway.Provider.OPENROUTER_FREE -> keys.get(ApiKeyStore.OPENROUTER)
+    }
 
     private fun addAttachment(uri: Uri, photo: Boolean) {
         if (selectedId == null) { toast("Select a project before attaching files"); return }
@@ -494,18 +490,15 @@ class WorkspaceActivity : AppCompatActivity() {
             statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
             render()
             AlertDialog.Builder(this).setTitle("No Workspace provider key")
-                .setMessage("Add an OpenRouter key in API & Cloud Settings, or a Gemini key in Voice & AI Models. No provider will be contacted without consent.")
+                .setMessage("Add an OpenRouter key in API & Cloud Settings. No provider will be contacted without consent.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("API settings") { _, _ ->
                     startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
                 }.show()
             return
         }
-        val name = if (provider == WorkspaceChatGateway.Provider.OPENROUTER_FREE)
-            "OpenRouter's $0 free-model router" else "Gemini 2.5 Flash"
-        val warning = if (provider == WorkspaceChatGateway.Provider.GEMINI_FREE_TIER)
-            "Only proceed if your Gemini account has free-tier access with billing disabled. " else
-            "A free quota or privacy-compatible route may be unavailable. "
+        val name = "OpenRouter's $0 free-model router"
+        val warning = "A free quota or privacy-compatible route may be unavailable. "
         val selectedDetails = if (picked.isEmpty()) "No attachments selected. " else
             "Also send: ${picked.joinToString { "${it.name} (${it.mime})" }}. "
         AlertDialog.Builder(this).setTitle("Send to $name?")
