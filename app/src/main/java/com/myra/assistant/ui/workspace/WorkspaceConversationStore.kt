@@ -56,6 +56,15 @@ class WorkspaceConversationStore(
         }
     }
 
+    /** Delete only this transcript. Project manifests, source files, tasks and Undo/Keep remain untouched. */
+    @Synchronized fun deleteChat(projectId: String): Boolean {
+        val file = transcript(projectId)
+        if (!file.exists()) return false
+        require(file.isFile && !Files.isSymbolicLink(file.toPath())) { "Conversation changed unexpectedly" }
+        check(file.delete()) { "Conversation could not be deleted" }
+        return true
+    }
+
     @Synchronized fun append(projectId: String, role: String, text: String): Message {
         require(role == "user" || role == "assistant") { "Invalid conversation role" }
         val content = text.trim()
