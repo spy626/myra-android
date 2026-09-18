@@ -2,20 +2,22 @@ package com.myra.assistant.ui.workspace
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.text.Editable
 import android.text.InputFilter
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
-import android.view.WindowManager
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.PopupMenu
-import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -56,7 +58,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private var workTab = false
     private var requestGeneration = 0L
     private var activeRequest: Call? = null
-    private var statusMessage = "Messages remain private until you approve one provider request."
+    private var statusMessage = ""
     private val coding by lazy {
         WorkspaceChatCodingFlow(this, projects, files, tasks, suggestions, keys,
             activeProject = { selectedId }, report = { message ->
@@ -65,14 +67,13 @@ class WorkspaceActivity : AppCompatActivity() {
             })
     }
     private lateinit var root: LinearLayout
-    private lateinit var projectLabel: TextView
     private lateinit var chatTab: TextView
     private lateinit var workTabButton: TextView
     private lateinit var scroll: ScrollView
     private lateinit var content: LinearLayout
     private lateinit var composerArea: LinearLayout
     private lateinit var composer: EditText
-    private lateinit var sendButton: TextView
+    private lateinit var sendButton: ImageButton
     private lateinit var attachmentList: LinearLayout
 
     private val photoPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -83,10 +84,14 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density + .5f).toInt()
+    private fun rounded(color: Int, radius: Int): GradientDrawable = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radius).toFloat()
+    }
     private fun label(value: String, size: Float = 14f) = TextView(this).apply {
         text = value
         textSize = size
-        setTextColor(Color.rgb(223, 245, 227))
+        setTextColor(Color.rgb(235, 235, 235))
         setPadding(dp(12), dp(12), dp(12), dp(12))
     }
     private fun control(value: String, action: () -> Unit) = label(value).apply {
@@ -144,33 +149,56 @@ class WorkspaceActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(2, 6, 9))
         }
+        // One compact row: plain three dots, small segmented Chat/Work, new chat icon.
+        // The navigation drawer itself remains unchanged.
         val heading = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(4))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
         }
-        heading.addView(control("⋮") { showMenu() }.apply {
+        heading.addView(label("⋮", 24f).apply {
+            gravity = Gravity.CENTER
             contentDescription = "Open Workspace navigation"
-        }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        projectLabel = label("Workspace", 18f).apply {
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            isClickable = true
+            isFocusable = true
             setOnClickListener { showMenu() }
+        }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        heading.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(Color.rgb(39, 39, 39), 24)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
         }
-        heading.addView(projectLabel, LinearLayout.LayoutParams(0, -2, 1f))
-        heading.addView(control("✎") { newChat() }.apply {
+        chatTab = label("Chat", 14f).apply {
+            gravity = Gravity.CENTER
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { workTab = false; render() }
+        }
+        workTabButton = label("Work", 14f).apply {
+            gravity = Gravity.CENTER
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { workTab = true; render() }
+        }
+        tabs.addView(chatTab, LinearLayout.LayoutParams(0, dp(36), 1f))
+        tabs.addView(workTabButton, LinearLayout.LayoutParams(0, dp(36), 1f))
+        heading.addView(tabs, LinearLayout.LayoutParams(dp(164), dp(42)))
+        heading.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
+        heading.addView(ImageButton(this).apply {
+            setImageResource(android.R.drawable.ic_menu_edit)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            background = rounded(Color.TRANSPARENT, 22)
             contentDescription = "New Chat"
-        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            setOnClickListener { newChat() }
+        }, LinearLayout.LayoutParams(dp(44), dp(44)))
         root.addView(heading)
-        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        chatTab = control("Chat") { workTab = false; render() }
-        workTabButton = control("Work") { workTab = true; render() }
-        tabs.addView(chatTab, LinearLayout.LayoutParams(0, dp(48), 1f))
-        tabs.addView(workTabButton, LinearLayout.LayoutParams(0, dp(48), 1f))
-        root.addView(tabs)
+
         scroll = ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(20))
+            setPadding(dp(16), dp(8), dp(16), dp(20))
         }
         scroll.addView(content)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -183,24 +211,25 @@ class WorkspaceActivity : AppCompatActivity() {
         val entry = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(52)
             background = GradientDrawable().apply {
-                setColor(Color.rgb(18, 28, 24))
-                cornerRadius = dp(30).toFloat()
-                setStroke(dp(1), Color.rgb(72, 101, 79))
+                setColor(Color.rgb(34, 34, 34))
+                cornerRadius = dp(28).toFloat()
+                setStroke(dp(1), Color.rgb(65, 65, 65))
             }
         }
-        val plusButton = label("+", 26f).apply {
+        val plusButton = label("+", 27f).apply {
             gravity = Gravity.CENTER
             contentDescription = "Add photo or file"
             isClickable = true
             isFocusable = true
             setOnClickListener { showAttachmentMenu(this) }
         }
-        entry.addView(plusButton, LinearLayout.LayoutParams(dp(48), dp(52)))
+        entry.addView(plusButton, LinearLayout.LayoutParams(dp(43), dp(50)))
         composer = EditText(this).apply {
-            hint = "Ask LYRA…"
+            hint = "Ask LYRA"
             setTextColor(Color.WHITE)
-            setHintTextColor(Color.rgb(148, 171, 153))
+            setHintTextColor(Color.rgb(158, 158, 158))
             setBackgroundColor(Color.TRANSPARENT)
             textSize = 15f
             minLines = 1
@@ -211,17 +240,37 @@ class WorkspaceActivity : AppCompatActivity() {
             setPadding(dp(2), dp(10), dp(6), dp(10))
         }
         entry.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
-        sendButton = label("↑", 23f).apply {
-            gravity = Gravity.CENTER
+        // Use a real Android send drawable: the old text arrow rendered as broken glyphs on phones.
+        sendButton = ImageButton(this).apply {
+            setImageResource(android.R.drawable.ic_menu_send)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            background = rounded(Color.rgb(67, 67, 67), 22)
+            scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(11), dp(11), dp(11), dp(11))
             contentDescription = "Send message"
-            isClickable = true
-            isFocusable = true
             setOnClickListener { sendMessage() }
         }
-        entry.addView(sendButton, LinearLayout.LayoutParams(dp(48), dp(52)))
+        entry.addView(sendButton, LinearLayout.LayoutParams(dp(42), dp(42)).apply {
+            rightMargin = dp(5)
+        })
+        composer.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = updateSendButton()
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
         composerArea.addView(entry, LinearLayout.LayoutParams(-1, -2))
         root.addView(composerArea)
         setContentView(root)
+        updateSendButton()
+    }
+
+    private fun updateSendButton() {
+        if (!::sendButton.isInitialized || !::composer.isInitialized) return
+        val ready = !workTab && activeRequest == null && composer.text.toString().isNotBlank()
+        sendButton.isEnabled = ready
+        sendButton.alpha = if (ready) 1f else .5f
+        sendButton.background = rounded(if (ready) Color.rgb(235, 235, 235) else Color.rgb(67, 67, 67), 22)
+        sendButton.imageTintList = ColorStateList.valueOf(if (ready) Color.rgb(20, 20, 20) else Color.WHITE)
     }
 
     private fun showAttachmentMenu(anchor: View) {
@@ -249,37 +298,47 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun render() {
         if (!::root.isInitialized) return
         val current = project()
-        projectLabel.text = current?.let(::chatTitle) ?: "Workspace · New chat"
-        chatTab.setTextColor(if (workTab) Color.GRAY else Color.rgb(168, 255, 178))
-        workTabButton.setTextColor(if (workTab) Color.rgb(168, 255, 178) else Color.GRAY)
+        chatTab.background = rounded(if (workTab) Color.TRANSPARENT else Color.rgb(67, 67, 67), 21)
+        workTabButton.background = rounded(if (workTab) Color.rgb(67, 67, 67) else Color.TRANSPARENT, 21)
+        chatTab.setTextColor(if (workTab) Color.LTGRAY else Color.WHITE)
+        workTabButton.setTextColor(if (workTab) Color.WHITE else Color.LTGRAY)
         // Work is a read/preview destination. All messaging and approvals stay in Chat.
         composerArea.visibility = if (workTab) View.GONE else View.VISIBLE
-        sendButton.isEnabled = activeRequest == null
-        sendButton.alpha = if (activeRequest == null) 1f else .45f
+        updateSendButton()
         content.removeAllViews()
-        if (!workTab) content.addView(label(statusMessage, 12f))
+        // Never show internal routing instructions or a verbose empty-state on a fresh chat.
+        // Errors, waiting states and action results remain visible after a real interaction.
+        if (!workTab && statusMessage.isNotBlank()) {
+            content.addView(label(statusMessage, 12f).apply {
+                setTextColor(Color.rgb(169, 169, 169))
+                setPadding(dp(8), dp(4), dp(8), dp(12))
+            })
+        }
         if (workTab) renderWork(current) else renderChat(current)
         renderAttachments()
     }
 
     private fun renderChat(current: WorkspaceProject?) {
-        if (current == null) {
-            content.addView(label("Ask LYRA anything. Greetings stay in a private chat; a coding project starts only when you request one.", 16f))
-            return
-        }
+        if (current == null) return
         val messages = runCatching { conversations.read(current.projectId) }
             .getOrElse {
                 content.addView(label("Conversation storage requires attention. No other chat's messages will be shown."))
                 return
             }
-        if (messages.isEmpty()) content.addView(label("What would you like to build or ask about?", 18f))
         messages.forEach { message ->
-            val card = label((if (message.role == "user") "You" else "LYRA · Workspace") +
-                "\n\n" + message.text).apply {
-                setBackgroundResource(R.drawable.bg_workspace_project_card)
-                setTextIsSelectable(true)
+            val mine = message.role == "user"
+            val line = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = if (mine) Gravity.END else Gravity.START
             }
-            content.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+            val bubble = label(message.text, 15f).apply {
+                maxWidth = resources.displayMetrics.widthPixels - dp(72)
+                setTextIsSelectable(true)
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                if (mine) background = rounded(Color.rgb(42, 42, 42), 18)
+            }
+            line.addView(bubble, LinearLayout.LayoutParams(-2, -2))
+            content.addView(line, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
         }
         if (current.type != WorkspaceProjectType.CHAT) {
             val id = current.projectId
@@ -312,7 +371,6 @@ class WorkspaceActivity : AppCompatActivity() {
         } else addControl("Preview · Not available for Android builds") {
             toast("Android build preview is not implemented; no successful build is claimed")
         }
-        content.addView(label("Coding requests and permission popups are in Chat. The current Safe Edit supports one reviewed source-file change at a time.", 12f))
     }
 
     private fun showMenu() {
@@ -393,7 +451,7 @@ class WorkspaceActivity : AppCompatActivity() {
         workTab = false
         attachments.clear()
         composer.text.clear()
-        statusMessage = "New chat. Nothing is sent until you approve a provider request."
+        statusMessage = ""
         render()
     }
 
@@ -419,31 +477,8 @@ class WorkspaceActivity : AppCompatActivity() {
         projects.markOpened(id)
         attachments.clear()
         composer.setText(localDrafts[id].orEmpty())
-        statusMessage = "${projects.getProject(id)?.name} selected. Other chat history remains separate."
+        statusMessage = ""
         render()
-    }
-
-    /** Existing typed-project dialog remains internal for compatibility; Chat starts projects naturally. */
-    private fun showNewProjectDialog() {
-        val view = layoutInflater.inflate(R.layout.dialog_new_workspace_project, null)
-        val name = view.findViewById<EditText>(R.id.projectNameInput)
-        val group = view.findViewById<RadioGroup>(R.id.projectTypeGroup)
-        val dialog = AlertDialog.Builder(this).setView(view).create()
-        dialog.show()
-        dialog.window?.apply {
-            setBackgroundDrawableResource(android.R.color.transparent)
-            setLayout((resources.displayMetrics.widthPixels - dp(32)).coerceAtLeast(0),
-                WindowManager.LayoutParams.WRAP_CONTENT)
-            setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        }
-        view.findViewById<TextView>(R.id.cancelProjectButton).setOnClickListener { dialog.dismiss() }
-        view.findViewById<TextView>(R.id.createProjectButton).setOnClickListener {
-            val type = if (group.checkedRadioButtonId == R.id.projectTypeAndroid)
-                WorkspaceProjectType.ANDROID_APP else WorkspaceProjectType.WEBSITE
-            runCatching { projects.createProject(name.text.toString(), type) }
-                .onSuccess { created -> dialog.dismiss(); selectProject(created.projectId) }
-                .onFailure { name.error = it.message ?: "Project creation failed" }
-        }
     }
 
     /** Gemini remains voice-only; no silent paid or model fallback for Workspace. */
@@ -594,6 +629,7 @@ class WorkspaceActivity : AppCompatActivity() {
             .setNegativeButton("Keep local", null)
             .setPositiveButton("Send once") { _, _ -> requestReply(id, stored.id, provider, picked) }
             .show()
+        statusMessage = ""
         render()
     }
 
@@ -644,7 +680,7 @@ class WorkspaceActivity : AppCompatActivity() {
             activeRequest = null
             result.onSuccess { reply ->
                 runCatching { conversations.append(id, "assistant", reply) }
-                    .onSuccess { statusMessage = "Response saved. Coding changes require a separate Chat popup approval." }
+                    .onSuccess { statusMessage = "" }
                     .onFailure { statusMessage = "Response could not be saved; no source changed." }
             }.onFailure { statusMessage = it.message ?: "Provider failed; no file changed." }
             render()
