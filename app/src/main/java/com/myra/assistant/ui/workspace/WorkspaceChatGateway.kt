@@ -8,12 +8,16 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Workspace text and explicitly consented one-turn images. Never uses the voice-only Gemini key. */
+/** Workspace text and explicitly selected one-turn images. Never uses the voice-only Gemini key. */
 internal object WorkspaceChatGateway {
     enum class Provider { OPENROUTER_FREE }
     data class Image(val mime: String, val base64: String)
     private const val MAX_REPLY_BYTES = 32_768L
-    val client: OkHttpClient = WorkspaceFreeAiSuggestion.client
+    // One extra try only after specific upstream HTTP rejections. Connection failures and
+    // ambiguous timeouts are NOT retried. Retain the existing 35-second total call timeout.
+    val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
+        .addInterceptor(WorkspaceFreeRouteRetry())
+        .build()
 
     /** Each request includes only bounded messages from the explicitly selected project. */
     fun request(provider: Provider, key: String, messages: List<WorkspaceConversationStore.Message>,
