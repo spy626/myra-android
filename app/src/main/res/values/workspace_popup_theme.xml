@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Scoped to WorkspaceActivity; LYRA Voice and other screens keep their existing theme. -->
+    <style name="Theme.Myra.Workspace" parent="Theme.Myra">
+        <item name="android:popupMenuStyle">@style/WorkspacePopupMenu</item>
+        <item name="popupMenuStyle">@style/WorkspacePopupMenu</item>
+        <item name="android:textColorPrimary">#DFF5E3</item>
+    </style>
+    <!-- Both the Photos/Files menu and the user's message long-press menu use PopupMenu. -->
+    <style name="WorkspacePopupMenu" parent="Widget.AppCompat.PopupMenu">
+        <item name="android:popupBackground">@drawable/bg_workspace_popup</item>
+    </style>
+</resources>
