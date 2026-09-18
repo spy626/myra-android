@@ -36,13 +36,17 @@ import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 
-/** Project-aware Workspace chat and existing Work tools; never touches personal AIRI memory. */
+/** Private general Chat; typed coding project only after an explicit request. Voice is untouched. */
 class WorkspaceActivity : AppCompatActivity() {
     private data class Attachment(val uri: Uri, val name: String, val mime: String, val size: Long)
     private val projects by lazy { WorkspaceProjectStore(File(filesDir, "workspace/projects")) }
     private val files by lazy { WorkspaceFileStore(projects) }
     private val conversations by lazy {
         WorkspaceConversationStore(projects, File(noBackupFilesDir, "workspace-conversations"))
+    }
+    private val tasks by lazy { WorkspaceTaskStore(projects) }
+    private val suggestions by lazy {
+        WorkspaceAiSuggestionDraftStore(File(noBackupFilesDir, "workspace-ai-drafts"))
     }
     private val keys by lazy { ApiKeyStore(this) }
     private val preferences by lazy { getSharedPreferences("workspace_ui", Context.MODE_PRIVATE) }
@@ -53,6 +57,13 @@ class WorkspaceActivity : AppCompatActivity() {
     private var requestGeneration = 0L
     private var activeRequest: Call? = null
     private var statusMessage = "Messages remain private until you approve one provider request."
+    private val coding by lazy {
+        WorkspaceChatCodingFlow(this, projects, files, tasks, suggestions, keys,
+            activeProject = { selectedId }, report = { message ->
+                statusMessage = message
+                if (::root.isInitialized) render()
+            })
+    }
     private lateinit var root: LinearLayout
     private lateinit var projectLabel: TextView
     private lateinit var chatTab: TextView
@@ -94,7 +105,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // A fresh Workspace launch starts a new, unsent chat. Existing transcripts remain in the drawer.
+        // A fresh launch starts an unsent chat, never silently reopens the last project.
         selectedId = savedInstanceState?.getString("workspace_selected_id")
             ?.takeIf { projects.getProject(it) != null }
         workTab = savedInstanceState?.getBoolean("workspace_work_tab") ?: false
@@ -114,7 +125,7 @@ class WorkspaceActivity : AppCompatActivity() {
             if (selectedId != null && projects.getProject(selectedId!!) == null) {
                 selectedId = null
                 attachments.clear()
-                statusMessage = "The selected project is unavailable. Choose another project."
+                statusMessage = "Selected conversation is unavailable. Choose another chat."
             }
             render()
         }
@@ -124,6 +135,7 @@ class WorkspaceActivity : AppCompatActivity() {
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
+        coding.cancel()
         super.onStop()
     }
 
@@ -168,7 +180,6 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         attachmentList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         composerArea.addView(attachmentList)
-        // A single compact composer in both Chat and Work. Attachment actions stay behind +.
         val entry = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -214,6 +225,7 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun showAttachmentMenu(anchor: View) {
+        if (workTab) return
         PopupMenu(this, anchor).apply {
             menu.add(0, 1, 0, "Photos")
             menu.add(0, 2, 1, "Files")
@@ -240,23 +252,24 @@ class WorkspaceActivity : AppCompatActivity() {
         projectLabel.text = current?.let(::chatTitle) ?: "Workspace · New chat"
         chatTab.setTextColor(if (workTab) Color.GRAY else Color.rgb(168, 255, 178))
         workTabButton.setTextColor(if (workTab) Color.rgb(168, 255, 178) else Color.GRAY)
-        composerArea.visibility = View.VISIBLE
+        // Work is a read/preview destination. All messaging and approvals stay in Chat.
+        composerArea.visibility = if (workTab) View.GONE else View.VISIBLE
         sendButton.isEnabled = activeRequest == null
         sendButton.alpha = if (activeRequest == null) 1f else .45f
         content.removeAllViews()
-        content.addView(label(statusMessage, 12f))
+        if (!workTab) content.addView(label(statusMessage, 12f))
         if (workTab) renderWork(current) else renderChat(current)
         renderAttachments()
     }
 
     private fun renderChat(current: WorkspaceProject?) {
         if (current == null) {
-            content.addView(label("Ask LYRA anything. Your first message creates a private project automatically.", 16f))
+            content.addView(label("Ask LYRA anything. Greetings stay in a private chat; a coding project starts only when you request one.", 16f))
             return
         }
         val messages = runCatching { conversations.read(current.projectId) }
             .getOrElse {
-                content.addView(label("Conversation storage requires attention. No other project's messages will be shown."))
+                content.addView(label("Conversation storage requires attention. No other chat's messages will be shown."))
                 return
             }
         if (messages.isEmpty()) content.addView(label("What would you like to build or ask about?", 18f))
@@ -268,59 +281,47 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             content.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
         }
+        if (current.type != WorkspaceProjectType.CHAT) {
+            val id = current.projectId
+            val pending = runCatching { WorkspaceScopedEdit.pending(projects, id) }.getOrNull()
+            if (pending != null) addControl("Review edit · Undo / Keep") { coding.reviewPending(id) }
+            else {
+                val saved = runCatching { suggestions.recover(files, tasks, projects, id) }.getOrNull()
+                if (saved is WorkspaceAiSuggestionDraftStore.Recovery.Ready)
+                    addControl("Review saved code change") { coding.reviewSaved(id) }
+                val lastInstruction = messages.lastOrNull { it.role == "user" }?.text.orEmpty()
+                if (lastInstruction.isNotBlank()) addControl("Continue coding request") {
+                    coding.continueRequest(id, lastInstruction)
+                }
+            }
+        }
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
     private fun renderWork(current: WorkspaceProject?) {
-        if (current == null) {
-            content.addView(label("Send a message in Chat to create a project automatically, or create a typed project here."))
-            addControl("Open Chat") { workTab = false; render() }
-            addControl("＋ New Project") { showNewProjectDialog() }
+        if (current == null || current.type == WorkspaceProjectType.CHAT) {
+            content.addView(label("No coding project yet. Ask LYRA to build a website or app in Chat.", 16f))
             return
         }
-        content.addView(label("${current.name} · ${current.type.displayName}\nFiles and approvals are scoped to this project.", 15f))
-        addControl("AI change from latest Chat request") {
-            startActivity(WorkspaceChatProposalActivity.intent(this, current.projectId))
-        }
-        addControl("Task brief & approve scope") {
-            startActivity(WorkspaceTaskActivity.intent(this, current.projectId))
-        }
-        addControl("Existing AI patch & draft restore") {
-            startActivity(WorkspaceStructuredEditActivity.intent(this, current.projectId))
-        }
-        addControl("Safe Edit · Undo / Keep") {
-            startActivity(WorkspaceScopedEditActivity.intent(this, current.projectId))
-        }
-        addControl("Project files & editor") {
+        content.addView(label("${current.name} · ${current.type.displayName}", 16f))
+        addControl("Project Files & Editor") {
             startActivity(WorkspaceEditorActivity.intent(this, current.projectId))
         }
-        if (current.type == WorkspaceProjectType.WEBSITE) addControl("Website preview") {
+        if (current.type == WorkspaceProjectType.WEBSITE) addControl("Preview") {
             startActivity(WorkspacePreviewActivity.intent(this, current.projectId))
+        } else addControl("Preview · Not available for Android builds") {
+            toast("Android build preview is not implemented; no successful build is claimed")
         }
-        runCatching { conversations.read(current.projectId).lastOrNull { it.role == "user" } }
-            .getOrNull()?.let { latest ->
-                content.addView(label("Latest Chat request:\n${latest.text}", 13f).apply {
-                    setTextIsSelectable(true)
-                })
-            }
-        content.addView(label("PROJECT FILES", 12f))
-        runCatching { files.list(current.projectId) }
-            .onSuccess { entries ->
-                if (entries.isEmpty()) content.addView(label("No files yet. Use AI change to add the approved website starter or open the existing editor."))
-                entries.filterNot { it.folder }.take(80).forEach { entry ->
-                    addControl("${entry.path}  ›") {
-                        runCatching {
-                            files.rememberActive(current.projectId, entry.path)
-                            startActivity(WorkspaceEditorActivity.intent(this, current.projectId))
-                        }.onFailure { toast(it.message ?: "File unavailable") }
-                    }
-                }
-            }.onFailure { content.addView(label("File explorer unavailable: ${it.message.orEmpty()}")) }
+        content.addView(label("Coding requests and permission popups are in Chat. The current Safe Edit supports one reviewed source-file change at a time.", 12f))
     }
 
     private fun showMenu() {
-        val available = projects.listProjects()
-        val chats = available.filter { runCatching { conversations.read(it.projectId).isNotEmpty() }.getOrDefault(false) }
+        val all = projects.listProjects()
+        val available = all.filter { project -> project.type != WorkspaceProjectType.CHAT ||
+            runCatching { conversations.read(project.projectId).isNotEmpty() }.getOrDefault(false) }
+        val chats = available.filter {
+            runCatching { conversations.read(it.projectId).isNotEmpty() }.getOrDefault(false)
+        }
         val ids = chats.map { it.projectId }.toSet()
         val pinned = chats.filter { preferences.getBoolean("chat_pinned_${it.projectId}", false) }
             .map { it.projectId }.toSet()
@@ -354,18 +355,31 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun confirmDeleteChat(id: String) {
         val target = projects.getProject(id) ?: return
+        val chatOnly = target.type == WorkspaceProjectType.CHAT
         AlertDialog.Builder(this).setTitle("Delete Chat?")
-            .setMessage("Delete the conversation for ${chatTitle(target)}? This cannot be undone. " +
-                "Project files, task briefs, approvals and Undo/Keep will NOT be deleted.")
+            .setMessage(if (chatOnly) "Delete ${chatTitle(target)}? This private chat has no project source. This cannot be undone."
+                else "Delete the conversation for ${chatTitle(target)}? Project source, task briefs, approvals and Undo/Keep remain intact. This cannot be undone.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
-                runCatching { conversations.deleteChat(id) }
-                    .onSuccess {
-                        preferences.edit().remove("chat_pinned_$id").remove("chat_title_$id").apply()
-                        localDrafts.remove(id)
-                        if (selectedId == id) newChat() else render()
+                if (selectedId == id) coding.cancel()
+                runCatching {
+                    if (chatOnly) {
+                        // Only an actual CHAT manifest may be removed with the conversation. Never delete code.
+                        require(projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
+                            "Chat became a coding project; deletion cancelled"
+                        }
+                        require(files.list(id).isEmpty() && tasks.get(id) == null &&
+                            WorkspaceScopedEdit.pending(projects, id) == null) {
+                            "This chat has project work. Delete Chat only; keep the project."
+                        }
                     }
-                    .onFailure { toast(it.message ?: "Chat could not be deleted") }
+                    conversations.deleteChat(id)
+                    if (chatOnly) check(projects.deleteProject(id)) { "Chat-only metadata could not be removed" }
+                }.onSuccess {
+                    preferences.edit().remove("chat_pinned_$id").remove("chat_title_$id").apply()
+                    localDrafts.remove(id)
+                    if (selectedId == id) newChat() else render()
+                }.onFailure { toast(it.message ?: "Chat could not be deleted") }
             }.show()
     }
 
@@ -374,6 +388,7 @@ class WorkspaceActivity : AppCompatActivity() {
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
+        coding.cancel()
         selectedId = null
         workTab = false
         attachments.clear()
@@ -399,14 +414,16 @@ class WorkspaceActivity : AppCompatActivity() {
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
+        coding.cancel()
         selectedId = id
         projects.markOpened(id)
         attachments.clear()
         composer.setText(localDrafts[id].orEmpty())
-        statusMessage = "${projects.getProject(id)?.name} selected. Other project history remains separate."
+        statusMessage = "${projects.getProject(id)?.name} selected. Other chat history remains separate."
         render()
     }
 
+    /** Existing typed-project dialog remains internal for compatibility; Chat starts projects naturally. */
     private fun showNewProjectDialog() {
         val view = layoutInflater.inflate(R.layout.dialog_new_workspace_project, null)
         val name = view.findViewById<EditText>(R.id.projectNameInput)
@@ -429,7 +446,7 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }
 
-    /** The voice-only credential is never considered for Workspace routing. No silent fallback. */
+    /** Gemini remains voice-only; no silent paid or model fallback for Workspace. */
     private fun selectedProvider(): WorkspaceChatGateway.Provider? =
         if (keys.get(ApiKeyStore.OPENROUTER).isNotBlank())
             WorkspaceChatGateway.Provider.OPENROUTER_FREE else null
@@ -440,6 +457,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun addAttachment(uri: Uri, photo: Boolean) {
         if (selectedId == null) { toast("Send a first message before attaching files"); return }
+        if (workTab) { toast("Attachments belong in Chat"); return }
         if (attachments.size >= 3) { toast("Maximum three local attachments"); return }
         if (uri.scheme != "content") { toast("Only Android document-provider files are accepted"); return }
         val item = runCatching {
@@ -488,7 +506,6 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }
 
-    /** Works on API 26 too; never allocates more than the authorized limit plus one byte. */
     private fun InputStream.readBounded(max: Int): ByteArray {
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(4_096)
@@ -513,31 +530,53 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun sendMessage() {
-        if (activeRequest != null) { toast("One request already in progress"); return }
+        if (workTab) return
+        if (activeRequest != null) { toast("One chat reply is already in progress"); return }
         val text = composer.text.toString().trim()
         if (text.isEmpty()) { toast("Write a message first"); return }
+        val intent = WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
-            // Local creation is not consent to share the prompt, attachments or project source externally.
+            // CHAT is never a website: greetings produce no coding project or source files.
             val title = text.lineSequence().firstOrNull().orEmpty()
                 .replace(Regex("\\s+"), " ").trim().take(72).trim().ifBlank { "New chat" }
-            val created = runCatching { projects.createProject(title, WorkspaceProjectType.WEBSITE) }
+            val created = runCatching { projects.createProject(title, intent ?: WorkspaceProjectType.CHAT) }
                 .getOrElse { toast(it.message ?: "Cannot start chat"); return }
             selectedId = created.projectId
         }
         val id = selectedId ?: return
+        val current = projects.getProject(id) ?: return
+        if (intent != null && current.type != WorkspaceProjectType.CHAT && current.type != intent) {
+            toast("This is a different project type. Start a New Chat for that request.")
+            return
+        }
         val picked = attachments.toList()
         val stored = runCatching { conversations.append(id, "user", text) }
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
         composer.text.clear()
         localDrafts.remove(id)
         attachments.clear()
+        if (intent != null && current.type == WorkspaceProjectType.CHAT) {
+            runCatching { projects.promoteChat(id, text.take(72), intent) }
+                .onFailure { statusMessage = "Request saved, but project creation failed: ${it.message}"; render(); return }
+        }
+        val codingRequest = intent != null ||
+            (projects.getProject(id)?.type != WorkspaceProjectType.CHAT &&
+                WorkspaceChatIntent.isCodingFollowUp(text))
+        if (codingRequest) {
+            if (picked.isNotEmpty()) {
+                statusMessage = "Coding request saved. Attachments were not sent to a coding provider; review them separately in Chat."
+            } else statusMessage = "Coding request saved. Review task and source approvals in Chat; no website or app completion is claimed."
+            render()
+            coding.continueRequest(id, text)
+            return
+        }
         val provider = runCatching { selectedProvider() }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
         if (provider == null) {
             statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
             render()
             AlertDialog.Builder(this).setTitle("No Workspace provider key")
-                .setMessage("Add an OpenRouter key in API & Cloud Settings. No provider will be contacted without consent.")
+                .setMessage("Add an OpenRouter key in API & Cloud Settings. Gemini remains Voice-only. No provider will be contacted without consent.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("API settings") { _, _ ->
                     startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
@@ -560,7 +599,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun requestReply(id: String, messageId: String, provider: WorkspaceChatGateway.Provider,
                              picked: List<Attachment>) {
-        if (selectedId != id || activeRequest != null) return
+        if (selectedId != id || activeRequest != null || workTab) return
         val history = runCatching { conversations.read(id) }
             .getOrElse { toast("Conversation unavailable"); return }
         if (history.lastOrNull()?.id != messageId) { toast("Conversation changed; request cancelled"); return }
@@ -605,7 +644,7 @@ class WorkspaceActivity : AppCompatActivity() {
             activeRequest = null
             result.onSuccess { reply ->
                 runCatching { conversations.append(id, "assistant", reply) }
-                    .onSuccess { statusMessage = "Response saved. Review proposals in Work; writing requires separate approval." }
+                    .onSuccess { statusMessage = "Response saved. Coding changes require a separate Chat popup approval." }
                     .onFailure { statusMessage = "Response could not be saved; no source changed." }
             }.onFailure { statusMessage = it.message ?: "Provider failed; no file changed." }
             render()
