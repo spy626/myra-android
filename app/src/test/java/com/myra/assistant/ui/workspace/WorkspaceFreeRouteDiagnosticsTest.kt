@@ -26,8 +26,8 @@ class WorkspaceFreeRouteDiagnosticsTest {
         assertTrue(failure.message.orEmpty().contains("HTTP 429"))
         assertTrue(failure.message.orEmpty().contains("rate-limited"))
         assertTrue(failure.message.orEmpty().contains("17 seconds"))
+        assertTrue(failure.message.orEmpty().contains("does not prove your daily quota"))
         assertFalse(failure.message.orEmpty().contains("SECRET"))
-        assertFalse(failure.message.orEmpty().contains("daily quota is exhausted."))
     }
 
     @Test fun http408IsAnUpstreamTimeoutNotRateLimit() {
