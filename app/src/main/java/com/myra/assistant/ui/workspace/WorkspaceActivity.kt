@@ -327,6 +327,132 @@ class WorkspaceActivity : AppCompatActivity() {
             .onFailure { toast("Could not copy message") }
     }
 
+    /** Only LYRA's replies display persistent icons. User actions appear on long press. */
+    private fun messageIcon(resource: Int, description: String, action: () -> Unit): ImageButton =
+        ImageButton(this).apply {
+            setImageResource(resource)
+            background = rounded(Color.TRANSPARENT, 18)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(9), dp(9), dp(9), dp(9))
+            contentDescription = description
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { action() }
+        }
+
+    private fun showUserMessageMenu(anchor: View, id: String, message: WorkspaceConversationStore.Message) {
+        PopupMenu(this, anchor).apply {
+            menu.add(0, 1, 0, "Copy")
+            menu.add(0, 2, 1, "Edit message")
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    1 -> copyMessage(message.text)
+                    2 -> editUserMessage(id, message)
+                }
+                true
+            }
+            show()
+        }
+    }
+
+    private fun editUserMessage(id: String, message: WorkspaceConversationStore.Message) {
+        if (selectedId != id || workTab || activeRequest != null) {
+            toast("Wait for the current request before editing")
+            return
+        }
+        // Editing an approved coding instruction cannot silently undo a task, source or Safe Edit.
+        if (projects.getProject(id)?.type != WorkspaceProjectType.CHAT) {
+            toast("For coding projects, send a new instruction in Chat; existing approvals stay intact")
+            return
+        }
+        val history = runCatching { conversations.read(id) }
+            .getOrElse { toast("Conversation unavailable"); return }
+        val index = history.indexOfLast { it.role == "user" }
+        if (index < 0 || history[index].id != message.id ||
+            (index != history.lastIndex && (index != history.lastIndex - 1 || history.last().role != "assistant"))) {
+            toast("Only the newest user message can be edited without changing later messages")
+            return
+        }
+        val input = EditText(this).apply {
+            setText(message.text)
+            setSelection(text.length)
+            minLines = 2
+            maxLines = 6
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            filters = arrayOf(InputFilter.LengthFilter(4_000))
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+        }
+        AlertDialog.Builder(this).setTitle("Edit message")
+            .setMessage("Saving an edit replaces this latest message and removes only its previous reply. Nothing is sent until you approve a new provider request.")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save edit") { _, _ ->
+                val revisedText = input.text.toString().trim()
+                if (revisedText.isBlank() || revisedText.length > 4_000) {
+                    toast("Message must contain 1–4000 characters")
+                } else if (WorkspaceChatIntent.requestedProjectType(revisedText) != null) {
+                    toast("Send a new coding request in Chat instead of editing a private message")
+                } else if (selectedId != id || activeRequest != null ||
+                    projects.getProject(id)?.type != WorkspaceProjectType.CHAT) {
+                    toast("Conversation changed; edit cancelled")
+                } else {
+                    runCatching { conversations.reviseNewestUser(id, message.id, revisedText) }
+                        .onSuccess { revised ->
+                            statusMessage = "Edited message saved locally. No provider contacted."
+                            render()
+                            confirmEditedSend(id, revised.id)
+                        }.onFailure { toast(it.message ?: "Edit could not be saved") }
+                }
+            }.show()
+    }
+
+    private fun confirmEditedSend(id: String, messageId: String) {
+        val provider = runCatching { selectedProvider() }
+            .getOrElse { toast("Secure provider key storage unavailable"); return }
+        if (provider == null) {
+            toast("Edited message saved locally. Add a free OpenRouter key to request a reply")
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Send edited message to OpenRouter?")
+            .setMessage("Send up to eight recent messages in this chat using the configured free-model route. No attachments or project source are included. Free capacity is not guaranteed; no paid fallback. Your edit remains local if you cancel.")
+            .setNegativeButton("Keep local", null)
+            .setPositiveButton("Send once") { _, _ -> requestReply(id, messageId, provider, emptyList()) }
+            .show()
+    }
+
+    private fun retryAssistant(id: String, assistantId: String) {
+        if (selectedId != id || workTab || activeRequest != null) {
+            toast("Wait for the current request before retrying")
+            return
+        }
+        // Coding replies may be coupled to approved file operations; never regenerate them here.
+        if (projects.getProject(id)?.type != WorkspaceProjectType.CHAT) {
+            toast("Coding changes must use the existing review flow in Chat")
+            return
+        }
+        val history = runCatching { conversations.read(id) }
+            .getOrElse { toast("Conversation unavailable"); return }
+        val last = history.lastOrNull()
+        val user = history.getOrNull(history.lastIndex - 1)
+        if (last?.role != "assistant" || last.id != assistantId || user?.role != "user") {
+            toast("Retry is available for the latest LYRA reply only")
+            return
+        }
+        val provider = runCatching { selectedProvider() }
+            .getOrElse { toast("Secure provider key storage unavailable"); return }
+        if (provider == null) {
+            toast("Add a free OpenRouter key in API & Cloud Settings to retry")
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Retry LYRA reply?")
+            .setMessage("Send up to eight recent messages to OpenRouter's free-model route again. The existing reply stays until the new response succeeds. Previous attachments cannot be resent automatically. No project source or paid fallback. Nothing is sent without your approval.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Retry once") { _, _ ->
+                requestReply(id, user.id, provider, emptyList(), assistantId)
+            }.show()
+    }
+
     private fun renderChat(current: WorkspaceProject?) {
         if (current == null) return
         val messages = runCatching { conversations.read(current.projectId) }
@@ -343,26 +469,32 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             val bubble = label(message.text, 15f).apply {
                 maxWidth = resources.displayMetrics.widthPixels - dp(72)
-                setTextIsSelectable(true)
+                setTextIsSelectable(!mine)
                 setPadding(dp(14), dp(10), dp(14), dp(10))
-                if (mine) background = rounded(Color.rgb(28, 46, 37), 18)
+                if (mine) {
+                    background = rounded(Color.rgb(28, 46, 37), 18)
+                    isLongClickable = true
+                    setOnLongClickListener {
+                        showUserMessageMenu(this, current.projectId, message)
+                        true
+                    }
+                }
             }
             line.addView(bubble, LinearLayout.LayoutParams(-2, -2))
             item.addView(line, LinearLayout.LayoutParams(-1, -2))
-            val actionRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = if (mine) Gravity.END else Gravity.START
+            if (!mine) {
+                val actionRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.START
+                }
+                actionRow.addView(messageIcon(R.drawable.ic_workspace_copy, "Copy LYRA reply") {
+                    copyMessage(message.text)
+                }, LinearLayout.LayoutParams(dp(40), dp(40)))
+                actionRow.addView(messageIcon(R.drawable.ic_workspace_retry, "Retry LYRA reply") {
+                    retryAssistant(current.projectId, message.id)
+                }, LinearLayout.LayoutParams(dp(40), dp(40)))
+                item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(40)))
             }
-            actionRow.addView(label("Copy", 12f).apply {
-                gravity = Gravity.CENTER
-                setTextColor(Color.rgb(148, 171, 153))
-                setPadding(dp(5), 0, dp(5), 0)
-                contentDescription = "Copy message"
-                isClickable = true
-                isFocusable = true
-                setOnClickListener { copyMessage(message.text) }
-            }, LinearLayout.LayoutParams(dp(52), dp(36)))
-            item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(36)))
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
         }
         if (current.type != WorkspaceProjectType.CHAT) {
@@ -659,20 +791,32 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun requestReply(id: String, messageId: String, provider: WorkspaceChatGateway.Provider,
-                             picked: List<Attachment>) {
+                             picked: List<Attachment>, replacingAssistantId: String? = null) {
         if (selectedId != id || activeRequest != null || workTab) return
         val history = runCatching { conversations.read(id) }
             .getOrElse { toast("Conversation unavailable"); return }
-        if (history.lastOrNull()?.id != messageId) { toast("Conversation changed; request cancelled"); return }
+        val transcript = if (replacingAssistantId == null) history else {
+            if (history.size < 2 || history.last().id != replacingAssistantId ||
+                history.last().role != "assistant" || history[history.lastIndex - 1].id != messageId ||
+                history[history.lastIndex - 1].role != "user") {
+                toast("Conversation changed; retry cancelled")
+                return
+            }
+            history.dropLast(1)
+        }
+        if (transcript.lastOrNull()?.id != messageId || transcript.lastOrNull()?.role != "user") {
+            toast("Conversation changed; request cancelled")
+            return
+        }
         val enriched = runCatching {
             val addition = picked.filterNot { it.mime.startsWith("image/") }
                 .joinToString("\n\n") { "Document ${it.name}:\n${readAttachmentText(it)}" }
-            val last = history.last()
+            val last = transcript.last()
             val expanded = last.text + if (addition.isBlank()) "" else "\n\n$addition"
             require(expanded.length <= WorkspaceConversationStore.MAX_MESSAGE_LENGTH) {
                 "Attachments exceed the private request limit"
             }
-            history.dropLast(1) + last.copy(text = expanded)
+            transcript.dropLast(1) + last.copy(text = expanded)
         }.getOrElse { toast(it.message ?: "Document unavailable"); return }
         val image = picked.firstOrNull { it.mime.startsWith("image/") }?.let { attachment ->
             runCatching {
@@ -692,22 +836,31 @@ class WorkspaceActivity : AppCompatActivity() {
         render()
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
-                Result.failure(IllegalStateException("Connection failed or was cancelled. No retry or paid fallback.")))
+                messageId, replacingAssistantId,
+                Result.failure(IllegalStateException("Connection failed or was cancelled. No automatic retry or paid fallback.")))
             override fun onResponse(call: Call, response: Response) =
-                complete(call, serial, id, runCatching { WorkspaceChatGateway.read(provider, response) })
+                complete(call, serial, id, messageId, replacingAssistantId,
+                    runCatching { WorkspaceChatGateway.read(provider, response) })
         })
     }
 
-    private fun complete(call: Call, serial: Long, id: String, result: Result<String>) {
+    private fun complete(call: Call, serial: Long, id: String, userMessageId: String,
+                         replacingAssistantId: String?, result: Result<String>) {
         runOnUiThread {
             if (isFinishing || isDestroyed || serial != requestGeneration ||
                 activeRequest !== call || selectedId != id) return@runOnUiThread
             activeRequest = null
             result.onSuccess { reply ->
-                runCatching { conversations.append(id, "assistant", reply) }
-                    .onSuccess { statusMessage = "" }
-                    .onFailure { statusMessage = "Response could not be saved; no source changed." }
-            }.onFailure { statusMessage = it.message ?: "Provider failed; no file changed." }
+                runCatching {
+                    if (replacingAssistantId == null) {
+                        require(conversations.read(id).lastOrNull()?.id == userMessageId) {
+                            "Conversation changed; response was not applied"
+                        }
+                        conversations.append(id, "assistant", reply)
+                    } else conversations.replaceNewestAssistant(id, replacingAssistantId, userMessageId, reply)
+                }.onSuccess { statusMessage = "" }
+                    .onFailure { statusMessage = it.message ?: "Response could not be saved; no source changed." }
+            }.onFailure { statusMessage = it.message ?: "Provider failed; original reply preserved." }
             render()
         }
     }
