@@ -7,14 +7,15 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 
-/** One user-authorized, untrusted suggestion; not a second agent or file writer. No retry or paid fallback. */
+/** A bounded free request; no automatic retry or paid fallback and no raw provider error bodies. */
 internal object WorkspaceFreeAiSuggestion {
     const val MODEL = "openrouter/free"
     const val ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-    // A 750-token cap produced finish_reason=length on a real phone. Allow room for the
-    // free router's possible reasoning while still bounding response size and edit literals.
     const val MAX_OUTPUT_TOKENS = 2_048
     private const val MAX_RESPONSE_BYTES = 32_768L
     private const val MAX_SUGGESTION_CHARS = 6_000
@@ -38,7 +39,7 @@ internal object WorkspaceFreeAiSuggestion {
             .toString()
     }
 
-    /** Key is supplied for this one call only: never saved, included in URL/body or logged. */
+    /** Key is only in the Authorization header; never copy it into diagnostics. */
     fun request(key: String, prompt: String): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "Enter a valid session-only OpenRouter API key"
@@ -51,17 +52,35 @@ internal object WorkspaceFreeAiSuggestion {
             .build()
     }
 
-    /** Bound response size; never show error bodies (may echo user source or credentials). */
+    /** Accept only a small integer delay from Retry-After, never arbitrary provider header text. */
+    private fun retryAfterHint(header: String?): String {
+        if (header == null || header.length !in 1..6 || !header.all { it in '0'..'9' }) return ""
+        val seconds = header.toLongOrNull() ?: return ""
+        if (seconds !in 1..86_400) return ""
+        return " Server suggests waiting $seconds seconds."
+    }
+
+    /** An upstream HTTP status is not a phone/network timeout or proof of daily quota exhaustion. */
+    internal fun httpFailure(code: Int, retryAfter: String? = null): String = when (code) {
+        401, 403 -> "OpenRouter returned HTTP $code: key or provider access refused. No paid fallback."
+        402 -> "OpenRouter returned HTTP 402: free route unavailable; payment will NOT be attempted."
+        408 -> "OpenRouter returned HTTP 408: upstream request timed out. Try again later; no paid fallback."
+        429 -> "OpenRouter returned HTTP 429: free route rate-limited. This does not prove your daily quota is exhausted.${retryAfterHint(retryAfter)} No paid fallback."
+        503 -> "OpenRouter returned HTTP 503: service temporarily unavailable. Try later; no paid fallback."
+        else -> "OpenRouter returned HTTP $code: free route refused; no paid fallback."
+    }
+
+    /** Never include exception.message: it could include a URL, provider body or sensitive text. */
+    internal fun networkFailure(error: IOException): String = when (error) {
+        is SocketTimeoutException, is InterruptedIOException ->
+            "Phone/network request timed out (LYRA limit: 35 seconds). No HTTP response was received; no paid fallback."
+        else -> "Phone/network connection failed before a usable response. No HTTP status confirmed; no paid fallback."
+    }
+
+    /** Bound response size; never display, log or parse a failed response body. */
     fun readResponse(response: Response): String {
         response.use {
-            require(it.isSuccessful) {
-                when (it.code) {
-                    401, 403 -> "Free AI key or provider permission refused. No paid fallback."
-                    402 -> "Free AI route unavailable; payment will NOT be attempted."
-                    408, 429 -> "Free AI limit or timeout reached. Try later; no paid fallback."
-                    else -> "Free AI route refused (HTTP ${it.code}); no paid fallback."
-                }
-            }
+            require(it.isSuccessful) { httpFailure(it.code, it.header("Retry-After")) }
             val peek = requireNotNull(it.peekBody(MAX_RESPONSE_BYTES + 1)) {
                 "Free AI response was empty"
             }
@@ -73,7 +92,7 @@ internal object WorkspaceFreeAiSuggestion {
         }
     }
 
-    /** Report a fixed category only. Never surface provider text or accept a partial patch. */
+    /** Report only fixed categories; never expose provider text or accept a partial patch. */
     fun parseResponse(raw: String): String {
         require(raw.length in 1..32_768) { "Free AI response missing or too large; no edit made" }
         val root = runCatching { JSONObject(raw) }
