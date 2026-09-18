@@ -4,10 +4,10 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
@@ -33,10 +33,7 @@ class WorkspaceFreeRouteRetryTest {
             .body("{}".toResponseBody()).build()
 
     private fun request() = Request.Builder().url("https://example.invalid/test")
-        .post("{}".toResponseBody().let { "{}".toByteArray().toResponseBody() }.let {
-            // Request body is deliberately small; no network is reached in these tests.
-            okhttp3.RequestBody.create(null, "{}")
-        }).build()
+        .post("{}".toRequestBody()).build()
 
     @Test fun oneRetryAtMostAndSameRequestForAcceptedServerError() {
         var calls = 0
