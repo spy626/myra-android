@@ -84,7 +84,7 @@ class WorkspaceFreeAiSuggestionTest {
 
     @Test fun httpErrorCannotLeakProviderBodyAndNoAutomaticRetryOrPaidFallback() {
         val request = WorkspaceFreeAiSuggestion.request("key", "harmless test")
-        for ((status, fragment) in listOf(402 to "payment will NOT be attempted", 429 to "limit or timeout")) {
+        for ((status, fragment) in listOf(402 to "payment will NOT be attempted", 429 to "HTTP 429: free route rate-limited")) {
             val response = Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
                 .code(status).message("Provider message may be private")
                 .body("PRIVATE_SOURCE_SHOULD_NOT_APPEAR".toResponseBody("text/plain".toMediaType()))
