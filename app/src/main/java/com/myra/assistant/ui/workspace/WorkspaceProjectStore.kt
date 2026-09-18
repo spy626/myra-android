@@ -24,7 +24,7 @@ class WorkspaceProjectStore(
         require(projectsRoot.mkdirs() || projectsRoot.isDirectory) { "Workspace project root is unavailable" }
     }
 
-    fun createProject(rawName: String, type: WorkspaceProjectType): WorkspaceProject {
+    @Synchronized fun createProject(rawName: String, type: WorkspaceProjectType): WorkspaceProject {
         val name = normalizeProjectName(rawName)
         val projectId = nextProjectId()
         val projectDir = safeProjectDir(projectId)
@@ -59,15 +59,31 @@ class WorkspaceProjectStore(
     fun getProject(projectId: String): WorkspaceProject? =
         runCatching { loadProjectFromDirectory(safeProjectDir(projectId)) }.getOrNull()
 
-    fun markOpened(projectId: String): WorkspaceProject? {
+    @Synchronized fun markOpened(projectId: String): WorkspaceProject? {
         val existing = getProject(projectId) ?: return null
         val opened = existing.copy(lastOpenedAtMs = nowMillis())
         writeManifest(opened)
         return opened
     }
 
+    /** Upgrade a chat's existing identity/history only when a direct coding request is recognized.
+     * Never demote an existing code project or rename/rewrite any source file. */
+    @Synchronized fun promoteChat(projectId: String, rawName: String,
+                                  type: WorkspaceProjectType): WorkspaceProject {
+        require(type == WorkspaceProjectType.WEBSITE || type == WorkspaceProjectType.ANDROID_APP) {
+            "A coding project type is required"
+        }
+        val existing = requireNotNull(getProject(projectId)) { "Chat is unavailable" }
+        require(existing.type == WorkspaceProjectType.CHAT) { "Only chat-only sessions can be promoted" }
+        val updated = existing.copy(name = normalizeProjectName(rawName), type = type,
+            updatedAtMs = maxOf(existing.updatedAtMs, nowMillis()),
+            lastOpenedAtMs = maxOf(existing.lastOpenedAtMs, nowMillis()))
+        writeManifest(updated)
+        return updated
+    }
+
     /** Update the existing manifest; do not create a second editor-session database or index. */
-    fun setActiveFile(projectId: String, path: String?): WorkspaceProject {
+    @Synchronized fun setActiveFile(projectId: String, path: String?): WorkspaceProject {
         val existing = requireNotNull(getProject(projectId)) { "Workspace project is unavailable" }
         if (path != null) require(isSafeRelativeFilePath(path)) { "Invalid active-file path" }
         val updated = existing.copy(activeFilePath = path, updatedAtMs = maxOf(existing.updatedAtMs, nowMillis()))
@@ -75,14 +91,14 @@ class WorkspaceProjectStore(
         return updated
     }
 
-    fun touchProject(projectId: String): WorkspaceProject {
+    @Synchronized fun touchProject(projectId: String): WorkspaceProject {
         val existing = requireNotNull(getProject(projectId)) { "Workspace project is unavailable" }
         val updated = existing.copy(updatedAtMs = maxOf(existing.updatedAtMs, nowMillis()))
         writeManifest(updated)
         return updated
     }
 
-    fun deleteProject(projectId: String): Boolean {
+    @Synchronized fun deleteProject(projectId: String): Boolean {
         val projectDir = runCatching { safeProjectDir(projectId) }.getOrNull() ?: return false
         if (!projectDir.exists() || getProject(projectId) == null) return false
         return deleteTreeSafely(projectDir)
