@@ -65,13 +65,53 @@ class WorkspaceConversationStore(
         return true
     }
 
+    private fun checkedText(text: String): String = text.trim().also {
+        require(it.isNotBlank() && it.length <= MAX_MESSAGE_LENGTH) { "Message must contain 1–6000 characters" }
+    }
+
+    /** Revisions are limited to the newest user turn, protecting later conversation and project work. */
+    @Synchronized fun reviseNewestUser(projectId: String, expectedUserId: String, text: String): Message {
+        val content = checkedText(text)
+        val previous = read(projectId)
+        val lastUser = previous.indexOfLast { it.role == "user" }
+        require(lastUser >= 0 && previous[lastUser].id == expectedUserId) { "Only the newest user message can be edited" }
+        require(lastUser == previous.lastIndex ||
+            (lastUser == previous.lastIndex - 1 && previous.last().role == "assistant")) {
+            "Conversation changed; edit cancelled"
+        }
+        val revised = previous[lastUser].copy(text = content)
+        // The previous answer no longer belongs to this edited prompt. Do not affect other turns.
+        write(projectId, previous.take(lastUser) + revised)
+        return revised
+    }
+
+    /** Keep the original answer on network failure, replacing it only after a verified retry succeeds. */
+    @Synchronized fun replaceNewestAssistant(projectId: String, expectedAssistantId: String,
+                                              expectedUserId: String, text: String): Message {
+        val content = checkedText(text)
+        val previous = read(projectId)
+        require(previous.size >= 2 && previous.last().role == "assistant" &&
+            previous.last().id == expectedAssistantId &&
+            previous[previous.lastIndex - 1].role == "user" &&
+            previous[previous.lastIndex - 1].id == expectedUserId) {
+            "Conversation changed; retried response was not applied"
+        }
+        val revised = previous.last().copy(text = content)
+        write(projectId, previous.dropLast(1) + revised)
+        return revised
+    }
+
     @Synchronized fun append(projectId: String, role: String, text: String): Message {
         require(role == "user" || role == "assistant") { "Invalid conversation role" }
-        val content = text.trim()
-        require(content.isNotBlank() && content.length <= MAX_MESSAGE_LENGTH) { "Message must contain 1–6000 characters" }
+        val content = checkedText(text)
         val previous = read(projectId)
         val message = Message(UUID.randomUUID().toString(), role, content, now())
-        val records = (previous + message).takeLast(MAX_MESSAGES)
+        write(projectId, (previous + message).takeLast(MAX_MESSAGES))
+        return message
+    }
+
+    private fun write(projectId: String, records: List<Message>) {
+        require(records.size <= MAX_MESSAGES) { "Conversation exceeds local limit" }
         val document = JSONObject().put("schemaVersion", 1).put("projectId", projectId)
         val array = JSONArray()
         records.forEach { record ->
@@ -95,6 +135,5 @@ class WorkspaceConversationStore(
         } finally {
             temporary.delete()
         }
-        return message
     }
 }
