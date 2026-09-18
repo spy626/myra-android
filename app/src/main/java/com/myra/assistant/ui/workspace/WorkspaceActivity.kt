@@ -1,5 +1,7 @@
 package com.myra.assistant.ui.workspace
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -15,6 +17,7 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.PopupMenu
@@ -91,7 +94,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun label(value: String, size: Float = 14f) = TextView(this).apply {
         text = value
         textSize = size
-        setTextColor(Color.rgb(235, 235, 235))
+        setTextColor(Color.rgb(223, 245, 227))
         setPadding(dp(12), dp(12), dp(12), dp(12))
     }
     private fun control(value: String, action: () -> Unit) = label(value).apply {
@@ -149,51 +152,52 @@ class WorkspaceActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(2, 6, 9))
         }
-        // One compact row: plain three dots, small segmented Chat/Work, new chat icon.
-        // The navigation drawer itself remains unchanged.
-        val heading = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+        // Independently aligned controls keep Chat / Work centered and fully visible on narrow phones.
+        val heading = FrameLayout(this).apply {
+            minimumHeight = dp(52)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
         }
-        heading.addView(label("⋮", 24f).apply {
+        heading.addView(label("⋮", 23f).apply {
             gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 0)
             contentDescription = "Open Workspace navigation"
             isClickable = true
             isFocusable = true
             setOnClickListener { showMenu() }
-        }, LinearLayout.LayoutParams(dp(44), dp(44)))
-        heading.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
+        }, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.START or Gravity.CENTER_VERTICAL))
         val tabs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = rounded(Color.rgb(39, 39, 39), 24)
+            background = rounded(Color.rgb(18, 28, 24), 24)
             setPadding(dp(3), dp(3), dp(3), dp(3))
         }
         chatTab = label("Chat", 14f).apply {
             gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 0)
             isClickable = true
             isFocusable = true
             setOnClickListener { workTab = false; render() }
         }
         workTabButton = label("Work", 14f).apply {
             gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 0)
             isClickable = true
             isFocusable = true
             setOnClickListener { workTab = true; render() }
         }
-        tabs.addView(chatTab, LinearLayout.LayoutParams(0, dp(36), 1f))
-        tabs.addView(workTabButton, LinearLayout.LayoutParams(0, dp(36), 1f))
-        heading.addView(tabs, LinearLayout.LayoutParams(dp(164), dp(42)))
-        heading.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
+        tabs.addView(chatTab, LinearLayout.LayoutParams(0, dp(34), 1f))
+        tabs.addView(workTabButton, LinearLayout.LayoutParams(0, dp(34), 1f))
+        heading.addView(tabs, FrameLayout.LayoutParams(dp(154), dp(40), Gravity.CENTER))
         heading.addView(ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_menu_edit)
-            imageTintList = ColorStateList.valueOf(Color.WHITE)
-            background = rounded(Color.TRANSPARENT, 22)
+            imageTintList = ColorStateList.valueOf(Color.rgb(223, 245, 227))
+            background = rounded(Color.TRANSPARENT, 20)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(11), dp(11), dp(11), dp(11))
             contentDescription = "New Chat"
             setOnClickListener { newChat() }
-        }, LinearLayout.LayoutParams(dp(44), dp(44)))
-        root.addView(heading)
+        }, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.END or Gravity.CENTER_VERTICAL))
+        root.addView(heading, LinearLayout.LayoutParams(-1, dp(52)))
 
         scroll = ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
         content = LinearLayout(this).apply {
@@ -213,9 +217,9 @@ class WorkspaceActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = dp(52)
             background = GradientDrawable().apply {
-                setColor(Color.rgb(34, 34, 34))
+                setColor(Color.rgb(18, 28, 24))
                 cornerRadius = dp(28).toFloat()
-                setStroke(dp(1), Color.rgb(65, 65, 65))
+                setStroke(dp(1), Color.rgb(72, 101, 79))
             }
         }
         val plusButton = label("+", 27f).apply {
@@ -229,7 +233,7 @@ class WorkspaceActivity : AppCompatActivity() {
         composer = EditText(this).apply {
             hint = "Ask LYRA"
             setTextColor(Color.WHITE)
-            setHintTextColor(Color.rgb(158, 158, 158))
+            setHintTextColor(Color.rgb(148, 171, 153))
             setBackgroundColor(Color.TRANSPARENT)
             textSize = 15f
             minLines = 1
@@ -240,11 +244,10 @@ class WorkspaceActivity : AppCompatActivity() {
             setPadding(dp(2), dp(10), dp(6), dp(10))
         }
         entry.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
-        // Use a real Android send drawable: the old text arrow rendered as broken glyphs on phones.
         sendButton = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_menu_send)
             imageTintList = ColorStateList.valueOf(Color.WHITE)
-            background = rounded(Color.rgb(67, 67, 67), 22)
+            background = rounded(Color.rgb(41, 65, 48), 22)
             scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(11), dp(11), dp(11), dp(11))
             contentDescription = "Send message"
@@ -269,8 +272,8 @@ class WorkspaceActivity : AppCompatActivity() {
         val ready = !workTab && activeRequest == null && composer.text.toString().isNotBlank()
         sendButton.isEnabled = ready
         sendButton.alpha = if (ready) 1f else .5f
-        sendButton.background = rounded(if (ready) Color.rgb(235, 235, 235) else Color.rgb(67, 67, 67), 22)
-        sendButton.imageTintList = ColorStateList.valueOf(if (ready) Color.rgb(20, 20, 20) else Color.WHITE)
+        sendButton.background = rounded(if (ready) Color.rgb(168, 255, 178) else Color.rgb(41, 65, 48), 22)
+        sendButton.imageTintList = ColorStateList.valueOf(if (ready) Color.rgb(20, 30, 22) else Color.WHITE)
     }
 
     private fun showAttachmentMenu(anchor: View) {
@@ -298,24 +301,30 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun render() {
         if (!::root.isInitialized) return
         val current = project()
-        chatTab.background = rounded(if (workTab) Color.TRANSPARENT else Color.rgb(67, 67, 67), 21)
-        workTabButton.background = rounded(if (workTab) Color.rgb(67, 67, 67) else Color.TRANSPARENT, 21)
-        chatTab.setTextColor(if (workTab) Color.LTGRAY else Color.WHITE)
-        workTabButton.setTextColor(if (workTab) Color.WHITE else Color.LTGRAY)
+        chatTab.background = rounded(if (workTab) Color.TRANSPARENT else Color.rgb(41, 65, 48), 21)
+        workTabButton.background = rounded(if (workTab) Color.rgb(41, 65, 48) else Color.TRANSPARENT, 21)
+        chatTab.setTextColor(if (workTab) Color.rgb(148, 171, 153) else Color.rgb(223, 245, 227))
+        workTabButton.setTextColor(if (workTab) Color.rgb(223, 245, 227) else Color.rgb(148, 171, 153))
         // Work is a read/preview destination. All messaging and approvals stay in Chat.
         composerArea.visibility = if (workTab) View.GONE else View.VISIBLE
         updateSendButton()
         content.removeAllViews()
-        // Never show internal routing instructions or a verbose empty-state on a fresh chat.
-        // Errors, waiting states and action results remain visible after a real interaction.
         if (!workTab && statusMessage.isNotBlank()) {
             content.addView(label(statusMessage, 12f).apply {
-                setTextColor(Color.rgb(169, 169, 169))
+                setTextColor(Color.rgb(148, 171, 153))
                 setPadding(dp(8), dp(4), dp(8), dp(12))
             })
         }
         if (workTab) renderWork(current) else renderChat(current)
         renderAttachments()
+    }
+
+    private fun copyMessage(text: String) {
+        runCatching {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("LYRA message", text))
+        }.onSuccess { toast("Message copied") }
+            .onFailure { toast("Could not copy message") }
     }
 
     private fun renderChat(current: WorkspaceProject?) {
@@ -327,6 +336,7 @@ class WorkspaceActivity : AppCompatActivity() {
             }
         messages.forEach { message ->
             val mine = message.role == "user"
+            val item = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             val line = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = if (mine) Gravity.END else Gravity.START
@@ -335,10 +345,25 @@ class WorkspaceActivity : AppCompatActivity() {
                 maxWidth = resources.displayMetrics.widthPixels - dp(72)
                 setTextIsSelectable(true)
                 setPadding(dp(14), dp(10), dp(14), dp(10))
-                if (mine) background = rounded(Color.rgb(42, 42, 42), 18)
+                if (mine) background = rounded(Color.rgb(28, 46, 37), 18)
             }
             line.addView(bubble, LinearLayout.LayoutParams(-2, -2))
-            content.addView(line, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+            item.addView(line, LinearLayout.LayoutParams(-1, -2))
+            val actionRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = if (mine) Gravity.END else Gravity.START
+            }
+            actionRow.addView(ImageButton(this).apply {
+                setImageResource(android.R.drawable.ic_menu_copy)
+                imageTintList = ColorStateList.valueOf(Color.rgb(148, 171, 153))
+                background = rounded(Color.TRANSPARENT, 18)
+                scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+                setPadding(dp(7), dp(7), dp(7), dp(7))
+                contentDescription = "Copy message"
+                setOnClickListener { copyMessage(message.text) }
+            }, LinearLayout.LayoutParams(dp(36), dp(36)))
+            item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(36)))
+            content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
         }
         if (current.type != WorkspaceProjectType.CHAT) {
             val id = current.projectId
@@ -573,7 +598,7 @@ class WorkspaceActivity : AppCompatActivity() {
         if (selectedId == null) {
             // CHAT is never a website: greetings produce no coding project or source files.
             val title = text.lineSequence().firstOrNull().orEmpty()
-                .replace(Regex("\\s+"), " ").trim().take(72).trim().ifBlank { "New chat" }
+                .replace(Regex("\s+"), " ").trim().take(72).trim().ifBlank { "New chat" }
             val created = runCatching { projects.createProject(title, intent ?: WorkspaceProjectType.CHAT) }
                 .getOrElse { toast(it.message ?: "Cannot start chat"); return }
             selectedId = created.projectId
