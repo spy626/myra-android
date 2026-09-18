@@ -14,11 +14,11 @@
         <TextView style="@style/MyraLabel" android:text="AI &amp; CLOUD" />
         <LinearLayout android:id="@+id/apiCloudCard" style="@style/MyraSettingsCard">
             <TextView style="@style/MyraSettingsIcon" android:text="☁" />
-            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="API &amp; Cloud Settings" /><TextView style="@style/MyraSettingsSubtitle" android:text="Gemini, Groq, DeepSeek and Tavily keys" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="API &amp; Cloud Settings" /><TextView style="@style/MyraSettingsSubtitle" android:text="OpenRouter, Groq, DeepSeek and Tavily keys" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
         </LinearLayout>
         <LinearLayout android:id="@+id/voiceAiCard" style="@style/MyraSettingsCard">
             <TextView style="@style/MyraSettingsIcon" android:text="◉" />
-            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Voice &amp; AI Models" /><TextView style="@style/MyraSettingsSubtitle" android:text="Live model, voice and personality" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Voice &amp; AI Models" /><TextView style="@style/MyraSettingsSubtitle" android:text="Gemini key, Live model, voice and personality" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
         </LinearLayout>
         <TextView style="@style/MyraLabel" android:text="PERSONALIZATION" />
         <LinearLayout android:id="@+id/memoryCard" style="@style/MyraSettingsCard">

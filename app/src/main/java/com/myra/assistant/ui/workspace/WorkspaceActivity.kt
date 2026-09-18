@@ -3,6 +3,7 @@ package com.myra.assistant.ui.workspace
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -61,7 +62,6 @@ class WorkspaceActivity : AppCompatActivity() {
     private lateinit var composerArea: LinearLayout
     private lateinit var composer: EditText
     private lateinit var sendButton: TextView
-    private lateinit var providerButton: TextView
     private lateinit var attachmentList: LinearLayout
 
     private val photoPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -163,36 +163,65 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         attachmentList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         composerArea.addView(attachmentList)
-        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        controls.addView(control("Photo") { photoPicker.launch(arrayOf("image/jpeg", "image/png")) },
-            LinearLayout.LayoutParams(dp(74), dp(48)))
-        controls.addView(control("＋ File") {
-            documentPicker.launch(arrayOf("text/plain", "text/html", "text/css", "application/json",
-                "application/javascript", "application/pdf"))
-        }, LinearLayout.LayoutParams(dp(78), dp(48)).apply { marginStart = dp(6) })
-        providerButton = control("Choose provider") { showProviders() }
-        controls.addView(providerButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(6) })
-        composerArea.addView(controls)
-        val entry = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
+        // A single compact composer in both Chat and Work. Attachment actions stay behind +.
+        val entry = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(18, 28, 24))
+                cornerRadius = dp(30).toFloat()
+                setStroke(dp(1), Color.rgb(72, 101, 79))
+            }
+        }
+        val plusButton = label("+", 26f).apply {
+            gravity = Gravity.CENTER
+            contentDescription = "Add photo or file"
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showAttachmentMenu(this) }
+        }
+        entry.addView(plusButton, LinearLayout.LayoutParams(dp(48), dp(52)))
         composer = EditText(this).apply {
-            hint = "Ask anything or describe a website change…"
+            hint = "Ask LYRA…"
             setTextColor(Color.WHITE)
             setHintTextColor(Color.rgb(148, 171, 153))
-            setBackgroundResource(R.drawable.bg_workspace_dialog_input)
+            setBackgroundColor(Color.TRANSPARENT)
             textSize = 15f
             minLines = 1
             maxLines = 5
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                 InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             filters = arrayOf(InputFilter.LengthFilter(4_000))
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setPadding(dp(2), dp(10), dp(6), dp(10))
         }
         entry.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
-        sendButton = control("Send") { sendMessage() }
-        entry.addView(sendButton, LinearLayout.LayoutParams(dp(70), dp(50)).apply { marginStart = dp(6) })
-        composerArea.addView(entry)
+        sendButton = label("↑", 23f).apply {
+            gravity = Gravity.CENTER
+            contentDescription = "Send message"
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { sendMessage() }
+        }
+        entry.addView(sendButton, LinearLayout.LayoutParams(dp(48), dp(52)))
+        composerArea.addView(entry, LinearLayout.LayoutParams(-1, -2))
         root.addView(composerArea)
         setContentView(root)
+    }
+
+    private fun showAttachmentMenu(anchor: View) {
+        PopupMenu(this, anchor).apply {
+            menu.add(0, 1, 0, "Photos")
+            menu.add(0, 2, 1, "Files")
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    1 -> photoPicker.launch(arrayOf("image/jpeg", "image/png"))
+                    2 -> documentPicker.launch(arrayOf("text/plain", "text/html", "text/css",
+                        "application/json", "application/javascript", "application/pdf"))
+                }
+                true
+            }
+            show()
+        }
     }
 
     private fun project() = selectedId?.let(projects::getProject)
@@ -202,13 +231,9 @@ class WorkspaceActivity : AppCompatActivity() {
         projectLabel.text = current?.name ?: "Workspace · No project"
         chatTab.setTextColor(if (workTab) Color.GRAY else Color.rgb(168, 255, 178))
         workTabButton.setTextColor(if (workTab) Color.rgb(168, 255, 178) else Color.GRAY)
-        composerArea.visibility = if (workTab) View.GONE else View.VISIBLE
-        providerButton.text = when (selectedProvider()) {
-            WorkspaceChatGateway.Provider.OPENROUTER_FREE -> "OpenRouter free ▾"
-            WorkspaceChatGateway.Provider.GEMINI_FREE_TIER -> "Gemini · free key ▾"
-            null -> "Choose provider ▾"
-        }
+        composerArea.visibility = View.VISIBLE
         sendButton.isEnabled = activeRequest == null
+        sendButton.alpha = if (activeRequest == null) 1f else .45f
         content.removeAllViews()
         content.addView(label(statusMessage, 12f))
         if (workTab) renderWork(current) else renderChat(current)
@@ -354,43 +379,18 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }
 
-    private fun selectedProvider(): WorkspaceChatGateway.Provider? = when (
-        preferences.getString("workspace_provider", null)
-    ) {
-        "openrouter_free" -> WorkspaceChatGateway.Provider.OPENROUTER_FREE
-        "gemini_free" -> WorkspaceChatGateway.Provider.GEMINI_FREE_TIER
-        else -> null
+    /** Choose only one configured route; never silently switch providers or use a paid fallback. */
+    private fun selectedProvider(): WorkspaceChatGateway.Provider? {
+        val openRouter = keys.get(ApiKeyStore.OPENROUTER)
+        if (openRouter.isNotBlank()) return WorkspaceChatGateway.Provider.OPENROUTER_FREE
+        val gemini = keys.get(ApiKeyStore.GEMINI)
+        if (gemini.isNotBlank()) return WorkspaceChatGateway.Provider.GEMINI_FREE_TIER
+        return null
     }
 
     private fun keyFor(provider: WorkspaceChatGateway.Provider): String =
         keys.get(if (provider == WorkspaceChatGateway.Provider.OPENROUTER_FREE)
             ApiKeyStore.OPENROUTER else ApiKeyStore.GEMINI)
-
-    private fun showProviders() {
-        val configured = runCatching {
-            WorkspaceChatGateway.Provider.values().filter { keyFor(it).isNotBlank() }
-        }.getOrElse { toast("Secure key storage unavailable: ${it.javaClass.simpleName}"); return }
-        if (configured.isEmpty()) {
-            AlertDialog.Builder(this).setTitle("No Workspace provider key")
-                .setMessage("Save a Gemini or OpenRouter key in API & Cloud Settings. Gemini Live voice selection does not configure coding.")
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Open settings") { _, _ ->
-                    startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
-                }.show()
-            return
-        }
-        AlertDialog.Builder(this).setTitle("Choose a configured (not yet tested) provider")
-            .setItems(configured.map {
-                if (it == WorkspaceChatGateway.Provider.OPENROUTER_FREE)
-                    "OpenRouter · $0 free router (quota applies)" else
-                    "Gemini 2.5 Flash · own free-tier account"
-            }.toTypedArray()) { _, index ->
-                preferences.edit().putString("workspace_provider",
-                    if (configured[index] == WorkspaceChatGateway.Provider.OPENROUTER_FREE)
-                        "openrouter_free" else "gemini_free").apply()
-                render()
-            }.setNegativeButton("Cancel", null).show()
-    }
 
     private fun addAttachment(uri: Uri, photo: Boolean) {
         if (selectedId == null) { toast("Select a project before attaching files"); return }
@@ -488,11 +488,17 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.text.clear()
         localDrafts.remove(id)
         attachments.clear()
-        val provider = selectedProvider()
+        val provider = runCatching { selectedProvider() }
+            .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
         if (provider == null) {
-            statusMessage = "Message saved locally. Choose a provider for an AI response."
+            statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
             render()
-            showProviders()
+            AlertDialog.Builder(this).setTitle("No Workspace provider key")
+                .setMessage("Add an OpenRouter key in API & Cloud Settings, or a Gemini key in Voice & AI Models. No provider will be contacted without consent.")
+                .setNegativeButton("Close", null)
+                .setPositiveButton("API settings") { _, _ ->
+                    startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
+                }.show()
             return
         }
         val name = if (provider == WorkspaceChatGateway.Provider.OPENROUTER_FREE)
@@ -500,12 +506,12 @@ class WorkspaceActivity : AppCompatActivity() {
         val warning = if (provider == WorkspaceChatGateway.Provider.GEMINI_FREE_TIER)
             "Only proceed if your Gemini account has free-tier access with billing disabled. " else
             "A free quota or privacy-compatible route may be unavailable. "
+        val selectedDetails = if (picked.isEmpty()) "No attachments selected. " else
+            "Also send: ${picked.joinToString { "${it.name} (${it.mime})" }}. "
         AlertDialog.Builder(this).setTitle("Send to $name?")
             .setMessage("Share up to eight recent messages from ${project()?.name} with $name. " +
-                if (picked.isEmpty()) "No attachments selected. " else
-                    "Also send: ${picked.joinToString { "${it.name} (${it.mime})" }}. " +
-                    "No project source is automatically included. $warning" +
-                    "No paid fallback or automatic provider switch. Cancel keeps the message local.")
+                selectedDetails + "No project source is automatically included. " + warning +
+                "No paid fallback or automatic provider switch. Cancel keeps the message local.")
             .setNegativeButton("Keep local", null)
             .setPositiveButton("Send once") { _, _ -> requestReply(id, stored.id, provider, picked) }
             .show()
