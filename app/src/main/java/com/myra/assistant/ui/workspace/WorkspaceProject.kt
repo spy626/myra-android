@@ -1,11 +1,6 @@
 package com.myra.assistant.ui.workspace
 
-/**
- * Canonical metadata for one Workspace project.
- *
- * This state belongs to Workspace only. It is deliberately independent from
- * LYRA's personal AIRI / Plast-Mem durable-memory truth.
- */
+/** Canonical project metadata; Workspace owns it, independently of personal AIRI memory. */
 data class WorkspaceProject(
     val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
     val projectId: String,
@@ -17,9 +12,7 @@ data class WorkspaceProject(
     val updatedAtMs: Long,
     val lastOpenedAtMs: Long,
 ) {
-    companion object {
-        const val CURRENT_SCHEMA_VERSION = 1
-    }
+    companion object { const val CURRENT_SCHEMA_VERSION = 1 }
 }
 
 enum class WorkspaceProjectType(
@@ -27,16 +20,10 @@ enum class WorkspaceProjectType(
     val displayName: String,
     val subtitle: String,
 ) {
-    WEBSITE(
-        storageValue = "website",
-        displayName = "Website",
-        subtitle = "HTML • CSS • JavaScript",
-    ),
-    ANDROID_APP(
-        storageValue = "android_app",
-        displayName = "Android App",
-        subtitle = "Native Android project",
-    );
+    /** Chat-only container: no website/app is claimed, scaffolded, or shown in Projects. */
+    CHAT("chat", "Chat", "Private conversation"),
+    WEBSITE("website", "Website", "HTML • CSS • JavaScript"),
+    ANDROID_APP("android_app", "Android App", "Native Android project");
 
     companion object {
         fun fromStorage(value: String): WorkspaceProjectType? =
