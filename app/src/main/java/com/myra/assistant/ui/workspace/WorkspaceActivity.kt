@@ -94,7 +94,8 @@ class WorkspaceActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        selectedId = preferences.getString("selected_project", null)
+        // A fresh Workspace launch starts a new, unsent chat. Existing transcripts remain in the drawer.
+        selectedId = savedInstanceState?.getString("workspace_selected_id")
             ?.takeIf { projects.getProject(it) != null }
         workTab = savedInstanceState?.getBoolean("workspace_work_tab") ?: false
         buildUi()
@@ -103,6 +104,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("workspace_work_tab", workTab)
+        outState.putString("workspace_selected_id", selectedId)
         super.onSaveInstanceState(outState)
     }
 
@@ -111,7 +113,6 @@ class WorkspaceActivity : AppCompatActivity() {
         if (::root.isInitialized) {
             if (selectedId != null && projects.getProject(selectedId!!) == null) {
                 selectedId = null
-                preferences.edit().remove("selected_project").apply()
                 attachments.clear()
                 statusMessage = "The selected project is unavailable. Choose another project."
             }
@@ -136,7 +137,6 @@ class WorkspaceActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(4))
         }
-        // Workspace is a root destination: the leading control opens full-height navigation.
         heading.addView(control("⋮") { showMenu() }.apply {
             contentDescription = "Open Workspace navigation"
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -145,6 +145,9 @@ class WorkspaceActivity : AppCompatActivity() {
             setOnClickListener { showMenu() }
         }
         heading.addView(projectLabel, LinearLayout.LayoutParams(0, -2, 1f))
+        heading.addView(control("✎") { newChat() }.apply {
+            contentDescription = "New Chat"
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
         root.addView(heading)
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         chatTab = control("Chat") { workTab = false; render() }
@@ -227,10 +230,14 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun project() = selectedId?.let(projects::getProject)
+    private fun chatTitle(project: WorkspaceProject) =
+        preferences.getString("chat_title_${project.projectId}", null)?.takeIf { it.isNotBlank() }
+            ?: project.name
+
     private fun render() {
         if (!::root.isInitialized) return
         val current = project()
-        projectLabel.text = current?.name ?: "Workspace · No project"
+        projectLabel.text = current?.let(::chatTitle) ?: "Workspace · New chat"
         chatTab.setTextColor(if (workTab) Color.GRAY else Color.rgb(168, 255, 178))
         workTabButton.setTextColor(if (workTab) Color.rgb(168, 255, 178) else Color.GRAY)
         composerArea.visibility = View.VISIBLE
@@ -244,8 +251,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun renderChat(current: WorkspaceProject?) {
         if (current == null) {
-            content.addView(label("Start a conversation or choose New Project from the left menu.", 16f))
-            addControl("＋ New Project") { showNewProjectDialog() }
+            content.addView(label("Ask LYRA anything. Your first message creates a private project automatically.", 16f))
             return
         }
         val messages = runCatching { conversations.read(current.projectId) }
@@ -267,7 +273,8 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun renderWork(current: WorkspaceProject?) {
         if (current == null) {
-            content.addView(label("Create or select a project to open its Work tools."))
+            content.addView(label("Send a message in Chat to create a project automatically, or create a typed project here."))
+            addControl("Open Chat") { workTab = false; render() }
             addControl("＋ New Project") { showNewProjectDialog() }
             return
         }
@@ -312,15 +319,67 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun showMenu() {
+        val available = projects.listProjects()
+        val chats = available.filter { runCatching { conversations.read(it.projectId).isNotEmpty() }.getOrDefault(false) }
+        val ids = chats.map { it.projectId }.toSet()
+        val pinned = chats.filter { preferences.getBoolean("chat_pinned_${it.projectId}", false) }
+            .map { it.projectId }.toSet()
         WorkspaceNavigationDrawer.show(
             activity = this,
-            projects = projects.listProjects(),
+            projects = available,
+            chatProjectIds = ids,
             selectedProjectId = selectedId,
-            onNewProject = { showNewProjectDialog() },
+            pinnedChatIds = pinned,
+            titleFor = ::chatTitle,
+            onNewChat = { newChat() },
             onPlugins = { showPlugins() },
             onApiSettings = { startActivity(Intent(this, ApiCloudSettingsActivity::class.java)) },
-            onSelectProject = { selectProject(it) }
+            onSelectProject = { selectProject(it) },
+            onTogglePin = { id ->
+                preferences.edit().putBoolean("chat_pinned_$id", id !in pinned).apply()
+            },
+            onRenameChat = { id, name ->
+                val updated = name.trim().replace(Regex("\\s+"), " ")
+                if (projects.getProject(id) == null || updated.isBlank() || updated.length > 80 ||
+                    updated.any(Char::isISOControl)) {
+                    toast("Chat name must contain 1–80 safe characters")
+                } else {
+                    preferences.edit().putString("chat_title_$id", updated).apply()
+                    render()
+                }
+            },
+            onDeleteChat = { id -> confirmDeleteChat(id) }
         )
+    }
+
+    private fun confirmDeleteChat(id: String) {
+        val target = projects.getProject(id) ?: return
+        AlertDialog.Builder(this).setTitle("Delete Chat?")
+            .setMessage("Delete the conversation for ${chatTitle(target)}? This cannot be undone. " +
+                "Project files, task briefs, approvals and Undo/Keep will NOT be deleted.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete") { _, _ ->
+                runCatching { conversations.deleteChat(id) }
+                    .onSuccess {
+                        preferences.edit().remove("chat_pinned_$id").remove("chat_title_$id").apply()
+                        localDrafts.remove(id)
+                        if (selectedId == id) newChat() else render()
+                    }
+                    .onFailure { toast(it.message ?: "Chat could not be deleted") }
+            }.show()
+    }
+
+    private fun newChat() {
+        selectedId?.let { localDrafts[it] = composer.text.toString() }
+        requestGeneration++
+        activeRequest?.cancel()
+        activeRequest = null
+        selectedId = null
+        workTab = false
+        attachments.clear()
+        composer.text.clear()
+        statusMessage = "New chat. Nothing is sent until you approve a provider request."
+        render()
     }
 
     private fun showPlugins() {
@@ -342,7 +401,6 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest = null
         selectedId = id
         projects.markOpened(id)
-        preferences.edit().putString("selected_project", id).apply()
         attachments.clear()
         composer.setText(localDrafts[id].orEmpty())
         statusMessage = "${projects.getProject(id)?.name} selected. Other project history remains separate."
@@ -381,7 +439,7 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun addAttachment(uri: Uri, photo: Boolean) {
-        if (selectedId == null) { toast("Select a project before attaching files"); return }
+        if (selectedId == null) { toast("Send a first message before attaching files"); return }
         if (attachments.size >= 3) { toast("Maximum three local attachments"); return }
         if (uri.scheme != "content") { toast("Only Android document-provider files are accepted"); return }
         val item = runCatching {
@@ -459,15 +517,12 @@ class WorkspaceActivity : AppCompatActivity() {
         val text = composer.text.toString().trim()
         if (text.isEmpty()) { toast("Write a message first"); return }
         if (selectedId == null) {
-            AlertDialog.Builder(this).setTitle("Start a private conversation?")
-                .setMessage("Create a General chat project for this message and its history?")
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Create & continue") { _, _ ->
-                    runCatching { projects.createProject("General chat", WorkspaceProjectType.WEBSITE) }
-                        .onSuccess { selectProject(it.projectId); composer.setText(text); sendMessage() }
-                        .onFailure { toast(it.message ?: "Project creation failed") }
-                }.show()
-            return
+            // Local creation is not consent to share the prompt, attachments or project source externally.
+            val title = text.lineSequence().firstOrNull().orEmpty()
+                .replace(Regex("\\s+"), " ").trim().take(72).trim().ifBlank { "New chat" }
+            val created = runCatching { projects.createProject(title, WorkspaceProjectType.WEBSITE) }
+                .getOrElse { toast(it.message ?: "Cannot start chat"); return }
+            selectedId = created.projectId
         }
         val id = selectedId ?: return
         val picked = attachments.toList()
