@@ -12,10 +12,13 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import java.io.File
+import java.nio.file.Files
 
-/** Workspace-only navigation: chats are conversations, never a permission to delete project files. */
+/** Workspace-only navigation: deleting a chat never authorizes deletion of project files. */
 internal object WorkspaceNavigationDrawer {
     fun show(
         activity: AppCompatActivity,
@@ -33,6 +36,7 @@ internal object WorkspaceNavigationDrawer {
         onDeleteChat: (String) -> Unit
     ) {
         fun dp(value: Int) = (value * activity.resources.displayMetrics.density + .5f).toInt()
+        fun toast(message: String) = Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
         val dialog = Dialog(activity)
         val frame = FrameLayout(activity).apply { setBackgroundColor(Color.TRANSPARENT) }
         frame.addView(View(activity).apply {
@@ -66,14 +70,6 @@ internal object WorkspaceNavigationDrawer {
                 isFocusable = true
                 setOnClickListener { dialog.dismiss(); action() }
             }
-        fun section(title: String) {
-            panel.addView(TextView(activity).apply {
-                text = title
-                textSize = 12f
-                setTextColor(Color.rgb(175, 175, 175))
-                setPadding(dp(16), dp(8), 0, dp(8))
-            })
-        }
         val header = LinearLayout(activity).apply {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
@@ -130,6 +126,66 @@ internal object WorkspaceNavigationDrawer {
                     }
                 }.show()
         }
+
+        // Project deletion is separate from Chat deletion: never infer consent to erase source from Delete Chat.
+        fun showProjectActions(project: WorkspaceProject) {
+            AlertDialog.Builder(activity).setTitle(project.name)
+                .setItems(arrayOf("Delete Project…")) { _, _ ->
+                    val editor = EditText(activity).apply {
+                        hint = "Type project name to confirm"
+                        setSingleLine(true)
+                        setPadding(dp(18), dp(14), dp(18), dp(14))
+                    }
+                    val confirmation = AlertDialog.Builder(activity)
+                        .setTitle("Permanently delete project?")
+                        .setMessage("This deletes '${project.name}', all its source files, task briefs, saved drafts, rollback data and chat history. This CANNOT be undone. Type the exact project name to continue. Delete Chat alone never deletes these files.")
+                        .setView(editor)
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Delete Project", null)
+                        .create()
+                    confirmation.show()
+                    confirmation.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        if (editor.text.toString() != project.name) {
+                            editor.error = "Type the exact project name"
+                            return@setOnClickListener
+                        }
+                        val id = project.projectId
+                        val result = runCatching {
+                            val store = WorkspaceProjectStore(File(activity.filesDir, "workspace/projects"))
+                            require(store.getProject(id)?.name == project.name) { "Project changed; reopen the drawer" }
+                            val root = File(activity.noBackupFilesDir, "workspace-conversations")
+                            require(!Files.isSymbolicLink(root.toPath())) { "Unsafe conversation root" }
+                            val conversationDir = File(root, id)
+                            require(!Files.isSymbolicLink(conversationDir.toPath()) &&
+                                conversationDir.canonicalFile.parentFile == root.canonicalFile) {
+                                "Unsafe conversation directory"
+                            }
+                            val transcript = File(conversationDir, "conversation.json")
+                            require(!Files.isSymbolicLink(transcript.toPath())) { "Unsafe transcript" }
+                            check(store.deleteProject(id)) { "Project could not be deleted" }
+                            // The manifest is gone now, so the normal chat-only deletion API cannot be used.
+                            // Clean up only the exact, previously validated private transcript path.
+                            if (transcript.exists()) check(transcript.isFile && transcript.delete()) {
+                                "Project deleted but conversation cleanup failed"
+                            }
+                            if (conversationDir.isDirectory && conversationDir.listFiles().isNullOrEmpty())
+                                conversationDir.delete()
+                            WorkspaceAiSuggestionDraftStore(File(activity.noBackupFilesDir, "workspace-ai-drafts"))
+                                .discard(id)
+                        }
+                        confirmation.dismiss()
+                        dialog.dismiss()
+                        if (storeProjectGone(activity, id)) {
+                            activity.getSharedPreferences("workspace_ui", android.content.Context.MODE_PRIVATE)
+                                .edit().remove("chat_pinned_$id").remove("chat_title_$id").apply()
+                            if (selectedProjectId == id) onNewChat() else activity.recreate()
+                        }
+                        result.onFailure { toast(it.message ?: "Project deletion failed") }
+                            .onSuccess { toast("Project deleted") }
+                    }
+                }.show()
+        }
+
         fun projectRow(project: WorkspaceProject, chat: Boolean) {
             val row = LinearLayout(activity).apply {
                 gravity = Gravity.CENTER_VERTICAL
@@ -141,14 +197,14 @@ internal object WorkspaceNavigationDrawer {
                 "${if (pinned && chat) "📌   " else if (project.projectId == selectedProjectId) "✓   " else "▢   "}$title",
                 "Open ${if (chat) "chat" else "project"} $title"
             ) { onSelectProject(project.projectId) }
-            if (chat) {
-                entry.isLongClickable = true
-                entry.setOnLongClickListener { showChatActions(project); true }
+            entry.isLongClickable = true
+            entry.setOnLongClickListener {
+                if (chat) showChatActions(project) else showProjectActions(project)
+                true
             }
             row.addView(entry, LinearLayout.LayoutParams(0, dp(55), 1f))
-            if (chat) row.addView(item("⋯", "Options for chat $title") {
-                // The item helper dismisses the drawer; the menu is opened on a new dialog.
-                showChatActions(project)
+            row.addView(item("⋯", "Options for ${if (chat) "chat" else "project"} $title") {
+                if (chat) showChatActions(project) else showProjectActions(project)
             }, LinearLayout.LayoutParams(dp(48), dp(55)))
             projectList.addView(row)
         }
@@ -188,4 +244,7 @@ internal object WorkspaceNavigationDrawer {
         dialog.show()
         dialog.window?.setLayout(-1, -1)
     }
+
+    private fun storeProjectGone(activity: AppCompatActivity, id: String): Boolean =
+        WorkspaceProjectStore(File(activity.filesDir, "workspace/projects")).getProject(id) == null
 }
