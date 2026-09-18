@@ -113,7 +113,6 @@ class WorkspaceActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // A fresh launch starts an unsent chat, never silently reopens the last project.
         selectedId = savedInstanceState?.getString("workspace_selected_id")
             ?.takeIf { projects.getProject(it) != null }
         workTab = savedInstanceState?.getBoolean("workspace_work_tab") ?: false
@@ -152,7 +151,6 @@ class WorkspaceActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(2, 6, 9))
         }
-        // Independently aligned controls keep Chat / Work centered and fully visible on narrow phones.
         val heading = FrameLayout(this).apply {
             minimumHeight = dp(52)
             setPadding(dp(10), dp(4), dp(10), dp(4))
@@ -251,7 +249,7 @@ class WorkspaceActivity : AppCompatActivity() {
             scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(11), dp(11), dp(11), dp(11))
             contentDescription = "Send message"
-            setOnClickListener { sendMessage() }
+            setOnClickListener { if (isBusy()) stopReply() else sendMessage() }
         }
         entry.addView(sendButton, LinearLayout.LayoutParams(dp(42), dp(42)).apply {
             rightMargin = dp(5)
@@ -267,17 +265,33 @@ class WorkspaceActivity : AppCompatActivity() {
         updateSendButton()
     }
 
+    private fun isBusy(): Boolean = activeRequest != null || coding.isRunning
+
+    private fun stopReply() {
+        if (!isBusy()) return
+        // Invalidate before cancellation: late network callbacks must never append or apply code.
+        requestGeneration++
+        activeRequest?.cancel()
+        activeRequest = null
+        coding.cancel()
+        statusMessage = "Stopped. No partial reply is available from this non-streaming provider."
+        render()
+    }
+
     private fun updateSendButton() {
         if (!::sendButton.isInitialized || !::composer.isInitialized) return
-        val ready = !workTab && activeRequest == null && composer.text.toString().isNotBlank()
+        val busy = isBusy()
+        val ready = !workTab && (busy || composer.text.toString().isNotBlank())
         sendButton.isEnabled = ready
         sendButton.alpha = if (ready) 1f else .5f
+        sendButton.setImageResource(if (busy) R.drawable.ic_workspace_stop else android.R.drawable.ic_menu_send)
+        sendButton.contentDescription = if (busy) "Stop LYRA reply" else "Send message"
         sendButton.background = rounded(if (ready) Color.rgb(168, 255, 178) else Color.rgb(41, 65, 48), 22)
         sendButton.imageTintList = ColorStateList.valueOf(if (ready) Color.rgb(20, 30, 22) else Color.WHITE)
     }
 
     private fun showAttachmentMenu(anchor: View) {
-        if (workTab) return
+        if (workTab || isBusy()) return
         PopupMenu(this, anchor).apply {
             menu.add(0, 1, 0, "Photos")
             menu.add(0, 2, 1, "Files")
@@ -305,7 +319,6 @@ class WorkspaceActivity : AppCompatActivity() {
         workTabButton.background = rounded(if (workTab) Color.rgb(41, 65, 48) else Color.TRANSPARENT, 21)
         chatTab.setTextColor(if (workTab) Color.rgb(148, 171, 153) else Color.rgb(223, 245, 227))
         workTabButton.setTextColor(if (workTab) Color.rgb(223, 245, 227) else Color.rgb(148, 171, 153))
-        // Work is a read/preview destination. All messaging and approvals stay in Chat.
         composerArea.visibility = if (workTab) View.GONE else View.VISIBLE
         updateSendButton()
         content.removeAllViews()
@@ -327,7 +340,6 @@ class WorkspaceActivity : AppCompatActivity() {
             .onFailure { toast("Could not copy message") }
     }
 
-    /** Only LYRA's replies display persistent icons. User actions appear on long press. */
     private fun messageIcon(resource: Int, description: String, action: () -> Unit): ImageButton =
         ImageButton(this).apply {
             setImageResource(resource)
@@ -356,13 +368,12 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun editUserMessage(id: String, message: WorkspaceConversationStore.Message) {
-        if (selectedId != id || workTab || activeRequest != null) {
+        if (selectedId != id || workTab || isBusy()) {
             toast("Wait for the current request before editing")
             return
         }
-        // Editing an approved coding instruction cannot silently undo a task, source or Safe Edit.
         if (projects.getProject(id)?.type != WorkspaceProjectType.CHAT) {
-            toast("For coding projects, send a new instruction in Chat; existing approvals stay intact")
+            toast("For coding projects, send a new instruction in Chat; existing edits stay intact")
             return
         }
         val history = runCatching { conversations.read(id) }
@@ -384,7 +395,7 @@ class WorkspaceActivity : AppCompatActivity() {
             setPadding(dp(20), dp(12), dp(20), dp(12))
         }
         AlertDialog.Builder(this).setTitle("Edit message")
-            .setMessage("Saving an edit replaces this latest message and removes only its previous reply. Nothing is sent until you approve a new provider request.")
+            .setMessage("Save and resend this latest message? Its previous reply is removed. No files are changed.")
             .setView(input)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save edit") { _, _ ->
@@ -393,42 +404,39 @@ class WorkspaceActivity : AppCompatActivity() {
                     toast("Message must contain 1–4000 characters")
                 } else if (WorkspaceChatIntent.requestedProjectType(revisedText) != null) {
                     toast("Send a new coding request in Chat instead of editing a private message")
-                } else if (selectedId != id || activeRequest != null ||
+                } else if (selectedId != id || isBusy() ||
                     projects.getProject(id)?.type != WorkspaceProjectType.CHAT) {
                     toast("Conversation changed; edit cancelled")
                 } else {
                     runCatching { conversations.reviseNewestUser(id, message.id, revisedText) }
                         .onSuccess { revised ->
-                            statusMessage = "Edited message saved locally. No provider contacted."
+                            statusMessage = ""
                             render()
-                            confirmEditedSend(id, revised.id)
+                            sendEditedMessage(id, revised.id)
                         }.onFailure { toast(it.message ?: "Edit could not be saved") }
                 }
             }.show()
     }
 
-    private fun confirmEditedSend(id: String, messageId: String) {
+    private fun sendEditedMessage(id: String, messageId: String) {
         val provider = runCatching { selectedProvider() }
-            .getOrElse { toast("Secure provider key storage unavailable"); return }
+            .getOrElse { statusMessage = "Secure provider key storage unavailable. Edit saved locally."; render(); return }
         if (provider == null) {
-            toast("Edited message saved locally. Add a free OpenRouter key to request a reply")
+            statusMessage = "Edit saved locally. Add a free OpenRouter key to request a reply."
+            render()
             return
         }
-        AlertDialog.Builder(this).setTitle("Send edited message to OpenRouter?")
-            .setMessage("Send up to eight recent messages in this chat using the configured free-model route. No attachments or project source are included. Free capacity is not guaranteed; no paid fallback. Your edit remains local if you cancel.")
-            .setNegativeButton("Keep local", null)
-            .setPositiveButton("Send once") { _, _ -> requestReply(id, messageId, provider, emptyList()) }
-            .show()
+        // Saving an edit is the user's new send action; no redundant provider prompt.
+        requestReply(id, messageId, provider, emptyList())
     }
 
     private fun retryAssistant(id: String, assistantId: String) {
-        if (selectedId != id || workTab || activeRequest != null) {
+        if (selectedId != id || workTab || isBusy()) {
             toast("Wait for the current request before retrying")
             return
         }
-        // Coding replies may be coupled to approved file operations; never regenerate them here.
         if (projects.getProject(id)?.type != WorkspaceProjectType.CHAT) {
-            toast("Coding changes must use the existing review flow in Chat")
+            toast("Coding changes must use the existing Safe Edit flow in Chat")
             return
         }
         val history = runCatching { conversations.read(id) }
@@ -445,12 +453,8 @@ class WorkspaceActivity : AppCompatActivity() {
             toast("Add a free OpenRouter key in API & Cloud Settings to retry")
             return
         }
-        AlertDialog.Builder(this).setTitle("Retry LYRA reply?")
-            .setMessage("Send up to eight recent messages to OpenRouter's free-model route again. The existing reply stays until the new response succeeds. Previous attachments cannot be resent automatically. No project source or paid fallback. Nothing is sent without your approval.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Retry once") { _, _ ->
-                requestReply(id, user.id, provider, emptyList(), assistantId)
-            }.show()
+        // Tapping Retry explicitly requests a new response; old reply stays until success.
+        requestReply(id, user.id, provider, emptyList(), assistantId)
     }
 
     private fun renderChat(current: WorkspaceProject?) {
@@ -579,7 +583,6 @@ class WorkspaceActivity : AppCompatActivity() {
                 if (selectedId == id) coding.cancel()
                 runCatching {
                     if (chatOnly) {
-                        // Only an actual CHAT manifest may be removed with the conversation. Never delete code.
                         require(projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
                             "Chat became a coding project; deletion cancelled"
                         }
@@ -649,7 +652,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun addAttachment(uri: Uri, photo: Boolean) {
         if (selectedId == null) { toast("Send a first message before attaching files"); return }
-        if (workTab) { toast("Attachments belong in Chat"); return }
+        if (workTab || isBusy()) { toast("Wait for the current reply before adding files"); return }
         if (attachments.size >= 3) { toast("Maximum three local attachments"); return }
         if (uri.scheme != "content") { toast("Only Android document-provider files are accepted"); return }
         val item = runCatching {
@@ -723,12 +726,11 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun sendMessage() {
         if (workTab) return
-        if (activeRequest != null) { toast("One chat reply is already in progress"); return }
+        if (isBusy()) { stopReply(); return }
         val text = composer.text.toString().trim()
         if (text.isEmpty()) { toast("Write a message first"); return }
         val intent = WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
-            // CHAT is never a website: greetings produce no coding project or source files.
             val title = text.lineSequence().firstOrNull().orEmpty()
                 .replace(Regex("\\s+"), " ").trim().take(72).trim().ifBlank { "New chat" }
             val created = runCatching { projects.createProject(title, intent ?: WorkspaceProjectType.CHAT) }
@@ -756,8 +758,8 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceChatIntent.isCodingFollowUp(text))
         if (codingRequest) {
             if (picked.isNotEmpty()) {
-                statusMessage = "Coding request saved. Attachments were not sent to a coding provider; review them separately in Chat."
-            } else statusMessage = "Coding request saved. Review task and source approvals in Chat; no website or app completion is claimed."
+                statusMessage = "Coding instruction saved. Attachments are not automatically included in project source."
+            } else statusMessage = ""
             render()
             coding.continueRequest(id, text)
             return
@@ -768,31 +770,23 @@ class WorkspaceActivity : AppCompatActivity() {
             statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
             render()
             AlertDialog.Builder(this).setTitle("No Workspace provider key")
-                .setMessage("Add an OpenRouter key in API & Cloud Settings. Gemini remains Voice-only. No provider will be contacted without consent.")
+                .setMessage("Add an OpenRouter key in API & Cloud Settings. Gemini remains Voice-only. No paid fallback is available.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("API settings") { _, _ ->
                     startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
                 }.show()
             return
         }
-        val name = "OpenRouter's $0 free-model router"
-        val warning = "A free quota or privacy-compatible route may be unavailable. "
-        val selectedDetails = if (picked.isEmpty()) "No attachments selected. " else
-            "Also send: ${picked.joinToString { "${it.name} (${it.mime})" }}. "
-        AlertDialog.Builder(this).setTitle("Send to $name?")
-            .setMessage("Share up to eight recent messages from ${project()?.name} with $name. " +
-                selectedDetails + "No project source is automatically included. " + warning +
-                "No paid fallback or automatic provider switch. Cancel keeps the message local.")
-            .setNegativeButton("Keep local", null)
-            .setPositiveButton("Send once") { _, _ -> requestReply(id, stored.id, provider, picked) }
-            .show()
+        // Tapping Send explicitly sends this message, recent bounded chat context and any
+        // attachments the user picked and can remove. No unrelated project files are included.
         statusMessage = ""
         render()
+        requestReply(id, stored.id, provider, picked)
     }
 
     private fun requestReply(id: String, messageId: String, provider: WorkspaceChatGateway.Provider,
                              picked: List<Attachment>, replacingAssistantId: String? = null) {
-        if (selectedId != id || activeRequest != null || workTab) return
+        if (selectedId != id || isBusy() || workTab) return
         val history = runCatching { conversations.read(id) }
             .getOrElse { toast("Conversation unavailable"); return }
         val transcript = if (replacingAssistantId == null) history else {
@@ -817,7 +811,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 "Attachments exceed the private request limit"
             }
             transcript.dropLast(1) + last.copy(text = expanded)
-        }.getOrElse { toast(it.message ?: "Document unavailable"); return }
+        }.getOrElse { statusMessage = it.message ?: "Document unavailable"; render(); return }
         val image = picked.firstOrNull { it.mime.startsWith("image/") }?.let { attachment ->
             runCatching {
                 val bytes = contentResolver.openInputStream(attachment.uri)?.use { it.readBounded(2_000_000) }
@@ -825,14 +819,14 @@ class WorkspaceActivity : AppCompatActivity() {
                 require(bytes.isNotEmpty()) { "Photo is empty" }
                 WorkspaceChatGateway.Image(attachment.mime,
                     android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
-            }.getOrElse { toast(it.message ?: "Photo unavailable"); return }
+            }.getOrElse { statusMessage = it.message ?: "Photo unavailable"; render(); return }
         }
-        val request = runCatching { WorkspaceChatGateway.request(provider, keyFor(provider), enriched, image) }
-            .getOrElse { toast(it.message ?: "Provider unavailable"); return }
+        val outgoing = runCatching { WorkspaceChatGateway.request(provider, keyFor(provider), enriched, image) }
+            .getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
-        val call = WorkspaceChatGateway.client.newCall(request)
+        val call = WorkspaceChatGateway.client.newCall(outgoing)
         activeRequest = call
-        statusMessage = "Requesting one reply from ${provider.name}. No file write authorized."
+        statusMessage = ""
         render()
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
