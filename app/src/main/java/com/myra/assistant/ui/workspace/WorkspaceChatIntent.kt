@@ -2,7 +2,7 @@ package com.myra.assistant.ui.workspace
 
 /** Conservative local intent boundary. Greetings and educational questions never create projects. */
 internal object WorkspaceChatIntent {
-    private val question = Regex("""\b(?:how to|how do|how can|what is|what are|why|kaise|kya hota|tutorial|explain|difference|teach me)\b|कैसे|क्या है""")
+    private val question = Regex("""\b(?:how to|how do|how can|what is|what are|why|kaise|kya hai|kya hota|tutorial|explain|tell me about|show me how|difference|teach me)\b|कैसे|क्या है""")
     private val action = Regex("""\b(?:make|build|create|generate|develop|design|code|implement|banao|bana\s*do|bana\s*ke|banado|banaye|banaiye|बनाओ|बना\s*दो|बनाइए)\b""")
     private val website = Regex("""\b(?:website|web\s*site|web\s*app|webapp|landing\s*page|site)\b|वेबसाइट""")
     private val android = Regex("""\b(?:android\s*app|android\s*application|mobile\s*app|apk)\b|एंड्रॉयड\s*ऐप""")
