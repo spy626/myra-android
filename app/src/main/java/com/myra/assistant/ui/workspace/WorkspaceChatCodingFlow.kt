@@ -114,7 +114,7 @@ internal class WorkspaceChatCodingFlow(
         report("Working on ${prepared.context.path} · Stop ■ to cancel. One-file Safe Edit only.")
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = complete(call, serial, id, prepared,
-                Result.failure(IllegalStateException("Free route failed or was cancelled. No paid fallback.")))
+                Result.failure(IllegalStateException(WorkspaceFreeAiSuggestion.networkFailure(e))))
             override fun onResponse(call: Call, response: Response) = complete(call, serial, id,
                 prepared, runCatching { WorkspaceChatGateway.read(provider, response) })
         })
