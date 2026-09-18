@@ -1,13 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Scoped to WorkspaceActivity; LYRA Voice and other screens keep their existing theme. -->
+    <!-- Only WorkspaceActivity uses this theme. Existing Voice and global settings remain unchanged. -->
     <style name="Theme.Myra.Workspace" parent="Theme.Myra">
         <item name="android:popupMenuStyle">@style/WorkspacePopupMenu</item>
         <item name="popupMenuStyle">@style/WorkspacePopupMenu</item>
+        <item name="alertDialogTheme">@style/WorkspaceAlertDialog</item>
         <item name="android:textColorPrimary">#DFF5E3</item>
     </style>
-    <!-- Both the Photos/Files menu and the user's message long-press menu use PopupMenu. -->
+
+    <!-- Photos/Files and message long-press menus retain the existing Workspace palette. -->
     <style name="WorkspacePopupMenu" parent="Widget.AppCompat.PopupMenu">
         <item name="android:popupBackground">@drawable/bg_workspace_popup</item>
+    </style>
+
+    <!-- AppCompat AlertDialog.Builder(this) uses alertDialogTheme, not popupMenuStyle.
+         Scoped here so edit/retry/source-consent dialogs cannot inherit the red Voice accent. -->
+    <style name="WorkspaceAlertDialog" parent="ThemeOverlay.AppCompat.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/bg_workspace_dialog</item>
+        <item name="android:colorBackground">#14231C</item>
+        <item name="colorBackgroundFloating">#14231C</item>
+        <item name="colorSurface">#14231C</item>
+        <item name="colorOnSurface">#DFF5E3</item>
+        <item name="android:textColorPrimary">#DFF5E3</item>
+        <item name="android:textColorSecondary">#B7C8BD</item>
+        <item name="colorPrimary">#A8F5B2</item>
+        <item name="colorAccent">#A8F5B2</item>
+        <item name="android:colorAccent">#A8F5B2</item>
     </style>
 </resources>
