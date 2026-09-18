@@ -136,13 +136,15 @@ class WorkspaceActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(4))
         }
-        heading.addView(control("‹") { finish() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        // Workspace is a root destination: the leading control opens full-height navigation.
+        heading.addView(control("⋮") { showMenu() }.apply {
+            contentDescription = "Open Workspace navigation"
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
         projectLabel = label("Workspace", 18f).apply {
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setOnClickListener { showMenu() }
         }
         heading.addView(projectLabel, LinearLayout.LayoutParams(0, -2, 1f))
-        heading.addView(control("⋮") { showMenu() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         root.addView(heading)
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         chatTab = control("Chat") { workTab = false; render() }
@@ -242,7 +244,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun renderChat(current: WorkspaceProject?) {
         if (current == null) {
-            content.addView(label("Start a conversation or choose New Project from ⋮.", 16f))
+            content.addView(label("Start a conversation or choose New Project from the left menu.", 16f))
             addControl("＋ New Project") { showNewProjectDialog() }
             return
         }
@@ -310,25 +312,15 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun showMenu() {
-        val popup = PopupMenu(this, projectLabel)
-        popup.menu.add(0, 1, 0, "Plugins")
-        popup.menu.add(0, 2, 1, "New Project")
-        popup.menu.add(0, 3, 2, "API & Cloud Settings")
-        val available = projects.listProjects()
-        available.forEachIndexed { index, item ->
-            popup.menu.add(0, 100 + index, index + 3,
-                "${if (item.projectId == selectedId) "✓ " else ""}${item.name}")
-        }
-        popup.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                1 -> showPlugins()
-                2 -> showNewProjectDialog()
-                3 -> startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
-                else -> available.getOrNull(item.itemId - 100)?.let { selectProject(it.projectId) }
-            }
-            true
-        }
-        popup.show()
+        WorkspaceNavigationDrawer.show(
+            activity = this,
+            projects = projects.listProjects(),
+            selectedProjectId = selectedId,
+            onNewProject = { showNewProjectDialog() },
+            onPlugins = { showPlugins() },
+            onApiSettings = { startActivity(Intent(this, ApiCloudSettingsActivity::class.java)) },
+            onSelectProject = { selectProject(it) }
+        )
     }
 
     private fun showPlugins() {
