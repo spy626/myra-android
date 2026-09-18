@@ -269,7 +269,6 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun stopReply() {
         if (!isBusy()) return
-        // Invalidate before cancellation: late network callbacks must never append or apply code.
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
@@ -426,7 +425,6 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
-        // Saving an edit is the user's new send action; no redundant provider prompt.
         requestReply(id, messageId, provider, emptyList())
     }
 
@@ -453,7 +451,6 @@ class WorkspaceActivity : AppCompatActivity() {
             toast("Add a free OpenRouter key in API & Cloud Settings to retry")
             return
         }
-        // Tapping Retry explicitly requests a new response; old reply stays until success.
         requestReply(id, user.id, provider, emptyList(), assistantId)
     }
 
@@ -777,8 +774,6 @@ class WorkspaceActivity : AppCompatActivity() {
                 }.show()
             return
         }
-        // Tapping Send explicitly sends this message, recent bounded chat context and any
-        // attachments the user picked and can remove. No unrelated project files are included.
         statusMessage = ""
         render()
         requestReply(id, stored.id, provider, picked)
@@ -831,7 +826,7 @@ class WorkspaceActivity : AppCompatActivity() {
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
                 messageId, replacingAssistantId,
-                Result.failure(IllegalStateException("Connection failed or was cancelled. No automatic retry or paid fallback.")))
+                Result.failure(IllegalStateException(WorkspaceFreeAiSuggestion.networkFailure(error))))
             override fun onResponse(call: Call, response: Response) =
                 complete(call, serial, id, messageId, replacingAssistantId,
                     runCatching { WorkspaceChatGateway.read(provider, response) })
