@@ -353,15 +353,15 @@ class WorkspaceActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = if (mine) Gravity.END else Gravity.START
             }
-            actionRow.addView(ImageButton(this).apply {
-                setImageResource(android.R.drawable.ic_menu_copy)
-                imageTintList = ColorStateList.valueOf(Color.rgb(148, 171, 153))
-                background = rounded(Color.TRANSPARENT, 18)
-                scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
-                setPadding(dp(7), dp(7), dp(7), dp(7))
+            actionRow.addView(label("Copy", 12f).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(148, 171, 153))
+                setPadding(dp(5), 0, dp(5), 0)
                 contentDescription = "Copy message"
+                isClickable = true
+                isFocusable = true
                 setOnClickListener { copyMessage(message.text) }
-            }, LinearLayout.LayoutParams(dp(36), dp(36)))
+            }, LinearLayout.LayoutParams(dp(52), dp(36)))
             item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(36)))
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
         }
@@ -598,7 +598,7 @@ class WorkspaceActivity : AppCompatActivity() {
         if (selectedId == null) {
             // CHAT is never a website: greetings produce no coding project or source files.
             val title = text.lineSequence().firstOrNull().orEmpty()
-                .replace(Regex("\s+"), " ").trim().take(72).trim().ifBlank { "New chat" }
+                .replace(Regex("\\s+"), " ").trim().take(72).trim().ifBlank { "New chat" }
             val created = runCatching { projects.createProject(title, intent ?: WorkspaceProjectType.CHAT) }
                 .getOrElse { toast(it.message ?: "Cannot start chat"); return }
             selectedId = created.projectId
