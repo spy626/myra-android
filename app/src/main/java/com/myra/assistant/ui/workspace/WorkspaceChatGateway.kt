@@ -10,13 +10,12 @@ import org.json.JSONObject
 
 /** Workspace text and explicitly selected one-turn images. Never uses the voice-only Gemini key. */
 internal object WorkspaceChatGateway {
-    enum class Provider { OPENROUTER_FREE }
+    enum class Provider { OPENROUTER_FREE, GROQ_FREE }
     data class Image(val mime: String, val base64: String)
-    private const val MAX_REPLY_BYTES = 32_768L
     // One extra try only after specific upstream HTTP rejections. Connection failures and
     // ambiguous timeouts are NOT retried. Retain the existing 35-second total call timeout.
     val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
-        .addInterceptor(WorkspaceMemoryInterceptor()) // read-only, explicit opt-in, off UI thread
+        .addInterceptor(WorkspaceMemoryInterceptor()) // only the approved OpenRouter endpoint
         .addInterceptor(WorkspaceFreeRouteRetry())
         .build()
 
@@ -24,13 +23,14 @@ internal object WorkspaceChatGateway {
     fun request(provider: Provider, key: String, messages: List<WorkspaceConversationStore.Message>,
                 image: Image? = null): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
-            "Set a valid OpenRouter key in API & Cloud Settings"
+            "Set a valid provider key in API & Cloud Settings"
         }
         require(messages.isNotEmpty() && messages.last().role == "user") { "A user message is required" }
         // Previous turns are dropped whole when needed; the latest pasted prompt is never sliced.
         require(WorkspaceLongInputPolicy.requestFits(messages)) {
             "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
+        if (provider == Provider.GROQ_FREE) return WorkspaceGroqFree.request(key, messages, image)
         image?.let {
             require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
             require(it.base64.length in 1..2_700_000 &&
@@ -39,9 +39,8 @@ internal object WorkspaceChatGateway {
             }
         }
         // Inspect earlier user intent locally when needed, but transmit only recent raw turns.
-        val body = when (provider) {
-            Provider.OPENROUTER_FREE -> openRouterBody(messages, image)
-        }.toRequestBody("application/json; charset=utf-8".toMediaType())
+        val body = openRouterBody(messages, image)
+            .toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder()
             .url(WorkspaceFreeAiSuggestion.ENDPOINT)
             .header("Authorization", "Bearer $key")
@@ -101,5 +100,6 @@ internal object WorkspaceChatGateway {
 
     fun read(provider: Provider, response: Response): String = when (provider) {
         Provider.OPENROUTER_FREE -> WorkspaceFreeAiSuggestion.readResponse(response)
+        Provider.GROQ_FREE -> WorkspaceGroqFree.read(response)
     }
 }
