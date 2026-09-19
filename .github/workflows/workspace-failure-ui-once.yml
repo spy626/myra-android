@@ -1,0 +1,248 @@
+name: One-time Workspace failure UI patch
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/workspace-failure-ui-once.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply exact Workspace-only patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = 'agent/myra-phase-1'
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('app/src/main/java/com/myra/assistant/ui/workspace')
+          activity = root / 'WorkspaceActivity.kt'
+          intent = root / 'WorkspaceChatIntent.kt'
+          tests = Path('app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatIntentTest.kt')
+
+          def apply(path, changes):
+              text = path.read_text()
+              for old, new in changes:
+                  if text.count(old) != 1:
+                      raise RuntimeError(f'{path}: expected one matching patch anchor, found {text.count(old)}: {old[:90]!r}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text)
+
+          apply(activity, [
+              ('''    private var statusMessage = ""
+''', '''    private var statusMessage = ""
+    // Bound to the latest saved user turn; never fabricate a second message on Retry.
+    private var codingRetryTarget: Pair<String, String>? = null
+'''),
+              ('''            activeProject = { selectedId }, report = { message ->
+                statusMessage = message
+                if (::root.isInitialized) render()
+            })
+''', '''            activeProject = { selectedId }, report = { message ->
+                statusMessage = message
+                if (::root.isInitialized) {
+                    render()
+                    if (message.startsWith("Free AI reached its output-token limit") ||
+                        message.startsWith("OpenRouter returned HTTP ") ||
+                        message.startsWith("Phone/network ") ||
+                        message.startsWith("Free AI provider returned an error") ||
+                        message.startsWith("Free AI stopped")) presentCodingFailure(message)
+                }
+            })
+'''),
+              ('''    private lateinit var composerArea: LinearLayout
+''', '''    private lateinit var composerArea: LinearLayout
+    private lateinit var statusBanner: TextView
+'''),
+              ('''        attachmentList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        composerArea.addView(attachmentList)
+''', '''        // Kept OUTSIDE the scrolling transcript so failures remain visible above the keyboard.
+        statusBanner = label("", 12f).apply {
+            visibility = View.GONE
+            background = rounded(Color.rgb(20, 37, 28), 12)
+            setTextColor(Color.rgb(222, 241, 224))
+            setPadding(dp(12), dp(9), dp(12), dp(9))
+            maxLines = 4
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            isClickable = true
+            setOnClickListener {
+                AlertDialog.Builder(this@WorkspaceActivity).setTitle("LYRA status")
+                    .setMessage(statusMessage).setPositiveButton("Close", null).show()
+            }
+        }
+        composerArea.addView(statusBanner, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(5)
+        })
+        attachmentList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        composerArea.addView(attachmentList)
+'''),
+              ('''        coding.cancel()
+        statusMessage = "Stopped. No partial reply is available from this non-streaming provider."
+''', '''        coding.cancel()
+        codingRetryTarget = null
+        statusMessage = "Stopped. No partial reply is available from this non-streaming provider."
+'''),
+              ('''        content.removeAllViews()
+        if (!workTab && statusMessage.isNotBlank()) {
+            content.addView(label(statusMessage, 12f).apply {
+                setTextColor(Color.rgb(148, 171, 153))
+                setPadding(dp(8), dp(4), dp(8), dp(12))
+            })
+        }
+        if (workTab) renderWork(current) else renderChat(current)
+''', '''        statusBanner.text = statusMessage
+        statusBanner.visibility = if (!workTab && statusMessage.isNotBlank()) View.VISIBLE else View.GONE
+        content.removeAllViews()
+        if (workTab) renderWork(current) else renderChat(current)
+'''),
+              ('''    private fun retryAssistant(id: String, assistantId: String) {
+''', '''    private fun presentCodingFailure(reason: String) {
+        val target = codingRetryTarget ?: return
+        val id = target.first
+        if (selectedId != id || workTab || isBusy()) return
+        val latest = runCatching { conversations.read(id).lastOrNull() }.getOrNull() ?: return
+        if (latest.role != "user" || latest.id != target.second) return
+        // A retry is never an Apply operation; canonical source/rollback checks run again.
+        if (runCatching { WorkspaceScopedEdit.pending(projects, id) }.getOrNull() != null) return
+        val note = if (reason.contains("output-token limit"))
+            "The free model ran out of reply tokens. An identical retry may fail again; " +
+                "for a large code change, ask for one smaller change at a time."
+        else "The original task and source will be checked again. No paid fallback."
+        AlertDialog.Builder(this).setTitle("LYRA couldn't finish the request")
+            .setMessage("$reason\\n\\n$note")
+            .setNegativeButton("Later", null)
+            .setPositiveButton("Retry once") { _, _ ->
+                if (selectedId == id && !workTab && !isBusy() &&
+                    runCatching { conversations.read(id).lastOrNull()?.id == latest.id }.getOrDefault(false)) {
+                    coding.continueRequest(id, latest.text)
+                }
+            }.show()
+    }
+
+    private fun showChatFailure(id: String, messageId: String,
+                                replacingAssistantId: String?, provider: WorkspaceChatGateway.Provider,
+                                picked: List<Attachment>, reason: String) {
+        if (selectedId != id || workTab || isBusy()) return
+        val history = runCatching { conversations.read(id) }.getOrNull() ?: return
+        val eligible = if (replacingAssistantId == null)
+            history.lastOrNull()?.let { it.role == "user" && it.id == messageId } == true
+        else history.size >= 2 && history.last().role == "assistant" &&
+            history.last().id == replacingAssistantId &&
+            history[history.lastIndex - 1].id == messageId
+        if (!eligible) return
+        AlertDialog.Builder(this).setTitle("LYRA couldn't reply")
+            .setMessage("$reason\\n\\nRetry the same complete message? " +
+                "The same selected attachments will be read again, if any. No paid fallback.")
+            .setNegativeButton("Later", null)
+            .setPositiveButton("Retry once") { _, _ ->
+                if (selectedId == id && !workTab && !isBusy())
+                    requestReply(id, messageId, provider, picked, replacingAssistantId)
+            }.show()
+    }
+
+    private fun retryAssistant(id: String, assistantId: String) {
+'''),
+              ('''        coding.cancel()
+        selectedId = null
+''', '''        coding.cancel()
+        codingRetryTarget = null
+        selectedId = null
+'''),
+              ('''        coding.cancel()
+        selectedId = id
+''', '''        coding.cancel()
+        codingRetryTarget = null
+        selectedId = id
+'''),
+              ('''        if (codingRequest) {
+            if (picked.isNotEmpty()) {
+''', '''        if (codingRequest) {
+            codingRetryTarget = id to stored.id
+            if (picked.isNotEmpty()) {
+'''),
+              ('''            override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
+                messageId, replacingAssistantId,
+                Result.failure(IllegalStateException(WorkspaceFreeAiSuggestion.networkFailure(error))))
+            override fun onResponse(call: Call, response: Response) =
+                complete(call, serial, id, messageId, replacingAssistantId,
+                    runCatching { WorkspaceChatGateway.read(provider, response) })
+''', '''            override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
+                messageId, replacingAssistantId, provider, picked,
+                Result.failure(IllegalStateException(WorkspaceFreeAiSuggestion.networkFailure(error))))
+            override fun onResponse(call: Call, response: Response) =
+                complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
+                    runCatching { WorkspaceChatGateway.read(provider, response) })
+'''),
+              ('''    private fun complete(call: Call, serial: Long, id: String, userMessageId: String,
+                         replacingAssistantId: String?, result: Result<String>) {
+''', '''    private fun complete(call: Call, serial: Long, id: String, userMessageId: String,
+                         replacingAssistantId: String?, provider: WorkspaceChatGateway.Provider,
+                         picked: List<Attachment>, result: Result<String>) {
+'''),
+              ('''            activeRequest = null
+            result.onSuccess { reply ->
+''', '''            activeRequest = null
+            val failure = result.exceptionOrNull()
+            result.onSuccess { reply ->
+'''),
+              ('''            }.onFailure { statusMessage = it.message ?: "Provider failed; original reply preserved." }
+            render()
+        }
+    }
+}
+''', '''            }.onFailure { statusMessage = it.message ?: "Provider failed; original reply preserved." }
+            render()
+            if (failure != null) showChatFailure(id, userMessageId, replacingAssistantId,
+                provider, picked, statusMessage)
+        }
+    }
+}
+''')
+          ])
+          apply(intent, [
+              ('''        return !question.containsMatchIn(text) && followUp.containsMatchIn(text)
+''', '''        // A prompt-writing request is never authority to edit project source.
+        return !promptRequest.containsMatchIn(text) &&
+            !question.containsMatchIn(text) && followUp.containsMatchIn(text)
+''')
+          ])
+          apply(tests, [
+              ('''import org.junit.Assert.assertEquals
+''', '''import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+'''),
+              ('''    @Test fun explicitBuildRequestsAreTyped() {
+''', '''    @Test fun writingADevelopmentPromptDoesNotExecuteProjectEdits() {
+        assertNull(WorkspaceChatIntent.requestedProjectType("Build Android app ka prompt do"))
+        assertFalse(WorkspaceChatIntent.isCodingFollowUp("Add hands-free to my Android app prompt"))
+        assertFalse(WorkspaceChatIntent.isCodingFollowUp("Fix my AI companion development prompt"))
+    }
+
+    @Test fun explicitBuildRequestsAreTyped() {
+''')
+          ])
+          PY
+          git diff --check
+      - name: Verify unit tests and APK before committing
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon
+      - name: Commit only verified Workspace changes (no force push)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatIntent.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatIntentTest.kt
+          git commit -m 'fix(workspace): show failures by composer and offer guarded retry'
+          git push origin HEAD:agent/myra-phase-1
