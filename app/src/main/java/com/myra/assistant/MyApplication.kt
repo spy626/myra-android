@@ -9,6 +9,13 @@ class MyApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        application = this
         VoicePipelineLogger.initialize(this)
+    }
+
+    companion object {
+        @Volatile private var application: MyApplication? = null
+        /** Application context only: never retain a Workspace Activity or voice session. */
+        fun contextOrNull(): Application? = application
     }
 }
