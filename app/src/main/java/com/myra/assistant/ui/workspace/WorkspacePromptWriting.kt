@@ -58,11 +58,18 @@ internal object WorkspacePromptWriting {
         }
     }
 
-    /** Only recognized top-level sections are extracted; unstructured answers stay intact. */
+    /**
+     * A follow-up such as 'isme hands-free add karo' has no word 'prompt'. The provider's
+     * structured PROMPT reply is still the same writing artifact and must stay copyable.
+     * Neither the user's nor provider's stored text is rewritten.
+     */
     fun card(message: String, reply: String): WorkspaceStoryScript.Card? {
-        val mode = kind(message) ?: return null
+        val mode = kind(message)
         val text = reply.trim().replace("\r\n", "\n")
         if (text.isBlank()) return null
+        val structuredRevision = mode == null && WorkspacePromptFollowUp.looksLikeRevision(message) &&
+            WorkspacePromptFollowUp.hasPromptLabel(text)
+        if (mode == null && !structuredRevision) return null
         val matches = section.findAll(text).toList()
         val bodyAt = matches.indexOfFirst {
             it.range.first < 800 && it.groupValues[1].equals("PROMPT", ignoreCase = true)
@@ -70,12 +77,12 @@ internal object WorkspacePromptWriting {
         val titleAt = if (bodyAt > 0) (0 until bodyAt).lastOrNull {
             matches[it].groupValues[1].equals("TITLE", ignoreCase = true)
         } ?: -1 else -1
+        fun content(index: Int, end: Int): String {
+            val found = matches[index]
+            return listOf(found.groupValues[2].trim(), text.substring(found.range.last + 1, end).trim())
+                .filter { it.isNotBlank() }.joinToString("\n").trim()
+        }
         if (titleAt >= 0) {
-            fun content(index: Int, end: Int): String {
-                val found = matches[index]
-                return listOf(found.groupValues[2].trim(), text.substring(found.range.last + 1, end).trim())
-                    .filter { it.isNotBlank() }.joinToString("\n").trim()
-            }
             val title = content(titleAt, matches[bodyAt].range.first)
                 .lineSequence().firstOrNull()?.trim()?.removeSurrounding("**")?.trim()
             val nextAt = matches.indices.firstOrNull { i ->
@@ -93,9 +100,25 @@ internal object WorkspacePromptWriting {
                 return WorkspaceStoryScript.Card(title, body, body, intro, next, promptCard = true)
             }
         }
+        // If a free model supplies PROMPT but omits TITLE, retain its actual prompt body.
+        // Only make this limited recovery for a clearly referential follow-up.
+        if (structuredRevision && bodyAt >= 0) {
+            val nextAt = matches.indices.firstOrNull { i ->
+                i > bodyAt && matches[i].groupValues[1].replace(Regex("\\s+"), " ")
+                    .equals("NEXT STEP", ignoreCase = true)
+            }
+            val body = content(bodyAt, nextAt?.let { matches[it].range.first } ?: text.length)
+            if (body.isNotBlank()) {
+                val intro = text.substring(0, matches[bodyAt].range.first).trim().take(300)
+                val next = nextAt?.let { content(it, text.length).take(500) }
+                return WorkspaceStoryScript.Card("Updated prompt", body, body, intro, next, promptCard = true)
+            }
+        }
         // The model may ignore markers. Never silently replace or delete its actual answer.
-        return WorkspaceStoryScript.Card(
-            if (mode == Kind.BUILD) "Development prompt" else "Personality prompt",
-            text, text, promptCard = true)
+        return mode?.let {
+            WorkspaceStoryScript.Card(
+                if (it == Kind.BUILD) "Development prompt" else "Personality prompt",
+                text, text, promptCard = true)
+        }
     }
 }
