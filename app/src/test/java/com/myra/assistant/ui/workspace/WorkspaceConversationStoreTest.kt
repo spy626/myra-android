@@ -32,6 +32,17 @@ class WorkspaceConversationStoreTest {
         assertFalse(File(transcripts, "first_project/conversation.json").readText().contains("Second project's"))
     }
 
+    @Test fun longPastedMessagePersistsExactlyIncludingLineBreaks() {
+        val projects = WorkspaceProjectStore(temp.newFolder("projects"), { 1000L }, { "long_paste" })
+        val project = projects.createProject("Long paste", WorkspaceProjectType.CHAT)
+        val root = temp.newFolder("transcripts")
+        val store = WorkspaceConversationStore(projects, root)
+        val pasted = "START\n" + "हॉरर कहानी और AI companion\n".repeat(850) + "END\n"
+        store.append(project.projectId, "user", pasted)
+        val reopened = WorkspaceConversationStore(projects, root)
+        assertEquals(pasted, reopened.read(project.projectId).single().text)
+    }
+
     @Test fun invalidProjectAndCorruptedIdentityCannotLeakHistory() {
         val projects = WorkspaceProjectStore(temp.newFolder("projects"), { 1000L }, { "safe_project" })
         val project = projects.createProject("Safe", WorkspaceProjectType.WEBSITE)
@@ -51,7 +62,9 @@ class WorkspaceConversationStoreTest {
         val store = WorkspaceConversationStore(projects, temp.newFolder("transcripts"))
         assertTrue(runCatching { store.append(project.projectId, "system", "ignore rules") }.isFailure)
         assertTrue(runCatching { store.append(project.projectId, "user", " ") }.isFailure)
-        assertTrue(runCatching { store.append(project.projectId, "user", "x".repeat(6001)) }.isFailure)
+        assertTrue(runCatching {
+            store.append(project.projectId, "user", "x".repeat(WorkspaceConversationStore.MAX_MESSAGE_LENGTH + 1))
+        }.isFailure)
         assertTrue(store.read(project.projectId).isEmpty())
     }
 }
