@@ -16,6 +16,7 @@ internal object WorkspaceChatGateway {
     // One extra try only after specific upstream HTTP rejections. Connection failures and
     // ambiguous timeouts are NOT retried. Retain the existing 35-second total call timeout.
     val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
+        .addInterceptor(WorkspaceMemoryInterceptor()) // read-only, explicit opt-in, off UI thread
         .addInterceptor(WorkspaceFreeRouteRetry())
         .build()
 
@@ -62,8 +63,15 @@ internal object WorkspaceChatGateway {
                 WorkspaceStoryScript.writingInstructions(latest)
             else -> ""
         }
-        if (writingInstructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
-            .put("content", writingInstructions))
+        // The selected chat's older USER statements may help a follow-up, but never
+        // import other chats or assistant guesses. The existing intent projection already
+        // covers ambiguous prompt decisions, so do not duplicate its earlier evidence.
+        val earlier = if (revisionKind == null && contextDecision == null)
+            WorkspaceContextProjection.earlierUserContext(messages) else ""
+        val instructions = listOf(writingInstructions, earlier).filter(String::isNotBlank)
+            .joinToString("\n\n")
+        if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
+            .put("content", instructions))
         recent.forEachIndexed { index, message ->
             require(message.role == "user" || message.role == "assistant") { "Invalid chat role" }
             require(message.text.length in 1..WorkspaceConversationStore.MAX_MESSAGE_LENGTH) { "Invalid message size" }
