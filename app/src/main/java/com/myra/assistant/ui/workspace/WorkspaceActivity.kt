@@ -68,7 +68,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private var codingRetryTarget: Pair<String, String>? = null
     private val coding by lazy {
         WorkspaceChatCodingFlow(this, projects, files, tasks, suggestions, keys,
-            activeProject = { selectedId }, report = { message ->
+            activeProject = { selectedId },
+            onCompleted = { id, userId, summary ->
+                conversations.completeCodingTurn(id, userId, summary)
+            }, report = { message ->
                 statusMessage = message
                 if (::root.isInitialized) {
                     render()
@@ -462,10 +465,14 @@ class WorkspaceActivity : AppCompatActivity() {
         val target = codingRetryTarget ?: return
         val id = target.first
         if (selectedId != id || workTab || isBusy()) return
-        val latest = runCatching { conversations.read(id).lastOrNull() }.getOrNull() ?: return
-        if (latest.role != "user" || latest.id != target.second) return
+        val history = runCatching { conversations.read(id) }.getOrNull() ?: return
+        val latest = history.lastOrNull() ?: return
+        val original = if (latest.role == "user") latest else
+            history.getOrNull(history.lastIndex - 1)?.takeIf { latest.role == "assistant" }
+        if (original == null || original.role != "user" || original.id != target.second) return
         // Never retry into a pending edit; canonical source freshness checks still apply.
-        if (runCatching { WorkspaceScopedEdit.pending(projects, id) }.getOrNull() != null) return
+        if (runCatching { WorkspaceScopedEdit.pending(projects, id) }.getOrNull() != null ||
+            runCatching { WorkspaceWebsiteGeneration.pending(projects, id) }.getOrNull() != null) return
         val note = if (reason.contains("output-token limit"))
             "The free model ran out of reply tokens. The same retry may fail again; " +
                 "for larger edits, ask for one smaller change at a time."
@@ -475,8 +482,15 @@ class WorkspaceActivity : AppCompatActivity() {
             .setNegativeButton("Later", null)
             .setPositiveButton("Retry once") { _, _ ->
                 if (selectedId == id && !workTab && !isBusy() &&
-                    runCatching { conversations.read(id).lastOrNull()?.id == latest.id }.getOrDefault(false))
-                    coding.continueRequest(id, latest.text)
+                    runCatching { conversations.read(id).lastOrNull()?.id == latest.id }.getOrDefault(false)) {
+                    // Explicit retry creates a new user turn and keeps the previous failure visible.
+                    runCatching { conversations.append(id, "user", original.text) }
+                        .onSuccess { retry ->
+                            codingRetryTarget = id to retry.id
+                            render()
+                            coding.continueRequest(id, retry.text, retry.id)
+                        }.onFailure { toast("Could not save retry; no request was sent") }
+                }
             }.show()
     }
 
@@ -925,7 +939,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 statusMessage = "Coding instruction saved. Attachments are not automatically included in project source."
             } else statusMessage = ""
             render()
-            coding.continueRequest(id, text)
+            coding.continueRequest(id, text, stored.id)
             return
         }
         val provider = runCatching { selectedProvider(picked.isNotEmpty()) }

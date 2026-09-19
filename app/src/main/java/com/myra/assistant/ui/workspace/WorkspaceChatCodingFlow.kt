@@ -21,25 +21,39 @@ internal class WorkspaceChatCodingFlow(
     private val keys: ApiKeyStore,
     private val activeProject: () -> String?,
     private val report: (String) -> Unit,
+    private val onCompleted: (String, String, String) -> Unit,
 ) {
     private var generation = 0L
     private var request: Call? = null
+    private var activeTurn: Pair<String, String>? = null
     val isRunning: Boolean get() = request != null
 
     fun cancel() {
         generation++
         request?.cancel()
         request = null
+        activeTurn = null
     }
 
-    private fun error(message: String) = report(message)
+    /** Source writes are finished before the result enters the private transcript. */
+    private fun terminal(message: String, status: String = message) {
+        val turn = activeTurn
+        activeTurn = null
+        val result = if (turn == null) Result.success(Unit)
+            else runCatching { onCompleted(turn.first, turn.second, message) }
+        if (result.isFailure) report("Coding result could not be saved in Chat: " +
+            "${result.exceptionOrNull()?.message}. Check Work files before retrying.")
+        else report(status)
+    }
+    private fun error(message: String) = terminal(WorkspaceCodingResult.failure(message), message)
     private fun current(id: String) = activeProject() == id && projects.getProject(id) != null
 
-    fun continueRequest(id: String, instruction: String) {
+    fun continueRequest(id: String, instruction: String, userMessageId: String? = null) {
         if (!current(id)) return
         val project = projects.getProject(id) ?: return
         if (project.type == WorkspaceProjectType.CHAT) return
         if (isRunning) { report("A coding request is already running."); return }
+        activeTurn = userMessageId?.let { id to it }
         if (project.type == WorkspaceProjectType.WEBSITE) {
             continueWebsite(id, instruction)
             return
@@ -130,8 +144,7 @@ internal class WorkspaceChatCodingFlow(
                 runCatching {
                     WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, generated)
                 }.onSuccess {
-                    report("Saved index.html, style.css and script.js. Preview shows the saved project; " +
-                        "Undo is available in Chat. Visual correctness still needs your check.")
+                    terminal(WorkspaceCodingResult.websiteSuccess(snapshot.original, generated))
                     activity.startActivity(WorkspacePreviewActivity.intent(activity, id))
                 }.onFailure {
                     error("Website files were not fully saved: ${it.message}. " +
@@ -214,7 +227,8 @@ internal class WorkspaceChatCodingFlow(
                     WorkspaceScopedEdit.apply(files, tasks, projects, draft.context, draft.proposal)
                 }.onSuccess {
                     runCatching { suggestions.discard(id) }
-                    report("One scoped file changed with protected rollback. Check Preview and use Undo / Keep in Chat. A complete website or verified build is not claimed.")
+                    terminal("Updated ${prepared.context.path} in your existing project. " +
+                        "Review the file and use Undo / Keep in Chat. Preview/build is not verified.")
                 }.onFailure { error("AI suggestion was not applied: ${it.message}. Check saved proposal and rollback in Chat.") }
             }.onFailure { error(it.message ?: "Provider failed; original files are unchanged.") }
         }

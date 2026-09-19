@@ -101,6 +101,31 @@ class WorkspaceConversationStore(
         return revised
     }
 
+    /** Attach a coding outcome only to its exact user turn; never overwrite newer work.
+     * Reattempts of the same turn replace only that turn's preceding assistant outcome.
+     */
+    @Synchronized fun completeCodingTurn(projectId: String, expectedUserId: String, text: String): Message {
+        require(projects.getProject(projectId)?.type != WorkspaceProjectType.CHAT) {
+            "Coding result requires an existing project"
+        }
+        val content = checkedText(text)
+        val history = read(projectId)
+        val last = history.lastOrNull()
+        if (last?.role == "user" && last.id == expectedUserId) {
+            val saved = Message(UUID.randomUUID().toString(), "assistant", content, now())
+            write(projectId, (history + saved).takeLast(MAX_MESSAGES))
+            return saved
+        }
+        if (last?.role == "assistant" && history.getOrNull(history.lastIndex - 1)?.let {
+                it.role == "user" && it.id == expectedUserId
+            } == true) {
+            val updated = last.copy(text = content)
+            write(projectId, history.dropLast(1) + updated)
+            return updated
+        }
+        error("Coding turn changed; stale result was not added to chat")
+    }
+
     @Synchronized fun append(projectId: String, role: String, text: String): Message {
         require(role == "user" || role == "assistant") { "Invalid conversation role" }
         val content = checkedText(text)
