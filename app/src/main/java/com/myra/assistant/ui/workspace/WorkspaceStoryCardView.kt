@@ -27,11 +27,13 @@ internal object WorkspaceStoryCardView {
                 setLineSpacing(dp(3).toFloat(), 1.05f)
             }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
         }
-        // Title belongs to the assistant's reply above the writing card, not in the copied script.
-        whole.addView(text(card.title, 19f).apply {
-            setTypeface(null, Typeface.BOLD)
-            setLineSpacing(dp(2).toFloat(), 1f)
-        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+        // Story titles are above their cards; a reusable prompt's title belongs INSIDE its card.
+        if (!card.promptCard) {
+            whole.addView(text(card.title, 19f).apply {
+                setTypeface(null, Typeface.BOLD)
+                setLineSpacing(dp(2).toFloat(), 1f)
+            }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+        }
         val panel = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
@@ -54,18 +56,24 @@ internal object WorkspaceStoryCardView {
             setBackgroundColor(Color.TRANSPARENT)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            contentDescription = "Copy script only"
+            contentDescription = if (card.promptCard) "Copy prompt only" else "Copy story or script only"
             setOnClickListener { onCopy() }
         }
         top.addView(copy, LinearLayout.LayoutParams(dp(40), dp(40)))
         panel.addView(top, LinearLayout.LayoutParams(-1, dp(42)))
+        if (card.promptCard) {
+            panel.addView(text(card.title, 18f).apply {
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, dp(6), 0, dp(8))
+            })
+        }
         panel.addView(text(WorkspaceMarkdownText.render(card.body), 15f).apply {
             setTextIsSelectable(true)
             setLineSpacing(dp(4).toFloat(), 1.1f)
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(5) })
         whole.addView(panel, LinearLayout.LayoutParams(-1, -2))
         card.tip?.takeIf { it.isNotBlank() }?.let { tip ->
-            whole.addView(text("🎬 Video tip", 13f).apply {
+            whole.addView(text(if (card.promptCard) "Next step" else "🎬 Video tip", 13f).apply {
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.rgb(185, 222, 191))
             }, LinearLayout.LayoutParams(-1, -2).apply {
