@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.databinding.ActivityApiCloudSettingsBinding
+import com.myra.assistant.ui.workspace.WorkspaceFreeCrossProvider
 import com.myra.assistant.ui.workspace.WorkspaceGroqFree
 import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
 
@@ -33,6 +34,12 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         b.groqFreeZdrSwitch.isChecked = workspacePrefs.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
         b.groqFreeZdrSwitch.setOnCheckedChangeListener { _, enabled ->
             workspacePrefs.edit().putBoolean(WorkspaceGroqFree.PREFERENCE_KEY, enabled).apply()
+        }
+        // Independent opt-in: enabling Groq or merely saving two keys never enables failover.
+        b.workspaceFreeCrossProviderSwitch.isChecked = workspacePrefs.getBoolean(
+            WorkspaceFreeCrossProvider.PREFERENCE_KEY, false)
+        b.workspaceFreeCrossProviderSwitch.setOnCheckedChangeListener { _, enabled ->
+            workspacePrefs.edit().putBoolean(WorkspaceFreeCrossProvider.PREFERENCE_KEY, enabled).apply()
         }
         b.backButton.setOnClickListener { finish() }
         b.deepResearchButton.setOnClickListener {
