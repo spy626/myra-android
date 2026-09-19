@@ -13,7 +13,7 @@ class WorkspaceStoryScriptTest {
             listOf(message("user", "Mujhe ek horror kahani sunao"))))
         val entries = story.getJSONArray("messages")
         assertEquals("system", entries.getJSONObject(0).getString("role"))
-        assertTrue(entries.getJSONObject(0).getString("content").contains("no preface", ignoreCase = true))
+        assertTrue(entries.getJSONObject(0).getString("content").contains("Do not add a preface"))
         assertEquals("Mujhe ek horror kahani sunao", entries.getJSONObject(1).getString("content"))
         val plain = JSONObject(WorkspaceChatGateway.openRouterBody(
             listOf(message("user", "Kese ho bro?")))).getJSONArray("messages")
