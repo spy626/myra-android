@@ -1,7 +1,6 @@
 package com.myra.assistant.ui.workspace
 
 import android.content.Context
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -10,28 +9,21 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
-import com.myra.assistant.R
-import java.io.ByteArrayInputStream
 
-/** Native, chat-only code presentation. No generated text is executed unless Preview is tapped. */
+/** Native, chat-only code presentation. Generated HTML runs only following a Preview tap. */
 internal object WorkspaceCodeCardView {
     private val ink = Color.rgb(223, 245, 227)
     private val accent = Color.rgb(185, 222, 191)
-
     private fun dp(context: Context, n: Int) = (n * context.resources.displayMetrics.density + .5f).toInt()
 
-    private fun highlighted(code: String, language: String): CharSequence {
+    internal fun highlighted(code: String, language: String): CharSequence {
         val result = SpannableString(code)
         fun color(pattern: Regex, shade: Int) {
             pattern.findAll(code).forEach { hit ->
@@ -59,11 +51,7 @@ internal object WorkspaceCodeCardView {
                 cornerRadius = unit(15).toFloat()
                 setStroke(unit(1), Color.rgb(72, 101, 79))
             }
-            setPadding(unit(14), unit(8), unit(14), unit(15))
-        }
-        val header = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            setPadding(unit(14), unit(8), unit(14), unit(12))
         }
         val language = when (block.language) {
             "html", "htm" -> "HTML"
@@ -74,100 +62,110 @@ internal object WorkspaceCodeCardView {
             "" -> "Code"
             else -> block.language.replaceFirstChar { it.uppercase() }
         }
+        val header = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         header.addView(TextView(context).apply {
             text = language
             textSize = WorkspaceCodeCardStyle.HEADER_TEXT_SP
             setTextColor(accent)
             contentDescription = "$language code"
         }, LinearLayout.LayoutParams(0, -2, 1f))
-        if (WorkspaceCodeBlocks.canPreview(block)) {
-            header.addView(TextView(context).apply {
-                text = "Preview"
-                textSize = WorkspaceCodeCardStyle.HEADER_TEXT_SP
-                setTextColor(accent)
-                gravity = Gravity.CENTER
-                setPadding(unit(10), unit(9), unit(10), unit(9))
-                minHeight = unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)
-                isClickable = true
-                isFocusable = true
-                contentDescription = "Preview HTML locally"
-                setOnClickListener { preview(context, block.source) }
-            }, LinearLayout.LayoutParams(-2, unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)))
-        }
-        val copy = TextView(context).apply {
-            text = "Copy"
+        val mayPreview = WorkspaceCodeBlocks.canPreview(block)
+        val previewButton = TextView(context).apply {
+            text = "Preview"
             textSize = WorkspaceCodeCardStyle.HEADER_TEXT_SP
             setTextColor(accent)
-            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_workspace_copy, 0, 0, 0)
-            compoundDrawableTintList = ColorStateList.valueOf(accent)
-            compoundDrawablePadding = unit(5)
             gravity = Gravity.CENTER
-            setPadding(unit(8), unit(8), unit(5), unit(8))
-            minHeight = unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)
+            setPadding(unit(9), unit(9), unit(9), unit(9))
             isClickable = true
             isFocusable = true
-            contentDescription = "Copy $language code only"
-            setOnClickListener { onCopy() }
+            contentDescription = "Preview HTML locally"
         }
-        header.addView(copy, LinearLayout.LayoutParams(-2, unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)))
+        if (mayPreview) header.addView(previewButton,
+            LinearLayout.LayoutParams(-2, unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)))
+        header.addView(WorkspaceCodeViewer.copyIcon(context, "Copy $language code only", onCopy),
+            LinearLayout.LayoutParams(unit(48), unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)))
         card.addView(header, LinearLayout.LayoutParams(-1, unit(WorkspaceCodeCardStyle.HEADER_HEIGHT_DP)))
 
-        val horizontal = HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = true
-            isFillViewport = true
+        val viewport = FrameLayout(context)
+        card.addView(viewport, LinearLayout.LayoutParams(-1, -2))
+        var web: WebView? = null
+        var showingPreview = false
+        fun showCode() {
+            WorkspaceCodeViewer.destroy(web)
+            web = null
+            viewport.removeAllViews()
+            showingPreview = false
+            previewButton.text = "Preview"
+            previewButton.contentDescription = "Preview HTML locally"
+            val horizontal = HorizontalScrollView(context).apply {
+                isHorizontalScrollBarEnabled = true
+                isFillViewport = true
+            }
+            val source = TextView(context).apply {
+                text = highlighted(block.source, block.language)
+                setTextColor(ink)
+                typeface = Typeface.MONOSPACE
+                textSize = WorkspaceCodeCardStyle.SOURCE_TEXT_SP
+                setLineSpacing(unit(WorkspaceCodeCardStyle.SOURCE_LINE_EXTRA_DP).toFloat(), 1.05f)
+                setTextIsSelectable(true)
+                setHorizontallyScrolling(true)
+                setPadding(unit(3), unit(9), unit(14), unit(12))
+                contentDescription = "$language source code; full screen available below"
+            }
+            horizontal.addView(source, FrameLayout.LayoutParams(-2, -2))
+            val vertical = ScrollView(context).apply {
+                isVerticalScrollBarEnabled = true
+                isFillViewport = true
+            }
+            vertical.addView(horizontal, FrameLayout.LayoutParams(-1, -2))
+            val maxHeight = if (WorkspaceCodeViewerPolicy.needsCompactCard(block.source)) unit(310) else -2
+            viewport.addView(vertical, FrameLayout.LayoutParams(-1, maxHeight))
         }
-        horizontal.addView(TextView(context).apply {
-            text = highlighted(block.source, block.language)
-            setTextColor(ink)
-            typeface = Typeface.MONOSPACE
-            textSize = WorkspaceCodeCardStyle.SOURCE_TEXT_SP
-            setLineSpacing(unit(WorkspaceCodeCardStyle.SOURCE_LINE_EXTRA_DP).toFloat(), 1.05f)
-            setTextIsSelectable(true)
-            setHorizontallyScrolling(true)
-            setPadding(unit(3), unit(9), unit(14), unit(12))
-            contentDescription = "$language source code"
-        }, FrameLayout.LayoutParams(-2, -2))
-        card.addView(horizontal, LinearLayout.LayoutParams(-1, -2))
+        fun showPreview() {
+            if (!mayPreview) return
+            WorkspaceCodeViewer.destroy(web)
+            web = null
+            viewport.removeAllViews()
+            runCatching {
+                val preview = WorkspaceCodeViewer.offlineHtml(context, block.source)
+                web = preview
+                viewport.addView(preview, FrameLayout.LayoutParams(-1, unit(310)))
+                showingPreview = true
+                previewButton.text = "Code"
+                previewButton.contentDescription = "Show code instead of preview"
+            }.onFailure {
+                WorkspaceCodeViewer.destroy(web)
+                web = null
+                Toast.makeText(context, "Offline preview unavailable", Toast.LENGTH_SHORT).show()
+                showCode()
+            }
+        }
+        previewButton.setOnClickListener {
+            if (showingPreview) showCode() else showPreview()
+        }
+        showCode()
+        card.addView(TextView(context).apply {
+            text = "Open full screen ↗"
+            textSize = 12f
+            setTextColor(accent)
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            setPadding(unit(8), unit(5), unit(6), unit(3))
+            minHeight = unit(38)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Open full-screen code and preview"
+            setOnClickListener { WorkspaceCodeViewer.open(context, block, showingPreview, onCopy) }
+        }, LinearLayout.LayoutParams(-1, -2))
+        card.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) = Unit
+            override fun onViewDetachedFromWindow(v: View) {
+                WorkspaceCodeViewer.destroy(web)
+                web = null
+            }
+        })
         return card
-    }
-
-    private fun preview(context: Context, html: String) {
-        // An HTML snippet is untrusted. Run only after a tap, without file/content/network
-        // access, storage, new windows, navigation or a JavaScript bridge.
-        runCatching {
-            val web = WebView(context).apply {
-                settings.javaScriptEnabled = true // required for the user-requested click demo
-                settings.domStorageEnabled = false
-                settings.allowFileAccess = false
-                settings.allowContentAccess = false
-                settings.blockNetworkLoads = true
-                settings.javaScriptCanOpenWindowsAutomatically = false
-                settings.setSupportMultipleWindows(false)
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = true
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = true
-                    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                        val scheme = request?.url?.scheme.orEmpty()
-                        if (scheme == "about" || scheme == "data") return null
-                        return WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0)))
-                    }
-                }
-            }
-            val holder = FrameLayout(context).apply {
-                setPadding(dp(context, 6), dp(context, 3), dp(context, 6), dp(context, 3))
-                addView(web, FrameLayout.LayoutParams(-1, dp(context, 400)))
-            }
-            val dialog = AlertDialog.Builder(context).setTitle("HTML Preview · Offline")
-                .setView(holder).setPositiveButton("Close", null).create()
-            dialog.setOnDismissListener {
-                (web.parent as? ViewGroup)?.removeView(web)
-                web.stopLoading()
-                web.destroy()
-            }
-            dialog.show()
-            web.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
-        }.onFailure {
-            Toast.makeText(context, "HTML preview unavailable on this phone", Toast.LENGTH_LONG).show()
-        }
     }
 }
