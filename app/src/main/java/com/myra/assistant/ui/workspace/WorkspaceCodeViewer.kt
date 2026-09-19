@@ -8,7 +8,6 @@ import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
-import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.WebResourceRequest
@@ -145,8 +144,9 @@ internal object WorkspaceCodeViewer {
             }
             if (preview && mayPreview) {
                 runCatching {
-                    web = offlineHtml(context, block.source)
-                    viewport.addView(web, FrameLayout.LayoutParams(-1, -1))
+                    val page = offlineHtml(context, block.source)
+                    web = page
+                    viewport.addView(page, FrameLayout.LayoutParams(-1, -1))
                 }.onFailure {
                     destroy(web)
                     web = null
@@ -169,7 +169,7 @@ internal object WorkspaceCodeViewer {
                     contentDescription = "Full screen source code"
                 }, FrameLayout.LayoutParams(-2, -2))
                 val scroll = ScrollView(context).apply { isFillViewport = true }
-                scroll.addView(horizontal, ScrollView.LayoutParams(-1, -2))
+                scroll.addView(horizontal, FrameLayout.LayoutParams(-1, -2))
                 viewport.addView(scroll, FrameLayout.LayoutParams(-1, -1))
             }
         }
@@ -185,6 +185,6 @@ internal object WorkspaceCodeViewer {
         }
         dialog.show()
         dialog.window?.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
-        select(startPreview && mayPreview)
+        select(WorkspaceCodeViewerPolicy.initialPreview(block, startPreview))
     }
 }
