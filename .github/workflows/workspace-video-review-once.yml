@@ -1,0 +1,45 @@
+name: One-time LYRA Workspace video review repair
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/workspace-video-review-once.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply exact Workspace-only fixes
+        run: |
+          set -euo pipefail
+          python3 tools/patch_workspace_video_review_once.py
+          git diff --check
+          git diff --stat
+      - name: Verify unit tests and Android debug APK before commit
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Commit verified Workspace code only
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspacePromptWriting.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspacePromptFollowUp.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceGroqFree.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceFreeProviderSelection.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt \
+            app/src/test/java/com/myra/assistant/ui/workspace/WorkspacePromptWritingTest.kt \
+            app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceGroqFreeTest.kt
+          git diff --cached --check
+          git commit -m 'fix(workspace): keep Groq attachments local and route full prompts safely'
+          git push origin HEAD:agent/myra-phase-1
