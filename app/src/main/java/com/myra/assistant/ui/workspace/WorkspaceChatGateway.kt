@@ -35,8 +35,9 @@ internal object WorkspaceChatGateway {
                 "Photo is invalid or exceeds the request limit"
             }
         }
+        // Inspect earlier user intent locally when needed, but transmit only recent raw turns.
         val body = when (provider) {
-            Provider.OPENROUTER_FREE -> openRouterBody(recent, image)
+            Provider.OPENROUTER_FREE -> openRouterBody(messages, image)
         }.toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder()
             .url(WorkspaceFreeAiSuggestion.ENDPOINT)
@@ -48,20 +49,23 @@ internal object WorkspaceChatGateway {
 
     fun openRouterBody(messages: List<WorkspaceConversationStore.Message>, image: Image? = null): String {
         val entries = JSONArray()
-        val latest = messages.lastOrNull()?.takeIf { it.role == "user" }?.text
-        val writingInstructions = latest?.let { prompt ->
-            when {
-                WorkspacePromptWriting.kind(prompt) != null -> WorkspacePromptWriting.instructions(prompt)
-                WorkspaceStoryScript.isWritingRequest(prompt) -> WorkspaceStoryScript.writingInstructions(prompt)
-                else -> ""
-            }
-        }.orEmpty()
+        val recent = messages.takeLast(8)
+        val latest = recent.lastOrNull()?.takeIf { it.role == "user" }?.text
+        val contextDecision = WorkspacePromptContext.resolve(messages)
+        val writingInstructions = when {
+            contextDecision != null -> WorkspacePromptContext.instructions(contextDecision)
+            latest != null && WorkspacePromptWriting.kind(latest) != null ->
+                WorkspacePromptWriting.instructions(latest)
+            latest != null && WorkspaceStoryScript.isWritingRequest(latest) ->
+                WorkspaceStoryScript.writingInstructions(latest)
+            else -> ""
+        }
         if (writingInstructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", writingInstructions))
-        messages.forEachIndexed { index, message ->
+        recent.forEachIndexed { index, message ->
             require(message.role == "user" || message.role == "assistant") { "Invalid chat role" }
             require(message.text.length in 1..WorkspaceConversationStore.MAX_MESSAGE_LENGTH) { "Invalid message size" }
-            val content: Any = if (image != null && index == messages.lastIndex) {
+            val content: Any = if (image != null && index == recent.lastIndex) {
                 JSONArray().put(JSONObject().put("type", "text").put("text", message.text))
                     .put(JSONObject().put("type", "image_url")
                         .put("image_url", JSONObject().put("url", "data:${image.mime};base64,${image.base64}")))
