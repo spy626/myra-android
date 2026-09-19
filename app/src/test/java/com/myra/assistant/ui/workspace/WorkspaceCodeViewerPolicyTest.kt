@@ -1,15 +1,29 @@
 package com.myra.assistant.ui.workspace
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkspaceCodeViewerPolicyTest {
-    @Test fun longCodeIsCompactButShortCodeStaysNaturalHeight() {
-        assertFalse(WorkspaceCodeViewerPolicy.needsCompactCard("one\ntwo\nthree"))
-        assertFalse(WorkspaceCodeViewerPolicy.needsCompactCard((1..14).joinToString("\n")))
-        assertTrue(WorkspaceCodeViewerPolicy.needsCompactCard((1..15).joinToString("\n")))
+    @Test fun longCodeRemainsVisibleAndTappingCardOpensViewerWithoutFooter() {
+        val card = File("src/main/java/com/myra/assistant/ui/workspace/WorkspaceCodeCardView.kt").readText()
+        assertTrue(card.contains("card.addView(horizontal, LinearLayout.LayoutParams(-1, -2))"))
+        assertTrue(card.contains("setOnClickListener { openCode() }"))
+        assertFalse(card.contains("Open full screen ↗"))
+        assertFalse(card.contains("unit(310)"))
+        assertFalse(card.contains("needsCompactCard"))
+    }
+
+    @Test fun previewTapOpensFullScreenInsteadOfEmbeddingWebViewInChat() {
+        val card = File("src/main/java/com/myra/assistant/ui/workspace/WorkspaceCodeCardView.kt").readText()
+        assertTrue(card.contains("WorkspaceCodeViewer.open(context, block, true, onCopy)"))
+        assertTrue(card.contains("WorkspaceCodeViewer.open(context, block, false, onCopy)"))
+        assertFalse(card.contains("offlineHtml(context, block.source)"))
+        assertFalse(card.contains("text = \"Copy\""))
+        val viewer = File("src/main/java/com/myra/assistant/ui/workspace/WorkspaceCodeViewer.kt").readText()
+        assertTrue(viewer.contains("viewport.addView(web, FrameLayout.LayoutParams(-1, -1))"))
     }
 
     @Test fun onlyCompleteHtmlCanOpenPreviewAndNeverByDefault() {
