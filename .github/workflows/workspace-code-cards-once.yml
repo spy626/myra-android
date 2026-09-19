@@ -28,8 +28,17 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
           python3 -m py_compile scripts/apply_workspace_code_cards_once.py
           python3 scripts/apply_workspace_code_cards_once.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceCodeCardView.kt')
+          source = path.read_text(encoding='utf-8')
+          old = '            fillViewport = true\n'
+          if source.count(old) != 1:
+              raise SystemExit('Unexpected code card version; abort rather than change unknown source')
+          path.write_text(source.replace(old, '            isFillViewport = true\n'), encoding='utf-8')
+          PY
           git diff --check
-          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceCodeCardView.kt
           git diff --cached --stat
           if git diff --cached --quiet; then
             echo 'No source changes made' >&2
