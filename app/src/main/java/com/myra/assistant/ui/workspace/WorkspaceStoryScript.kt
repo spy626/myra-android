@@ -12,7 +12,7 @@ internal object WorkspaceStoryScript {
 
     private val creativeNoun = Regex("(?iu)(?:\\b(?:story|stories|script|screenplay|narration|kahani|kahaani|qissa|kissa)\\b|कहानी|स्क्रिप्ट|کہانی|قصہ)")
     private val narrativeNoun = Regex("(?iu)(?:\\b(?:story|stories|screenplay|narration|kahani|kahaani|qissa|kissa)\\b|कहानी|کہانی|قصہ)")
-    private val requestVerb = Regex("(?iu)(?:\\b(?:write|create|make|tell|generate|draft|compose|sunao|sunana|suna|likho|likh|banao|bana|give|chahiye|chahie|sunaye)\\b|लिख|सुना|बना|سنا|لکھ)")
+    private val requestVerb = Regex("(?iu)(?:\\b(?:write|create|make|tell|generate|draft|compose|sunao|sunana|suna|likho|likh|banao|bana|give|do|de|dedo|dena|chahiye|chahie|sunaye)\\b|लिख|सुना|बना|سنا|لکھ)")
     private val explanation = Regex("(?iu)^(?:please\\s+)?(?:explain|define|summarize|analyse|analyze|review|critique|what is|how to|meaning of|definition of|क्या है|समझाओ)\\b")
     private val technicalScript = Regex("(?iu)\\b(?:python|javascript|bash|shell|automation|automate|terminal|function|script\\.js|code|coding|programming)\\b")
     private val videoNoun = Regex("(?iu)(?:\\b(?:video|reel|shorts|youtube|voice[ -]?over|film|filming|shoot|recording)\\b|वीडियो|ویڈیو)")
@@ -72,8 +72,9 @@ internal object WorkspaceStoryScript {
         val title = labeled?.trim()?.removeSurrounding("**")?.trim()?.takeIf { it.isNotBlank() && it.length <= 100 }
         val body = if (title != null) text.substringAfter('\n', "").trimStart('\n', '\r', ' ') else text
         val retained = body.ifBlank { text }
-        // Legacy free-model replies stay complete; do not fabricate a video-specific tip for old text.
-        return Card(title ?: "Story / Script", retained, cleanCopy(retained), defaultIntro(video))
+        // Even if a free model ignores all labels, the UI still provides outside context and
+        // a general next action for video requests. The entire original story remains copyable.
+        return Card(title ?: "Story / Script", retained, cleanCopy(retained), defaultIntro(video), defaultTip(video))
     }
 
     private fun defaultIntro(video: Boolean) =
