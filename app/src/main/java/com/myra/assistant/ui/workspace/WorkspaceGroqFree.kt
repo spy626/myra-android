@@ -19,14 +19,25 @@ internal object WorkspaceGroqFree {
     const val MAX_PROMPT_CHARS = 12_000
     private const val MAX_RESPONSE_BYTES = 96_000L
 
+    /** Includes generated system instructions, not just raw chat characters. */
+    internal fun withinBudget(messages: List<WorkspaceConversationStore.Message>): Boolean =
+        runCatching { withinBudget(JSONObject(WorkspaceChatGateway.openRouterBody(messages))) }
+            .getOrDefault(false)
+
+    private fun withinBudget(json: JSONObject): Boolean {
+        val entries = json.optJSONArray("messages") ?: return false
+        return (0 until entries.length()).sumOf { index ->
+            (entries.getJSONObject(index).opt("content") as? String)?.length
+                ?: (MAX_PROMPT_CHARS + 1)
+        } <= MAX_PROMPT_CHARS
+    }
+
     fun body(messages: List<WorkspaceConversationStore.Message>, image: WorkspaceChatGateway.Image? = null): String {
         require(image == null) { "Groq Free text route does not accept photos; nothing was sent" }
-        val recent = WorkspaceLongInputPolicy.outbound(messages)
-        require(recent.isNotEmpty() && recent.last().role == "user") { "Latest user message is required" }
-        require(recent.sumOf { it.text.length } <= MAX_PROMPT_CHARS) {
+        val json = JSONObject(WorkspaceChatGateway.openRouterBody(messages))
+        require(withinBudget(json)) {
             "Groq Free request exceeds LYRA's conservative free-quota budget; complete prompt saved locally, nothing sent. Use OpenRouter Free for a larger request."
         }
-        val json = JSONObject(WorkspaceChatGateway.openRouterBody(messages))
         json.put("model", MODEL)
         json.remove("provider") // OpenRouter-specific settings must never leak to Groq.
         json.remove("plugins")

@@ -448,7 +448,7 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun sendEditedMessage(id: String, messageId: String) {
-        val provider = runCatching { selectedProvider(conversations.read(id).lastOrNull()?.text.orEmpty()) }
+        val provider = runCatching { selectedProvider() }
             .getOrElse { statusMessage = "Secure provider key storage unavailable. Edit saved locally."; render(); return }
         if (provider == null) {
             statusMessage = "Edit saved locally. Add a free OpenRouter key to request a reply."
@@ -518,7 +518,7 @@ class WorkspaceActivity : AppCompatActivity() {
             toast("Retry is available for the latest LYRA reply only")
             return
         }
-        val provider = runCatching { selectedProvider(user.text) }
+        val provider = runCatching { selectedProvider() }
             .getOrElse { toast("Secure provider key storage unavailable"); return }
         if (provider == null) {
             toast("Add a free OpenRouter key in API & Cloud Settings to retry")
@@ -749,21 +749,21 @@ class WorkspaceActivity : AppCompatActivity() {
         render()
     }
 
-    /** Single Workspace selection point. Groq stays OFF unless explicitly opted in as Free+ZDR.
-     * Large prompts use the already configured $0 OpenRouter route, never a paid route.
-     * Groq has no price ceiling: turn the opt-in OFF before changing its account tier.
+    /** Single Workspace selection point; full same-chat request budget, never only latest text.
+     * Attachments use the existing OpenRouter route or stay local; no auto retry or paid route.
+     * Groq Free/ZDR opt-in does not certify an account that is later upgraded to paid.
      */
-    private fun selectedProvider(latestText: String = ""): WorkspaceChatGateway.Provider? {
-        val openRouterKey = keys.get(ApiKeyStore.OPENROUTER)
-        val groqKey = keys.get(ApiKeyStore.GROQ)
-        val groqEnabled = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
-        return when {
-            groqEnabled && groqKey.isNotBlank() &&
-                (latestText.length <= WorkspaceGroqFree.MAX_PROMPT_CHARS || openRouterKey.isBlank()) ->
-                WorkspaceChatGateway.Provider.GROQ_FREE
-            openRouterKey.isNotBlank() -> WorkspaceChatGateway.Provider.OPENROUTER_FREE
-            else -> null
-        }
+    private fun selectedProvider(hasAttachments: Boolean = false): WorkspaceChatGateway.Provider? {
+        val openRouterAvailable = keys.get(ApiKeyStore.OPENROUTER).isNotBlank()
+        val groqAvailable = keys.get(ApiKeyStore.GROQ).isNotBlank()
+        val groqApproved = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
+        val history = selectedId?.let { runCatching { conversations.read(it) }.getOrNull() }
+        // Retry of an existing assistant reply uses its preceding user turn.
+        val candidate = if (history?.lastOrNull()?.role == "assistant") history.dropLast(1) else history
+        val groqFits = candidate?.takeIf { it.lastOrNull()?.role == "user" }
+            ?.let { WorkspaceGroqFree.withinBudget(it) } ?: false
+        return WorkspaceFreeProviderSelection.choose(openRouterAvailable, groqAvailable,
+            groqApproved, groqFits, hasAttachments)
     }
 
     private fun keyFor(provider: WorkspaceChatGateway.Provider): String = when (provider) {
@@ -903,13 +903,13 @@ class WorkspaceActivity : AppCompatActivity() {
             coding.continueRequest(id, text)
             return
         }
-        val provider = runCatching { selectedProvider(text) }
+        val provider = runCatching { selectedProvider(picked.isNotEmpty()) }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
         if (provider == null) {
             statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
             render()
-            AlertDialog.Builder(this).setTitle("No Workspace provider key")
-                .setMessage("Add an OpenRouter key, or add a Groq key and enable the Free + Inference ZDR switch in API & Cloud Settings. Gemini remains Voice-only. No paid fallback is available.")
+            AlertDialog.Builder(this).setTitle("No eligible Workspace free route")
+                .setMessage("Add an OpenRouter Free key for long requests or attachments, or enable Groq Free + Inference ZDR for bounded text chat in API & Cloud Settings. Full message stays local if no route fits. Gemini is Voice-only; no paid fallback.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("API settings") { _, _ ->
                     startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
@@ -937,6 +937,11 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         if (transcript.lastOrNull()?.id != messageId || transcript.lastOrNull()?.role != "user") {
             toast("Conversation changed; request cancelled")
+            return
+        }
+        if (provider == WorkspaceChatGateway.Provider.GROQ_FREE && picked.isNotEmpty()) {
+            statusMessage = "Groq Free is text-only; no selected photo/file was sent."
+            render()
             return
         }
         val enriched = runCatching {

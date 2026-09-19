@@ -4,7 +4,7 @@ package com.myra.assistant.ui.workspace
 internal object WorkspacePromptWriting {
     enum class Kind { BUILD, PERSONA }
 
-    private val promptWord = Regex("(?iu)\\bprompts?\\b|प्रॉम्प्ट|پرومپٹ")
+    private val promptWord = Regex("(?iu)\\b(?:prompts?|promts?)\\b|प्रॉम्प्ट|پرومپٹ")
     private val explanation = Regex("(?iu)^(?:please\\s+)?(?:what is|how to|explain|define|meaning of|difference between|क्या है|समझाओ)\\b")
     private val target = Regex("(?iu)\\b(?:companion|assistant|chatbot|agent|bot|app|application|website|software|project|platform)\\b|ऐप|एप्लिकेशन|सहायक")
     private val build = Regex("(?iu)\\b(?:banane|banana|banwana|banao|bana|banani|build|building|develop|development|implement|create|creating|coding|code|make|making)\\b|बनाने|बनाना|बनाओ|बनवाने|تیار")
@@ -46,6 +46,12 @@ internal object WorkspacePromptWriting {
                 "technical constraints and integration with EXISTING code if any; implementation stages; " +
                 "and observable tests/acceptance criteria. Do not invent a platform when unspecified: " +
                 "ask the coding AI to confirm it before platform-specific implementation. If the user " +
+                "already specified Android, use Android and do NOT ask to confirm the platform " +
+                "again. Treat hands-free phone control as permission-scoped Android actions, " +
+                "not unrestricted control. Do not invent calls, SMS, contacts, location, " +
+                "wake words, always-listening or broad permissions when unrequested. " +
+                "Explain Android limits and request runtime consent only for actually needed " +
+                "capabilities. If the user " +
                 "asks for a short prompt, keep it short. No unrequested fictional personality, random " +
                 "bot name, platform-directory table or generic tips. Clearly separate proposed features " +
                 "from verified working functionality; do not promise permanent memory from wording alone. " +

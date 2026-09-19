@@ -53,6 +53,8 @@ internal object WorkspacePromptFollowUp {
             "and approximately the draft's length unless more is explicitly requested. " +
             "Do not silently add always-listening, wake-word detection, calls, SMS, broad device " +
             "permissions or unrelated features just because hands-free interaction was requested. " +
+            "If Android is already specified, use it directly; do not reconfirm the " +
+            "platform or introduce an alternative. " +
             "Describe capabilities to implement, not features already working. If the previous " +
             "prompt is unavailable or insufficient, ask for it rather than inventing it. " +
             "Use plain-text sections on separate lines, WITHOUT code fences: " +

@@ -70,4 +70,16 @@ class WorkspacePromptWritingTest {
         assertNull(card.tip)
         assertEquals("Development prompt", card.title)
     }
+
+    @Test fun misspelledPromptStillProducesAndroidDevelopmentBrief() {
+        val original = "Mujhe ek ai companion bana hai hand free mujhe ek promt do"
+        assertEquals(WorkspacePromptWriting.Kind.BUILD, WorkspacePromptWriting.kind(original))
+        val instructions = sent(original).getJSONObject(0).getString("content")
+        assertTrue(instructions.contains("CODING/DEVELOPMENT AI"))
+        assertTrue(instructions.contains("do NOT ask to confirm the platform"))
+        assertTrue(instructions.contains("Do not invent calls, SMS"))
+        assertEquals(WorkspacePromptWriting.Kind.BUILD,
+            WorkspacePromptWriting.kind("make an android app, promt do"))
+        assertNull(WorkspacePromptWriting.kind("hi bro, promt kya hai"))
+    }
 }
