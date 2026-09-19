@@ -1,0 +1,38 @@
+name: One-time Groq Free Workspace activation
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/workspace-groq-once.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply exact Workspace-only opt-in patch
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = 'agent/myra-phase-1'
+          python3 tools/patch_workspace_groq_activation_once.py
+          git diff --check
+      - name: Unit tests and Android debug APK
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Commit only verified Workspace changes
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatGatewayTest.kt
+          git diff --cached --check
+          git commit -m 'feat(workspace): enable opt-in Groq Free text chat without paid fallback'
+          git push origin HEAD:agent/myra-phase-1
