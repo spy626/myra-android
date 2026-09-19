@@ -59,7 +59,7 @@ internal object WorkspaceCodeCardView {
                 cornerRadius = unit(15).toFloat()
                 setStroke(unit(1), Color.rgb(72, 101, 79))
             }
-            setPadding(unit(12), unit(6), unit(12), unit(12))
+            setPadding(unit(14), unit(8), unit(14), unit(15))
         }
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -76,39 +76,41 @@ internal object WorkspaceCodeCardView {
         }
         header.addView(TextView(context).apply {
             text = language
-            textSize = 12f
+            textSize = WorkspaceCodeCardStyle.HEADER_TEXT_SP
             setTextColor(accent)
             contentDescription = "$language code"
         }, LinearLayout.LayoutParams(0, -2, 1f))
         if (WorkspaceCodeBlocks.canPreview(block)) {
             header.addView(TextView(context).apply {
                 text = "Preview"
-                textSize = 12f
+                textSize = WorkspaceCodeCardStyle.HEADER_TEXT_SP
                 setTextColor(accent)
                 gravity = Gravity.CENTER
                 setPadding(unit(10), unit(9), unit(10), unit(9))
+                minHeight = unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)
                 isClickable = true
                 isFocusable = true
                 contentDescription = "Preview HTML locally"
                 setOnClickListener { preview(context, block.source) }
-            }, LinearLayout.LayoutParams(-2, unit(42)))
+            }, LinearLayout.LayoutParams(-2, unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)))
         }
         val copy = TextView(context).apply {
             text = "Copy"
-            textSize = 12f
+            textSize = WorkspaceCodeCardStyle.HEADER_TEXT_SP
             setTextColor(accent)
             setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_workspace_copy, 0, 0, 0)
             compoundDrawableTintList = ColorStateList.valueOf(accent)
             compoundDrawablePadding = unit(5)
             gravity = Gravity.CENTER
-            setPadding(unit(8), unit(7), unit(5), unit(7))
+            setPadding(unit(8), unit(8), unit(5), unit(8))
+            minHeight = unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)
             isClickable = true
             isFocusable = true
             contentDescription = "Copy $language code only"
             setOnClickListener { onCopy() }
         }
-        header.addView(copy, LinearLayout.LayoutParams(-2, unit(42)))
-        card.addView(header, LinearLayout.LayoutParams(-1, unit(43)))
+        header.addView(copy, LinearLayout.LayoutParams(-2, unit(WorkspaceCodeCardStyle.ACTION_MIN_HEIGHT_DP)))
+        card.addView(header, LinearLayout.LayoutParams(-1, unit(WorkspaceCodeCardStyle.HEADER_HEIGHT_DP)))
 
         val horizontal = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = true
@@ -118,10 +120,11 @@ internal object WorkspaceCodeCardView {
             text = highlighted(block.source, block.language)
             setTextColor(ink)
             typeface = Typeface.MONOSPACE
-            textSize = 13f
+            textSize = WorkspaceCodeCardStyle.SOURCE_TEXT_SP
+            setLineSpacing(unit(WorkspaceCodeCardStyle.SOURCE_LINE_EXTRA_DP).toFloat(), 1.05f)
             setTextIsSelectable(true)
             setHorizontallyScrolling(true)
-            setPadding(unit(3), unit(6), unit(12), unit(8))
+            setPadding(unit(3), unit(9), unit(14), unit(12))
             contentDescription = "$language source code"
         }, FrameLayout.LayoutParams(-2, -2))
         card.addView(horizontal, LinearLayout.LayoutParams(-1, -2))
