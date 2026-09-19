@@ -32,7 +32,11 @@ internal object WorkspaceContextProjection {
         if (sensitive.containsMatchIn(latest)) return ""
         val referring = reference.containsMatchIn(latest)
         val recent = messages.takeLast(8).filter { it.role == "user" }.dropLast(1)
-        val query = terms(latest) + if (referring) terms(recent.joinToString(" ") { it.text }) else emptySet()
+        val subject = terms(latest)
+        // A vague 'isme' needs the nearby topic. An explicit 'Android companion' must NOT
+        // make unrelated recent food/phone topics candidates for old-context projection.
+        val query = subject + if (referring && subject.size <= 1)
+            terms(recent.joinToString(" ") { it.text }) else emptySet()
         if (query.isEmpty()) return ""
         val selected = messages.dropLast(8).asReversed().asSequence()
             .filter { it.role == "user" && it.text.length in 8..400 &&
