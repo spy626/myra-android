@@ -5,19 +5,19 @@ internal object WorkspaceStoryScript {
     data class Card(val title: String, val body: String, val copyText: String)
 
     private val creativeNoun = Regex("(?iu)(?:\\b(?:story|stories|script|screenplay|narration|kahani|kahaani|qissa|kissa)\\b|कहानी|स्क्रिप्ट|کہانی|قصہ)")
+    private val narrativeNoun = Regex("(?iu)(?:\\b(?:story|stories|screenplay|narration|kahani|kahaani|qissa|kissa)\\b|कहानी|کہانی|قصہ)")
     private val requestVerb = Regex("(?iu)(?:\\b(?:write|create|make|tell|generate|draft|compose|sunao|sunana|suna|likho|likh|banao|bana|give|chahiye|chahie|sunaye)\\b|लिख|सुना|बना|سنا|لکھ)")
-    private val explanation = Regex("(?iu)(?:\\b(?:explain|definition|meaning|summarize|analyse|analyze|review|critique|what is|how to|about)\\b|क्या है|समझाओ)")
+    private val explanation = Regex("(?iu)^(?:please\\s+)?(?:explain|define|summarize|analyse|analyze|review|critique|what is|how to|meaning of|definition of|क्या है|समझाओ)\\b")
+    private val technicalScript = Regex("(?iu)\\b(?:python|javascript|bash|shell|automation|automate|terminal|function|script\\.js|code|coding|programming)\\b")
     private val heading = Regex("^#{1,3}\\s+(.+?)\\s*#*\\s*$")
     private val titleLabel = Regex("(?i)^(?:\\*\\*)?(?:title|शीर्षक|عنوان)\\s*:\\s*(.+?)(?:\\*\\*)?\\s*$")
 
     /** Do not treat a technical question mentioning the word 'script' as a writing request. */
     fun isWritingRequest(prompt: String): Boolean {
         val text = prompt.trim().take(600)
-        if (!creativeNoun.containsMatchIn(text)) return false
-        if (explanation.containsMatchIn(text) && !requestVerb.containsMatchIn(text)) return false
-        if (text.length <= 90 && creativeNoun.containsMatchIn(text) &&
-            !explanation.containsMatchIn(text)) return true
-        return requestVerb.containsMatchIn(text) && !explanation.containsMatchIn(text)
+        if (!creativeNoun.containsMatchIn(text) || explanation.containsMatchIn(text)) return false
+        if (!narrativeNoun.containsMatchIn(text) && technicalScript.containsMatchIn(text)) return false
+        return requestVerb.containsMatchIn(text) || text.length <= 90
     }
 
     /** Only a complete titled first line is separated; never guess and drop story paragraphs. */
