@@ -626,8 +626,13 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         if (current.type != WorkspaceProjectType.CHAT) {
             val id = current.projectId
+            val websitePending = if (current.type == WorkspaceProjectType.WEBSITE)
+                runCatching { WorkspaceWebsiteGeneration.pending(projects, id) }.getOrNull() else null
             val pending = runCatching { WorkspaceScopedEdit.pending(projects, id) }.getOrNull()
-            if (pending != null) addControl("Review edit · Undo / Keep") { coding.reviewPending(id) }
+            if (websitePending != null) addControl("Review website · Undo / Keep") {
+                coding.reviewPending(id)
+            }
+            else if (pending != null) addControl("Review edit · Undo / Keep") { coding.reviewPending(id) }
             else {
                 val saved = runCatching { suggestions.recover(files, tasks, projects, id) }.getOrNull()
                 if (saved is WorkspaceAiSuggestionDraftStore.Recovery.Ready)

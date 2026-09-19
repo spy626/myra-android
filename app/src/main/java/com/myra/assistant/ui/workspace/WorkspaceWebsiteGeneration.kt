@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
 internal object WorkspaceWebsiteGeneration {
     val PATHS = listOf("index.html", "style.css", "script.js")
     private const val BACKUP = "website-build-backup.json"
-    private const val MAX_EXISTING_CHARS = 4_000
+    private const val MAX_EXISTING_CHARS = 8_000
     private const val MAX_OUTPUT_CHARS = 30_000
     private const val MAX_FILE_CHARS = 15_000
 
@@ -209,7 +209,7 @@ internal object WorkspaceWebsiteGeneration {
             val before = String(Base64.getDecoder().decode(entry.getString("originalBase64")), Charsets.UTF_8)
             val afterHash = entry.getString("afterSha256")
             require(before.length <= MAX_EXISTING_CHARS && sha(before) == entry.getString("beforeSha256") &&
-                Regex("[0-9a-f]{64}").matches(afterHash) && (!existed).not().let { it || before.isEmpty() }) {
+                Regex("[0-9a-f]{64}").matches(afterHash) && (existed || before.isEmpty())) {
                 "Website rollback checksum invalid"
             }
             originals[path] = if (existed) before else null
