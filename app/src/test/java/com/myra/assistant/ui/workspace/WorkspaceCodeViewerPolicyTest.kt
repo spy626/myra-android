@@ -23,7 +23,7 @@ class WorkspaceCodeViewerPolicyTest {
         assertFalse(card.contains("offlineHtml(context, block.source)"))
         assertFalse(card.contains("text = \"Copy\""))
         val viewer = File("src/main/java/com/myra/assistant/ui/workspace/WorkspaceCodeViewer.kt").readText()
-        assertTrue(viewer.contains("viewport.addView(web, FrameLayout.LayoutParams(-1, -1))"))
+        assertTrue(viewer.contains("viewport.addView(page, FrameLayout.LayoutParams(-1, -1))"))
     }
 
     @Test fun onlyCompleteHtmlCanOpenPreviewAndNeverByDefault() {
