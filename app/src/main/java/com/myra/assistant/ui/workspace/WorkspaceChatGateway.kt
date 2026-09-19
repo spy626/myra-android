@@ -51,8 +51,10 @@ internal object WorkspaceChatGateway {
         val entries = JSONArray()
         val recent = messages.takeLast(8)
         val latest = recent.lastOrNull()?.takeIf { it.role == "user" }?.text
+        val revisionKind = WorkspacePromptFollowUp.kind(messages)
         val contextDecision = WorkspacePromptContext.resolve(messages)
         val writingInstructions = when {
+            revisionKind != null -> WorkspacePromptFollowUp.instructions(revisionKind)
             contextDecision != null -> WorkspacePromptContext.instructions(contextDecision)
             latest != null && WorkspacePromptWriting.kind(latest) != null ->
                 WorkspacePromptWriting.instructions(latest)
