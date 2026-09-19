@@ -25,6 +25,8 @@ internal object WorkspaceChatIntent {
     /** Only for an already selected coding project, never for ordinary/general chats. */
     fun isCodingFollowUp(message: String): Boolean {
         val text = message.lowercase().trim()
-        return !question.containsMatchIn(text) && followUp.containsMatchIn(text)
+        // Writing a development prompt is not authority to edit project files.
+        return !promptRequest.containsMatchIn(text) &&
+            !question.containsMatchIn(text) && followUp.containsMatchIn(text)
     }
 }
