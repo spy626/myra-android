@@ -1,0 +1,52 @@
+name: One-time Workspace delete confirmation UX
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/workspace-delete-confirm-once.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'spy626/myra-android' && github.ref == 'refs/heads/agent/myra-phase-1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply only known deletion UI and rate-limit guidance
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          python3 -m py_compile scripts/workspace_delete_confirmation_once.py
+          python3 scripts/workspace_delete_confirmation_once.py
+          git diff --check
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceNavigationDrawer.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceFreeAiSuggestion.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceCodingResult.kt
+          git diff --cached --stat
+          if git diff --cached --quiet; then
+            echo 'No scoped deletion/diagnostic change was applied' >&2
+            exit 1
+          fi
+      - name: Unit tests and assemble debug APK
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Fast-forward scoped fix on phase branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(workspace): confirm project delete without typing and explain free HTTP 429'
+          git push origin HEAD:agent/myra-phase-1
