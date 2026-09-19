@@ -23,6 +23,7 @@ class WorkspaceStoryScriptTest {
             listOf(message("user", "Kese ho bro?")))).getJSONArray("messages")
         assertEquals(1, plain.length())
         assertEquals("user", plain.getJSONObject(0).getString("role"))
+        assertTrue(WorkspaceStoryScript.isWritingRequest("Mujhe meri video ke liye ek lambi suspense aur horror story do jisme ending unexpected ho"))
         assertFalse(WorkspaceStoryScript.isWritingRequest("Explain the meaning of a screenplay"))
         assertFalse(WorkspaceStoryScript.isWritingRequest("Write a Python script to automate my files"))
     }
@@ -54,11 +55,13 @@ class WorkspaceStoryScriptTest {
         assertEquals(null, WorkspaceStoryScript.card("Hello", "# The Night Train\nStory"))
     }
 
-    @Test fun legacyVideoStoryDoesNotInventSpecificTipAndPlainStoryHasNoVideoTip() {
+    @Test fun freeModelIgnoringSectionsStillGetsOutsideVideoTipWithoutChangingCopiedStory() {
         val old = requireNotNull(WorkspaceStoryScript.card("Give me a video script", "Voice-over: **Hello**\n\n[Pause] Hi!"))
         assertEquals("Voice-over: Hello\n\n[Pause] Hi!", old.copyText)
         assertEquals("Story / Script", old.title)
-        assertNull(old.tip)
+        assertTrue(old.intro.contains("video"))
+        assertNotNull(old.tip)
+        assertFalse(old.copyText.contains("Voice-over record karo"))
         val plain = requireNotNull(WorkspaceStoryScript.card("Write a story", "INTRO: A short tale.\nTITLE: Door\nSCRIPT:\nKnock.\nVIDEO TIP: Record at night."))
         assertEquals("Knock.\nVIDEO TIP: Record at night.", plain.copyText)
         assertNull(plain.tip)
