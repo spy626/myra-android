@@ -17,7 +17,9 @@ internal object WorkspaceLongInputPolicy {
     /** Select only complete preceding messages, with the latest user turn always intact. */
     fun outbound(messages: List<WorkspaceConversationStore.Message>): List<WorkspaceConversationStore.Message> {
         require(messages.lastOrNull()?.role == "user") { "A user message is required" }
-        require(requestFits(messages)) { "Prompt exceeds the free-route request limit; full message remains saved locally" }
+        require(requestFits(messages)) {
+            "Latest message exceeds LYRA's 64000-character local cap; full message remains saved locally"
+        }
         val selected = mutableListOf<WorkspaceConversationStore.Message>()
         var remaining = MAX_REQUEST_CHARS
         for (message in messages.takeLast(MAX_RECENT_MESSAGES).asReversed()) {
