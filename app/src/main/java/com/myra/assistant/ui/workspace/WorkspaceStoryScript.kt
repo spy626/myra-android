@@ -8,6 +8,7 @@ internal object WorkspaceStoryScript {
         val copyText: String,
         val intro: String = "",
         val tip: String? = null,
+        val promptCard: Boolean = false,
     )
 
     enum class Kind { STORY, VOICE_OVER, SCENE_SCRIPT }
@@ -28,6 +29,8 @@ internal object WorkspaceStoryScript {
     fun kind(prompt: String): Kind? {
         val text = prompt.trim().take(600)
         if (text.isEmpty() || explanation.containsMatchIn(text)) return null
+        // Asking for a writing prompt is not the same as asking us to write the story itself.
+        if (Regex("(?iu)\\bprompts?\\b|प्रॉम्प्ट|پرومپٹ").containsMatchIn(text)) return null
         val story = storyNoun.containsMatchIn(text)
         val voiceOver = voiceOverNoun.containsMatchIn(text)
         val script = sceneScriptNoun.containsMatchIn(text)
@@ -80,6 +83,7 @@ internal object WorkspaceStoryScript {
 
     /** Fall back to the original full piece if a free model omits labels; never discard prose. */
     fun card(prompt: String, reply: String): Card? {
+        WorkspacePromptWriting.card(prompt, reply)?.let { return it }
         val requested = kind(prompt) ?: return null
         var text = reply.trim().replace("\r\n", "\n")
         if (text.isEmpty()) return null
