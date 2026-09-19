@@ -42,8 +42,14 @@ object WorkspaceAiHandoff {
         require(WorkspaceScopedEdit.pending(projects, projectId) == null) {
             "Finish the pending protected edit before sharing another source"
         }
-        val followUp = normalizeFollowUp(rawFollowUp)
         val saved = requireNotNull(tasks.get(projectId)) { "Save the project task first" }
+        // Chat's initial coding instruction is already the saved, version-bound goal.
+        // Never treat the same approved goal as an extra 180-character follow-up.
+        // A distinct follow-up still goes through its original short/secret guards.
+        val repeatsSavedGoal = rawFollowUp.isNotBlank() && runCatching {
+            WorkspaceTaskContract.normalizeGoal(rawFollowUp) == saved.goal
+        }.getOrDefault(false)
+        val followUp = if (repeatsSavedGoal) "" else normalizeFollowUp(rawFollowUp)
         val context = WorkspaceSourceContext.prepare(files, tasks, projectId, saved, selectedPath)
         // Keep the approved source excerpt and criteria intact, but use a small instruction
         // envelope so free-router output tokens are spent on the single JSON patch.
