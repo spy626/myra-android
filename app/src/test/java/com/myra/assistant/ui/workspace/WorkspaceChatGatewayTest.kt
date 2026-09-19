@@ -35,11 +35,17 @@ class WorkspaceChatGatewayTest {
 
     @Test fun longPastedMessageIsSentInFullWithoutSlicing() {
         val original = "START\n" + "हॉरर कहानी और AI companion\n".repeat(850) + "\nEND"
-        val older = message("assistant", "old".repeat(15000))
-        val body = JSONObject(WorkspaceChatGateway.openRouterBody(listOf(older, message("user", original))))
+        val olderThatFits = message("assistant", "old".repeat(15000))
+        val body = JSONObject(WorkspaceChatGateway.openRouterBody(listOf(olderThatFits, message("user", original))))
         val payload = body.getJSONArray("messages")
+        assertEquals(2, payload.length())
         assertEquals(original, payload.getJSONObject(payload.length() - 1).getString("content"))
-        assertEquals(1, payload.length())
+
+        val olderTooLarge = message("assistant", "x".repeat(80_000))
+        val bounded = JSONObject(WorkspaceChatGateway.openRouterBody(listOf(olderTooLarge, message("user", original))))
+            .getJSONArray("messages")
+        assertEquals(1, bounded.length())
+        assertEquals(original, bounded.getJSONObject(0).getString("content"))
     }
 
     @Test fun photoSentOnlyInCurrentTurnAndNotRetainedInPreviousMessages() {
