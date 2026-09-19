@@ -1,11 +1,13 @@
 package com.myra.assistant.ui.settings
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.databinding.ActivityApiCloudSettingsBinding
+import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
 
 /** Non-voice provider credentials only. Gemini Live is configured in Voice & AI Models. */
 class ApiCloudSettingsActivity : AppCompatActivity() {
@@ -17,6 +19,13 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         b.openRouterKey.setText(keys.get(ApiKeyStore.OPENROUTER))
         b.groqKey.setText(keys.get(ApiKeyStore.GROQ))
         b.deepseekKey.setText(keys.get(ApiKeyStore.DEEPSEEK))
+        val workspacePrefs = getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+        b.workspaceMemorySwitch.isChecked = workspacePrefs.getBoolean(
+            WorkspaceMemoryInterceptor.PREFERENCE_KEY, false)
+        b.workspaceMemorySwitch.setOnCheckedChangeListener { _, enabled ->
+            // This explicit setting is persisted immediately; no per-message permission popup.
+            workspacePrefs.edit().putBoolean(WorkspaceMemoryInterceptor.PREFERENCE_KEY, enabled).apply()
+        }
         b.backButton.setOnClickListener { finish() }
         b.deepResearchButton.setOnClickListener {
             startActivity(Intent(this, DeepResearchSettingsActivity::class.java))
