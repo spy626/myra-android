@@ -27,18 +27,19 @@ internal object WorkspaceContextProjection {
 
     /** Older turns are selected only from the SAME private chat, never another chat or source. */
     fun earlierUserContext(messages: List<WorkspaceConversationStore.Message>): String {
-        if (messages.size <= 8 || messages.lastOrNull()?.role != "user") return ""
+        if (messages.size <= WorkspaceLongInputPolicy.MAX_RECENT_MESSAGES ||
+            messages.lastOrNull()?.role != "user") return ""
         val latest = messages.last().text
         if (sensitive.containsMatchIn(latest)) return ""
         val referring = reference.containsMatchIn(latest)
-        val recent = messages.takeLast(8).filter { it.role == "user" }.dropLast(1)
+        val recent = messages.takeLast(WorkspaceLongInputPolicy.MAX_RECENT_MESSAGES).filter { it.role == "user" }.dropLast(1)
         val subject = terms(latest)
         // A vague 'isme' needs the nearby topic. An explicit 'Android companion' must NOT
         // make unrelated recent food/phone topics candidates for old-context projection.
         val query = subject + if (referring && subject.size <= 1)
             terms(recent.joinToString(" ") { it.text }) else emptySet()
         if (query.isEmpty()) return ""
-        val selected = messages.dropLast(8).asReversed().asSequence()
+        val selected = messages.dropLast(WorkspaceLongInputPolicy.MAX_RECENT_MESSAGES).asReversed().asSequence()
             .filter { it.role == "user" && it.text.length in 8..400 &&
                 !sensitive.containsMatchIn(it.text) }
             .map { it.text.trim().replace(Regex("[\\r\\n]+"), " ") to terms(it.text).count(query::contains) }

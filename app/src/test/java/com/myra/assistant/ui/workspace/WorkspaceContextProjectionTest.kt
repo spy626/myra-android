@@ -15,21 +15,21 @@ class WorkspaceContextProjectionTest {
 
     @Test fun relevantOldUserTopicIsAvailableBeyondEightTurnsWithoutAssistantGuesses() {
         val older = user("I am building an Android companion with memory and voice")
-        val filler = (1..5).flatMap { listOf(user("Unrelated food topic $it"), assistant("Guess: buy a phone $it")) }
+        val filler = (1..13).flatMap { listOf(user("Unrelated food topic $it"), assistant("Guess: buy a phone $it")) }
         val history = listOf(older) + filler + user("Can you improve that Android companion memory?")
         val note = WorkspaceContextProjection.earlierUserContext(history)
         assertTrue(note.contains(older.text))
         assertFalse(note.contains("Guess:"))
         val sent = JSONObject(WorkspaceChatGateway.openRouterBody(history)).getJSONArray("messages")
-        assertEquals(9, sent.length()) // one bounded system note, last eight raw messages
+        assertEquals(25, sent.length()) // one bounded system note, last 24 raw messages
         assertEquals("system", sent.getJSONObject(0).getString("role"))
         assertTrue(sent.getJSONObject(0).getString("content").contains("SAME chat"))
-        assertEquals(history.last().text, sent.getJSONObject(8).getString("content"))
+        assertEquals(history.last().text, sent.getJSONObject(24).getString("content"))
         assertFalse(sent.getJSONObject(1).getString("content").contains(older.text))
     }
 
     @Test fun unrelatedOrSensitiveOldTurnsAreNotReplayedAsMemory() {
-        val filler = (1..5).flatMap { listOf(user("Gardening flowers number $it"), assistant("Okay $it")) }
+        val filler = (1..13).flatMap { listOf(user("Gardening flowers number $it"), assistant("Okay $it")) }
         assertEquals("", WorkspaceContextProjection.earlierUserContext(
             listOf(user("My API key is secret123 and I have an Android companion")) + filler +
                 user("Improve that Android companion")))

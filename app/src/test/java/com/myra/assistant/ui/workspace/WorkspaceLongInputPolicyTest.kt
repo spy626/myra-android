@@ -18,8 +18,16 @@ class WorkspaceLongInputPolicyTest {
         assertTrue(WorkspaceLongInputPolicy.requestFits(listOf(message("b".repeat(40_000)), message("c".repeat(30_000)))))
         val latest = message("c".repeat(30_000))
         val outgoing = WorkspaceLongInputPolicy.outbound(listOf(message("b".repeat(40_000)), latest))
-        assertTrue(outgoing.size == 1)
-        assertTrue(outgoing.single().text == latest.text)
+        assertTrue(outgoing.size == 2)
+        assertTrue(outgoing.last().text == latest.text)
+        val overBudget = WorkspaceLongInputPolicy.outbound(listOf(
+            message("b".repeat(40_000)), message("c".repeat(64_000))))
+        assertTrue(overBudget.size == 1)
+        assertTrue(overBudget.single().text == "c".repeat(64_000))
+        val history = (1..30).map { message("turn-$it " + "x".repeat(1_000)) }
+        val recent = WorkspaceLongInputPolicy.outbound(history)
+        assertTrue(recent.size == WorkspaceLongInputPolicy.MAX_RECENT_MESSAGES)
+        assertTrue(recent.first().text == history[6].text)
         assertFalse(WorkspaceLongInputPolicy.requestFits(listOf(message("z".repeat(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS + 1)))))
     }
 }

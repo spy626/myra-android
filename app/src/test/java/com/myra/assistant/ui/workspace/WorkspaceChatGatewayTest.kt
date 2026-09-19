@@ -24,6 +24,7 @@ class WorkspaceChatGatewayTest {
         assertTrue(body.getJSONObject("provider").getBoolean("zdr"))
         assertEquals("deny", body.getJSONObject("provider").getString("data_collection"))
         assertFalse(body.getJSONObject("provider").getBoolean("allow_fallbacks"))
+        assertFalse(body.getJSONArray("plugins").getJSONObject(0).getBoolean("enabled"))
         assertEquals("this project only", body.getJSONArray("messages").getJSONObject(0).getString("content"))
         assertFalse(request.url.toString().contains("session-secret"))
         assertFalse(body.toString().contains("session-secret"))

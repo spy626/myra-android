@@ -29,7 +29,7 @@ internal object WorkspaceChatGateway {
         require(messages.isNotEmpty() && messages.last().role == "user") { "A user message is required" }
         // Previous turns are dropped whole when needed; the latest pasted prompt is never sliced.
         require(WorkspaceLongInputPolicy.requestFits(messages)) {
-            "Full prompt exceeds this free route's 64000-character request cap; saved locally, nothing sent"
+            "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
         image?.let {
             require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
@@ -88,6 +88,10 @@ internal object WorkspaceChatGateway {
             .put("stream", false).put("max_tokens", 2_048)
             .put("provider", JSONObject().put("zdr", true).put("data_collection", "deny")
                 .put("allow_fallbacks", false))
+            // OpenRouter may otherwise compress/truncate the middle on small endpoints.
+            // Never permit silent truncation of the user's full pasted prompt.
+            .put("plugins", JSONArray().put(JSONObject().put("id", "context-compression")
+                .put("enabled", false)))
             .put("messages", entries).toString()
     }
 

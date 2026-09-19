@@ -56,6 +56,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private val keys by lazy { ApiKeyStore(this) }
     private val preferences by lazy { getSharedPreferences("workspace_ui", Context.MODE_PRIVATE) }
     private val localDrafts = mutableMapOf<String, String>()
+    // Display-only state: never alters persisted messages, Copy or provider requests.
+    private val expandedMessageIds = mutableSetOf<String>()
     private val attachments = mutableListOf<Attachment>()
     private var selectedId: String? = null
     private var workTab = false
@@ -497,6 +499,30 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
                 line.addView(bubble, LinearLayout.LayoutParams(-2, -2))
                 item.addView(line, LinearLayout.LayoutParams(-1, -2))
+                if (mine && WorkspaceMessageDisplayPolicy.shouldCollapse(message.text)) {
+                    val messageKey = "${current.projectId}:${message.id}"
+                    val toggle = label("Show more", 12f).apply {
+                        gravity = Gravity.END
+                        setTextColor(Color.rgb(168, 255, 178))
+                        setPadding(dp(8), dp(2), dp(12), dp(8))
+                        isClickable = true
+                        isFocusable = true
+                    }
+                    fun display(expanded: Boolean) {
+                        bubble.maxLines = if (expanded) Int.MAX_VALUE else
+                            WorkspaceMessageDisplayPolicy.COLLAPSED_LINES
+                        bubble.ellipsize = if (expanded) null else android.text.TextUtils.TruncateAt.END
+                        toggle.text = if (expanded) "Show less" else "Show more"
+                        toggle.contentDescription = if (expanded) "Show less of your message" else
+                            "Show full message"
+                    }
+                    display(messageKey in expandedMessageIds)
+                    toggle.setOnClickListener {
+                        if (!expandedMessageIds.add(messageKey)) expandedMessageIds.remove(messageKey)
+                        display(messageKey in expandedMessageIds)
+                    }
+                    item.addView(toggle, LinearLayout.LayoutParams(-1, -2))
+                }
             }
             if (!mine) {
                 val actionRow = LinearLayout(this).apply {
