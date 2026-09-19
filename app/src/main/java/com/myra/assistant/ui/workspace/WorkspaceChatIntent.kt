@@ -6,11 +6,15 @@ internal object WorkspaceChatIntent {
     private val action = Regex("""\b(?:make|build|create|generate|develop|design|code|implement|banao|bana\s*do|bana\s*ke|banado|banaye|banaiye|बनाओ|बना\s*दो|बनाइए)\b""")
     private val website = Regex("""\b(?:website|web\s*site|web\s*app|webapp|landing\s*page|site)\b|वेबसाइट""")
     private val android = Regex("""\b(?:android\s*app|android\s*application|mobile\s*app|apk)\b|एंड्रॉयड\s*ऐप""")
+    private val promptRequest = Regex("""\bprompts?\b|प्रॉम्प्ट|پرومپٹ""")
     private val followUp = Regex("""\b(?:change|update|fix|modify|add|remove|replace|implement|redesign|code|badlo|hatao|jodo)\b|बदलो|हटाओ|जोड़ो""")
 
     fun requestedProjectType(message: String): WorkspaceProjectType? {
         val text = message.lowercase().replace(Regex("""[\s\p{Z}]+"""), " ").trim()
-        if (text.isEmpty() || question.containsMatchIn(text) || !action.containsMatchIn(text)) return null
+        // Asking for a prompt to paste into a coding AI is writing, not authority to
+        // create or mutate an Android/website project in this app.
+        if (text.isEmpty() || promptRequest.containsMatchIn(text) ||
+            question.containsMatchIn(text) || !action.containsMatchIn(text)) return null
         return when {
             android.containsMatchIn(text) -> WorkspaceProjectType.ANDROID_APP
             website.containsMatchIn(text) -> WorkspaceProjectType.WEBSITE
