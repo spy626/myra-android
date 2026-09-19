@@ -21,8 +21,9 @@ class WorkspaceChatGatewayTest {
         }
     }
 
-    @Test fun onlyNonVoiceOpenRouterRouteIsExposed() {
-        assertEquals(listOf(WorkspaceChatGateway.Provider.OPENROUTER_FREE),
+    @Test fun onlyExplicitWorkspaceFreeRoutesAreExposed() {
+        assertEquals(listOf(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+            WorkspaceChatGateway.Provider.GROQ_FREE),
             WorkspaceChatGateway.Provider.values().toList())
         val request = WorkspaceChatGateway.request(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
             "session-secret", listOf(message("user", "this project only")))
