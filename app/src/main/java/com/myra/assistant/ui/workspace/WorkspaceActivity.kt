@@ -629,18 +629,20 @@ class WorkspaceActivity : AppCompatActivity() {
             val websitePending = if (current.type == WorkspaceProjectType.WEBSITE)
                 runCatching { WorkspaceWebsiteGeneration.pending(projects, id) }.getOrNull() else null
             val pending = runCatching { WorkspaceScopedEdit.pending(projects, id) }.getOrNull()
-            if (websitePending != null) addControl("Review website · Undo / Keep") {
-                coding.reviewPending(id)
-            }
-            else if (pending != null) addControl("Review edit · Undo / Keep") { coding.reviewPending(id) }
-            else {
-                val saved = runCatching { suggestions.recover(files, tasks, projects, id) }.getOrNull()
-                if (saved is WorkspaceAiSuggestionDraftStore.Recovery.Ready)
+            val savedProposal = if (websitePending == null && pending == null)
+                runCatching { suggestions.recover(files, tasks, projects, id) }.getOrNull() is
+                    WorkspaceAiSuggestionDraftStore.Recovery.Ready
+            else false
+            // Never treat a saved instruction as a completed or resumable file edit.
+            // A new instruction is sent through the chat composer; review requires a real backup.
+            when (WorkspaceCodingActionPolicy.next(websitePending != null, pending != null, savedProposal)) {
+                WorkspaceCodingActionPolicy.Action.REVIEW_WEBSITE ->
+                    addControl("Review website · Undo / Keep") { coding.reviewPending(id) }
+                WorkspaceCodingActionPolicy.Action.REVIEW_EDIT ->
+                    addControl("Review edit · Undo / Keep") { coding.reviewPending(id) }
+                WorkspaceCodingActionPolicy.Action.REVIEW_SAVED_PROPOSAL ->
                     addControl("Review saved code change") { coding.reviewSaved(id) }
-                val lastInstruction = messages.lastOrNull { it.role == "user" }?.text.orEmpty()
-                if (lastInstruction.isNotBlank()) addControl("Continue coding request") {
-                    coding.continueRequest(id, lastInstruction)
-                }
+                WorkspaceCodingActionPolicy.Action.NONE -> Unit
             }
         }
         // Scrolling by coordinates must not move input focus to the last selectable reply.
