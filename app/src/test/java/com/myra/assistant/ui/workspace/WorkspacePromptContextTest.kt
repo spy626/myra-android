@@ -22,19 +22,19 @@ class WorkspacePromptContextTest {
         assertEquals(prompt.text, sent.getJSONObject(1).getString("content"))
     }
 
-    @Test fun pastExplicitCompanionInSameChatResolvesAmbiguityEvenWhenOlderThanEight() {
+    @Test fun pastExplicitCompanionInSameChatResolvesAmbiguityEvenWhenOlderThanRecentWindow() {
         val earlier = user("Mujhe AI companion app chahiye with voice and memory")
-        val filler = (1..10).flatMap { listOf(user("Other topic $it"), assistant("Okay $it")) }
+        val filler = (1..13).flatMap { listOf(user("Other topic $it"), assistant("Okay $it")) }
         val latest = user("Mujhe ek ai companiyon banane hai mujhe prompt do")
         val history = listOf(earlier) + filler + latest
         assertEquals(WorkspacePromptContext.Decision.BUILD_COMPANION,
             WorkspacePromptContext.resolve(history))
         val sent = entries(history)
-        assertEquals(9, sent.length()) // system + latest 8 raw chat turns only
+        assertEquals(25, sent.length()) // one context instruction + latest 24 raw turns
         val instruction = sent.getJSONObject(0).getString("content")
         assertTrue(instruction.contains("CODING/DEVELOPMENT AI"))
         assertTrue(instruction.contains("same conversation"))
-        assertFalse(sent.toString().contains(earlier.text)) // no old raw messages uploaded
+        assertFalse(sent.toString().contains(earlier.text)) // old raw message is projected, not replayed verbatim
         assertEquals(latest.text, sent.getJSONObject(sent.length() - 1).getString("content"))
     }
 
