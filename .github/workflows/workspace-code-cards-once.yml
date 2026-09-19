@@ -31,7 +31,10 @@ jobs:
           git diff --check
           git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt
           git diff --cached --stat
-          git diff --cached --quiet && { echo 'No source changes made' >&2; exit 1; }
+          if git diff --cached --quiet; then
+            echo 'No source changes made' >&2
+            exit 1
+          fi
       - name: Test native code cards and assemble APK before pushing
         run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
       - name: Fast-forward only scoped changes to phase branch
