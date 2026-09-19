@@ -35,6 +35,7 @@ internal object WorkspaceNavigationDrawer {
         onTogglePin: (String) -> Unit,
         onRenameChat: (String, String) -> Unit,
         onDeleteChat: (String) -> Unit,
+        onBeforeDeleteProject: (String) -> Unit,
     ) {
         fun dp(value: Int) = (value * activity.resources.displayMetrics.density + .5f).toInt()
         fun toast(value: String) = Toast.makeText(activity, value, Toast.LENGTH_LONG).show()
@@ -128,32 +129,23 @@ internal object WorkspaceNavigationDrawer {
                 }.show()
         }
 
-        /** This is deliberately NOT called by Delete Chat. Requires exact-name confirmation. */
+        /** Delete Project is separate from Delete Chat, with one explicit destructive confirmation. */
         fun showProjectActions(project: WorkspaceProject) {
             AlertDialog.Builder(activity).setTitle(project.name)
                 .setItems(arrayOf("Delete Project…")) { _, _ ->
-                    val input = EditText(activity).apply {
-                        hint = "Type project name to confirm"
-                        setSingleLine(true)
-                        setPadding(dp(18), dp(14), dp(18), dp(14))
-                    }
                     val confirmation = AlertDialog.Builder(activity)
                         .setTitle("Permanently delete project?")
-                        .setMessage("This deletes '${project.name}', all its source files, task briefs, saved drafts, rollback data and chat history. This CANNOT be undone. Type the exact project name to continue. Delete Chat alone never deletes these files.")
-                        .setView(input)
+                        .setMessage("Delete '${project.name}' and ALL its source files, task briefs, saved drafts, rollback data and chat history? This cannot be undone. Delete Chat alone does not delete project files.")
                         .setNegativeButton("Cancel", null)
                         .setPositiveButton("Delete Project", null).create()
                     confirmation.show()
                     confirmation.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                        if (input.text.toString() != project.name) {
-                            input.error = "Type the exact project name"
-                            return@setOnClickListener
-                        }
                         val id = project.projectId
                         val result = runCatching {
                             val store = WorkspaceProjectStore(File(activity.filesDir, "workspace/projects"))
                             val current = requireNotNull(store.getProject(id)) { "Project disappeared" }
-                            require(current.name == project.name && current.type != WorkspaceProjectType.CHAT) {
+                            require(current.projectId == id && current.name == project.name &&
+                                current.type == project.type && current.type != WorkspaceProjectType.CHAT) {
                                 "Project changed; reopen the drawer"
                             }
                             val root = File(activity.noBackupFilesDir, "workspace-conversations")
@@ -165,6 +157,8 @@ internal object WorkspaceNavigationDrawer {
                             }
                             val transcript = File(directory, "conversation.json")
                             require(!Files.isSymbolicLink(transcript.toPath())) { "Unsafe transcript" }
+                            // Stop any selected in-flight project work before removing its source.
+                            onBeforeDeleteProject(id)
                             check(store.deleteProject(id)) { "Project could not be deleted" }
                             // Project manifest is gone, so only this prevalidated transcript may be cleaned up.
                             if (transcript.exists()) check(transcript.isFile && transcript.delete()) {

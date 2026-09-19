@@ -65,7 +65,7 @@ internal object WorkspaceFreeAiSuggestion {
         401, 403 -> "OpenRouter returned HTTP $code: key or provider access refused. No paid fallback."
         402 -> "OpenRouter returned HTTP 402: free route unavailable; payment will NOT be attempted."
         408 -> "OpenRouter returned HTTP 408: upstream request timed out. Try again later; no paid fallback."
-        429 -> "OpenRouter returned HTTP 429: free route rate-limited. This does not prove your daily quota is exhausted.${retryAfterHint(retryAfter)} No paid fallback."
+        429 -> "OpenRouter returned HTTP 429: free route rate-limited. This does not prove your daily quota is exhausted.${retryAfterHint(retryAfter)} Wait as suggested, or try later instead of repeatedly tapping Retry. No paid fallback."
         503 -> "OpenRouter returned HTTP 503: service temporarily unavailable. Try later; no paid fallback."
         else -> "OpenRouter returned HTTP $code: free route refused; no paid fallback."
     }

@@ -21,6 +21,6 @@ internal object WorkspaceCodingResult {
 
     fun failure(reason: String): String = "LYRA coding request complete nahi kar paayi: $reason " +
         "Work → Files mein current project check karo. Agar Review edit/website dikhe " +
-        "toh Undo ya Keep ke baad same instruction dobara bhej sakte ho. " +
-        "No paid fallback."
+        "toh Undo ya Keep ke baad same instruction dobara bhej sakte ho." +
+        if (reason.contains("No paid fallback", ignoreCase = true)) "" else " No paid fallback."
 }

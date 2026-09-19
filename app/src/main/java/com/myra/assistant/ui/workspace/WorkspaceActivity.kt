@@ -713,7 +713,16 @@ class WorkspaceActivity : AppCompatActivity() {
                     render()
                 }
             },
-            onDeleteChat = { id -> confirmDeleteChat(id) }
+            onDeleteChat = { id -> confirmDeleteChat(id) },
+            onBeforeDeleteProject = { id ->
+                if (selectedId == id) {
+                    requestGeneration++
+                    activeRequest?.cancel()
+                    activeRequest = null
+                    coding.cancel()
+                    codingRetryTarget = null
+                }
+            }
         )
     }
 
