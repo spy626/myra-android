@@ -1,0 +1,140 @@
+package com.myra.assistant.data.memory
+
+import java.io.File
+import org.junit.Assert.*
+import org.junit.Test
+
+class AiriMemorySourceComplianceTest {
+    private val root = File("src/main/java/com/myra/assistant")
+
+    @Test fun exactlyOneOwnerAndOneRoomDatabaseRemain() {
+        val sources = root.walkTopDown().filter { it.extension == "kt" }.toList()
+        assertEquals(1, sources.sumOf { Regex("class MemoryBrainCoordinator\\b").findAll(it.readText()).count() })
+        assertEquals(1, sources.sumOf { Regex("class LyraMemoryDatabase\\b").findAll(it.readText()).count() })
+        assertEquals(1, sources.sumOf { Regex("Room\\.databaseBuilder").findAll(it.readText()).count() })
+    }
+
+    @Test fun legacyNaturalMemoryOwnersCannotReturn() {
+        val forbidden = setOf("MemoryBrainV2.kt", "MemoryCommandParser.kt", "NaturalMemoryExtractor.kt",
+            "PersonalMemoryExtractor.kt", "PersonLinkedMemoryExtractor.kt", "BestFriendNameCorrectionParser.kt",
+            "SemanticMemoryProposalValidator.kt", "AutomaticMemoryExtractor.kt", "AutomaticMemoryChangeParser.kt",
+            "JarvisSimpleMemory.kt", "JarvisMemoryDatabase.kt", "JarvisLegacyImporter.kt",
+            "ContextAwareMemoryAdmission.kt")
+        assertTrue(root.walkTopDown().filter { it.isFile }.none { it.name in forbidden })
+        val all = root.walkTopDown().filter { it.extension == "kt" }.joinToString("\n") { it.readText() }
+        assertFalse(all.contains("JarvisSimpleMemoryRuntime"))
+        assertFalse(all.contains("JarvisSimpleMemoryExtractor"))
+        assertFalse(all.contains("jarvisDao()"))
+    }
+
+    @Test fun geminiAndVoiceServiceCannotWriteDaoDirectly() {
+        val gemini = File(root, "ai/GeminiLiveClient.kt").readText()
+        val service = File(root, "service/MyraVoiceService.kt").readText()
+        assertFalse(gemini.contains("AiriMemoryDao")); assertFalse(gemini.contains("RoomAiriMemoryStore"))
+        assertFalse(service.contains("airiMemoryDao()")); assertFalse(service.contains("insertSemantic("))
+        assertTrue(service.contains("memoryBrain.executeFinalTurnPlan"))
+    }
+
+    @Test fun simpleRecallIsBoundedLocalStoreWork() {
+        val store = File(root, "data/memory/AiriMemoryStore.kt").readText()
+        assertTrue(store.contains("limit.coerceIn(1, 8)"))
+        assertFalse(store.contains("Gemini")); assertFalse(store.contains("http")); assertFalse(store.contains("Retrofit"))
+    }
+
+    @Test fun simpleRecallCrossesServiceBoundaryWithoutGeminiToolStaging() {
+        val lane = File(root, "data/memory/LocalFastMemoryLane.kt").readText()
+        val service = File(root, "service/MyraVoiceService.kt").readText()
+        assertTrue(lane.contains("class LocalFastMemoryLane"))
+        assertTrue(lane.contains("owner.recall"))
+        assertFalse(lane.contains("GeminiLiveClient"))
+        assertFalse(lane.contains("query_user_memory"))
+        assertTrue(service.contains("fastMemoryLane.recall(finalUtterance.memoryEvidence)"))
+        assertTrue(service.contains("networkCall=false"))
+    }
+
+    @Test fun allProductionDurableWritersAreCoordinatorOwned() {
+        val sources = root.walkTopDown().filter { it.extension == "kt" }.toList()
+        val roomConstructors = sources.filter { it.readText().contains("RoomAiriMemoryStore(") }
+        assertEquals(setOf("AiriMemoryStore.kt", "AiriMemoryCoordinator.kt"), roomConstructors.map { it.name }.toSet())
+        val passive = File(root, "data/memory/BehaviorMemoryLearner.kt").readText()
+        val ui = File(root, "ui/settings/MemorySettingsActivity.kt").readText()
+        assertFalse(passive.contains("RoomAiriMemoryStore("))
+        assertTrue(passive.contains("owner.recordBehaviorObservation"))
+        assertFalse(ui.contains(".forgetCard(")); assertFalse(ui.contains(".renamePerson(")); assertFalse(ui.contains(".clearAll("))
+        assertTrue(ui.contains("memoryOwner.deleteMemory")); assertTrue(ui.contains("memoryOwner.renameFromManualUi"))
+        val wake = File(root, "data/memory/AiriMemoryWakeWorker.kt").readText()
+        assertTrue(wake.contains("MemoryBrainCoordinator.get(applicationContext).runDurableBackgroundWork()"))
+        assertTrue(wake.contains("ExistingWorkPolicy.APPEND_OR_REPLACE"))
+        assertFalse(wake.contains("ExistingWorkPolicy.KEEP"))
+        assertFalse(wake.contains("AiriMemoryDao")); assertFalse(wake.contains("RoomAiriMemoryStore"))
+        val dao = File(root, "data/memory/MemoryDao.kt").readText()
+        val owner = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
+        assertTrue(dao.contains("state = 'RUNNING' AND updatedAt <= :expiredBefore"))
+        assertTrue(dao.contains("state IN ('PENDING', 'RUNNING')"))
+        assertTrue(owner.contains("recoverExpiredBackgroundLeases"))
+        assertTrue(owner.contains("consolidateEpisode(work.subjectId)"))
+        assertFalse(owner.contains("consolidationQueue"))
+        assertFalse(owner.contains("for (episodeId in consolidationQueue)"))
+        assertEquals(2, Regex("consolidateEpisode\\(").findAll(owner).count())
+        assertTrue(owner.indexOf("claimBackgroundWork(work.workId, now)") <
+            owner.indexOf("consolidateEpisode(work.subjectId)"))
+    }
+
+    @Test fun relationshipStrengthIsStructuredSemanticEvidenceNotLanguageParsing() {
+        val runtime = File(root, "data/memory/AiriMemoryRuntime.kt").readText()
+        val owner = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
+        val reasoning = File(root, "data/memory/MemoryReasoningProvider.kt").readText()
+        assertTrue(runtime.contains("fun authorize(semantic: PersonRelationship?)"))
+        assertFalse(runtime.contains("private val FRIENDSHIP"))
+        assertFalse(runtime.contains("private val GOOD"))
+        assertFalse(runtime.contains("private val BEST"))
+        assertTrue(reasoning.contains("semantic_relationship"))
+        assertFalse(reasoning.contains(".put(\"relationship\""))
+        assertFalse(reasoning.contains("requested relationship"))
+        assertTrue(owner.contains("canonical target owns REINFORCE/INVALIDATE"))
+    }
+
+    @Test fun structuredProjectionClosuresAreCanonicalAndVerifiedInRoom() {
+        val dao = File(root, "data/memory/MemoryDao.kt").readText()
+        val owner = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
+        assertTrue(dao.contains("suspend fun endCurrentRelationship"))
+        assertTrue(dao.contains("targetEntityId = :entityId AND active = 1 AND deletedAt IS NULL"))
+        assertTrue(dao.contains("semanticMemoryId = :semanticMemoryId"))
+        assertTrue(dao.contains("suspend fun closeLinkedGoal"))
+        assertTrue(owner.contains("store.endCurrentRelationship(person.entityId)"))
+        assertTrue(owner.contains("store.closeGoal(target.semanticKey, target.memoryId"))
+        assertTrue(owner.contains("throw MemoryMutationAbort(MemoryFailureReason.VERIFY_FAILED)"))
+    }
+
+    @Test fun entityAnchorsAreNotStoredAsUserFacingCards() {
+        val entity = File(root, "data/memory/MemoryEntity.kt").readText()
+        val store = File(root, "data/memory/AiriMemoryStore.kt").readText()
+        assertTrue(entity.contains("data class PersonEntity"))
+        assertFalse(store.contains("person known to Zopy"))
+    }
+
+    @Test fun plastMemTablesAndNoParallelTruthTablesAreDeclared() {
+        val db = File(root, "data/memory/LyraMemoryDatabase.kt").readText()
+        val entities = File(root, "data/memory/MemoryEntity.kt").readText()
+        assertTrue(db.contains("version = 12"))
+        val coordinator = File(root, "data/memory/AiriMemoryCoordinator.kt").readText()
+        assertTrue(coordinator.contains("segmentCommittedConversation(evidence.sessionId, eof = false)"))
+        assertFalse(coordinator.contains("segmentCommittedConversation(evidence.sessionId, eof = true)"))
+        listOf("airi_conversation_truth", "airi_segmentation_state", "airi_episode_spans",
+            "airi_episodes", "airi_semantic_memory", "airi_pending_review",
+            "airi_semantic_fts", "airi_episode_fts").forEach { assertTrue(it, entities.contains(it)) }
+        assertTrue(entities.contains("airi_consolidation_actions"))
+        assertTrue(entities.contains("airi_background_work"))
+        assertFalse(db.contains("Jarvis")); assertFalse(db.contains("abstract fun jarvisDao"))
+    }
+
+    @Test fun sparkIsSubordinateToUnifiedAgentAndCannotWriteMemory() {
+        val spark = File(root, "agent/SparkRuntime.kt").readText()
+        val unified = File(root, "agent/UnifiedLyraAgent.kt").readText()
+        assertTrue(unified.contains("val sparkRuntime = LyraSparkRuntime"))
+        assertTrue(unified.contains("val sparkNotifyScheduler = SparkNotifyScheduler"))
+        assertTrue(unified.contains("fun handleSparkNotify"))
+        assertFalse(spark.contains("AiriMemoryDao")); assertFalse(spark.contains("RoomAiriMemoryStore"))
+        assertFalse(spark.contains("insertSemantic")); assertFalse(spark.contains("addSemantic"))
+    }
+}
