@@ -48,10 +48,10 @@ internal object WorkspaceChatGateway {
 
     fun openRouterBody(messages: List<WorkspaceConversationStore.Message>, image: Image? = null): String {
         val entries = JSONArray()
-        val writing = messages.lastOrNull()?.takeIf { it.role == "user" }
-            ?.let { WorkspaceStoryScript.isWritingRequest(it.text) } == true
-        if (writing) entries.put(JSONObject().put("role", "system")
-            .put("content", WorkspaceStoryScript.WRITING_INSTRUCTIONS))
+        val writingPrompt = messages.lastOrNull()?.takeIf { it.role == "user" &&
+            WorkspaceStoryScript.isWritingRequest(it.text) }?.text
+        if (writingPrompt != null) entries.put(JSONObject().put("role", "system")
+            .put("content", WorkspaceStoryScript.writingInstructions(writingPrompt)))
         messages.forEachIndexed { index, message ->
             require(message.role == "user" || message.role == "assistant") { "Invalid chat role" }
             require(message.text.length in 1..WorkspaceConversationStore.MAX_MESSAGE_LENGTH) { "Invalid message size" }
