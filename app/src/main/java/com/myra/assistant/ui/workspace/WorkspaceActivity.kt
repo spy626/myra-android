@@ -275,6 +275,7 @@ class WorkspaceActivity : AppCompatActivity() {
         coding.cancel()
         statusMessage = "Stopped. No partial reply is available from this non-streaming provider."
         render()
+        if (!workTab) composer.requestFocus()
     }
 
     private fun updateSendButton() {
@@ -461,28 +462,39 @@ class WorkspaceActivity : AppCompatActivity() {
                 content.addView(label("Conversation storage requires attention. No other chat's messages will be shown."))
                 return
             }
+        var latestUserPrompt = ""
         messages.forEach { message ->
             val mine = message.role == "user"
+            if (mine) latestUserPrompt = message.text
             val item = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            val line = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = if (mine) Gravity.END else Gravity.START
-            }
-            val bubble = label(message.text, 15f).apply {
-                maxWidth = resources.displayMetrics.widthPixels - dp(72)
-                setTextIsSelectable(!mine)
-                setPadding(dp(14), dp(10), dp(14), dp(10))
-                if (mine) {
-                    background = rounded(Color.rgb(28, 46, 37), 18)
-                    isLongClickable = true
-                    setOnLongClickListener {
-                        showUserMessageMenu(this, current.projectId, message)
-                        true
+            val story = if (!mine && current.type == WorkspaceProjectType.CHAT)
+                WorkspaceStoryScript.card(latestUserPrompt, message.text) else null
+            if (story != null) {
+                item.addView(WorkspaceStoryCardView.create(this, story) {
+                    copyMessage(story.copyText)
+                }, LinearLayout.LayoutParams(-1, -2))
+            } else {
+                val line = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = if (mine) Gravity.END else Gravity.START
+                }
+                val bubble = label(message.text, 15f).apply {
+                    if (!mine) text = WorkspaceMarkdownText.render(message.text)
+                    maxWidth = resources.displayMetrics.widthPixels - dp(72)
+                    setTextIsSelectable(!mine)
+                    setPadding(dp(14), dp(10), dp(14), dp(10))
+                    if (mine) {
+                        background = rounded(Color.rgb(28, 46, 37), 18)
+                        isLongClickable = true
+                        setOnLongClickListener {
+                            showUserMessageMenu(this, current.projectId, message)
+                            true
+                        }
                     }
                 }
+                line.addView(bubble, LinearLayout.LayoutParams(-2, -2))
+                item.addView(line, LinearLayout.LayoutParams(-1, -2))
             }
-            line.addView(bubble, LinearLayout.LayoutParams(-2, -2))
-            item.addView(line, LinearLayout.LayoutParams(-1, -2))
             if (!mine) {
                 val actionRow = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -512,7 +524,8 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
             }
         }
-        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        // Scrolling by coordinates must not move input focus to the last selectable reply.
+        scroll.post { scroll.scrollTo(0, content.height) }
     }
 
     private fun renderWork(current: WorkspaceProject?) {
@@ -744,6 +757,8 @@ class WorkspaceActivity : AppCompatActivity() {
         val stored = runCatching { conversations.append(id, "user", text) }
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
         composer.text.clear()
+        // Keep the keyboard's typing target after Send; opening the keyboard is still user-driven.
+        composer.requestFocus()
         localDrafts.remove(id)
         attachments.clear()
         if (intent != null && current.type == WorkspaceProjectType.CHAT) {
