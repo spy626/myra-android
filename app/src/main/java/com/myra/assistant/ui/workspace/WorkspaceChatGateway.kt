@@ -69,8 +69,9 @@ internal object WorkspaceChatGateway {
         // covers ambiguous prompt decisions, so do not duplicate its earlier evidence.
         val earlier = if (revisionKind == null && contextDecision == null)
             WorkspaceContextProjection.earlierUserContext(messages) else ""
-        val instructions = listOf(writingInstructions, earlier).filter(String::isNotBlank)
-            .joinToString("\n\n")
+        val codeInstructions = latest?.let(WorkspaceCodePrompt::instructions).orEmpty()
+        val instructions = listOf(writingInstructions, earlier, codeInstructions)
+            .filter(String::isNotBlank).joinToString("\n\n")
         if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", instructions))
         recent.forEachIndexed { index, message ->

@@ -541,10 +541,28 @@ class WorkspaceActivity : AppCompatActivity() {
             val item = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             val story = if (!mine && current.type == WorkspaceProjectType.CHAT)
                 WorkspaceStoryScript.card(latestUserPrompt, message.text) else null
+            val codeParts = if (!mine && story == null) WorkspaceCodeBlocks.parse(message.text)
+                else emptyList()
             if (story != null) {
                 item.addView(WorkspaceStoryCardView.create(this, story) {
                     copyMessage(story.copyText)
                 }, LinearLayout.LayoutParams(-1, -2))
+            } else if (codeParts.any { it is WorkspaceCodeBlocks.Part.Code }) {
+                codeParts.forEach { part ->
+                    when (part) {
+                        is WorkspaceCodeBlocks.Part.Prose -> item.addView(label("", 15f).apply {
+                            text = WorkspaceMarkdownText.render(part.text)
+                            setTextIsSelectable(true)
+                            setPadding(dp(14), dp(9), dp(14), dp(9))
+                        }, LinearLayout.LayoutParams(-1, -2))
+                        is WorkspaceCodeBlocks.Part.Code -> item.addView(
+                            WorkspaceCodeCardView.create(this, part) { copyMessage(part.source) },
+                            LinearLayout.LayoutParams(-1, -2).apply {
+                                topMargin = dp(7)
+                                bottomMargin = dp(9)
+                            })
+                    }
+                }
             } else {
                 val line = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL

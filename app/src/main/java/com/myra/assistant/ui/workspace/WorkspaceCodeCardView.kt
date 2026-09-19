@@ -112,7 +112,7 @@ internal object WorkspaceCodeCardView {
 
         val horizontal = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = true
-            fillViewport = true
+            isFillViewport = true
         }
         horizontal.addView(TextView(context).apply {
             text = highlighted(block.source, block.language)
