@@ -15,6 +15,11 @@ class WorkspaceLongInputPolicyTest {
 
     @Test fun remoteLimitChecksWholeTextNotTruncatedPrefix() {
         assertTrue(WorkspaceLongInputPolicy.requestFits(listOf(message("a".repeat(32_000)))))
-        assertFalse(WorkspaceLongInputPolicy.requestFits(listOf(message("b".repeat(40_000)), message("c".repeat(30_000)))))
+        assertTrue(WorkspaceLongInputPolicy.requestFits(listOf(message("b".repeat(40_000)), message("c".repeat(30_000)))))
+        val latest = message("c".repeat(30_000))
+        val outgoing = WorkspaceLongInputPolicy.outbound(listOf(message("b".repeat(40_000)), latest))
+        assertTrue(outgoing.size == 1)
+        assertTrue(outgoing.single().text == latest.text)
+        assertFalse(WorkspaceLongInputPolicy.requestFits(listOf(message("z".repeat(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS + 1)))))
     }
 }

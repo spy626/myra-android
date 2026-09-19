@@ -235,10 +235,12 @@ class WorkspaceActivity : AppCompatActivity() {
             setBackgroundColor(Color.TRANSPARENT)
             textSize = 15f
             minLines = 1
-            maxLines = 5
+            maxLines = 8
+            isVerticalScrollBarEnabled = true
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                 InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            filters = arrayOf(InputFilter.LengthFilter(4_000))
+            // Never silently truncate a pasted prompt. Check the full text on Send.
+            filters = emptyArray<InputFilter>()
             setPadding(dp(2), dp(10), dp(6), dp(10))
         }
         entry.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
@@ -391,7 +393,8 @@ class WorkspaceActivity : AppCompatActivity() {
             maxLines = 6
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                 InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            filters = arrayOf(InputFilter.LengthFilter(4_000))
+            // Never silently truncate a pasted prompt. Check the full text on Send.
+            filters = emptyArray<InputFilter>()
             setPadding(dp(20), dp(12), dp(20), dp(12))
         }
         AlertDialog.Builder(this).setTitle("Edit message")
@@ -399,9 +402,9 @@ class WorkspaceActivity : AppCompatActivity() {
             .setView(input)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save edit") { _, _ ->
-                val revisedText = input.text.toString().trim()
-                if (revisedText.isBlank() || revisedText.length > 4_000) {
-                    toast("Message must contain 1–4000 characters")
+                val revisedText = input.text.toString()
+                if (!WorkspaceLongInputPolicy.sendable(revisedText)) {
+                    toast("Message must contain 1–${WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS} characters; edit remains open if too long")
                 } else if (WorkspaceChatIntent.requestedProjectType(revisedText) != null) {
                     toast("Send a new coding request in Chat instead of editing a private message")
                 } else if (selectedId != id || isBusy() ||
@@ -737,8 +740,14 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun sendMessage() {
         if (workTab) return
         if (isBusy()) { stopReply(); return }
-        val text = composer.text.toString().trim()
-        if (text.isEmpty()) { toast("Write a message first"); return }
+        val text = composer.text.toString()
+        if (text.isBlank()) { toast("Write a message first"); return }
+        if (!WorkspaceLongInputPolicy.sendable(text)) {
+            statusMessage = "The complete pasted draft is still in the chat box. " +
+                "This app supports up to ${WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS} characters per message; nothing was sent."
+            render()
+            return
+        }
         val intent = WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
             val title = text.lineSequence().firstOrNull().orEmpty()
@@ -817,7 +826,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 .joinToString("\n\n") { "Document ${it.name}:\n${readAttachmentText(it)}" }
             val last = transcript.last()
             val expanded = last.text + if (addition.isBlank()) "" else "\n\n$addition"
-            require(expanded.length <= WorkspaceConversationStore.MAX_MESSAGE_LENGTH) {
+            require(expanded.length <= WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS) {
                 "Attachments exceed the private request limit"
             }
             transcript.dropLast(1) + last.copy(text = expanded)

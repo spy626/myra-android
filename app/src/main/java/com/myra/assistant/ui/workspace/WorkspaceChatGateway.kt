@@ -27,8 +27,10 @@ internal object WorkspaceChatGateway {
             "Set a valid OpenRouter key in API & Cloud Settings"
         }
         require(messages.isNotEmpty() && messages.last().role == "user") { "A user message is required" }
-        val recent = messages.takeLast(8)
-        require(recent.sumOf { it.text.length } <= 12_000) { "Conversation is too long for one private request" }
+        // Previous turns are dropped whole when needed; the latest pasted prompt is never sliced.
+        require(WorkspaceLongInputPolicy.requestFits(messages)) {
+            "Full prompt exceeds this free route's 64000-character request cap; saved locally, nothing sent"
+        }
         image?.let {
             require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
             require(it.base64.length in 1..2_700_000 &&
@@ -50,7 +52,7 @@ internal object WorkspaceChatGateway {
 
     fun openRouterBody(messages: List<WorkspaceConversationStore.Message>, image: Image? = null): String {
         val entries = JSONArray()
-        val recent = messages.takeLast(8)
+        val recent = WorkspaceLongInputPolicy.outbound(messages)
         val latest = recent.lastOrNull()?.takeIf { it.role == "user" }?.text
         val revisionKind = WorkspacePromptFollowUp.kind(messages)
         val contextDecision = WorkspacePromptContext.resolve(messages)

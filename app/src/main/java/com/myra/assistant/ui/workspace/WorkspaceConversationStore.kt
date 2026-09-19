@@ -16,9 +16,9 @@ class WorkspaceConversationStore(
 ) {
     data class Message(val id: String, val role: String, val text: String, val createdAtMs: Long)
     companion object {
-        const val MAX_MESSAGE_LENGTH = 6_000
+        const val MAX_MESSAGE_LENGTH = WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS
         private const val MAX_MESSAGES = 160
-        private const val MAX_FILE_BYTES = 1_200_000L
+        private const val MAX_FILE_BYTES = 16_000_000L
     }
 
     private fun transcript(projectId: String): File {
@@ -65,8 +65,8 @@ class WorkspaceConversationStore(
         return true
     }
 
-    private fun checkedText(text: String): String = text.trim().also {
-        require(it.isNotBlank() && it.length <= MAX_MESSAGE_LENGTH) { "Message must contain 1–6000 characters" }
+    private fun checkedText(text: String): String = text.also {
+        require(it.isNotBlank() && it.length <= MAX_MESSAGE_LENGTH) { "Message must contain 1–${MAX_MESSAGE_LENGTH} characters" }
     }
 
     /** Revisions are limited to the newest user turn, protecting later conversation and project work. */

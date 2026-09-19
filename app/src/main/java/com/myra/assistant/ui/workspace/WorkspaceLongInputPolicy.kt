@@ -10,5 +10,19 @@ internal object WorkspaceLongInputPolicy {
 
     fun sendable(text: String): Boolean = text.isNotBlank() && text.length <= MAX_MESSAGE_CHARS
     fun requestFits(messages: List<WorkspaceConversationStore.Message>): Boolean =
-        messages.takeLast(8).sumOf { it.text.length.toLong() } <= MAX_REQUEST_CHARS
+        messages.lastOrNull()?.let { it.text.length <= MAX_REQUEST_CHARS } == true
+
+    /** Select only complete preceding messages, with the latest user turn always intact. */
+    fun outbound(messages: List<WorkspaceConversationStore.Message>): List<WorkspaceConversationStore.Message> {
+        require(messages.lastOrNull()?.role == "user") { "A user message is required" }
+        require(requestFits(messages)) { "Prompt exceeds the free-route request limit; full message remains saved locally" }
+        val selected = mutableListOf<WorkspaceConversationStore.Message>()
+        var remaining = MAX_REQUEST_CHARS
+        for (message in messages.takeLast(8).asReversed()) {
+            if (message.text.length > remaining) break
+            selected.add(message)
+            remaining -= message.text.length
+        }
+        return selected.asReversed()
+    }
 }

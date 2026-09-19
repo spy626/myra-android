@@ -32,6 +32,15 @@ class WorkspaceChatGatewayTest {
         assertEquals("openrouter.ai", request.url.host)
     }
 
+    @Test fun longPastedMessageIsSentInFullWithoutSlicing() {
+        val original = "START\n" + "हॉरर कहानी और AI companion\n".repeat(850) + "\nEND"
+        val older = message("assistant", "old".repeat(15000))
+        val body = JSONObject(WorkspaceChatGateway.openRouterBody(listOf(older, message("user", original))))
+        val payload = body.getJSONArray("messages")
+        assertEquals(original, payload.getJSONObject(payload.length() - 1).getString("content"))
+        assertEquals(1, payload.length())
+    }
+
     @Test fun photoSentOnlyInCurrentTurnAndNotRetainedInPreviousMessages() {
         val messages = listOf(message("user", "Earlier"), message("assistant", "Okay"), message("user", "Describe photo"))
         val image = WorkspaceChatGateway.Image("image/png", "cG5n")
