@@ -86,8 +86,12 @@ internal object WorkspaceChatGateway {
         }
         return JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
             .put("stream", false).put("max_tokens", 2_048)
+            // A free label alone is insufficient: reject every endpoint with a nonzero
+            // prompt, completion, per-request or image price. Never upgrade silently.
             .put("provider", JSONObject().put("zdr", true).put("data_collection", "deny")
-                .put("allow_fallbacks", false))
+                .put("allow_fallbacks", false)
+                .put("max_price", JSONObject().put("prompt", 0).put("completion", 0)
+                    .put("request", 0).put("image", 0)))
             // OpenRouter may otherwise compress/truncate the middle on small endpoints.
             // Never permit silent truncation of the user's full pasted prompt.
             .put("plugins", JSONArray().put(JSONObject().put("id", "context-compression")
