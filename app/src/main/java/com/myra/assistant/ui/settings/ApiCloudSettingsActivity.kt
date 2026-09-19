@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.databinding.ActivityApiCloudSettingsBinding
+import com.myra.assistant.ui.workspace.WorkspaceGroqFree
 import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
 
 /** Non-voice provider credentials only. Gemini Live is configured in Voice & AI Models. */
@@ -25,6 +26,13 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         b.workspaceMemorySwitch.setOnCheckedChangeListener { _, enabled ->
             // This explicit setting is persisted immediately; no per-message permission popup.
             workspacePrefs.edit().putBoolean(WorkspaceMemoryInterceptor.PREFERENCE_KEY, enabled).apply()
+        }
+        // A saved key is never consent to send personal text to a second company. Groq has
+        // no enforceable API-side $0 ceiling; this confirmation is valid only while the
+        // account stays on Free tier with inference ZDR enabled.
+        b.groqFreeZdrSwitch.isChecked = workspacePrefs.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
+        b.groqFreeZdrSwitch.setOnCheckedChangeListener { _, enabled ->
+            workspacePrefs.edit().putBoolean(WorkspaceGroqFree.PREFERENCE_KEY, enabled).apply()
         }
         b.backButton.setOnClickListener { finish() }
         b.deepResearchButton.setOnClickListener {
