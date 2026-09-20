@@ -92,8 +92,19 @@ class WorkspacePreviewActivity : AppCompatActivity() {
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
-                    if (!failed && isLocalPreviewUrl(Uri.parse(url)))
-                        binding.previewStatus.text = "Preview ready  •  Saved project files"
+                    if (failed || !isLocalPreviewUrl(Uri.parse(url))) return
+                    binding.previewStatus.text = "Preview loaded · checking phone layout…"
+                    // Fixed, read-only DOM metrics for the saved page. No JS bridge or
+                    // model transfer. A late callback cannot overwrite another page's status.
+                    view.evaluateJavascript(WorkspaceWebsiteVisualQuality.DOM_AUDIT_SCRIPT) { encoded ->
+                        if (!failed && !isFinishing && !isDestroyed &&
+                            binding.previewWebView.url == url &&
+                            isLocalPreviewUrl(Uri.parse(url))) {
+                            val audit = WorkspaceWebsiteVisualQuality.decodeDomResult(encoded)
+                            binding.previewStatus.text = audit?.status() ?:
+                                "Preview loaded · layout check unavailable; inspect on phone."
+                        }
+                    }
                 }
             }
         }

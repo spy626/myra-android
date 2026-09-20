@@ -247,13 +247,16 @@ internal class WorkspaceChatCodingFlow(
                 request !== call || !current(id)) return@runOnUiThread
             request = null
             result.onSuccess { generated ->
-                val cleaned = WorkspaceWebsiteGeneration.omitUnverifiedImages(snapshot, generated)
-                val omittedImages = cleaned["index.html"] != generated["index.html"]
+                val review = runCatching { WorkspaceWebsiteVisualQuality.review(snapshot, generated) }
+                    .getOrElse { issue ->
+                        error("Website layout safeguard rejected this output: ${issue.message}. No files changed.")
+                        return@runOnUiThread
+                    }
                 runCatching {
-                    WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, cleaned)
+                    WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, review.files)
                 }.onSuccess {
-                    val summary = WorkspaceCodingResult.websiteSuccess(snapshot.original, cleaned) +
-                        if (omittedImages) "\nUnverified images omitted; cards use the saved text and CSS." else ""
+                    val summary = WorkspaceCodingResult.websiteSuccess(snapshot.original, review.files) +
+                        review.chatNote()
                     terminal(summary, "") // The durable Chat reply is the single success message.
                     activity.startActivity(WorkspacePreviewActivity.intent(activity, id))
                 }.onFailure {
