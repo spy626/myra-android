@@ -11,16 +11,19 @@ class WorkspaceWebsiteGroqFallbackTest {
             "index.html" to html, "style.css" to "body { margin: 0; }",
             "script.js" to "console.log('Minicoy')"))
 
-    @Test fun final429OnlyWithSeparateWebsiteAndGroqFreeConsentAndKey() {
+    @Test fun definitiveFreeRouteRejectionsSwitchWithoutRepeatingConsent() {
         val allowed = WorkspaceWebsiteGroqFallback::eligible
-        assertTrue(allowed(429, true, true, "gsk_test_key"))
-        for (code in listOf(400, 401, 402, 403, 408, 500, 502, 503, 504)) {
-            assertFalse(allowed(code, true, true, "gsk_test_key"))
+        for (code in listOf(404, 429, 502, 503, 504)) {
+            assertTrue("Expected safe failover for HTTP $code", allowed(code, true, true, "gsk_test_key"))
         }
-        assertFalse(allowed(429, false, true, "gsk_test_key"))
-        assertFalse(allowed(429, true, false, "gsk_test_key"))
-        assertFalse(allowed(429, true, true, ""))
-        assertFalse(allowed(429, true, true, "bad key"))
+        for (code in listOf(200, 400, 401, 402, 403, 408, 413, 422, 500)) {
+            assertFalse("Must not resend for HTTP $code", allowed(code, true, true, "gsk_test_key"))
+        }
+        assertFalse(allowed(404, false, true, "gsk_test_key"))
+        assertFalse(allowed(404, true, false, "gsk_test_key"))
+        assertFalse(allowed(404, true, true, ""))
+        assertFalse(allowed(404, true, true, "bad key"))
+        assertEquals("workspace_website_groq_429_opt_in", WorkspaceWebsiteGroqFallback.PREFERENCE_KEY)
     }
 
     @Test fun resendsOnlyApprovedWebsiteSnapshotWithGroqJsonModeAndNoPaidRouting() {

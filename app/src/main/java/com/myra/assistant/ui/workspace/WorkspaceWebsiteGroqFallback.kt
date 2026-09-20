@@ -23,8 +23,14 @@ internal object WorkspaceWebsiteGroqFallback {
         .callTimeout(80, TimeUnit.SECONDS)
         .build()
 
+    /** Only definitive free-route HTTP rejections. A timeout or unknown network outcome
+     * is NEVER resent to another provider, and an alternate response is NEVER retried.
+     * 404 can mean OpenRouter has no free endpoint matching the requested JSON parameters.
+     */
+    fun routeRejected(code: Int): Boolean = code in setOf(404, 429, 502, 503, 504)
+
     fun eligible(code: Int, websiteOptIn: Boolean, groqFreeZdrOptIn: Boolean,
-                 groqKey: String): Boolean = code == 429 && websiteOptIn && groqFreeZdrOptIn &&
+                 groqKey: String): Boolean = routeRejected(code) && websiteOptIn && groqFreeZdrOptIn &&
         groqKey.isNotBlank() && groqKey.length <= 256 && groqKey.none(Char::isWhitespace)
 
     /** GPT-OSS 120B supports strict JSON schema; require exactly the three named files.

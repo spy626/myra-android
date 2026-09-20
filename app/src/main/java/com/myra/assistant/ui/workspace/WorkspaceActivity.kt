@@ -73,14 +73,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 conversations.completeCodingTurn(id, userId, summary)
             }, report = { message ->
                 statusMessage = message
-                if (::root.isInitialized) {
-                    render()
-                    if (message.startsWith("Free AI reached its output-token limit") ||
-                        message.startsWith("OpenRouter returned HTTP ") ||
-                        message.startsWith("Phone/network ") ||
-                        message.startsWith("Free AI provider returned an error") ||
-                        message.startsWith("Free AI stopped")) presentCodingFailure(message)
-                }
+                if (::root.isInitialized) render() // Failure is already in Chat; no duplicate modal.
             })
     }
     private lateinit var root: LinearLayout

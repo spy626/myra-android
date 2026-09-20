@@ -46,7 +46,7 @@ internal class WorkspaceChatCodingFlow(
             "${result.exceptionOrNull()?.message}. Check Work files before retrying.")
         else report(status)
     }
-    private fun error(message: String) = terminal(WorkspaceCodingResult.failure(message), message)
+    private fun error(message: String) = terminal(WorkspaceCodingResult.failure(message), "")
     private fun current(id: String) = activeProject() == id && projects.getProject(id) != null
 
     fun continueRequest(id: String, instruction: String, userMessageId: String? = null) {
@@ -130,11 +130,12 @@ internal class WorkspaceChatCodingFlow(
                     Result.failure(IllegalStateException(message)))
             }
             override fun onResponse(call: Call, response: Response) {
-                if (response.code == 429) {
-                    // Only a definitive final HTTP rejection can trigger another provider.
-                    // Close the first response before attempting the separately consented resend.
+                val rejectedStatus = response.code
+                if (WorkspaceWebsiteGroqFallback.routeRejected(rejectedStatus)) {
+                    // The user enabled website source sharing once in Settings; no per-edit
+                    // permission dialog. Only a definitive HTTP rejection may switch routes.
                     response.close()
-                    fallbackWebsiteOn429(call, serial, id, snapshot)
+                    fallbackWebsiteOnRejected(call, serial, id, snapshot, rejectedStatus)
                     return
                 }
                 completeWebsite(call, serial, id, snapshot,
@@ -143,8 +144,9 @@ internal class WorkspaceChatCodingFlow(
         })
     }
 
-    private fun fallbackWebsiteOn429(first: Call, serial: Long, id: String,
-                                     snapshot: WorkspaceWebsiteGeneration.Snapshot) {
+    private fun fallbackWebsiteOnRejected(first: Call, serial: Long, id: String,
+                                           snapshot: WorkspaceWebsiteGeneration.Snapshot,
+                                           statusCode: Int) {
         activity.runOnUiThread {
             if (activity.isFinishing || activity.isDestroyed || serial != generation ||
                 request !== first || !current(id)) return@runOnUiThread
@@ -152,9 +154,9 @@ internal class WorkspaceChatCodingFlow(
             val optedIn = preferences.getBoolean(WorkspaceWebsiteGroqFallback.PREFERENCE_KEY, false)
             val groqFree = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
             val key = runCatching { keys.get(ApiKeyStore.GROQ) }.getOrDefault("")
-            if (!WorkspaceWebsiteGroqFallback.eligible(429, optedIn, groqFree, key)) {
+            if (!WorkspaceWebsiteGroqFallback.eligible(statusCode, optedIn, groqFree, key)) {
                 completeWebsite(first, serial, id, snapshot, Result.failure(
-                    IllegalStateException("OpenRouter Free HTTP 429. Website Groq fallback is unavailable or OFF. " +
+                    IllegalStateException("Primary free route HTTP $statusCode. Website Groq fallback is unavailable or OFF. " +
                         "To enable a one-time automatic switch, save a Groq Free key and enable " +
                         "Groq Free/ZDR plus the separate website-source fallback setting. No paid fallback.")))
                 return@runOnUiThread
@@ -162,13 +164,13 @@ internal class WorkspaceChatCodingFlow(
             val secondRequest = runCatching { WorkspaceWebsiteGroqFallback.request(key, snapshot) }
                 .getOrElse { issue ->
                     completeWebsite(first, serial, id, snapshot, Result.failure(
-                        IllegalStateException("OpenRouter 429; Groq Free website fallback not sent: " +
+                        IllegalStateException("Primary free route HTTP $statusCode; Groq Free website fallback not sent: " +
                             "${issue.message}. No files changed.")))
                     return@runOnUiThread
                 }
             val second = WorkspaceWebsiteGroqFallback.client.newCall(secondRequest)
             request = second
-            report("OpenRouter Free rate-limited; trying Groq Free once for this website · Stop ■ to cancel.")
+            report("Primary free route unavailable; trying Groq Free for this website · Stop ■ to cancel.")
             second.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
                     val message = if (e is java.net.SocketTimeoutException ||
