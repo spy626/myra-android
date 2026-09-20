@@ -19,7 +19,7 @@ internal object WorkspaceWebsiteNativeActionOwner {
     private val extraControl = Regex("""(?is)<(?:button|form|input|select|textarea)\b""")
     private val inlineHandler = Regex("""(?is)<[^>]*\bon[a-z]+\s*=""")
     private val dangerousEffect = Regex(
-        """(?i)\b(?:fetch|XMLHttpRequest|WebSocket|eval|Function|import|postMessage|sendBeacon|localStorage|sessionStorage|alert)\b|\.\s*(?:click|submit|removeChild|appendChild)\s*\(""")
+        """(?i)\b(?:fetch|XMLHttpRequest|WebSocket|eval|import|postMessage|sendBeacon|localStorage|sessionStorage|alert)\b|\.\s*(?:click|submit|removeChild|appendChild)\s*\(""")
 
     fun review(snapshot: WorkspaceWebsiteGeneration.Snapshot,
                files: Map<String, String>): Map<String, String> {
