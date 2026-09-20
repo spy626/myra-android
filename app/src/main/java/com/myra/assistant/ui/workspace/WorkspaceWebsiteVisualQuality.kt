@@ -10,18 +10,22 @@ internal object WorkspaceWebsiteVisualQuality {
     data class SourceReview(val files: Map<String, String>, val removedImages: Int,
                             val removedEmptyMedia: Int, val viewportAdded: Boolean,
                             val repairedExploreAction: Boolean = false,
-                            val completedRequestedSection: Boolean = false) {
+                            val completedRequestedSection: Boolean = false,
+                            val rebuiltCardGroup: Boolean = false) {
         fun chatNote(): String = (when {
             removedImages + removedEmptyMedia > 0 ->
                 "\nLayout safeguard: omitted $removedImages unverified image(s) and " +
-                "$removedEmptyMedia empty image slot(s). Cards retain their text. " +
-                "Inspect Preview on your phone; source checks cannot judge visual appearance."
+                    "$removedEmptyMedia empty image slot(s). Cards retain their text. " +
+                    "Inspect Preview on your phone; source checks cannot judge visual appearance."
             viewportAdded -> "\nMobile viewport added. Inspect Preview on your phone."
             else -> ""
         }) + (if (repairedExploreAction)
             "\nExplore Minicoy now links to Things to Explore; tap it to verify in Preview."
         else "") + (if (completedRequestedSection)
-            "\nCompleted the explicitly requested Things to Explore section locally. " +
+            if (rebuiltCardGroup) "\nThe free model's card labels were not usable headings. " +
+                "LYRA rebuilt only the new project's requested three-card group locally. " +
+                "Check its design and text in Preview before Keep."
+            else "\nCompleted the explicitly requested Things to Explore section locally. " +
                 "Review cards and appearance in Preview before Keep."
         else "")
     }
@@ -90,15 +94,20 @@ internal object WorkspaceWebsiteVisualQuality {
         val completed = WorkspaceWebsiteRequestedSectionRepair.repair(snapshot,
             withoutImages + ("index.html" to html))
         val action = WorkspaceWebsiteActionQuality.review(snapshot, completed.files)
-        // All providers must pass the same user-brief contract before any project write.
-        val files = WorkspaceWebsiteConsistency.verify(snapshot, action.files)
+        // Do not expose generated HTML, project contents, keys or API responses on failure.
+        // The bounded diagnostic says WHICH local repair gate blocked, not WHAT it read.
+        val files = try {
+            WorkspaceWebsiteConsistency.verify(snapshot, action.files)
+        } catch (issue: IllegalArgumentException) {
+            throw IllegalArgumentException("${issue.message} [local repair: ${completed.diagnostic}]", issue)
+        }
         require(files.values.sumOf { it.length } <= 30_000 &&
             files.values.all { it.length <= 15_000 } &&
             !WorkspaceSourceContext.containsPossibleSecret(files.getValue("index.html"))) {
             "Visual safeguard exceeded approved file limits; original files unchanged"
         }
         return SourceReview(files, removedImages, removedEmpty, viewportAdded,
-            action.repaired, completed.completed)
+            action.repaired, completed.completed, completed.rebuiltCards)
     }
 
     data class LayoutFindings(val overflow: Boolean, val brokenImages: Int, val emptyMedia: Int) {
