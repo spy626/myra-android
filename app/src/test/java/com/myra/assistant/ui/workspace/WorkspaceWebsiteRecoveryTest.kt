@@ -34,7 +34,7 @@ class WorkspaceWebsiteRecoveryTest {
         assertEquals(original.header("Authorization"), recovery.header("Authorization"))
         assertEquals(first.getJSONArray("messages").toString(), second.getJSONArray("messages").toString())
         assertEquals(first.getString("model"), second.getString("model"))
-        assertEquals("json_schema", first.getJSONObject("response_format").getString("type"))
+        assertFalse(first.has("response_format"))
         assertEquals("json_object", second.getJSONObject("response_format").getString("type"))
         assertFalse(second.has("provider"))
         assertFalse(second.has("plugins"))
