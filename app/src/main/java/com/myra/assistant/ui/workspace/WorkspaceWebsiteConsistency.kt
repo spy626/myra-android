@@ -96,8 +96,9 @@ internal object WorkspaceWebsiteConsistency {
                 }
             }
         }
-        // Native anchor repair can make an old JS listener's ID stale. Verify after
-        // all local repairs, before the existing atomic apply/rollback owner.
-        return WorkspaceWebsiteScriptQuality.review(snapshot, files)
+        // Verify both missing ID listeners and the recorded all-anchor listener that
+        // suppresses native URL fragments and :target feedback. Never change existing sites.
+        return WorkspaceWebsiteAnchorScriptQuality.review(snapshot,
+            WorkspaceWebsiteScriptQuality.review(snapshot, files))
     }
 }
