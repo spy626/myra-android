@@ -155,8 +155,11 @@ internal object WorkspaceWebsiteGeneration {
     fun readResponse(response: Response): Map<String, String> = response.use { result ->
         require(result.isSuccessful) {
             if (result.request.url.toString() == WorkspaceGroqFree.ENDPOINT) when (result.code) {
-                400 -> "Groq Free HTTP 400: request or output format rejected, not a quota " +
-                    "or billing signal. No further retry or paid fallback; project files unchanged."
+                400 -> "Groq Free HTTP 400: request or output format rejected (" +
+                    WorkspaceWebsiteProviderError.category(result.body?.let {
+                        result.peekBody(8_193L).string()
+                    }.orEmpty()) +
+                    "); not a quota or billing signal. No further retry or paid fallback; project files unchanged."
                 429 -> "Groq Free HTTP 429: rate-limited; no further retry or paid fallback. " +
                     "Project files unchanged."
                 else -> "Groq Free HTTP ${result.code}: website fallback refused. " +

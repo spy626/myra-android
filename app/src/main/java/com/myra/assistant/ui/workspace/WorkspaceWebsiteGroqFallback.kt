@@ -60,7 +60,10 @@ internal object WorkspaceWebsiteGroqFallback {
         val buffer = Buffer()
         requireNotNull(original.body).writeTo(buffer)
         val payload = JSONObject(buffer.readUtf8())
-        payload.put("response_format", JSONObject().put("type", "json_object"))
+        // Last of at most three attempts: JSON Schema and JSON Object modes may
+        // both receive a definite HTTP 400. Use the documented default text mode.
+        // The approved JSON-only instruction and strict local parser remain in force.
+        payload.remove("response_format")
         return original.newBuilder()
             .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()

@@ -24,7 +24,11 @@ internal object WorkspaceWebsiteActionQuality {
     private const val TARGET_CLASS = "lyra-explore-target"
     private const val FEEDBACK = "\n/* LYRA Explore target feedback */\n" +
         ".lyra-explore-target:target { outline: 2px solid #0f766e; " +
-        "outline-offset: 6px; scroll-margin-top: 24px; border-radius: 6px; }\n"
+        "outline-offset: 6px; scroll-margin-top: 24px; border-radius: 6px; }\n" +
+        ".lyra-explore-feedback { display: none; }\n" +
+        ".lyra-explore-target:target + .lyra-explore-feedback { display: block; " +
+        "margin: 12px 0; padding: 10px 14px; background: #d1fae5; " +
+        "color: #064e3b; font-weight: 700; border-radius: 8px; }\n"
 
     private fun text(html: String): String = spaces.replace(
         tags.replace(html, "").replace("&nbsp;", " ").trim(), " ")
@@ -87,6 +91,16 @@ internal object WorkspaceWebsiteActionQuality {
         }
         fixedHtml = fixedHtml.replaceRange(freshHeading.range,
             opening + ">" + freshHeading.value.substringAfter('>'))
+        if (goal.contains("Exploring Minicoy!", ignoreCase = true) &&
+            !fixedHtml.contains("lyra-explore-feedback")) {
+            val updatedHeading = heading.findAll(fixedHtml).firstOrNull {
+                text(it.groupValues[3]).equals("Things to Explore", ignoreCase = true)
+            } ?: return Review(files, false)
+            val feedback = "<p class=\"lyra-explore-feedback\" role=\"status\" " +
+                "aria-live=\"polite\">Exploring Minicoy!</p>"
+            fixedHtml = fixedHtml.replaceRange(updatedHeading.range.last + 1,
+                updatedHeading.range.last + 1, feedback)
+        }
         val fixedCss = if (css.contains("/* LYRA Explore target feedback */")) css else css + FEEDBACK
         require(fixedHtml.length <= 15_000 && fixedCss.length <= 15_000) {
             "Explore link repair exceeds website file limit; no files changed"

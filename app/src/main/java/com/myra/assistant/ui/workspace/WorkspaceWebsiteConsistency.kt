@@ -85,6 +85,13 @@ internal object WorkspaceWebsiteConsistency {
                         .findAll(html).count() == 1 && css.contains(":target")) {
                     "Explore Minicoy target or visible feedback is missing; no files changed"
                 }
+                if (goal.contains("Exploring Minicoy!", ignoreCase = true)) {
+                    require(html.contains("class=\"lyra-explore-feedback\"") &&
+                        html.contains("Exploring Minicoy!") &&
+                        css.contains(".lyra-explore-target:target + .lyra-explore-feedback")) {
+                        "Requested Explore click text is missing; no files changed"
+                    }
+                }
             }
         }
         return files
