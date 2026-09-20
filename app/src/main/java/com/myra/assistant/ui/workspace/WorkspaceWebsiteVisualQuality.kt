@@ -20,15 +20,24 @@ internal object WorkspaceWebsiteVisualQuality {
     }
 
     // Only new empty media-specific div/figure nodes. Never remove general empty elements,
-    // text/card content, or an existing opening tag from the previously saved project.
+    // text/card content, existing markup, or deliberate gradient artwork.
     private val emptyMedia = Regex("""(?is)<(div|figure)\b([^>]*)>\s*</\1\s*>""")
     private val className = Regex("""(?is)\bclass\s*=\s*(["'])(.*?)\1""")
     private val mediaWord = Regex("(?i)(image|photo|picture|thumbnail|thumb)")
+    private val gradient = Regex("""(?i)(?:linear|radial|conic)-gradient\s*\(""")
     private val viewport = Regex("""(?is)<meta\b[^>]*\bname\s*=\s*['"]?viewport\b""")
     private val headTag = Regex("""(?is)<head\b[^>]*>""")
     private val htmlTag = Regex("""(?is)<html\b[^>]*>""")
     private const val viewportTag =
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+
+    private fun decorated(attributes: String, classes: String, css: String): Boolean {
+        if (gradient.containsMatchIn(attributes)) return true
+        return classes.split(Regex("""\s+""")).take(8).any { token ->
+            token.length in 1..64 && Regex("""(?is)\.${Regex.escape(token)}\s*\{[^}]{0,1200}(?:linear|radial|conic)-gradient\s*\(""")
+                .containsMatchIn(css)
+        }
+    }
 
     fun review(snapshot: WorkspaceWebsiteGeneration.Snapshot,
                generated: Map<String, String>): SourceReview {
@@ -38,15 +47,18 @@ internal object WorkspaceWebsiteVisualQuality {
         val baseline = snapshot.original["index.html"].orEmpty()
         val withoutImages = WorkspaceWebsiteGeneration.omitUnverifiedImages(snapshot, generated)
         var html = withoutImages.getValue("index.html")
+        val css = generated.getValue("style.css")
         val removedImages = Regex("""(?is)<img\b[^>]*>""").findAll(generated.getValue("index.html")).count() -
             Regex("""(?is)<img\b[^>]*>""").findAll(html).count()
         var removedEmpty = 0
         // Inner empty image slots first, then outer wrappers. Bounded; no recursive HTML parser.
         repeat(4) {
             html = emptyMedia.replace(html) { match ->
-                val classes = className.find(match.groupValues[2])?.groupValues?.get(2).orEmpty()
+                val attributes = match.groupValues[2]
+                val classes = className.find(attributes)?.groupValues?.get(2).orEmpty()
                 val oldOpeningTag = match.value.substringBefore('>') + ">"
-                if (mediaWord.containsMatchIn(classes) && !baseline.contains(oldOpeningTag)) {
+                if (mediaWord.containsMatchIn(classes) && !baseline.contains(oldOpeningTag) &&
+                    !decorated(attributes, classes, css)) {
                     removedEmpty++
                     ""
                 } else match.value
