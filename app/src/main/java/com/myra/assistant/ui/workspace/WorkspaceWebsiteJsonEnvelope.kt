@@ -1,6 +1,7 @@
 package com.myra.assistant.ui.workspace
 
 import org.json.JSONObject
+import org.json.JSONTokener
 
 /** Bounded, offline recovery for complete model transport formats. Never invent a file,
  * synthesize a missing brace, replay a provider call, or parse prose as source code.
@@ -35,7 +36,6 @@ internal object WorkspaceWebsiteJsonEnvelope {
             line++
             val content = mutableListOf<String>()
             while (line < lines.size && lines[line].trim() != "```") {
-                // Any nested or second fence is ambiguous, even if the closing fence exists.
                 if (lines[line].trimStart().startsWith("```")) return null
                 content += lines[line]
                 line++
@@ -48,6 +48,28 @@ internal object WorkspaceWebsiteJsonEnvelope {
         return JSONObject().put("files", JSONObject(files)).toString()
     }
 
+    /** Diagnose a completed response without persisting any raw model text, source, or keys.
+     * This is not an opportunity to retry an uncertain request or relax file validation.
+     */
+    private fun completeObjectOrFail(candidate: String, original: String): String {
+        val valid = runCatching {
+            val tokens = JSONTokener(candidate)
+            tokens.nextValue() is JSONObject && tokens.nextClean() == '\u0000'
+        }.getOrDefault(false)
+        if (!valid) {
+            val category = when {
+                original.startsWith("{") && !original.endsWith("}") -> "incomplete_json"
+                original.startsWith("{") -> "invalid_json_syntax"
+                original.startsWith("[") -> "unsupported_root"
+                "```" in original -> "unrecognized_fence"
+                else -> "non_json_output"
+            }
+            throw IllegalArgumentException(
+                "Website model did not return complete three-file JSON [format: $category]; no files changed")
+        }
+        return candidate
+    }
+
     fun normalize(raw: String): String {
         val trimmed = raw.trim().trimStart('\uFEFF').trim()
         exactLabelledFiles(trimmed)?.let { return it }
@@ -56,13 +78,13 @@ internal object WorkspaceWebsiteJsonEnvelope {
             ?: trimmed
         val start = unwrapped.indexOf('{')
         val end = unwrapped.lastIndexOf('}')
-        if (start < 0 || end <= start) return unwrapped
+        if (start < 0 || end <= start) return completeObjectOrFail(unwrapped, trimmed)
         val before = unwrapped.substring(0, start)
         val after = unwrapped.substring(end + 1)
-        // Only a bounded leading explanation is tolerated. A trailing sentence,
-        // second candidate or code fence must retain the original rejection behavior.
         if (before.length > 160 || after.isNotBlank() ||
-            before.any { it == '{' || it == '}' || it == '`' }) return unwrapped
+            before.any { it == '{' || it == '}' || it == '`' }) {
+            return completeObjectOrFail(unwrapped, trimmed)
+        }
         val candidate = unwrapped.substring(start, end + 1)
         // Preserve actual file text while escaping invalid literal CR/LF inside JSON
         // strings. Do not repair quotes, backslashes, braces or incomplete responses.
@@ -79,6 +101,6 @@ internal object WorkspaceWebsiteJsonEnvelope {
                 else -> result.append(character)
             }
         }
-        return result.toString()
+        return completeObjectOrFail(result.toString(), trimmed)
     }
 }
