@@ -17,6 +17,10 @@ internal object WorkspaceWebsiteConsistency {
     private fun visible(html: String): String = whitespace.replace(
         tags.replace(html, " ").replace("&nbsp;", " ").replace("&amp;", "&").trim(), " ")
 
+    /** A decorative emoji/icon must not make a correctly named heading disappear. */
+    private fun named(label: String, name: String): Boolean = label.equals(name, true) ||
+        label.replace(Regex("""^[^\p{L}\p{N}]{1,12}"""), "").trim().equals(name, true)
+
     /** A removal request must name the exact target close to the removal verb. Removing
      * some *other* card must not disable protection for the existing welcome or section.
      */
@@ -42,7 +46,7 @@ internal object WorkspaceWebsiteConsistency {
         val headings = heading.findAll(html).map { visible(it.groupValues[3]) }.toList()
         val old = snapshot.original["index.html"].orEmpty()
         val oldHeadings = heading.findAll(old).map { visible(it.groupValues[3]) }.toList()
-        fun has(name: String, choices: List<String>) = choices.any { it.equals(name, true) }
+        fun has(name: String, choices: List<String>) = choices.any { named(it, name) }
         fun required(name: String) = !explicitlyRemove(goal, name) &&
             (goal.contains(name, true) || has(name, oldHeadings))
         val mustWelcome = required("Welcome to Minicoy")
@@ -77,7 +81,7 @@ internal object WorkspaceWebsiteConsistency {
                     "Explore Minicoy link has no section target; no files changed"
                 }
                 val section = heading.findAll(html).firstOrNull {
-                    visible(it.groupValues[3]).equals("Things to Explore", true)
+                    named(visible(it.groupValues[3]), "Things to Explore")
                 }
                 val sectionId = section?.let { id.find(it.groupValues[2])?.groupValues?.get(2) }
                 require(sectionId == anchor &&
