@@ -33,11 +33,10 @@ internal object WorkspaceWebsiteActionQuality {
     private fun text(html: String): String = spaces.replace(
         tags.replace(html, "").replace("&nbsp;", " ").trim(), " ")
 
-    private fun named(html: String, label: String): Boolean {
-        val found = text(html)
-        return found.equals(label, ignoreCase = true) || found.replace(
-            Regex("""^[^\p{L}\p{N}]{1,12}"""), "").trim().equals(label, ignoreCase = true)
-    }
+    private fun named(html: String, label: String): Boolean = text(html)
+        .replace(Regex("""^[^\p{L}\p{N}]{1,12}"""), "")
+        .replace(Regex("""[^\p{L}\p{N}]{1,12}$"""), "")
+        .trim().equals(label, ignoreCase = true)
 
     private fun hasDifferentRequestedAction(goal: String): Boolean =
         // Explicitly requesting an alternate action (e.g. show Welcome on click)
