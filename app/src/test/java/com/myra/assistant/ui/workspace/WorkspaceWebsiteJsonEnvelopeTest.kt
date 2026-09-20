@@ -11,10 +11,10 @@ class WorkspaceWebsiteJsonEnvelopeTest {
         .put("index.html", html).put("style.css", "body { color: blue; }")
         .put("script.js", "console.log('hello');")).toString()
 
-    @Test fun crlfJsonFenceAndShortProseAroundWholeObjectCanRecoverWithoutAnotherRequest() {
+    @Test fun crlfJsonFenceAndShortLeadingTextCanRecoverWithoutAnotherRequest() {
         val valid = envelope()
         assertEquals(html, WorkspaceWebsiteGeneration.parse("```JSON\r\n$valid\r\n```").getValue("index.html"))
-        assertEquals(html, WorkspaceWebsiteGeneration.parse("Here are the requested files:\n$valid\nDone.")
+        assertEquals(html, WorkspaceWebsiteGeneration.parse("Here are the requested files:\n$valid")
             .getValue("index.html"))
         assertEquals(html, WorkspaceWebsiteGeneration.parse("\uFEFF$valid").getValue("index.html"))
     }
@@ -34,6 +34,7 @@ class WorkspaceWebsiteJsonEnvelopeTest {
             valid.dropLast(1),
             "<html>Only HTML</html>",
             "First: $valid Second: $valid",
+            valid + " trailing",
             JSONObject().put("files", JSONObject().put("index.html", html)).toString(),
             JSONObject().put("files", JSONObject().put("index.html", html)
                 .put("style.css", "").put("script.js", "").put("secret.txt", "bad")).toString(),
