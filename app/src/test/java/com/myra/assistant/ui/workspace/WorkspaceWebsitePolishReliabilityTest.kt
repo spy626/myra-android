@@ -22,17 +22,17 @@ class WorkspaceWebsitePolishReliabilityTest {
     private fun output(html: String = page) = mapOf(
         "index.html" to html, "style.css" to ".hero{background:teal}", "script.js" to "")
 
-    @Test fun compatibleGroqRequestRetainsJsonObjectAndExactlySameApprovedSource() {
-        val strict = WorkspaceWebsiteGroqFallback.request("gsk_test_key", fresh)
+    @Test fun freshTextRequestAndJsonCompatibilityRetainSameApprovedSource() {
+        val firstRequest = WorkspaceWebsiteGroqFallback.request("gsk_test_key", fresh)
         val compatible = WorkspaceWebsiteGroqFallback.compatibilityRequest("gsk_test_key", fresh)
         fun body(request: okhttp3.Request): JSONObject {
             val buffer = Buffer()
             requireNotNull(request.body).writeTo(buffer)
             return JSONObject(buffer.readUtf8())
         }
-        val first = body(strict)
+        val first = body(firstRequest)
         val second = body(compatible)
-        assertEquals("json_schema", first.getJSONObject("response_format").getString("type"))
+        assertFalse(first.has("response_format"))
         assertEquals("json_object", second.getJSONObject("response_format").getString("type"))
         assertEquals(first.getJSONArray("messages").toString(), second.getJSONArray("messages").toString())
         assertEquals(first.getString("model"), second.getString("model"))
@@ -46,6 +46,9 @@ class WorkspaceWebsitePolishReliabilityTest {
         assertEquals(3, WorkspaceWebsiteGroqFallback.MAX_WEBSITE_ATTEMPTS)
         assertFalse(WorkspaceWebsiteGroqFallback.recoverAfterFallbackGroq(400, 3))
         assertFalse(WorkspaceWebsiteGroqFallback.recoverAfterFallbackGroq(429, 2))
+        val existing = fresh.copy(original = output().mapValues { it.value })
+        val existingRequest = body(WorkspaceWebsiteGroqFallback.request("gsk_test_key", existing))
+        assertEquals("json_schema", existingRequest.getJSONObject("response_format").getString("type"))
     }
 
     @Test fun exactFallbackCopyGetsSpecificTextAndStyledCtaWithoutDuplicateFeedback() {
