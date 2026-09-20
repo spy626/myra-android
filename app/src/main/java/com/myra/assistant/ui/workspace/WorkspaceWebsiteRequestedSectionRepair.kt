@@ -43,8 +43,9 @@ internal object WorkspaceWebsiteRequestedSectionRepair {
             return Outcome(generated, false)
         val html = generated["index.html"] ?: return Outcome(generated, false)
         val css = generated["style.css"] ?: return Outcome(generated, false)
-        if (headingNamed(html, "Things to Explore") ||
-            visible(html).contains("Things to Explore", ignoreCase = true))
+        // A CTA, nav link or paragraph can say "Things to Explore" without the
+        // required section heading. Only a real heading satisfies this guard.
+        if (headingNamed(html, "Things to Explore"))
             return Outcome(generated, false)
 
         // Label the existing card group when it is unambiguous; never duplicate its cards.
