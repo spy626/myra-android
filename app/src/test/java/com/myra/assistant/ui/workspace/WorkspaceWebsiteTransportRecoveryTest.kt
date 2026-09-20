@@ -12,20 +12,9 @@ class WorkspaceWebsiteTransportRecoveryTest {
         "site", "task", "approved", "Build Minicoy: Explore Minicoy should scroll to Things to Explore and show Exploring Minicoy!",
         mapOf("index.html" to null, "style.css" to null, "script.js" to null))
 
-    private fun fenced(script: String = "", extra: String = "") = """
-        index.html
-        ```html
-        $html
-        ```
-        style.css
-        ```css
-        body { color: #123; }
-        ```
-        script.js
-        ```javascript
-        $script
-        ```$extra
-    """.trimIndent()
+    private fun fenced(script: String = "", extra: String = "") =
+        "index.html\n```html\n$html\n```\nstyle.css\n```css\n" +
+            "body { color: #123; }\n```\nscript.js\n```javascript\n$script\n```$extra"
 
     @Test fun completeExplicitlyLabelledThreeFileResponseCanBeValidatedWithoutNetworkReplay() {
         val parsed = WorkspaceWebsiteGeneration.parse(fenced())
@@ -36,7 +25,7 @@ class WorkspaceWebsiteTransportRecoveryTest {
 
     @Test fun incompleteAmbiguousOrExtraLabelledFilesMustStillFailClosed() {
         listOf(
-            fenced().substringBefore("script.js"),
+            fenced().substringBefore("script.js\n```javascript"),
             fenced(extra = "\nnotes.txt\n```text\nsecret\n```"),
             "Here is your site:\n" + fenced(),
             fenced() + "\n" + fenced(),
