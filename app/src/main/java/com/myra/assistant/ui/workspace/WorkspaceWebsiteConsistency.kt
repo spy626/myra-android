@@ -96,9 +96,11 @@ internal object WorkspaceWebsiteConsistency {
                 }
             }
         }
-        // Verify both missing ID listeners and the recorded all-anchor listener that
-        // suppresses native URL fragments and :target feedback. Never change existing sites.
+        // One new, explicitly scoped Explore action has one owner: the native
+        // href/CSS pair. Reconcile its competing generated JS BEFORE missing-ID
+        // and all-anchor safeguards, which remain authoritative otherwise.
+        val owned = WorkspaceWebsiteNativeActionOwner.review(snapshot, files)
         return WorkspaceWebsiteAnchorScriptQuality.review(snapshot,
-            WorkspaceWebsiteScriptQuality.review(snapshot, files))
+            WorkspaceWebsiteScriptQuality.review(snapshot, owned))
     }
 }
