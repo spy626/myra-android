@@ -106,6 +106,11 @@ internal object WorkspaceWebsiteGeneration {
             "with only a files object containing exactly index.html, style.css, script.js string fields. " +
             "Each field is the COMPLETE new file content, not a patch or a markdown code fence. " +
             "index.html must be a complete HTML document linking style.css and script.js. " +
+            "Treat each explicitly requested heading, named card and button behavior as acceptance criteria. " +
+            "On a new Minicoy tourism page without a specified theme, follow a coherent coastal " +
+            "palette (teal #087e93, sand #fff5e6, coral #fb923c), consistent typography and spacing. " +
+            "On existing projects preserve the current palette, typography, sections and working UI " +
+            "unless the user explicitly asks to change them; avoid unrelated full-page redesigns. " +
             "Plan an intentional mobile-first visual hierarchy: legible contrasting text, " +
             "coherent colors, compact content-sized cards, consistent spacing, and a clear call to action. " +
             "Include the viewport meta tag; at 360px width no horizontal overflow or clipped controls. " +

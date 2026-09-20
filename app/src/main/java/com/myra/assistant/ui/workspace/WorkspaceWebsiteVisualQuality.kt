@@ -85,7 +85,8 @@ internal object WorkspaceWebsiteVisualQuality {
         }
         val action = WorkspaceWebsiteActionQuality.review(snapshot,
             withoutImages + ("index.html" to html))
-        val files = action.files
+        // All providers must pass the same user-brief contract before any project write.
+        val files = WorkspaceWebsiteConsistency.verify(snapshot, action.files)
         require(files.values.sumOf { it.length } <= 30_000 &&
             files.values.all { it.length <= 15_000 } &&
             !WorkspaceSourceContext.containsPossibleSecret(html)) {
@@ -104,7 +105,7 @@ internal object WorkspaceWebsiteVisualQuality {
                     if (emptyMedia > 0) "$emptyMedia empty media slot(s)" else null)
                 "Preview needs layout review: ${findings.joinToString(", ")}. Check before Keep."
             }
-            else -> "Preview loaded · automated layout checks clear; inspect appearance on phone."
+            else -> "Preview loaded · basic layout checks clear; inspect appearance on phone. Button actions need a real tap test."
         }
     }
 
