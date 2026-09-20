@@ -15,7 +15,7 @@ class WorkspaceWebsiteGuardedClickRecoveryTest {
     private fun source(js: String, html: String = originalHtml) = mapOf(
         "index.html" to html, "style.css" to "body { margin: 0; }", "script.js" to js)
 
-    // The complete single-purpose DOMContentLoaded, guarded button and highlight pattern
+    // The single-purpose DOMContentLoaded, guarded button and highlight pattern
     // visible in the physical Android recording, including the inline comment.
     private val observedGuardedScript = """
         // Smooth scroll for the Explore Minicoy button
@@ -87,9 +87,13 @@ class WorkspaceWebsiteGuardedClickRecoveryTest {
 
     @Test fun noNativeDestinationNeverDeletesGeneratedScript() {
         val input = source(observedGuardedScript)
-        assertTrue(runCatching { WorkspaceWebsiteScriptQuality.review(fresh, input) }.isFailure)
-        val alteredGoal = fresh.copy(goal = "Build a different website without Explore Minicoy")
+        // Before native replacement, the original button and its listener still match.
+        assertEquals(input, WorkspaceWebsiteScriptQuality.review(fresh, input))
         val afterAnchor = WorkspaceWebsiteActionQuality.review(fresh, input).files
+        val brokenLink = afterAnchor + ("index.html" to afterAnchor.getValue("index.html")
+            .replace("href=\"#lyra-explore-section\"", "href=\"#missing\""))
+        assertTrue(runCatching { WorkspaceWebsiteScriptQuality.review(fresh, brokenLink) }.isFailure)
+        val alteredGoal = fresh.copy(goal = "Build a different website without Explore Minicoy")
         assertTrue(runCatching { WorkspaceWebsiteScriptQuality.review(alteredGoal, afterAnchor) }.isFailure)
     }
 }
