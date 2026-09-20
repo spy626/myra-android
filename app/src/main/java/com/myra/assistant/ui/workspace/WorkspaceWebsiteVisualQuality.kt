@@ -8,15 +8,18 @@ import org.json.JSONTokener
  */
 internal object WorkspaceWebsiteVisualQuality {
     data class SourceReview(val files: Map<String, String>, val removedImages: Int,
-                            val removedEmptyMedia: Int, val viewportAdded: Boolean) {
-        fun chatNote(): String = when {
+                            val removedEmptyMedia: Int, val viewportAdded: Boolean,
+                            val repairedExploreAction: Boolean = false) {
+        fun chatNote(): String = (when {
             removedImages + removedEmptyMedia > 0 ->
                 "\nLayout safeguard: omitted $removedImages unverified image(s) and " +
                 "$removedEmptyMedia empty image slot(s). Cards retain their text. " +
                 "Inspect Preview on your phone; source checks cannot judge visual appearance."
             viewportAdded -> "\nMobile viewport added. Inspect Preview on your phone."
             else -> ""
-        }
+        }) + if (repairedExploreAction)
+            "\nExplore Minicoy now links to Things to Explore; tap it to verify in Preview."
+        else ""
     }
 
     // Only new empty media-specific div/figure nodes. Never remove general empty elements,
@@ -80,13 +83,16 @@ internal object WorkspaceWebsiteVisualQuality {
                 }
             }
         }
-        val files = withoutImages + ("index.html" to html)
+        val action = WorkspaceWebsiteActionQuality.review(snapshot,
+            withoutImages + ("index.html" to html))
+        val files = action.files
         require(files.values.sumOf { it.length } <= 30_000 &&
             files.values.all { it.length <= 15_000 } &&
             !WorkspaceSourceContext.containsPossibleSecret(html)) {
             "Visual safeguard exceeded approved file limits; original files unchanged"
         }
-        return SourceReview(files, removedImages, removedEmpty, viewportAdded)
+        return SourceReview(files, removedImages, removedEmpty, viewportAdded,
+            action.repaired)
     }
 
     data class LayoutFindings(val overflow: Boolean, val brokenImages: Int, val emptyMedia: Int) {
