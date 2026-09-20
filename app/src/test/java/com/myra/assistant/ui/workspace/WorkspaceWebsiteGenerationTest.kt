@@ -107,6 +107,19 @@ class WorkspaceWebsiteGenerationTest {
         assertNull(WorkspaceWebsiteGeneration.pending(s.projects, "site"))
     }
 
+    @Test fun groqHttp400IsNotLabeledAsQuotaAndDoesNotSavePartialFiles() {
+        val snapshot = fixture()
+        val request = WorkspaceWebsiteGroqFallback.request("gsk_test_key",
+            WorkspaceWebsiteGeneration.prepare(snapshot.files, snapshot.tasks, snapshot.projects, "site"))
+        val response = okhttp3.Response.Builder().request(request)
+            .protocol(okhttp3.Protocol.HTTP_1_1).code(400).message("Bad Request").build()
+        val failure = runCatching { WorkspaceWebsiteGeneration.readResponse(response) }.exceptionOrNull()
+        assertNotNull(failure)
+        assertTrue(failure!!.message.orEmpty().contains("request or output format rejected"))
+        assertTrue(failure.message.orEmpty().contains("not a quota"))
+        assertTrue(snapshot.files.list("site").isEmpty())
+    }
+
     @Test fun providerRequestUsesOnlyFreeRouteWithoutPersonalMemory() {
         val s = fixture()
         val snapshot = WorkspaceWebsiteGeneration.prepare(s.files, s.tasks, s.projects, "site")
@@ -115,6 +128,10 @@ class WorkspaceWebsiteGenerationTest {
         requireNotNull(request.body).writeTo(buffer)
         val body = JSONObject(buffer.readUtf8())
         assertEquals("openrouter/free", body.getString("model"))
+        assertEquals("json_object", body.getJSONObject("response_format").getString("type"))
+        assertTrue(body.getJSONObject("provider").getBoolean("require_parameters"))
+        assertTrue(body.getJSONObject("provider").getBoolean("zdr"))
+        assertEquals("deny", body.getJSONObject("provider").getString("data_collection"))
         assertEquals(0, body.getJSONObject("provider").getJSONObject("max_price").getInt("prompt"))
         assertEquals(false, body.getJSONObject("provider").getBoolean("allow_fallbacks"))
         assertEquals(2, body.getJSONArray("messages").length())

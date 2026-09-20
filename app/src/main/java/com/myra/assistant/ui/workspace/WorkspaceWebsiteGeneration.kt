@@ -112,8 +112,10 @@ internal object WorkspaceWebsiteGeneration {
             "Do not claim that the website was tested. No prose, explanations or markdown outside the JSON."
         val payload = JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
             .put("stream", false).put("max_tokens", 7_000).put("temperature", 0.2)
+            .put("response_format", JSONObject().put("type", "json_object"))
             .put("provider", JSONObject().put("zdr", true).put("data_collection", "deny")
-                .put("allow_fallbacks", false).put("max_price", JSONObject().put("prompt", 0)
+                .put("allow_fallbacks", false).put("require_parameters", true)
+                .put("max_price", JSONObject().put("prompt", 0)
                     .put("completion", 0).put("request", 0).put("image", 0)))
             .put("plugins", JSONArray().put(JSONObject().put("id", "context-compression")
                 .put("enabled", false)))
@@ -129,10 +131,14 @@ internal object WorkspaceWebsiteGeneration {
 
     fun readResponse(response: Response): Map<String, String> = response.use { result ->
         require(result.isSuccessful) {
-            if (result.request.url.toString() == WorkspaceGroqFree.ENDPOINT)
-                "Groq Free HTTP ${result.code}: website fallback refused or quota-limited. " +
+            if (result.request.url.toString() == WorkspaceGroqFree.ENDPOINT) when (result.code) {
+                400 -> "Groq Free HTTP 400: request or output format rejected, not a quota " +
+                    "or billing signal. No further retry or paid fallback; project files unchanged."
+                429 -> "Groq Free HTTP 429: rate-limited; no further retry or paid fallback. " +
+                    "Project files unchanged."
+                else -> "Groq Free HTTP ${result.code}: website fallback refused. " +
                     "No further retry or paid fallback; project files unchanged."
-            else WorkspaceFreeAiSuggestion.httpFailure(result.code, result.header("Retry-After"))
+            } else WorkspaceFreeAiSuggestion.httpFailure(result.code, result.header("Retry-After"))
         }
         val bytes = result.peekBody(130_001L).bytes()
         require(bytes.isNotEmpty() && bytes.size <= 130_000) { "Website response too large; no files changed" }

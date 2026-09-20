@@ -31,7 +31,22 @@ class WorkspaceWebsiteGroqFallbackTest {
         requireNotNull(request.body).writeTo(buffer)
         val body = JSONObject(buffer.readUtf8())
         assertEquals(WorkspaceGroqFree.MODEL, body.getString("model"))
-        assertEquals("json_object", body.getJSONObject("response_format").getString("type"))
+        assertEquals("json_schema", body.getJSONObject("response_format").getString("type"))
+        val envelope = body.getJSONObject("response_format").getJSONObject("json_schema")
+        assertTrue(envelope.getBoolean("strict"))
+        val schema = envelope.getJSONObject("schema")
+        assertFalse(schema.getBoolean("additionalProperties"))
+        assertEquals(listOf("files"), (0 until schema.getJSONArray("required").length()).map {
+            schema.getJSONArray("required").getString(it)
+        })
+        val files = schema.getJSONObject("properties").getJSONObject("files")
+        assertFalse(files.getBoolean("additionalProperties"))
+        assertEquals(WorkspaceWebsiteGeneration.PATHS.toSet(),
+            (0 until files.getJSONArray("required").length()).map {
+                files.getJSONArray("required").getString(it)
+            }.toSet())
+        assertFalse(body.has("reasoning_format")) // Unsupported by Groq GPT-OSS; caused HTTP 400.
+        assertFalse(body.getBoolean("include_reasoning"))
         assertEquals(4500, body.getInt("max_completion_tokens"))
         assertFalse(body.has("max_tokens"))
         assertFalse(body.has("provider"))
