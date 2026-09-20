@@ -9,6 +9,7 @@ import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.databinding.ActivityApiCloudSettingsBinding
 import com.myra.assistant.ui.workspace.WorkspaceFreeCrossProvider
 import com.myra.assistant.ui.workspace.WorkspaceGroqFree
+import com.myra.assistant.ui.workspace.WorkspaceWebsiteGroqFallback
 import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
 
 /** Non-voice provider credentials only. Gemini Live is configured in Voice & AI Models. */
@@ -40,6 +41,13 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             WorkspaceFreeCrossProvider.PREFERENCE_KEY, false)
         b.workspaceFreeCrossProviderSwitch.setOnCheckedChangeListener { _, enabled ->
             workspacePrefs.edit().putBoolean(WorkspaceFreeCrossProvider.PREFERENCE_KEY, enabled).apply()
+        }
+        // Website source is more sensitive than selected chat text: a separate opt-in
+        // is required before any existing HTML/CSS/JS is sent to Groq after OpenRouter 429.
+        b.websiteGroqFallbackSwitch.isChecked = workspacePrefs.getBoolean(
+            WorkspaceWebsiteGroqFallback.PREFERENCE_KEY, false)
+        b.websiteGroqFallbackSwitch.setOnCheckedChangeListener { _, enabled ->
+            workspacePrefs.edit().putBoolean(WorkspaceWebsiteGroqFallback.PREFERENCE_KEY, enabled).apply()
         }
         b.backButton.setOnClickListener { finish() }
         b.deepResearchButton.setOnClickListener {

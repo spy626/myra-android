@@ -1,5 +1,6 @@
 package com.myra.assistant.ui.workspace
 
+import android.content.Context
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.ai.ApiKeyStore
@@ -128,9 +129,60 @@ internal class WorkspaceChatCodingFlow(
                 completeWebsite(call, serial, id, snapshot,
                     Result.failure(IllegalStateException(message)))
             }
-            override fun onResponse(call: Call, response: Response) = completeWebsite(
-                call, serial, id, snapshot, runCatching { WorkspaceWebsiteGeneration.readResponse(response) })
+            override fun onResponse(call: Call, response: Response) {
+                if (response.code == 429) {
+                    // Only a definitive final HTTP rejection can trigger another provider.
+                    // Close the first response before attempting the separately consented resend.
+                    response.close()
+                    fallbackWebsiteOn429(call, serial, id, snapshot)
+                    return
+                }
+                completeWebsite(call, serial, id, snapshot,
+                    runCatching { WorkspaceWebsiteGeneration.readResponse(response) })
+            }
         })
+    }
+
+    private fun fallbackWebsiteOn429(first: Call, serial: Long, id: String,
+                                     snapshot: WorkspaceWebsiteGeneration.Snapshot) {
+        activity.runOnUiThread {
+            if (activity.isFinishing || activity.isDestroyed || serial != generation ||
+                request !== first || !current(id)) return@runOnUiThread
+            val preferences = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+            val optedIn = preferences.getBoolean(WorkspaceWebsiteGroqFallback.PREFERENCE_KEY, false)
+            val groqFree = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
+            val key = runCatching { keys.get(ApiKeyStore.GROQ) }.getOrDefault("")
+            if (!WorkspaceWebsiteGroqFallback.eligible(429, optedIn, groqFree, key)) {
+                completeWebsite(first, serial, id, snapshot, Result.failure(
+                    IllegalStateException("OpenRouter Free HTTP 429. Website Groq fallback is unavailable or OFF. " +
+                        "To enable a one-time automatic switch, save a Groq Free key and enable " +
+                        "Groq Free/ZDR plus the separate website-source fallback setting. No paid fallback.")))
+                return@runOnUiThread
+            }
+            val secondRequest = runCatching { WorkspaceWebsiteGroqFallback.request(key, snapshot) }
+                .getOrElse { issue ->
+                    completeWebsite(first, serial, id, snapshot, Result.failure(
+                        IllegalStateException("OpenRouter 429; Groq Free website fallback not sent: " +
+                            "${issue.message}. No files changed.")))
+                    return@runOnUiThread
+                }
+            val second = WorkspaceWebsiteGeneration.client.newCall(secondRequest)
+            request = second
+            report("OpenRouter Free rate-limited; trying Groq Free once for this website · Stop ■ to cancel.")
+            second.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    val message = if (e is java.net.SocketTimeoutException ||
+                        e is java.io.InterruptedIOException)
+                        "Groq Free website fallback timed out. No uncertain request was resent."
+                    else "Groq Free website fallback connection failed. No paid fallback."
+                    completeWebsite(call, serial, id, snapshot,
+                        Result.failure(IllegalStateException(message)))
+                }
+                override fun onResponse(call: Call, response: Response) = completeWebsite(
+                    call, serial, id, snapshot,
+                    runCatching { WorkspaceWebsiteGeneration.readResponse(response) })
+            })
+        }
     }
 
     private fun completeWebsite(call: Call, serial: Long, id: String,

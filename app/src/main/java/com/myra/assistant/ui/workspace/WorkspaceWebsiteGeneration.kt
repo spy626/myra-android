@@ -129,7 +129,10 @@ internal object WorkspaceWebsiteGeneration {
 
     fun readResponse(response: Response): Map<String, String> = response.use { result ->
         require(result.isSuccessful) {
-            WorkspaceFreeAiSuggestion.httpFailure(result.code, result.header("Retry-After"))
+            if (result.request.url.toString() == WorkspaceGroqFree.ENDPOINT)
+                "Groq Free HTTP ${result.code}: website fallback refused or quota-limited. " +
+                    "No further retry or paid fallback; project files unchanged."
+            else WorkspaceFreeAiSuggestion.httpFailure(result.code, result.header("Retry-After"))
         }
         val bytes = result.peekBody(130_001L).bytes()
         require(bytes.isNotEmpty() && bytes.size <= 130_000) { "Website response too large; no files changed" }
