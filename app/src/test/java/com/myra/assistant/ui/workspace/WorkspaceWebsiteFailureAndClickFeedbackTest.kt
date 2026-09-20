@@ -19,13 +19,13 @@ class WorkspaceWebsiteFailureAndClickFeedbackTest {
         return JSONObject(out.readUtf8())
     }
 
-    @Test fun thirdAttemptIsTextModeWithSameFreeModelAndApprovedSource() {
+    @Test fun thirdAttemptKeepsJsonObjectModeWithSameFreeModelAndApprovedSource() {
         val first = body(WorkspaceWebsiteGroqFallback.request("gsk_test", snapshot))
         val third = body(WorkspaceWebsiteGroqFallback.compatibilityRequest("gsk_test", snapshot))
         assertEquals(first.getString("model"), third.getString("model"))
         assertEquals(first.getJSONArray("messages").toString(), third.getJSONArray("messages").toString())
         assertEquals("json_schema", first.getJSONObject("response_format").getString("type"))
-        assertFalse(third.has("response_format"))
+        assertEquals("json_object", third.getJSONObject("response_format").getString("type"))
         assertFalse(third.has("provider"))
         assertFalse(third.has("plugins"))
         assertTrue(runCatching { WorkspaceWebsiteGeneration.parse("not json") }.isFailure)
