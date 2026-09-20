@@ -13,16 +13,20 @@ class WorkspaceWebsiteGroqFallbackTest {
 
     @Test fun definitiveFreeRouteRejectionsSwitchWithoutRepeatingConsent() {
         val allowed = WorkspaceWebsiteGroqFallback::eligible
-        for (code in listOf(404, 429, 502, 503, 504)) {
+        // Regression: the user's repeated OpenRouter HTTP 400 must reach Groq Free
+        // when both keys and existing one-time website-source consent are present.
+        for (code in listOf(400, 404, 429, 502, 503, 504)) {
             assertTrue("Expected safe failover for HTTP $code", allowed(code, true, true, "gsk_test_key"))
+            assertTrue(WorkspaceWebsiteGroqFallback.routeRejected(code))
         }
-        for (code in listOf(200, 400, 401, 402, 403, 408, 413, 422, 500)) {
+        for (code in listOf(200, 401, 402, 403, 408, 413, 422, 500)) {
             assertFalse("Must not resend for HTTP $code", allowed(code, true, true, "gsk_test_key"))
         }
-        assertFalse(allowed(404, false, true, "gsk_test_key"))
-        assertFalse(allowed(404, true, false, "gsk_test_key"))
-        assertFalse(allowed(404, true, true, ""))
-        assertFalse(allowed(404, true, true, "bad key"))
+        // A key alone is not project-source consent: never silently forward source.
+        assertFalse(allowed(400, false, true, "gsk_test_key"))
+        assertFalse(allowed(400, true, false, "gsk_test_key"))
+        assertFalse(allowed(400, true, true, ""))
+        assertFalse(allowed(400, true, true, "bad key"))
         assertEquals("workspace_website_groq_429_opt_in", WorkspaceWebsiteGroqFallback.PREFERENCE_KEY)
     }
 
