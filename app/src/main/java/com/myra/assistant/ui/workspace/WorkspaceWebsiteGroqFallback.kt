@@ -35,11 +35,8 @@ internal object WorkspaceWebsiteGroqFallback {
         .callTimeout(80, TimeUnit.SECONDS)
         .build()
 
-    /** A definitive OpenRouter HTTP 400 rejected the website request, so it is safe
-     * to try the already-consented Groq Free route ONCE with the same approved source.
-     * 400 may reflect a route/JSON-parameter mismatch, but its exact cause is unknown
-     * without a sanitized provider reason. Never retry an uncertain network outcome,
-     * key/auth/payment failures, or a rejection by the second provider.
+    /** Only definite, eligible OpenRouter HTTP rejections permit an already-consented
+     * Groq Free request. Never replay unknown network outcomes, auth or payment failures.
      */
     fun routeRejected(code: Int): Boolean = code in setOf(400, 404, 429, 502, 503, 504)
 
@@ -47,10 +44,10 @@ internal object WorkspaceWebsiteGroqFallback {
                  groqKey: String): Boolean = routeRejected(code) && websiteOptIn && groqFreeZdrOptIn &&
         groqKey.isNotBlank() && groqKey.length <= 256 && groqKey.none(Char::isWhitespace)
 
-    /** A definitive Groq HTTP 400 can indicate incompatibility with structured-output
-     * parameters on a particular free backend. Reuse the exact approved snapshot and
-     * key once with documented JSON Object Mode. Local parse/apply remain strict.
-     * NEVER use this for timeouts, 429, or a response that may have succeeded.
+    /** A definite Groq HTTP 400 on strict schema permits ONE JSON Object Mode attempt.
+     * Removing response_format entirely used to allow a plain-text answer and a subsequent
+     * malformed three-file JSON failure on phone. This mode requires valid JSON syntax;
+     * the existing local three-file and content checks still independently decide success.
      */
     fun compatibilityEligible(primary: WorkspaceWebsiteRoute.Provider, code: Int): Boolean =
         primary == WorkspaceWebsiteRoute.Provider.GROQ && code == 400
@@ -60,10 +57,9 @@ internal object WorkspaceWebsiteGroqFallback {
         val buffer = Buffer()
         requireNotNull(original.body).writeTo(buffer)
         val payload = JSONObject(buffer.readUtf8())
-        // Last of at most three attempts: JSON Schema and JSON Object modes may
-        // both receive a definite HTTP 400. Use the documented default text mode.
-        // The approved JSON-only instruction and strict local parser remain in force.
-        payload.remove("response_format")
+        // Do not remove JSON mode: the returned text must remain one JSON object.
+        // This is the last permitted mode change; another 400 is terminal, not a loop.
+        payload.put("response_format", JSONObject().put("type", "json_object"))
         return original.newBuilder()
             .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
