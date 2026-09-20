@@ -33,6 +33,12 @@ internal object WorkspaceWebsiteActionQuality {
     private fun text(html: String): String = spaces.replace(
         tags.replace(html, "").replace("&nbsp;", " ").trim(), " ")
 
+    private fun named(html: String, label: String): Boolean {
+        val found = text(html)
+        return found.equals(label, ignoreCase = true) || found.replace(
+            Regex("""^[^\p{L}\p{N}]{1,12}"""), "").trim().equals(label, ignoreCase = true)
+    }
+
     private fun hasDifferentRequestedAction(goal: String): Boolean =
         // Explicitly requesting an alternate action (e.g. show Welcome on click)
         // is authoritative. Do not swap that action for default section navigation.
@@ -48,10 +54,10 @@ internal object WorkspaceWebsiteActionQuality {
         val html = files["index.html"] ?: return Review(files, false)
         val css = files["style.css"] ?: return Review(files, false)
         val section = heading.findAll(html).firstOrNull {
-            text(it.groupValues[3]).equals("Things to Explore", ignoreCase = true)
+            named(it.groupValues[3], "Things to Explore")
         } ?: return Review(files, false)
         val cta = control.findAll(html).firstOrNull {
-            text(it.groupValues[3]).equals("Explore Minicoy", ignoreCase = true)
+            named(it.groupValues[3], "Explore Minicoy")
         } ?: return Review(files, false)
 
         val headingId = id.find(section.groupValues[2])?.groupValues?.get(2)
@@ -78,7 +84,7 @@ internal object WorkspaceWebsiteActionQuality {
         }
         // Re-find after changing the CTA because it may precede the heading.
         val freshHeading = heading.findAll(fixedHtml).firstOrNull {
-            text(it.groupValues[3]).equals("Things to Explore", ignoreCase = true)
+            named(it.groupValues[3], "Things to Explore")
         } ?: return Review(files, false)
         var opening = freshHeading.value.substringBefore('>')
         if (headingId == null) opening += " id=\"$target\""
@@ -94,7 +100,7 @@ internal object WorkspaceWebsiteActionQuality {
         if (goal.contains("Exploring Minicoy!", ignoreCase = true) &&
             !fixedHtml.contains("lyra-explore-feedback")) {
             val updatedHeading = heading.findAll(fixedHtml).firstOrNull {
-                text(it.groupValues[3]).equals("Things to Explore", ignoreCase = true)
+                named(it.groupValues[3], "Things to Explore")
             } ?: return Review(files, false)
             val feedback = "<p class=\"lyra-explore-feedback\" role=\"status\" " +
                 "aria-live=\"polite\">Exploring Minicoy!</p>"
