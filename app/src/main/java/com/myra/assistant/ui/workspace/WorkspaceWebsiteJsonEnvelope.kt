@@ -16,10 +16,10 @@ internal object WorkspaceWebsiteJsonEnvelope {
         if (start < 0 || end <= start) return unwrapped
         val before = unwrapped.substring(0, start)
         val after = unwrapped.substring(end + 1)
-        // A small textual preface/suffix is allowed, but never another object,
-        // code block, multiple candidate envelopes or long uncontrolled prose.
-        if (before.length > 160 || after.length > 160 ||
-            (before + after).any { it == '{' || it == '}' || it == '`' }) return unwrapped
+        // Only a bounded leading explanation is tolerated. A trailing sentence,
+        // second candidate or code fence must retain the original rejection behavior.
+        if (before.length > 160 || after.isNotBlank() ||
+            before.any { it == '{' || it == '}' || it == '`' }) return unwrapped
         val candidate = unwrapped.substring(start, end + 1)
         // Preserve all actual file bytes except invalid literal CR/LF inside JSON
         // strings, which must be escaped by the JSON transport. Do not repair quotes,
