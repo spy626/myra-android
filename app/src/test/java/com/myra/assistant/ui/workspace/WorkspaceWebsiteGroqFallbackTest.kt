@@ -30,6 +30,23 @@ class WorkspaceWebsiteGroqFallbackTest {
         assertEquals("workspace_website_groq_429_opt_in", WorkspaceWebsiteGroqFallback.PREFERENCE_KEY)
     }
 
+    @Test fun exactlyThreeTotalAttemptsAndOnlyDefinitiveFallbackGroq400Recovers() {
+        assertEquals(3, WorkspaceWebsiteGroqFallback.MAX_WEBSITE_ATTEMPTS)
+        assertFalse(WorkspaceWebsiteGroqFallback.canAttempt(0))
+        assertTrue(WorkspaceWebsiteGroqFallback.canAttempt(1))
+        assertTrue(WorkspaceWebsiteGroqFallback.canAttempt(2))
+        assertFalse(WorkspaceWebsiteGroqFallback.canAttempt(3))
+        assertFalse(WorkspaceWebsiteGroqFallback.canAttempt(4))
+        assertTrue(WorkspaceWebsiteGroqFallback.recoverAfterFallbackGroq(400, 2))
+        assertFalse(WorkspaceWebsiteGroqFallback.recoverAfterFallbackGroq(400, 3))
+        for (code in listOf(200, 401, 402, 403, 408, 429, 500, 502, 503, 504)) {
+            assertFalse(WorkspaceWebsiteGroqFallback.recoverAfterFallbackGroq(code, 2))
+        }
+        // Groq-primary 400 may use attempt 2; a fallback Groq 400 may use 3.
+        assertTrue(WorkspaceWebsiteGroqFallback.compatibilityEligible(
+            WorkspaceWebsiteRoute.Provider.GROQ, 400))
+    }
+
     @Test fun resendsOnlyApprovedWebsiteSnapshotWithGroqJsonModeAndNoPaidRouting() {
         val request = WorkspaceWebsiteGroqFallback.request("gsk_test_key", sample("<html>Old page</html>"))
         assertEquals(WorkspaceGroqFree.ENDPOINT, request.url.toString())

@@ -19,6 +19,16 @@ internal object WorkspaceWebsiteGroqFallback {
     // This is a bounded remote envelope, not the historical 500-character task cap.
     private const val MAX_PROMPT_CHARS = WorkspaceLongInputPolicy.MAX_REQUEST_CHARS
     private const val MAX_COMPLETION_TOKENS = 4_500
+    // A single website turn can issue at most three requests total (not three per route).
+    const val MAX_WEBSITE_ATTEMPTS = 3
+
+    fun canAttempt(issued: Int): Boolean = issued in 1 until MAX_WEBSITE_ATTEMPTS
+
+    /** Third attempt: only after an actual Groq schema HTTP 400, never on timeout,
+     * 429, invalid output, a finished compatible request, or a fourth call.
+     */
+    fun recoverAfterFallbackGroq(code: Int, issued: Int): Boolean =
+        code == 400 && canAttempt(issued)
 
     // This client deliberately has NO retry interceptor, including after Groq HTTP 429.
     val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()

@@ -26,6 +26,8 @@ internal class WorkspaceChatCodingFlow(
 ) {
     private var generation = 0L
     private var request: Call? = null
+    // Counts actual provider calls, including retries; reset only at terminal/cancel.
+    private var websiteAttempts = 0
     private var activeTurn: Pair<String, String>? = null
     val isRunning: Boolean get() = request != null
 
@@ -33,6 +35,7 @@ internal class WorkspaceChatCodingFlow(
         generation++
         request?.cancel()
         request = null
+        websiteAttempts = 0
         activeTurn = null
     }
 
@@ -137,8 +140,9 @@ internal class WorkspaceChatCodingFlow(
         val client = if (primary == WorkspaceWebsiteRoute.Provider.GROQ)
             WorkspaceWebsiteGroqFallback.client else WorkspaceWebsiteGeneration.client
         val call = client.newCall(outgoing)
+        websiteAttempts = 1
         request = call
-        report("Building index.html, style.css and script.js in this project · Stop ■ to cancel.")
+        report("Building website · free attempt 1/3 · Stop ■ to cancel.")
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 val message = if (e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException)
@@ -168,8 +172,9 @@ internal class WorkspaceChatCodingFlow(
         })
     }
 
-    /** One same-provider compatibility attempt after a definitive Groq-only HTTP 400.
-     * The second response is terminal: never loop, change provider, or replay on timeout.
+    /** One same-provider JSON Object Mode compatibility attempt after a definitive
+     * Groq schema HTTP 400, whether Groq was primary or the consented fallback.
+     * It is terminal: never replay a timeout, invalid answer, or this third response.
      */
     private fun recoverGroqWebsiteFormat(first: Call, serial: Long, id: String,
                                          snapshot: WorkspaceWebsiteGeneration.Snapshot,
@@ -177,6 +182,11 @@ internal class WorkspaceChatCodingFlow(
         activity.runOnUiThread {
             if (activity.isFinishing || activity.isDestroyed || serial != generation ||
                 request !== first || !current(id)) return@runOnUiThread
+            if (!WorkspaceWebsiteGroqFallback.canAttempt(websiteAttempts)) {
+                completeWebsite(first, serial, id, snapshot, Result.failure(
+                    IllegalStateException("All eligible free website attempts failed; no files changed.")))
+                return@runOnUiThread
+            }
             val alternate = runCatching {
                 WorkspaceWebsiteGroqFallback.compatibilityRequest(groqKey, snapshot)
             }.getOrElse {
@@ -185,8 +195,9 @@ internal class WorkspaceChatCodingFlow(
                 return@runOnUiThread
             }
             val second = WorkspaceWebsiteGroqFallback.client.newCall(alternate)
+            websiteAttempts++
             request = second
-            report("Trying a compatible Groq Free website format · Stop ■ to cancel.")
+            report("Trying compatible Groq Free format · attempt $websiteAttempts/3 · Stop ■ to cancel.")
             second.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
                     completeWebsite(call, serial, id, snapshot, Result.failure(
@@ -206,6 +217,11 @@ internal class WorkspaceChatCodingFlow(
         activity.runOnUiThread {
             if (activity.isFinishing || activity.isDestroyed || serial != generation ||
                 request !== first || !current(id)) return@runOnUiThread
+            if (!WorkspaceWebsiteGroqFallback.canAttempt(websiteAttempts)) {
+                completeWebsite(first, serial, id, snapshot, Result.failure(
+                    IllegalStateException("All eligible free website attempts failed; no files changed.")))
+                return@runOnUiThread
+            }
             val preferences = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
             val optedIn = preferences.getBoolean(WorkspaceWebsiteGroqFallback.PREFERENCE_KEY, false)
             val groqFree = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
@@ -225,8 +241,9 @@ internal class WorkspaceChatCodingFlow(
                     return@runOnUiThread
                 }
             val second = WorkspaceWebsiteGroqFallback.client.newCall(secondRequest)
+            websiteAttempts++
             request = second
-            report("Primary free route unavailable; trying Groq Free for this website · Stop ■ to cancel.")
+            report("Switching to Groq Free · attempt $websiteAttempts/3 · Stop ■ to cancel.")
             second.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
                     val message = if (e is java.net.SocketTimeoutException ||
@@ -236,9 +253,19 @@ internal class WorkspaceChatCodingFlow(
                     completeWebsite(call, serial, id, snapshot,
                         Result.failure(IllegalStateException(message)))
                 }
-                override fun onResponse(call: Call, response: Response) = completeWebsite(
-                    call, serial, id, snapshot,
-                    runCatching { WorkspaceWebsiteGeneration.readResponse(response) })
+                override fun onResponse(call: Call, response: Response) {
+                    // Phone failure: Groq was the SECOND provider, so the primary-Groq
+                    // branch never ran. One definite 400 permits the THIRD request,
+                    // with the exact same approved snapshot in JSON Object Mode.
+                    if (WorkspaceWebsiteGroqFallback.recoverAfterFallbackGroq(
+                            response.code, websiteAttempts)) {
+                        response.close()
+                        recoverGroqWebsiteFormat(call, serial, id, snapshot, key)
+                        return
+                    }
+                    completeWebsite(call, serial, id, snapshot,
+                        runCatching { WorkspaceWebsiteGeneration.readResponse(response) })
+                }
             })
         }
     }
@@ -250,6 +277,7 @@ internal class WorkspaceChatCodingFlow(
             if (activity.isFinishing || activity.isDestroyed || serial != generation ||
                 request !== call || !current(id)) return@runOnUiThread
             request = null
+            websiteAttempts = 0
             result.onSuccess { generated ->
                 val review = runCatching { WorkspaceWebsiteVisualQuality.review(snapshot, generated) }
                     .getOrElse { issue ->
