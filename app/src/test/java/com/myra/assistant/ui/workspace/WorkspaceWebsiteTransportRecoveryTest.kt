@@ -49,6 +49,20 @@ class WorkspaceWebsiteTransportRecoveryTest {
         }.isFailure)
     }
 
+    @Test fun invalidTransportReportsOnlyBoundedCategoriesNeverProjectContents() {
+        val privateValue = "SENSITIVE_SOURCE_SHOULD_NEVER_APPEAR"
+        val inputs = mapOf(
+            "{\"files\":{\"index.html\":\"$privateValue\"" to "incomplete_json",
+            "```html\n$privateValue\n```" to "unrecognized_fence",
+            "This is not JSON: $privateValue" to "non_json_output")
+        inputs.forEach { (raw, category) ->
+            val error = runCatching { WorkspaceWebsiteGeneration.parse(raw) }.exceptionOrNull()
+            assertNotNull(error)
+            assertTrue(error!!.message.orEmpty().contains(category))
+            assertFalse(error.message.orEmpty().contains(privateValue))
+        }
+    }
+
     private fun payload(request: Request): JSONObject {
         val buffer = Buffer()
         requireNotNull(request.body).writeTo(buffer)
