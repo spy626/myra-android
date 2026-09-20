@@ -11,7 +11,8 @@ internal object WorkspaceWebsiteVisualQuality {
                             val removedEmptyMedia: Int, val viewportAdded: Boolean,
                             val repairedExploreAction: Boolean = false,
                             val completedRequestedSection: Boolean = false,
-                            val rebuiltCardGroup: Boolean = false) {
+                            val rebuiltCardGroup: Boolean = false,
+                            val polishedDesign: Boolean = false) {
         fun chatNote(): String = (when {
             removedImages + removedEmptyMedia > 0 ->
                 "\nLayout safeguard: omitted $removedImages unverified image(s) and " +
@@ -27,6 +28,9 @@ internal object WorkspaceWebsiteVisualQuality {
                 "Check its design and text in Preview before Keep."
             else "\nCompleted the explicitly requested Things to Explore section locally. " +
                 "Review cards and appearance in Preview before Keep."
+        else "") + (if (polishedDesign)
+            "\nApplied requested blue hero, mobile card layout and duplicate-feedback cleanup " +
+                "to this new website. Inspect its appearance in Preview before Keep."
         else "")
     }
 
@@ -94,10 +98,13 @@ internal object WorkspaceWebsiteVisualQuality {
         val completed = WorkspaceWebsiteRequestedSectionRepair.repair(snapshot,
             withoutImages + ("index.html" to html))
         val action = WorkspaceWebsiteActionQuality.review(snapshot, completed.files)
+        // Only an empty/starter site and the fully explicit user brief are eligible.
+        // Do not let cosmetic changes alter source freshness, rollback or provider routing.
+        val polished = WorkspaceWebsiteDesignPolish.review(snapshot, action.files)
         // Do not expose generated HTML, project contents, keys or API responses on failure.
         // The bounded diagnostic says WHICH local repair gate blocked, not WHAT it read.
         val files = try {
-            WorkspaceWebsiteConsistency.verify(snapshot, action.files)
+            WorkspaceWebsiteConsistency.verify(snapshot, polished.files)
         } catch (issue: IllegalArgumentException) {
             throw IllegalArgumentException("${issue.message} [local repair: ${completed.diagnostic}]", issue)
         }
@@ -107,7 +114,7 @@ internal object WorkspaceWebsiteVisualQuality {
             "Visual safeguard exceeded approved file limits; original files unchanged"
         }
         return SourceReview(files, removedImages, removedEmpty, viewportAdded,
-            action.repaired, completed.completed, completed.rebuiltCards)
+            action.repaired, completed.completed, completed.rebuiltCards, polished.changed)
     }
 
     data class LayoutFindings(val overflow: Boolean, val brokenImages: Int, val emptyMedia: Int) {
