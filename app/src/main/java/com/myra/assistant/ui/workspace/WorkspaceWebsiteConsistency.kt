@@ -17,15 +17,11 @@ internal object WorkspaceWebsiteConsistency {
     private fun visible(html: String): String = whitespace.replace(
         tags.replace(html, " ").replace("&nbsp;", " ").replace("&amp;", "&").trim(), " ")
 
-    /** Recognize decorative emoji/icons on either side without accepting a different title. */
     private fun named(label: String, name: String): Boolean = label.trim()
         .replace(Regex("""^[^\p{L}\p{N}]{1,12}"""), "")
         .replace(Regex("""[^\p{L}\p{N}]{1,12}$"""), "")
         .trim().equals(name, true)
 
-    /** A removal request must name the exact target close to the removal verb. Removing
-     * some *other* card must not disable protection for the existing welcome or section.
-     */
     private fun explicitlyRemove(goal: String, name: String): Boolean {
         val verb = "(?:remove|delete|drop|hatao|hata|nikalo)"
         val namePattern = Regex.escape(name).replace("\\ ", "\\s+")
@@ -100,6 +96,8 @@ internal object WorkspaceWebsiteConsistency {
                 }
             }
         }
-        return files
+        // Native anchor repair can make an old JS listener's ID stale. Verify after
+        // all local repairs, before the existing atomic apply/rollback owner.
+        return WorkspaceWebsiteScriptQuality.review(snapshot, files)
     }
 }
