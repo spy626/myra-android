@@ -9,11 +9,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/** One explicitly authorized, bounded OpenRouter 429 -> Groq Free WEBSITE resend.
- * Chat consent does not cover project source. No other error or a Groq failure retries.
+/** One consented, bounded OpenRouter rejection -> Groq Free WEBSITE resend.
+ * The website-source opt-in is distinct from Chat consent. Never switch to a paid route.
  * Groq cannot enforce an API-side $0 cap; user must keep their Groq account Free.
  */
 internal object WorkspaceWebsiteGroqFallback {
+    // Keep the existing preference key for all previously approved website-source sharing.
     const val PREFERENCE_KEY = "workspace_website_groq_429_opt_in"
     // This is a bounded remote envelope, not the historical 500-character task cap.
     private const val MAX_PROMPT_CHARS = WorkspaceLongInputPolicy.MAX_REQUEST_CHARS
@@ -24,11 +25,13 @@ internal object WorkspaceWebsiteGroqFallback {
         .callTimeout(80, TimeUnit.SECONDS)
         .build()
 
-    /** Only definitive free-route HTTP rejections. A timeout or unknown network outcome
-     * is NEVER resent to another provider, and an alternate response is NEVER retried.
-     * 404 can mean OpenRouter has no free endpoint matching the requested JSON parameters.
+    /** A definitive OpenRouter HTTP 400 rejected the website request, so it is safe
+     * to try the already-consented Groq Free route ONCE with the same approved source.
+     * 400 may reflect a route/JSON-parameter mismatch, but its exact cause is unknown
+     * without a sanitized provider reason. Never retry an uncertain network outcome,
+     * key/auth/payment failures, or a rejection by the second provider.
      */
-    fun routeRejected(code: Int): Boolean = code in setOf(404, 429, 502, 503, 504)
+    fun routeRejected(code: Int): Boolean = code in setOf(400, 404, 429, 502, 503, 504)
 
     fun eligible(code: Int, websiteOptIn: Boolean, groqFreeZdrOptIn: Boolean,
                  groqKey: String): Boolean = routeRejected(code) && websiteOptIn && groqFreeZdrOptIn &&
