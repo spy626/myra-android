@@ -19,15 +19,16 @@ class WorkspaceWebsiteFailureAndClickFeedbackTest {
         return JSONObject(out.readUtf8())
     }
 
-    @Test fun thirdAttemptKeepsJsonObjectModeWithSameFreeModelAndApprovedSource() {
+    @Test fun freshSiteTextFirstAndCompatibleJsonModeKeepSameFreeModelAndApprovedSource() {
         val first = body(WorkspaceWebsiteGroqFallback.request("gsk_test", snapshot))
-        val third = body(WorkspaceWebsiteGroqFallback.compatibilityRequest("gsk_test", snapshot))
-        assertEquals(first.getString("model"), third.getString("model"))
-        assertEquals(first.getJSONArray("messages").toString(), third.getJSONArray("messages").toString())
-        assertEquals("json_schema", first.getJSONObject("response_format").getString("type"))
-        assertEquals("json_object", third.getJSONObject("response_format").getString("type"))
-        assertFalse(third.has("provider"))
-        assertFalse(third.has("plugins"))
+        val compatible = body(WorkspaceWebsiteGroqFallback.compatibilityRequest("gsk_test", snapshot))
+        assertTrue(WorkspaceWebsiteGroqFallback.usesFreshTextMode(snapshot))
+        assertEquals(first.getString("model"), compatible.getString("model"))
+        assertEquals(first.getJSONArray("messages").toString(), compatible.getJSONArray("messages").toString())
+        assertFalse(first.has("response_format"))
+        assertEquals("json_object", compatible.getJSONObject("response_format").getString("type"))
+        assertFalse(compatible.has("provider"))
+        assertFalse(compatible.has("plugins"))
         assertTrue(runCatching { WorkspaceWebsiteGeneration.parse("not json") }.isFailure)
         assertTrue(runCatching { WorkspaceWebsiteGeneration.parse("{\"files\":{}}") }.isFailure)
     }
