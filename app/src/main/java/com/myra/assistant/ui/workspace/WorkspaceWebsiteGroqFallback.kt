@@ -5,6 +5,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.Buffer
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -17,8 +18,7 @@ internal object WorkspaceWebsiteGroqFallback {
     private const val MAX_PROMPT_CHARS = 12_000
     private const val MAX_COMPLETION_TOKENS = 4_500
 
-    // Separate client deliberately lacks WorkspaceFreeRouteRetry; even HTTP 429 with a short
-    // Retry-After cannot silently send the website source a second time to Groq.
+    // This client deliberately has NO retry interceptor, including after Groq HTTP 429.
     val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
         .callTimeout(80, TimeUnit.SECONDS)
         .build()
@@ -27,6 +27,25 @@ internal object WorkspaceWebsiteGroqFallback {
                  groqKey: String): Boolean = code == 429 && websiteOptIn && groqFreeZdrOptIn &&
         groqKey.isNotBlank() && groqKey.length <= 256 && groqKey.none(Char::isWhitespace)
 
+    /** GPT-OSS 120B supports strict JSON schema; require exactly the three named files.
+     * File contents still pass WorkspaceWebsiteGeneration.parse and local safety checks.
+     */
+    private fun responseFormat(): JSONObject {
+        val fileProperties = JSONObject()
+        WorkspaceWebsiteGeneration.PATHS.forEach { fileProperties.put(it, JSONObject().put("type", "string")) }
+        val files = JSONObject().put("type", "object")
+            .put("properties", fileProperties)
+            .put("required", JSONArray(WorkspaceWebsiteGeneration.PATHS))
+            .put("additionalProperties", false)
+        val schema = JSONObject().put("type", "object")
+            .put("properties", JSONObject().put("files", files))
+            .put("required", JSONArray().put("files"))
+            .put("additionalProperties", false)
+        return JSONObject().put("type", "json_schema")
+            .put("json_schema", JSONObject().put("name", "website_files")
+                .put("strict", true).put("schema", schema))
+    }
+
     /** Reuse the exact approved website goal and selected three-file snapshot. Never send
      * chat history, memory, file attachments, secrets or unrelated project directories.
      */
@@ -34,8 +53,7 @@ internal object WorkspaceWebsiteGroqFallback {
         require(groqKey.isNotBlank() && groqKey.length <= 256 && groqKey.none(Char::isWhitespace)) {
             "A valid Groq Free key is required"
         }
-        // The placeholder is only used to construct the existing, already reviewed request body.
-        // Its Authorization header is not used or sent to either provider.
+        // Placeholder constructs the already reviewed body locally; its key is not sent.
         val sourceRequest = WorkspaceWebsiteGeneration.request("local-body-only", snapshot)
         val buffer = Buffer()
         requireNotNull(sourceRequest.body).writeTo(buffer)
@@ -50,11 +68,14 @@ internal object WorkspaceWebsiteGroqFallback {
         payload.remove("provider")
         payload.remove("plugins")
         payload.remove("max_tokens")
+        // GPT-OSS rejects reasoning_format with HTTP 400. Use the documented
+        // include_reasoning flag instead; don't leak reasoning into the JSON body.
+        payload.remove("reasoning_format")
         payload.put("model", WorkspaceGroqFree.MODEL)
             .put("max_completion_tokens", MAX_COMPLETION_TOKENS)
             .put("reasoning_effort", "low")
-            .put("reasoning_format", "hidden")
-            .put("response_format", JSONObject().put("type", "json_object"))
+            .put("include_reasoning", false)
+            .put("response_format", responseFormat())
         return Request.Builder().url(WorkspaceGroqFree.ENDPOINT)
             .header("Authorization", "Bearer $groqKey")
             .header("Content-Type", "application/json")
