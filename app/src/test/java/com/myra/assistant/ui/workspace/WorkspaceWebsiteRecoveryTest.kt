@@ -35,7 +35,7 @@ class WorkspaceWebsiteRecoveryTest {
         assertEquals(first.getJSONArray("messages").toString(), second.getJSONArray("messages").toString())
         assertEquals(first.getString("model"), second.getString("model"))
         assertEquals("json_schema", first.getJSONObject("response_format").getString("type"))
-        assertFalse(second.has("response_format")) // last attempt is plain text, locally parsed
+        assertEquals("json_object", second.getJSONObject("response_format").getString("type"))
         assertFalse(second.has("provider"))
         assertFalse(second.has("plugins"))
         assertTrue(runCatching { WorkspaceWebsiteGeneration.parse("{\"files\":{}}") }.isFailure)
