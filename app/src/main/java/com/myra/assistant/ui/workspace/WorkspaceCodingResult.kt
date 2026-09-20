@@ -14,7 +14,11 @@ internal object WorkspaceCodingResult {
             }.filter { it.isNotEmpty() && it.none(Char::isISOControl) }
             .distinct().take(5).toList()
         val headings = if (titles.isEmpty()) "" else "\nSaved page headings: ${titles.joinToString(", ")}."
-        return "$files$headings\nWork → Preview mein result check karo. " +
+        val nativeNote = if (generated["script.js"] == WorkspaceWebsiteNativeActionOwner.REPLACEMENT)
+            "\nLYRA omitted unverified generated Explore JavaScript on this new one-action page; " +
+                "the native link and CSS target feedback own the click. Test it in Preview before Keep."
+        else ""
+        return "$files$headings$nativeNote\nWork → Preview mein result check karo. " +
             "Review website · Undo / Keep sirf pending change ke liye hai. " +
             "Visual aur button testing aapko phone par confirm karni hai."
     }
