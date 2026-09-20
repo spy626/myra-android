@@ -1,0 +1,52 @@
+name: One-time audited OpenClaw idea ledger addition
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths: [.github/workflows/workspace-openclaw-ideas-ledger-once.yml]
+permissions:
+  contents: write
+jobs:
+  update-ledger:
+    if: github.repository == 'spy626/myra-android' && github.ref == 'refs/heads/agent/myra-phase-1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Append exact audited references to existing collection
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          python3 - <<'PY'
+          from pathlib import Path
+          ledger = Path('docs/WORKSPACE_IDEA_LEDGER.md')
+          detail = Path('docs/WORKSPACE_OPENCLAW_ALTERNATIVES_RESEARCH_2026-09-20.md')
+          assert detail.is_file(), 'Audited source detail missing'
+          text = ledger.read_text()
+          marker = 'T31K/awesome-openclaw-alternatives'
+          assert marker not in text, 'This directory is already indexed; refusing duplicate'
+          anchor = '| AI-For-Brokies | Free-first discovery/deployment concepts, not blanket free-route claim | 12 | BORROW selectively |'
+          assert text.count(anchor) == 1, 'Existing source ledger shape changed'
+          added = ('| [T31K/awesome-openclaw-alternatives](https://github.com/T31K/awesome-openclaw-alternatives/tree/7d5cf1601ee866083695398e201d805cb81bc321)'
+              ' | Curated agent-runtime list, NOT free models. Audit PicoClaw/NullClaw route capability, IronClaw credential isolation, SafestClaw local deterministic tools; source/fork warnings, local Qwen3.5 and free Cerebras candidate in'
+              ' [detailed accounting](WORKSPACE_OPENCLAW_ALTERNATIVES_RESEARCH_2026-09-20.md) | 7-12, 18 | REVIEW / BORROW concepts only; no integration or new API entitlement |')
+          text = text.replace(anchor, anchor + '\n' + added, 1)
+          free_anchor = '| Ollama local / Cloud Starter | Local or starter capability subject to device/cloud constraints | REVERIFY |'
+          assert text.count(free_anchor) == 1, 'Free model candidate table has changed'
+          candidate = ('| Cerebras Inference Free / `gpt-oss-120b` | Official free-rate-limit candidate uncovered via PicoClaw provider docs; '
+              'see [audit](WORKSPACE_OPENCLAW_ALTERNATIVES_RESEARCH_2026-09-20.md). No account, privacy, signup, model/schema or phone validation | REVERIFY; not connected |')
+          text = text.replace(free_anchor, free_anchor + '\n' + candidate, 1)
+          ledger.write_text(text)
+          print('Indexed audited source and separately gated free-inference candidate; no app code touched.')
+          PY
+          git diff --check
+          git add docs/WORKSPACE_IDEA_LEDGER.md
+          git diff --cached --exit-code && { echo 'No change unexpectedly'; exit 1; } || true
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs(ideas): index audited OpenClaw alternatives and gated Cerebras candidate'
+          git push origin HEAD:agent/myra-phase-1
