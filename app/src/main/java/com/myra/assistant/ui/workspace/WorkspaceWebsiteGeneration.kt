@@ -119,6 +119,11 @@ internal object WorkspaceWebsiteGeneration {
             "For cards use CSS-only decoration or text. Do not add img tags without existing local assets. " +
             "Do not include external scripts, CDN dependencies, tracking, secrets or additional files. " +
             "Do not claim that the website was tested. No prose, explanations or markdown outside the JSON."
+        val contextText = context.toString()
+        require(instruction.length.toLong() + contextText.length <= WorkspaceLongInputPolicy.MAX_REQUEST_CHARS) {
+            "Complete website brief plus current project source exceeds the free-provider request budget. " +
+                "No words were dropped and no project files changed. Reduce existing source or split into follow-ups."
+        }
         val payload = JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
             .put("stream", false).put("max_tokens", 7_000).put("temperature", 0.2)
             .put("response_format", JSONObject().put("type", "json_object"))
@@ -130,7 +135,7 @@ internal object WorkspaceWebsiteGeneration {
                 .put("enabled", false)))
             .put("messages", JSONArray()
                 .put(JSONObject().put("role", "system").put("content", instruction))
-                .put(JSONObject().put("role", "user").put("content", context.toString())))
+                .put(JSONObject().put("role", "user").put("content", contextText)))
         return Request.Builder().url(WorkspaceFreeAiSuggestion.ENDPOINT)
             .header("Authorization", "Bearer $key")
             .header("Content-Type", "application/json")

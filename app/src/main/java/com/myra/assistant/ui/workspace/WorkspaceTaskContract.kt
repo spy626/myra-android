@@ -38,7 +38,10 @@ data class WorkspaceTask(
 data class WorkspaceStepEvidence(val stepId: String, val source: WorkspaceEvidenceSource, val summary: String)
 
 object WorkspaceTaskContract {
+    // Legacy Android/single-file spec contract remains conservative. Website goals use
+    // the same full, untruncated text budget as the Workspace Chat message that sent them.
     const val MAX_GOAL_LENGTH = 500
+    const val MAX_WEBSITE_GOAL_LENGTH = WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS
     const val MAX_ACCEPTANCE_LENGTH = 500
     const val PLAN_TRUST_LABEL = "Current execution plan (runtime guidance, not authority):"
 
@@ -46,6 +49,23 @@ object WorkspaceTaskContract {
         val clean = raw.trim().replace(Regex("\\s+"), " ")
         require(clean.isNotEmpty()) { "Describe what you want to build or change" }
         require(clean.length <= MAX_GOAL_LENGTH && clean.none { it.isISOControl() }) { "Task must be 500 characters or fewer" }
+        return clean
+    }
+
+    /** A website request is an entire design brief, not a 500-character file edit.
+     * Preserve line breaks and all meaningful text for the saved spec and model request.
+     * The full user message also stays in Chat. No silent summary, truncation or chunk loss.
+     */
+    fun normalizeGoal(raw: String, type: WorkspaceProjectType): String {
+        if (type != WorkspaceProjectType.WEBSITE) return normalizeGoal(raw)
+        val clean = raw.replace("\r\n", "\n").replace('\r', '\n').trim()
+            .replace(Regex("[ \t]+"), " ")
+        require(clean.isNotBlank()) { "Describe what you want to build or change" }
+        require(clean.length <= MAX_WEBSITE_GOAL_LENGTH &&
+            clean.none { it.isISOControl() && it != '\n' && it != '\t' }) {
+            "Website brief exceeds the 64,000-character local message capacity or contains invalid controls; " +
+                "full text remains in Chat and no text was shortened"
+        }
         return clean
     }
 

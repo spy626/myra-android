@@ -59,6 +59,12 @@ class WorkspaceTaskActivity : AppCompatActivity() {
             return
         }
         project = found
+        // XML defaults to 500 for Android tasks; long website goals must remain fully
+        // editable on the Task screen too, including when reopening a saved brief.
+        if (project.type == WorkspaceProjectType.WEBSITE) {
+            binding.taskGoalInput.filters = arrayOf(
+                InputFilter.LengthFilter(WorkspaceTaskContract.MAX_WEBSITE_GOAL_LENGTH))
+        }
         installLocalPlanUi()
         binding.taskBack.setOnClickListener { leaveTask() }
         binding.taskHeading.text = project.name
@@ -199,7 +205,7 @@ class WorkspaceTaskActivity : AppCompatActivity() {
     }
 
     private fun saveGoal() {
-        val normalized = runCatching { WorkspaceTaskContract.normalizeGoal(binding.taskGoalInput.text.toString()) }.getOrElse {
+        val normalized = runCatching { WorkspaceTaskContract.normalizeGoal(binding.taskGoalInput.text.toString(), project.type) }.getOrElse {
             binding.taskGoalInput.error = it.message
             return
         }

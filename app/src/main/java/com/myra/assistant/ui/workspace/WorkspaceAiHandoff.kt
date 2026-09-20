@@ -47,7 +47,8 @@ object WorkspaceAiHandoff {
         // Never treat the same approved goal as an extra 180-character follow-up.
         // A distinct follow-up still goes through its original short/secret guards.
         val repeatsSavedGoal = rawFollowUp.isNotBlank() && runCatching {
-            WorkspaceTaskContract.normalizeGoal(rawFollowUp) == saved.goal
+            WorkspaceTaskContract.normalizeGoal(rawFollowUp,
+                projects.getProject(projectId)?.type ?: WorkspaceProjectType.CHAT) == saved.goal
         }.getOrDefault(false)
         val followUp = if (repeatsSavedGoal) "" else normalizeFollowUp(rawFollowUp)
         val context = WorkspaceSourceContext.prepare(files, tasks, projectId, saved, selectedPath)

@@ -64,7 +64,7 @@ class WorkspaceWebsiteGroqFallbackTest {
     }
 
     @Test fun oversizedWebsiteContextRefusesFallbackBeforeAnyNetworkCall() {
-        val huge = sample("a".repeat(12_000))
+        val huge = sample("a".repeat(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS))
         assertTrue(runCatching { WorkspaceWebsiteGroqFallback.request("gsk_test_key", huge) }.isFailure)
     }
 

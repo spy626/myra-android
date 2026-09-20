@@ -93,8 +93,12 @@ internal class WorkspaceChatCodingFlow(
      * No additional per-file permission popup is needed for this requested website build.
      */
     private fun continueWebsite(id: String, instruction: String) {
-        if (instruction.length > WorkspaceTaskContract.MAX_GOAL_LENGTH) {
-            error("Website request exceeds 500 characters; shorten it without removing important details.")
+        // Validate the full website brief before changing a pending backup or task.
+        // Ordinary Android single-file edits retain their separate 500-character contract.
+        val fullBrief = runCatching {
+            WorkspaceTaskContract.normalizeGoal(instruction, WorkspaceProjectType.WEBSITE)
+        }.getOrElse {
+            error("Website brief could not be accepted: ${it.message}")
             return
         }
         val openRouterKey = runCatching { keys.get(ApiKeyStore.OPENROUTER) }
@@ -115,7 +119,7 @@ internal class WorkspaceChatCodingFlow(
             val previous = tasks.get(id)
             val criteria = previous?.acceptanceCriteria?.takeIf { it.isNotBlank() }
                 ?: "The three saved website files are inspectable in Work Preview; preserve existing work."
-            val saved = tasks.create(id, instruction, replaceExisting = previous != null,
+            val saved = tasks.create(id, fullBrief, replaceExisting = previous != null,
                 rawAcceptanceCriteria = criteria)
             tasks.setSpecificationApproved(id, saved.taskId, WorkspaceTaskContract.specToken(saved), true)
         }.onFailure { error("Website task could not be saved: ${it.message}"); return }

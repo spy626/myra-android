@@ -18,7 +18,7 @@ class WorkspaceTaskStore(
     private val safeToken = Regex("^[0-9a-f]{64}$")
 
     @Synchronized fun get(projectId: String): WorkspaceTask? = runCatching {
-        if (projects.getProject(projectId) == null) return null
+        val project = projects.getProject(projectId) ?: return null
         val file = taskFile(projectId)
         if (!file.isFile) return null
         val json = JSONObject(file.readText(Charsets.UTF_8))
@@ -26,7 +26,7 @@ class WorkspaceTaskStore(
         if (schema !in 1..3 || json.getString("projectId") != projectId) return null
         val id = json.getString("taskId")
         if (!safeId.matches(id)) return null
-        val goal = WorkspaceTaskContract.normalizeGoal(json.getString("goal"))
+        val goal = WorkspaceTaskContract.normalizeGoal(json.getString("goal"), project.type)
         val criteria = if (schema == 1) "" else WorkspaceTaskContract.normalizeAcceptanceCriteria(json.getString("acceptanceCriteria"))
         val status = WorkspaceTaskStatus.valueOf(json.getString("status"))
         val created = json.getLong("createdAtMs")
@@ -46,8 +46,8 @@ class WorkspaceTaskStore(
     /** Replacing an existing goal needs an explicit user confirmation from the UI. */
     @Synchronized fun create(projectId: String, rawGoal: String, replaceExisting: Boolean = false,
                              rawAcceptanceCriteria: String = ""): WorkspaceTask {
-        requireNotNull(projects.getProject(projectId)) { "Project is unavailable" }
-        val goal = WorkspaceTaskContract.normalizeGoal(rawGoal)
+        val project = requireNotNull(projects.getProject(projectId)) { "Project is unavailable" }
+        val goal = WorkspaceTaskContract.normalizeGoal(rawGoal, project.type)
         val criteria = WorkspaceTaskContract.normalizeAcceptanceCriteria(rawAcceptanceCriteria)
         require(replaceExisting || get(projectId) == null) { "Confirm before replacing the current task" }
         val id = idFactory().trim()

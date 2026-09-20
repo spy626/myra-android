@@ -15,7 +15,8 @@ import java.util.concurrent.TimeUnit
  */
 internal object WorkspaceWebsiteGroqFallback {
     const val PREFERENCE_KEY = "workspace_website_groq_429_opt_in"
-    private const val MAX_PROMPT_CHARS = 12_000
+    // This is a bounded remote envelope, not the historical 500-character task cap.
+    private const val MAX_PROMPT_CHARS = WorkspaceLongInputPolicy.MAX_REQUEST_CHARS
     private const val MAX_COMPLETION_TOKENS = 4_500
 
     // This client deliberately has NO retry interceptor, including after Groq HTTP 429.
