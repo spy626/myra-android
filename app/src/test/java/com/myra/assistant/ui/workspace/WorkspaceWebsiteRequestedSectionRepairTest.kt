@@ -31,6 +31,28 @@ class WorkspaceWebsiteRequestedSectionRepairTest {
         assertTrue(review.chatNote().contains("completed", ignoreCase = true))
     }
 
+    @Test fun ctaOrParagraphTextCannotMasqueradeAsRequestedSection() {
+        val misleading = page.replace("</main>",
+            "<p>Tap Explore Minicoy to jump to Things to Explore.</p>" +
+            "<section class='tiles'><article><h3>Beaches</h3></article>" +
+            "<article><h3>Lighthouse</h3></article>" +
+            "<article><h3>Local Food</h3></article></section></main>")
+        val review = WorkspaceWebsiteVisualQuality.review(fresh, output(misleading))
+        val html = review.files.getValue("index.html")
+        assertTrue(review.completedRequestedSection)
+        assertTrue(review.repairedExploreAction)
+        assertEquals(1, Regex("<h2[^>]*>Things to Explore</h2>").findAll(html).count())
+        listOf("Beaches", "Lighthouse", "Local Food").forEach { name ->
+            assertEquals(1, Regex("<h3>$name</h3>").findAll(html).count())
+        }
+        assertEquals(review.files, WorkspaceWebsiteConsistency.verify(fresh, review.files))
+        assertEquals(review.files, WorkspaceWebsiteVisualQuality.review(fresh, review.files).files)
+
+        val existing = fresh.copy(original = output(misleading).mapValues { it.value })
+        assertFalse(WorkspaceWebsiteRequestedSectionRepair.repair(existing, output(misleading)).completed)
+        assertTrue(runCatching { WorkspaceWebsiteVisualQuality.review(existing, output(misleading)) }.isFailure)
+    }
+
     @Test fun existingCardSectionGetsHeadingWithoutDuplicatedCards() {
         val grouped = page.replace("</main>", "<section class='tiles'>" +
             "<article><h3>Beaches</h3></article>" +
