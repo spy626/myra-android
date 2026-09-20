@@ -129,7 +129,7 @@ class WorkspaceWebsiteGenerationTest {
         val body = JSONObject(buffer.readUtf8())
         assertEquals("openrouter/free", body.getString("model"))
         assertEquals("json_object", body.getJSONObject("response_format").getString("type"))
-        assertTrue(body.getJSONObject("provider").getBoolean("require_parameters"))
+        assertFalse(body.getJSONObject("provider").optBoolean("require_parameters", false))
         assertTrue(body.getJSONObject("provider").getBoolean("zdr"))
         assertEquals("deny", body.getJSONObject("provider").getString("data_collection"))
         assertEquals(0, body.getJSONObject("provider").getJSONObject("max_price").getInt("prompt"))

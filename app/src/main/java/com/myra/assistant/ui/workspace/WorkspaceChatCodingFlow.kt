@@ -97,10 +97,16 @@ internal class WorkspaceChatCodingFlow(
             error("Website request exceeds 500 characters; shorten it without removing important details.")
             return
         }
-        val key = runCatching { keys.get(ApiKeyStore.OPENROUTER) }
-            .getOrElse { error("Secure OpenRouter key unavailable; nothing was shared."); return }
-        if (key.isBlank()) {
-            error("Website request saved locally. Add an OpenRouter Free key in API & Cloud Settings.")
+        val openRouterKey = runCatching { keys.get(ApiKeyStore.OPENROUTER) }
+            .getOrElse { error("Secure provider keys unavailable; no source was shared."); return }
+        val groqKey = runCatching { keys.get(ApiKeyStore.GROQ) }
+            .getOrElse { error("Secure provider keys unavailable; no source was shared."); return }
+        val groqFreeEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+            .getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
+        val primary = WorkspaceWebsiteRoute.choose(openRouterKey, groqKey, groqFreeEnabled)
+        if (primary == null) {
+            error("Website request saved locally. Save a valid OpenRouter Free key, or enable " +
+                "Groq Free/ZDR with a valid Groq Free key in API & Cloud Settings. No source was sent.")
             return
         }
         runCatching { WorkspaceWebsiteGeneration.finishPreviousForNewRequest(files, projects, id) }
@@ -115,10 +121,18 @@ internal class WorkspaceChatCodingFlow(
         }.onFailure { error("Website task could not be saved: ${it.message}"); return }
         val snapshot = runCatching { WorkspaceWebsiteGeneration.prepare(files, tasks, projects, id) }
             .getOrElse { error("Website source review blocked: ${it.message}"); return }
-        val outgoing = runCatching { WorkspaceWebsiteGeneration.request(key, snapshot) }
-            .getOrElse { error("Free website request refused: ${it.message}"); return }
+        val outgoing = runCatching {
+            when (primary) {
+                WorkspaceWebsiteRoute.Provider.OPENROUTER ->
+                    WorkspaceWebsiteGeneration.request(openRouterKey, snapshot)
+                WorkspaceWebsiteRoute.Provider.GROQ ->
+                    WorkspaceWebsiteGroqFallback.request(groqKey, snapshot)
+            }
+        }.getOrElse { error("Free website request refused: ${it.message}"); return }
         val serial = ++generation
-        val call = WorkspaceWebsiteGeneration.client.newCall(outgoing)
+        val client = if (primary == WorkspaceWebsiteRoute.Provider.GROQ)
+            WorkspaceWebsiteGroqFallback.client else WorkspaceWebsiteGeneration.client
+        val call = client.newCall(outgoing)
         request = call
         report("Building index.html, style.css and script.js in this project · Stop ■ to cancel.")
         call.enqueue(object : Callback {
@@ -131,7 +145,8 @@ internal class WorkspaceChatCodingFlow(
             }
             override fun onResponse(call: Call, response: Response) {
                 val rejectedStatus = response.code
-                if (WorkspaceWebsiteGroqFallback.routeRejected(rejectedStatus)) {
+                if (primary == WorkspaceWebsiteRoute.Provider.OPENROUTER &&
+                    WorkspaceWebsiteGroqFallback.routeRejected(rejectedStatus)) {
                     // The user enabled website source sharing once in Settings; no per-edit
                     // permission dialog. Only a definitive HTTP rejection may switch routes.
                     response.close()

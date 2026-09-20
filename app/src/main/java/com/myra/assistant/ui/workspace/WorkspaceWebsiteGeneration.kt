@@ -114,7 +114,7 @@ internal object WorkspaceWebsiteGeneration {
             .put("stream", false).put("max_tokens", 7_000).put("temperature", 0.2)
             .put("response_format", JSONObject().put("type", "json_object"))
             .put("provider", JSONObject().put("zdr", true).put("data_collection", "deny")
-                .put("allow_fallbacks", false).put("require_parameters", true)
+                .put("allow_fallbacks", false)
                 .put("max_price", JSONObject().put("prompt", 0)
                     .put("completion", 0).put("request", 0).put("image", 0)))
             .put("plugins", JSONArray().put(JSONObject().put("id", "context-compression")
