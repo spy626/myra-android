@@ -68,6 +68,7 @@ Status key: `INTEGRATED` = demonstrably in LYRA; `BORROW` = concept to implement
 | huggingface/speech-to-speech; k2-fsa/OmniVoice | Modular streaming VAD/STT/LLM/TTS, turn cancellation and voice fallback under one core | 16 | BORROW/REVIEW |
 | calesthio/OpenMontage; ComfyUI; Remotion; FFmpeg | Declarative storyboard, bounded resources, approved creative rendering and QA | 17 | BORROW; free/license check |
 | AI-For-Brokies | Free-first discovery/deployment concepts, not blanket free-route claim | 12 | BORROW selectively |
+| [T31K/awesome-openclaw-alternatives](https://github.com/T31K/awesome-openclaw-alternatives/tree/7d5cf1601ee866083695398e201d805cb81bc321) | Curated agent-runtime list, NOT free models. Audit PicoClaw/NullClaw route capability, IronClaw credential isolation, SafestClaw local deterministic tools; source/fork warnings, local Qwen3.5 and free Cerebras candidate in [detailed accounting](WORKSPACE_OPENCLAW_ALTERNATIVES_RESEARCH_2026-09-20.md) | 7-12, 18 | REVIEW / BORROW concepts only; no integration or new API entitlement |
 | user CodeAI recording / SPCK workflow | Top tabs, safe file edits, task chat/preview loop; no full UI copy | 3–6 | INTEGRATED editor ideas; BORROW chat loop, prompt handoff MERGED in Slice 14 |
 
 ## Collected free model/provider *candidates*, NOT current free certifications
@@ -80,6 +81,7 @@ Every provider must be verified at the **exact route/model/account tier** immedi
 | Gemini Free | Free-tier route; privacy gate | REVERIFY, gated |
 | OpenRouter Free Pool | Exact `:free` routes only; dynamic availability | REVERIFY exact route |
 | Ollama local / Cloud Starter | Local or starter capability subject to device/cloud constraints | REVERIFY |
+| Cerebras Inference Free / `gpt-oss-120b` | Official free-rate-limit candidate uncovered via PicoClaw provider docs; see [audit](WORKSPACE_OPENCLAW_ALTERNATIVES_RESEARCH_2026-09-20.md). No account, privacy, signup, model/schema or phone validation | REVERIFY; not connected |
 | Kilo | `kilo-auto/free`, `inclusionai/ring-2.6-1t:free`, `nex-agi/nex-n2.5-pro:free` | REVERIFY exact route |
 | Routeway; OrcaRouter | Previously noted DeepSeek V4 Flash Free / MiniMax M2.7 Free / Qwen3.8 27B Free | REVERIFY exact route |
 | xKiro; UnoRouter | Previously high-capacity candidates; limits not guaranteed | REVERIFY |
