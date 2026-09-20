@@ -96,11 +96,12 @@ internal object WorkspaceWebsiteConsistency {
                 }
             }
         }
-        // One new, explicitly scoped Explore action has one owner: the native
-        // href/CSS pair. Reconcile its competing generated JS BEFORE missing-ID
-        // and all-anchor safeguards, which remain authoritative otherwise.
+        // The native link owns this single action. For the exact recorded fresh-page
+        // duplicate, remove only the redundant paragraph and its two old CSS rules.
+        // Established sites and unrecognized effects remain byte-for-byte unchanged.
         val owned = WorkspaceWebsiteNativeActionOwner.review(snapshot, files)
+        val clean = WorkspaceWebsiteDuplicateFeedbackCleanup.review(snapshot, owned)
         return WorkspaceWebsiteAnchorScriptQuality.review(snapshot,
-            WorkspaceWebsiteScriptQuality.review(snapshot, owned))
+            WorkspaceWebsiteScriptQuality.review(snapshot, clean))
     }
 }
