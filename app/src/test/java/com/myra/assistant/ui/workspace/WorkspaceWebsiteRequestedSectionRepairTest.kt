@@ -42,6 +42,17 @@ class WorkspaceWebsiteRequestedSectionRepairTest {
         assertEquals(1, Regex(">Things to Explore<").findAll(review.files.getValue("index.html")).count())
     }
 
+    @Test fun decoratedHeadingsCountAsRequestedContentWithoutDuplicatingSection() {
+        val decorated = page.replace("</main>", "<section>" +
+            "<h2>🌴 Things to Explore</h2><h3>🏖 Beaches</h3>" +
+            "<h3>🗼 Lighthouse</h3><h3>🍲 Local Food</h3></section></main>")
+        val review = WorkspaceWebsiteVisualQuality.review(fresh, output(decorated))
+        assertFalse(review.completedRequestedSection)
+        assertTrue(review.repairedExploreAction)
+        assertEquals(1, Regex("Things to Explore").findAll(review.files.getValue("index.html")).count())
+        assertEquals(review.files, WorkspaceWebsiteConsistency.verify(fresh, review.files))
+    }
+
     @Test fun existingSiteOrAmbiguousMarkupIsNeverSilentlyRewritten() {
         val existing = fresh.copy(original = mapOf("index.html" to page,
             "style.css" to "body{}", "script.js" to ""))
