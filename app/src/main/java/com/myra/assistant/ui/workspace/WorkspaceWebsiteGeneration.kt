@@ -184,12 +184,7 @@ internal object WorkspaceWebsiteGeneration {
     /** A full three-file envelope, never guessed paths or partial, truncated output. */
     fun parse(raw: String): Map<String, String> {
         require(raw.length in 1..MAX_OUTPUT_CHARS) { "Website output missing or too large; no files changed" }
-        val trimmed = raw.trim()
-        val unwrapped = if (trimmed.startsWith("```json\n") && trimmed.endsWith("```"))
-            trimmed.removePrefix("```json\n").removeSuffix("```").trim()
-        else if (trimmed.startsWith("```\n") && trimmed.endsWith("```"))
-            trimmed.removePrefix("```\n").removeSuffix("```").trim()
-        else trimmed
+        val unwrapped = WorkspaceWebsiteJsonEnvelope.normalize(raw)
         val root = runCatching {
             val tokens = JSONTokener(unwrapped)
             val parsed = tokens.nextValue()
