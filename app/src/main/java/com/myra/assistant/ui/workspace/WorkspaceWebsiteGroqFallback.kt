@@ -1,10 +1,12 @@
 package com.myra.assistant.ui.workspace
 
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.Buffer
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 /** One explicitly authorized, bounded OpenRouter 429 -> Groq Free WEBSITE resend.
  * Chat consent does not cover project source. No other error or a Groq failure retries.
@@ -14,6 +16,12 @@ internal object WorkspaceWebsiteGroqFallback {
     const val PREFERENCE_KEY = "workspace_website_groq_429_opt_in"
     private const val MAX_PROMPT_CHARS = 12_000
     private const val MAX_COMPLETION_TOKENS = 4_500
+
+    // Separate client deliberately lacks WorkspaceFreeRouteRetry; even HTTP 429 with a short
+    // Retry-After cannot silently send the website source a second time to Groq.
+    val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
+        .callTimeout(80, TimeUnit.SECONDS)
+        .build()
 
     fun eligible(code: Int, websiteOptIn: Boolean, groqFreeZdrOptIn: Boolean,
                  groqKey: String): Boolean = code == 429 && websiteOptIn && groqFreeZdrOptIn &&
