@@ -45,7 +45,9 @@ internal object WorkspaceWebsiteJsonEnvelope {
             line++
         }
         if (line != lines.size) return null
-        return JSONObject().put("files", JSONObject(files)).toString()
+        val fileObject = JSONObject()
+        files.forEach { (path, source) -> fileObject.put(path, source) }
+        return JSONObject().put("files", fileObject).toString()
     }
 
     /** Diagnose a completed response without persisting any raw model text, source, or keys.
