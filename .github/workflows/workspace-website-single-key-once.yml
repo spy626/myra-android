@@ -1,0 +1,27 @@
+name: Website single-key CI
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths: [.github/workflows/workspace-website-single-key-once.yml]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - run: python3 scripts/workspace_website_single_key_once.py
+      - run: gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon
+      - run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatCodingFlow.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteRoute.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGenerationTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteRouteTest.kt
+          git commit -m 'fix(workspace): allow Groq-only website generation'
+          git push origin HEAD:agent/myra-phase-1
