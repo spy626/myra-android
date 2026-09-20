@@ -33,6 +33,25 @@ internal object WorkspaceWebsiteGroqFallback {
                  groqKey: String): Boolean = routeRejected(code) && websiteOptIn && groqFreeZdrOptIn &&
         groqKey.isNotBlank() && groqKey.length <= 256 && groqKey.none(Char::isWhitespace)
 
+    /** A definitive Groq HTTP 400 can indicate incompatibility with structured-output
+     * parameters on a particular free backend. Reuse the exact approved snapshot and
+     * key once with documented JSON Object Mode. Local parse/apply remain strict.
+     * NEVER use this for timeouts, 429, or a response that may have succeeded.
+     */
+    fun compatibilityEligible(primary: WorkspaceWebsiteRoute.Provider, code: Int): Boolean =
+        primary == WorkspaceWebsiteRoute.Provider.GROQ && code == 400
+
+    fun compatibilityRequest(groqKey: String, snapshot: WorkspaceWebsiteGeneration.Snapshot): Request {
+        val original = request(groqKey, snapshot)
+        val buffer = Buffer()
+        requireNotNull(original.body).writeTo(buffer)
+        val payload = JSONObject(buffer.readUtf8())
+        payload.put("response_format", JSONObject().put("type", "json_object"))
+        return original.newBuilder()
+            .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+    }
+
     /** GPT-OSS 120B supports strict JSON schema; require exactly the three named files.
      * File contents still pass WorkspaceWebsiteGeneration.parse and local safety checks.
      */

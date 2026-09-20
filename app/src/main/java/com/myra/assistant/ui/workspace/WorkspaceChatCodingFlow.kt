@@ -145,6 +145,11 @@ internal class WorkspaceChatCodingFlow(
             }
             override fun onResponse(call: Call, response: Response) {
                 val rejectedStatus = response.code
+                if (WorkspaceWebsiteGroqFallback.compatibilityEligible(primary, rejectedStatus)) {
+                    response.close() // Definitive HTTP rejection, not an uncertain timeout.
+                    recoverGroqWebsiteFormat(call, serial, id, snapshot, groqKey)
+                    return
+                }
                 if (primary == WorkspaceWebsiteRoute.Provider.OPENROUTER &&
                     WorkspaceWebsiteGroqFallback.routeRejected(rejectedStatus)) {
                     // The user enabled website source sharing once in Settings; no per-edit
@@ -157,6 +162,38 @@ internal class WorkspaceChatCodingFlow(
                     runCatching { WorkspaceWebsiteGeneration.readResponse(response) })
             }
         })
+    }
+
+    /** One same-provider compatibility attempt after a definitive Groq-only HTTP 400.
+     * The second response is terminal: never loop, change provider, or replay on timeout.
+     */
+    private fun recoverGroqWebsiteFormat(first: Call, serial: Long, id: String,
+                                         snapshot: WorkspaceWebsiteGeneration.Snapshot,
+                                         groqKey: String) {
+        activity.runOnUiThread {
+            if (activity.isFinishing || activity.isDestroyed || serial != generation ||
+                request !== first || !current(id)) return@runOnUiThread
+            val alternate = runCatching {
+                WorkspaceWebsiteGroqFallback.compatibilityRequest(groqKey, snapshot)
+            }.getOrElse {
+                completeWebsite(first, serial, id, snapshot, Result.failure(
+                    IllegalStateException("Groq Free rejected this website format; no files changed.")))
+                return@runOnUiThread
+            }
+            val second = WorkspaceWebsiteGroqFallback.client.newCall(alternate)
+            request = second
+            report("Trying a compatible Groq Free website format · Stop ■ to cancel.")
+            second.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    completeWebsite(call, serial, id, snapshot, Result.failure(
+                        IllegalStateException("Groq Free compatibility attempt could not complete. " +
+                            "No uncertain request was resent; project files unchanged.")))
+                }
+                override fun onResponse(call: Call, response: Response) = completeWebsite(
+                    call, serial, id, snapshot,
+                    runCatching { WorkspaceWebsiteGeneration.readResponse(response) })
+            })
+        }
     }
 
     private fun fallbackWebsiteOnRejected(first: Call, serial: Long, id: String,
@@ -210,10 +247,14 @@ internal class WorkspaceChatCodingFlow(
                 request !== call || !current(id)) return@runOnUiThread
             request = null
             result.onSuccess { generated ->
+                val cleaned = WorkspaceWebsiteGeneration.omitUnverifiedImages(snapshot, generated)
+                val omittedImages = cleaned["index.html"] != generated["index.html"]
                 runCatching {
-                    WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, generated)
+                    WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, cleaned)
                 }.onSuccess {
-                    terminal(WorkspaceCodingResult.websiteSuccess(snapshot.original, generated))
+                    val summary = WorkspaceCodingResult.websiteSuccess(snapshot.original, cleaned) +
+                        if (omittedImages) "\nUnverified images omitted; cards use the saved text and CSS." else ""
+                    terminal(summary, "") // The durable Chat reply is the single success message.
                     activity.startActivity(WorkspacePreviewActivity.intent(activity, id))
                 }.onFailure {
                     error("Website files were not fully saved: ${it.message}. " +
