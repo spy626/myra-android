@@ -166,7 +166,7 @@ internal class WorkspaceChatCodingFlow(
                             "${issue.message}. No files changed.")))
                     return@runOnUiThread
                 }
-            val second = WorkspaceWebsiteGeneration.client.newCall(secondRequest)
+            val second = WorkspaceWebsiteGroqFallback.client.newCall(secondRequest)
             request = second
             report("OpenRouter Free rate-limited; trying Groq Free once for this website · Stop ■ to cancel.")
             second.enqueue(object : Callback {

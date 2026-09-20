@@ -50,6 +50,11 @@ class WorkspaceWebsiteGroqFallbackTest {
         assertTrue(runCatching { WorkspaceWebsiteGroqFallback.request("gsk_test_key", huge) }.isFailure)
     }
 
+    @Test fun GroqFallbackClientCannotRetryOrResendAfter429() {
+        assertTrue(WorkspaceWebsiteGroqFallback.client.interceptors.none { it is WorkspaceFreeRouteRetry })
+        assertFalse(WorkspaceWebsiteGroqFallback.client.retryOnConnectionFailure)
+    }
+
     @Test fun invalidKeyNeverBuildsGroqRequest() {
         assertTrue(runCatching { WorkspaceWebsiteGroqFallback.request("bad key", sample()) }.isFailure)
     }
