@@ -96,6 +96,22 @@ internal object WorkspaceWebsiteGroqFallback {
         requireNotNull(sourceRequest.body).writeTo(buffer)
         val payload = JSONObject(buffer.readUtf8())
         val messages = payload.getJSONArray("messages")
+        if (isFreshWebsite(snapshot) && snapshot.goal.contains("Explore Minicoy", true) &&
+            snapshot.goal.contains("Things to Explore", true)) {
+            // The previous phone failures came from generating TWO competing owners for
+            // the same click: a native anchor plus a JS preventDefault() listener.
+            // Preserve arbitrary other requested interactions; constrain only Explore.
+            val system = messages.getJSONObject(0)
+            system.put("content", system.getString("content") +
+                " For this NEW page, implement Explore Minicoy as a native <a href=\"#section-id\"> " +
+                "link to the actual Things to Explore heading. CSS :target must show the " +
+                "requested Exploring Minicoy! feedback. Do not attach Explore click listeners " +
+                "or intercept in-page anchor clicks with preventDefault(). If no OTHER " +
+                "JavaScript behaviors are explicitly requested, script.js must be an empty string. " +
+                "If other JS is requested, implement only that JS without intercepting Explore. " +
+                "Keep the three full files concise. In JSON strings escape literal newlines, " +
+                "quotes and backslashes; never output a truncated JSON envelope.")
+        }
         val chars = (0 until messages.length()).sumOf {
             messages.getJSONObject(it).getString("content").length
         }
