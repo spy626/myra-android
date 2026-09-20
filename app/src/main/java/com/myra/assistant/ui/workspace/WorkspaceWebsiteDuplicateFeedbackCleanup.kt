@@ -1,0 +1,61 @@
+package com.myra.assistant.ui.workspace
+
+/** Removes only the observed duplicate Explore status from an untouched, new Minicoy site.
+ * The native link/CSS :target feedback must already be complete. Unknown code, other
+ * interactions and established projects remain untouched; this is not a CSS/HTML parser.
+ */
+internal object WorkspaceWebsiteDuplicateFeedbackCleanup {
+    private val nativeLink = Regex(
+        """(?is)<a\b[^>]*\bhref\s*=\s*(['"])#([a-zA-Z][\w:.-]{0,63})\1[^>]*>\s*Explore\s+Minicoy\s*</a\s*>""")
+    private val status = Regex(
+        """(?is)<p\b[^>]*\bclass\s*=\s*(['"])lyra-explore-feedback\1[^>]*>\s*Exploring\s+Minicoy!\s*</p\s*>""")
+    private val redundant = Regex(
+        """(?is)<p\s+class\s*=\s*(['"])feedback\1\s*>\s*Exploring\s+Minicoy!\s*</p\s*>""")
+    private val classes = Regex("""(?is)\bclass\s*=\s*(['"])(.*?)\1""")
+    private val oldClassSelector = Regex("""(?i)(?<![\w-])\.feedback(?![\w-])""")
+    // Whole, single-selector rules only: never remove a grouped selector or unrelated CSS.
+    private val hiddenRule = Regex(
+        """(?m)^[ \t]*\.feedback[ \t]*\{[^{}]{0,700}\}[ \t]*(?:\r?\n)?""")
+    private val obsoleteTargetRule = Regex(
+        """(?m)^[ \t]*(?:/\* Show feedback when section is target \*/[ \t]*\r?\n)?[ \t]*#explore-section:target[ \t]+\.feedback[ \t]*\{[^{}]{0,700}\}[ \t]*(?:\r?\n)?""")
+    private val hidden = Regex("""(?i)\bdisplay\s*:\s*none\b""")
+    private val shown = Regex("""(?i)\bdisplay\s*:\s*block\b""")
+
+    fun review(snapshot: WorkspaceWebsiteGeneration.Snapshot,
+               files: Map<String, String>): Map<String, String> {
+        if (snapshot.original.values.any { it != null }) return files
+        if (!listOf("Minicoy", "Explore Minicoy", "Things to Explore", "Exploring Minicoy!")
+                .all { snapshot.goal.contains(it, ignoreCase = true) }) return files
+        val html = files["index.html"] ?: return files
+        val css = files["style.css"] ?: return files
+        val script = files["script.js"] ?: return files
+        // Never remove a node or a rule that an unknown generated script may consume.
+        if (script.isNotBlank() && script != WorkspaceWebsiteNativeActionOwner.REPLACEMENT) return files
+        val link = nativeLink.findAll(html).singleOrNull() ?: return files
+        val target = link.groupValues[2]
+        if (target == "explore-section") return files
+        val heading = Regex(
+            """(?is)<h[1-6]\b[^>]*\bid\s*=\s*(['"])${Regex.escape(target)}\1[^>]*>\s*Things\s+to\s+Explore\s*</h[1-6]\s*>""")
+        if (!heading.containsMatchIn(html) ||
+            !css.contains(".lyra-explore-target:target + .lyra-explore-feedback")) return files
+        val primary = status.findAll(html).singleOrNull() ?: return files
+        val extra = redundant.findAll(html).singleOrNull() ?: return files
+        if (extra.range.first <= primary.range.last ||
+            html.substring(primary.range.last + 1, extra.range.first).isNotBlank()) return files
+        // No other HTML consumer of the old class, including multi-class attributes.
+        val oldClassUses = classes.findAll(html).count { match ->
+            match.groupValues[2].split(Regex("""\s+""")).contains("feedback")
+        }
+        if (oldClassUses != 1 || oldClassSelector.findAll(css).count() != 2) return files
+        val oldHidden = hiddenRule.findAll(css).singleOrNull() ?: return files
+        val oldTarget = obsoleteTargetRule.findAll(css).singleOrNull() ?: return files
+        if (!hidden.containsMatchIn(oldHidden.value) ||
+            !shown.containsMatchIn(oldTarget.value) ||
+            oldHidden.range.first == oldTarget.range.first) return files
+        val cleanedCss = listOf(oldHidden.range, oldTarget.range)
+            .sortedByDescending { it.first }
+            .fold(css) { source, range -> source.removeRange(range) }
+        val cleanedHtml = html.removeRange(extra.range)
+        return files + ("index.html" to cleanedHtml) + ("style.css" to cleanedCss)
+    }
+}
