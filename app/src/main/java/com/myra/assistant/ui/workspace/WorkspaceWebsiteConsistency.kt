@@ -11,12 +11,21 @@ internal object WorkspaceWebsiteConsistency {
     private val whitespace = Regex("""\s+""")
     private val href = Regex("""(?is)\bhref\s*=\s*(["'])#([a-zA-Z][\w:.-]{0,63})\1""")
     private val id = Regex("""(?is)\bid\s*=\s*(["'])([a-zA-Z][\w:.-]{0,63})\1""")
-    private val remove = Regex("""(?i)\b(remove|delete|drop|hatao|hata|nikalo)\b""")
     private val alternateExplore = Regex(
         """(?is)(?:explore\s+minicoy|explore\s+button).{0,100}\b(?:click|tap|press|dabao|dabane)\b.{0,100}\bwelcome\s+to\s+minicoy\b|\b(?:click|tap|press)\b.{0,100}\b(?:alert|modal|new\s+page|external\s+link)\b""")
 
     private fun visible(html: String): String = whitespace.replace(
         tags.replace(html, " ").replace("&nbsp;", " ").replace("&amp;", "&").trim(), " ")
+
+    /** A removal request must name the exact target close to the removal verb. Removing
+     * some *other* card must not disable protection for the existing welcome or section.
+     */
+    private fun explicitlyRemove(goal: String, name: String): Boolean {
+        val verb = "(?:remove|delete|drop|hatao|hata|nikalo)"
+        val namePattern = Regex.escape(name).replace("\\ ", "\\s+")
+        return Regex("(?is)\\b$verb\\b(?:\\s+\\w+){0,3}\\s+$namePattern\\b|" +
+            "$namePattern(?:\\s+\\w+){0,3}\\s+\\b$verb\\b").containsMatchIn(goal)
+    }
 
     /** Refuse incomplete three-file results before WorkspaceWebsiteGeneration.apply/Undo.
      * Require only titles explicitly named by the user or already in their project.
@@ -34,11 +43,10 @@ internal object WorkspaceWebsiteConsistency {
         val old = snapshot.original["index.html"].orEmpty()
         val oldHeadings = heading.findAll(old).map { visible(it.groupValues[3]) }.toList()
         fun has(name: String, choices: List<String>) = choices.any { it.equals(name, true) }
-        val preservesExisting = !remove.containsMatchIn(goal)
-        val mustWelcome = goal.contains("Welcome to Minicoy", true) ||
-            (preservesExisting && has("Welcome to Minicoy", oldHeadings))
-        val mustExplore = goal.contains("Things to Explore", true) ||
-            (preservesExisting && has("Things to Explore", oldHeadings))
+        fun required(name: String) = !explicitlyRemove(goal, name) &&
+            (goal.contains(name, true) || has(name, oldHeadings))
+        val mustWelcome = required("Welcome to Minicoy")
+        val mustExplore = required("Things to Explore")
         if (mustWelcome) require(has("Welcome to Minicoy", headings)) {
             "Website omitted the requested Welcome to Minicoy heading; no files changed"
         }
@@ -49,11 +57,11 @@ internal object WorkspaceWebsiteConsistency {
         val asksThreeCards = cardNames.all { goal.contains(it, true) } &&
             Regex("""(?i)\b(?:card|cards)\b""").containsMatchIn(goal)
         if (asksThreeCards) cardNames.forEach { card ->
-            require(has(card, headings)) {
+            if (!explicitlyRemove(goal, card)) require(has(card, headings)) {
                 "Website omitted the requested $card card; no files changed"
             }
         }
-        if (goal.contains("Explore Minicoy", true)) {
+        if (goal.contains("Explore Minicoy", true) && !explicitlyRemove(goal, "Explore Minicoy")) {
             val cta = control.findAll(html).firstOrNull {
                 visible(it.groupValues[3]).equals("Explore Minicoy", true)
             }
