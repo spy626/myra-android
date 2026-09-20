@@ -9,7 +9,8 @@ import org.json.JSONTokener
 internal object WorkspaceWebsiteVisualQuality {
     data class SourceReview(val files: Map<String, String>, val removedImages: Int,
                             val removedEmptyMedia: Int, val viewportAdded: Boolean,
-                            val repairedExploreAction: Boolean = false) {
+                            val repairedExploreAction: Boolean = false,
+                            val completedRequestedSection: Boolean = false) {
         fun chatNote(): String = (when {
             removedImages + removedEmptyMedia > 0 ->
                 "\nLayout safeguard: omitted $removedImages unverified image(s) and " +
@@ -17,9 +18,12 @@ internal object WorkspaceWebsiteVisualQuality {
                 "Inspect Preview on your phone; source checks cannot judge visual appearance."
             viewportAdded -> "\nMobile viewport added. Inspect Preview on your phone."
             else -> ""
-        }) + if (repairedExploreAction)
+        }) + (if (repairedExploreAction)
             "\nExplore Minicoy now links to Things to Explore; tap it to verify in Preview."
-        else ""
+        else "") + (if (completedRequestedSection)
+            "\nCompleted the explicitly requested Things to Explore section locally. " +
+                "Review cards and appearance in Preview before Keep."
+        else "")
     }
 
     // Only new empty media-specific div/figure nodes. Never remove general empty elements,
@@ -83,17 +87,18 @@ internal object WorkspaceWebsiteVisualQuality {
                 }
             }
         }
-        val action = WorkspaceWebsiteActionQuality.review(snapshot,
+        val completed = WorkspaceWebsiteRequestedSectionRepair.repair(snapshot,
             withoutImages + ("index.html" to html))
+        val action = WorkspaceWebsiteActionQuality.review(snapshot, completed.files)
         // All providers must pass the same user-brief contract before any project write.
         val files = WorkspaceWebsiteConsistency.verify(snapshot, action.files)
         require(files.values.sumOf { it.length } <= 30_000 &&
             files.values.all { it.length <= 15_000 } &&
-            !WorkspaceSourceContext.containsPossibleSecret(html)) {
+            !WorkspaceSourceContext.containsPossibleSecret(files.getValue("index.html"))) {
             "Visual safeguard exceeded approved file limits; original files unchanged"
         }
         return SourceReview(files, removedImages, removedEmpty, viewportAdded,
-            action.repaired)
+            action.repaired, completed.completed)
     }
 
     data class LayoutFindings(val overflow: Boolean, val brokenImages: Int, val emptyMedia: Int) {
