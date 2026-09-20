@@ -1,0 +1,45 @@
+name: One-time Groq 400 and Explore feedback repair
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths: [.github/workflows/workspace-website-400-and-cta-once.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'spy626/myra-android' && github.ref == 'refs/heads/agent/myra-phase-1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Verify exact branch and apply deterministic changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          python3 -m py_compile scripts/workspace_website_400_click_feedback_once.py
+          python3 scripts/workspace_website_400_click_feedback_once.py
+          git diff --check
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGroqFallback.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteProviderError.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteActionQuality.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteConsistency.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteFailureAndClickFeedbackTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteRecoveryTest.kt
+          test -n "$(git diff --cached --name-only)"
+      - name: Full Android unit tests and debug compile
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Fast-forward ONLY tested agent branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(workspace): diagnose Groq 400 safely and show requested Explore click text'
+          git push origin HEAD:agent/myra-phase-1
