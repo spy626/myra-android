@@ -54,8 +54,12 @@ class WorkspaceWebsiteGenericOutputContractTest {
         assertEquals(css, parsed.getValue("style.css"))
         assertEquals(js, parsed.getValue("script.js"))
         assertEquals(WorkspaceWebsiteGeneration.PATHS.toSet(), parsed.keys)
+        val spaced = response.replace("```\nstyle.css", "```\n\nstyle.css")
+            .replace("```\nscript.js", "```\n\n\nscript.js")
+        assertEquals(parsed, WorkspaceWebsiteGeneration.parse(spaced))
         listOf(response.dropLast(3), response + "\nMore output", response + "\n" + response,
-            response.replace("script.js\n```javascript", "api_key.txt\n```javascript"))
+            response.replace("script.js\n```javascript", "api_key.txt\n```javascript"),
+            response.replace("```\nstyle.css", "```\n\n\n\nstyle.css"))
             .forEach { assertTrue(runCatching { WorkspaceWebsiteGeneration.parse(it) }.isFailure) }
     }
 
