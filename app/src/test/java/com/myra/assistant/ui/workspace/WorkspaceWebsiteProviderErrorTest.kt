@@ -31,7 +31,7 @@ class WorkspaceWebsiteProviderErrorTest {
 
     @Test fun openRouter429DoesNotClaimDailyQuotaFromStatusOrGenericRateLimit() {
         val secret = "PRIVATE_SENTINEL_429"
-        val generic = """{"error":{"code":429,"message":"Rate limit exceeded $secret"}}""
+        val generic = "{\"error\":{\"code\":429,\"message\":\"Rate limit exceeded $secret\"}}"
         val result = WorkspaceWebsiteProviderError.openRouter429Summary(generic, null)
         assertTrue(result.contains("HTTP 429: rate-limited; scope unverified"))
         assertTrue(result.contains("does not independently prove"))
@@ -44,13 +44,13 @@ class WorkspaceWebsiteProviderErrorTest {
 
     @Test fun openRouter429OnlyReportsExplicitProviderScopeAndBoundedRetryAfter() {
         val secret = "SECRET_SOURCE_43"
-        val daily = """{"error":{"message":"Daily request limit exceeded $secret"}}""
+        val daily = "{\"error\":{\"message\":\"Daily request limit exceeded $secret\"}}"
         assertEquals("provider reports a daily limit for this route",
             WorkspaceWebsiteProviderError.openRouter429Category(daily))
-        val minute = """{"error":{"message":"Requests per minute limit exceeded $secret"}}""
+        val minute = "{\"error\":{\"message\":\"Requests per minute limit exceeded $secret\"}}"
         assertEquals("provider reports a per-minute limit for this route",
             WorkspaceWebsiteProviderError.openRouter429Category(minute))
-        val provider = """{"error":{"message":"Upstream provider rate limit $secret"}}""
+        val provider = "{\"error\":{\"message\":\"Upstream provider rate limit $secret\"}}"
         assertEquals("provider-side rate or capacity limit reported",
             WorkspaceWebsiteProviderError.openRouter429Category(provider))
         val good = WorkspaceWebsiteProviderError.openRouter429Summary(minute, "120")
