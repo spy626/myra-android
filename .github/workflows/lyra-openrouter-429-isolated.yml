@@ -18,7 +18,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git branch --show-current)" = agent/myra-phase-1
-          git merge-base --is-ancestor edd9ee2fc6d31c6d710ffdebb5d36826b89e9e5e HEAD
+          git merge-base --is-ancestor 1a2426d44e0cd0ad6e1f81403446f799c3cc8baa HEAD
           git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
           git merge-base --is-ancestor 74f603cd2f19bf9435e20020486d9f22d061474f HEAD
           git diff --exit-code
