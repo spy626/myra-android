@@ -34,7 +34,12 @@ class WorkspaceWebsitePolishReliabilityTest {
         val second = body(compatible)
         assertFalse(first.has("response_format"))
         assertEquals("json_object", second.getJSONObject("response_format").getString("type"))
-        assertEquals(first.getJSONArray("messages").toString(), second.getJSONArray("messages").toString())
+        assertEquals(first.getJSONArray("messages").getJSONObject(1).toString(),
+            second.getJSONArray("messages").getJSONObject(1).toString())
+        assertTrue(first.getJSONArray("messages").getJSONObject(0).getString("content")
+            .contains("Return exactly THREE complete files"))
+        assertTrue(second.getJSONArray("messages").getJSONObject(0).getString("content")
+            .contains("Return exactly ONE JSON object"))
         assertEquals(first.getString("model"), second.getString("model"))
         assertEquals(first.getInt("max_completion_tokens"), second.getInt("max_completion_tokens"))
         assertFalse(second.has("provider"))
