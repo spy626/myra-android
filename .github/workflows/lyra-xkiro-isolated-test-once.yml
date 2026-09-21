@@ -1,0 +1,73 @@
+name: LYRA isolated xKiro phone-test APK once
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/lyra-xkiro-isolated-test-once.yml']
+permissions:
+  contents: read
+jobs:
+  isolated-test-build:
+    if: github.ref == 'refs/heads/agent/myra-phase-1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 32
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require verified xKiro source and unchanged main app source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = agent/myra-phase-1
+          git merge-base --is-ancestor c8c6d3e3cda8bdbcce1d208642465706e7d54788 HEAD
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+          git diff --exit-code
+      - name: Change package name ONLY in runner for side-by-side test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          gradle=Path('app/build.gradle')
+          text=gradle.read_text()
+          old="debug { if (hasStableSigning) signingConfig signingConfigs.ciStable }"
+          assert text.count(old)==1, 'Refusing unexpected build configuration'
+          gradle.write_text(text.replace(old,"debug { applicationIdSuffix '.xkirotest'; if (hasStableSigning) signingConfig signingConfigs.ciStable }"))
+          manifest=Path('app/src/main/AndroidManifest.xml')
+          text=manifest.read_text()
+          old='android:label="LYRA"'
+          assert text.count(old)==1, 'Refusing unexpected app label'
+          manifest.write_text(text.replace(old,'android:label="LYRA xKiro Test"'))
+          PY
+          git diff --check
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Unit tests and isolated APK; original repository files stay uncommitted
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon > "$RUNNER_TEMP/xkiro-isolated.log" 2>&1; then
+            tail -n 400 "$RUNNER_TEMP/xkiro-isolated.log"
+            exit 1
+          fi
+          tail -n 55 "$RUNNER_TEMP/xkiro-isolated.log"
+      - name: Verify isolated package and label before upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          test -n "$aapt"
+          "$aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | tee "$RUNNER_TEMP/lyra-isolated-badging.txt" | head -n 18
+          grep -q "package: name='com.myra.assistant.xkirotest'" "$RUNNER_TEMP/lyra-isolated-badging.txt"
+          grep -q "application-label:'LYRA xKiro Test'" "$RUNNER_TEMP/lyra-isolated-badging.txt"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-xkiro-isolated-phone-test-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
