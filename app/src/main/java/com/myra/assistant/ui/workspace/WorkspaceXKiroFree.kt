@@ -162,7 +162,16 @@ internal object WorkspaceXKiroFree {
             if (chain.call().isCanceled()) throw IOException("Work request cancelled; no fallback sent")
             val second = chain.proceed(open) // Any network ambiguity ends the chain.
             if (!WorkspaceCodingAutoFallback.openRouterRejected(second.code)) return second
-            openRouterResult = "OpenRouter Free HTTP ${second.code}"
+            openRouterResult = if (second.code == 429) {
+                // Only a bounded response preview and numeric Retry-After are used. Never echo
+                // arbitrary provider text or treat 429 as proof of daily quota exhaustion.
+                val safeBody = runCatching {
+                    val bytes = second.peekBody(8_193L).bytes()
+                    if (bytes.size <= 8_192) String(bytes, Charsets.UTF_8) else ""
+                }.getOrDefault("")
+                WorkspaceWebsiteProviderError.openRouter429Summary(
+                    safeBody, second.header("Retry-After"))
+            } else "OpenRouter Free HTTP ${second.code}"
             second.close()
         }
         val groq = requestForGroq() ?: throw IOException(
