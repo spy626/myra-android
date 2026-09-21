@@ -3,12 +3,14 @@ package com.myra.assistant.ui.settings
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.databinding.ActivityApiCloudSettingsBinding
 import com.myra.assistant.ui.workspace.WorkspaceFreeCrossProvider
 import com.myra.assistant.ui.workspace.WorkspaceGroqFree
+import com.myra.assistant.ui.workspace.WorkspaceXKiroFree
 import com.myra.assistant.ui.workspace.WorkspaceWebsiteGroqFallback
 import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
 
@@ -21,8 +23,21 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         val keys = ApiKeyStore(this)
         b.openRouterKey.setText(keys.get(ApiKeyStore.OPENROUTER))
         b.groqKey.setText(keys.get(ApiKeyStore.GROQ))
+        b.xKiroKey.setText(keys.get(ApiKeyStore.XKIRO))
         b.deepseekKey.setText(keys.get(ApiKeyStore.DEEPSEEK))
         val workspacePrefs = getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+        b.advancedProviderControls.visibility = View.GONE
+        b.advancedProviderToggle.setOnClickListener {
+            val opening = b.advancedProviderControls.visibility != View.VISIBLE
+            b.advancedProviderControls.visibility = if (opening) View.VISIBLE else View.GONE
+            b.advancedProviderToggle.text = if (opening) "Advanced · Privacy & fallback ▴"
+                else "Advanced · Privacy & fallback ▾"
+        }
+        b.xKiroWorkSwitch.isChecked = workspacePrefs.getBoolean(
+            WorkspaceXKiroFree.PREFERENCE_KEY, false)
+        b.xKiroWorkSwitch.setOnCheckedChangeListener { _, enabled ->
+            workspacePrefs.edit().putBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, enabled).apply()
+        }
         b.workspaceMemorySwitch.isChecked = workspacePrefs.getBoolean(
             WorkspaceMemoryInterceptor.PREFERENCE_KEY, false)
         b.workspaceMemorySwitch.setOnCheckedChangeListener { _, enabled ->
@@ -57,6 +72,7 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             // Never touch the Gemini key or legacy conversation_provider preference here.
             keys.put(ApiKeyStore.OPENROUTER, b.openRouterKey.text.toString())
             keys.put(ApiKeyStore.GROQ, b.groqKey.text.toString())
+            keys.put(ApiKeyStore.XKIRO, b.xKiroKey.text.toString())
             keys.put(ApiKeyStore.DEEPSEEK, b.deepseekKey.text.toString())
             Toast.makeText(this, "API configuration saved", Toast.LENGTH_SHORT).show()
         }
