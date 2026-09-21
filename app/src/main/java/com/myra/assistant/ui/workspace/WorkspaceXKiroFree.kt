@@ -15,7 +15,7 @@ import java.io.IOException
 import java.math.BigDecimal
 import java.util.concurrent.TimeUnit
 
-/** Optional, user-approved xKiro Free route for Work coding ONLY. No automatic fallback.
+/** Optional, user-approved xKiro Free route for Work coding ONLY. Automatic fallback requires separate opt-in.
  * Public catalog + key-specific free quota are checked before EVERY source-bearing POST;
  * missing/ambiguous metadata fails closed. A :free label alone is not sufficient.
  */
@@ -139,15 +139,25 @@ internal object WorkspaceXKiroFree {
                 listOf(WorkspaceConversationStore.Message("approved-work-source", "user",
                     oneFilePrompt(original), System.currentTimeMillis())))
         }.getOrNull()
-        val open = if (WorkspaceCodingAutoFallback.validKey(openKey)) runCatching {
+        val openKeyWellFormed = WorkspaceCodingAutoFallback.validKey(openKey)
+        val openKeyCheck = if (openKeyWellFormed)
+            WorkspaceOpenRouterKeyPreflight.verify(openKey)
+        else WorkspaceOpenRouterKeyPreflight.Result.UNVERIFIED
+        // A definitive key/account rejection cannot receive the project source.
+        // If the read-only check is unavailable, preserve the existing consented free route.
+        val openAllowed = openKeyWellFormed &&
+            openKeyCheck != WorkspaceOpenRouterKeyPreflight.Result.ACCESS_REFUSED
+        val open = if (openAllowed) runCatching {
             if (snapshot != null) WorkspaceWebsiteGeneration.request(openKey, snapshot)
             else WorkspaceChatGateway.request(WorkspaceChatGateway.Provider.OPENROUTER_FREE, openKey,
                 listOf(WorkspaceConversationStore.Message("approved-work-source", "user",
                     oneFilePrompt(original), System.currentTimeMillis())))
         }.getOrNull() else null
-        var openRouterResult = if (WorkspaceCodingAutoFallback.validKey(openKey))
-            "OpenRouter Free request could not be prepared"
-        else "OpenRouter Free key missing or invalid"
+        var openRouterResult = when {
+            !openKeyWellFormed -> "OpenRouter Free key missing or invalid"
+            !openAllowed -> "OpenRouter Free key/account access refused by read-only key check; no source sent to OpenRouter"
+            else -> "OpenRouter Free request could not be prepared"
+        }
         if (open != null) {
             if (chain.call().isCanceled()) throw IOException("Work request cancelled; no fallback sent")
             val second = chain.proceed(open) // Any network ambiguity ends the chain.
