@@ -27,7 +27,7 @@ internal object WorkspaceWebsiteJsonEnvelope {
             "script.js" to setOf("```javascript", "```js", "```"))
         val files = LinkedHashMap<String, String>()
         var line = 0
-        for (path in WorkspaceWebsiteGeneration.PATHS) {
+        for ((index, path) in WorkspaceWebsiteGeneration.PATHS.withIndex()) {
             val label = lines.getOrNull(line)?.trim() ?: return null
             if (label != path && label != "### $path") return null
             line++
@@ -43,6 +43,15 @@ internal object WorkspaceWebsiteJsonEnvelope {
             if (line >= lines.size) return null
             files[path] = content.joinToString("\n")
             line++
+            // Models may insert a blank line between complete file blocks. Accept at
+            // most two separators; never skip arbitrary text, missing labels or fences.
+            if (index < WorkspaceWebsiteGeneration.PATHS.lastIndex) {
+                var blankLines = 0
+                while (line < lines.size && lines[line].isBlank()) {
+                    if (++blankLines > 2) return null
+                    line++
+                }
+            }
         }
         if (line != lines.size) return null
         val fileObject = JSONObject()
