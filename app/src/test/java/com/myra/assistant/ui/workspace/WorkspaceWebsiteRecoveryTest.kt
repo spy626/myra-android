@@ -32,7 +32,12 @@ class WorkspaceWebsiteRecoveryTest {
         val second = payload(recovery)
         assertEquals(original.url, recovery.url)
         assertEquals(original.header("Authorization"), recovery.header("Authorization"))
-        assertEquals(first.getJSONArray("messages").toString(), second.getJSONArray("messages").toString())
+        assertEquals(first.getJSONArray("messages").getJSONObject(1).toString(),
+            second.getJSONArray("messages").getJSONObject(1).toString())
+        assertTrue(first.getJSONArray("messages").getJSONObject(0).getString("content")
+            .contains("Return exactly THREE complete files"))
+        assertTrue(second.getJSONArray("messages").getJSONObject(0).getString("content")
+            .contains("Return exactly ONE JSON object"))
         assertEquals(first.getString("model"), second.getString("model"))
         assertFalse(first.has("response_format"))
         assertEquals("json_object", second.getJSONObject("response_format").getString("type"))
