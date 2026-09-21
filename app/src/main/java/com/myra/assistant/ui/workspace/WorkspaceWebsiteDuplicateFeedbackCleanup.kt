@@ -13,14 +13,24 @@ internal object WorkspaceWebsiteDuplicateFeedbackCleanup {
         """(?is)<p\s+class\s*=\s*(['"])feedback\1\s*>\s*Exploring\s+Minicoy!\s*</p\s*>""")
     private val classes = Regex("""(?is)\bclass\s*=\s*(['"])(.*?)\1""")
     private val oldClassSelector = Regex("""(?i)(?<![\w-])\.feedback(?![\w-])""")
-    // The phone generated `.explore .feedback`, not `.feedback`. Accept only these two
-    // complete single-selector rules; never delete a grouped or other scoped selector.
+    // Accept only these complete single-selector rules, not grouped/other scoped selectors.
     private val hiddenRule = Regex(
         """(?m)^[ \t]*(?:\.feedback|\.explore[ \t]+\.feedback)[ \t]*\{[^{}]{0,700}\}[ \t]*(?:\r?\n)?""")
     private val obsoleteTargetRule = Regex(
         """(?m)^[ \t]*(?:/\* Show feedback when section is target \*/[ \t]*\r?\n)?[ \t]*#explore-section:target[ \t]+\.feedback[ \t]*\{[^{}]{0,700}\}[ \t]*(?:\r?\n)?""")
     private val hidden = Regex("""(?i)\bdisplay\s*:\s*none\b""")
     private val shown = Regex("""(?i)\bdisplay\s*:\s*block\b""")
+    // Inspect actual CSS declarations, not the word 'opacity' in 'transition: opacity'.
+    // Repeated declarations and mixed display/opacity modes are not safe to infer.
+    private val opacityProperty = Regex("""(?i)[;{]\s*opacity\s*:\s*([^;{}]{1,60}?)(?=[;}])""")
+    private val displayProperty = Regex("""(?i)[;{]\s*display\s*:""")
+    private val visibilityProperty = Regex("""(?i)[;{]\s*visibility\s*:""")
+    private val zeroOpacity = Regex("""(?i)0(?:\.0+)?(?:\s*!important)?""")
+    private val fullOpacity = Regex("""(?i)1(?:\.0+)?(?:\s*!important)?""")
+    private fun opacityIs(rule: String, expected: Regex): Boolean {
+        val declarations = opacityProperty.findAll(rule).map { it.groupValues[1].trim() }.toList()
+        return declarations.size == 1 && expected.matches(declarations.single())
+    }
     private val exploreSectionId = Regex("""(?is)\bid\s*=\s*(['"])explore-section\1""")
     private val openingSection = Regex("""(?is)<section\b([^>]{0,500})>""")
     private val closingSection = Regex("""(?i)</section\s*>""")
@@ -53,9 +63,17 @@ internal object WorkspaceWebsiteDuplicateFeedbackCleanup {
         if (oldClassUses != 1 || oldClassSelector.findAll(css).count() != 2) return files
         val oldHidden = hiddenRule.findAll(css).singleOrNull() ?: return files
         val oldTarget = obsoleteTargetRule.findAll(css).singleOrNull() ?: return files
-        if (!hidden.containsMatchIn(oldHidden.value) ||
-            !shown.containsMatchIn(oldTarget.value) ||
-            oldHidden.range.first == oldTarget.range.first) return files
+        if (oldHidden.range.first == oldTarget.range.first) return files
+        val displayPair = hidden.containsMatchIn(oldHidden.value) &&
+            shown.containsMatchIn(oldTarget.value) &&
+            !opacityProperty.containsMatchIn(oldHidden.value) &&
+            !opacityProperty.containsMatchIn(oldTarget.value)
+        val opacityPair = opacityIs(oldHidden.value, zeroOpacity) &&
+            opacityIs(oldTarget.value, fullOpacity) &&
+            listOf(oldHidden.value, oldTarget.value).none {
+                displayProperty.containsMatchIn(it) || visibilityProperty.containsMatchIn(it)
+            }
+        if (!displayPair && !opacityPair) return files
         // A `.explore .feedback` rule may belong to another component. Only clean it
         // when one actual <section id="explore-section" class="explore"> contains BOTH
         // statuses, as observed on the phone. Don't silently remove unrelated CSS.
