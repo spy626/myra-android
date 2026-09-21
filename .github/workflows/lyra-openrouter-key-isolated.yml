@@ -1,0 +1,63 @@
+name: LYRA OpenRouter Key Isolated Phone APK
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths:
+      - .github/workflows/lyra-openrouter-key-isolated.yml
+permissions:
+  contents: read
+jobs:
+  isolated-phone-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify branch, exact change and recovery ancestor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = agent/myra-phase-1
+          git merge-base --is-ancestor 7d6df6f89b2f4657692b15a09190ddbbfeeaa8d4 HEAD
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+          git merge-base --is-ancestor 74f603cd2f19bf9435e20020486d9f22d061474f HEAD
+          git diff --exit-code
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Isolate application ID and label ONLY on runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          build=Path('app/build.gradle'); s=build.read_text()
+          old='debug { if (hasStableSigning) signingConfig signingConfigs.ciStable }'
+          assert s.count(old)==1
+          build.write_text(s.replace(old,"debug { applicationIdSuffix '.openrouterkeytest'; if (hasStableSigning) signingConfig signingConfigs.ciStable }"))
+          manifest=Path('app/src/main/AndroidManifest.xml'); s=manifest.read_text()
+          old='android:label="LYRA"'
+          assert s.count(old)==1
+          manifest.write_text(s.replace(old,'android:label="LYRA OpenRouter Key Test"'))
+          PY
+          git diff --check
+      - name: Unit tests and isolated debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace > "$RUNNER_TEMP/build.log" 2>&1 || { tail -n 180 "$RUNNER_TEMP/build.log"; exit 1; }
+          tail -n 25 "$RUNNER_TEMP/build.log"
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$aapt" dump badging app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/badging.txt"
+          grep -q "package: name='com.myra.assistant.openrouterkeytest'" "$RUNNER_TEMP/badging.txt"
+          grep -q "application-label:'LYRA OpenRouter Key Test'" "$RUNNER_TEMP/badging.txt"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-openrouter-key-isolated-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
