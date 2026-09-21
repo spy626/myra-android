@@ -98,9 +98,14 @@ internal object WorkspaceWebsiteVisualQuality {
         val completed = WorkspaceWebsiteRequestedSectionRepair.repair(snapshot,
             withoutImages + ("index.html" to html))
         val action = WorkspaceWebsiteActionQuality.review(snapshot, completed.files)
+        // The phone's dead feedback must be removed BEFORE moving its adjacent card
+        // section; the fail-closed cleanup deliberately requires the two paragraphs
+        // to be adjacent and would otherwise skip the actual phone case.
+        val deduplicated = WorkspaceWebsiteDuplicateFeedbackCleanup.review(snapshot, action.files)
+        val structured = WorkspaceWebsiteSplitSectionPolish.review(snapshot, deduplicated)
         // Only an empty/starter site and the fully explicit user brief are eligible.
         // Do not let cosmetic changes alter source freshness, rollback or provider routing.
-        val polished = WorkspaceWebsiteDesignPolish.review(snapshot, action.files)
+        val polished = WorkspaceWebsiteDesignPolish.review(snapshot, structured)
         // Do not expose generated HTML, project contents, keys or API responses on failure.
         // The bounded diagnostic says WHICH local repair gate blocked, not WHAT it read.
         val files = try {
