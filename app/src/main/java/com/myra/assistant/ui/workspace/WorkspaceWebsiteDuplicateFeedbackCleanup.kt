@@ -13,13 +13,17 @@ internal object WorkspaceWebsiteDuplicateFeedbackCleanup {
         """(?is)<p\s+class\s*=\s*(['"])feedback\1\s*>\s*Exploring\s+Minicoy!\s*</p\s*>""")
     private val classes = Regex("""(?is)\bclass\s*=\s*(['"])(.*?)\1""")
     private val oldClassSelector = Regex("""(?i)(?<![\w-])\.feedback(?![\w-])""")
-    // Whole, single-selector rules only: never remove a grouped selector or unrelated CSS.
+    // The phone generated `.explore .feedback`, not `.feedback`. Accept only these two
+    // complete single-selector rules; never delete a grouped or other scoped selector.
     private val hiddenRule = Regex(
-        """(?m)^[ \t]*\.feedback[ \t]*\{[^{}]{0,700}\}[ \t]*(?:\r?\n)?""")
+        """(?m)^[ \t]*(?:\.feedback|\.explore[ \t]+\.feedback)[ \t]*\{[^{}]{0,700}\}[ \t]*(?:\r?\n)?""")
     private val obsoleteTargetRule = Regex(
         """(?m)^[ \t]*(?:/\* Show feedback when section is target \*/[ \t]*\r?\n)?[ \t]*#explore-section:target[ \t]+\.feedback[ \t]*\{[^{}]{0,700}\}[ \t]*(?:\r?\n)?""")
     private val hidden = Regex("""(?i)\bdisplay\s*:\s*none\b""")
     private val shown = Regex("""(?i)\bdisplay\s*:\s*block\b""")
+    private val exploreSectionId = Regex("""(?is)\bid\s*=\s*(['"])explore-section\1""")
+    private val openingSection = Regex("""(?is)<section\b([^>]{0,500})>""")
+    private val closingSection = Regex("""(?i)</section\s*>""")
 
     fun review(snapshot: WorkspaceWebsiteGeneration.Snapshot,
                files: Map<String, String>): Map<String, String> {
@@ -52,6 +56,23 @@ internal object WorkspaceWebsiteDuplicateFeedbackCleanup {
         if (!hidden.containsMatchIn(oldHidden.value) ||
             !shown.containsMatchIn(oldTarget.value) ||
             oldHidden.range.first == oldTarget.range.first) return files
+        // A `.explore .feedback` rule may belong to another component. Only clean it
+        // when one actual <section id="explore-section" class="explore"> contains BOTH
+        // statuses, as observed on the phone. Don't silently remove unrelated CSS.
+        if (oldHidden.value.trimStart().startsWith(".explore")) {
+            val sections = openingSection.findAll(html).filter { opening ->
+                val attrs = opening.groupValues[1]
+                exploreSectionId.containsMatchIn(attrs) &&
+                    classes.find(attrs)?.groupValues?.get(2)
+                        ?.split(Regex("""\s+"""))?.contains("explore") == true
+            }.toList()
+            val section = sections.singleOrNull() ?: return files
+            val close = closingSection.find(html, section.range.last + 1) ?: return files
+            if (primary.range.first <= section.range.last ||
+                extra.range.last >= close.range.first ||
+                openingSection.find(html, section.range.last + 1)
+                    ?.range?.first?.let { it < close.range.first } == true) return files
+        }
         val cleanedCss = listOf(oldHidden.range, oldTarget.range)
             .sortedByDescending { it.first }
             .fold(css) { source, range -> source.removeRange(range) }
