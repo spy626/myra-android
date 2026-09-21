@@ -1,0 +1,123 @@
+name: One-shot LYRA fallback diagnostics corrected test
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/lyra-fallback-error-retry-once.yml']
+permissions:
+  contents: write
+jobs:
+  diagnose-build-isolate:
+    if: github.repository == 'spy626/myra-android'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/myra-phase-1
+          fetch-depth: 0
+      - name: Verify exact branch and required recovery ancestry
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/agent/myra-phase-1)"
+          git merge-base --is-ancestor 75797cb2ad564bbc082981e681d715fd9f0f1356 HEAD
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+          git merge-base --is-ancestor 74f603cd2f19bf9435e20020486d9f22d061474f HEAD
+          git diff --exit-code && git diff --cached --exit-code
+      - name: Correct test literal in runner only and apply anchored diagnostic patch
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/lyra_fallback_error_once.py')
+          s=p.read_text()
+          old='SECRET_DO_NOT_ECHO"}}""\n'
+          new='SECRET_DO_NOT_ECHO"}}"""\n'
+          assert s.count(old)==1, 'Unexpected staged test literal'
+          p.write_text(s.replace(old,new))
+          PY
+          python3 tools/lyra_fallback_error_once.py
+          git diff --check
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          expected = {
+            'tools/lyra_fallback_error_once.py',
+            'app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteProviderError.kt',
+            'app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt',
+            'app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceXKiroFree.kt',
+            'app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGenerationTest.kt',
+          }
+          actual = set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          assert actual == expected, (actual,expected)
+          assert Path('app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteProviderErrorTest.kt').is_file()
+          PY
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Full unit tests and standard debug APK before commit
+        run: |
+          set -euo pipefail
+          if ! gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace > "$RUNNER_TEMP/fallback-gradle.log" 2>&1; then
+            tail -n 200 "$RUNNER_TEMP/fallback-gradle.log"
+            exit 1
+          fi
+          tail -n 30 "$RUNNER_TEMP/fallback-gradle.log"
+      - name: Integrate tested scope and remove all temporary workflow/scripts
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/agent/myra-phase-1 | cut -f1)" = "$(git rev-parse HEAD)"
+          git rm tools/lyra_fallback_error_once.py .github/workflows/lyra-fallback-error-once.yml .github/workflows/lyra-fallback-error-retry-once.yml
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteProviderError.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceXKiroFree.kt \
+            app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGenerationTest.kt \
+            app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteProviderErrorTest.kt
+          git diff --cached --check
+          git config user.name 'LYRA CI scoped integrator'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(workspace): report safe exact free-provider failure stages'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
+          echo "Integrated HEAD: $(git rev-parse HEAD)"
+      - name: Isolate phone APK identity ONLY on CI runner
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/build.gradle'); t=p.read_text()
+          old="debug { if (hasStableSigning) signingConfig signingConfigs.ciStable }"
+          assert t.count(old)==1
+          p.write_text(t.replace(old,"debug { applicationIdSuffix '.fallbackdiagtest'; if (hasStableSigning) signingConfig signingConfigs.ciStable }"))
+          p=Path('app/src/main/AndroidManifest.xml'); t=p.read_text()
+          old='android:label="LYRA"'
+          assert t.count(old)==1
+          p.write_text(t.replace(old,'android:label="LYRA Fallback Diagnostic Test"'))
+          PY
+          git diff --check
+      - name: Test and verify isolated phone APK
+        run: |
+          set -euo pipefail
+          if ! gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace > "$RUNNER_TEMP/isolated-gradle.log" 2>&1; then
+            tail -n 200 "$RUNNER_TEMP/isolated-gradle.log"
+            exit 1
+          fi
+          tail -n 25 "$RUNNER_TEMP/isolated-gradle.log"
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$aapt" dump badging app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/fallback-badging.txt"
+          grep -q "package: name='com.myra.assistant.fallbackdiagtest'" "$RUNNER_TEMP/fallback-badging.txt"
+          grep -q "application-label:'LYRA Fallback Diagnostic Test'" "$RUNNER_TEMP/fallback-badging.txt"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-fallback-diagnostics-isolated-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Dispatch ordinary Android CI on tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run android.yml --ref agent/myra-phase-1
