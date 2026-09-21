@@ -72,7 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git ls-remote origin refs/heads/agent/myra-phase-1 | cut -f1)" = "$(git rev-parse HEAD)"
-          git rm tools/lyra_fallback_error_once.py .github/workflows/lyra-fallback-error-once.yml .github/workflows/lyra-fallback-error-retry-once.yml
+          git rm -f -- tools/lyra_fallback_error_once.py
+          git rm -- .github/workflows/lyra-fallback-error-once.yml .github/workflows/lyra-fallback-error-retry-once.yml
           git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteProviderError.kt \
             app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt \
             app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceXKiroFree.kt \
