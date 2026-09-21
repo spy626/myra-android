@@ -6,6 +6,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import android.content.Context
+import com.myra.assistant.MyApplication
+import com.myra.assistant.ai.ApiKeyStore
 import okio.Buffer
 import org.json.JSONObject
 import java.io.IOException
@@ -25,6 +28,8 @@ internal object WorkspaceXKiroFree {
     private const val WEBSITE_OUTPUT_TOKENS = 7_000
     private const val EDIT_OUTPUT_TOKENS = 3_500
     private const val MAX_CHECK_BYTES = 500_000L
+    /** No inference POST was sent; cross-provider attempt is safe only with saved opt-in. */
+    internal class NoSourcePreflight(message: String): IOException(message)
 
     fun validKey(key: String): Boolean = key.length in 1..256 &&
         key.none(Char::isWhitespace) && ',' !in key
@@ -79,20 +84,90 @@ internal object WorkspaceXKiroFree {
                 !header.startsWith("Bearer ") || !validKey(key)) {
                 throw IOException("xKiro Free request refused; no source sent")
             }
-            try {
+            val preflightFailure = try {
                 if (!catalogIsFree(checkedGet(MODELS)))
-                    throw IOException("xKiro Free preflight: exact model/zero price unverified; no source sent")
+                    throw NoSourcePreflight("xKiro Free preflight: exact model/zero price unverified; no source sent")
                 if (!quotaIsFree(checkedGet(USAGE, key)))
-                    throw IOException("xKiro Free preflight: remaining free quota unverified; no source sent")
+                    throw NoSourcePreflight("xKiro Free preflight: remaining free quota unverified; no source sent")
+                null
             } catch (failure: IOException) {
-                if (failure.message?.startsWith("xKiro Free preflight") == true) throw failure
-                throw IOException("xKiro Free preflight unavailable; no source sent", failure)
+                if (failure is NoSourcePreflight) failure
+                else NoSourcePreflight("xKiro Free preflight unavailable; no source sent")
             } catch (failure: Exception) {
-                throw IOException("xKiro Free preflight invalid; no source sent", failure)
+                NoSourcePreflight("xKiro Free preflight invalid; no source sent")
             }
+            if (preflightFailure != null) return consentedFallback(chain, request,
+                preflightFailure.message.orEmpty(), preflightFailure)
             if (chain.call().isCanceled()) throw IOException("xKiro Free request cancelled; no source sent")
-            return chain.proceed(request)
+            val response = chain.proceed(request) // Network failure/timeout propagates; NEVER replay.
+            if (!WorkspaceCodingAutoFallback.xKiroRejected(response.code)) return response
+            val code = response.code
+            response.close() // Definitive rejected HTTP, not a completed/partial output.
+            return consentedFallback(chain, request, "xKiro Free HTTP $code")
         }
+    }
+
+    /** A single user-selected source can cross companies after a definite rejection or
+     * before xKiro sent ANY source. No uncertain resend or nested automatic retry chain.
+     */
+    private fun consentedFallback(chain: Interceptor.Chain, original: Request, reason: String,
+                                  preflight: NoSourcePreflight? = null): Response {
+        if (chain.call().isCanceled()) throw IOException("Work request cancelled; no fallback sent")
+        val context = MyApplication.contextOrNull()
+        val prefs = context?.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+        val approved = prefs?.let {
+            WorkspaceCodingAutoFallback.permitted(
+                it.getBoolean(WorkspaceCodingAutoFallback.PREFERENCE_KEY, false),
+                it.getBoolean(PREFERENCE_KEY, false))
+        } == true
+        if (!approved) throw preflight ?: IOException("$reason; automatic Free fallback OFF. No files changed")
+        val keys = ApiKeyStore(requireNotNull(context))
+        val openKey = runCatching { keys.get(ApiKeyStore.OPENROUTER) }.getOrDefault("")
+        val groqKey = runCatching { keys.get(ApiKeyStore.GROQ) }.getOrDefault("")
+        val groqAllowed = WorkspaceCodingAutoFallback.groqPermitted(approved,
+            prefs!!.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false), groqKey)
+        val snapshot = payloadSnapshot(original)
+        fun requestForGroq(): Request? = if (!groqAllowed) null else runCatching {
+            if (snapshot != null) WorkspaceWebsiteGroqFallback.request(groqKey, snapshot)
+            else WorkspaceChatGateway.request(WorkspaceChatGateway.Provider.GROQ_FREE, groqKey,
+                listOf(WorkspaceConversationStore.Message("approved-work-source", "user",
+                    oneFilePrompt(original), System.currentTimeMillis())))
+        }.getOrNull()
+        val open = if (WorkspaceCodingAutoFallback.validKey(openKey)) runCatching {
+            if (snapshot != null) WorkspaceWebsiteGeneration.request(openKey, snapshot)
+            else WorkspaceChatGateway.request(WorkspaceChatGateway.Provider.OPENROUTER_FREE, openKey,
+                listOf(WorkspaceConversationStore.Message("approved-work-source", "user",
+                    oneFilePrompt(original), System.currentTimeMillis())))
+        }.getOrNull() else null
+        if (open != null) {
+            if (chain.call().isCanceled()) throw IOException("Work request cancelled; no fallback sent")
+            val second = chain.proceed(open) // Any network ambiguity ends the chain.
+            if (!WorkspaceCodingAutoFallback.openRouterRejected(second.code)) return second
+            second.close()
+        }
+        val groq = requestForGroq() ?: throw IOException(
+            "$reason; no eligible Groq Free/ZDR route remains; files unchanged")
+        if (chain.call().isCanceled()) throw IOException("Work request cancelled; no fallback sent")
+        return chain.proceed(groq) // One Groq attempt; no paid or recursive fallback.
+    }
+
+    private fun payloadSnapshot(request: Request): WorkspaceWebsiteGeneration.Snapshot? {
+        val buffer = Buffer(); requireNotNull(request.body).writeTo(buffer)
+        val body = JSONObject(buffer.readUtf8())
+        if (body.optInt("max_tokens") != WEBSITE_OUTPUT_TOKENS) return null
+        val text = body.getJSONArray("messages").getJSONObject(1).getString("content")
+        val context = JSONObject(text)
+        val sources = context.getJSONObject("existingFiles")
+        val original = WorkspaceWebsiteGeneration.PATHS.associateWith { path ->
+            if (sources.isNull(path)) null else sources.getString(path)
+        }
+        return WorkspaceWebsiteGeneration.Snapshot("", "", "", context.getString("goal"), original)
+    }
+
+    private fun oneFilePrompt(request: Request): String {
+        val buffer = Buffer(); requireNotNull(request.body).writeTo(buffer)
+        val messages = JSONObject(buffer.readUtf8()).getJSONArray("messages")
+        return messages.getJSONObject(messages.length() - 1).getString("content")
     }
 
     /** New independent adapter; no generic retry interceptor and no hidden paid routes. */
@@ -100,7 +175,7 @@ internal object WorkspaceXKiroFree {
         .retryOnConnectionFailure(false)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(95, TimeUnit.SECONDS)
-        .callTimeout(115, TimeUnit.SECONDS)
+        .callTimeout(240, TimeUnit.SECONDS) // Total bound includes up to two definite free fallbacks.
         .addInterceptor(FreeOnlyGate()).build()
 
     private fun transform(key: String, canonical: JSONObject, maxTokens: Int): Request {
@@ -169,11 +244,15 @@ internal object WorkspaceXKiroFree {
     }
 
     fun readWebsite(response: Response): Map<String, String> = response.use {
-        verifiedResponse(it)
+        if (it.request.url.toString() == ENDPOINT) verifiedResponse(it)
         WorkspaceWebsiteGeneration.readResponse(it)
     }
 
     fun readEdit(response: Response): String = response.use {
+        if (it.request.url.toString() == WorkspaceFreeAiSuggestion.ENDPOINT)
+            return@use WorkspaceFreeAiSuggestion.readResponse(it)
+        if (it.request.url.toString() == WorkspaceGroqFree.ENDPOINT)
+            return@use WorkspaceGroqFree.read(it)
         val outer = verifiedResponse(it)
         val choice = outer.optJSONArray("choices")?.optJSONObject(0)
         require(choice?.optString("finish_reason") == "stop") {

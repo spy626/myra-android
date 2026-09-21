@@ -9,6 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.databinding.ActivityApiCloudSettingsBinding
 import com.myra.assistant.ui.workspace.WorkspaceFreeCrossProvider
+import com.myra.assistant.ui.workspace.WorkspaceCodingAutoFallback
 import com.myra.assistant.ui.workspace.WorkspaceGroqFree
 import com.myra.assistant.ui.workspace.WorkspaceXKiroFree
 import com.myra.assistant.ui.workspace.WorkspaceWebsiteGroqFallback
@@ -37,6 +38,11 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             WorkspaceXKiroFree.PREFERENCE_KEY, false)
         b.xKiroWorkSwitch.setOnCheckedChangeListener { _, enabled ->
             workspacePrefs.edit().putBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, enabled).apply()
+        }
+        b.xKiroFallbackSwitch.isChecked = workspacePrefs.getBoolean(
+            WorkspaceCodingAutoFallback.PREFERENCE_KEY, false)
+        b.xKiroFallbackSwitch.setOnCheckedChangeListener { _, enabled ->
+            workspacePrefs.edit().putBoolean(WorkspaceCodingAutoFallback.PREFERENCE_KEY, enabled).apply()
         }
         b.workspaceMemorySwitch.isChecked = workspacePrefs.getBoolean(
             WorkspaceMemoryInterceptor.PREFERENCE_KEY, false)

@@ -186,10 +186,12 @@ internal class WorkspaceChatCodingFlow(
                     fallbackWebsiteOnRejected(call, serial, id, snapshot, rejectedStatus)
                     return
                 }
+                val via = if (primary == WorkspaceWebsiteRoute.Provider.XKIRO)
+                    WorkspaceCodingAutoFallback.displayName(response.request.url.toString()) else null
                 completeWebsite(call, serial, id, snapshot,
                     runCatching { if (primary == WorkspaceWebsiteRoute.Provider.XKIRO)
                         WorkspaceXKiroFree.readWebsite(response)
-                    else WorkspaceWebsiteGeneration.readResponse(response) })
+                    else WorkspaceWebsiteGeneration.readResponse(response) }, via)
             }
         })
     }
@@ -294,7 +296,8 @@ internal class WorkspaceChatCodingFlow(
 
     private fun completeWebsite(call: Call, serial: Long, id: String,
                                 snapshot: WorkspaceWebsiteGeneration.Snapshot,
-                                result: Result<Map<String, String>>) {
+                                result: Result<Map<String, String>>,
+                                via: String? = null) {
         activity.runOnUiThread {
             if (activity.isFinishing || activity.isDestroyed || serial != generation ||
                 request !== call || !current(id)) return@runOnUiThread
@@ -310,7 +313,7 @@ internal class WorkspaceChatCodingFlow(
                     WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, review.files)
                 }.onSuccess {
                     val summary = WorkspaceCodingResult.websiteSuccess(snapshot.original, review.files) +
-                        review.chatNote()
+                        review.chatNote() + (via?.let { " Completed via $it after xKiro was unavailable." } ?: "")
                     terminal(summary, "") // The durable Chat reply is the single success message.
                     activity.startActivity(WorkspacePreviewActivity.intent(activity, id))
                 }.onFailure {
@@ -376,12 +379,13 @@ internal class WorkspaceChatCodingFlow(
                 else WorkspaceFreeAiSuggestion.networkFailure(e))))
             override fun onResponse(call: Call, response: Response) = complete(call, serial, id,
                 prepared, runCatching { if (usingXKiro) WorkspaceXKiroFree.readEdit(response)
-                    else WorkspaceChatGateway.read(provider, response) })
+                    else WorkspaceChatGateway.read(provider, response) },
+                if (usingXKiro) WorkspaceCodingAutoFallback.displayName(response.request.url.toString()) else null)
         })
     }
 
     private fun complete(call: Call, serial: Long, id: String, prepared: WorkspaceAiHandoff.Draft,
-                         result: Result<String>) {
+                         result: Result<String>, via: String? = null) {
         activity.runOnUiThread {
             if (activity.isFinishing || activity.isDestroyed || serial != generation ||
                 request !== call || !current(id)) return@runOnUiThread
@@ -403,7 +407,8 @@ internal class WorkspaceChatCodingFlow(
                 }.onSuccess {
                     runCatching { suggestions.discard(id) }
                     terminal("Updated ${prepared.context.path} in your existing project. " +
-                        "Review the file and use Undo / Keep in Chat. Preview/build is not verified.")
+                        "Review the file and use Undo / Keep in Chat. Preview/build is not verified." +
+                        (via?.let { " Completed via $it after xKiro was unavailable." } ?: ""))
                 }.onFailure { error("AI suggestion was not applied: ${it.message}. Check saved proposal and rollback in Chat.") }
             }.onFailure { error(it.message ?: "Provider failed; original files are unchanged.") }
         }
