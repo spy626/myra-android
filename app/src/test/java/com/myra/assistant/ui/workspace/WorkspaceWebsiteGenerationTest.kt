@@ -1,6 +1,7 @@
 package com.myra.assistant.ui.workspace
 
 import org.json.JSONObject
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -118,6 +119,21 @@ class WorkspaceWebsiteGenerationTest {
         assertTrue(failure!!.message.orEmpty().contains("request or output format rejected"))
         assertTrue(failure.message.orEmpty().contains("not a quota"))
         assertTrue(snapshot.files.list("site").isEmpty())
+    }
+
+    @Test fun openRouter400ReportsSafeCategoryAndNeverWritesOrRetries() {
+        val s = fixture()
+        val snapshot = WorkspaceWebsiteGeneration.prepare(s.files, s.tasks, s.projects, "site")
+        val request = WorkspaceWebsiteGeneration.request("safe_test_key", snapshot)
+        val raw = """{"error":{"message":"response_format unsupported SECRET_DO_NOT_ECHO"}}"""
+        val response = okhttp3.Response.Builder().request(request)
+            .protocol(okhttp3.Protocol.HTTP_1_1).code(400).message("Bad Request")
+            .body(raw.toResponseBody()).build()
+        val failure = runCatching { WorkspaceWebsiteGeneration.readResponse(response) }.exceptionOrNull()
+        assertNotNull(failure)
+        assertTrue(failure!!.message.orEmpty().contains("OpenRouter Free HTTP 400: response format rejected"))
+        assertFalse(failure.message.orEmpty().contains("SECRET_DO_NOT_ECHO"))
+        assertTrue(s.files.list("site").isEmpty())
     }
 
     @Test fun providerRequestUsesOnlyFreeRouteWithoutPersonalMemory() {

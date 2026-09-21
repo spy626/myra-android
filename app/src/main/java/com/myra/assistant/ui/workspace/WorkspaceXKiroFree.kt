@@ -66,7 +66,13 @@ internal object WorkspaceXKiroFree {
             if (key != null) header("Authorization", "Bearer $key")
         }.get().build()
         return checkClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("xKiro Free preflight unavailable; no source sent")
+            if (!response.isSuccessful) {
+                val stage = if (key == null) "model catalog" else "free quota"
+                val access = if (response.code == 401 || response.code == 403)
+                    "; key or account access refused" else ""
+                throw NoSourcePreflight(
+                    "xKiro Free $stage preflight HTTP ${response.code}$access; no source sent to xKiro")
+            }
             val bytes = response.peekBody(MAX_CHECK_BYTES + 1L).bytes()
             if (bytes.isEmpty() || bytes.size > MAX_CHECK_BYTES) {
                 throw IOException("xKiro Free preflight invalid; no source sent")
@@ -139,14 +145,18 @@ internal object WorkspaceXKiroFree {
                 listOf(WorkspaceConversationStore.Message("approved-work-source", "user",
                     oneFilePrompt(original), System.currentTimeMillis())))
         }.getOrNull() else null
+        var openRouterResult = if (WorkspaceCodingAutoFallback.validKey(openKey))
+            "OpenRouter Free request could not be prepared"
+        else "OpenRouter Free key missing or invalid"
         if (open != null) {
             if (chain.call().isCanceled()) throw IOException("Work request cancelled; no fallback sent")
             val second = chain.proceed(open) // Any network ambiguity ends the chain.
             if (!WorkspaceCodingAutoFallback.openRouterRejected(second.code)) return second
+            openRouterResult = "OpenRouter Free HTTP ${second.code}"
             second.close()
         }
         val groq = requestForGroq() ?: throw IOException(
-            "$reason; no eligible Groq Free/ZDR route remains; files unchanged")
+            "$reason; $openRouterResult; no eligible Groq Free/ZDR route remains; files unchanged")
         if (chain.call().isCanceled()) throw IOException("Work request cancelled; no fallback sent")
         return chain.proceed(groq) // One Groq attempt; no paid or recursive fallback.
     }
