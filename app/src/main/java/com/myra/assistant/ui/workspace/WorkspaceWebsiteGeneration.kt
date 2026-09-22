@@ -198,10 +198,9 @@ internal object WorkspaceWebsiteGeneration {
             }
             parsed
         }.getOrElse { throw IllegalArgumentException("Website model did not return complete three-file JSON; no files changed") }
-        require(root.keys().asSequence().toSet() == setOf("files")) {
-            "Website response must contain only a files object"
-        }
-        val files = requireNotNull(root.optJSONObject("files")) { "Website files object is missing" }
+        // Accept only complete, unambiguous representations of the SAME three files.
+        // Path, size, secret, HTML and atomic-write checks below remain authoritative.
+        val files = WorkspaceWebsiteReplyShape.exactFiles(root)
         require(files.keys().asSequence().toSet() == PATHS.toSet()) {
             "Website response must include exactly index.html, style.css and script.js"
         }
