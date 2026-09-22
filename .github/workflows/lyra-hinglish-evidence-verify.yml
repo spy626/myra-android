@@ -1,0 +1,55 @@
+name: LYRA Hinglish Evidence Verify
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths: [.github/workflows/lyra-hinglish-evidence-verify.yml]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check exact branch and required recovery ancestor
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "agent/myra-phase-1"
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply scoped conversational evidence and Roman Hindi changes
+        run: |
+          set -euo pipefail
+          python3 tools/apply_hinglish_chat_evidence.py
+          git diff --check
+      - name: Run all Android unit tests and assemble debug APK
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace > "$RUNNER_TEMP/chat.log" 2>&1 || {
+            tail -n 180 "$RUNNER_TEMP/chat.log"; exit 1;
+          }
+          tail -n 45 "$RUNNER_TEMP/chat.log"
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Commit tested source only on feature branch
+        run: |
+          set -euo pipefail
+          git config user.name 'LYRA scoped CI verification'
+          git config user.email 'lyra-ci@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatTurnFrame.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatPlanStatus.kt
+          git diff --cached --check
+          git commit -m 'fix(chat): enforce user-grounded Hinglish casual replies and current plan state'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-hinglish-evidence-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
