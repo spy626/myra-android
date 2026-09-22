@@ -272,7 +272,9 @@ internal object WorkspaceCloudflareFree {
                         choice.optJSONObject("delta")?.opt("content")
                     } else body.opt("response")
                     if (piece != null && piece != JSONObject.NULL) {
-                        val chunk = visibleText(piece)
+                        // Whitespace is meaningful inside JSON strings and often arrives as
+                        // its own SSE delta. Blank chunks are valid, unlike a blank FINAL reply.
+                        val chunk = if (piece is String) piece else visibleText(piece)
                             ?: throw IllegalArgumentException("Cloudflare website stream has unsupported text; no files changed")
                         text.append(chunk)
                         require(text.length <= 30_000) { "Cloudflare website output oversized; no files changed" }
