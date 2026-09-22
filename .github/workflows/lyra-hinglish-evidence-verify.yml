@@ -29,13 +29,20 @@ jobs:
           set -euo pipefail
           python3 tools/apply_hinglish_chat_evidence.py
           git diff --check
-      - name: Run all Android unit tests and assemble debug APK
+      - name: Run focused regressions then all tests and assemble APK
         run: |
           set -euo pipefail
-          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace > "$RUNNER_TEMP/chat.log" 2>&1 || {
-            tail -n 180 "$RUNNER_TEMP/chat.log"; exit 1;
+          gradle :app:testDebugUnitTest --tests '*WorkspaceChatHinglishEvidenceTest' --tests '*WorkspaceChatResponseSafetyTest' --no-daemon > "$RUNNER_TEMP/focused.log" 2>&1 || {
+            grep -E 'FAILED|tests completed|AssertionError|ComparisonFailure|Exception' "$RUNNER_TEMP/focused.log" | tail -n 45 || true
+            find app/build/test-results/testDebugUnitTest -name '*.xml' -exec grep -H -E '<failure|<error' {} \; | head -n 35 || true
+            exit 1;
           }
-          tail -n 45 "$RUNNER_TEMP/chat.log"
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace > "$RUNNER_TEMP/chat.log" 2>&1 || {
+            grep -E 'FAILED|tests completed|AssertionError|ComparisonFailure|Exception' "$RUNNER_TEMP/chat.log" | tail -n 45 || true
+            find app/build/test-results/testDebugUnitTest -name '*.xml' -exec grep -H -E '<failure|<error' {} \; | head -n 35 || true
+            exit 1;
+          }
+          tail -n 32 "$RUNNER_TEMP/chat.log"
           test -s app/build/outputs/apk/debug/app-debug.apk
       - name: Commit tested source only on feature branch
         run: |
