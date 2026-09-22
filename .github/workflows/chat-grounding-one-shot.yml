@@ -27,14 +27,15 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
-      - name: Apply scoped same-chat grounding and regression cases
+      - name: Apply scoped grounding and align seven legacy payload assertions
         run: |
           set -euo pipefail
           python3 .github/scripts/chat_grounding_one_shot.py
+          python3 .github/scripts/chat_grounding_regression_alignment.py
           git add -N app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGrounding.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGroundingTest.kt
           git diff --check
           git diff --name-only
-          test "$(git diff --name-only | wc -l)" -eq 5
+          test "$(git diff --name-only | wc -l)" -eq 12
       - name: Run full unit suite and build regular LYRA debug APK
         run: |
           set -euo pipefail
@@ -46,7 +47,7 @@ jobs:
           set -euo pipefail
           git config user.name 'LYRA scoped CI verification'
           git config user.email 'lyra-ci@users.noreply.github.com'
-          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGrounding.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatGatewayTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGroundingTest.kt
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGrounding.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatGatewayTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGroundingTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceCloudflareFreeTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceContextProjectionTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceGroqFreeTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspacePromptContextTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspacePromptFollowUpTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspacePromptWritingTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceStoryScriptTest.kt
           git commit -m 'fix(chat): ground same-chat user recall and keep replies on topic'
           git push origin HEAD:refs/heads/agent/myra-phase-1
       - uses: actions/upload-artifact@v4
