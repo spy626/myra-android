@@ -136,7 +136,8 @@ internal object WorkspaceWebsiteGeneration {
         val payload = JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
             .put("stream", false).put("max_tokens", 7_000).put("temperature", 0.2)
             .put("provider", JSONObject().put("zdr", true).put("data_collection", "deny")
-                .put("allow_fallbacks", false)
+                // OpenRouter can switch only among zero-price, ZDR-compliant providers.
+                .put("allow_fallbacks", true)
                 .put("max_price", JSONObject().put("prompt", 0)
                     .put("completion", 0).put("request", 0).put("image", 0)))
             .put("plugins", JSONArray().put(JSONObject().put("id", "context-compression")

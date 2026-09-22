@@ -150,7 +150,13 @@ class WorkspaceWebsiteGenerationTest {
         assertTrue(body.getJSONObject("provider").getBoolean("zdr"))
         assertEquals("deny", body.getJSONObject("provider").getString("data_collection"))
         assertEquals(0, body.getJSONObject("provider").getJSONObject("max_price").getInt("prompt"))
-        assertEquals(false, body.getJSONObject("provider").getBoolean("allow_fallbacks"))
+        // Provider failover is confined by the free router and every zero-price/privacy gate.
+        assertTrue(body.getJSONObject("provider").getBoolean("allow_fallbacks"))
+        val maximumPrice = body.getJSONObject("provider").getJSONObject("max_price")
+        listOf("prompt", "completion", "request", "image").forEach {
+            assertEquals("$it must remain free", 0, maximumPrice.getInt(it))
+        }
+        assertFalse(body.has("models"))
         assertEquals(2, body.getJSONArray("messages").length())
         assertTrue(body.getInt("max_tokens") > 2048)
     }
