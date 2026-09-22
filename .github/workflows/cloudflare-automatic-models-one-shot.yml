@@ -1,0 +1,59 @@
+name: LYRA Cloudflare Automatic Free Model Verify
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths:
+      - .github/workflows/cloudflare-automatic-models-one-shot.yml
+      - .github/scripts/cloudflare_automatic_models_ci.py
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify branch and recovery ancestry
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "agent/myra-phase-1"
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+          git merge-base --is-ancestor 2b22135857ac5c13aeb07d7dc42f6d31bb439aed HEAD
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply exactly scoped feature and regression cases
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/cloudflare_automatic_models_ci.py
+          sed -i 's/buffer.size in 1\.\.200_000/buffer.size in 1L..200_000L/' app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceCloudflareFree.kt
+          git diff --check
+          git diff --name-only
+          test "$(git diff --name-only | wc -l)" -eq 6
+          ! grep -R 'cloudflareModelSpinner' app/src/main
+          ! grep -R 'chosenModel(' app/src/main/java/com/myra/assistant/ui/ | grep -v 'fun chosenModel'
+      - name: All unit tests and regular signed-by-debug LYRA APK
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon > "$RUNNER_TEMP/cloudflare-automatic-models.log" 2>&1 || { tail -n 160 "$RUNNER_TEMP/cloudflare-automatic-models.log"; exit 1; }
+          tail -n 45 "$RUNNER_TEMP/cloudflare-automatic-models.log"
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Commit only tested Kotlin XML and regression cases to feature branch
+        run: |
+          set -euo pipefail
+          git config user.name 'LYRA scoped CI verification'
+          git config user.email 'lyra-ci@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceCloudflareFree.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatCodingFlow.kt app/src/main/java/com/myra/assistant/ui/settings/ApiCloudSettingsActivity.kt app/src/main/res/layout/activity_api_cloud_settings.xml app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceCloudflareModelsWebsiteTest.kt
+          git commit -m 'feat(workspace): automatically switch Cloudflare free model on definite capacity failure'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-cloudflare-automatic-free-models-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+          if-no-files-found: error
