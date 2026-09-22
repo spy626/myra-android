@@ -1,0 +1,56 @@
+name: LYRA Workers AI Website Models Verify
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths:
+      - .github/workflows/workers-ai-website-models-one-shot.yml
+      - .github/scripts/workers_ai_website_models_ci.py
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check branch and recovery ancestry
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "agent/myra-phase-1"
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+          git merge-base --is-ancestor 6815c376e7eeedd0f54822789dcda9b7399c21f3 HEAD
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply narrow patch and check whitespace
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/workers_ai_website_models_ci.py
+          git diff --check
+          git diff --name-only
+          test "$(git diff --name-only | wc -l)" -eq 6
+      - name: Unit tests and REGULAR LYRA debug APK
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon > "$RUNNER_TEMP/cloudflare-website.log" 2>&1 || { tail -n 180 "$RUNNER_TEMP/cloudflare-website.log"; exit 1; }
+          tail -n 35 "$RUNNER_TEMP/cloudflare-website.log"
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Commit only verified feature on feature branch
+        run: |
+          set -euo pipefail
+          git config user.name 'LYRA scoped CI verification'
+          git config user.email 'lyra-ci@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceCloudflareFree.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatCodingFlow.kt app/src/main/java/com/myra/assistant/ui/settings/ApiCloudSettingsActivity.kt app/src/main/res/layout/activity_api_cloud_settings.xml
+          git commit -m 'feat(workspace): select four Cloudflare free models and stream guarded website results'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-cloudflare-models-streaming-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+          if-no-files-found: error
