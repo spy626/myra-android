@@ -37,7 +37,7 @@ internal object WorkspaceChatGateway {
             "claims only in earlier USER turns from this same conversation; quote them " +
             "if necessary. If evidence is absent, say so instead of guessing a name, " +
             "place, plan or other fact. Never claim phone testing."
-    enum class Provider { OPENROUTER_FREE, GROQ_FREE }
+    enum class Provider { OPENROUTER_FREE, GROQ_FREE, ZAI_FREE }
     data class Image(val mime: String, val base64: String)
     // One extra try only after specific upstream HTTP rejections. Connection failures and
     // ambiguous timeouts are NOT retried. Retain the existing 35-second total call timeout.
@@ -48,7 +48,8 @@ internal object WorkspaceChatGateway {
 
     /** Each request includes only bounded messages from the explicitly selected project. */
     fun request(provider: Provider, key: String, messages: List<WorkspaceConversationStore.Message>,
-                image: Image? = null): Request {
+                image: Image? = null, zaiModel: String = WorkspaceZaiFree.DEFAULT_TEXT_MODEL,
+                zaiVisionApproved: Boolean = false): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "Set a valid provider key in API & Cloud Settings"
         }
@@ -58,6 +59,8 @@ internal object WorkspaceChatGateway {
             "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
         if (provider == Provider.GROQ_FREE) return WorkspaceGroqFree.request(key, messages, image)
+        if (provider == Provider.ZAI_FREE) return WorkspaceZaiFree.request(key, messages, image,
+            zaiModel, zaiVisionApproved)
         image?.let {
             require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
             require(it.base64.length in 1..2_700_000 &&
@@ -134,5 +137,6 @@ internal object WorkspaceChatGateway {
     fun read(provider: Provider, response: Response): String = when (provider) {
         Provider.OPENROUTER_FREE -> WorkspaceFreeAiSuggestion.readResponse(response)
         Provider.GROQ_FREE -> WorkspaceGroqFree.read(response)
+        Provider.ZAI_FREE -> WorkspaceZaiFree.read(response)
     }
 }

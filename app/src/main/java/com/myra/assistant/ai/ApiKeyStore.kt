@@ -12,5 +12,5 @@ class ApiKeyStore(context: Context) {
     fun get(name:String):String { val saved=secure.getString(name,null);if(saved!=null)return saved;val old=if(name==GEMINI)legacy.getString("api_key","").orEmpty() else "";if(old.isNotBlank())put(name,old);return old }
     fun put(name:String,value:String){secure.edit().putString(name,value.trim()).apply();if(name==GEMINI)legacy.edit().remove("api_key").apply()}
     fun remove(name: String) { secure.edit().remove(name).apply() }
-    companion object { const val GEMINI="gemini_api_key";const val OPENROUTER="openrouter_api_key";const val GROQ="groq_api_key";const val XKIRO="xkiro_api_key";const val DEEPSEEK="deepseek_api_key";const val TAVILY="tavily_api_key" }
+    companion object { const val GEMINI="gemini_api_key";const val OPENROUTER="openrouter_api_key";const val GROQ="groq_api_key";const val XKIRO="xkiro_api_key";const val ZAI="zai_api_key";const val DEEPSEEK="deepseek_api_key";const val TAVILY="tavily_api_key" }
 }

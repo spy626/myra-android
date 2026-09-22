@@ -12,6 +12,7 @@ import com.myra.assistant.ui.workspace.WorkspaceFreeCrossProvider
 import com.myra.assistant.ui.workspace.WorkspaceCodingAutoFallback
 import com.myra.assistant.ui.workspace.WorkspaceGroqFree
 import com.myra.assistant.ui.workspace.WorkspaceXKiroFree
+import com.myra.assistant.ui.workspace.WorkspaceZaiFree
 import com.myra.assistant.ui.workspace.WorkspaceWebsiteGroqFallback
 import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
 
@@ -25,6 +26,7 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         b.openRouterKey.setText(keys.get(ApiKeyStore.OPENROUTER))
         b.groqKey.setText(keys.get(ApiKeyStore.GROQ))
         b.xKiroKey.setText(keys.get(ApiKeyStore.XKIRO))
+        b.zaiKey.setText(keys.get(ApiKeyStore.ZAI))
         b.deepseekKey.setText(keys.get(ApiKeyStore.DEEPSEEK))
         val workspacePrefs = getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
         // One-time retirement of old encrypted credentials and opt-in settings.
@@ -38,6 +40,23 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             b.advancedProviderControls.visibility = if (opening) View.VISIBLE else View.GONE
             b.advancedProviderToggle.text = if (opening) "Advanced · Privacy & fallback ▴"
                 else "Advanced · Privacy & fallback ▾"
+        }
+        b.zaiWorkSwitch.isChecked = workspacePrefs.getBoolean(WorkspaceZaiFree.PREFERENCE_KEY, false)
+        b.zaiWorkSwitch.setOnCheckedChangeListener { _, enabled ->
+            workspacePrefs.edit().putBoolean(WorkspaceZaiFree.PREFERENCE_KEY, enabled).apply()
+        }
+        b.zaiVisionSwitch.isChecked = workspacePrefs.getBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, false)
+        b.zaiVisionSwitch.setOnCheckedChangeListener { _, enabled ->
+            workspacePrefs.edit().putBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, enabled).apply()
+        }
+        val selectedZai = workspacePrefs.getString(WorkspaceZaiFree.MODEL_PREFERENCE_KEY,
+            WorkspaceZaiFree.DEFAULT_TEXT_MODEL)
+        b.zaiModel45.isChecked = selectedZai == WorkspaceZaiFree.ALT_TEXT_MODEL
+        b.zaiModel47.isChecked = selectedZai != WorkspaceZaiFree.ALT_TEXT_MODEL
+        b.zaiModelGroup.setOnCheckedChangeListener { _, checked ->
+            val model = if (checked == b.zaiModel45.id) WorkspaceZaiFree.ALT_TEXT_MODEL
+                else WorkspaceZaiFree.DEFAULT_TEXT_MODEL
+            workspacePrefs.edit().putString(WorkspaceZaiFree.MODEL_PREFERENCE_KEY, model).apply()
         }
         b.xKiroWorkSwitch.isChecked = workspacePrefs.getBoolean(
             WorkspaceXKiroFree.PREFERENCE_KEY, false)
@@ -84,6 +103,7 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             keys.put(ApiKeyStore.OPENROUTER, b.openRouterKey.text.toString())
             keys.put(ApiKeyStore.GROQ, b.groqKey.text.toString())
             keys.put(ApiKeyStore.XKIRO, b.xKiroKey.text.toString())
+            keys.put(ApiKeyStore.ZAI, b.zaiKey.text.toString())
             keys.put(ApiKeyStore.DEEPSEEK, b.deepseekKey.text.toString())
             Toast.makeText(this, "API configuration saved", Toast.LENGTH_SHORT).show()
         }

@@ -794,7 +794,7 @@ class WorkspaceActivity : AppCompatActivity() {
      * Attachments use the existing OpenRouter route or stay local; no auto retry or paid route.
      * Groq Free/ZDR opt-in does not certify an account that is later upgraded to paid.
      */
-    private fun selectedProvider(hasAttachments: Boolean = false): WorkspaceChatGateway.Provider? {
+    private fun selectedProvider(hasAttachments: Boolean = false, hasImage: Boolean = false): WorkspaceChatGateway.Provider? {
         val openRouterAvailable = keys.get(ApiKeyStore.OPENROUTER).isNotBlank()
         val groqAvailable = keys.get(ApiKeyStore.GROQ).isNotBlank()
         val groqApproved = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
@@ -803,13 +803,17 @@ class WorkspaceActivity : AppCompatActivity() {
         val candidate = if (history?.lastOrNull()?.role == "assistant") history.dropLast(1) else history
         val groqFits = candidate?.takeIf { it.lastOrNull()?.role == "user" }
             ?.let { WorkspaceGroqFree.withinBudget(it) } ?: false
+        val zaiApproved = preferences.getBoolean(WorkspaceZaiFree.PREFERENCE_KEY, false)
+        val zaiAvailable = zaiApproved && keys.get(ApiKeyStore.ZAI).isNotBlank()
         return WorkspaceFreeProviderSelection.choose(openRouterAvailable, groqAvailable,
-            groqApproved, groqFits, hasAttachments)
+            groqApproved, groqFits, hasAttachments, zaiApproved, zaiAvailable,
+            preferences.getBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, false), hasImage)
     }
 
     private fun keyFor(provider: WorkspaceChatGateway.Provider): String = when (provider) {
         WorkspaceChatGateway.Provider.OPENROUTER_FREE -> keys.get(ApiKeyStore.OPENROUTER)
         WorkspaceChatGateway.Provider.GROQ_FREE -> keys.get(ApiKeyStore.GROQ)
+        WorkspaceChatGateway.Provider.ZAI_FREE -> keys.get(ApiKeyStore.ZAI)
     }
 
     private fun addAttachment(uri: Uri, photo: Boolean) {
@@ -916,7 +920,11 @@ class WorkspaceActivity : AppCompatActivity() {
         // to a different provider just because another API key exists.
         if (intent == null && current.type == WorkspaceProjectType.CHAT && picked.isNotEmpty() &&
             preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false) &&
-            keys.get(ApiKeyStore.GROQ).isNotBlank()) {
+            keys.get(ApiKeyStore.GROQ).isNotBlank() &&
+            !(preferences.getBoolean(WorkspaceZaiFree.PREFERENCE_KEY, false) &&
+              keys.get(ApiKeyStore.ZAI).isNotBlank() &&
+              (!picked.any { it.mime.startsWith("image/") } ||
+               preferences.getBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, false)))) {
             statusMessage = "Groq Free is text-only. Remove the attachment or turn Groq OFF in Settings before sending. Nothing was sent."
             render()
             return
@@ -963,13 +971,14 @@ class WorkspaceActivity : AppCompatActivity() {
                 return
             }
         }
-        val provider = runCatching { selectedProvider(picked.isNotEmpty()) }
+        val provider = runCatching { selectedProvider(picked.isNotEmpty(),
+            picked.any { it.mime.startsWith("image/") }) }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
         if (provider == null) {
             statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
             render()
             AlertDialog.Builder(this).setTitle("No eligible Workspace free route")
-                .setMessage("Save a valid OpenRouter Free key or enable Groq Free/ZDR with a valid key. No paid fallback.")
+                .setMessage("Save a valid OpenRouter Free key, Groq Free/ZDR key, or enable Z.ai Free with its own key. No paid fallback.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("API settings") { _, _ ->
                     startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
@@ -1023,10 +1032,16 @@ class WorkspaceActivity : AppCompatActivity() {
                     android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
             }.getOrElse { statusMessage = it.message ?: "Photo unavailable"; render(); return }
         }
-        val outgoing = runCatching { WorkspaceChatGateway.request(provider, keyFor(provider), enriched, image) }
+        val outgoing = runCatching {
+            WorkspaceChatGateway.request(provider, keyFor(provider), enriched, image,
+                WorkspaceZaiFree.textModel(preferences.getString(WorkspaceZaiFree.MODEL_PREFERENCE_KEY,
+                    WorkspaceZaiFree.DEFAULT_TEXT_MODEL)),
+                preferences.getBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, false))
+        }
             .getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
-        val call = WorkspaceChatGateway.client.newCall(outgoing)
+        val call = (if (provider == WorkspaceChatGateway.Provider.ZAI_FREE)
+            WorkspaceZaiFree.client else WorkspaceChatGateway.client).newCall(outgoing)
         activeRequest = call
         statusMessage = ""
         render()
