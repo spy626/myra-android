@@ -7,7 +7,10 @@ package com.myra.assistant.ui.workspace
  * The user's actual words, not earlier assistant guesses, define what was mentioned.
  */
 internal object WorkspaceCasualReplyEvidence {
-    private val properName = Regex("""(?U)\b\p{Lu}[\p{Ll}]{3,}\b""")
+    // Android's regex engine already uses Unicode character classes and does not support
+    // Java's (?U) / UNICODE_CHARACTER_CLASS flag. That flag caused class initialization to
+    // fail on a real phone before any reply could be displayed, despite JVM tests passing.
+    private val properName = Regex("""\b\p{Lu}[\p{Ll}]{3,}\b""")
     private val meeting = Regex("""(?iu)\b(?:milte|milenge|milna|meet|meetup|hang\s+out)\b""")
     private val ordinaryWords = setOf(
         "main", "maine", "mujhe", "mera", "meri", "mere", "tum", "tumne", "tumhara",
