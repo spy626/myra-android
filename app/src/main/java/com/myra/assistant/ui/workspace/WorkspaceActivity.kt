@@ -1063,8 +1063,18 @@ class WorkspaceActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed || serial != requestGeneration ||
                 activeRequest !== call || selectedId != id) return@runOnUiThread
             activeRequest = null
-            val failure = result.exceptionOrNull()
-            result.onSuccess { reply ->
+            // Check the completed visible draft against the actual USER topic before
+            // saving it. This is deliberately conservative and makes NO new AI call.
+            val checked = result.mapCatching { reply ->
+                if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT && picked.isEmpty()) {
+                    val saved = conversations.read(id)
+                    val actual = if (replacingAssistantId != null &&
+                        saved.lastOrNull()?.id == replacingAssistantId) saved.dropLast(1) else saved
+                    WorkspaceChatTurnFrame.verify(actual, reply)
+                } else reply
+            }
+            val failure = checked.exceptionOrNull()
+            checked.onSuccess { reply ->
                 runCatching {
                     if (replacingAssistantId == null) {
                         require(conversations.read(id).lastOrNull()?.id == userMessageId) {

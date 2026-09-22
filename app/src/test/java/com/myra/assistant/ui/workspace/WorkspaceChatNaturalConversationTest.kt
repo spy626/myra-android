@@ -45,7 +45,9 @@ class WorkspaceChatNaturalConversationTest {
         assertTrue(guidance.contains("not small talk"))
         assertTrue(guidance.contains("Earlier assistant replies can be mistaken"))
         // The guidance is not a prompt-specific script or invented user history.
-        assertFalse(guidance.contains("chess club"))
+        // A read-only current-turn frame now quotes the actual USER's subject,
+        // but it must never promote the assistant's invented activity to evidence.
+        assertTrue(guidance.contains("chess club"))
         assertFalse(guidance.contains("hiking"))
         listOf(openRouter, groq, cloudflare).forEach { entries ->
             assertEquals(4, entries.length())

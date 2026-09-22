@@ -97,7 +97,12 @@ internal object WorkspaceChatGateway {
         val earlier = if (revisionKind == null && contextDecision == null)
             WorkspaceContextProjection.earlierUserContext(messages) else ""
         val codeInstructions = latest?.let(WorkspaceCodePrompt::instructions).orEmpty()
-        val instructions = listOf(CHAT_REPLY_DISCIPLINE, writingInstructions, earlier, codeInstructions)
+        // AIRI-style turn state is a bounded, read-only projection of this same Chat.
+        // Dedicated writing, follow-up, coding and task prompts are never replaced.
+        val turnFrame = if (revisionKind == null && contextDecision == null &&
+            writingInstructions.isBlank() && codeInstructions.isBlank())
+            WorkspaceChatTurnFrame.instructions(recent) else ""
+        val instructions = listOf(CHAT_REPLY_DISCIPLINE, turnFrame, writingInstructions, earlier, codeInstructions)
             .filter(String::isNotBlank).joinToString("\n\n")
         if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", instructions))
