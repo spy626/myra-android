@@ -57,7 +57,7 @@ class WorkspaceChatRecallGroundingTest {
             u("How should I tell my friend about the trip?"))))
     }
 
-    @Test fun sameChatRequestCarriesLiteralUserEvidenceAndGenericDisciplineToCloudflare() {
+    @Test fun sameChatRequestCarriesLiteralUserEvidenceAndGenericDisciplineToOpenRouter() {
         val conversation = listOf(u("I added cardamom to the tea."),
             a("You added cinnamon."), u("What did I tell you about the tea?"))
         val json = JSONObject(WorkspaceChatGateway.openRouterBody(conversation))

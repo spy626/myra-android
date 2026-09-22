@@ -1,7 +1,5 @@
 package com.myra.assistant.ui.workspace
 
-import okhttp3.Request
-import okio.Buffer
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -85,19 +83,13 @@ class WorkspaceChatHinglishEvidenceTest {
             "Harshi is a string value."))
     }
 
-    @Test fun romanHindiKeepsEveryApprovedProviderSystemContextAligned() {
+    @Test fun romanHindiKeepsGroqAndOpenRouterSystemContextAligned() {
         val messages = listOf(turn("user", "Kal main painting workshop jaunga. Dost ki tarah short reply dena.", 1),
             turn("user", "Sahi hai", 2))
         val body = JSONObject(WorkspaceChatGateway.openRouterBody(messages))
         val system = body.getJSONArray("messages").getJSONObject(0).getString("content")
         assertTrue(system.contains("natural Roman Hindi/Hinglish"))
         assertTrue(system.contains("painting workshop"))
-        val account = "0123456789abcdef0123456789abcdef"
-        val request: Request = WorkspaceCloudflareFree.chatRequest("fake-test-token", account, messages)
-        val buffer = Buffer()
-        requireNotNull(request.body).writeTo(buffer)
-        val cf = JSONObject(buffer.readUtf8())
-        assertEquals(system, cf.getJSONArray("messages").getJSONObject(0).getString("content"))
         val groq = JSONObject(WorkspaceGroqFree.body(messages))
         assertEquals(system, groq.getJSONArray("messages").getJSONObject(0).getString("content"))
     }

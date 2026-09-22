@@ -65,7 +65,7 @@ class WorkspaceChatCasualRegressionTest {
         assertEquals("hello world", WorkspaceChatTurnFrame.verify(explicitTask, "hello world"))
     }
 
-    @Test fun newestUserTurnAndHinglishPromptAreSentAcrossAllFreeRoutes() {
+    @Test fun newestUserTurnAndHinglishPromptAreSentAcrossRemainingFreeRoutes() {
         val messages = chat(
             "Kal main library jaane ka plan kar raha hoon. Dost ki tarah short reply dena.",
             "Achha, library wali baat samajh gayi.",
@@ -84,12 +84,6 @@ class WorkspaceChatCasualRegressionTest {
         val groq = JSONObject(WorkspaceGroqFree.body(messages)).getJSONArray("messages")
         assertEquals(instructions, groq.getJSONObject(0).getString("content"))
         assertEquals("Sahi hai 😄", groq.getJSONObject(groq.length() - 1).getString("content"))
-        val cfRequest = WorkspaceCloudflareFree.chatRequest("fake-token",
-            "0123456789abcdef0123456789abcdef", messages)
-        val buffer = okio.Buffer()
-        requireNotNull(cfRequest.body).writeTo(buffer)
-        val cloudflare = JSONObject(buffer.readUtf8()).getJSONArray("messages")
-        assertEquals(instructions, cloudflare.getJSONObject(0).getString("content"))
-        assertEquals("Sahi hai 😄", cloudflare.getJSONObject(cloudflare.length() - 1).getString("content"))
+
     }
 }

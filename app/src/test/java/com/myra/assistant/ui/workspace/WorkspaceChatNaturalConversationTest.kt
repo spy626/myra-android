@@ -1,7 +1,5 @@
 package com.myra.assistant.ui.workspace
 
-import okhttp3.Request
-import okio.Buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -13,18 +11,12 @@ class WorkspaceChatNaturalConversationTest {
     private fun turn(role: String, text: String) =
         WorkspaceConversationStore.Message("$role-${text.length}", role, text, 1L)
 
-    private fun content(request: Request): JSONObject {
-        val buffer = Buffer()
-        requireNotNull(request.body).writeTo(buffer)
-        return JSONObject(buffer.readUtf8())
-    }
-
     private fun instructions(messages: JSONArray): String {
         assertEquals("system", messages.getJSONObject(0).getString("role"))
         return messages.getJSONObject(0).getString("content")
     }
 
-    @Test fun casualConversationUsesSameGenericDisciplineAcrossAllThreeFreeRoutes() {
+    @Test fun casualConversationUsesSameGenericDisciplineAcrossBothFreeRoutes() {
         val conversation = listOf(
             turn("user", "I'm joining a chess club tomorrow. Talk to me like a friend, short replies please."),
             turn("assistant", "You are going hiking with friends."),
@@ -32,12 +24,8 @@ class WorkspaceChatNaturalConversationTest {
         val openRouter = JSONObject(WorkspaceChatGateway.openRouterBody(conversation))
             .getJSONArray("messages")
         val groq = JSONObject(WorkspaceGroqFree.body(conversation)).getJSONArray("messages")
-        val cloudflare = content(WorkspaceCloudflareFree.chatRequest(
-            "test-token-not-real", "0123456789abcdef0123456789abcdef", conversation))
-            .getJSONArray("messages")
         val guidance = instructions(openRouter)
         assertEquals(guidance, instructions(groq))
-        assertEquals(guidance, instructions(cloudflare))
         assertTrue(guidance.contains("briefly acknowledges a previous reply"))
         assertTrue(guidance.contains("plan or personal update is not a request for instructions"))
         assertTrue(guidance.contains("end the conversation only when the user actually signals"))
@@ -49,7 +37,7 @@ class WorkspaceChatNaturalConversationTest {
         // but it must never promote the assistant's invented activity to evidence.
         assertTrue(guidance.contains("chess club"))
         assertFalse(guidance.contains("hiking"))
-        listOf(openRouter, groq, cloudflare).forEach { entries ->
+        listOf(openRouter, groq).forEach { entries ->
             assertEquals(4, entries.length())
             assertEquals(conversation[0].text, entries.getJSONObject(1).getString("content"))
             assertEquals(conversation[1].text, entries.getJSONObject(2).getString("content"))
@@ -59,9 +47,7 @@ class WorkspaceChatNaturalConversationTest {
             JSONObject(WorkspaceChatGateway.openRouterBody(conversation)).getString("model") })
         assertEquals(WorkspaceGroqFree.MODEL,
             JSONObject(WorkspaceGroqFree.body(conversation)).getString("model"))
-        assertTrue(WorkspaceCloudflareFree.chatRequest("test-token-not-real",
-            "0123456789abcdef0123456789abcdef", conversation).url.toString()
-            .endsWith("/ai/run/${WorkspaceCloudflareFree.MODEL}"))
+
     }
 
     @Test fun taskAndCreativeInstructionsStillTakePriorityWithoutRewritingUserText() {

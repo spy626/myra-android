@@ -1,7 +1,5 @@
 package com.myra.assistant.ui.workspace
 
-import okhttp3.Request
-import okio.Buffer
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,12 +10,6 @@ import org.junit.Test
 class WorkspaceChatTurnFrameTest {
     private fun turn(role: String, text: String, index: Int) =
         WorkspaceConversationStore.Message("turn-$index", role, text, index.toLong())
-
-    private fun body(request: Request): JSONObject {
-        val bytes = Buffer()
-        requireNotNull(request.body).writeTo(bytes)
-        return JSONObject(bytes.readUtf8())
-    }
 
     @Test fun activeUserTopicAndClarificationSurviveAnInventedAssistantPlace() {
         val messages = listOf(
@@ -48,16 +40,14 @@ class WorkspaceChatTurnFrameTest {
         assertEquals("", WorkspaceChatTurnFrame.instructions(large))
     }
 
-    @Test fun allFreeProviderRoutesKeepRawUserLastAndTheSameLocalTurnFrame() {
+    @Test fun bothFreeProviderRoutesKeepRawUserLastAndTheSameLocalTurnFrame() {
         val messages = listOf(
             turn("user", "My first pottery class is tomorrow. Keep it short please, friend.", 1),
             turn("assistant", "Let's go skydiving!", 2),
             turn("user", "Okay", 3))
-        val account = "0123456789abcdef0123456789abcdef"
         val openRouter = JSONObject(WorkspaceChatGateway.openRouterBody(messages))
         val groq = JSONObject(WorkspaceGroqFree.body(messages))
-        val cloudflare = body(WorkspaceCloudflareFree.chatRequest("fake-test-token", account, messages))
-        val frames = listOf(openRouter, groq, cloudflare).map { it.getJSONArray("messages") }
+        val frames = listOf(openRouter, groq).map { it.getJSONArray("messages") }
         val system = frames.first().getJSONObject(0).getString("content")
         assertTrue(system.contains("pottery class"))
         assertFalse(system.contains("skydiving"))
