@@ -1,0 +1,60 @@
+name: LYRA Recovery Release One-Off
+on:
+  push:
+    branches:
+      - agent/myra-phase-1
+    paths:
+      - .github/workflows/lyra-recovery-release-once.yml
+permissions:
+  contents: write
+jobs:
+  recovery-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify immutable recovery source and APK artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: 2ab0db4451b17b418ea3d2ef1be704f91de390b6
+          SOURCE_RUN: '35779987823'
+          ARTIFACT_NAME: lyra-cloudflare-removed-apk
+          EXPECTED_ZIP_SHA: 11575f2991bd3d78f3b64d08e6f0707859bfc4f5b9d0c8c2b5a20642109fce66
+          EXPECTED_APK_SHA: 07586ccd47132cc43026269ee57226b3a408a52f1c3b259225f46b0ff896fd76
+        run: |
+          set -euo pipefail
+          git fetch origin refs/heads/recovery/lyra-no-cloudflare-20260923
+          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 "$SOURCE_SHA"
+          mkdir -p "$RUNNER_TEMP/lyra-recovery"
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT_NAME" --dir "$RUNNER_TEMP/lyra-recovery"
+          APK="$RUNNER_TEMP/lyra-recovery/app-debug.apk"
+          test -s "$APK"
+          test "$(sha256sum "$APK" | cut -d ' ' -f 1)" = "$EXPECTED_APK_SHA"
+          test "$(stat -c%s "$APK")" -gt 100000000
+          mkdir -p recovery
+          cp "$APK" recovery/LYRA-Recovery-2026-09-23.apk
+          sha256sum recovery/LYRA-Recovery-2026-09-23.apk
+      - name: Publish stable recovery download without altering source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: 2ab0db4451b17b418ea3d2ef1be704f91de390b6
+          TAG: lyra-recovery-2026-09-23-no-cloudflare
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Recovery release already exists; refusing to overwrite it."
+            exit 1
+          fi
+          cat > "$RUNNER_TEMP/recovery-notes.md" <<'NOTES'
+          LYRA Android recovery baseline: exact source commit `2ab0db4451b17b418ea3d2ef1be704f91de390b6` on `recovery/lyra-no-cloudflare-20260923`.
+
+          Cloudflare AI removed. Existing Groq, OpenRouter and xKiro routes retained. Unit tests and debug APK assembly passed in workflow 35779987823. The app owner reports the update, settings and basic chat/website Preview checks working on an Android phone. This is scoped acceptance, not verification of all voice, memory or coding features.
+
+          Recovery APK is the exact byte-for-byte APK from the successful removal workflow. SHA-256: `07586ccd47132cc43026269ee57226b3a408a52f1c3b259225f46b0ff896fd76`.
+
+          Do not uninstall or clear app data to recover; Android may reject installation if signing certificates differ. Back up important local data separately before attempting a downgrade. Recovery source snapshot and APK do not include the phone's private chats or keys.
+          NOTES
+          gh release create "$TAG" 'recovery/LYRA-Recovery-2026-09-23.apk#LYRA-Recovery-2026-09-23.apk' --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title 'LYRA recovery baseline — No Cloudflare — 2026-09-23' --notes-file "$RUNNER_TEMP/recovery-notes.md" --prerelease
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,assets --jq '{tag: .tagName, assets: [.assets[] | {name: .name, size: .size}]}'
