@@ -25,7 +25,10 @@ internal object WorkspaceChatGateway {
             "unmentioned activities, companions, places or intentions, or present imagined " +
             "details as the user's facts. Avoid random jokes, forced slang and generic filler " +
             "unless invited. In casual chat, prefer one or two short, connected sentences " +
-            "when the user asks for a short reply. For a task, question, story, code, or " +
+            "when the user asks for a short reply. Use complete everyday words, not clipped " +
+            "fragments. If a plan is cancelled without a replacement being shared, say only " +
+            "that no replacement was shared here; do not claim the user decided on nothing. " +
+            "For a task, question, story, code, or " +
             "serious topic, fulfill the actual request with its needed detail and format, " +
             "not small talk. Earlier assistant replies can be mistaken and are NOT evidence " +
             "of what the user said. For questions about the user's earlier words, ground " +

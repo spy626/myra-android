@@ -74,12 +74,14 @@ internal object WorkspaceChatTurnFrame {
      */
     fun verify(messages: List<WorkspaceConversationStore.Message>, reply: String): String {
         if (!isCasual(messages)) return reply
+        // All three Free routes arrive here before any assistant text is persisted.
+        val visible = WorkspaceChatVisibleReply.sanitize(reply)
         val recentUsers = messages.takeLast(8).filter { it.role == "user" }
-        if (recentUsers.none { shortPreference.containsMatchIn(it.text) }) return reply
+        if (recentUsers.none { shortPreference.containsMatchIn(it.text) }) return visible
         val anchor = topic(messages)?.let(::tokens).orEmpty()
-        if (anchor.isEmpty() || reply.length < 100) return reply
-        val responseWords = tokens(reply)
-        if (anchor.intersect(responseWords).isNotEmpty()) return reply
+        if (anchor.isEmpty() || visible.length < 100) return visible
+        val responseWords = tokens(visible)
+        if (anchor.intersect(responseWords).isNotEmpty()) return visible
         throw IllegalArgumentException(
             "LYRA's long reply may be off-topic, so it was not saved. Tap Retry or choose another approved Free model; no automatic resend."
         )

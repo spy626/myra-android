@@ -11,7 +11,7 @@ internal object WorkspaceChatPlanStatus {
     private val ownership = Regex("""(?iu)\b(?:mera|meri|mere|my|our|hamara|humara)\b|मेरा|मेरी|میرا""")
     private val askingCurrent = Regex("""(?iu)\b(?:kya\s+(?:hai|he|hei)|what(?:'s|\s+is)|which\s+is)\b|क्या\s+है|کیا\s+ہے""")
     private val cancellation = Regex(
-        """(?iu)\b(?:nahi|nahin|nehi|nhi|not|won't|wont)\b.{0,45}\b(?:jaa?unga|jaa?ungi|jaa?enge|going|go|attend|visit|karunga|karungi|karoge)\b""")
+        """(?iu)\b(?:nahi|nahin|nehi|nhi|not|won't|wont)\b.{0,45}?\b(?:jaa?unga|jaa?ungi|jaa?enge|going|go|attend|visit|karunga|karungi|karoge)\b""")
     private val englishQuestion = Regex("""(?iu)\b(?:what|which|my|our)\b""")
 
     /** Null: not clearly this narrow state, including any possible replacement in the same update. */

@@ -961,7 +961,9 @@ class WorkspaceActivity : AppCompatActivity() {
         // Never let a model's earlier guess become evidence; do not spend another Free call.
         if (picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
             val grounded = runCatching {
-                WorkspaceChatRecallGrounding.answer(conversations.read(id))
+                val selectedChat = conversations.read(id)
+                WorkspaceChatRecallGrounding.answer(selectedChat)
+                    ?: WorkspaceChatPlanStatus.answer(selectedChat)
             }.getOrNull()
             if (grounded != null) {
                 runCatching {

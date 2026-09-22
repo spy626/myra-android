@@ -8,11 +8,11 @@ package com.myra.assistant.ui.workspace
 internal object WorkspaceChatVisibleReply {
     // A well-formed reasoning block can be removed without rewriting visible speech.
     private val completeBlock = Regex(
-        """(?is)<\s*(think|reasoning|analysis)\s*>[\s\S]*?<\s*/\s*\1\s*>""")
+        """(?is)<\s*(think|thinking|reasoning|analysis)\s*>[\s\S]*?<\s*/\s*\1\s*>""")
     // A closing tag without an opener means the preceding text could be private reasoning.
     // Incomplete openers and special model-control tokens are unsafe as well.
     private val strayMarker = Regex(
-        """(?is)<\s*/?\s*(?:think|reasoning|analysis)\b|<\|(?:im_start|im_end|endoftext|eot_id|start_header_id|end_header_id)[^>]*""")
+        """(?is)<\s*/?\s*(?:think|thinking|reasoning|analysis)\b|<\|(?:im_start|im_end|endoftext|eot_id|start_header_id|end_header_id)[^>]*""")
 
     fun sanitize(completedText: String): String {
         require(completedText.length in 1..WorkspaceConversationStore.MAX_MESSAGE_LENGTH) {
@@ -25,6 +25,6 @@ internal object WorkspaceChatVisibleReply {
         require(speech.isNotBlank()) {
             "LYRA received no visible answer after reasoning; reply not saved. Tap Retry if needed."
         }
-        return speech
+        return speech.replace(Regex("""[ \t]{2,}"""), " ")
     }
 }
