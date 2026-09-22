@@ -1,0 +1,53 @@
+name: LYRA Casual Regex Fix Side by Side APK
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/lyra-casual-fixed-side-by-side.yml']
+permissions:
+  contents: read
+jobs:
+  isolated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate source branch and recovery ancestor
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = 'agent/myra-phase-1'
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply separate package ID only inside temporary CI checkout
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          original = 'applicationId "com.myra.assistant"'
+          assert s.count(original) == 1
+          p.write_text(s.replace(original, 'applicationId "com.myra.assistant.chatfix20260922"', 1))
+          manifest = Path('app/src/main/AndroidManifest.xml')
+          m = manifest.read_text()
+          original_label = 'android:label="LYRA"'
+          assert m.count(original_label) == 1
+          manifest.write_text(m.replace(original_label, 'android:label="LYRA Chat Fix Test"', 1))
+          PY
+          git diff --check
+      - name: Full tests and isolated Android debug APK
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-chat-runtime-fixed-side-by-side
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
