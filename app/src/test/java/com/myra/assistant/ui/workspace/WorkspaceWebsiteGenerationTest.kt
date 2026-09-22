@@ -144,7 +144,8 @@ class WorkspaceWebsiteGenerationTest {
         requireNotNull(request.body).writeTo(buffer)
         val body = JSONObject(buffer.readUtf8())
         assertEquals("openrouter/free", body.getString("model"))
-        assertEquals("json_object", body.getJSONObject("response_format").getString("type"))
+        // Free models may not offer provider-enforced JSON mode; complete JSON stays mandatory locally.
+        assertFalse(body.has("response_format"))
         assertFalse(body.getJSONObject("provider").optBoolean("require_parameters", false))
         assertTrue(body.getJSONObject("provider").getBoolean("zdr"))
         assertEquals("deny", body.getJSONObject("provider").getString("data_collection"))

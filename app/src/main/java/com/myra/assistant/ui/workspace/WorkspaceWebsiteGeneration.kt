@@ -135,7 +135,6 @@ internal object WorkspaceWebsiteGeneration {
         }
         val payload = JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
             .put("stream", false).put("max_tokens", 7_000).put("temperature", 0.2)
-            .put("response_format", JSONObject().put("type", "json_object"))
             .put("provider", JSONObject().put("zdr", true).put("data_collection", "deny")
                 .put("allow_fallbacks", false)
                 .put("max_price", JSONObject().put("prompt", 0)
