@@ -14,6 +14,13 @@ patch('WorkspaceChatVisibleReply.kt',
       '(think|reasoning|analysis)', '(think|thinking|reasoning|analysis)')
 patch('WorkspaceChatVisibleReply.kt',
       '(?:think|reasoning|analysis)', '(?:think|thinking|reasoning|analysis)')
+# Replace a removed reasoning block with one normal word separator, not three.
+patch('WorkspaceChatVisibleReply.kt',
+      '        return speech\n',
+      '        return speech.replace(Regex("""[ \\t]{2,}"""), " ")\n')
+# Match the first negative action; a second positive action could be a replacement plan.
+patch('WorkspaceChatPlanStatus.kt',
+      r'\b.{0,45}\b', r'\b.{0,45}?\b')
 
 patch('WorkspaceChatTurnFrame.kt',
 '''    fun verify(messages: List<WorkspaceConversationStore.Message>, reply: String): String {
