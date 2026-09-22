@@ -4,6 +4,7 @@ on:
     branches: [agent/myra-phase-1]
     paths:
       - .github/workflows/lyra-cloudflare-direct-one-shot.yml
+      - app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatGatewayTest.kt
 permissions:
   contents: write
 jobs:
