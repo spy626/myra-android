@@ -6,6 +6,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okio.Buffer
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -51,14 +52,18 @@ internal object WorkspaceCloudflareFree {
         require(last?.optString("role") == "user" && last.optString("content").isNotBlank()) {
             "Cloudflare request needs a complete user instruction"
         }
-        // Exactly one hardcoded Cloudflare-hosted Workers AI model, not Gateway's model router.
+        // Fixed Cloudflare-hosted Workers AI model, never Gateway's model router.
         payload.remove("model")
         payload.remove("provider")
         payload.remove("plugins")
         payload.remove("response_format")
         payload.remove("max_tokens")
+        // GLM may spend the entire completion budget on non-visible reasoning, leaving
+        // content empty even on HTTP 200. Both switches are documented Workers AI inputs.
+        // Disable thinking before generation; never display reasoning as a substitute reply.
         payload.put("stream", false).put("max_completion_tokens", maxCompletion)
-            .put("store", false).put("reasoning_effort", "low")
+            .put("store", false).put("reasoning_effort", JSONObject.NULL)
+            .put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
         return Request.Builder().url(url)
             .header("Authorization", "Bearer $token")
             .header("Content-Type", "application/json")
@@ -113,6 +118,34 @@ internal object WorkspaceCloudflareFree {
         }
     }
 
+    /** Only visible assistant text. All parts must be text; never consume reasoning,
+     * tool arguments, partial output, or an unrecognized multimodal part as chat/code.
+     */
+    private fun visibleText(raw: Any?): String? = when (raw) {
+        is String -> raw.takeIf { it.isNotBlank() }
+        is JSONArray -> {
+            if (raw.length() == 0) null else {
+                val text = StringBuilder()
+                for (index in 0 until raw.length()) {
+                    val part = raw.optJSONObject(index) ?: return null
+                    if (part.optString("type") !in setOf("text", "output_text")) return null
+                    val segment = part.opt("text")
+                    if (segment !is String) return null
+                    text.append(segment)
+                }
+                text.toString().takeIf { it.isNotBlank() }
+            }
+        }
+        else -> null
+    }
+
+    private fun missingTextCategory(raw: Any?): String = when (raw) {
+        null, JSONObject.NULL -> "content_missing"
+        is String -> "content_empty"
+        is JSONArray -> "content_parts_missing_or_invalid"
+        else -> "unsupported_content_type"
+    }
+
     private fun readText(response: Response, maxChars: Int): String = response.use { result ->
         require(result.request.url.host == "api.cloudflare.com" &&
             result.request.url.pathSegments.takeLast(5) ==
@@ -125,22 +158,41 @@ internal object WorkspaceCloudflareFree {
             "Cloudflare reply missing or oversized; nothing saved"
         }
         val root = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }
-            .getOrElse { throw IllegalArgumentException("Cloudflare returned an invalid response; nothing saved") }
+            .getOrElse { throw IllegalArgumentException("Cloudflare returned invalid JSON [format: invalid_json]; nothing saved") }
         require(!root.has("error") && (!root.has("success") || root.optBoolean("success"))) {
-            "Cloudflare refused the request; nothing saved"
+            "Cloudflare refused the request [format: provider_refused]; nothing saved"
         }
         val body = root.optJSONObject("result") ?: root
-        val choice = body.optJSONArray("choices")?.optJSONObject(0)
-        val content = if (choice != null) {
-            require(choice.optString("finish_reason") == "stop") {
-                "Cloudflare reply incomplete or output limit reached; nothing saved"
+        val raw: Any?
+        if (body.has("choices")) {
+            val choices = body.optJSONArray("choices")
+            val choice = choices?.optJSONObject(0)
+                ?: throw IllegalArgumentException("Cloudflare returned no choice [format: choices_missing]; nothing saved")
+            val finish = choice.optString("finish_reason")
+            require(finish == "stop") {
+                val category = when (finish) {
+                    "length" -> "output_limit"
+                    "tool_calls" -> "unexpected_tool_call"
+                    "content_filter" -> "content_filtered"
+                    else -> "unexpected_finish"
+                }
+                "Cloudflare reply incomplete [format: $category]; nothing saved. No automatic resend."
             }
-            choice.optJSONObject("message")?.opt("content")
-        } else body.opt("response")
-        require(content is String && content.isNotBlank() && content.length <= maxChars) {
-            "Cloudflare returned no complete bounded text reply; nothing saved"
+            val message = choice.optJSONObject("message")
+                ?: throw IllegalArgumentException("Cloudflare returned no assistant message [format: message_missing]; nothing saved")
+            // Never turn reasoning_content or tool_calls into a user-visible reply.
+            raw = message.opt("content")
+        } else {
+            // Legacy Workers AI synchronous text response, with or without result wrapper.
+            raw = body.opt("response")
         }
-        content.trim()
+        val text = visibleText(raw)
+            ?: throw IllegalArgumentException(
+                "Cloudflare returned no complete text [format: ${missingTextCategory(raw)}]; nothing saved. No automatic resend.")
+        require(text.length <= maxChars) {
+            "Cloudflare visible reply too large [format: output_oversized]; nothing saved"
+        }
+        text.trim()
     }
 
     fun readChat(response: Response): String = readText(response, WorkspaceConversationStore.MAX_MESSAGE_LENGTH)
