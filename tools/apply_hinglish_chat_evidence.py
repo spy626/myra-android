@@ -46,6 +46,10 @@ patch('WorkspaceChatTurnFrame.kt',
 ''')
 
 patch('WorkspaceChatPlanStatus.kt',
+    r'\b.{0,25}\b(?:jaa?unga|jaa?ungi|jaa?enge|going|go|attend|visit|karunga|karungi)',
+    r'\b.{0,25}?\b(?:jaa?unga|jaa?ungi|jaa?enge|going|go|attend|visit|karunga|karungi)')
+
+patch('WorkspaceChatPlanStatus.kt',
 '''        if (plan.containsMatchIn(text) && decision.containsMatchIn(text) &&
             withholding.containsMatchIn(text)) return Evidence(State.DECIDED_UNDISCLOSED, text)
 ''',
