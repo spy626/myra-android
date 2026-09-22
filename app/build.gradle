@@ -58,6 +58,7 @@ tasks.register('prepareLyraCharacter') {
     outputs.file(outputFile)
     doLast {
         def chunks = chunksDir.listFiles()?.findAll { it.name.endsWith('.b64') }?.sort { it.name }
+        if (!chunks) throw new GradleException('LYRA character model chunks are missing')
         outputFile.parentFile.mkdirs()
         def encoded = new StringBuilder()
         chunks.each { encoded.append(it.getText('UTF-8').trim()) }
