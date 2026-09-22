@@ -17,8 +17,12 @@ import java.util.concurrent.TimeUnit
 internal object WorkspaceCloudflareFree {
     const val PREFERENCE_KEY = "workspace_cloudflare_free_direct_opt_in"
     const val MODEL = "@cf/zai-org/glm-4.7-flash"
+    const val MODEL_PREFERENCE_KEY = "workspace_cloudflare_selected_free_model"
+    val MODELS = listOf(MODEL, "@cf/qwen/qwen3-30b-a3b-fp8",
+        "@cf/google/gemma-4-26b-a4b-it", "@cf/nvidia/nemotron-3-120b-a12b")
+    val MODEL_LABELS = listOf("GLM-4.7-Flash", "Qwen3 30B", "Gemma 4 26B", "Nemotron 3 120B")
+    fun chosenModel(saved: String?): String = saved?.takeIf { it in MODELS } ?: MODEL
     private const val ROOT = "https://api.cloudflare.com/client/v4/accounts/"
-    private const val PATH = "/ai/run/@cf/zai-org/glm-4.7-flash"
     private const val MAX_BYTES = 130_000L
     private val ACCOUNT = Regex("^[a-fA-F0-9]{32}$")
 
@@ -28,9 +32,10 @@ internal object WorkspaceCloudflareFree {
     fun configured(approved: Boolean, token: String, accountId: String) =
         approved && validToken(token) && validAccountId(accountId)
 
-    fun endpoint(accountId: String): String {
+    fun endpoint(accountId: String, model: String = MODEL): String {
         require(validAccountId(accountId)) { "Enter the 32-character Cloudflare Account ID in API Settings" }
-        return ROOT + accountId.lowercase() + PATH
+        require(model in MODELS) { "Cloudflare model is not approved for this Free-only selector" }
+        return ROOT + accountId.lowercase() + "/ai/run/" + model
     }
 
     // Independent client; existing OpenRouter/Groq retry and memory interceptors never run.
@@ -38,13 +43,17 @@ internal object WorkspaceCloudflareFree {
         .retryOnConnectionFailure(false)
         .followRedirects(false)
         .followSslRedirects(false)
-        .callTimeout(180, TimeUnit.SECONDS)
+        // Stream website generation incrementally; a stalled stream still fails safely.
+        // The 300s ceiling is total, NOT an unlimited inference or a retry policy.
+        .callTimeout(300, TimeUnit.SECONDS)
+        .readTimeout(75, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
         .build()
 
     private fun request(token: String, accountId: String, payload: JSONObject,
-                        maxCompletion: Int): Request {
+                        maxCompletion: Int, model: String = MODEL, website: Boolean = false): Request {
         require(validToken(token)) { "Save a valid Cloudflare Workers AI token in API Settings" }
-        val url = endpoint(accountId)
+        val url = endpoint(accountId, model)
         require(maxCompletion in 1..7_000) { "Cloudflare output budget is invalid" }
         val messages = payload.optJSONArray("messages")
         require(messages != null && messages.length() in 1..25) { "Cloudflare request needs selected messages" }
@@ -52,18 +61,28 @@ internal object WorkspaceCloudflareFree {
         require(last?.optString("role") == "user" && last.optString("content").isNotBlank()) {
             "Cloudflare request needs a complete user instruction"
         }
-        // Fixed Cloudflare-hosted Workers AI model, never Gateway's model router.
+        // Exact user-selected, allowlisted Cloudflare-hosted model; never AI Gateway.
         payload.remove("model")
         payload.remove("provider")
         payload.remove("plugins")
         payload.remove("response_format")
         payload.remove("max_tokens")
-        // GLM may spend the entire completion budget on non-visible reasoning, leaving
-        // content empty even on HTTP 200. Both switches are documented Workers AI inputs.
-        // Disable thinking before generation; never display reasoning as a substitute reply.
-        payload.put("stream", false).put("max_completion_tokens", maxCompletion)
-            .put("store", false).put("reasoning_effort", JSONObject.NULL)
-            .put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
+        payload.remove("reasoning_effort")
+        payload.remove("chat_template_kwargs")
+        payload.remove("store")
+        payload.put("stream", website)
+        if (model == MODELS[1]) {
+            // Qwen's native Workers AI schema uses max_tokens, not max_completion_tokens.
+            payload.put("max_tokens", maxCompletion)
+        } else {
+            payload.put("max_completion_tokens", maxCompletion).put("store", false)
+            if (model == MODEL) {
+                // GLM-specific documented switch: prevent invisible reasoning consuming
+                // the whole output budget; do not send this to other model schemas.
+                payload.put("reasoning_effort", JSONObject.NULL)
+                    .put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
+            }
+        }
         return Request.Builder().url(url)
             .header("Authorization", "Bearer $token")
             .header("Content-Type", "application/json")
@@ -72,28 +91,31 @@ internal object WorkspaceCloudflareFree {
     }
 
     fun chatRequest(token: String, accountId: String,
-                    messages: List<WorkspaceConversationStore.Message>): Request {
+                    messages: List<WorkspaceConversationStore.Message>,
+                    model: String = MODEL): Request {
         require(WorkspaceLongInputPolicy.requestFits(messages)) {
             "Complete chat exceeds local budget; nothing was sent"
         }
         val payload = JSONObject(WorkspaceChatGateway.openRouterBody(messages))
-        return request(token, accountId, payload, 2_048)
+        return request(token, accountId, payload, 2_048, model)
     }
 
     fun websiteRequest(token: String, accountId: String,
-                       snapshot: WorkspaceWebsiteGeneration.Snapshot): Request {
+                       snapshot: WorkspaceWebsiteGeneration.Snapshot,
+                       model: String = MODEL): Request {
         // Reuse exactly the existing approved goal + three selected source files + instructions.
         val base = WorkspaceWebsiteGeneration.request("local-body-only", snapshot)
         val buffer = Buffer()
         requireNotNull(base.body).writeTo(buffer)
-        return request(token, accountId, JSONObject(buffer.readUtf8()), 7_000)
+        return request(token, accountId, JSONObject(buffer.readUtf8()), 7_000, model, website = true)
     }
 
-    fun editRequest(token: String, accountId: String, prompt: String): Request {
+    fun editRequest(token: String, accountId: String, prompt: String,
+                    model: String = MODEL): Request {
         val selected = listOf(WorkspaceConversationStore.Message(
             "selected-source", "user", prompt, System.currentTimeMillis()))
         return request(token, accountId,
-            JSONObject(WorkspaceChatGateway.openRouterBody(selected)), 3_500)
+            JSONObject(WorkspaceChatGateway.openRouterBody(selected)), 3_500, model)
     }
 
     private fun status(response: Response): String {
@@ -148,12 +170,17 @@ internal object WorkspaceCloudflareFree {
         else -> "unsupported_content_type"
     }
 
-    private fun readText(response: Response, maxChars: Int): String = response.use { result ->
-        require(result.request.url.host == "api.cloudflare.com" &&
-            result.request.url.pathSegments.takeLast(5) ==
-                listOf("ai", "run", "@cf", "zai-org", "glm-4.7-flash")) {
+    private fun assertApprovedRoute(response: Response) {
+        val segments = response.request.url.pathSegments
+        require(response.request.url.host == "api.cloudflare.com" &&
+            segments.takeLast(5).take(2) == listOf("ai", "run") &&
+            segments.takeLast(3).joinToString("/") in MODELS) {
             "Cloudflare response arrived from an unexpected route; nothing saved"
         }
+    }
+
+    private fun readText(response: Response, maxChars: Int): String = response.use { result ->
+        assertApprovedRoute(result)
         require(result.isSuccessful) { status(result) }
         val bytes = result.peekBody(MAX_BYTES + 1).bytes()
         require(bytes.isNotEmpty() && bytes.size <= MAX_BYTES) {
@@ -199,6 +226,65 @@ internal object WorkspaceCloudflareFree {
 
     fun readChat(response: Response): String = readText(response, WorkspaceConversationStore.MAX_MESSAGE_LENGTH)
     fun readEdit(response: Response): String = readText(response, 30_000)
-    fun readWebsite(response: Response): Map<String, String> =
-        WorkspaceWebsiteGeneration.parse(readText(response, 30_000))
+    /** Website-only SSE: bounded incremental bytes, no partial writes or uncertain retries.
+     * Read and validate the COMPLETE finish event before invoking the existing local validator.
+     * Both the SSE and synchronous API response shape are supported for compatibility.
+     */
+    fun readWebsite(response: Response): Map<String, String> {
+        if (!response.isSuccessful ||
+            !response.header("Content-Type").orEmpty().contains("text/event-stream", ignoreCase = true)) {
+            return WorkspaceWebsiteGeneration.parse(readText(response, 30_000))
+        }
+        return response.use { result ->
+            assertApprovedRoute(result)
+            val source = result.body?.source()
+                ?: throw IllegalArgumentException("Cloudflare website stream missing; no files changed")
+            val text = StringBuilder()
+            var totalChars = 0
+            var done = false
+            var sawChoice = false
+            var completed = false
+            try {
+                while (true) {
+                    val line = source.readUtf8Line() ?: break
+                    totalChars += line.length
+                    require(totalChars <= MAX_BYTES) { "Cloudflare website stream oversized; no files changed" }
+                    if (!line.startsWith("data:")) continue
+                    val data = line.substringAfter("data:").trim()
+                    if (data == "[DONE]") { done = true; break }
+                    if (data.isBlank()) continue
+                    val event = runCatching { JSONObject(data) }
+                        .getOrElse { throw IllegalArgumentException("Cloudflare website stream invalid JSON; no files changed") }
+                    require(!event.has("error") && (!event.has("success") || event.optBoolean("success"))) {
+                        "Cloudflare website stream refused; no files changed"
+                    }
+                    val body = event.optJSONObject("result") ?: event
+                    val choice = body.optJSONArray("choices")?.optJSONObject(0)
+                    val piece = if (choice != null) {
+                        sawChoice = true
+                        val finish = choice.optString("finish_reason")
+                        if (finish.isNotBlank() && finish != "null") {
+                            require(finish == "stop") {
+                                "Cloudflare website output incomplete [format: output_limit_or_stop]; no files changed"
+                            }
+                            completed = true
+                        }
+                        choice.optJSONObject("delta")?.opt("content")
+                    } else body.opt("response")
+                    if (piece != null && piece != JSONObject.NULL) {
+                        val chunk = visibleText(piece)
+                            ?: throw IllegalArgumentException("Cloudflare website stream has unsupported text; no files changed")
+                        text.append(chunk)
+                        require(text.length <= 30_000) { "Cloudflare website output oversized; no files changed" }
+                    }
+                }
+            } catch (e: java.io.IOException) {
+                throw IllegalStateException("Cloudflare website stream interrupted or stalled; outcome uncertain. No files changed or automatic resend.")
+            }
+            require(done && (!sawChoice || completed) && text.isNotBlank()) {
+                "Cloudflare website stream ended before a complete reply; no files changed or automatic resend"
+            }
+            WorkspaceWebsiteGeneration.parse(text.toString())
+        }
+    }
 }

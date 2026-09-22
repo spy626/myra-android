@@ -166,7 +166,10 @@ internal class WorkspaceChatCodingFlow(
                 WorkspaceWebsiteRoute.Provider.XKIRO ->
                     WorkspaceXKiroFree.websiteRequest(xKiroKey, snapshot)
                 WorkspaceWebsiteRoute.Provider.CLOUDFLARE ->
-                    WorkspaceCloudflareFree.websiteRequest(cloudKey, cloudAccount, snapshot)
+                    WorkspaceCloudflareFree.websiteRequest(cloudKey, cloudAccount, snapshot,
+                        WorkspaceCloudflareFree.chosenModel(activity.getSharedPreferences(
+                            "workspace_ui", Context.MODE_PRIVATE).getString(
+                            WorkspaceCloudflareFree.MODEL_PREFERENCE_KEY, WorkspaceCloudflareFree.MODEL)))
             }
         }.getOrElse { error("Free website request refused: ${it.message}"); return }
         val serial = ++generation
@@ -188,6 +191,10 @@ internal class WorkspaceChatCodingFlow(
             override fun onFailure(call: Call, e: IOException) {
                 val message = if (primary == WorkspaceWebsiteRoute.Provider.XKIRO &&
                     e.message?.startsWith("xKiro Free") == true) e.message!!
+                else if (primary == WorkspaceWebsiteRoute.Provider.CLOUDFLARE &&
+                    (e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException))
+                    "Cloudflare website stream timed out or stalled; server outcome is uncertain. " +
+                        "No files changed or automatic retry. Check your daily neurons before manually trying another Free model."
                 else if (e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException)
                     "Website provider timed out. No incomplete code was saved."
                 else "Website provider connection failed; no result received. No paid fallback."
@@ -395,7 +402,10 @@ internal class WorkspaceChatCodingFlow(
         val messages = listOf(WorkspaceConversationStore.Message("explicit-one-file-prompt", "user",
             prepared.prompt, System.currentTimeMillis()))
         val outgoing = runCatching { if (usingCloudflare)
-            WorkspaceCloudflareFree.editRequest(key, cloudAccount, prepared.prompt)
+            WorkspaceCloudflareFree.editRequest(key, cloudAccount, prepared.prompt,
+                WorkspaceCloudflareFree.chosenModel(activity.getSharedPreferences(
+                    "workspace_ui", Context.MODE_PRIVATE).getString(
+                    WorkspaceCloudflareFree.MODEL_PREFERENCE_KEY, WorkspaceCloudflareFree.MODEL)))
         else if (usingXKiro) WorkspaceXKiroFree.editRequest(key, prepared.prompt)
         else WorkspaceChatGateway.request(provider, key, messages) }
             .getOrElse { error("Provider request refused: ${it.message}"); return }

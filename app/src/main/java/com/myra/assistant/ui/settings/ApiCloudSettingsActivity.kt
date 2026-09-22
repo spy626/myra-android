@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.ai.ApiKeyStore
@@ -30,6 +31,13 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         b.cloudflareAccountId.setText(keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT))
         b.deepseekKey.setText(keys.get(ApiKeyStore.DEEPSEEK))
         val workspacePrefs = getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+        b.cloudflareModelSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item,
+            WorkspaceCloudflareFree.MODEL_LABELS).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        val selectedModel = WorkspaceCloudflareFree.chosenModel(workspacePrefs.getString(
+            WorkspaceCloudflareFree.MODEL_PREFERENCE_KEY, WorkspaceCloudflareFree.MODEL))
+        b.cloudflareModelSpinner.setSelection(WorkspaceCloudflareFree.MODELS.indexOf(selectedModel))
         b.advancedProviderControls.visibility = View.GONE
         b.advancedProviderToggle.setOnClickListener {
             val opening = b.advancedProviderControls.visibility != View.VISIBLE
@@ -89,6 +97,8 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             keys.put(ApiKeyStore.XKIRO, b.xKiroKey.text.toString())
             keys.put(ApiKeyStore.CLOUDFLARE_TOKEN, b.cloudflareToken.text.toString())
             keys.put(ApiKeyStore.CLOUDFLARE_ACCOUNT, b.cloudflareAccountId.text.toString())
+            workspacePrefs.edit().putString(WorkspaceCloudflareFree.MODEL_PREFERENCE_KEY,
+                WorkspaceCloudflareFree.MODELS[b.cloudflareModelSpinner.selectedItemPosition]).apply()
             keys.put(ApiKeyStore.DEEPSEEK, b.deepseekKey.text.toString())
             Toast.makeText(this, "API configuration saved", Toast.LENGTH_SHORT).show()
         }

@@ -1019,7 +1019,9 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val outgoing = runCatching { WorkspaceChatGateway.request(provider, keyFor(provider), enriched, image,
             if (provider == WorkspaceChatGateway.Provider.CLOUDFLARE_FREE)
-                keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT) else "") }
+                keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT) else "",
+            WorkspaceCloudflareFree.chosenModel(preferences.getString(
+                WorkspaceCloudflareFree.MODEL_PREFERENCE_KEY, WorkspaceCloudflareFree.MODEL))) }
             .getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
         val call = (if (provider == WorkspaceChatGateway.Provider.CLOUDFLARE_FREE)

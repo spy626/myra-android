@@ -21,7 +21,8 @@ internal object WorkspaceChatGateway {
 
     /** Each request includes only bounded messages from the explicitly selected project. */
     fun request(provider: Provider, key: String, messages: List<WorkspaceConversationStore.Message>,
-                image: Image? = null, cloudflareAccountId: String = ""): Request {
+                image: Image? = null, cloudflareAccountId: String = "",
+                cloudflareModel: String = WorkspaceCloudflareFree.MODEL): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "Set a valid provider key in API & Cloud Settings"
         }
@@ -33,7 +34,7 @@ internal object WorkspaceChatGateway {
         if (provider == Provider.GROQ_FREE) return WorkspaceGroqFree.request(key, messages, image)
         if (provider == Provider.CLOUDFLARE_FREE) {
             require(image == null) { "Cloudflare Free is text-only; no photo sent" }
-            return WorkspaceCloudflareFree.chatRequest(key, cloudflareAccountId, messages)
+            return WorkspaceCloudflareFree.chatRequest(key, cloudflareAccountId, messages, cloudflareModel)
         }
         image?.let {
             require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
