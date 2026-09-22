@@ -1,0 +1,57 @@
+name: LYRA Chat Grounding Verify
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths:
+      - .github/workflows/chat-grounding-one-shot.yml
+      - .github/scripts/chat_grounding_one_shot.py
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify feature-branch ancestry
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'agent/myra-phase-1'
+          git merge-base --is-ancestor 6e839aee320008dbc41b751c7dd4e71aacedc01c HEAD
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply scoped same-chat grounding and regression cases
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/chat_grounding_one_shot.py
+          git add -N app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGrounding.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGroundingTest.kt
+          git diff --check
+          git diff --name-only
+          test "$(git diff --name-only | wc -l)" -eq 5
+      - name: Run full unit suite and build regular LYRA debug APK
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon > "$RUNNER_TEMP/chat-grounding.log" 2>&1 || { tail -n 220 "$RUNNER_TEMP/chat-grounding.log"; exit 1; }
+          tail -n 40 "$RUNNER_TEMP/chat-grounding.log"
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Commit only tested source and regressions to feature branch
+        run: |
+          set -euo pipefail
+          git config user.name 'LYRA scoped CI verification'
+          git config user.email 'lyra-ci@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGrounding.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatGatewayTest.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatRecallGroundingTest.kt
+          git commit -m 'fix(chat): ground same-chat user recall and keep replies on topic'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-chat-grounding-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
