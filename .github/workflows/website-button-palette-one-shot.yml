@@ -1,0 +1,57 @@
+name: LYRA Website Button Palette Verify
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths:
+      - .github/workflows/website-button-palette-one-shot.yml
+      - .github/scripts/website_button_palette_one_shot.py
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify protected feature branch and recovery ancestor
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'agent/myra-phase-1'
+          git merge-base --is-ancestor d716503cf77d1e4b5b7be23a2588ec60087fab6e HEAD
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply narrow generic source gate and regression cases
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/website_button_palette_one_shot.py
+          git add -N app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteButtonPalette.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteButtonPaletteTest.kt
+          git diff --check
+          git diff --name-only
+          test "$(git diff --name-only | wc -l)" -eq 4
+      - name: Run full unit suite and build regular LYRA debug APK
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon > "$RUNNER_TEMP/website-button-palette.log" 2>&1 || { tail -n 180 "$RUNNER_TEMP/website-button-palette.log"; exit 1; }
+          tail -n 35 "$RUNNER_TEMP/website-button-palette.log"
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Commit only tested source and regressions to feature branch
+        run: |
+          set -euo pipefail
+          git config user.name 'LYRA scoped CI verification'
+          git config user.email 'lyra-ci@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteVisualQuality.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteButtonPalette.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteButtonPaletteTest.kt
+          git commit -m 'fix(workspace): honor explicit button palette across visible controls'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-website-button-palette-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
