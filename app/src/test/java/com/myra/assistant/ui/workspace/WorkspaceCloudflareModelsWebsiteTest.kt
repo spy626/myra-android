@@ -92,6 +92,50 @@ class WorkspaceCloudflareModelsWebsiteTest {
         assertTrue(failure!!.message.orEmpty().contains("incomplete"))
     }
 
+    @Test fun validWebsiteSurvivesLargeSseProtocolEnvelopeWithoutRelaxingOutputLimit() {
+        val req = WorkspaceCloudflareFree.websiteRequest(token, account, snapshot)
+        // Real streams repeat envelope metadata for many tokens. Over 130 KB of
+        // protocol framing must not reject a small, complete three-file result.
+        val metadata = buildString {
+            repeat(200) { append(": ").append("m".repeat(1_000)).append('\n') }
+        }
+        val stream = metadata + chunk(files()) + end
+        assertTrue(stream.toByteArray(Charsets.UTF_8).size > 130_000)
+        val generated = WorkspaceCloudflareFree.readWebsite(response(req, stream))
+        assertEquals(WorkspaceWebsiteGeneration.PATHS.toSet(), generated.keys)
+        assertTrue(generated.getValue("index.html").contains("style.css"))
+    }
+
+    @Test fun oversizedSingleEventAndTotalTransportStillFailClosed() {
+        val req = WorkspaceCloudflareFree.websiteRequest(token, account, snapshot)
+        val longLine = ":" + "x".repeat(70_000) + "\n" + chunk(files()) + end
+        val lineFailure = runCatching {
+            WorkspaceCloudflareFree.readWebsite(response(req, longLine))
+        }.exceptionOrNull()
+        assertNotNull(lineFailure)
+        assertTrue(lineFailure!!.message.orEmpty().contains("oversized or unterminated"))
+
+        val excessTransport = buildString {
+            repeat(2_100) { append(": ").append("t".repeat(1_000)).append('\n') }
+            append(chunk(files())).append(end)
+        }
+        val transportFailure = runCatching {
+            WorkspaceCloudflareFree.readWebsite(response(req, excessTransport))
+        }.exceptionOrNull()
+        assertNotNull(transportFailure)
+        assertTrue(transportFailure!!.message.orEmpty().contains("transport limit reached"))
+    }
+
+    @Test fun actualWebsiteTextRemainsLimitedToThirtyThousandCharacters() {
+        val req = WorkspaceCloudflareFree.websiteRequest(token, account, snapshot)
+        val oversizedText = chunk("x".repeat(30_001)) + end
+        val failure = runCatching {
+            WorkspaceCloudflareFree.readWebsite(response(req, oversizedText))
+        }.exceptionOrNull()
+        assertNotNull(failure)
+        assertTrue(failure!!.message.orEmpty().contains("output oversized"))
+    }
+
     @Test fun synchronousWebsiteRepliesRemainSupportedWithoutStreamHeader() {
         val req = WorkspaceCloudflareFree.websiteRequest(token, account, snapshot)
         val payload = JSONObject().put("success", true).put("result", JSONObject()

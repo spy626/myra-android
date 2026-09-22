@@ -24,7 +24,11 @@ internal object WorkspaceCloudflareFree {
     val MODEL_LABELS = listOf("GLM-4.7-Flash", "Qwen3 30B", "Gemma 4 26B", "Nemotron 3 120B")
     fun chosenModel(saved: String?): String = saved?.takeIf { it in MODELS } ?: MODEL
     private const val ROOT = "https://api.cloudflare.com/client/v4/accounts/"
-    private const val MAX_BYTES = 130_000L
+    private const val MAX_BYTES = 130_000L // Synchronous JSON envelope only.
+    // Website SSE adds per-token JSON/framing overhead; these are transport limits,
+    // separate from the unchanged 30,000-character complete website JSON limit.
+    private const val MAX_WEBSITE_STREAM_BYTES = 2_000_000L
+    private const val MAX_WEBSITE_EVENT_LINE_BYTES = 65_536L
     private val ACCOUNT = Regex("^[a-fA-F0-9]{32}$")
 
     fun validAccountId(value: String) = ACCOUNT.matches(value)
@@ -328,15 +332,27 @@ internal object WorkspaceCloudflareFree {
             val source = result.body?.source()
                 ?: throw IllegalArgumentException("Cloudflare website stream missing; no files changed")
             val text = StringBuilder()
-            var totalChars = 0
+            var transportBytes = 0L
             var done = false
             var sawChoice = false
             var completed = false
             try {
                 while (true) {
-                    val line = source.readUtf8Line() ?: break
-                    totalChars += line.length
-                    require(totalChars <= MAX_BYTES) { "Cloudflare website stream oversized; no files changed" }
+                    // readUtf8Line() can buffer an unbounded single line. Strict per-line
+                    // reads bound memory; EOF without the required delimiter fails closed.
+                    if (source.exhausted()) break
+                    val line = try {
+                        source.readUtf8LineStrict(MAX_WEBSITE_EVENT_LINE_BYTES)
+                    } catch (e: java.io.EOFException) {
+                        throw IllegalArgumentException(
+                            "Cloudflare website stream event oversized or unterminated; no files changed")
+                    }
+                    // Account for UTF-8 bytes and CRLF (conservatively two terminator bytes).
+                    // SSE protocol/usage overhead is not generated file content.
+                    transportBytes += line.toByteArray(Charsets.UTF_8).size.toLong() + 2L
+                    require(transportBytes <= MAX_WEBSITE_STREAM_BYTES) {
+                        "Cloudflare website stream transport limit reached; no files changed"
+                    }
                     if (!line.startsWith("data:")) continue
                     val data = line.substringAfter("data:").trim()
                     if (data == "[DONE]") { done = true; break }
