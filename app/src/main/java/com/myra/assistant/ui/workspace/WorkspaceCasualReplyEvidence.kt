@@ -10,12 +10,11 @@ internal object WorkspaceCasualReplyEvidence {
     // Android's regex engine already uses Unicode character classes and does not support
     // Java's (?U) / UNICODE_CHARACTER_CLASS flag.
     private val properName = Regex("""\b\p{Lu}[\p{Ll}]{3,}\b""")
-    // A bare 'milna', 'meet', or 'milte' can describe a THIRD PERSON or ask a question.
-    // Only an assistant-authored, sentence-level invitation is treated as a proposal.
-    // This deliberately prefers missing an ambiguous proposal over blocking harmless chat.
-    private val meetingProposal = Regex("""(?iu)(?:^|[.!?]\s+)\s*(?:let['’]?s\s+(?:meet|hang\s+out)|(?:kal|aaj|phir|chalo|chal)\b[^.!?\n]{0,50}\b(?:milte\s+hain|mil\s+lo|meet)|(?:main|mai|hum|i|we)\b[^.!?\n]{0,45}\b(?:tumse|aapse|you)\b[^.!?\n]{0,20}\b(?:milne|meet))\b""")
-    // A mention of meeting somebody else is NOT permission for LYRA to meet the user.
-    private val userInvitation = Regex("""(?iu)(?:let['’]?s\s+(?:meet|hang\s+out)|(?:lyra|tum|aap)\b[^.!?\n]{0,55}\b(?:milo|milna|milne|meet)|(?:^|[.!?]\s+)\s*(?:kal|aaj|phir|chalo|chal)\b[^.!?\n]{0,50}\b(?:milte\s+hain|mil\s+lo|meet))\b""")
+    // Bare 'milna'/'meet' can describe someone else or ask a question, not invite LYRA.
+    // Only high-confidence, assistant-authored sentence-level invitations are blocked.
+    private val meetingProposal = Regex("""(?iu)(?:^|[.!?]\s+)\s*(?:let['’]?s\s+(?:meet|hang\s+out)|(?:kal|aaj|phir|chalo|chal)\b[^.!?\n]{0,50}\bmilte\s+hain|(?:main|mai|hum|i|we)\b[^.!?\n]{0,45}\b(?:tumse|aapse|you)\b[^.!?\n]{0,20}\b(?:milne|meet))\b""")
+    // Mentioning a third-party meeting does not constitute permission to meet LYRA.
+    private val userInvitation = Regex("""(?iu)(?:let['’]?s\s+(?:meet|hang\s+out)|(?:lyra|tum|aap)\b[^.!?\n]{0,55}\b(?:milo|milna|milne|meet)|(?:^|[.!?]\s+)\s*(?:kal|aaj|phir|chalo|chal)\b[^.!?\n]{0,50}\bmilte\s+hain)\b""")
     private val ordinaryWords = setOf(
         "main", "maine", "mujhe", "mera", "meri", "mere", "tum", "tumne", "tumhara",
         "haan", "nahi", "nahin", "achha", "acha", "accha", "theek", "thik", "sahi",
@@ -24,7 +23,8 @@ internal object WorkspaceCasualReplyEvidence {
         "okay", "nice", "sure", "great", "wow", "sounds", "that", "this", "your", "you",
         "sorry", "actually", "right", "well", "yes", "no", "good", "let", "please"
     )
-    private val acknowledgement = Regex("""(?iu)^\s*(?:ok(?:ay)?|theek|thik|sahi|haan|han|yes|achha|accha|got it|sounds good)(?:\s+(?:hai|he|h|bro|yaar|great))?\s*[!?., 🙂😄]*$""")
+    // Emojis express tone; they do not turn a brief acknowledgement into a new task.
+    private val acknowledgement = Regex("""(?iu)^\s*(?:ok(?:ay)?|theek|thik|sahi|haan|han|yes|achha|accha|got it|sounds good)(?:\s+(?:hai|he|h|bro|yaar|great))?\s*[!?.,\p{So}\p{Sk}\uFE0F\u200D]*\s*$""")
     private val clarification = Regex("""(?iu)^\s*(?:kya|kia|kya hai|kya hei|kya he|what do you mean|what was that|matlab kya|samajh nahi aaya)\s*[?!. ]*$""")
     private val shortRequest = Regex("""(?iu)\b(?:short|brief|concise|chhote|chote|chhota|chota)\b.{0,28}\b(?:reply|replies|answer|answers|jawab|response)\b""")
 
