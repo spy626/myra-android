@@ -14,48 +14,20 @@ jobs:
           ref: agent/myra-phase-1
           fetch-depth: 0
           persist-credentials: true
-      - name: Prepare scoped routing fixes
+      - name: Apply verified narrowly scoped priority patch
         run: |
           set -euo pipefail
           git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
           python3 - <<'PY'
-          from pathlib import Path
-          base = 'app/src/main/java/com/myra/assistant/ui/workspace/'
-          a = base + 'WorkspaceActivity.kt'
-          c = base + 'WorkspaceChatCodingFlow.kt'
-          p = base + 'WorkspaceFreeProviderSelection.kt'
-          def change(file, old, new):
-              path = Path(file)
-              text = path.read_text()
-              if text.count(old) != 1:
-                  raise RuntimeError(f'{file}: expected exactly one target, found {text.count(old)}')
-              path.write_text(text.replace(old, new, 1))
-          def section(file, start, end, replacement):
-              path = Path(file)
-              text = path.read_text()
-              if text.count(start) != 1:
-                  raise RuntimeError(f'{file}: ambiguous start marker {start!r}')
-              i = text.index(start)
-              j = text.index(end, i + len(start))
-              path.write_text(text[:i] + replacement + text[j:])
-          def lines(*values):
-              return '\n'.join(values)
-          change(p, '               hasAttachments: Boolean): WorkspaceChatGateway.Provider? = when {', '               hasAttachments: Boolean, cloudflareAvailable: Boolean = false): WorkspaceChatGateway.Provider? = when {')
-          change(p, '        openRouterAvailable -> WorkspaceChatGateway.Provider.OPENROUTER_FREE\n        else -> null', lines('        openRouterAvailable -> WorkspaceChatGateway.Provider.OPENROUTER_FREE', '        // Last-resort initial selection only; never resend after another provider fails.', '        !hasAttachments && cloudflareAvailable -> WorkspaceChatGateway.Provider.CLOUDFLARE_FREE', '        else -> null'))
-          section(a, '        if (preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)) {', '        val openRouterAvailable =', '')
-          section(a, '        return WorkspaceFreeProviderSelection.choose(openRouterAvailable, groqAvailable,', '\n    }\n\n    private fun keyFor', lines('        val cloudApproved = preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)', '        val cloudAvailable = cloudApproved && WorkspaceCloudflareFree.configured(true,', '            keys.get(ApiKeyStore.CLOUDFLARE_TOKEN), keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT))', '        return WorkspaceFreeProviderSelection.choose(openRouterAvailable, groqAvailable,', '            groqApproved, groqFits, hasAttachments, cloudAvailable)'))
-          section(c, '        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {', '        if (key.isBlank()) {', lines('        val xKiroEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)', '            .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)', '        val xKiroKey = if (xKiroEnabled) runCatching { keys.get(ApiKeyStore.XKIRO) }', '            .getOrElse { error("Secure xKiro key unavailable; nothing was shared."); return } else ""', '        val usingXKiro = xKiroEnabled && WorkspaceXKiroFree.validKey(xKiroKey)', '        val openRouterKey = if (usingXKiro) "" else runCatching { keys.get(ApiKeyStore.OPENROUTER) }', '            .getOrElse { error("Secure provider key unavailable; nothing was shared."); return }', '        val usingCloudflare = !usingXKiro && openRouterKey.isBlank() && cloudApproved &&', '            WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)', '        if (!usingXKiro && openRouterKey.isBlank() && cloudApproved && !usingCloudflare) {', '            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")', '            return', '        }', '        val key = when {', '            usingXKiro -> xKiroKey', '            openRouterKey.isNotBlank() -> openRouterKey', '            usingCloudflare -> cloudKey', '            else -> ""', '        }') + '\n')
-          change(c, '        prepareSource(id, instruction, key, usingXKiro, cloudApproved, cloudAccount)', '        prepareSource(id, instruction, key, usingXKiro, usingCloudflare, cloudAccount)')
-          section(c, '        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {', '        val groqFreeEnabled', '')
-          section(c, '        val primary = if (cloudApproved) WorkspaceWebsiteRoute.Provider.CLOUDFLARE', '        if (primary == null) {', lines('        val preferred = if (xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey))', '            WorkspaceWebsiteRoute.Provider.XKIRO', '        else WorkspaceWebsiteRoute.choose(openRouterKey, groqKey, groqFreeEnabled)', '        val cloudAvailable = cloudApproved &&', '            WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)', '        val primary = preferred ?: if (cloudAvailable) WorkspaceWebsiteRoute.Provider.CLOUDFLARE else null', '        if (primary == null && cloudApproved && !cloudAvailable) {', '            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")', '            return', '        }') + '\n')
-          xml = 'app/src/main/res/layout/activity_api_cloud_settings.xml'
-          change(xml, 'android:text="Use Cloudflare Workers AI Free in Chat and Work coding"', 'android:text="Allow Cloudflare Free only as a last-resort Chat / Work route"')
-          change(xml, 'Existing xKiro/OpenRouter/Groq paths stay unchanged when OFF.', 'When ON, eligible Groq/OpenRouter Chat and xKiro/OpenRouter/Groq Work routes take priority; Cloudflare is selected only if no other eligible initial route exists. No automatic resend to Cloudflare after another provider fails.')
-          test = Path('app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceCloudflarePriorityTest.kt')
-          if test.exists():
-              raise RuntimeError('The new regression test must not replace an existing test.')
-          test.write_text(lines('package com.myra.assistant.ui.workspace', '', 'import org.junit.Assert.assertEquals', 'import org.junit.Assert.assertNull', 'import org.junit.Test', '', 'class WorkspaceCloudflarePriorityTest {', '    @Test fun groqBeforeCloudflare() {', '        assertEquals(WorkspaceChatGateway.Provider.GROQ_FREE,', '            WorkspaceFreeProviderSelection.choose(true, true, true, true, false, true))', '    }', '    @Test fun openRouterBeforeCloudflare() {', '        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,', '            WorkspaceFreeProviderSelection.choose(true, true, true, false, false, true))', '    }', '    @Test fun cloudflareOnlyWhenApprovedAndNoOtherEligibleRoute() {', '        assertEquals(WorkspaceChatGateway.Provider.CLOUDFLARE_FREE,', '            WorkspaceFreeProviderSelection.choose(false, false, false, false, false, true))', '        assertNull(WorkspaceFreeProviderSelection.choose(false, false, false, false, false, false))', '    }', '    @Test fun photosNeverSentToCloudflare() {', '        assertNull(WorkspaceFreeProviderSelection.choose(false, true, true, true, true, true))', '        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,', '            WorkspaceFreeProviderSelection.choose(true, true, true, true, true, true))', '    }', '}', ''))
-          print('Routing patch prepared; original branch unchanged until tests and build pass.')
+          import subprocess, textwrap
+          old = subprocess.check_output(['git', 'show', '33d5e4c022348c66fcf1fcd9d649b30398f7789f:.github/workflows/lyra-cloudflare-last-resort-once.yml'], text=True)
+          start = "          python3 - <<'PY'\n"
+          end = '\n          PY\n'
+          assert old.count(start) == 1
+          script = textwrap.dedent(old.split(start, 1)[1].split(end, 1)[0])
+          assert script.count('if text.count(start) != 1:') == 1
+          script = script.replace('if text.count(start) != 1:', 'if start not in text:')
+          exec(compile(script, 'verified-cloudflare-routing-patch', 'exec'), {'__name__': '__main__'})
           PY
           git diff --check
       - uses: actions/setup-java@v4
