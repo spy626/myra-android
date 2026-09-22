@@ -55,7 +55,7 @@ class WorkspaceChatResponseSafetyTest {
             turn("user", "Toh ab mera kal ka plan kya hai?", 5))
         val answer = requireNotNull(WorkspaceChatPlanStatus.answer(messages))
         assertTrue(answer.contains("library nahi jaunga"))
-        assertTrue(answer.contains("naya plan nahi bataya"))
+        assertTrue(answer.contains("Naya plan abhi mujhe nahi bataya"))
         assertFalse(answer.contains("decide nahi kiya"))
         assertFalse(answer.contains("beach"))
     }
