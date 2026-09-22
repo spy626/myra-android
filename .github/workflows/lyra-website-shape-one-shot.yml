@@ -1,0 +1,233 @@
+name: LYRA Three File Shape Recovery Test
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths:
+      - .github/workflows/lyra-website-shape-one-shot.yml
+permissions:
+  contents: write
+jobs:
+  verify-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify feature branch and protected ancestors
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = agent/myra-phase-1
+          git merge-base --is-ancestor ef62fc17ef747ae5dc189e7d30e71fdfccc16900 HEAD
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+          git merge-base --is-ancestor 74f603cd2f19bf9435e20020486d9f22d061474f HEAD
+          git diff --exit-code
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply minimal structural adapter and exact-schema tests on runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('app/src/main/java/com/myra/assistant/ui/workspace')
+          target=root/'WorkspaceWebsiteGeneration.kt'
+          source=target.read_text()
+          old='''        require(root.keys().asSequence().toSet() == setOf("files")) {
+            "Website response must contain only a files object"
+        }
+        val files = requireNotNull(root.optJSONObject("files")) { "Website files object is missing" }
+'''
+          new='''        // Accept only complete, unambiguous representations of the SAME three files.
+        // All content, path, size, secret, HTML and atomic-write checks below remain authoritative.
+        val files = WorkspaceWebsiteReplyShape.exactFiles(root)
+'''
+          assert source.count(old)==1, 'Website parser unexpectedly changed: abort'
+          target.write_text(source.replace(old,new,1))
+          helper=root/'WorkspaceWebsiteReplyShape.kt'
+          assert not helper.exists(), 'Shape adapter already exists: abort'
+          helper.write_text(r'''package com.myra.assistant.ui.workspace
+
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** Accept only exact, complete three-file transport shapes; no guessed paths or source repair.
+ * Error categories are fixed strings and never contain provider-generated text or keys.
+ */
+internal object WorkspaceWebsiteReplyShape {
+    private val paths = WorkspaceWebsiteGeneration.PATHS.toSet()
+
+    private fun fail(category: String): Nothing = throw IllegalArgumentException(
+        "Website reply structure unsupported [shape: $category]; no files changed")
+
+    fun exactFiles(root: JSONObject): JSONObject {
+        val keys = root.keys().asSequence().toSet()
+        if (keys == paths) return root // Some free models return the exact file map directly.
+        if (keys != setOf("files")) {
+            val category = when {
+                "files" in keys -> "extra_top_level_fields"
+                keys.any { it in paths } -> "incomplete_or_extra_file_keys"
+                keys.any { it in setOf("html", "css", "javascript", "js") } -> "unlabelled_file_fields"
+                else -> "unknown_top_level"
+            }
+            fail(category)
+        }
+        return when (val value = root.opt("files")) {
+            is JSONObject -> value
+            is JSONArray -> fromExactArray(value)
+            else -> fail("files_value_not_object_or_array")
+        }
+    }
+
+    private fun fromExactArray(array: JSONArray): JSONObject {
+        if (array.length() != WorkspaceWebsiteGeneration.PATHS.size) fail("files_array_wrong_count")
+        val result = JSONObject()
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: fail("files_array_entry_invalid")
+            if (item.keys().asSequence().toSet() != setOf("path", "content"))
+                fail("files_array_entry_invalid")
+            val path = item.opt("path") as? String ?: fail("files_array_entry_invalid")
+            val content = item.opt("content") as? String ?: fail("files_array_entry_invalid")
+            if (path !in paths || result.has(path)) fail("files_array_paths_invalid")
+            result.put(path, content)
+        }
+        if (result.keys().asSequence().toSet() != paths) fail("files_array_paths_invalid")
+        return result
+    }
+}
+''')
+          test=Path('app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteReplyShapeTest.kt')
+          assert not test.exists(), 'Shape test already exists: abort'
+          test.write_text(r'''package com.myra.assistant.ui.workspace
+
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+
+class WorkspaceWebsiteReplyShapeTest {
+    private val html = "<!doctype html><html><head><link rel=\"stylesheet\" href=\"style.css\"></head>" +
+        "<body><h1>Fallback Test</h1><script src=\"script.js\"></script></body></html>"
+    private fun files() = JSONObject().put("index.html", html)
+        .put("style.css", "body { color: black; }")
+        .put("script.js", "document.body.dataset.ready = 'yes';")
+    private fun parse(raw: String) = WorkspaceWebsiteGeneration.parse(raw)
+    private fun rejected(raw: String, expected: String) {
+        val error = runCatching { parse(raw) }.exceptionOrNull()
+        assertNotNull(error)
+        assertTrue(error!!.message.orEmpty(), error.message.orEmpty().contains(expected))
+        assertFalse(error.message.orEmpty().contains("PRIVATE_PROVIDER_TEXT_9"))
+    }
+
+    @Test fun canonicalAndDirectMapBothRequireSameCompleteFileValues() {
+        val expected = parse(JSONObject().put("files", files()).toString())
+        assertEquals(expected, parse(files().toString()))
+        assertEquals(html, parse(files().toString()).getValue("index.html"))
+    }
+
+    @Test fun exactThreeFileArrayIsAcceptedRegardlessOfOrder() {
+        val expected = parse(JSONObject().put("files", files()).toString())
+        val array = JSONArray()
+            .put(JSONObject().put("path", "script.js").put("content", expected.getValue("script.js")))
+            .put(JSONObject().put("path", "index.html").put("content", html))
+            .put(JSONObject().put("path", "style.css").put("content", expected.getValue("style.css")))
+        assertEquals(expected, parse(JSONObject().put("files", array).toString()))
+    }
+
+    @Test fun extraFieldsMissingOrDuplicateFilesNeverBecomeCode() {
+        val direct = files()
+        direct.put("PRIVATE_PROVIDER_TEXT_9", "unsafe")
+        rejected(direct.toString(), "incomplete_or_extra_file_keys")
+        rejected(JSONObject().put("files", files()).put("explanation", "PRIVATE_PROVIDER_TEXT_9").toString(),
+            "extra_top_level_fields")
+        rejected(JSONObject().put("files", JSONObject().put("index.html", html)).toString(),
+            "exactly index.html, style.css and script.js")
+        val array = JSONArray()
+            .put(JSONObject().put("path", "index.html").put("content", html))
+            .put(JSONObject().put("path", "index.html").put("content", html))
+            .put(JSONObject().put("path", "script.js").put("content", ""))
+        rejected(JSONObject().put("files", array).toString(), "files_array_paths_invalid")
+        rejected(JSONObject().put("files", JSONArray().put(JSONObject().put("path", "index.html")
+            .put("content", html))).toString(), "files_array_wrong_count")
+    }
+
+    @Test fun invalidArrayEntriesAndUnsafeFilesRemainRejected() {
+        val array = JSONArray()
+            .put(JSONObject().put("path", "index.html").put("content", html)
+                .put("extra", "PRIVATE_PROVIDER_TEXT_9"))
+            .put(JSONObject().put("path", "style.css").put("content", ""))
+            .put(JSONObject().put("path", "script.js").put("content", ""))
+        rejected(JSONObject().put("files", array).toString(), "files_array_entry_invalid")
+        rejected(JSONObject().put("files", "PRIVATE_PROVIDER_TEXT_9").toString(),
+            "files_value_not_object_or_array")
+        val unsafe = files().put("script.js", "const api_key = 'PRIVATE_PROVIDER_TEXT_9';")
+        rejected(unsafe.toString(), "Possible secret")
+        val invalidHtml = files().put("index.html", "<div>Not a complete page</div>")
+        rejected(invalidHtml.toString(), "Website HTML is incomplete")
+    }
+
+    @Test fun unsupportedWrapperHasSafeFixedCategory() {
+        rejected(JSONObject().put("response", files())
+            .put("PRIVATE_PROVIDER_TEXT_9", "anything").toString(), "unknown_top_level")
+    }
+}
+''')
+          PY
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git ls-files --others --exclude-standard | wc -l)" -eq 2
+      - name: Test entire unit suite and normal debug APK before commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon > "$RUNNER_TEMP/verify.log" 2>&1 || { tail -n 180 "$RUNNER_TEMP/verify.log"; exit 1; }
+          tail -n 35 "$RUNNER_TEMP/verify.log"
+      - name: Commit only verified parser and tests to feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = agent/myra-phase-1
+          git diff --check
+          git config user.name 'LYRA CI parser verification'
+          git config user.email 'lyra-ci@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteReplyShape.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteReplyShapeTest.kt
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git commit -m 'fix(workspace): validate exact direct and array three-file replies'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
+      - name: Isolate phone APK identity on runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          build=Path('app/build.gradle'); s=build.read_text()
+          old='debug { if (hasStableSigning) signingConfig signingConfigs.ciStable }'
+          assert s.count(old)==1
+          build.write_text(s.replace(old,"debug { applicationIdSuffix '.shapecheck'; if (hasStableSigning) signingConfig signingConfigs.ciStable }",1))
+          manifest=Path('app/src/main/AndroidManifest.xml'); s=manifest.read_text()
+          old='android:label="LYRA"'
+          assert s.count(old)==1
+          manifest.write_text(s.replace(old, 'android:label="LYRA Shape Test"',1))
+          PY
+          git diff --check
+      - name: Build isolated test APK and verify identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:assembleDebug --no-daemon > "$RUNNER_TEMP/apk.log" 2>&1 || { tail -n 120 "$RUNNER_TEMP/apk.log"; exit 1; }
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$aapt" dump badging app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/badging.txt"
+          grep -q "package: name='com.myra.assistant.shapecheck'" "$RUNNER_TEMP/badging.txt"
+          grep -q "application-label:'LYRA Shape Test'" "$RUNNER_TEMP/badging.txt"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+          tail -n 10 "$RUNNER_TEMP/apk.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-website-shape-isolated-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
