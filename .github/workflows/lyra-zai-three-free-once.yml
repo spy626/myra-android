@@ -1,0 +1,75 @@
+name: LYRA Z.ai three free models guarded integration
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/lyra-zai-three-free-once.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  integrate:
+    if: github.ref == 'refs/heads/agent/myra-phase-1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply checked integration patch in disposable runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/lyra_zai_three_free_once.py')
+          original = path.read_text()
+          old = ') textModel(textModel) else {'
+          assert original.count(old) == 1, 'Unexpected Z.ai patch content'
+          path.write_text(original.replace(old, ') WorkspaceZaiFree.textModel(textModel) else {', 1))
+          PY
+          python3 scripts/lyra_zai_three_free_once.py
+          git diff --check
+          git diff --stat
+      - name: Run Android unit tests and compile debug APK
+        shell: bash
+        env:
+          LYRA_KEYSTORE_BASE64: ${{ secrets.LYRA_KEYSTORE_BASE64 }}
+          LYRA_KEYSTORE_PASSWORD: ${{ secrets.LYRA_KEYSTORE_PASSWORD }}
+          LYRA_KEY_ALIAS: ${{ secrets.LYRA_KEY_ALIAS }}
+          LYRA_KEY_PASSWORD: ${{ secrets.LYRA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${LYRA_KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$LYRA_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/lyra-ci.jks"
+            export LYRA_KEYSTORE_PATH="$RUNNER_TEMP/lyra-ci.jks"
+          fi
+          gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon > "$RUNNER_TEMP/zai-build.log" 2>&1 || {
+            tail -n 300 "$RUNNER_TEMP/zai-build.log";
+            exit 1;
+          }
+          tail -n 50 "$RUNNER_TEMP/zai-build.log"
+      - name: Commit only compiled and tested Z.ai app changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ai/ApiKeyStore.kt \
+            app/src/main/java/com/myra/assistant/ui/settings/ApiCloudSettingsActivity.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceZaiFree.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceFreeProviderSelection.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt \
+            app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt \
+            app/src/main/res/layout/activity_api_cloud_settings.xml \
+            app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceChatGatewayTest.kt \
+            app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceZaiFreeTest.kt
+          git diff --cached --check
+          git commit -m 'feat: integrate three direct Z.ai free chat and photo models'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
