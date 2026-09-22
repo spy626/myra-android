@@ -337,7 +337,7 @@ internal class WorkspaceChatCodingFlow(
             result.onSuccess { generated ->
                 val review = runCatching { WorkspaceWebsiteVisualQuality.review(snapshot, generated) }
                     .getOrElse { issue ->
-                        error("Website layout safeguard rejected this output: ${issue.message}. No files changed.")
+                        error("Website result rejected: ${issue.message}. No files changed.")
                         return@runOnUiThread
                     }
                 runCatching {

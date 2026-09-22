@@ -109,6 +109,11 @@ internal object WorkspaceWebsiteGeneration {
             "Treat each explicitly requested heading, named card and button behavior as acceptance criteria. " +
             "On a new Minicoy tourism page without a specified theme, follow a coherent coastal " +
             "palette (teal #087e93, sand #fff5e6, coral #fb923c), consistent typography and spacing. " +
+            "When existingFiles contain a website, implement the LATEST user goal as a real " +
+            "change in the relevant HTML, CSS or JavaScript. Preserve unrelated working behavior. " +
+            "Never return all existingFiles unchanged for a change request: LYRA rejects " +
+            "unchanged results without saving. For a visual request, modify rendered styles " +
+            "or markup rather than only comments or a completion claim. " +
             "On existing projects preserve the current palette, typography, sections and working UI " +
             "unless the user explicitly asks to change them; avoid unrelated full-page redesigns. " +
             "Plan an intentional mobile-first visual hierarchy: legible contrasting text, " +
@@ -272,6 +277,20 @@ internal object WorkspaceWebsiteGeneration {
     private fun snapshotUnchanged(files: WorkspaceFileStore, snapshot: Snapshot): Boolean =
         PATHS.all { current(files, snapshot.projectId, it) == snapshot.original[it] }
 
+    /** A provider result is not a completed edit unless a saved project file actually changes.
+     * This check happens after guarded repairs and again before the first backup/write.
+     * It never invents a substitute edit, charges another request, or mutates the project.
+     */
+    internal fun requireChanged(snapshot: Snapshot, generated: Map<String, String>) {
+        require(generated.keys == PATHS.toSet()) {
+            "Website result is missing required files; no files changed"
+        }
+        require(PATHS.any { path -> snapshot.original[path] != generated.getValue(path) }) {
+            "Website model returned unchanged files; requested edit not applied. " +
+                "No files changed or automatic resend."
+        }
+    }
+
     /** One Send grants this build's three project-local file writes. Persist rollback first. */
     @Synchronized fun apply(files: WorkspaceFileStore, tasks: WorkspaceTaskStore,
                             projects: WorkspaceProjectStore, snapshot: Snapshot,
@@ -289,6 +308,7 @@ internal object WorkspaceWebsiteGeneration {
         require(generated.keys == PATHS.toSet() && generated.values.sumOf { it.length } <= MAX_OUTPUT_CHARS) {
             "Website response is incomplete"
         }
+        requireChanged(snapshot, generated)
         val file = backupFile(projects, snapshot.projectId)
         val entries = JSONObject()
         PATHS.forEach { path ->
