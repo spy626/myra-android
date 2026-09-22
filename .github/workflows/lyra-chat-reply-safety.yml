@@ -2,7 +2,7 @@ name: LYRA Chat Reply Safety Verify
 on:
   push:
     branches: [agent/myra-phase-1]
-    paths: [.github/workflows/lyra-chat-reply-safety.yml]
+    paths: [.github/workflows/lyra-chat-reply-safety.yml, tools/apply_chat_safety.py]
 permissions:
   contents: write
 jobs:
