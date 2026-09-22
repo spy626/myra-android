@@ -166,10 +166,7 @@ internal class WorkspaceChatCodingFlow(
                 WorkspaceWebsiteRoute.Provider.XKIRO ->
                     WorkspaceXKiroFree.websiteRequest(xKiroKey, snapshot)
                 WorkspaceWebsiteRoute.Provider.CLOUDFLARE ->
-                    WorkspaceCloudflareFree.websiteRequest(cloudKey, cloudAccount, snapshot,
-                        WorkspaceCloudflareFree.chosenModel(activity.getSharedPreferences(
-                            "workspace_ui", Context.MODE_PRIVATE).getString(
-                            WorkspaceCloudflareFree.MODEL_PREFERENCE_KEY, WorkspaceCloudflareFree.MODEL)))
+                    WorkspaceCloudflareFree.websiteRequest(cloudKey, cloudAccount, snapshot)
             }
         }.getOrElse { error("Free website request refused: ${it.message}"); return }
         val serial = ++generation
@@ -402,10 +399,7 @@ internal class WorkspaceChatCodingFlow(
         val messages = listOf(WorkspaceConversationStore.Message("explicit-one-file-prompt", "user",
             prepared.prompt, System.currentTimeMillis()))
         val outgoing = runCatching { if (usingCloudflare)
-            WorkspaceCloudflareFree.editRequest(key, cloudAccount, prepared.prompt,
-                WorkspaceCloudflareFree.chosenModel(activity.getSharedPreferences(
-                    "workspace_ui", Context.MODE_PRIVATE).getString(
-                    WorkspaceCloudflareFree.MODEL_PREFERENCE_KEY, WorkspaceCloudflareFree.MODEL)))
+            WorkspaceCloudflareFree.editRequest(key, cloudAccount, prepared.prompt)
         else if (usingXKiro) WorkspaceXKiroFree.editRequest(key, prepared.prompt)
         else WorkspaceChatGateway.request(provider, key, messages) }
             .getOrElse { error("Provider request refused: ${it.message}"); return }

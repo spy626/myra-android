@@ -2,6 +2,7 @@ package com.myra.assistant.ui.workspace
 
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -10,7 +11,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/** Explicitly selected Workers Free inference. Never uses AI Gateway, dynamic routes or paid models.
+/** Approved Workers Free inference. Same-account model fallback only for definitive model-level rejections.
  * The account's Free plan (not API-side pricing caps) is a user-confirmed prerequisite.
  * No credentials, raw provider error, memory, or source are logged or copied elsewhere.
  */
@@ -38,8 +39,95 @@ internal object WorkspaceCloudflareFree {
         return ROOT + accountId.lowercase() + "/ai/run/" + model
     }
 
-    // Independent client; existing OpenRouter/Groq retry and memory interceptors never run.
+    /** Only these documented Cloudflare error codes prove the selected model was unavailable.
+     * 3036 is the SHARED account quota: absolutely no model switch on 3036 or unknown 429.
+     * A timeout, partial HTTP 200, invalid answer or interruption never enters this method.
+     */
+    internal fun nextModelAfter(response: Response, current: String): String? {
+        if (current !in MODELS || response.isSuccessful) return null
+        val code = runCatching {
+            JSONObject(response.peekBody(8_193L).string()).optJSONArray("errors")
+                ?.optJSONObject(0)?.optInt("code", -1)
+        }.getOrNull() ?: return null
+        val definiteModelRejection = (response.code == 429 && code == 3040) ||
+            (response.code == 404 && code == 3042) ||
+            (response.code == 400 && code == 5007)
+        return if (definiteModelRejection) MODELS[(MODELS.indexOf(current) + 1) % MODELS.size] else null
+    }
+
+    /** Preserve the exact approved text/source while adapting ONLY the next model's schema.
+     * Rebuild the POST body because Qwen requires max_tokens, unlike the other models.
+     */
+    internal fun alternateRequest(original: Request, nextModel: String): Request {
+        val url = original.url
+        val segments = url.pathSegments
+        require(url.scheme == "https" && url.host == "api.cloudflare.com" && url.port == 443 &&
+            url.query == null && segments.size == 9 &&
+            segments.take(3) == listOf("client", "v4", "accounts") &&
+            segments[4] == "ai" && segments[5] == "run") {
+            "Cloudflare automatic model switch refused an unexpected route"
+        }
+        val previous = segments.drop(6).joinToString("/")
+        require(previous in MODELS && nextModel in MODELS && previous != nextModel) {
+            "Cloudflare automatic model switch refused an unapproved model"
+        }
+        val originalBody = requireNotNull(original.body) { "Cloudflare model switch requires the same POST body" }
+        val buffer = Buffer()
+        originalBody.writeTo(buffer)
+        require(buffer.size in 1L..200_000L) { "Cloudflare model switch body is missing or oversized" }
+        val payload = JSONObject(buffer.readUtf8())
+        val budget = if (payload.has("max_tokens")) payload.optInt("max_tokens", -1)
+            else payload.optInt("max_completion_tokens", -1)
+        require(budget in 1..7_000 && payload.optJSONArray("messages") != null) {
+            "Cloudflare model switch has an invalid output budget or messages"
+        }
+        payload.remove("max_tokens")
+        payload.remove("max_completion_tokens")
+        payload.remove("store")
+        payload.remove("reasoning_effort")
+        payload.remove("chat_template_kwargs")
+        if (nextModel == MODELS[1]) payload.put("max_tokens", budget)
+        else {
+            payload.put("max_completion_tokens", budget).put("store", false)
+            if (nextModel == MODEL) payload.put("reasoning_effort", JSONObject.NULL)
+                .put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
+        }
+        return original.newBuilder().url(endpoint(segments[3], nextModel))
+            .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+    }
+
+    /** Maximum four allowlisted models, exactly once each, only after definite rejection.
+     * A successful response, including an incomplete SSE body, belongs to the original model.
+     * Network errors are propagated; there is no uncertain retry or paid-provider escape.
+     */
+    private class AutomaticFreeModelFallback : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            var request = chain.request()
+            val segments = request.url.pathSegments
+            val initial = segments.drop(6).joinToString("/")
+            require(segments.size == 9 && initial in MODELS) {
+                "Cloudflare automatic request has an unapproved model route"
+            }
+            var current = initial
+            var attempts = 1
+            while (true) {
+                val response = chain.proceed(request)
+                val next = if (attempts < MODELS.size) nextModelAfter(response, current) else null
+                if (next == null) return response
+                val alternate = runCatching { alternateRequest(request, next) }
+                    .getOrElse { return response }
+                response.close()
+                request = alternate
+                current = next
+                attempts++
+            }
+        }
+    }
+
+    // Separate client; no OpenRouter/Groq interceptors, AI Gateway or provider switching.
     val client: OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(AutomaticFreeModelFallback())
         .retryOnConnectionFailure(false)
         .followRedirects(false)
         .followSslRedirects(false)

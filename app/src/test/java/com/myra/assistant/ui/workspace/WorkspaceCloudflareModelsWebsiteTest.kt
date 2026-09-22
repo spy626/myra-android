@@ -99,4 +99,62 @@ class WorkspaceCloudflareModelsWebsiteTest {
                 .put("message", JSONObject().put("content", files()))))).toString()
         assertEquals(3, WorkspaceCloudflareFree.readWebsite(response(req, payload, "application/json")).size)
     }
+
+    @Test fun onlyDefinitiveModelFailuresAllowAutomaticSwitchNotSharedQuota() {
+        val request = WorkspaceCloudflareFree.websiteRequest(token, account, snapshot)
+        fun failed(http: Int, code: Int): Response = Response.Builder().request(request)
+            .protocol(Protocol.HTTP_1_1).code(http).message("Rejected")
+            .body(JSONObject().put("errors", JSONArray().put(JSONObject().put("code", code)))
+                .toString().toResponseBody()).build()
+        assertEquals(WorkspaceCloudflareFree.MODELS[1],
+            WorkspaceCloudflareFree.nextModelAfter(failed(429, 3040), WorkspaceCloudflareFree.MODEL))
+        assertEquals(WorkspaceCloudflareFree.MODELS[1],
+            WorkspaceCloudflareFree.nextModelAfter(failed(404, 3042), WorkspaceCloudflareFree.MODEL))
+        assertEquals(WorkspaceCloudflareFree.MODELS[1],
+            WorkspaceCloudflareFree.nextModelAfter(failed(400, 5007), WorkspaceCloudflareFree.MODEL))
+        for ((http, code) in listOf(429 to 3036, 429 to 0, 403 to 5035, 408 to 3007,
+            400 to 5004, 401 to 0, 503 to 0)) {
+            assertNull("Must stop on HTTP $http error $code",
+                WorkspaceCloudflareFree.nextModelAfter(failed(http, code), WorkspaceCloudflareFree.MODEL))
+        }
+        assertNull(WorkspaceCloudflareFree.nextModelAfter(response(request, files(), "application/json"),
+            WorkspaceCloudflareFree.MODEL))
+    }
+
+    @Test fun automaticFallbackPreservesExactMessagesAndAdaptsAllFourModelSchemas() {
+        val original = WorkspaceCloudflareFree.websiteRequest(token, account, snapshot)
+        fun json(req: Request): JSONObject = Buffer().also {
+            requireNotNull(req.body).writeTo(it)
+        }.let { JSONObject(it.readUtf8()) }
+        var request = original
+        val originalBody = json(original)
+        WorkspaceCloudflareFree.MODELS.drop(1).forEach { next ->
+            request = WorkspaceCloudflareFree.alternateRequest(request, next)
+            assertEquals("api.cloudflare.com", request.url.host)
+            assertTrue(request.url.toString().endsWith("/ai/run/$next"))
+            assertEquals(original.header("Authorization"), request.header("Authorization"))
+            val body = json(request)
+            assertEquals(originalBody.getJSONArray("messages").toString(),
+                body.getJSONArray("messages").toString())
+            assertEquals(originalBody.getBoolean("stream"), body.getBoolean("stream"))
+            assertFalse(body.has("provider"))
+            assertFalse(body.has("model"))
+            if (next == WorkspaceCloudflareFree.MODELS[1]) {
+                assertEquals(7000, body.getInt("max_tokens"))
+                assertFalse(body.has("max_completion_tokens"))
+                assertFalse(body.has("store"))
+            } else {
+                assertEquals(7000, body.getInt("max_completion_tokens"))
+                assertFalse(body.has("max_tokens"))
+                assertFalse(body.has("chat_template_kwargs"))
+            }
+        }
+        assertTrue(runCatching { WorkspaceCloudflareFree.alternateRequest(
+            original, "@cf/unknown/paid-model") }.isFailure)
+        val nonCloudflare = original.newBuilder().url("https://example.org/api").build()
+        assertTrue(runCatching { WorkspaceCloudflareFree.alternateRequest(
+            nonCloudflare, WorkspaceCloudflareFree.MODELS[1]) }.isFailure)
+        assertFalse(WorkspaceCloudflareFree.client.retryOnConnectionFailure)
+        assertFalse(WorkspaceCloudflareFree.client.followRedirects)
+    }
 }
