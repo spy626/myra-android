@@ -76,18 +76,25 @@ internal class WorkspaceChatCodingFlow(
             .getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)
         val cloudKey = if (cloudApproved) keys.get(ApiKeyStore.CLOUDFLARE_TOKEN) else ""
         val cloudAccount = if (cloudApproved) keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT) else ""
-        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {
-            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
-            return
-        }
         val xKiroEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
             .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
         val xKiroKey = if (xKiroEnabled) runCatching { keys.get(ApiKeyStore.XKIRO) }
             .getOrElse { error("Secure xKiro key unavailable; nothing was shared."); return } else ""
-        val usingXKiro = !cloudApproved && xKiroEnabled && WorkspaceXKiroFree.validKey(xKiroKey)
-        val key = if (cloudApproved) cloudKey else if (usingXKiro) xKiroKey
-            else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
+        val usingXKiro = xKiroEnabled && WorkspaceXKiroFree.validKey(xKiroKey)
+        val openRouterKey = if (usingXKiro) "" else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
             .getOrElse { error("Secure provider key unavailable; nothing was shared."); return }
+        val usingCloudflare = !usingXKiro && openRouterKey.isBlank() && cloudApproved &&
+            WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)
+        if (!usingXKiro && openRouterKey.isBlank() && cloudApproved && !usingCloudflare) {
+            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
+            return
+        }
+        val key = when {
+            usingXKiro -> xKiroKey
+            openRouterKey.isNotBlank() -> openRouterKey
+            usingCloudflare -> cloudKey
+            else -> ""
+        }
         if (key.isBlank()) {
             error("Coding request saved locally. Configure a free Workspace route in API & Cloud Settings.")
             return
@@ -102,7 +109,7 @@ internal class WorkspaceChatCodingFlow(
                 rawAcceptanceCriteria = WorkspaceTaskContract.normalizeAcceptanceCriteria(criteria))
             tasks.setSpecificationApproved(id, saved.taskId, WorkspaceTaskContract.specToken(saved), true)
         }.onFailure { error("Task could not be saved: ${it.message}"); return }
-        prepareSource(id, instruction, key, usingXKiro, cloudApproved, cloudAccount)
+        prepareSource(id, instruction, key, usingXKiro, usingCloudflare, cloudAccount)
     }
 
     /** Explicit 'build website' Send authorizes generation of the three named project files.
@@ -126,20 +133,22 @@ internal class WorkspaceChatCodingFlow(
             .getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)
         val cloudKey = if (cloudApproved) keys.get(ApiKeyStore.CLOUDFLARE_TOKEN) else ""
         val cloudAccount = if (cloudApproved) keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT) else ""
-        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {
-            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
-            return
-        }
         val groqFreeEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
             .getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
         val xKiroApproved = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
             .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
         val xKiroKey = if (xKiroApproved) runCatching { keys.get(ApiKeyStore.XKIRO) }
             .getOrElse { error("Secure xKiro key unavailable; no source was shared."); return } else ""
-        val primary = if (cloudApproved) WorkspaceWebsiteRoute.Provider.CLOUDFLARE
-        else if (xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey))
+        val preferred = if (xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey))
             WorkspaceWebsiteRoute.Provider.XKIRO
         else WorkspaceWebsiteRoute.choose(openRouterKey, groqKey, groqFreeEnabled)
+        val cloudAvailable = cloudApproved &&
+            WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)
+        val primary = preferred ?: if (cloudAvailable) WorkspaceWebsiteRoute.Provider.CLOUDFLARE else null
+        if (primary == null && cloudApproved && !cloudAvailable) {
+            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
+            return
+        }
         if (primary == null) {
             error("Website request saved locally. Save a valid OpenRouter Free key, or enable " +
                 "Groq Free/ZDR with a valid Groq Free key in API & Cloud Settings. No source was sent.")

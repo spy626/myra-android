@@ -795,12 +795,6 @@ class WorkspaceActivity : AppCompatActivity() {
      * Groq Free/ZDR opt-in does not certify an account that is later upgraded to paid.
      */
     private fun selectedProvider(hasAttachments: Boolean = false): WorkspaceChatGateway.Provider? {
-        if (preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)) {
-            val token = keys.get(ApiKeyStore.CLOUDFLARE_TOKEN)
-            val account = keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT)
-            return if (!hasAttachments && WorkspaceCloudflareFree.configured(true, token, account))
-                WorkspaceChatGateway.Provider.CLOUDFLARE_FREE else null
-        }
         val openRouterAvailable = keys.get(ApiKeyStore.OPENROUTER).isNotBlank()
         val groqAvailable = keys.get(ApiKeyStore.GROQ).isNotBlank()
         val groqApproved = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
@@ -809,8 +803,11 @@ class WorkspaceActivity : AppCompatActivity() {
         val candidate = if (history?.lastOrNull()?.role == "assistant") history.dropLast(1) else history
         val groqFits = candidate?.takeIf { it.lastOrNull()?.role == "user" }
             ?.let { WorkspaceGroqFree.withinBudget(it) } ?: false
+        val cloudApproved = preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)
+        val cloudAvailable = cloudApproved && WorkspaceCloudflareFree.configured(true,
+            keys.get(ApiKeyStore.CLOUDFLARE_TOKEN), keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT))
         return WorkspaceFreeProviderSelection.choose(openRouterAvailable, groqAvailable,
-            groqApproved, groqFits, hasAttachments)
+            groqApproved, groqFits, hasAttachments, cloudAvailable)
     }
 
     private fun keyFor(provider: WorkspaceChatGateway.Provider): String = when (provider) {
