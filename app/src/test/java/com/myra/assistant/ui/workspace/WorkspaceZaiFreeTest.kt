@@ -64,4 +64,14 @@ class WorkspaceZaiFreeTest {
             WorkspaceFreeProviderSelection.choose(false, false, false, false, true,
                 zaiApproved = true, zaiAvailable = true, zaiVisionApproved = true, hasImage = true))
     }
+
+    @Test fun optedInZaiNeverSilentlyFallsBackToOtherCompany() {
+        assertNull(WorkspaceFreeProviderSelection.choose(true, true, true, true, false,
+            zaiApproved = true, zaiAvailable = false))
+        assertNull(WorkspaceFreeProviderSelection.choose(true, true, true, true, true,
+            zaiApproved = true, zaiAvailable = true, hasImage = true, zaiVisionApproved = false))
+        assertEquals(WorkspaceChatGateway.Provider.ZAI_FREE,
+            WorkspaceFreeProviderSelection.choose(true, true, true, true, true,
+                zaiApproved = true, zaiAvailable = true, hasImage = true, zaiVisionApproved = true))
+    }
 }
