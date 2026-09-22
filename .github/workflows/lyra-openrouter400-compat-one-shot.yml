@@ -1,0 +1,108 @@
+name: LYRA OpenRouter Website Compatibility Test
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths:
+      - .github/workflows/lyra-openrouter400-compat-one-shot.yml
+permissions:
+  contents: write
+jobs:
+  verify-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify authorized branch and protected ancestors
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = agent/myra-phase-1
+          git merge-base --is-ancestor 90db5a95dbe194bb9b932b0d4eda9df8e00cdd05 HEAD
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+          git merge-base --is-ancestor 74f603cd2f19bf9435e20020486d9f22d061474f HEAD
+          git diff --exit-code
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Make minimal website-only compatibility edit on CI runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt')
+          text=path.read_text()
+          old='            .put("response_format", JSONObject().put("type", "json_object"))\n'
+          assert text.count(old)==1, 'Unexpected website provider payload; abort'
+          text=text.replace(old, '', 1)
+          old_comment='    /** Website builds need more output than the 2,048-token one-snippet edit route. */'
+          assert text.count(old_comment)==1, 'Unexpected website code; abort'
+          text=text.replace(old_comment, '    /** Website builds need more output than the 2,048-token one-snippet edit route. */', 1)
+          path.write_text(text)
+          test=Path('app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGenerationTest.kt')
+          text=test.read_text()
+          old='        assertEquals("json_object", body.getJSONObject("response_format").getString("type"))'
+          assert text.count(old)==1, 'Unexpected website request test; abort'
+          text=text.replace(old, '        // Free models may not offer provider-enforced JSON mode; complete JSON stays mandatory locally.\n        assertFalse(body.has("response_format"))', 1)
+          assert text.count('WorkspaceWebsiteGeneration.parse(envelope(good))')>=1, 'Local envelope validator test missing'
+          assert text.count('assertTrue(body.getInt("max_tokens") > 2048)')==1, 'Request budget contract changed'
+          test.write_text(text)
+          PY
+          git diff --check
+          git diff --stat
+          test "$(git diff --name-only | wc -l)" -eq 2
+      - name: Run unit tests and normal debug compilation before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon > "$RUNNER_TEMP/verify.log" 2>&1 || { tail -n 160 "$RUNNER_TEMP/verify.log"; exit 1; }
+          tail -n 30 "$RUNNER_TEMP/verify.log"
+      - name: Commit only verified website request and test on feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = agent/myra-phase-1
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          git config user.name 'LYRA CI compatibility test'
+          git config user.email 'lyra-ci@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGenerationTest.kt
+          git commit -m 'fix(workspace): allow free router text JSON with strict local validation'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
+      - name: Isolate phone test app identity only on CI runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('app/build.gradle'); text=path.read_text()
+          old='debug { if (hasStableSigning) signingConfig signingConfigs.ciStable }'
+          assert text.count(old)==1
+          path.write_text(text.replace(old, "debug { applicationIdSuffix '.or400compat'; if (hasStableSigning) signingConfig signingConfigs.ciStable }", 1))
+          path=Path('app/src/main/AndroidManifest.xml'); text=path.read_text()
+          old='android:label="LYRA"'
+          assert text.count(old)==1
+          path.write_text(text.replace(old, 'android:label="LYRA OR400 Compatibility Test"', 1))
+          PY
+          git diff --check
+      - name: Build and verify distinct phone APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:assembleDebug --no-daemon > "$RUNNER_TEMP/apk.log" 2>&1 || { tail -n 120 "$RUNNER_TEMP/apk.log"; exit 1; }
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$aapt" dump badging app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/badging.txt"
+          grep -q "package: name='com.myra.assistant.or400compat'" "$RUNNER_TEMP/badging.txt"
+          grep -q "application-label:'LYRA OR400 Compatibility Test'" "$RUNNER_TEMP/badging.txt"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+          tail -n 8 "$RUNNER_TEMP/apk.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-openrouter400-compat-isolated-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
