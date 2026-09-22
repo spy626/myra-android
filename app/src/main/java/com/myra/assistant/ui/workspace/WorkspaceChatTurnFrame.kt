@@ -69,13 +69,17 @@ internal object WorkspaceChatTurnFrame {
                 append(" USER LANGUAGE: Reply in natural Roman Hindi/Hinglish in Latin letters, " +
                     "not invented slang or Devanagari. Use grammatically complete everyday " +
                     "phrases, consistent speaker perspective and normal Hindi verb forms. " +
-                    "Never output broken or clipped words or random English fragments.")
+                    "Sirf grammatically correct, contextually relevant Hindi-English mix mein " +
+                    "reply do. Koi random ya unrelated words insert mat karo jo current " +
+                    "conversation se match na karte ho. Never output broken or clipped " +
+                    "words or random English fragments.")
             }
             append(" An earlier ASSISTANT reply can be mistaken: do not use its guesses as " +
                 "user facts. For short acknowledgements and clarifications, never add an " +
-                "unmentioned name, venue or a plan to meet. Correct any unsupported prior " +
-                "assistant claim instead of compounding it. Keep short replies brief and " +
-                "complete; do not use a canned response template.")
+                "unmentioned name, venue or a plan to meet. Answer the newest user turn " +
+                "afresh; never repeat the previous assistant answer word-for-word. " +
+                "Correct any unsupported prior assistant claim instead of compounding it. " +
+                "Keep short replies brief and complete; do not use a canned response template.")
         }
     }
 
