@@ -107,6 +107,13 @@ internal object WorkspaceWebsiteGeneration {
             "Each field is the COMPLETE new file content, not a patch or a markdown code fence. " +
             "index.html must be a complete HTML document linking style.css and script.js. " +
             "Treat each explicitly requested heading, named card and button behavior as acceptance criteria. " +
+            "If the goal requests a color for buttons, apply that background to EVERY visible " +
+            "button, including increment, decrement, reset and secondary actions, not just " +
+            "the most prominent action. Check button IDs/classes and CSS cascade: a later " +
+            "specific selector must not override the requested button color. Keep existing " +
+            "JavaScript handlers and accessible text contrast. Use explicit solid CSS hex " +
+            "button backgrounds (or a resolvable CSS variable) so local source review " +
+            "can check requested color coverage before saving. " +
             "On a new Minicoy tourism page without a specified theme, follow a coherent coastal " +
             "palette (teal #087e93, sand #fff5e6, coral #fb923c), consistent typography and spacing. " +
             "When existingFiles contain a website, implement the LATEST user goal as a real " +
@@ -309,6 +316,7 @@ internal object WorkspaceWebsiteGeneration {
             "Website response is incomplete"
         }
         requireChanged(snapshot, generated)
+        WorkspaceWebsiteButtonPalette.verify(snapshot, generated)
         val file = backupFile(projects, snapshot.projectId)
         val entries = JSONObject()
         PATHS.forEach { path ->

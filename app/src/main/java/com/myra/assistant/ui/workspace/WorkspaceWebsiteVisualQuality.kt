@@ -119,6 +119,7 @@ internal object WorkspaceWebsiteVisualQuality {
             "Visual safeguard exceeded approved file limits; original files unchanged"
         }
         WorkspaceWebsiteGeneration.requireChanged(snapshot, files)
+        WorkspaceWebsiteButtonPalette.verify(snapshot, files)
         return SourceReview(files, removedImages, removedEmpty, viewportAdded,
             action.repaired, completed.completed, completed.rebuiltCards, polished.changed)
     }
