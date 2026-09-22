@@ -9,7 +9,7 @@ import com.myra.assistant.MyApplication
  * required before selecting Groq first with both keys.
  */
 internal object WorkspaceWebsiteRoute {
-    enum class Provider { OPENROUTER, GROQ, XKIRO }
+    enum class Provider { OPENROUTER, GROQ, XKIRO, CLOUDFLARE }
 
     private fun valid(key: String): Boolean =
         key.length in 1..256 && key.none(Char::isWhitespace)

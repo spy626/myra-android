@@ -10,7 +10,7 @@ import org.json.JSONObject
 
 /** Workspace text and explicitly selected one-turn images. Never uses the voice-only Gemini key. */
 internal object WorkspaceChatGateway {
-    enum class Provider { OPENROUTER_FREE, GROQ_FREE }
+    enum class Provider { OPENROUTER_FREE, GROQ_FREE, CLOUDFLARE_FREE }
     data class Image(val mime: String, val base64: String)
     // One extra try only after specific upstream HTTP rejections. Connection failures and
     // ambiguous timeouts are NOT retried. Retain the existing 35-second total call timeout.
@@ -21,7 +21,7 @@ internal object WorkspaceChatGateway {
 
     /** Each request includes only bounded messages from the explicitly selected project. */
     fun request(provider: Provider, key: String, messages: List<WorkspaceConversationStore.Message>,
-                image: Image? = null): Request {
+                image: Image? = null, cloudflareAccountId: String = ""): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "Set a valid provider key in API & Cloud Settings"
         }
@@ -31,6 +31,10 @@ internal object WorkspaceChatGateway {
             "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
         if (provider == Provider.GROQ_FREE) return WorkspaceGroqFree.request(key, messages, image)
+        if (provider == Provider.CLOUDFLARE_FREE) {
+            require(image == null) { "Cloudflare Free is text-only; no photo sent" }
+            return WorkspaceCloudflareFree.chatRequest(key, cloudflareAccountId, messages)
+        }
         image?.let {
             require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
             require(it.base64.length in 1..2_700_000 &&
@@ -102,5 +106,6 @@ internal object WorkspaceChatGateway {
     fun read(provider: Provider, response: Response): String = when (provider) {
         Provider.OPENROUTER_FREE -> WorkspaceFreeAiSuggestion.readResponse(response)
         Provider.GROQ_FREE -> WorkspaceGroqFree.read(response)
+        Provider.CLOUDFLARE_FREE -> WorkspaceCloudflareFree.readChat(response)
     }
 }

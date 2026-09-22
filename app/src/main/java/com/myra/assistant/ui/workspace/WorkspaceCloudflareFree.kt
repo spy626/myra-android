@@ -46,7 +46,7 @@ internal object WorkspaceCloudflareFree {
         val url = endpoint(accountId)
         require(maxCompletion in 1..7_000) { "Cloudflare output budget is invalid" }
         val messages = payload.optJSONArray("messages")
-        require(messages != null && messages.length() in 1..16) { "Cloudflare request needs selected messages" }
+        require(messages != null && messages.length() in 1..25) { "Cloudflare request needs selected messages" }
         val last = messages.optJSONObject(messages.length() - 1)
         require(last?.optString("role") == "user" && last.optString("content").isNotBlank()) {
             "Cloudflare request needs a complete user instruction"
@@ -114,7 +114,9 @@ internal object WorkspaceCloudflareFree {
     }
 
     private fun readText(response: Response, maxChars: Int): String = response.use { result ->
-        require(result.request.url.encodedPath.endsWith(PATH)) {
+        require(result.request.url.host == "api.cloudflare.com" &&
+            result.request.url.pathSegments.takeLast(5) ==
+                listOf("ai", "run", "@cf", "zai-org", "glm-4.7-flash")) {
             "Cloudflare response arrived from an unexpected route; nothing saved"
         }
         require(result.isSuccessful) { status(result) }

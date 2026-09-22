@@ -72,12 +72,21 @@ internal class WorkspaceChatCodingFlow(
             error("Coding request exceeds 500 characters. Shorten the instruction.")
             return
         }
+        val cloudApproved = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+            .getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)
+        val cloudKey = if (cloudApproved) keys.get(ApiKeyStore.CLOUDFLARE_TOKEN) else ""
+        val cloudAccount = if (cloudApproved) keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT) else ""
+        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {
+            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
+            return
+        }
         val xKiroEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
             .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
         val xKiroKey = if (xKiroEnabled) runCatching { keys.get(ApiKeyStore.XKIRO) }
             .getOrElse { error("Secure xKiro key unavailable; nothing was shared."); return } else ""
-        val usingXKiro = xKiroEnabled && WorkspaceXKiroFree.validKey(xKiroKey)
-        val key = if (usingXKiro) xKiroKey else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
+        val usingXKiro = !cloudApproved && xKiroEnabled && WorkspaceXKiroFree.validKey(xKiroKey)
+        val key = if (cloudApproved) cloudKey else if (usingXKiro) xKiroKey
+            else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
             .getOrElse { error("Secure provider key unavailable; nothing was shared."); return }
         if (key.isBlank()) {
             error("Coding request saved locally. Configure a free Workspace route in API & Cloud Settings.")
@@ -93,7 +102,7 @@ internal class WorkspaceChatCodingFlow(
                 rawAcceptanceCriteria = WorkspaceTaskContract.normalizeAcceptanceCriteria(criteria))
             tasks.setSpecificationApproved(id, saved.taskId, WorkspaceTaskContract.specToken(saved), true)
         }.onFailure { error("Task could not be saved: ${it.message}"); return }
-        prepareSource(id, instruction, key, usingXKiro)
+        prepareSource(id, instruction, key, usingXKiro, cloudApproved, cloudAccount)
     }
 
     /** Explicit 'build website' Send authorizes generation of the three named project files.
@@ -113,13 +122,22 @@ internal class WorkspaceChatCodingFlow(
             .getOrElse { error("Secure provider keys unavailable; no source was shared."); return }
         val groqKey = runCatching { keys.get(ApiKeyStore.GROQ) }
             .getOrElse { error("Secure provider keys unavailable; no source was shared."); return }
+        val cloudApproved = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+            .getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)
+        val cloudKey = if (cloudApproved) keys.get(ApiKeyStore.CLOUDFLARE_TOKEN) else ""
+        val cloudAccount = if (cloudApproved) keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT) else ""
+        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {
+            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
+            return
+        }
         val groqFreeEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
             .getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
         val xKiroApproved = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
             .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
         val xKiroKey = if (xKiroApproved) runCatching { keys.get(ApiKeyStore.XKIRO) }
             .getOrElse { error("Secure xKiro key unavailable; no source was shared."); return } else ""
-        val primary = if (xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey))
+        val primary = if (cloudApproved) WorkspaceWebsiteRoute.Provider.CLOUDFLARE
+        else if (xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey))
             WorkspaceWebsiteRoute.Provider.XKIRO
         else WorkspaceWebsiteRoute.choose(openRouterKey, groqKey, groqFreeEnabled)
         if (primary == null) {
@@ -147,6 +165,8 @@ internal class WorkspaceChatCodingFlow(
                     WorkspaceWebsiteGroqFallback.request(groqKey, snapshot)
                 WorkspaceWebsiteRoute.Provider.XKIRO ->
                     WorkspaceXKiroFree.websiteRequest(xKiroKey, snapshot)
+                WorkspaceWebsiteRoute.Provider.CLOUDFLARE ->
+                    WorkspaceCloudflareFree.websiteRequest(cloudKey, cloudAccount, snapshot)
             }
         }.getOrElse { error("Free website request refused: ${it.message}"); return }
         val serial = ++generation
@@ -154,11 +174,14 @@ internal class WorkspaceChatCodingFlow(
             WorkspaceWebsiteRoute.Provider.GROQ -> WorkspaceWebsiteGroqFallback.client
             WorkspaceWebsiteRoute.Provider.XKIRO -> WorkspaceXKiroFree.client
             WorkspaceWebsiteRoute.Provider.OPENROUTER -> WorkspaceWebsiteGeneration.client
+            WorkspaceWebsiteRoute.Provider.CLOUDFLARE -> WorkspaceCloudflareFree.client
         }
         val call = client.newCall(outgoing)
         websiteAttempts = 1
         request = call
-        report(if (primary == WorkspaceWebsiteRoute.Provider.XKIRO)
+        report(if (primary == WorkspaceWebsiteRoute.Provider.CLOUDFLARE)
+            "Building website · Cloudflare Workers AI Free · Stop ■ to cancel."
+        else if (primary == WorkspaceWebsiteRoute.Provider.XKIRO)
             "Building website · xKiro Free attempt 1/1 · Stop ■ to cancel."
         else "Building website · free attempt 1/3 · Stop ■ to cancel.")
         call.enqueue(object : Callback {
@@ -186,12 +209,16 @@ internal class WorkspaceChatCodingFlow(
                     fallbackWebsiteOnRejected(call, serial, id, snapshot, rejectedStatus)
                     return
                 }
-                val via = if (primary == WorkspaceWebsiteRoute.Provider.XKIRO)
+                val via = if (primary == WorkspaceWebsiteRoute.Provider.CLOUDFLARE)
+                    "Cloudflare Workers AI Free"
+                else if (primary == WorkspaceWebsiteRoute.Provider.XKIRO)
                     WorkspaceCodingAutoFallback.displayName(response.request.url.toString()) else null
                 completeWebsite(call, serial, id, snapshot,
-                    runCatching { if (primary == WorkspaceWebsiteRoute.Provider.XKIRO)
-                        WorkspaceXKiroFree.readWebsite(response)
-                    else WorkspaceWebsiteGeneration.readResponse(response) }, via)
+                    runCatching { when (primary) {
+                        WorkspaceWebsiteRoute.Provider.XKIRO -> WorkspaceXKiroFree.readWebsite(response)
+                        WorkspaceWebsiteRoute.Provider.CLOUDFLARE -> WorkspaceCloudflareFree.readWebsite(response)
+                        else -> WorkspaceWebsiteGeneration.readResponse(response)
+                    } }, via)
             }
         })
     }
@@ -313,7 +340,11 @@ internal class WorkspaceChatCodingFlow(
                     WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, review.files)
                 }.onSuccess {
                     val summary = WorkspaceCodingResult.websiteSuccess(snapshot.original, review.files) +
-                        review.chatNote() + (via?.let { " Completed via $it after xKiro was unavailable." } ?: "")
+                        review.chatNote() + (when (via) {
+                            "Cloudflare Workers AI Free" -> " Completed via Cloudflare Workers AI Free."
+                            null -> ""
+                            else -> " Completed via $via after xKiro was unavailable."
+                        })
                     terminal(summary, "") // The durable Chat reply is the single success message.
                     activity.startActivity(WorkspacePreviewActivity.intent(activity, id))
                 }.onFailure {
@@ -325,7 +356,7 @@ internal class WorkspaceChatCodingFlow(
     }
 
     private fun prepareSource(id: String, instruction: String, key: String,
-                              usingXKiro: Boolean) {
+                              usingXKiro: Boolean, usingCloudflare: Boolean, cloudAccount: String) {
         if (!current(id)) return
         val project = projects.getProject(id) ?: return
         var paths = runCatching { WorkspaceSourceContext.choices(files, id) }
@@ -351,11 +382,11 @@ internal class WorkspaceChatCodingFlow(
         val prepared = runCatching {
             WorkspaceAiHandoff.prepare(files, tasks, projects, id, selected, instruction)
         }.getOrElse { error("Source review blocked: ${it.message}"); return }
-        send(id, key, prepared, usingXKiro)
+        send(id, key, prepared, usingXKiro, usingCloudflare, cloudAccount)
     }
 
     private fun send(id: String, key: String, prepared: WorkspaceAiHandoff.Draft,
-                     usingXKiro: Boolean) {
+                     usingXKiro: Boolean, usingCloudflare: Boolean, cloudAccount: String) {
         if (isRunning || !current(id) || !WorkspaceAiHandoff.stillCurrent(files, tasks, projects, id, prepared)) {
             error("Project or source changed; request stopped. No source was sent.")
             return
@@ -363,12 +394,14 @@ internal class WorkspaceChatCodingFlow(
         val provider = WorkspaceChatGateway.Provider.OPENROUTER_FREE
         val messages = listOf(WorkspaceConversationStore.Message("explicit-one-file-prompt", "user",
             prepared.prompt, System.currentTimeMillis()))
-        val outgoing = runCatching { if (usingXKiro)
-            WorkspaceXKiroFree.editRequest(key, prepared.prompt)
+        val outgoing = runCatching { if (usingCloudflare)
+            WorkspaceCloudflareFree.editRequest(key, cloudAccount, prepared.prompt)
+        else if (usingXKiro) WorkspaceXKiroFree.editRequest(key, prepared.prompt)
         else WorkspaceChatGateway.request(provider, key, messages) }
             .getOrElse { error("Provider request refused: ${it.message}"); return }
         val serial = ++generation
-        val call = (if (usingXKiro) WorkspaceXKiroFree.client
+        val call = (if (usingCloudflare) WorkspaceCloudflareFree.client
+            else if (usingXKiro) WorkspaceXKiroFree.client
             else WorkspaceChatGateway.client).newCall(outgoing)
         request = call
         report("Working on ${prepared.context.path} · Stop ■ to cancel. One-file Safe Edit only.")
@@ -378,9 +411,11 @@ internal class WorkspaceChatCodingFlow(
                     e.message?.startsWith("xKiro Free") == true) e.message!!
                 else WorkspaceFreeAiSuggestion.networkFailure(e))))
             override fun onResponse(call: Call, response: Response) = complete(call, serial, id,
-                prepared, runCatching { if (usingXKiro) WorkspaceXKiroFree.readEdit(response)
+                prepared, runCatching { if (usingCloudflare) WorkspaceCloudflareFree.readEdit(response)
+                    else if (usingXKiro) WorkspaceXKiroFree.readEdit(response)
                     else WorkspaceChatGateway.read(provider, response) },
-                if (usingXKiro) WorkspaceCodingAutoFallback.displayName(response.request.url.toString()) else null)
+                if (usingCloudflare) "Cloudflare Workers AI Free"
+                else if (usingXKiro) WorkspaceCodingAutoFallback.displayName(response.request.url.toString()) else null)
         })
     }
 
@@ -408,7 +443,11 @@ internal class WorkspaceChatCodingFlow(
                     runCatching { suggestions.discard(id) }
                     terminal("Updated ${prepared.context.path} in your existing project. " +
                         "Review the file and use Undo / Keep in Chat. Preview/build is not verified." +
-                        (via?.let { " Completed via $it after xKiro was unavailable." } ?: ""))
+                        (when (via) {
+                            "Cloudflare Workers AI Free" -> " Completed via Cloudflare Workers AI Free."
+                            null -> ""
+                            else -> " Completed via $via after xKiro was unavailable."
+                        }))
                 }.onFailure { error("AI suggestion was not applied: ${it.message}. Check saved proposal and rollback in Chat.") }
             }.onFailure { error(it.message ?: "Provider failed; original files are unchanged.") }
         }

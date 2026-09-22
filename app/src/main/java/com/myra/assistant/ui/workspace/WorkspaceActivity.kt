@@ -795,6 +795,12 @@ class WorkspaceActivity : AppCompatActivity() {
      * Groq Free/ZDR opt-in does not certify an account that is later upgraded to paid.
      */
     private fun selectedProvider(hasAttachments: Boolean = false): WorkspaceChatGateway.Provider? {
+        if (preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)) {
+            val token = keys.get(ApiKeyStore.CLOUDFLARE_TOKEN)
+            val account = keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT)
+            return if (!hasAttachments && WorkspaceCloudflareFree.configured(true, token, account))
+                WorkspaceChatGateway.Provider.CLOUDFLARE_FREE else null
+        }
         val openRouterAvailable = keys.get(ApiKeyStore.OPENROUTER).isNotBlank()
         val groqAvailable = keys.get(ApiKeyStore.GROQ).isNotBlank()
         val groqApproved = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
@@ -810,6 +816,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun keyFor(provider: WorkspaceChatGateway.Provider): String = when (provider) {
         WorkspaceChatGateway.Provider.OPENROUTER_FREE -> keys.get(ApiKeyStore.OPENROUTER)
         WorkspaceChatGateway.Provider.GROQ_FREE -> keys.get(ApiKeyStore.GROQ)
+        WorkspaceChatGateway.Provider.CLOUDFLARE_FREE -> keys.get(ApiKeyStore.CLOUDFLARE_TOKEN)
     }
 
     private fun addAttachment(uri: Uri, photo: Boolean) {
@@ -912,6 +919,12 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         val picked = attachments.toList()
+        if (preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false) &&
+            current.type == WorkspaceProjectType.CHAT && intent == null && picked.isNotEmpty()) {
+            statusMessage = "Cloudflare Free supports text only. Remove attachments or turn Cloudflare OFF; nothing sent."
+            render()
+            return
+        }
         // The Groq Free opt-in covers text chat only. Never silently send photos or files
         // to a different provider just because another API key exists.
         if (intent == null && current.type == WorkspaceProjectType.CHAT && picked.isNotEmpty() &&
@@ -950,7 +963,7 @@ class WorkspaceActivity : AppCompatActivity() {
             statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
             render()
             AlertDialog.Builder(this).setTitle("No eligible Workspace free route")
-                .setMessage("Add an OpenRouter Free key for long requests or attachments, or enable Groq Free + Inference ZDR for bounded text chat in API & Cloud Settings. Full message stays local if no route fits. Gemini is Voice-only; no paid fallback.")
+                .setMessage("For Cloudflare, save a valid Workers AI token plus Account ID and enable its Free switch; otherwise use OpenRouter Free or Groq Free/ZDR. Cloudflare is text-only. No paid fallback.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("API settings") { _, _ ->
                     startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
@@ -1004,17 +1017,22 @@ class WorkspaceActivity : AppCompatActivity() {
                     android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
             }.getOrElse { statusMessage = it.message ?: "Photo unavailable"; render(); return }
         }
-        val outgoing = runCatching { WorkspaceChatGateway.request(provider, keyFor(provider), enriched, image) }
+        val outgoing = runCatching { WorkspaceChatGateway.request(provider, keyFor(provider), enriched, image,
+            if (provider == WorkspaceChatGateway.Provider.CLOUDFLARE_FREE)
+                keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT) else "") }
             .getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
-        val call = WorkspaceChatGateway.client.newCall(outgoing)
+        val call = (if (provider == WorkspaceChatGateway.Provider.CLOUDFLARE_FREE)
+            WorkspaceCloudflareFree.client else WorkspaceChatGateway.client).newCall(outgoing)
         activeRequest = call
         statusMessage = ""
         render()
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
                 messageId, replacingAssistantId, provider, picked,
-                Result.failure(IllegalStateException(WorkspaceFreeAiSuggestion.networkFailure(error))))
+                Result.failure(IllegalStateException(if (provider == WorkspaceChatGateway.Provider.CLOUDFLARE_FREE)
+                    "Cloudflare connection failed or timed out; no automatic retry or paid route."
+                else WorkspaceFreeAiSuggestion.networkFailure(error))))
             override fun onResponse(call: Call, response: Response) =
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
                     runCatching { WorkspaceChatGateway.read(provider, response) })
