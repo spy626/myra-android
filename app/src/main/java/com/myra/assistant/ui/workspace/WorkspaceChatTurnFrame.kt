@@ -21,7 +21,8 @@ internal object WorkspaceChatTurnFrame {
     private val romanHindi = Regex("(?iu)\\b(?:main|maine|mujhe|mera|meri|kal|kya|sahi|jaunga|jaungi|jaane|nahi|hai|bataya)\\b")
     private val directTask = Regex("(?iu)^\\s*(?:write|create|build|code|implement|explain|summari[sz]e|translate|calculate|solve|list|compare|design|generate|fix|debug|how to|how does|what is|who is|give me|make me)\\b")
     private val clarification = Regex("(?iu)^\\s*(?:(?:kya|kia)(?:\\s+(?:hai|hei|he|tha|matlab|bola|boli))?|(?:what\\s+(?:do you mean|did you mean|is that|was that))|(?:samajh|samjh)(?:\\s+(?:nahi|nahin|nehi|nhi|na))?|(?:matlab\\s+(?:kya|hai|he))|(?:what\\s*\\?))\\s*[?!.]*\\s*$|^(?:क्या (?:है|मतलब)|समझ नहीं आया)[?!. ]*$")
-    private val acknowledgement = Regex("(?iu)^\\s*(?:ok(?:ay)?|theek|thik|sahi|haan|han|yes|achha|accha|got it|sounds good)(?:\\s+(?:hai|he|h|bro|yaar|great))?\\s*[!?.]*\\s*$")
+    // Treat emoji as tone, not as a new request: 'Sahi hai 😄' is still an acknowledgement.
+    private val acknowledgement = Regex("(?iu)^\\s*(?:ok(?:ay)?|theek|thik|sahi|haan|han|yes|achha|accha|got it|sounds good)(?:\\s+(?:hai|he|h|bro|yaar|great))?\\s*[!?.\\p{So}\\p{Sk}\\uFE0F\\u200D]*\\s*$")
     private val shortPreference = Regex("(?iu)\\b(?:short|brief|concise|chhote|chote|chhota|chota)\\b.{0,28}\\b(?:reply|replies|answer|answers|jawab|response)\\b|(?:short reply|short answers)")
 
     private fun tokens(value: String): Set<String> = words.findAll(value.lowercase())
