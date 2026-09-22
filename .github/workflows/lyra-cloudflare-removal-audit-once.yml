@@ -17,11 +17,11 @@ jobs:
           set -euo pipefail
           git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
           echo '=== MAIN SOURCE REFERENCES ==='
-          rg -n -i 'cloudflare|CLOUDFLARE' app/src/main || true
+          grep -Rn -i cloudflare app/src/main || true
           echo '=== TEST FILE REFERENCES ==='
-          rg -l -i 'cloudflare|CLOUDFLARE' app/src/test app/src/androidTest || true
+          grep -Rl -i cloudflare app/src/test app/src/androidTest || true
           echo '=== OTHER TRACKED FILE REFERENCES ==='
-          git grep -l -i 'cloudflare' -- ':!app/src/main/**' ':!app/src/test/**' ':!app/src/androidTest/**' ':!.github/workflows/lyra-cloudflare-removal-audit-once.yml' || true
+          git grep -l -i cloudflare -- ':!app/src/main/**' ':!app/src/test/**' ':!app/src/androidTest/**' ':!.github/workflows/lyra-cloudflare-removal-audit-once.yml' || true
           echo '=== CODE BASE COUNTS ==='
-          rg -l -i 'cloudflare' app/src/main | wc -l
-          rg -l -i 'cloudflare' app/src/test app/src/androidTest | wc -l
+          grep -Rl -i cloudflare app/src/main | wc -l
+          grep -Rl -i cloudflare app/src/test app/src/androidTest | wc -l
