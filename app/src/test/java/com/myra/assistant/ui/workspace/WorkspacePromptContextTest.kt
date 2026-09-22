@@ -67,7 +67,7 @@ class WorkspacePromptContextTest {
 
     @Test fun unrelatedChatsStayUnchangedAndAssistantsCannotSupplyIntentEvidence() {
         assertNull(WorkspacePromptContext.resolve(listOf(user("Hi bro"))))
-        assertEquals("user", entries(listOf(user("Hi bro"))).getJSONObject(0).getString("role"))
+        assertEquals("user", entries(listOf(user("Hi bro"))).getJSONObject(1).getString("role"))
         assertEquals(WorkspacePromptContext.Decision.CLARIFY,
             WorkspacePromptContext.resolve(listOf(assistant("You want an AI companion"),
                 user("AI companiyon banane ka prompt do"))))

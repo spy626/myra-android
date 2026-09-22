@@ -61,7 +61,7 @@ class WorkspaceContextProjectionTest {
         assertEquals("system", messages.getJSONObject(0).getString("role"))
         assertTrue(messages.getJSONObject(0).getString("content").contains("Saved long-term memories"))
         assertEquals("Help with my companion", messages.getJSONObject(1).getString("content"))
-        assertEquals(1, JSONObject(WorkspaceChatGateway.openRouterBody(listOf(user("Hi"))))
+        assertEquals(2, JSONObject(WorkspaceChatGateway.openRouterBody(listOf(user("Hi"))))
             .getJSONArray("messages").length())
     }
 }

@@ -46,8 +46,9 @@ class WorkspaceStoryScriptTest {
     @Test fun normalChatAndTechnicalScriptNeverGetWritingInstructions() {
         val plain = JSONObject(WorkspaceChatGateway.openRouterBody(
             listOf(message("user", "Kese ho bro?")))).getJSONArray("messages")
-        assertEquals(1, plain.length())
-        assertEquals("user", plain.getJSONObject(0).getString("role"))
+        assertEquals(2, plain.length())
+        assertEquals("system", plain.getJSONObject(0).getString("role"))
+        assertEquals("user", plain.getJSONObject(1).getString("role"))
         assertFalse(WorkspaceStoryScript.isWritingRequest("Explain the meaning of a screenplay"))
         assertFalse(WorkspaceStoryScript.isWritingRequest("Write a Python script to automate my files"))
         assertNull(WorkspaceStoryScript.kind("Write a Python script to automate my files"))

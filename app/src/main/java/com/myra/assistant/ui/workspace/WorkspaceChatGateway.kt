@@ -10,6 +10,15 @@ import org.json.JSONObject
 
 /** Workspace text and explicitly selected one-turn images. Never uses the voice-only Gemini key. */
 internal object WorkspaceChatGateway {
+    // Applies across approved Free text routes. It is a general response contract,
+    // not a factual memory, prompt-specific location, or claim of verified model output.
+    private const val CHAT_REPLY_DISCIPLINE =
+        "Respond to the latest user message naturally in the user's language and requested length. " +
+            "Stay on its actual topic; do not insert unrelated activities or invented personal events. " +
+            "Earlier assistant replies can be mistaken and are NOT evidence of what the user said. " +
+            "For questions about the user's earlier words, ground claims only in earlier USER turns " +
+            "from this same conversation; quote them if necessary. If evidence is absent, say so " +
+            "instead of guessing a name, place, plan or other fact. Never claim phone testing."
     enum class Provider { OPENROUTER_FREE, GROQ_FREE, CLOUDFLARE_FREE }
     data class Image(val mime: String, val base64: String)
     // One extra try only after specific upstream HTTP rejections. Connection failures and
@@ -75,7 +84,7 @@ internal object WorkspaceChatGateway {
         val earlier = if (revisionKind == null && contextDecision == null)
             WorkspaceContextProjection.earlierUserContext(messages) else ""
         val codeInstructions = latest?.let(WorkspaceCodePrompt::instructions).orEmpty()
-        val instructions = listOf(writingInstructions, earlier, codeInstructions)
+        val instructions = listOf(CHAT_REPLY_DISCIPLINE, writingInstructions, earlier, codeInstructions)
             .filter(String::isNotBlank).joinToString("\n\n")
         if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", instructions))

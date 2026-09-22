@@ -957,6 +957,23 @@ class WorkspaceActivity : AppCompatActivity() {
             coding.continueRequest(id, text, stored.id)
             return
         }
+        // User-authored recall is answered from the exact selected-chat transcript.
+        // Never let a model's earlier guess become evidence; do not spend another Free call.
+        if (picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
+            val grounded = runCatching {
+                WorkspaceChatRecallGrounding.answer(conversations.read(id))
+            }.getOrNull()
+            if (grounded != null) {
+                runCatching {
+                    require(conversations.read(id).lastOrNull()?.id == stored.id) {
+                        "Conversation changed; grounded answer not saved"
+                    }
+                    conversations.append(id, "assistant", grounded)
+                }.onFailure { statusMessage = it.message ?: "Grounded answer could not be saved" }
+                render()
+                return
+            }
+        }
         val provider = runCatching { selectedProvider(picked.isNotEmpty()) }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
         if (provider == null) {

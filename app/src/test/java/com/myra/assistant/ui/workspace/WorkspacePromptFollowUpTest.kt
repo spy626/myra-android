@@ -70,7 +70,8 @@ class WorkspacePromptFollowUpTest {
         val switched = listOf(original, firstReply, user("Kese ho bro"), assistant("Theek hun"), followUp)
         assertNull(WorkspacePromptFollowUp.kind(switched))
         val sent = JSONObject(WorkspaceChatGateway.openRouterBody(switched)).getJSONArray("messages")
-        assertEquals("user", sent.getJSONObject(0).getString("role"))
+        assertEquals("system", sent.getJSONObject(0).getString("role"))
+        assertEquals("user", sent.getJSONObject(1).getString("role"))
         assertNull(WorkspacePromptFollowUp.kind(listOf(original, assistant("Plain conversation reply"),
             user("Isme ek aur feature add karo"), assistant("Okay"), followUp)))
         assertNull(WorkspacePromptFollowUp.kind(listOf(user("Write a Python prompt"),

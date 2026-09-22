@@ -35,7 +35,9 @@ class WorkspaceChatGatewayTest {
         assertFalse(body.getJSONObject("provider").getBoolean("allow_fallbacks"))
         assertZeroPrice(body)
         assertFalse(body.getJSONArray("plugins").getJSONObject(0).getBoolean("enabled"))
-        assertEquals("this project only", body.getJSONArray("messages").getJSONObject(0).getString("content"))
+        val initial = body.getJSONArray("messages")
+        assertEquals("system", initial.getJSONObject(0).getString("role"))
+        assertEquals("this project only", initial.getJSONObject(initial.length() - 1).getString("content"))
         assertFalse(request.url.toString().contains("session-secret"))
         assertFalse(body.toString().contains("session-secret"))
         assertEquals("Bearer session-secret", request.header("Authorization"))
@@ -49,14 +51,14 @@ class WorkspaceChatGatewayTest {
         val body = JSONObject(WorkspaceChatGateway.openRouterBody(listOf(olderThatFits, message("user", original))))
         assertZeroPrice(body)
         val payload = body.getJSONArray("messages")
-        assertEquals(2, payload.length())
+        assertEquals(3, payload.length())
         assertEquals(original, payload.getJSONObject(payload.length() - 1).getString("content"))
 
         val olderTooLarge = message("assistant", "x".repeat(80_000))
         val bounded = JSONObject(WorkspaceChatGateway.openRouterBody(listOf(olderTooLarge, message("user", original))))
             .getJSONArray("messages")
-        assertEquals(1, bounded.length())
-        assertEquals(original, bounded.getJSONObject(0).getString("content"))
+        assertEquals(2, bounded.length())
+        assertEquals(original, bounded.getJSONObject(bounded.length() - 1).getString("content"))
     }
 
     @Test fun photoSentOnlyInCurrentTurnAndNotRetainedInPreviousMessages() {
@@ -65,8 +67,8 @@ class WorkspaceChatGatewayTest {
         val body = JSONObject(WorkspaceChatGateway.openRouterBody(messages, image))
         assertZeroPrice(body)
         val openRouter = body.getJSONArray("messages")
-        assertEquals("Earlier", openRouter.getJSONObject(0).getString("content"))
-        assertTrue(openRouter.getJSONObject(2).getJSONArray("content").getJSONObject(1)
+        assertEquals("Earlier", openRouter.getJSONObject(1).getString("content"))
+        assertTrue(openRouter.getJSONObject(3).getJSONArray("content").getJSONObject(1)
             .getJSONObject("image_url").getString("url").startsWith("data:image/png;base64,"))
     }
 

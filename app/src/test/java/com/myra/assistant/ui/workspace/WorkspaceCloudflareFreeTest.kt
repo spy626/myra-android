@@ -40,7 +40,7 @@ class WorkspaceCloudflareFreeTest {
         assertEquals(2048, json.getInt("max_completion_tokens"))
         assertEquals(JSONObject.NULL, json.opt("reasoning_effort"))
         assertFalse(json.getJSONObject("chat_template_kwargs").getBoolean("enable_thinking"))
-        assertEquals("Say hello", json.getJSONArray("messages").getJSONObject(0).getString("content"))
+        assertEquals("Say hello", json.getJSONArray("messages").getJSONObject(json.getJSONArray("messages").length() - 1).getString("content"))
         assertFalse(json.has("provider"))
         assertFalse(json.has("plugins"))
         assertFalse(json.has("model"))

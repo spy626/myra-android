@@ -18,7 +18,7 @@ class WorkspaceGroqFreeTest {
         val original = "LYRA ke liye AI companion prompt do"
         val payload = JSONObject(WorkspaceGroqFree.body(listOf(message("user", original))))
         assertEquals(WorkspaceGroqFree.MODEL, payload.getString("model"))
-        assertEquals(original, payload.getJSONArray("messages").getJSONObject(0).getString("content"))
+        assertEquals(original, payload.getJSONArray("messages").getJSONObject(payload.getJSONArray("messages").length() - 1).getString("content"))
         assertFalse(payload.has("provider"))
         assertFalse(payload.has("plugins"))
         assertFalse(payload.has("tools"))

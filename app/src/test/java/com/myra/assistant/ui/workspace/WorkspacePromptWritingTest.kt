@@ -37,7 +37,7 @@ class WorkspacePromptWritingTest {
         assertNull(WorkspacePromptWriting.kind("What is prompt engineering?"))
         assertNull(WorkspacePromptWriting.kind("Hi bro, kese ho"))
         assertNull(WorkspacePromptWriting.kind("Mujhe horror story do"))
-        assertEquals(1, sent("Hi bro, kese ho").length())
+        assertEquals(2, sent("Hi bro, kese ho").length())
         assertEquals(WorkspaceStoryScript.Kind.STORY,
             WorkspaceStoryScript.kind("Mujhe video ke liye horror story do"))
     }
