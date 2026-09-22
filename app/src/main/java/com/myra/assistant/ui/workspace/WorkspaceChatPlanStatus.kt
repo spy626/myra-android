@@ -15,7 +15,7 @@ internal object WorkspaceChatPlanStatus {
         """(?iu)\b(?:nahi|nahin|nehi|nhi|not|haven't|hasn't|didn't)\b.{0,45}\b(?:bataya|batayi|bataye|told|shared|revealed?)\b|\b(?:bataya|batayi|bataye|told|shared|revealed?)\b.{0,30}\b(?:nahi|nahin|nehi|nhi|not)\b|नहीं.{0,24}बताया|بتایا.{0,24}نہیں""")
     private val cancelled = Regex("""(?iu)\b(?:cancel(?:led|ed)?|cancell?ation|radd)\b|रद्द|منسوخ""")
     private val negatedAction = Regex(
-        """(?iu)\b(?:nahi|nahin|nehi|nhi|not|won't|wont)\b.{0,25}\b(?:jaa?unga|jaa?ungi|jaa?enge|going|go|attend|visit|karunga|karungi)\b|नहीं.{0,30}(?:जाऊँगा|जाऊंगी|जाऊँगी|जाना)""")
+        """(?iu)\b(?:nahi|nahin|nehi|nhi|not|won't|wont)\b.{0,25}?\b(?:jaa?unga|jaa?ungi|jaa?enge|going|go|attend|visit|karunga|karungi)\b|नहीं.{0,30}(?:जाऊँगा|जाऊंगी|जाऊँगी|जाना)""")
     private val affirmativeAction = Regex(
         """(?iu)\b(?:jaa?unga|jaa?ungi|jaa?enge|jaunga|jaungi|going|will|attend|visit|karunga|karungi)\b|जाऊँगा|जाऊँगी""")
     private val acknowledgement = Regex("""(?iu)^\s*(?:ok(?:ay)?|theek|thik|sahi|haan|han|achha|accha)(?:\s+(?:hai|he|bro|yaar))?\s*[!?.🙂😄 ]*$""")
@@ -28,8 +28,13 @@ internal object WorkspaceChatPlanStatus {
         val text = raw.trim()
         if (text.length !in 8..260 || text.any(Char::isISOControl) || '?' in text || '؟' in text) return null
         // A user-authored explicit decision is stronger and newer than a past cancellation.
+        val negativeSpans = negatedAction.findAll(text).map { it.range }.toList()
+        val disclosedAction = affirmativeAction.findAll(text).any { action ->
+            negativeSpans.none { action.range.first in it }
+        }
         if (plan.containsMatchIn(text) && decision.containsMatchIn(text) &&
-            withholding.containsMatchIn(text)) return Evidence(State.DECIDED_UNDISCLOSED, text)
+            withholding.containsMatchIn(text) && !disclosedAction)
+            return Evidence(State.DECIDED_UNDISCLOSED, text)
         if (!cancelled.containsMatchIn(text) && !negatedAction.containsMatchIn(text)) return null
         // A proposed cancellation is not an accomplished cancellation.
         if (Regex("""(?iu)\b(?:should|shall|might|maybe|soch|chahiye|karun|karu)\b""")

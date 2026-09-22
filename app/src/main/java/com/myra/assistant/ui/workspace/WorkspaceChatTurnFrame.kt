@@ -18,6 +18,7 @@ internal object WorkspaceChatTurnFrame {
         "brief", "answer", "answers", "about", "would", "could", "should", "please"
     )
     private val firstPerson = Regex("(?iu)\\b(?:i|i'm|i’ll|i'll|my|we|main|mein|mera|meri|mujhe|hum)\\b|मैं|मेरा|مجھے|میں")
+    private val romanHindi = Regex("(?iu)\\b(?:main|maine|mujhe|mera|meri|kal|kya|sahi|jaunga|jaungi|jaane|nahi|hai|bataya)\\b")
     private val directTask = Regex("(?iu)^\\s*(?:write|create|build|code|implement|explain|summari[sz]e|translate|calculate|solve|list|compare|design|generate|fix|debug|how to|how does|what is|who is|give me|make me)\\b")
     private val clarification = Regex("(?iu)^\\s*(?:(?:kya|kia)(?:\\s+(?:hai|hei|he|tha|matlab|bola|boli))?|(?:what\\s+(?:do you mean|did you mean|is that|was that))|(?:samajh|samjh)(?:\\s+(?:nahi|nahin|nehi|nhi|na))?|(?:matlab\\s+(?:kya|hai|he))|(?:what\\s*\\?))\\s*[?!.]*\\s*$|^(?:क्या (?:है|मतलब)|समझ नहीं आया)[?!. ]*$")
     private val acknowledgement = Regex("(?iu)^\\s*(?:ok(?:ay)?|theek|thik|sahi|haan|han|yes|achha|accha|got it|sounds good)(?:\\s+(?:hai|he|h|bro|yaar|great))?\\s*[!?.]*\\s*$")
@@ -63,7 +64,18 @@ internal object WorkspaceChatTurnFrame {
             append(JSONObject.quote(latest.take(350).replace(Regex("[\\r\\n\\t]+"), " ")))
             append("\n")
             append(state)
-            append(" Previous ASSISTANT guesses do not establish user facts. Use clear everyday language matching the user's script; if a short reply was requested, keep it genuinely short. No scripted reply template.")
+            if (messages.asReversed().filter { it.role == "user" }.take(3)
+                    .any { romanHindi.containsMatchIn(it.text) }) {
+                append(" USER LANGUAGE: Reply in natural Roman Hindi/Hinglish in Latin letters, " +
+                    "not invented slang or Devanagari. Use grammatically complete everyday " +
+                    "phrases, consistent speaker perspective and normal Hindi verb forms. " +
+                    "Never output broken or clipped words or random English fragments.")
+            }
+            append(" An earlier ASSISTANT reply can be mistaken: do not use its guesses as " +
+                "user facts. For short acknowledgements and clarifications, never add an " +
+                "unmentioned name, venue or a plan to meet. Correct any unsupported prior " +
+                "assistant claim instead of compounding it. Keep short replies brief and " +
+                "complete; do not use a canned response template.")
         }
     }
 
@@ -75,7 +87,8 @@ internal object WorkspaceChatTurnFrame {
     fun verify(messages: List<WorkspaceConversationStore.Message>, reply: String): String {
         if (!isCasual(messages)) return reply
         // All three Free routes arrive here before any assistant text is persisted.
-        val visible = WorkspaceChatVisibleReply.sanitize(reply)
+        val visible = WorkspaceCasualReplyEvidence.verify(messages,
+            WorkspaceChatVisibleReply.sanitize(reply))
         val recentUsers = messages.takeLast(8).filter { it.role == "user" }
         if (recentUsers.none { shortPreference.containsMatchIn(it.text) }) return visible
         val anchor = topic(messages)?.let(::tokens).orEmpty()
