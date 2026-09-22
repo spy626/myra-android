@@ -1,0 +1,91 @@
+name: LYRA Free Provider Failover Phone Test
+on:
+  push:
+    branches: [agent/myra-phase-1]
+    paths:
+      - .github/workflows/lyra-free-provider-failover-one-shot.yml
+permissions:
+  contents: write
+jobs:
+  verify-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify feature branch and recovery ancestors
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = agent/myra-phase-1
+          git merge-base --is-ancestor 9971d0f0e3349b87ee4f7f3b3e0841f8ae6f8cd2 HEAD
+          git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
+          git merge-base --is-ancestor 74f603cd2f19bf9435e20020486d9f22d061474f HEAD
+          git diff --exit-code
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply exact free-only website change on CI runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/website_free_provider_failover_ci.py
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          git diff --name-only | grep -Fx 'app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt'
+          git diff --name-only | grep -Fx 'app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGenerationTest.kt'
+          git diff --stat
+      - name: Run full unit suite and normal debug compilation before commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon > "$RUNNER_TEMP/verify.log" 2>&1 || { tail -n 160 "$RUNNER_TEMP/verify.log"; exit 1; }
+          tail -n 25 "$RUNNER_TEMP/verify.log"
+      - name: Commit verified change only to feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = agent/myra-phase-1
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          git config user.name 'LYRA CI free route verification'
+          git config user.email 'lyra-ci@users.noreply.github.com'
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGenerationTest.kt
+          git commit -m 'fix(workspace): permit zero-price ZDR provider failover for website requests'
+          git push origin HEAD:refs/heads/agent/myra-phase-1
+      - name: Isolate test APK identity on CI runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/build.gradle'); s=p.read_text()
+          old='debug { if (hasStableSigning) signingConfig signingConfigs.ciStable }'
+          assert s.count(old)==1, 'Signing config changed; abort'
+          p.write_text(s.replace(old, "debug { applicationIdSuffix '.orfreefailover'; if (hasStableSigning) signingConfig signingConfigs.ciStable }", 1))
+          p=Path('app/src/main/AndroidManifest.xml'); s=p.read_text()
+          old='android:label="LYRA"'
+          assert s.count(old)==1, 'Manifest changed; abort'
+          p.write_text(s.replace(old, 'android:label="LYRA Free Route Test"', 1))
+          PY
+          git diff --check
+      - name: Build and verify separate phone APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:assembleDebug --no-daemon > "$RUNNER_TEMP/apk.log" 2>&1 || { tail -n 120 "$RUNNER_TEMP/apk.log"; exit 1; }
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$aapt" dump badging app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/badging.txt"
+          grep -q "package: name='com.myra.assistant.orfreefailover'" "$RUNNER_TEMP/badging.txt"
+          grep -q "application-label:'LYRA Free Route Test'" "$RUNNER_TEMP/badging.txt"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+          tail -n 8 "$RUNNER_TEMP/apk.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-openrouter-free-provider-failover-isolated-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
