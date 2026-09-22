@@ -121,22 +121,24 @@ internal object WorkspaceCloudflareFree {
     /** Only visible assistant text. All parts must be text; never consume reasoning,
      * tool arguments, partial output, or an unrecognized multimodal part as chat/code.
      */
-    private fun visibleText(raw: Any?): String? = when (raw) {
-        is String -> raw.takeIf { it.isNotBlank() }
-        is JSONArray -> {
-            if (raw.length() == 0) null else {
-                val text = StringBuilder()
-                for (index in 0 until raw.length()) {
-                    val part = raw.optJSONObject(index) ?: return null
-                    if (part.optString("type") !in setOf("text", "output_text")) return null
-                    val segment = part.opt("text")
-                    if (segment !is String) return null
-                    text.append(segment)
+    private fun visibleText(raw: Any?): String? {
+        return when (raw) {
+            is String -> raw.takeIf { it.isNotBlank() }
+            is JSONArray -> {
+                if (raw.length() == 0) null else {
+                    val text = StringBuilder()
+                    for (index in 0 until raw.length()) {
+                        val part = raw.optJSONObject(index) ?: return null
+                        if (part.optString("type") !in setOf("text", "output_text")) return null
+                        val segment = part.opt("text")
+                        if (segment !is String) return null
+                        text.append(segment)
+                    }
+                    text.toString().takeIf { it.isNotBlank() }
                 }
-                text.toString().takeIf { it.isNotBlank() }
             }
+            else -> null
         }
-        else -> null
     }
 
     private fun missingTextCategory(raw: Any?): String = when (raw) {
