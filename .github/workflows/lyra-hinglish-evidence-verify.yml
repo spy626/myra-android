@@ -24,7 +24,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
-      - name: Apply scoped conversational evidence and Roman Hindi changes
+      - name: Apply corrected negation and scoped Roman Hindi changes
         run: |
           set -euo pipefail
           python3 tools/apply_hinglish_chat_evidence.py
