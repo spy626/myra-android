@@ -8,10 +8,14 @@ package com.myra.assistant.ui.workspace
  */
 internal object WorkspaceCasualReplyEvidence {
     // Android's regex engine already uses Unicode character classes and does not support
-    // Java's (?U) / UNICODE_CHARACTER_CLASS flag. That flag caused class initialization to
-    // fail on a real phone before any reply could be displayed, despite JVM tests passing.
+    // Java's (?U) / UNICODE_CHARACTER_CLASS flag.
     private val properName = Regex("""\b\p{Lu}[\p{Ll}]{3,}\b""")
-    private val meeting = Regex("""(?iu)\b(?:milte|milenge|milna|meet|meetup|hang\s+out)\b""")
+    // A bare 'milna', 'meet', or 'milte' can describe a THIRD PERSON or ask a question.
+    // Only an assistant-authored, sentence-level invitation is treated as a proposal.
+    // This deliberately prefers missing an ambiguous proposal over blocking harmless chat.
+    private val meetingProposal = Regex("""(?iu)(?:^|[.!?]\s+)\s*(?:let['’]?s\s+(?:meet|hang\s+out)|(?:kal|aaj|phir|chalo|chal)\b[^.!?\n]{0,50}\b(?:milte\s+hain|mil\s+lo|meet)|(?:main|mai|hum|i|we)\b[^.!?\n]{0,45}\b(?:tumse|aapse|you)\b[^.!?\n]{0,20}\b(?:milne|meet))\b""")
+    // A mention of meeting somebody else is NOT permission for LYRA to meet the user.
+    private val userInvitation = Regex("""(?iu)(?:let['’]?s\s+(?:meet|hang\s+out)|(?:lyra|tum|aap)\b[^.!?\n]{0,55}\b(?:milo|milna|milne|meet)|(?:^|[.!?]\s+)\s*(?:kal|aaj|phir|chalo|chal)\b[^.!?\n]{0,50}\b(?:milte\s+hain|mil\s+lo|meet))\b""")
     private val ordinaryWords = setOf(
         "main", "maine", "mujhe", "mera", "meri", "mere", "tum", "tumne", "tumhara",
         "haan", "nahi", "nahin", "achha", "acha", "accha", "theek", "thik", "sahi",
@@ -34,18 +38,29 @@ internal object WorkspaceCasualReplyEvidence {
             .any { shortRequest.containsMatchIn(it.text) }
         if (!lowInformation && !personalShort) return speech
 
+        // The latest user turn was persisted before the request. A repeated answer to a
+        // DIFFERENT acknowledgement/clarification is a stale echo, not a new reply.
+        val previous = messages.getOrNull(messages.lastIndex - 1)?.takeIf { it.role == "assistant" }
+        if (lowInformation && previous != null &&
+            speech.trim().replace(Regex("\\s+"), " ").equals(
+                previous.text.trim().replace(Regex("\\s+"), " "), ignoreCase = true)) {
+            throw IllegalArgumentException(
+                "LYRA repeated its previous reply. It was not saved; tap Retry if needed. No automatic resend."
+            )
+        }
+
         // Capitalised words at sentence starts are ordinary grammar, not evidence of a
         // person. Never reject names that the user actually wrote in this same chat.
         val unmentioned = properName.findAll(speech).firstOrNull { candidate ->
-            val previous = speech.substring(0, candidate.range.first).trimEnd().lastOrNull()
-            val startsSentence = previous == null || previous in listOf('.', '!', '?', '\n', '।')
+            val previousChar = speech.substring(0, candidate.range.first).trimEnd().lastOrNull()
+            val startsSentence = previousChar == null || previousChar in listOf('.', '!', '?', '\n', '।')
             !startsSentence && candidate.value.lowercase() !in ordinaryWords &&
                 !userText.contains(candidate.value, ignoreCase = true)
         }
         if (unmentioned != null) throw IllegalArgumentException(
             "LYRA's reply introduced an unverified name. It was not saved; tap Retry if needed. No automatic resend."
         )
-        if (meeting.containsMatchIn(speech) && !meeting.containsMatchIn(userText))
+        if (meetingProposal.containsMatchIn(speech) && !userInvitation.containsMatchIn(userText))
             throw IllegalArgumentException(
                 "LYRA proposed meeting without an invitation in your messages. Reply not saved; tap Retry if needed."
             )
