@@ -2,8 +2,7 @@ name: LYRA Cloudflare Last-Resort Routing One-Off
 on:
   push:
     branches: [agent/myra-phase-1]
-    paths:
-      - '.github/workflows/lyra-cloudflare-last-resort-once.yml'
+    paths: ['.github/workflows/lyra-cloudflare-last-resort-once.yml']
 permissions:
   contents: write
 jobs:
@@ -15,149 +14,48 @@ jobs:
           ref: agent/myra-phase-1
           fetch-depth: 0
           persist-credentials: true
-      - name: Verify protected ancestry and prepare narrowly scoped changes
+      - name: Prepare scoped routing fixes
         run: |
           set -euo pipefail
           git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
           python3 - <<'PY'
           from pathlib import Path
-          def replace_once(file, old, new):
-              p = Path(file)
-              s = p.read_text()
-              count = s.count(old)
-              if count != 1:
-                  raise RuntimeError(f'{file}: expected exactly one matching section, found {count}')
-              p.write_text(s.replace(old, new, 1))
           base = 'app/src/main/java/com/myra/assistant/ui/workspace/'
-          replace_once(base+'WorkspaceFreeProviderSelection.kt',
-              '''               hasAttachments: Boolean): WorkspaceChatGateway.Provider? = when {''',
-              '''               hasAttachments: Boolean, cloudflareAvailable: Boolean = false): WorkspaceChatGateway.Provider? = when {''')
-          replace_once(base+'WorkspaceFreeProviderSelection.kt',
-              '''        openRouterAvailable -> WorkspaceChatGateway.Provider.OPENROUTER_FREE
-        else -> null''',
-              '''        openRouterAvailable -> WorkspaceChatGateway.Provider.OPENROUTER_FREE
-        // Cloudflare is explicitly enabled AND no eligible Groq/OpenRouter route exists.
-        // This is initial selection, not an automatic resend after a failed request.
-        !hasAttachments && cloudflareAvailable -> WorkspaceChatGateway.Provider.CLOUDFLARE_FREE
-        else -> null''')
-          replace_once(base+'WorkspaceActivity.kt',
-              '''        if (preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)) {
-            val token = keys.get(ApiKeyStore.CLOUDFLARE_TOKEN)
-            val account = keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT)
-            return if (!hasAttachments && WorkspaceCloudflareFree.configured(true, token, account))
-                WorkspaceChatGateway.Provider.CLOUDFLARE_FREE else null
-        }
-''', '')
-          replace_once(base+'WorkspaceActivity.kt',
-              '''        return WorkspaceFreeProviderSelection.choose(openRouterAvailable, groqAvailable,
-            groqApproved, groqFits, hasAttachments)''',
-              '''        val cloudApproved = preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)
-        val cloudAvailable = cloudApproved && WorkspaceCloudflareFree.configured(true,
-            keys.get(ApiKeyStore.CLOUDFLARE_TOKEN), keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT))
-        return WorkspaceFreeProviderSelection.choose(openRouterAvailable, groqAvailable,
-            groqApproved, groqFits, hasAttachments, cloudAvailable)''')
-          replace_once(base+'WorkspaceChatCodingFlow.kt',
-              '''        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {
-            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
-            return
-        }
-        val xKiroEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
-            .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
-        val xKiroKey = if (xKiroEnabled) runCatching { keys.get(ApiKeyStore.XKIRO) }
-            .getOrElse { error("Secure xKiro key unavailable; nothing was shared."); return } else ""
-        val usingXKiro = !cloudApproved && xKiroEnabled && WorkspaceXKiroFree.validKey(xKiroKey)
-        val key = if (cloudApproved) cloudKey else if (usingXKiro) xKiroKey
-            else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
-            .getOrElse { error("Secure provider key unavailable; nothing was shared."); return }
-''',
-              '''        val xKiroEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
-            .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
-        val xKiroKey = if (xKiroEnabled) runCatching { keys.get(ApiKeyStore.XKIRO) }
-            .getOrElse { error("Secure xKiro key unavailable; nothing was shared."); return } else ""
-        val usingXKiro = xKiroEnabled && WorkspaceXKiroFree.validKey(xKiroKey)
-        val openRouterKey = if (usingXKiro) "" else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
-            .getOrElse { error("Secure provider key unavailable; nothing was shared."); return }
-        val usingCloudflare = !usingXKiro && openRouterKey.isBlank() && cloudApproved &&
-            WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)
-        if (!usingXKiro && openRouterKey.isBlank() && cloudApproved && !usingCloudflare) {
-            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
-            return
-        }
-        val key = when {
-            usingXKiro -> xKiroKey
-            openRouterKey.isNotBlank() -> openRouterKey
-            usingCloudflare -> cloudKey
-            else -> ""
-        }
-''')
-          replace_once(base+'WorkspaceChatCodingFlow.kt',
-              '''        prepareSource(id, instruction, key, usingXKiro, cloudApproved, cloudAccount)''',
-              '''        prepareSource(id, instruction, key, usingXKiro, usingCloudflare, cloudAccount)''')
-          replace_once(base+'WorkspaceChatCodingFlow.kt',
-              '''        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {
-            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
-            return
-        }
-        val groqFreeEnabled''',
-              '''        val groqFreeEnabled''')
-          replace_once(base+'WorkspaceChatCodingFlow.kt',
-              '''        val primary = if (cloudApproved) WorkspaceWebsiteRoute.Provider.CLOUDFLARE
-        else if (xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey))
-            WorkspaceWebsiteRoute.Provider.XKIRO
-        else WorkspaceWebsiteRoute.choose(openRouterKey, groqKey, groqFreeEnabled)
-        if (primary == null) {''',
-              '''        val preferred = if (xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey))
-            WorkspaceWebsiteRoute.Provider.XKIRO
-        else WorkspaceWebsiteRoute.choose(openRouterKey, groqKey, groqFreeEnabled)
-        val cloudAvailable = cloudApproved &&
-            WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)
-        val primary = preferred ?: if (cloudAvailable) WorkspaceWebsiteRoute.Provider.CLOUDFLARE else null
-        if (primary == null && cloudApproved && !cloudAvailable) {
-            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")
-            return
-        }
-        if (primary == null) {''')
-          layout = 'app/src/main/res/layout/activity_api_cloud_settings.xml'
-          replace_once(layout,
-              'android:text="Use Cloudflare Workers AI Free in Chat and Work coding"',
-              'android:text="Allow Cloudflare Free only as a last-resort Chat / Work route"')
-          replace_once(layout,
-              'Existing xKiro/OpenRouter/Groq paths stay unchanged when OFF.',
-              'Groq/OpenRouter text Chat and eligible xKiro/OpenRouter/Groq Work routes take priority even when ON. Cloudflare is chosen only when no other eligible initial route exists. No automatic resend to Cloudflare after another provider fails; existing Free and privacy limits still apply.')
-          p = Path('app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceCloudflarePriorityTest.kt')
-          if p.exists():
-              raise RuntimeError('Cloudflare priority test already exists')
-          p.write_text('''package com.myra.assistant.ui.workspace
-
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
-import org.junit.Test
-
-class WorkspaceCloudflarePriorityTest {
-    @Test fun groqIsPreferredEvenIfCloudflareIsEnabled() {
-        assertEquals(WorkspaceChatGateway.Provider.GROQ_FREE,
-            WorkspaceFreeProviderSelection.choose(true, true, true, true, false, true))
-    }
-
-    @Test fun openRouterPrecedesCloudflareWhenGroqIsNotEligible() {
-        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
-            WorkspaceFreeProviderSelection.choose(true, true, true, false, false, true))
-    }
-
-    @Test fun onlyExplicitlyAvailableCloudflareIsLastResort() {
-        assertEquals(WorkspaceChatGateway.Provider.CLOUDFLARE_FREE,
-            WorkspaceFreeProviderSelection.choose(false, false, false, false, false, true))
-        assertNull(WorkspaceFreeProviderSelection.choose(false, false, false, false, false, false))
-    }
-
-    @Test fun attachmentsNeverFallToCloudflareOrUnapprovedGroq() {
-        assertNull(WorkspaceFreeProviderSelection.choose(false, true, true, true, true, true))
-        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
-            WorkspaceFreeProviderSelection.choose(true, true, true, true, true, true))
-    }
-}
-''')
-          print('Prepared strict one-off priority patches and four routing regression tests.')
+          a = base + 'WorkspaceActivity.kt'
+          c = base + 'WorkspaceChatCodingFlow.kt'
+          p = base + 'WorkspaceFreeProviderSelection.kt'
+          def change(file, old, new):
+              path = Path(file)
+              text = path.read_text()
+              if text.count(old) != 1:
+                  raise RuntimeError(f'{file}: expected exactly one target, found {text.count(old)}')
+              path.write_text(text.replace(old, new, 1))
+          def section(file, start, end, replacement):
+              path = Path(file)
+              text = path.read_text()
+              if text.count(start) != 1:
+                  raise RuntimeError(f'{file}: ambiguous start marker {start!r}')
+              i = text.index(start)
+              j = text.index(end, i + len(start))
+              path.write_text(text[:i] + replacement + text[j:])
+          def lines(*values):
+              return '\n'.join(values)
+          change(p, '               hasAttachments: Boolean): WorkspaceChatGateway.Provider? = when {', '               hasAttachments: Boolean, cloudflareAvailable: Boolean = false): WorkspaceChatGateway.Provider? = when {')
+          change(p, '        openRouterAvailable -> WorkspaceChatGateway.Provider.OPENROUTER_FREE\n        else -> null', lines('        openRouterAvailable -> WorkspaceChatGateway.Provider.OPENROUTER_FREE', '        // Last-resort initial selection only; never resend after another provider fails.', '        !hasAttachments && cloudflareAvailable -> WorkspaceChatGateway.Provider.CLOUDFLARE_FREE', '        else -> null'))
+          section(a, '        if (preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)) {', '        val openRouterAvailable =', '')
+          section(a, '        return WorkspaceFreeProviderSelection.choose(openRouterAvailable, groqAvailable,', '\n    }\n\n    private fun keyFor', lines('        val cloudApproved = preferences.getBoolean(WorkspaceCloudflareFree.PREFERENCE_KEY, false)', '        val cloudAvailable = cloudApproved && WorkspaceCloudflareFree.configured(true,', '            keys.get(ApiKeyStore.CLOUDFLARE_TOKEN), keys.get(ApiKeyStore.CLOUDFLARE_ACCOUNT))', '        return WorkspaceFreeProviderSelection.choose(openRouterAvailable, groqAvailable,', '            groqApproved, groqFits, hasAttachments, cloudAvailable)'))
+          section(c, '        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {', '        if (key.isBlank()) {', lines('        val xKiroEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)', '            .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)', '        val xKiroKey = if (xKiroEnabled) runCatching { keys.get(ApiKeyStore.XKIRO) }', '            .getOrElse { error("Secure xKiro key unavailable; nothing was shared."); return } else ""', '        val usingXKiro = xKiroEnabled && WorkspaceXKiroFree.validKey(xKiroKey)', '        val openRouterKey = if (usingXKiro) "" else runCatching { keys.get(ApiKeyStore.OPENROUTER) }', '            .getOrElse { error("Secure provider key unavailable; nothing was shared."); return }', '        val usingCloudflare = !usingXKiro && openRouterKey.isBlank() && cloudApproved &&', '            WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)', '        if (!usingXKiro && openRouterKey.isBlank() && cloudApproved && !usingCloudflare) {', '            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")', '            return', '        }', '        val key = when {', '            usingXKiro -> xKiroKey', '            openRouterKey.isNotBlank() -> openRouterKey', '            usingCloudflare -> cloudKey', '            else -> ""', '        }') + '\n')
+          change(c, '        prepareSource(id, instruction, key, usingXKiro, cloudApproved, cloudAccount)', '        prepareSource(id, instruction, key, usingXKiro, usingCloudflare, cloudAccount)')
+          section(c, '        if (cloudApproved && !WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)) {', '        val groqFreeEnabled', '')
+          section(c, '        val primary = if (cloudApproved) WorkspaceWebsiteRoute.Provider.CLOUDFLARE', '        if (primary == null) {', lines('        val preferred = if (xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey))', '            WorkspaceWebsiteRoute.Provider.XKIRO', '        else WorkspaceWebsiteRoute.choose(openRouterKey, groqKey, groqFreeEnabled)', '        val cloudAvailable = cloudApproved &&', '            WorkspaceCloudflareFree.configured(true, cloudKey, cloudAccount)', '        val primary = preferred ?: if (cloudAvailable) WorkspaceWebsiteRoute.Provider.CLOUDFLARE else null', '        if (primary == null && cloudApproved && !cloudAvailable) {', '            error("Cloudflare Workers Free needs a valid token and Account ID in API Settings. No source sent.")', '            return', '        }') + '\n')
+          xml = 'app/src/main/res/layout/activity_api_cloud_settings.xml'
+          change(xml, 'android:text="Use Cloudflare Workers AI Free in Chat and Work coding"', 'android:text="Allow Cloudflare Free only as a last-resort Chat / Work route"')
+          change(xml, 'Existing xKiro/OpenRouter/Groq paths stay unchanged when OFF.', 'When ON, eligible Groq/OpenRouter Chat and xKiro/OpenRouter/Groq Work routes take priority; Cloudflare is selected only if no other eligible initial route exists. No automatic resend to Cloudflare after another provider fails.')
+          test = Path('app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceCloudflarePriorityTest.kt')
+          if test.exists():
+              raise RuntimeError('The new regression test must not replace an existing test.')
+          test.write_text(lines('package com.myra.assistant.ui.workspace', '', 'import org.junit.Assert.assertEquals', 'import org.junit.Assert.assertNull', 'import org.junit.Test', '', 'class WorkspaceCloudflarePriorityTest {', '    @Test fun groqBeforeCloudflare() {', '        assertEquals(WorkspaceChatGateway.Provider.GROQ_FREE,', '            WorkspaceFreeProviderSelection.choose(true, true, true, true, false, true))', '    }', '    @Test fun openRouterBeforeCloudflare() {', '        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,', '            WorkspaceFreeProviderSelection.choose(true, true, true, false, false, true))', '    }', '    @Test fun cloudflareOnlyWhenApprovedAndNoOtherEligibleRoute() {', '        assertEquals(WorkspaceChatGateway.Provider.CLOUDFLARE_FREE,', '            WorkspaceFreeProviderSelection.choose(false, false, false, false, false, true))', '        assertNull(WorkspaceFreeProviderSelection.choose(false, false, false, false, false, false))', '    }', '    @Test fun photosNeverSentToCloudflare() {', '        assertNull(WorkspaceFreeProviderSelection.choose(false, true, true, true, true, true))', '        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,', '            WorkspaceFreeProviderSelection.choose(true, true, true, true, true, true))', '    }', '}', ''))
+          print('Routing patch prepared; original branch unchanged until tests and build pass.')
           PY
           git diff --check
       - uses: actions/setup-java@v4
@@ -167,7 +65,7 @@ class WorkspaceCloudflarePriorityTest {
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
-      - name: Run unit tests and build APK before updating branch
+      - name: Run unit tests and assemble APK
         env:
           LYRA_KEYSTORE_BASE64: ${{ secrets.LYRA_KEYSTORE_BASE64 }}
           LYRA_KEYSTORE_PASSWORD: ${{ secrets.LYRA_KEYSTORE_PASSWORD }}
@@ -184,7 +82,7 @@ class WorkspaceCloudflarePriorityTest {
         with:
           name: lyra-cloudflare-last-resort-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-      - name: Commit only verified changes to feature branch and remove one-off workflow
+      - name: Commit verified changes only on feature branch; remove one-off workflow
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -192,6 +90,6 @@ class WorkspaceCloudflarePriorityTest {
           git rm .github/workflows/lyra-cloudflare-last-resort-once.yml
           git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceFreeProviderSelection.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatCodingFlow.kt app/src/main/res/layout/activity_api_cloud_settings.xml app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceCloudflarePriorityTest.kt
           git diff --cached --check
-          git commit -m 'fix(workspace): use Cloudflare only as explicitly enabled last-resort route'
+          git commit -m 'fix(workspace): make Cloudflare an explicitly enabled last-resort route'
           git merge-base --is-ancestor c307357b53ec4ad3a005769d55f29bc44d74ff41 HEAD
           git push origin HEAD:refs/heads/agent/myra-phase-1
