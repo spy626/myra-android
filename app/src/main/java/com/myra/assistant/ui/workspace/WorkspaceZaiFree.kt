@@ -6,30 +6,22 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okio.Buffer
-import java.io.IOException
-import java.io.InterruptedIOException
-import java.net.SocketTimeoutException
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/** Direct Z.ai, exact zero-list-price model allowlist; never uses Gemini Live or another gateway. */
+/** Direct Z.ai coding-only route. Never participates in ordinary Chat, voice or photo routing. */
 internal object WorkspaceZaiFree {
     const val ENDPOINT = "https://api.z.ai/api/paas/v4/chat/completions"
-    const val PREFERENCE_KEY = "workspace_zai_free_text_opt_in"
-    const val VISION_PREFERENCE_KEY = "workspace_zai_free_vision_opt_in"
     const val CODING_PREFERENCE_KEY = "workspace_zai_free_coding_source_opt_in"
     const val MODEL_PREFERENCE_KEY = "workspace_zai_free_text_model"
     const val DEFAULT_TEXT_MODEL = "glm-4.7-flash"
     const val ALT_TEXT_MODEL = "glm-4.5-flash"
-    const val VISION_MODEL = "glm-4.6v-flash"
     private const val MAX_RESPONSE_BYTES = 32_768L
     private const val MAX_ERROR_BODY_BYTES = 8_192L
     private const val MAX_CODING_PROMPT_CHARS = 12_000
 
-    // Ordinary Z.ai Chat gets its own bounded network windows. Do not inherit
-    // OkHttp's ~10s read timeout from the base free client. This client still has no
-    // retry/fallback interceptor, so an uncertain timeout is never resent automatically.
+    /** One-file Safe Edit client. One request only; no automatic retry or cross-provider fallback. */
     val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
@@ -37,18 +29,7 @@ internal object WorkspaceZaiFree {
         .callTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    // SSE text chat should fail a silent/stalled stream sooner than the old full-response
-    // wait, while allowing a healthy stream to keep producing text beyond 45 seconds.
-    // One request only: retryOnConnectionFailure/redirects remain disabled on the base client.
-    val streamClient: OkHttpClient = client.newBuilder()
-        .readTimeout(25, TimeUnit.SECONDS)
-        .callTimeout(90, TimeUnit.SECONDS)
-        .build()
-
-    // Website generation needs longer server-thinking/read time than ordinary chat.
-    // Keep the whole operation bounded to 80s, but do not inherit OkHttp's ~10s read
-    // timeout from the base client. Still one request only: no retry/fallback interceptor
-    // and no saved-memory interceptor.
+    /** Website generation gets a longer bounded read window, still one request only. */
     val websiteClient: OkHttpClient = client.newBuilder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -62,7 +43,7 @@ internal object WorkspaceZaiFree {
     fun textModel(saved: String?): String = when (saved) {
         null, DEFAULT_TEXT_MODEL -> DEFAULT_TEXT_MODEL
         ALT_TEXT_MODEL -> ALT_TEXT_MODEL
-        else -> throw IllegalArgumentException("Unrecognized Z.ai free model; nothing was sent")
+        else -> throw IllegalArgumentException("Unrecognized Z.ai coding model; nothing was sent")
     }
 
     fun displayName(model: String): String = when (textModel(model)) {
@@ -79,39 +60,6 @@ internal object WorkspaceZaiFree {
         require(approved) { "Z.ai Work coding source permission is OFF; no project source was sent" }
     }
 
-    fun request(key: String, messages: List<WorkspaceConversationStore.Message>,
-                image: WorkspaceChatGateway.Image?, textModel: String,
-                visionApproved: Boolean): Request {
-        requireKey(key)
-        require(messages.isNotEmpty() && messages.last().role == "user" &&
-            WorkspaceLongInputPolicy.requestFits(messages)) { "Selected chat exceeds safe request limit" }
-        val model = if (image == null) WorkspaceZaiFree.textModel(textModel) else {
-            require(visionApproved) { "Z.ai vision needs its separate permission; no image sent" }
-            require(image.mime == "image/jpeg" || image.mime == "image/png") { "Unsupported photo format" }
-            require(image.base64.length in 1..2_700_000 &&
-                image.base64.all { it.isLetterOrDigit() || it == '+' || it == '/' || it == '=' }) {
-                "Photo is invalid or too large"
-            }
-            VISION_MODEL
-        }
-        val body = JSONObject(WorkspaceChatGateway.openRouterBody(messages, image))
-        body.remove("provider")
-        body.remove("plugins")
-        body.put("model", model)
-        // Text chat is streamed so the first visible model text can be shown immediately.
-        // GLM-4.7 defaults to enabled thinking and, when enabled, thinks compulsorily.
-        // Normal conversational text does not need hidden reasoning latency; coding/website
-        // requests use their separate non-streaming owners and are unchanged.
-        if (image == null) {
-            body.put("stream", true)
-            body.put("thinking", JSONObject().put("type", "disabled"))
-        } else {
-            body.put("stream", false)
-        }
-        return directRequest(key, body)
-    }
-
-    /** Explicit single-file coding request. The caller must have separate project-source consent. */
     fun editRequest(key: String, prompt: String, textModel: String,
                     sourceApproved: Boolean): Request {
         requireKey(key)
@@ -130,7 +78,6 @@ internal object WorkspaceZaiFree {
         return directRequest(key, payload)
     }
 
-    /** Reuse the canonical website brief/snapshot owner; only transport changes to direct Z.ai. */
     fun websiteRequest(key: String, snapshot: WorkspaceWebsiteGeneration.Snapshot,
                        textModel: String, sourceApproved: Boolean): Request {
         requireKey(key)
@@ -149,19 +96,10 @@ internal object WorkspaceZaiFree {
         Request.Builder().url(ENDPOINT)
             .header("Authorization", "Bearer $key")
             .header("Content-Type", "application/json")
-            .apply {
-                if (body.optBoolean("stream", false)) header("Accept", "text/event-stream")
-            }
             .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 
     fun readEdit(response: Response): String = read(response)
-
-    /** Text-only Workspace Chat streaming. Partial text is display-only until [DONE] + stop. */
-    fun readStream(response: Response, onPartial: (String) -> Unit): String = response.use {
-        if (!it.isSuccessful) throwHttpFailure(it)
-        WorkspaceZaiStream.read(it, onPartial)
-    }
 
     internal class RateLimitException(
         val retryAfterMillis: Long?,
@@ -169,9 +107,7 @@ internal object WorkspaceZaiFree {
         message: String,
     ) : IllegalStateException(message)
 
-    /** Read only Z.ai's numeric business code from a small bounded JSON error body.
-     * Raw provider message/body is never returned, logged or shown.
-     */
+    /** Only the bounded numeric business code is extracted; raw provider text is never exposed. */
     internal fun businessCode(response: Response): String? {
         val bytes = runCatching { response.peekBody(MAX_ERROR_BODY_BYTES + 1).bytes() }
             .getOrNull() ?: return null
@@ -214,10 +150,9 @@ internal object WorkspaceZaiFree {
         val code = businessCode?.takeIf { it.length == 4 && it.all(Char::isDigit) }
         val codeText = code?.let { " Business code $it:" }.orEmpty()
         val hint = if (wait != null)
-            " Wait ${wait / 1_000L} seconds before sending again."
+            " Wait ${wait / 1_000L} seconds before trying the coding task again."
         else " Do not retry immediately."
         return "Z.ai Free HTTP 429.$codeText ${rateLimitCategory(code)}.$hint " +
-            "The business code above is the diagnostic signal; HTTP 429 alone does not prove a daily quota is exhausted. " +
             "No automatic retry, recharge, provider switch, or paid fallback."
     }
 
@@ -227,54 +162,41 @@ internal object WorkspaceZaiFree {
             rateLimitMessage(retryAfter, code))
     }
 
-    internal fun networkFailure(error: IOException, streaming: Boolean = false): String = when (error) {
-        is SocketTimeoutException, is InterruptedIOException -> if (streaming)
-            "Z.ai streaming Chat stalled or timed out within LYRA's bounded windows " +
-                "(15s connect / 20s write / 25s no-data gap / 90s total). " +
-                "Any partial text was display-only and was not saved. No automatic retry or paid fallback."
-        else "Z.ai Chat request timed out within LYRA's bounded network windows " +
-            "(15s connect / 20s write / 40s read / 45s total). " +
-            "No HTTP response was confirmed. No automatic retry or paid fallback."
-        else -> "Z.ai Chat connection failed before a usable HTTP response. " +
-            "No automatic retry or paid fallback."
-    }
-
     private fun throwHttpFailure(response: Response): Nothing = when (response.code) {
         401, 403 -> throw IllegalArgumentException(
-            "Z.ai refused the API key or free model access (HTTP ${response.code}). No paid fallback.")
+            "Z.ai refused the API key or coding-model access (HTTP ${response.code}). No paid fallback.")
         402 -> throw IllegalArgumentException(
             "Z.ai requested payment (HTTP 402); LYRA stopped. No paid fallback.")
         429 -> throw rateLimitFailure(response.header("Retry-After"), businessCode(response))
         else -> throw IllegalArgumentException(
-            "Z.ai free request failed (HTTP ${response.code}). No paid fallback.")
+            "Z.ai coding request failed (HTTP ${response.code}). No paid fallback.")
     }
 
     fun read(response: Response): String = response.use {
         if (!it.isSuccessful) throwHttpFailure(it)
         val bytes = it.peekBody(MAX_RESPONSE_BYTES + 1).bytes()
         require(bytes.isNotEmpty() && bytes.size <= MAX_RESPONSE_BYTES) {
-            "Z.ai response is empty or exceeds safe size"
+            "Z.ai coding response is empty or exceeds safe size"
         }
         val root = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }
-            .getOrElse { throw IllegalArgumentException("Z.ai returned invalid response") }
+            .getOrElse { throw IllegalArgumentException("Z.ai returned invalid coding response") }
         require(!root.has("error")) { "Z.ai returned an error; no paid fallback" }
         val choice = root.optJSONArray("choices")?.optJSONObject(0)
-            ?: throw IllegalArgumentException("Z.ai did not return a complete reply")
+            ?: throw IllegalArgumentException("Z.ai did not return a complete coding reply")
         require(choice.optString("finish_reason") == "stop") {
-            "Z.ai reply was incomplete or filtered; no partial reply saved"
+            "Z.ai coding reply was incomplete or filtered; no partial proposal saved"
         }
         val content = choice.optJSONObject("message")?.opt("content")
         require(content is String && content.trim().length in 1..6_000) {
-            "Z.ai returned no bounded text reply"
+            "Z.ai returned no bounded coding reply"
         }
         content.trim()
     }
 
-    /** Fixed categories only: never echo provider bodies, keys, prompts or source. */
     internal fun websiteHttpFailure(code: Int, businessCode: String? = null,
                                     retryAfter: String? = null): String = when (code) {
         400 -> "Z.ai Free HTTP 400: website request or output format rejected; no automatic retry or paid fallback. Project files unchanged."
-        401, 403 -> "Z.ai Free HTTP $code: key or model access refused; no project files changed."
+        401, 403 -> "Z.ai Free HTTP $code: key or coding-model access refused; no project files changed."
         402 -> "Z.ai Free HTTP 402 requested payment; LYRA stopped. No paid fallback; project files unchanged."
         408 -> "Z.ai Free HTTP 408: upstream request timed out; no uncertain resend. Project files unchanged."
         429 -> rateLimitMessage(retryAfter, businessCode) + " Project files unchanged."

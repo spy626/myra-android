@@ -41,18 +41,15 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             b.advancedProviderToggle.text = if (opening) "Advanced · Privacy & fallback ▴"
                 else "Advanced · Privacy & fallback ▾"
         }
-        b.zaiWorkSwitch.isChecked = workspacePrefs.getBoolean(WorkspaceZaiFree.PREFERENCE_KEY, false)
-        b.zaiWorkSwitch.setOnCheckedChangeListener { _, enabled ->
-            workspacePrefs.edit().putBoolean(WorkspaceZaiFree.PREFERENCE_KEY, enabled).apply()
-        }
+        // Z.ai is coding-only. Retire any stale Chat/vision opt-ins left by older test builds.
+        workspacePrefs.edit()
+            .remove("workspace_zai_free_text_opt_in")
+            .remove("workspace_zai_free_vision_opt_in")
+            .apply()
         b.zaiCodingSwitch.isChecked = workspacePrefs.getBoolean(
             WorkspaceZaiFree.CODING_PREFERENCE_KEY, false)
         b.zaiCodingSwitch.setOnCheckedChangeListener { _, enabled ->
             workspacePrefs.edit().putBoolean(WorkspaceZaiFree.CODING_PREFERENCE_KEY, enabled).apply()
-        }
-        b.zaiVisionSwitch.isChecked = workspacePrefs.getBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, false)
-        b.zaiVisionSwitch.setOnCheckedChangeListener { _, enabled ->
-            workspacePrefs.edit().putBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, enabled).apply()
         }
         val selectedZai = workspacePrefs.getString(WorkspaceZaiFree.MODEL_PREFERENCE_KEY,
             WorkspaceZaiFree.DEFAULT_TEXT_MODEL)
