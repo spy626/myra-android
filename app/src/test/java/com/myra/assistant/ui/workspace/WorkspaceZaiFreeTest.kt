@@ -53,22 +53,32 @@ class WorkspaceZaiFreeTest {
             WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
                 WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = false)
         }.isFailure)
-        val website = WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
+        val defaultWebsite = WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
+            WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = true)
+        val altWebsite = WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
             WorkspaceZaiFree.ALT_TEXT_MODEL, sourceApproved = true)
-        val websiteBody = body(website)
-        assertEquals(WorkspaceZaiFree.ALT_TEXT_MODEL, websiteBody.getString("model"))
-        assertFalse(websiteBody.has("provider"))
-        assertFalse(websiteBody.has("plugins"))
-        assertEquals(2, websiteBody.getJSONArray("messages").length())
-        assertTrue(websiteBody.toString().contains("Build a dark landing page"))
+        assertEquals(WorkspaceZaiFree.ENDPOINT, defaultWebsite.url.toString())
+        assertEquals(defaultWebsite.url, altWebsite.url)
+        val defaultBody = body(defaultWebsite)
+        val altBody = body(altWebsite)
+        assertEquals(WorkspaceZaiFree.DEFAULT_TEXT_MODEL, defaultBody.getString("model"))
+        assertEquals(WorkspaceZaiFree.ALT_TEXT_MODEL, altBody.getString("model"))
+        listOf(defaultBody, altBody).forEach { websiteBody ->
+            assertFalse(websiteBody.has("provider"))
+            assertFalse(websiteBody.has("plugins"))
+            assertEquals(2, websiteBody.getJSONArray("messages").length())
+            assertTrue(websiteBody.toString().contains("Build a dark landing page"))
+        }
     }
 
-    @Test fun websiteClientHasLongReadWindowButRemainsBounded() {
+    @Test fun sharedWebsiteClientGivesBothCodingModelsLongerBoundedWindow() {
         assertEquals(20_000, WorkspaceZaiFree.websiteClient.connectTimeoutMillis)
         assertEquals(30_000, WorkspaceZaiFree.websiteClient.writeTimeoutMillis)
-        assertEquals(70_000, WorkspaceZaiFree.websiteClient.readTimeoutMillis)
-        assertEquals(80_000, WorkspaceZaiFree.websiteClient.callTimeoutMillis)
+        assertEquals(120_000, WorkspaceZaiFree.websiteClient.readTimeoutMillis)
+        assertEquals(140_000, WorkspaceZaiFree.websiteClient.callTimeoutMillis)
         assertFalse(WorkspaceZaiFree.websiteClient.retryOnConnectionFailure)
+        assertFalse(WorkspaceZaiFree.websiteClient.followRedirects)
+        assertFalse(WorkspaceZaiFree.websiteClient.followSslRedirects)
     }
 
     @Test fun businessCodeClassifies429WithoutLeakingProviderMessage() {
