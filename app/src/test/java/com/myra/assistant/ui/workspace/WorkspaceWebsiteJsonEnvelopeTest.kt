@@ -19,6 +19,27 @@ class WorkspaceWebsiteJsonEnvelopeTest {
         assertEquals(html, WorkspaceWebsiteGeneration.parse("\uFEFF$valid").getValue("index.html"))
     }
 
+    @Test fun boundedMarkdownWrappersAroundCompleteOutputsRecoverWithoutGuessing() {
+        val valid = envelope()
+        val wrappedJson = "Here is the complete website:\n```json\n$valid\n```\nDone."
+        assertEquals(html, WorkspaceWebsiteGeneration.parse(wrappedJson).getValue("index.html"))
+
+        val labelled = "Here are the complete files:\n\n### **index.html**\n```html\n$html\n```" +
+            "\n### **style.css**\n```css\nbody { color: blue; }\n```" +
+            "\n### **script.js**\n```javascript\nconsole.log('hello');\n```\nAll three files are complete."
+        val parsed = WorkspaceWebsiteGeneration.parse(labelled)
+        assertEquals(html, parsed.getValue("index.html"))
+        assertEquals("body { color: blue; }", parsed.getValue("style.css"))
+        assertEquals("console.log('hello');", parsed.getValue("script.js"))
+
+        listOf(
+            labelled + "\n```txt\nextra\n```",
+            labelled + "\n{\\\"extra\\\":true}",
+            labelled + "\n" + labelled
+        ).forEach { raw -> assertTrue("Ambiguous extra output must still be refused", runCatching {
+            WorkspaceWebsiteGeneration.parse(raw)
+        }.isFailure) }
+    }
     @Test fun literalNewlinesInsideCompleteJsonStringsAreEscapedWithoutChangingFileText() {
         val multiline = html.replace("<body>", "<body>\n")
         val valid = JSONObject().put("files", JSONObject()
