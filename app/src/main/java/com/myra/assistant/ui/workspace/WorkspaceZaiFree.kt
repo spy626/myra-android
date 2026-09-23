@@ -14,9 +14,7 @@ import java.util.concurrent.TimeUnit
 internal object WorkspaceZaiFree {
     const val ENDPOINT = "https://api.z.ai/api/paas/v4/chat/completions"
     const val CODING_PREFERENCE_KEY = "workspace_zai_free_coding_source_opt_in"
-    const val MODEL_PREFERENCE_KEY = "workspace_zai_free_text_model"
     const val DEFAULT_TEXT_MODEL = "glm-4.7-flash"
-    const val ALT_TEXT_MODEL = "glm-4.5-flash"
     private const val MAX_RESPONSE_BYTES = 32_768L
     private const val MAX_ERROR_BODY_BYTES = 8_192L
     private const val MAX_CODING_PROMPT_CHARS = 12_000
@@ -29,8 +27,7 @@ internal object WorkspaceZaiFree {
         .callTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    /** Shared website transport for both allowlisted GLM coding models.
-     * Website generation can legitimately stay silent longer than a one-file edit, so keep
+    /** Website generation can legitimately stay silent longer than a one-file edit, so keep
      * a wider but still hard-bounded window. One request only; no retry or provider fallback.
      */
     val websiteClient: OkHttpClient = client.newBuilder()
@@ -43,16 +40,14 @@ internal object WorkspaceZaiFree {
     fun validKey(key: String): Boolean =
         key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)
 
-    fun textModel(saved: String?): String = when (saved) {
-        null, DEFAULT_TEXT_MODEL -> DEFAULT_TEXT_MODEL
-        ALT_TEXT_MODEL -> ALT_TEXT_MODEL
+    fun textModel(model: String): String = when (model) {
+        DEFAULT_TEXT_MODEL -> DEFAULT_TEXT_MODEL
         else -> throw IllegalArgumentException("Unrecognized Z.ai coding model; nothing was sent")
     }
 
-    fun displayName(model: String): String = when (textModel(model)) {
-        DEFAULT_TEXT_MODEL -> "GLM-4.7-Flash"
-        ALT_TEXT_MODEL -> "GLM-4.5-Flash"
-        else -> error("unreachable")
+    fun displayName(model: String): String {
+        textModel(model)
+        return "GLM-4.7-Flash"
     }
 
     private fun requireKey(key: String) {
