@@ -80,11 +80,7 @@ internal class WorkspaceChatCodingFlow(
             error("Z.ai Work coding is enabled but its key is missing or invalid. No source was sent and no other provider was used.")
             return
         }
-        val zaiModel = if (zaiCodingApproved) runCatching {
-            WorkspaceZaiFree.textModel(workspacePrefs.getString(
-                WorkspaceZaiFree.MODEL_PREFERENCE_KEY, WorkspaceZaiFree.DEFAULT_TEXT_MODEL))
-        }.getOrElse { error("${it.message}. No source was sent."); return }
-        else WorkspaceZaiFree.DEFAULT_TEXT_MODEL
+        val zaiModel = WorkspaceZaiFree.DEFAULT_TEXT_MODEL
         val usingZai = zaiCodingApproved
         val xKiroEnabled = !usingZai &&
             workspacePrefs.getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
@@ -137,11 +133,7 @@ internal class WorkspaceChatCodingFlow(
             error("Z.ai Work coding is enabled but its key is missing or invalid. No website source was sent and no other provider was used.")
             return
         }
-        val zaiModel = if (zaiCodingApproved) runCatching {
-            WorkspaceZaiFree.textModel(workspacePrefs.getString(
-                WorkspaceZaiFree.MODEL_PREFERENCE_KEY, WorkspaceZaiFree.DEFAULT_TEXT_MODEL))
-        }.getOrElse { error("${it.message}. No website source was sent."); return }
-        else WorkspaceZaiFree.DEFAULT_TEXT_MODEL
+        val zaiModel = WorkspaceZaiFree.DEFAULT_TEXT_MODEL
         val openRouterKey = if (zaiCodingApproved) "" else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
             .getOrElse { error("Secure provider keys unavailable; no source was shared."); return }
         val groqKey = if (zaiCodingApproved) "" else runCatching { keys.get(ApiKeyStore.GROQ) }
