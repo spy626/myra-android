@@ -29,12 +29,15 @@ internal object WorkspaceZaiFree {
         .callTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    /** Website generation gets a longer bounded read window, still one request only. */
+    /** Shared website transport for both allowlisted GLM coding models.
+     * Website generation can legitimately stay silent longer than a one-file edit, so keep
+     * a wider but still hard-bounded window. One request only; no retry or provider fallback.
+     */
     val websiteClient: OkHttpClient = client.newBuilder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(70, TimeUnit.SECONDS)
-        .callTimeout(80, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .callTimeout(140, TimeUnit.SECONDS)
         .build()
 
     fun validKey(key: String): Boolean =
