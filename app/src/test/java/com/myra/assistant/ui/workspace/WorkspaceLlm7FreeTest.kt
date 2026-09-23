@@ -7,6 +7,8 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
 
 class WorkspaceLlm7FreeTest {
     private fun message(role: String, text: String) =
@@ -60,6 +62,26 @@ class WorkspaceLlm7FreeTest {
             .body("""{"choices":[{"finish_reason":"length","message":{"content":"partial"}}]}"""
                 .toResponseBody()).build()
         assertTrue(runCatching { WorkspaceLlm7Free.read(partial) }.isFailure)
+    }
+
+    @Test fun transportUsesIntendedBoundedMobileTimeoutsAndAccurateMessages() {
+        assertEquals(15_000, WorkspaceLlm7Free.client.connectTimeoutMillis)
+        assertEquals(15_000, WorkspaceLlm7Free.client.writeTimeoutMillis)
+        assertEquals(30_000, WorkspaceLlm7Free.client.readTimeoutMillis)
+        assertEquals(35_000, WorkspaceLlm7Free.client.callTimeoutMillis)
+        assertFalse(WorkspaceLlm7Free.client.retryOnConnectionFailure)
+        assertFalse(WorkspaceLlm7Free.client.followRedirects)
+        assertFalse(WorkspaceLlm7Free.client.followSslRedirects)
+
+        val stage = WorkspaceLlm7Free.networkFailure(SocketTimeoutException("provider host"))
+        assertTrue(stage.contains("connection/read timed out"))
+        assertTrue(stage.contains("before"))
+        assertFalse(stage.contains("timed out (LYRA limit: 35 seconds)"))
+        assertFalse(stage.contains("provider host"))
+
+        val overall = WorkspaceLlm7Free.networkFailure(InterruptedIOException("timeout"))
+        assertTrue(overall.contains("35-second overall request limit"))
+        assertFalse(overall.contains("timeout"))
     }
 
     @Test fun completeOpenaiCompatibleReplyIsAccepted() {
