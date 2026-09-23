@@ -11,6 +11,7 @@ import com.myra.assistant.databinding.ActivityApiCloudSettingsBinding
 import com.myra.assistant.ui.workspace.WorkspaceFreeCrossProvider
 import com.myra.assistant.ui.workspace.WorkspaceCodingAutoFallback
 import com.myra.assistant.ui.workspace.WorkspaceGroqFree
+import com.myra.assistant.ui.workspace.WorkspaceLlm7Free
 import com.myra.assistant.ui.workspace.WorkspaceXKiroFree
 import com.myra.assistant.ui.workspace.WorkspaceZaiFree
 import com.myra.assistant.ui.workspace.WorkspaceWebsiteGroqFallback
@@ -25,6 +26,7 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         val keys = ApiKeyStore(this)
         b.openRouterKey.setText(keys.get(ApiKeyStore.OPENROUTER))
         b.groqKey.setText(keys.get(ApiKeyStore.GROQ))
+        b.llm7Key.setText(keys.get(ApiKeyStore.LLM7))
         b.xKiroKey.setText(keys.get(ApiKeyStore.XKIRO))
         b.zaiKey.setText(keys.get(ApiKeyStore.ZAI))
         b.deepseekKey.setText(keys.get(ApiKeyStore.DEEPSEEK))
@@ -71,6 +73,11 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         // A saved key is never consent to send personal text to a second company. Groq has
         // no enforceable API-side $0 ceiling; this confirmation is valid only while the
         // account stays on Free tier with inference ZDR enabled.
+        b.llm7FreeSwitch.isChecked = workspacePrefs.getBoolean(
+            WorkspaceLlm7Free.PREFERENCE_KEY, false)
+        b.llm7FreeSwitch.setOnCheckedChangeListener { _, enabled ->
+            workspacePrefs.edit().putBoolean(WorkspaceLlm7Free.PREFERENCE_KEY, enabled).apply()
+        }
         b.groqFreeZdrSwitch.isChecked = workspacePrefs.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
         b.groqFreeZdrSwitch.setOnCheckedChangeListener { _, enabled ->
             workspacePrefs.edit().putBoolean(WorkspaceGroqFree.PREFERENCE_KEY, enabled).apply()
@@ -96,6 +103,7 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             // Never touch the Gemini key or legacy conversation_provider preference here.
             keys.put(ApiKeyStore.OPENROUTER, b.openRouterKey.text.toString())
             keys.put(ApiKeyStore.GROQ, b.groqKey.text.toString())
+            keys.put(ApiKeyStore.LLM7, b.llm7Key.text.toString())
             keys.put(ApiKeyStore.XKIRO, b.xKiroKey.text.toString())
             keys.put(ApiKeyStore.ZAI, b.zaiKey.text.toString())
             keys.put(ApiKeyStore.DEEPSEEK, b.deepseekKey.text.toString())
