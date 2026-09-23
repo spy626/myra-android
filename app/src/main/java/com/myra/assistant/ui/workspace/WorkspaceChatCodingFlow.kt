@@ -58,9 +58,32 @@ internal class WorkspaceChatCodingFlow(
         if (project.type == WorkspaceProjectType.CHAT) return
         if (isRunning) { report("A coding request is already running."); return }
         activeTurn = userMessageId?.let { id to it }
+
         if (project.type == WorkspaceProjectType.WEBSITE) {
-            continueWebsite(id, instruction)
+            val existingPaths = runCatching { WorkspaceSourceContext.choices(files, id).toSet() }
+                .getOrElse { error("Website source unavailable: ${it.message}"); return }
+            val decision = WorkspaceWebsiteEditRouting.decide(instruction, existingPaths)
+            if (!decision.isSingleFile) {
+                continueWebsite(id, instruction)
+                return
+            }
+            continueSingleFile(id, instruction, decision.path)
             return
+        }
+        continueSingleFile(id, instruction, null)
+    }
+
+    /** Reuses the existing one-file Safe Edit owner for both Android source and a clearly
+     * bounded edit to one file of an already-built website. No unrelated website file is sent.
+     */
+    private fun continueSingleFile(id: String, instruction: String, forcedPath: String?) {
+        val project = projects.getProject(id) ?: return
+        if (project.type == WorkspaceProjectType.WEBSITE) {
+            runCatching { WorkspaceWebsiteGeneration.finishPreviousForNewRequest(files, projects, id) }
+                .onFailure {
+                    error("Previous website edit needs attention: ${it.message}. Use Undo / Keep in Chat.")
+                    return
+                }
         }
         val pending = runCatching { WorkspaceScopedEdit.pending(projects, id) }
             .getOrElse { error("Rollback needs attention: ${it.message}"); return }
@@ -109,9 +132,8 @@ internal class WorkspaceChatCodingFlow(
                 rawAcceptanceCriteria = WorkspaceTaskContract.normalizeAcceptanceCriteria(criteria))
             tasks.setSpecificationApproved(id, saved.taskId, WorkspaceTaskContract.specToken(saved), true)
         }.onFailure { error("Task could not be saved: ${it.message}"); return }
-        prepareSource(id, instruction, key, usingXKiro, usingZai, zaiModel)
+        prepareSource(id, instruction, key, usingXKiro, usingZai, zaiModel, forcedPath)
     }
-
     /** Explicit 'build website' Send authorizes generation of the three named project files.
      * The AI proposes text; the local file owner checks snapshots and saves a durable Undo.
      * No additional per-file permission popup is needed for this requested website build.
@@ -368,7 +390,8 @@ internal class WorkspaceChatCodingFlow(
     }
 
     private fun prepareSource(id: String, instruction: String, key: String,
-                              usingXKiro: Boolean, usingZai: Boolean, zaiModel: String) {
+                              usingXKiro: Boolean, usingZai: Boolean, zaiModel: String,
+                              forcedPath: String? = null) {
         if (!current(id)) return
         val project = projects.getProject(id) ?: return
         var paths = runCatching { WorkspaceSourceContext.choices(files, id) }
@@ -383,14 +406,20 @@ internal class WorkspaceChatCodingFlow(
             paths = runCatching { WorkspaceSourceContext.choices(files, id) }
                 .getOrElse { error("Starter files unavailable: ${it.message}"); return }
         }
-        val preferred = when {
+        val preferred = forcedPath ?: when {
             Regex("""(?i)\b(?:css|style|color|colour|background)\b""").containsMatchIn(instruction) -> "style.css"
             Regex("""(?i)\b(?:javascript|script|click|button|function)\b""").containsMatchIn(instruction) -> "script.js"
             else -> "index.html"
         }
-        // One scoped file, never an entire project directory or an arbitrary provider choice.
-        val selected = paths.firstOrNull { it == preferred } ?: paths.firstOrNull()
-        if (selected == null) { error("No editable source file available."); return }
+        // A website routing decision is binding: never substitute a different file silently.
+        val selected = if (forcedPath != null) paths.firstOrNull { it == forcedPath }
+            else paths.firstOrNull { it == preferred } ?: paths.firstOrNull()
+        if (selected == null) {
+            error(if (forcedPath != null)
+                "Requested website edit target is unavailable; no source was sent."
+            else "No editable source file available.")
+            return
+        }
         val prepared = runCatching {
             WorkspaceAiHandoff.prepare(files, tasks, projects, id, selected, instruction)
         }.getOrElse { error("Source review blocked: ${it.message}"); return }
