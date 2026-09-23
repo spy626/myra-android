@@ -114,7 +114,7 @@ jobs:
           test -x "$apksigner"
           test -x "$aapt"
 
-          "$apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
+          "$apksigner" verify --min-sdk-version 21 --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
           grep -F "Verified using v1 scheme (JAR signing): true" "$RUNNER_TEMP/apksigner.txt"
           grep -F "Verified using v2 scheme (APK Signature Scheme v2): true" "$RUNNER_TEMP/apksigner.txt"
           grep -F "Verified using v3 scheme (APK Signature Scheme v3): true" "$RUNNER_TEMP/apksigner.txt"
