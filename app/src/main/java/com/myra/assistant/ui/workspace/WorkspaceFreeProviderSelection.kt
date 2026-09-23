@@ -8,7 +8,8 @@ internal object WorkspaceFreeProviderSelection {
                llm7Available: Boolean = false, llm7Approved: Boolean = false,
                llm7WithinBudget: Boolean = false): WorkspaceChatGateway.Provider? = when {
         hasAttachments -> if (openRouterAvailable) WorkspaceChatGateway.Provider.OPENROUTER_FREE else null
-        llm7Approved && llm7Available && llm7WithinBudget -> WorkspaceChatGateway.Provider.LLM7_FREE
+        llm7Approved -> if (llm7Available && llm7WithinBudget)
+            WorkspaceChatGateway.Provider.LLM7_FREE else null
         groqFreeZdrApproved && groqAvailable && groqWithinBudget -> WorkspaceChatGateway.Provider.GROQ_FREE
         openRouterAvailable -> WorkspaceChatGateway.Provider.OPENROUTER_FREE
         else -> null
