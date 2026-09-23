@@ -23,8 +23,7 @@ internal object WorkspaceLlm7Free {
     private const val MAX_RESPONSE_BYTES = 96_000L
 
     // Dedicated client: do not inherit OpenRouter memory injection or cross-provider retry.
-    val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
-        .interceptors().let { WorkspaceFreeAiSuggestion.client.newBuilder().build() }
+    val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder().build()
 
     fun validKey(key: String): Boolean =
         key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)
