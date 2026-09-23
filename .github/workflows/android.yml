@@ -26,6 +26,8 @@ jobs:
         run: |
           if [ -n "$LYRA_KEYSTORE_BASE64" ]; then
             echo "$LYRA_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/lyra-ci.jks"
+          else
+            echo "Stable signing secrets are absent; debug output will use the isolated com.myra.assistant.phonetest package."
           fi
       - name: Android lint (legacy findings are reported separately)
         continue-on-error: true
@@ -47,11 +49,31 @@ jobs:
           LYRA_KEYSTORE_PASSWORD: ${{ secrets.LYRA_KEYSTORE_PASSWORD }}
           LYRA_KEY_ALIAS: ${{ secrets.LYRA_KEY_ALIAS }}
           LYRA_KEY_PASSWORD: ${{ secrets.LYRA_KEY_PASSWORD }}
+      - name: Verify phone-test APK identity and signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$apk"
+
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          aapt="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          test -x "$apksigner"
+          test -x "$aapt"
+
+          "$apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
+          grep -F "Verified using v1 scheme (JAR signing): true" "$RUNNER_TEMP/apksigner.txt"
+          grep -F "Verified using v2 scheme (APK Signature Scheme v2): true" "$RUNNER_TEMP/apksigner.txt"
+
+          "$aapt" dump badging "$apk" | head -n 1 | tee "$RUNNER_TEMP/apk-package.txt"
+          grep -F "package: name='com.myra.assistant.phonetest'" "$RUNNER_TEMP/apk-package.txt"
+
+          echo "Phone-test APK has isolated package identity and verified v1/v2 signatures."
       - uses: actions/upload-artifact@v4
         with:
-          name: myra-debug-apk
+          name: lyra-phone-test-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-      - name: Publish direct debug APK prerelease
+      - name: Publish direct phone-test APK prerelease
         if: github.event_name == 'push' && github.ref == 'refs/heads/agent/myra-phase-1'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,23 +85,20 @@ jobs:
           api="https://api.github.com/repos/$REPOSITORY"
           auth=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
 
-          # Re-running this step must be safe: reuse the release when it already exists.
           if response=$(curl --fail-with-body --silent --show-error "${auth[@]}" "$api/releases/tags/$tag"); then
             :
           else
             response=$(curl --fail-with-body --silent --show-error "${auth[@]}" \
               -X POST "$api/releases" \
-              -d "{\"tag_name\":\"$tag\",\"target_commitish\":\"$COMMIT_SHA\",\"name\":\"LYRA AIRI Memory $tag\",\"body\":\"Automated debug APK for physical Android acceptance. PHONE PASS is not claimed.\",\"draft\":false,\"prerelease\":true}")
+              -d "{\"tag_name\":\"$tag\",\"target_commitish\":\"$COMMIT_SHA\",\"name\":\"LYRA Phone Test $tag\",\"body\":\"Isolated com.myra.assistant.phonetest debug APK for physical Android acceptance. Existing LYRA is not replaced. PHONE PASS is not claimed.\",\"draft\":false,\"prerelease\":true}")
           fi
           release_id=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
           upload_url=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"].split("{")[0])')
 
-          # GitHub occasionally leaves a starter asset after a transient 5xx. Remove only
-          # this release's debug APK before each bounded retry so duplicate names cannot block recovery.
           uploaded=false
           for attempt in 1 2 3; do
             assets=$(curl --fail-with-body --silent --show-error "${auth[@]}" "$api/releases/$release_id/assets")
-            asset_id=$(printf '%s' "$assets" | python3 -c 'import json,sys; xs=json.load(sys.stdin); print(next((x["id"] for x in xs if x.get("name")=="app-debug.apk"), ""))')
+            asset_id=$(printf '%s' "$assets" | python3 -c 'import json,sys; xs=json.load(sys.stdin); print(next((x["id"] for x in xs if x.get("name")=="lyra-phone-test.apk"), ""))')
             if [ -n "$asset_id" ]; then
               curl --fail-with-body --silent --show-error "${auth[@]}" -X DELETE "$api/releases/assets/$asset_id"
             fi
@@ -88,7 +107,7 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Content-Type: application/vnd.android.package-archive" \
               --data-binary @app/build/outputs/apk/debug/app-debug.apk \
-              "$upload_url?name=app-debug.apk"; then
+              "$upload_url?name=lyra-phone-test.apk"; then
               uploaded=true
               break
             fi

@@ -25,18 +25,39 @@ android {
     ]
     def hasStableSigning = signingValues.values().every { it != null && !it.trim().isEmpty() } &&
         file(signingValues.storeFile ?: 'missing-keystore').isFile()
+
     signingConfigs {
+        // Phone-test APKs must be accepted by both Android and older file-manager
+        // verifiers. minSdk 26 would otherwise allow AGP to omit v1 signatures.
+        debug {
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
+            enableV4Signing true
+        }
         if (hasStableSigning) {
             ciStable {
                 storeFile file(signingValues.storeFile)
                 storePassword signingValues.storePassword
                 keyAlias signingValues.keyAlias
                 keyPassword signingValues.keyPassword
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+                enableV4Signing true
             }
         }
     }
+
     buildTypes {
-        debug { if (hasStableSigning) signingConfig signingConfigs.ciStable }
+        // CI debug builds are a side-by-side acceptance app. GitHub-hosted runners
+        // create a different default debug key when stable signing secrets are absent,
+        // so they must never masquerade as an update for com.myra.assistant.
+        debug {
+            applicationIdSuffix ".phonetest"
+            versionNameSuffix "-phone-test"
+            signingConfig hasStableSigning ? signingConfigs.ciStable : signingConfigs.debug
+        }
         release {
             minifyEnabled false
             if (hasStableSigning) signingConfig signingConfigs.ciStable
