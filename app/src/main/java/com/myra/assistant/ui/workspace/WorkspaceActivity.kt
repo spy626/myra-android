@@ -916,14 +916,10 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val picked = attachments.toList()
         // The Groq Free opt-in covers text chat only. Never silently send photos or files
-        // to a different provider just because another API key exists.
+        // to OpenRouter merely because an OpenRouter key also exists.
         if (intent == null && current.type == WorkspaceProjectType.CHAT && picked.isNotEmpty() &&
             preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false) &&
-            keys.get(ApiKeyStore.GROQ).isNotBlank() &&
-            !(preferences.getBoolean(WorkspaceZaiFree.PREFERENCE_KEY, false) &&
-              keys.get(ApiKeyStore.ZAI).isNotBlank() &&
-              (!picked.any { it.mime.startsWith("image/") } ||
-               preferences.getBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, false)))) {
+            keys.get(ApiKeyStore.GROQ).isNotBlank()) {
             statusMessage = "Groq Free is text-only. Remove the attachment or turn Groq OFF in Settings before sending. Nothing was sent."
             render()
             return
@@ -1066,8 +1062,6 @@ class WorkspaceActivity : AppCompatActivity() {
                 } else reply
             }
             val failure = checked.exceptionOrNull()
-            streamingReply = null
-            streamingRenderAtElapsedMs = 0L
             checked.onSuccess { reply ->
                 runCatching {
                     if (replacingAssistantId == null) {
