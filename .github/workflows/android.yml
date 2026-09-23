@@ -77,11 +77,24 @@ jobs:
             key_pass="$LYRA_KEY_PASSWORD"
             echo "Re-signing isolated phone-test APK with configured stable key."
           else
-            ks="$HOME/.android/debug.keystore"
-            alias="androiddebugkey"
-            store_pass="android"
-            key_pass="android"
-            echo "Re-signing isolated phone-test APK with this run's Android debug key."
+            # Do not assume AGP materialized ~/.android/debug.keystore on a hosted
+            # runner. Generate an explicit test-only signer for this isolated app.
+            ks="$RUNNER_TEMP/lyra-phone-test.jks"
+            alias="lyraphonetest"
+            store_pass="lyra-phone-test"
+            key_pass="lyra-phone-test"
+            rm -f "$ks"
+            keytool -genkeypair -noprompt \
+              -keystore "$ks" \
+              -storetype JKS \
+              -storepass "$store_pass" \
+              -keypass "$key_pass" \
+              -alias "$alias" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=LYRA Phone Test,O=Android,C=US"
+            echo "Re-signing isolated phone-test APK with an explicit test-only key."
           fi
           test -s "$ks"
 
