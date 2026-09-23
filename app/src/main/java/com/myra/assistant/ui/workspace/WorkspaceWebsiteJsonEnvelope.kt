@@ -31,8 +31,8 @@ internal object WorkspaceWebsiteJsonEnvelope {
         return label == path
     }
     /** A completed, explicitly labelled triple of standalone code fences is not free-form
-     * prose. The order and labels are exact. Only a short bounded prose wrapper is ignored;
-     * an extra block, duplicate path or nested fence still causes rejection.
+     * prose. The order and labels are exact. Only a short bounded leading intro is ignored;
+     * trailing prose, an extra block, duplicate path or nested fence still causes rejection.
      */
     private fun exactLabelledFiles(raw: String): String? {
         if (raw.length > 30_000) return null
@@ -71,7 +71,7 @@ internal object WorkspaceWebsiteJsonEnvelope {
                 }
             }
         }
-        if (!boundedWrapper(lines.drop(line).joinToString("\n"))) return null
+        if (lines.drop(line).any { it.isNotBlank() }) return null
         val fileObject = JSONObject()
         files.forEach { (path, source) -> fileObject.put(path, source) }
         return JSONObject().put("files", fileObject).toString()
@@ -106,7 +106,7 @@ internal object WorkspaceWebsiteJsonEnvelope {
             val match = fenced.single()
             val before = trimmed.substring(0, match.range.first)
             val after = trimmed.substring(match.range.last + 1)
-            if (boundedWrapper(before) && boundedWrapper(after))
+            if (boundedWrapper(before) && after.isBlank())
                 match.groupValues[1].trim()
             else trimmed
         } else trimmed
