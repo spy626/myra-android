@@ -10,7 +10,7 @@ import org.json.JSONTokener
  */
 internal object WorkspaceWebsiteJsonEnvelope {
     private val jsonFence = Regex(
-        """(?s)```(?:json)?[ \\t]*\\r?\\n(.*?)\\r?\\n?```""",
+        """(?s)```(?:json)?[ \t]*\r?\n(.*?)\r?\n?```""",
         RegexOption.IGNORE_CASE)
 
     private fun boundedWrapper(text: String): Boolean {
@@ -31,8 +31,8 @@ internal object WorkspaceWebsiteJsonEnvelope {
         return label == path
     }
     /** A completed, explicitly labelled triple of standalone code fences is not free-form
-     * prose. The order and labels are exact; an extra block, preface, duplicate path, nested
-     * fence or trailing explanation causes rejection rather than a guessed project write.
+     * prose. The order and labels are exact. Only a short bounded prose wrapper is ignored;
+     * an extra block, duplicate path or nested fence still causes rejection.
      */
     private fun exactLabelledFiles(raw: String): String? {
         if (raw.length > 30_000) return null
