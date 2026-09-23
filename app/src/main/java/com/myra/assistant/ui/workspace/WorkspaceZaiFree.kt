@@ -160,7 +160,7 @@ internal object WorkspaceZaiFree {
         is SocketTimeoutException, is InterruptedIOException ->
             "Z.ai Chat request timed out within LYRA's bounded network windows " +
                 "(15s connect / 20s write / 40s read / 45s total). " +
-                "No HTTP response was confirmed; no automatic retry or paid fallback."
+                "No HTTP response was confirmed. No automatic retry or paid fallback."
         else -> "Z.ai Chat connection failed before a usable HTTP response. " +
             "No automatic retry or paid fallback."
     }
