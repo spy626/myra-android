@@ -66,6 +66,10 @@ class WorkspaceActivity : AppCompatActivity() {
     // Monotonic, in-memory only. Used only when Z.ai explicitly supplies Retry-After.
     // App restart clears it; no durable profiling or provider state is created.
     private var zaiRetryNotBeforeElapsedMs = 0L
+    private data class StreamingReply(val projectId: String, val userMessageId: String, val text: String)
+    // Display-only. Never persisted until the provider finishes with [DONE] + stop.
+    private var streamingReply: StreamingReply? = null
+    private var streamingRenderAtElapsedMs = 0L
     private var statusMessage = ""
     // Latest saved user turn only; Retry never appends a duplicate message.
     private var codingRetryTarget: Pair<String, String>? = null
@@ -153,6 +157,8 @@ class WorkspaceActivity : AppCompatActivity() {
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
+        streamingReply = null
+        streamingRenderAtElapsedMs = 0L
         coding.cancel()
         super.onStop()
     }
@@ -299,12 +305,17 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun stopReply() {
         if (!isBusy()) return
+        val hadStreaming = streamingReply != null
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
         coding.cancel()
         codingRetryTarget = null
-        statusMessage = "Stopped. No partial reply is available from this non-streaming provider."
+        streamingReply = null
+        streamingRenderAtElapsedMs = 0L
+        statusMessage = if (hadStreaming)
+            "Stopped. The partial streaming reply was display-only and was not saved."
+        else "Stopped. No partial reply was saved."
         render()
         if (!workTab) composer.requestFocus()
     }
@@ -637,6 +648,22 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
         }
+        streamingReply?.takeIf {
+            current.type == WorkspaceProjectType.CHAT && it.projectId == current.projectId && it.text.isNotBlank()
+        }?.let { draft ->
+            val line = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.START
+            }
+            line.addView(label("", 15f).apply {
+                text = WorkspaceMarkdownText.render(draft.text)
+                maxWidth = resources.displayMetrics.widthPixels - dp(72)
+                setTextIsSelectable(false)
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                contentDescription = "LYRA reply streaming"
+            }, LinearLayout.LayoutParams(-2, -2))
+            content.addView(line, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+        }
         if (current.type != WorkspaceProjectType.CHAT) {
             val id = current.projectId
             val websitePending = if (current.type == WorkspaceProjectType.WEBSITE)
@@ -761,6 +788,8 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest = null
         coding.cancel()
         codingRetryTarget = null
+        streamingReply = null
+        streamingRenderAtElapsedMs = 0L
         selectedId = null
         workTab = false
         attachments.clear()
@@ -788,6 +817,8 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest = null
         coding.cancel()
         codingRetryTarget = null
+        streamingReply = null
+        streamingRenderAtElapsedMs = 0L
         selectedId = id
         projects.markOpened(id)
         attachments.clear()
@@ -1056,6 +1087,8 @@ class WorkspaceActivity : AppCompatActivity() {
         }
             .getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
+        streamingReply = null
+        streamingRenderAtElapsedMs = 0L
         val call = (if (provider == WorkspaceChatGateway.Provider.ZAI_FREE)
             WorkspaceZaiFree.client else WorkspaceChatGateway.client).newCall(outgoing)
         activeRequest = call
@@ -1067,9 +1100,28 @@ class WorkspaceActivity : AppCompatActivity() {
                 Result.failure(IllegalStateException(if (provider == WorkspaceChatGateway.Provider.ZAI_FREE)
                     WorkspaceZaiFree.networkFailure(error)
                 else WorkspaceFreeAiSuggestion.networkFailure(error))))
-            override fun onResponse(call: Call, response: Response) =
-                complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
-                    runCatching { WorkspaceChatGateway.read(provider, response) })
+            override fun onResponse(call: Call, response: Response) {
+                val result = runCatching {
+                    if (provider == WorkspaceChatGateway.Provider.ZAI_FREE && image == null) {
+                        WorkspaceZaiFree.readStream(response) { partial ->
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed && serial == requestGeneration &&
+                                    activeRequest === call && selectedId == id && !workTab) {
+                                    val first = streamingReply == null
+                                    streamingReply = StreamingReply(id, messageId, partial)
+                                    val now = android.os.SystemClock.elapsedRealtime()
+                                    if (first || now - streamingRenderAtElapsedMs >= 80L) {
+                                        streamingRenderAtElapsedMs = now
+                                        statusMessage = ""
+                                        render()
+                                    }
+                                }
+                            }
+                        }
+                    } else WorkspaceChatGateway.read(provider, response)
+                }
+                complete(call, serial, id, messageId, replacingAssistantId, provider, picked, result)
+            }
         })
     }
 
@@ -1091,6 +1143,8 @@ class WorkspaceActivity : AppCompatActivity() {
                 } else reply
             }
             val failure = checked.exceptionOrNull()
+            streamingReply = null
+            streamingRenderAtElapsedMs = 0L
             if (provider == WorkspaceChatGateway.Provider.ZAI_FREE &&
                 failure is WorkspaceZaiFree.RateLimitException) {
                 failure.retryAfterMillis?.let { wait ->

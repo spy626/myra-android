@@ -22,6 +22,9 @@ class WorkspaceZaiFreeTest {
         val data = body(request)
         assertEquals("api.z.ai", request.url.host)
         assertEquals("glm-4.7-flash", data.getString("model"))
+        assertTrue(data.getBoolean("stream"))
+        assertEquals("disabled", data.getJSONObject("thinking").getString("type"))
+        assertEquals("text/event-stream", request.header("Accept"))
         assertFalse(data.has("provider"))
         assertFalse(data.has("plugins"))
         assertFalse(data.toString().contains("zai-only-key"))
@@ -36,6 +39,8 @@ class WorkspaceZaiFreeTest {
         val request = WorkspaceZaiFree.request("zai-only-key", listOf(message), photo,
             WorkspaceZaiFree.DEFAULT_TEXT_MODEL, true)
         assertEquals("glm-4.6v-flash", body(request).getString("model"))
+        assertFalse(body(request).getBoolean("stream"))
+        assertNull(request.header("Accept"))
         assertTrue(body(request).toString().contains("data:image/png;base64,cG5n"))
     }
 

@@ -89,6 +89,16 @@ internal object WorkspaceZaiFree {
         body.remove("provider")
         body.remove("plugins")
         body.put("model", model)
+        // Text chat is streamed so the first visible model text can be shown immediately.
+        // GLM-4.7 defaults to enabled thinking and, when enabled, thinks compulsorily.
+        // Normal conversational text does not need hidden reasoning latency; coding/website
+        // requests use their separate non-streaming owners and are unchanged.
+        if (image == null) {
+            body.put("stream", true)
+            body.put("thinking", JSONObject().put("type", "disabled"))
+        } else {
+            body.put("stream", false)
+        }
         return directRequest(key, body)
     }
 
@@ -130,10 +140,19 @@ internal object WorkspaceZaiFree {
         Request.Builder().url(ENDPOINT)
             .header("Authorization", "Bearer $key")
             .header("Content-Type", "application/json")
+            .apply {
+                if (body.optBoolean("stream", false)) header("Accept", "text/event-stream")
+            }
             .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 
     fun readEdit(response: Response): String = read(response)
+
+    /** Text-only Workspace Chat streaming. Partial text is display-only until [DONE] + stop. */
+    fun readStream(response: Response, onPartial: (String) -> Unit): String = response.use {
+        if (!it.isSuccessful) throwHttpFailure(it)
+        WorkspaceZaiStream.read(it, onPartial)
+    }
 
     internal class RateLimitException(
         val retryAfterMillis: Long?,
@@ -165,18 +184,18 @@ internal object WorkspaceZaiFree {
             "No automatic retry or paid fallback."
     }
 
+    private fun throwHttpFailure(response: Response): Nothing = when (response.code) {
+        401, 403 -> throw IllegalArgumentException(
+            "Z.ai refused the API key or free model access (HTTP ${response.code}). No paid fallback.")
+        402 -> throw IllegalArgumentException(
+            "Z.ai requested payment (HTTP 402); LYRA stopped. No paid fallback.")
+        429 -> throw rateLimitFailure(response.header("Retry-After"))
+        else -> throw IllegalArgumentException(
+            "Z.ai free request failed (HTTP ${response.code}). No paid fallback.")
+    }
+
     fun read(response: Response): String = response.use {
-        if (!it.isSuccessful) {
-            when (it.code) {
-                401, 403 -> throw IllegalArgumentException(
-                    "Z.ai refused the API key or free model access (HTTP ${it.code}). No paid fallback.")
-                402 -> throw IllegalArgumentException(
-                    "Z.ai requested payment (HTTP 402); LYRA stopped. No paid fallback.")
-                429 -> throw rateLimitFailure(it.header("Retry-After"))
-                else -> throw IllegalArgumentException(
-                    "Z.ai free request failed (HTTP ${it.code}). No paid fallback.")
-            }
-        }
+        if (!it.isSuccessful) throwHttpFailure(it)
         val bytes = it.peekBody(MAX_RESPONSE_BYTES + 1).bytes()
         require(bytes.isNotEmpty() && bytes.size <= MAX_RESPONSE_BYTES) {
             "Z.ai response is empty or exceeds safe size"
