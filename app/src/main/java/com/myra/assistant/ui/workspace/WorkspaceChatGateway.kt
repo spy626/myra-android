@@ -7,6 +7,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 
 /** Workspace text and explicitly selected one-turn images. Never uses the voice-only Gemini key. */
 internal object WorkspaceChatGateway {
@@ -135,6 +136,11 @@ internal object WorkspaceChatGateway {
     fun client(provider: Provider): OkHttpClient = when (provider) {
         Provider.LLM7_FREE -> WorkspaceLlm7Free.client
         else -> client
+    }
+
+    fun networkFailure(provider: Provider, error: IOException): String = when (provider) {
+        Provider.LLM7_FREE -> WorkspaceLlm7Free.networkFailure(error)
+        else -> WorkspaceFreeAiSuggestion.networkFailure(error)
     }
 
     fun read(provider: Provider, response: Response): String = when (provider) {
