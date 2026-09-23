@@ -39,6 +39,16 @@ class WorkspaceZaiFreeTest {
         assertTrue(body(request).toString().contains("data:image/png;base64,cG5n"))
     }
 
+    @Test fun websiteClientHasLongReadWindowButRemainsGloballyBounded() {
+        assertEquals(20_000, WorkspaceZaiFree.websiteClient.connectTimeoutMillis)
+        assertEquals(30_000, WorkspaceZaiFree.websiteClient.writeTimeoutMillis)
+        assertEquals(70_000, WorkspaceZaiFree.websiteClient.readTimeoutMillis)
+        assertEquals(80_000, WorkspaceZaiFree.websiteClient.callTimeoutMillis)
+        assertFalse(WorkspaceZaiFree.websiteClient.retryOnConnectionFailure)
+        assertFalse(WorkspaceZaiFree.websiteClient.followRedirects)
+        assertFalse(WorkspaceZaiFree.websiteClient.followSslRedirects)
+    }
+
     @Test fun codingSourceNeedsSeparateConsentAndNeverAddsAnotherProvider() {
         assertTrue(runCatching {
             WorkspaceZaiFree.editRequest("zai-only-key", "replace selected file",

@@ -26,9 +26,14 @@ internal object WorkspaceZaiFree {
     // No existing cross-provider, memory, or retry interceptors are attached.
     val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder().build()
 
-    // Website generation can need a larger completion window, but still has one bounded
-    // direct request only. No retry/fallback interceptor and no saved-memory interceptor.
+    // Website generation needs longer server-thinking/read time than ordinary chat.
+    // Keep the whole operation bounded to 80s, but do not inherit OkHttp's ~10s read
+    // timeout from the base client. Still one request only: no retry/fallback interceptor
+    // and no saved-memory interceptor.
     val websiteClient: OkHttpClient = client.newBuilder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(70, TimeUnit.SECONDS)
         .callTimeout(80, TimeUnit.SECONDS)
         .build()
 
