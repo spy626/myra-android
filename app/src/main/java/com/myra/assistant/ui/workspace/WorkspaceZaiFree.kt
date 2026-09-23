@@ -76,6 +76,27 @@ internal object WorkspaceZaiFree {
         return directRequest(key, payload)
     }
 
+    /** Z.ai coding is more reliable when whole source files are not JSON-escaped.
+     * Only the trusted serialization instruction changes; goal/source/safety text is preserved.
+     */
+    private fun labelledWebsiteContract(base: String): String {
+        val jsonOpening = "Return exactly ONE JSON object with only a files object containing exactly " +
+            "index.html, style.css, script.js string fields. Each field is the COMPLETE new file " +
+            "content, not a patch or a markdown code fence. "
+        val jsonEnding = "No prose, explanations or markdown outside the JSON."
+        require(base.contains(jsonOpening) && base.contains(jsonEnding)) {
+            "Website output contract changed; source not sent"
+        }
+        val labelledOpening = "Return exactly THREE complete files as consecutive labelled code blocks, " +
+            "NOT a JSON object or patch. The entire response format must be: " +
+            "index.html then a fenced html block, style.css then a fenced css block, " +
+            "and script.js then a fenced javascript block, each on its own lines. " +
+            "Use the exact lowercase file labels; close every fence. If no JavaScript is " +
+            "needed, leave the script.js block empty. Do not put triple backtick fences " +
+            "inside any file block. "
+        return base.replace(jsonOpening, labelledOpening)
+            .replace(jsonEnding, "No preface, extra block, duplicated file or trailing explanation.")
+    }
     fun websiteRequest(key: String, snapshot: WorkspaceWebsiteGeneration.Snapshot,
                        textModel: String, sourceApproved: Boolean): Request {
         requireKey(key)
@@ -84,8 +105,12 @@ internal object WorkspaceZaiFree {
         val buffer = Buffer()
         requireNotNull(canonical.body).writeTo(buffer)
         val payload = JSONObject(buffer.readUtf8())
+        val messages = payload.getJSONArray("messages")
+        val system = messages.getJSONObject(0)
+        system.put("content", labelledWebsiteContract(system.getString("content")))
         payload.remove("provider")
         payload.remove("plugins")
+        payload.remove("response_format")
         payload.put("model", WorkspaceZaiFree.textModel(textModel))
         return directRequest(key, payload)
     }
