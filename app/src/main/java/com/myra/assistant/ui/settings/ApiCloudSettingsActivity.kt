@@ -41,24 +41,16 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             b.advancedProviderToggle.text = if (opening) "Advanced · Privacy & fallback ▴"
                 else "Advanced · Privacy & fallback ▾"
         }
-        // Z.ai is coding-only. Retire any stale Chat/vision opt-ins left by older test builds.
+        // Z.ai is coding-only. Retire stale Chat/vision/model prefs from older test builds.
         workspacePrefs.edit()
             .remove("workspace_zai_free_text_opt_in")
             .remove("workspace_zai_free_vision_opt_in")
+            .remove("workspace_zai_free_text_model")
             .apply()
         b.zaiCodingSwitch.isChecked = workspacePrefs.getBoolean(
             WorkspaceZaiFree.CODING_PREFERENCE_KEY, false)
         b.zaiCodingSwitch.setOnCheckedChangeListener { _, enabled ->
             workspacePrefs.edit().putBoolean(WorkspaceZaiFree.CODING_PREFERENCE_KEY, enabled).apply()
-        }
-        val selectedZai = workspacePrefs.getString(WorkspaceZaiFree.MODEL_PREFERENCE_KEY,
-            WorkspaceZaiFree.DEFAULT_TEXT_MODEL)
-        b.zaiModel45.isChecked = selectedZai == WorkspaceZaiFree.ALT_TEXT_MODEL
-        b.zaiModel47.isChecked = selectedZai != WorkspaceZaiFree.ALT_TEXT_MODEL
-        b.zaiModelGroup.setOnCheckedChangeListener { _, checked ->
-            val model = if (checked == b.zaiModel45.id) WorkspaceZaiFree.ALT_TEXT_MODEL
-                else WorkspaceZaiFree.DEFAULT_TEXT_MODEL
-            workspacePrefs.edit().putString(WorkspaceZaiFree.MODEL_PREFERENCE_KEY, model).apply()
         }
         b.xKiroWorkSwitch.isChecked = workspacePrefs.getBoolean(
             WorkspaceXKiroFree.PREFERENCE_KEY, false)
