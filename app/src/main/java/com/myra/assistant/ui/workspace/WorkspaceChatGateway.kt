@@ -37,7 +37,7 @@ internal object WorkspaceChatGateway {
             "claims only in earlier USER turns from this same conversation; quote them " +
             "if necessary. If evidence is absent, say so instead of guessing a name, " +
             "place, plan or other fact. Never claim phone testing."
-    enum class Provider { OPENROUTER_FREE, GROQ_FREE }
+    enum class Provider { OPENROUTER_FREE, GROQ_FREE, LLM7_FREE }
     data class Image(val mime: String, val base64: String)
     // One extra try only after specific upstream HTTP rejections. Connection failures and
     // ambiguous timeouts are NOT retried. Retain the existing 35-second total call timeout.
@@ -58,6 +58,7 @@ internal object WorkspaceChatGateway {
             "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
         if (provider == Provider.GROQ_FREE) return WorkspaceGroqFree.request(key, messages, image)
+        if (provider == Provider.LLM7_FREE) return WorkspaceLlm7Free.request(key, messages, image)
         image?.let {
             require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
             require(it.base64.length in 1..2_700_000 &&
@@ -131,8 +132,14 @@ internal object WorkspaceChatGateway {
             .put("messages", entries).toString()
     }
 
+    fun client(provider: Provider): OkHttpClient = when (provider) {
+        Provider.LLM7_FREE -> WorkspaceLlm7Free.client
+        else -> client
+    }
+
     fun read(provider: Provider, response: Response): String = when (provider) {
         Provider.OPENROUTER_FREE -> WorkspaceFreeAiSuggestion.readResponse(response)
         Provider.GROQ_FREE -> WorkspaceGroqFree.read(response)
+        Provider.LLM7_FREE -> WorkspaceLlm7Free.read(response)
     }
 }
