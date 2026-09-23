@@ -1089,8 +1089,12 @@ class WorkspaceActivity : AppCompatActivity() {
         val serial = ++requestGeneration
         streamingReply = null
         streamingRenderAtElapsedMs = 0L
-        val call = (if (provider == WorkspaceChatGateway.Provider.ZAI_FREE)
-            WorkspaceZaiFree.client else WorkspaceChatGateway.client).newCall(outgoing)
+        val zaiStreaming = provider == WorkspaceChatGateway.Provider.ZAI_FREE && image == null
+        val call = (when {
+            zaiStreaming -> WorkspaceZaiFree.streamClient
+            provider == WorkspaceChatGateway.Provider.ZAI_FREE -> WorkspaceZaiFree.client
+            else -> WorkspaceChatGateway.client
+        }).newCall(outgoing)
         activeRequest = call
         statusMessage = ""
         render()
@@ -1098,7 +1102,7 @@ class WorkspaceActivity : AppCompatActivity() {
             override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
                 messageId, replacingAssistantId, provider, picked,
                 Result.failure(IllegalStateException(if (provider == WorkspaceChatGateway.Provider.ZAI_FREE)
-                    WorkspaceZaiFree.networkFailure(error)
+                    WorkspaceZaiFree.networkFailure(error, streaming = zaiStreaming)
                 else WorkspaceFreeAiSuggestion.networkFailure(error))))
             override fun onResponse(call: Call, response: Response) {
                 val result = runCatching {

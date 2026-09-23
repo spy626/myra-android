@@ -36,6 +36,14 @@ internal object WorkspaceZaiFree {
         .callTimeout(45, TimeUnit.SECONDS)
         .build()
 
+    // SSE text chat should fail a silent/stalled stream sooner than the old full-response
+    // wait, while allowing a healthy stream to keep producing text beyond 45 seconds.
+    // One request only: retryOnConnectionFailure/redirects remain disabled on the base client.
+    val streamClient: OkHttpClient = client.newBuilder()
+        .readTimeout(25, TimeUnit.SECONDS)
+        .callTimeout(90, TimeUnit.SECONDS)
+        .build()
+
     // Website generation needs longer server-thinking/read time than ordinary chat.
     // Keep the whole operation bounded to 80s, but do not inherit OkHttp's ~10s read
     // timeout from the base client. Still one request only: no retry/fallback interceptor
@@ -175,11 +183,14 @@ internal object WorkspaceZaiFree {
                 "This does not prove a daily quota is exhausted. No automatic retry or paid fallback.")
     }
 
-    internal fun networkFailure(error: IOException): String = when (error) {
-        is SocketTimeoutException, is InterruptedIOException ->
-            "Z.ai Chat request timed out within LYRA's bounded network windows " +
-                "(15s connect / 20s write / 40s read / 45s total). " +
-                "No HTTP response was confirmed. No automatic retry or paid fallback."
+    internal fun networkFailure(error: IOException, streaming: Boolean = false): String = when (error) {
+        is SocketTimeoutException, is InterruptedIOException -> if (streaming)
+            "Z.ai streaming Chat stalled or timed out within LYRA's bounded windows " +
+                "(15s connect / 20s write / 25s no-data gap / 90s total). " +
+                "Any partial text was display-only and was not saved. No automatic retry or paid fallback."
+        else "Z.ai Chat request timed out within LYRA's bounded network windows " +
+            "(15s connect / 20s write / 40s read / 45s total). " +
+            "No HTTP response was confirmed. No automatic retry or paid fallback."
         else -> "Z.ai Chat connection failed before a usable HTTP response. " +
             "No automatic retry or paid fallback."
     }

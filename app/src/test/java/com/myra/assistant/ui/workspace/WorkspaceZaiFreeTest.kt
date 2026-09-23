@@ -54,6 +54,25 @@ class WorkspaceZaiFreeTest {
         assertFalse(WorkspaceZaiFree.client.followSslRedirects)
     }
 
+    @Test fun streamingClientBoundsSilentGapsButAllowsHealthyLongerReply() {
+        assertEquals(15_000, WorkspaceZaiFree.streamClient.connectTimeoutMillis)
+        assertEquals(20_000, WorkspaceZaiFree.streamClient.writeTimeoutMillis)
+        assertEquals(25_000, WorkspaceZaiFree.streamClient.readTimeoutMillis)
+        assertEquals(90_000, WorkspaceZaiFree.streamClient.callTimeoutMillis)
+        assertFalse(WorkspaceZaiFree.streamClient.retryOnConnectionFailure)
+        assertFalse(WorkspaceZaiFree.streamClient.followRedirects)
+        assertFalse(WorkspaceZaiFree.streamClient.followSslRedirects)
+    }
+
+    @Test fun streamingTimeoutDiagnosticMatchesStreamingClient() {
+        val message = WorkspaceZaiFree.networkFailure(
+            java.net.SocketTimeoutException("test"), streaming = true)
+        assertTrue(message.contains("25s no-data gap"))
+        assertTrue(message.contains("90s total"))
+        assertTrue(message.contains("partial text"))
+        assertFalse(message.contains("45s total"))
+    }
+
     @Test fun rateLimitCarriesOnlyBoundedRetryAfterAndNeverClaimsDailyExhaustion() {
         val limited = WorkspaceZaiFree.rateLimitFailure("17")
         assertEquals(17_000L, limited.retryAfterMillis)
