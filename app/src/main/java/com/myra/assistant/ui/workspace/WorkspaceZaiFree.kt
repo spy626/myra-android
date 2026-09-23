@@ -24,6 +24,7 @@ internal object WorkspaceZaiFree {
     const val ALT_TEXT_MODEL = "glm-4.5-flash"
     const val VISION_MODEL = "glm-4.6v-flash"
     private const val MAX_RESPONSE_BYTES = 32_768L
+    private const val MAX_ERROR_BODY_BYTES = 8_192L
     private const val MAX_CODING_PROMPT_CHARS = 12_000
 
     // Ordinary Z.ai Chat gets its own bounded network windows. Do not inherit
@@ -164,8 +165,26 @@ internal object WorkspaceZaiFree {
 
     internal class RateLimitException(
         val retryAfterMillis: Long?,
+        val businessCode: String?,
         message: String,
     ) : IllegalStateException(message)
+
+    /** Read only Z.ai's numeric business code from a small bounded JSON error body.
+     * Raw provider message/body is never returned, logged or shown.
+     */
+    internal fun businessCode(response: Response): String? {
+        val bytes = runCatching { response.peekBody(MAX_ERROR_BODY_BYTES + 1).bytes() }
+            .getOrNull() ?: return null
+        if (bytes.isEmpty() || bytes.size.toLong() > MAX_ERROR_BODY_BYTES) return null
+        val root = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }.getOrNull() ?: return null
+        val raw = root.optJSONObject("error")?.opt("code") ?: return null
+        val code = when (raw) {
+            is String -> raw.trim()
+            is Number -> raw.toString()
+            else -> return null
+        }
+        return code.takeIf { it.length == 4 && it.all(Char::isDigit) }
+    }
 
     private fun retryAfterMillis(header: String?): Long? {
         val seconds = header?.takeIf { it.length in 1..3 && it.all(Char::isDigit) }
@@ -173,14 +192,39 @@ internal object WorkspaceZaiFree {
         return seconds.takeIf { it in 1..300 }?.times(1_000L)
     }
 
-    internal fun rateLimitFailure(retryAfter: String?): RateLimitException {
+    private fun rateLimitCategory(code: String?): String = when (code) {
+        "1113" -> "no usable balance/resource package is available for this request"
+        "1302" -> "request-rate limit reached"
+        "1305" -> "Z.ai service is temporarily overloaded"
+        "1308" -> "usage-window limit reached; Z.ai reports that this limit resets later"
+        "1309" -> "GLM Coding Plan package is expired"
+        "1310" -> "weekly/monthly usage limit is exhausted; Z.ai reports that it resets later"
+        "1311" -> "the current plan does not include access to the selected model"
+        "1313" -> "request frequency is restricted under Z.ai Fair Usage Policy"
+        "1314" -> "enterprise package is expired"
+        "1315" -> "this API key is restricted to enterprise coding-package scenarios"
+        "1316", "1318", "1320" -> "5-hour usage window limit reached"
+        "1317", "1319", "1321" -> "7-day usage window limit reached"
+        null -> "rate/usage request rejected; Z.ai did not provide a usable numeric business code"
+        else -> "unrecognized Z.ai rate/usage condition"
+    }
+
+    private fun rateLimitMessage(retryAfter: String?, businessCode: String?): String {
         val wait = retryAfterMillis(retryAfter)
+        val code = businessCode?.takeIf { it.length == 4 && it.all(Char::isDigit) }
+        val codeText = code?.let { " Business code $it:" }.orEmpty()
         val hint = if (wait != null)
             " Wait ${wait / 1_000L} seconds before sending again."
-        else " Wait before sending again."
-        return RateLimitException(wait,
-            "Z.ai free model is rate-limited (HTTP 429).$hint " +
-                "This does not prove a daily quota is exhausted. No automatic retry or paid fallback.")
+        else " Do not retry immediately."
+        return "Z.ai Free HTTP 429.$codeText ${rateLimitCategory(code)}.$hint " +
+            "The business code above is the diagnostic signal; HTTP 429 alone does not prove a daily quota is exhausted. " +
+            "No automatic retry, recharge, provider switch, or paid fallback."
+    }
+
+    internal fun rateLimitFailure(retryAfter: String?, businessCode: String? = null): RateLimitException {
+        val code = businessCode?.takeIf { it.length == 4 && it.all(Char::isDigit) }
+        return RateLimitException(retryAfterMillis(retryAfter), code,
+            rateLimitMessage(retryAfter, code))
     }
 
     internal fun networkFailure(error: IOException, streaming: Boolean = false): String = when (error) {
@@ -200,7 +244,7 @@ internal object WorkspaceZaiFree {
             "Z.ai refused the API key or free model access (HTTP ${response.code}). No paid fallback.")
         402 -> throw IllegalArgumentException(
             "Z.ai requested payment (HTTP 402); LYRA stopped. No paid fallback.")
-        429 -> throw rateLimitFailure(response.header("Retry-After"))
+        429 -> throw rateLimitFailure(response.header("Retry-After"), businessCode(response))
         else -> throw IllegalArgumentException(
             "Z.ai free request failed (HTTP ${response.code}). No paid fallback.")
     }
@@ -227,12 +271,13 @@ internal object WorkspaceZaiFree {
     }
 
     /** Fixed categories only: never echo provider bodies, keys, prompts or source. */
-    internal fun websiteHttpFailure(code: Int): String = when (code) {
+    internal fun websiteHttpFailure(code: Int, businessCode: String? = null,
+                                    retryAfter: String? = null): String = when (code) {
         400 -> "Z.ai Free HTTP 400: website request or output format rejected; no automatic retry or paid fallback. Project files unchanged."
         401, 403 -> "Z.ai Free HTTP $code: key or model access refused; no project files changed."
         402 -> "Z.ai Free HTTP 402 requested payment; LYRA stopped. No paid fallback; project files unchanged."
         408 -> "Z.ai Free HTTP 408: upstream request timed out; no uncertain resend. Project files unchanged."
-        429 -> "Z.ai Free HTTP 429: rate-limited; try later. No automatic retry or paid fallback; project files unchanged."
+        429 -> rateLimitMessage(retryAfter, businessCode) + " Project files unchanged."
         502, 503, 504 -> "Z.ai Free HTTP $code: service unavailable; no cross-provider resend. Project files unchanged."
         else -> "Z.ai Free HTTP $code: website request refused; no paid fallback. Project files unchanged."
     }

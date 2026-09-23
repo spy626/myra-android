@@ -1,5 +1,6 @@
 package com.myra.assistant.ui.workspace
 
+import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONObject
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
@@ -167,10 +168,13 @@ class WorkspaceWebsiteGenerationTest {
             WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = true)
         val response = okhttp3.Response.Builder().request(request)
             .protocol(okhttp3.Protocol.HTTP_1_1).code(429).message("Too Many Requests")
-            .body("SECRET_PROVIDER_BODY".toResponseBody()).build()
+            .body("{\"error\":{\"code\":\"1305\",\"message\":\"SECRET_PROVIDER_BODY\"}}"
+                .toResponseBody("application/json".toMediaType())).build()
         val failure = runCatching { WorkspaceWebsiteGeneration.readResponse(response) }.exceptionOrNull()
         assertNotNull(failure)
         assertTrue(failure!!.message.orEmpty().contains("Z.ai Free HTTP 429"))
+        assertTrue(failure.message.orEmpty().contains("Business code 1305"))
+        assertTrue(failure.message.orEmpty().contains("temporarily overloaded"))
         assertFalse(failure.message.orEmpty().contains("OpenRouter"))
         assertFalse(failure.message.orEmpty().contains("SECRET_PROVIDER_BODY"))
         assertTrue(s.files.list("site").isEmpty())

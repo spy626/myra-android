@@ -1,5 +1,6 @@
 package com.myra.assistant.ui.workspace
 
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
@@ -71,6 +72,53 @@ class WorkspaceZaiFreeTest {
         assertTrue(message.contains("90s total"))
         assertTrue(message.contains("partial text"))
         assertFalse(message.contains("45s total"))
+    }
+
+    @Test fun businessCodeClassifiesKnown429WithoutLeakingProviderMessage() {
+        fun failure(code: String): WorkspaceZaiFree.RateLimitException {
+            val request = Request.Builder().url(WorkspaceZaiFree.ENDPOINT).build()
+            val response = Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(429).message("Too Many Requests")
+                .body(("{\"error\":{\"code\":\"$code\",\"message\":\"SECRET provider detail token=abc\"}}")
+                    .toResponseBody("application/json".toMediaType()))
+                .build()
+            return runCatching { WorkspaceZaiFree.read(response) }.exceptionOrNull()
+                as WorkspaceZaiFree.RateLimitException
+        }
+        val overload = failure("1305")
+        assertEquals("1305", overload.businessCode)
+        assertTrue(overload.message.orEmpty().contains("temporarily overloaded"))
+        assertFalse(overload.message.orEmpty().contains("SECRET"))
+        assertFalse(overload.message.orEmpty().contains("token=abc"))
+
+        val usage = failure("1308")
+        assertEquals("1308", usage.businessCode)
+        assertTrue(usage.message.orEmpty().contains("usage-window limit"))
+        val balance = failure("1113")
+        assertTrue(balance.message.orEmpty().contains("balance/resource package"))
+        assertTrue(balance.message.orEmpty().contains("No automatic retry"))
+    }
+
+    @Test fun unknownOrMalformedBusinessCodeIsSanitized() {
+        val request = Request.Builder().url(WorkspaceZaiFree.ENDPOINT).build()
+        val unknown = Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+            .code(429).message("Too Many Requests")
+            .body("{\"error\":{\"code\":\"1999\",\"message\":\"PRIVATE\"}}"
+                .toResponseBody("application/json".toMediaType())).build()
+        val ex = runCatching { WorkspaceZaiFree.read(unknown) }.exceptionOrNull()
+            as WorkspaceZaiFree.RateLimitException
+        assertEquals("1999", ex.businessCode)
+        assertTrue(ex.message.orEmpty().contains("unrecognized Z.ai"))
+        assertFalse(ex.message.orEmpty().contains("PRIVATE"))
+
+        val malformed = Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+            .code(429).message("Too Many Requests")
+            .body("{\"error\":{\"code\":\"abc\",\"message\":\"PRIVATE2\"}}"
+                .toResponseBody("application/json".toMediaType())).build()
+        val ex2 = runCatching { WorkspaceZaiFree.read(malformed) }.exceptionOrNull()
+            as WorkspaceZaiFree.RateLimitException
+        assertNull(ex2.businessCode)
+        assertFalse(ex2.message.orEmpty().contains("PRIVATE2"))
     }
 
     @Test fun rateLimitCarriesOnlyBoundedRetryAfterAndNeverClaimsDailyExhaustion() {
