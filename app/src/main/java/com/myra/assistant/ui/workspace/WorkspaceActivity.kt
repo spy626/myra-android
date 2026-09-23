@@ -1048,7 +1048,7 @@ class WorkspaceActivity : AppCompatActivity() {
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
                 messageId, replacingAssistantId, provider, picked,
-                Result.failure(IllegalStateException(WorkspaceFreeAiSuggestion.networkFailure(error))))
+                Result.failure(IllegalStateException(WorkspaceChatGateway.networkFailure(provider, error))))
             override fun onResponse(call: Call, response: Response) =
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
                     runCatching { WorkspaceChatGateway.read(provider, response) })
