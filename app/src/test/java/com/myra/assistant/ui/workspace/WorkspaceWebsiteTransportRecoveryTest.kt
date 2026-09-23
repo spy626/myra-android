@@ -23,11 +23,14 @@ class WorkspaceWebsiteTransportRecoveryTest {
         assertEquals("", parsed.getValue("script.js"))
     }
 
-    @Test fun incompleteAmbiguousOrExtraLabelledFilesMustStillFailClosed() {
+    @Test fun shortLeadingIntroCanRecoverButIncompleteAmbiguousOrExtraFilesFailClosed() {
+        assertEquals(html, WorkspaceWebsiteGeneration.parse(
+            "Here is your site:\n" + fenced()
+        ).getValue("index.html"))
         listOf(
             fenced().substringBefore("script.js\n```javascript"),
             fenced(extra = "\nnotes.txt\n```text\nsecret\n```"),
-            "Here is your site:\n" + fenced(),
+            fenced() + "\nMore output",
             fenced() + "\n" + fenced(),
             fenced(script = "```\nother.txt\n```text\nnot part of this file")
         ).forEach { output ->
