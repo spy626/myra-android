@@ -60,7 +60,12 @@ class WorkspaceZaiFreeTest {
         assertEquals(WorkspaceZaiFree.DEFAULT_TEXT_MODEL, websiteBody.getString("model"))
         assertFalse(websiteBody.has("provider"))
         assertFalse(websiteBody.has("plugins"))
+        assertFalse(websiteBody.has("response_format"))
         assertEquals(2, websiteBody.getJSONArray("messages").length())
+        val system = websiteBody.getJSONArray("messages").getJSONObject(0).getString("content")
+        assertTrue(system.contains("Return exactly THREE complete files as consecutive labelled code blocks"))
+        assertFalse(system.contains("Return exactly ONE JSON object"))
+        assertTrue(system.contains("No preface, extra block, duplicated file or trailing explanation."))
         assertTrue(websiteBody.toString().contains("Build a dark landing page"))
         assertTrue(runCatching {
             WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
