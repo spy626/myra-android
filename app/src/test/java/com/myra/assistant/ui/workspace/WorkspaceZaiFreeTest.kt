@@ -15,8 +15,8 @@ class WorkspaceZaiFreeTest {
         JSONObject(Buffer().also { request.body!!.writeTo(it) }.readUtf8())
 
     @Test fun exactCodingModelAllowlistAndDirectEndpoint() {
-        assertEquals("glm-4.7-flash", WorkspaceZaiFree.textModel(null))
-        assertEquals("glm-4.5-flash", WorkspaceZaiFree.textModel("glm-4.5-flash"))
+        assertEquals("glm-4.7-flash", WorkspaceZaiFree.textModel("glm-4.7-flash"))
+        assertTrue(runCatching { WorkspaceZaiFree.textModel("glm-4.5-flash") }.isFailure)
         assertTrue(runCatching { WorkspaceZaiFree.textModel("glm-4.7-flashx") }.isFailure)
         val request = WorkspaceZaiFree.editRequest("zai-only-key", "replace selected file",
             WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = true)
@@ -53,25 +53,22 @@ class WorkspaceZaiFreeTest {
             WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
                 WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = false)
         }.isFailure)
-        val defaultWebsite = WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
+        val website = WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
             WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = true)
-        val altWebsite = WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
-            WorkspaceZaiFree.ALT_TEXT_MODEL, sourceApproved = true)
-        assertEquals(WorkspaceZaiFree.ENDPOINT, defaultWebsite.url.toString())
-        assertEquals(defaultWebsite.url, altWebsite.url)
-        val defaultBody = body(defaultWebsite)
-        val altBody = body(altWebsite)
-        assertEquals(WorkspaceZaiFree.DEFAULT_TEXT_MODEL, defaultBody.getString("model"))
-        assertEquals(WorkspaceZaiFree.ALT_TEXT_MODEL, altBody.getString("model"))
-        listOf(defaultBody, altBody).forEach { websiteBody ->
-            assertFalse(websiteBody.has("provider"))
-            assertFalse(websiteBody.has("plugins"))
-            assertEquals(2, websiteBody.getJSONArray("messages").length())
-            assertTrue(websiteBody.toString().contains("Build a dark landing page"))
-        }
+        assertEquals(WorkspaceZaiFree.ENDPOINT, website.url.toString())
+        val websiteBody = body(website)
+        assertEquals(WorkspaceZaiFree.DEFAULT_TEXT_MODEL, websiteBody.getString("model"))
+        assertFalse(websiteBody.has("provider"))
+        assertFalse(websiteBody.has("plugins"))
+        assertEquals(2, websiteBody.getJSONArray("messages").length())
+        assertTrue(websiteBody.toString().contains("Build a dark landing page"))
+        assertTrue(runCatching {
+            WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
+                "glm-4.5-flash", sourceApproved = true)
+        }.isFailure)
     }
 
-    @Test fun sharedWebsiteClientGivesBothCodingModelsLongerBoundedWindow() {
+    @Test fun websiteClientHasLongerBoundedWindow() {
         assertEquals(20_000, WorkspaceZaiFree.websiteClient.connectTimeoutMillis)
         assertEquals(30_000, WorkspaceZaiFree.websiteClient.writeTimeoutMillis)
         assertEquals(120_000, WorkspaceZaiFree.websiteClient.readTimeoutMillis)
