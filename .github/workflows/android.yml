@@ -98,7 +98,7 @@ jobs:
           fi
           test -s "$ks"
 
-          "$apksigner" sign             --ks "$ks"             --ks-key-alias "$alias"             --ks-pass "pass:$store_pass"             --key-pass "pass:$key_pass"             --v1-signing-enabled true             --v2-signing-enabled true             --v3-signing-enabled true             --v4-signing-enabled false             --out "$RUNNER_TEMP/lyra-phone-test-signed.apk"             "$apk"
+          "$apksigner" sign             --ks "$ks"             --ks-key-alias "$alias"             --ks-pass "pass:$store_pass"             --key-pass "pass:$key_pass"             --min-sdk-version 21             --v1-signing-enabled true             --v2-signing-enabled true             --v3-signing-enabled true             --v4-signing-enabled false             --out "$RUNNER_TEMP/lyra-phone-test-signed.apk"             "$apk"
 
           mv "$RUNNER_TEMP/lyra-phone-test-signed.apk" "$apk"
 
