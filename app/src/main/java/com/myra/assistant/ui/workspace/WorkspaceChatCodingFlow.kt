@@ -72,14 +72,29 @@ internal class WorkspaceChatCodingFlow(
             error("Coding request exceeds 500 characters. Shorten the instruction.")
             return
         }
-        val xKiroEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
-            .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
+        val workspacePrefs = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+        val zaiCodingApproved = workspacePrefs.getBoolean(WorkspaceZaiFree.CODING_PREFERENCE_KEY, false)
+        val zaiKey = if (zaiCodingApproved) runCatching { keys.get(ApiKeyStore.ZAI) }
+            .getOrElse { error("Secure Z.ai key unavailable; nothing was shared."); return } else ""
+        if (zaiCodingApproved && !WorkspaceZaiFree.validKey(zaiKey)) {
+            error("Z.ai Work coding is enabled but its key is missing or invalid. No source was sent and no other provider was used.")
+            return
+        }
+        val zaiModel = if (zaiCodingApproved) runCatching {
+            WorkspaceZaiFree.textModel(workspacePrefs.getString(
+                WorkspaceZaiFree.MODEL_PREFERENCE_KEY, WorkspaceZaiFree.DEFAULT_TEXT_MODEL))
+        }.getOrElse { error("${it.message}. No source was sent."); return }
+        else WorkspaceZaiFree.DEFAULT_TEXT_MODEL
+        val usingZai = zaiCodingApproved
+        val xKiroEnabled = !usingZai &&
+            workspacePrefs.getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
         val xKiroKey = if (xKiroEnabled) runCatching { keys.get(ApiKeyStore.XKIRO) }
             .getOrElse { error("Secure xKiro key unavailable; nothing was shared."); return } else ""
         val usingXKiro = xKiroEnabled && WorkspaceXKiroFree.validKey(xKiroKey)
-        val openRouterKey = if (usingXKiro) "" else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
+        val openRouterKey = if (usingXKiro || usingZai) "" else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
             .getOrElse { error("Secure provider key unavailable; nothing was shared."); return }
         val key = when {
+            usingZai -> zaiKey
             usingXKiro -> xKiroKey
             openRouterKey.isNotBlank() -> openRouterKey
             else -> ""
@@ -98,7 +113,7 @@ internal class WorkspaceChatCodingFlow(
                 rawAcceptanceCriteria = WorkspaceTaskContract.normalizeAcceptanceCriteria(criteria))
             tasks.setSpecificationApproved(id, saved.taskId, WorkspaceTaskContract.specToken(saved), true)
         }.onFailure { error("Task could not be saved: ${it.message}"); return }
-        prepareSource(id, instruction, key, usingXKiro)
+        prepareSource(id, instruction, key, usingXKiro, usingZai, zaiModel)
     }
 
     /** Explicit 'build website' Send authorizes generation of the three named project files.
@@ -114,22 +129,36 @@ internal class WorkspaceChatCodingFlow(
             error("Website brief could not be accepted: ${it.message}")
             return
         }
-        val openRouterKey = runCatching { keys.get(ApiKeyStore.OPENROUTER) }
+        val workspacePrefs = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+        val zaiCodingApproved = workspacePrefs.getBoolean(WorkspaceZaiFree.CODING_PREFERENCE_KEY, false)
+        val zaiKey = if (zaiCodingApproved) runCatching { keys.get(ApiKeyStore.ZAI) }
+            .getOrElse { error("Secure Z.ai key unavailable; no source was shared."); return } else ""
+        if (zaiCodingApproved && !WorkspaceZaiFree.validKey(zaiKey)) {
+            error("Z.ai Work coding is enabled but its key is missing or invalid. No website source was sent and no other provider was used.")
+            return
+        }
+        val zaiModel = if (zaiCodingApproved) runCatching {
+            WorkspaceZaiFree.textModel(workspacePrefs.getString(
+                WorkspaceZaiFree.MODEL_PREFERENCE_KEY, WorkspaceZaiFree.DEFAULT_TEXT_MODEL))
+        }.getOrElse { error("${it.message}. No website source was sent."); return }
+        else WorkspaceZaiFree.DEFAULT_TEXT_MODEL
+        val openRouterKey = if (zaiCodingApproved) "" else runCatching { keys.get(ApiKeyStore.OPENROUTER) }
             .getOrElse { error("Secure provider keys unavailable; no source was shared."); return }
-        val groqKey = runCatching { keys.get(ApiKeyStore.GROQ) }
+        val groqKey = if (zaiCodingApproved) "" else runCatching { keys.get(ApiKeyStore.GROQ) }
             .getOrElse { error("Secure provider keys unavailable; no source was shared."); return }
-        val groqFreeEnabled = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
-            .getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
-        val xKiroApproved = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
-            .getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
+        val groqFreeEnabled = !zaiCodingApproved &&
+            workspacePrefs.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
+        val xKiroApproved = !zaiCodingApproved &&
+            workspacePrefs.getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
         val xKiroKey = if (xKiroApproved) runCatching { keys.get(ApiKeyStore.XKIRO) }
             .getOrElse { error("Secure xKiro key unavailable; no source was shared."); return } else ""
-        val primary = if (xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey))
-            WorkspaceWebsiteRoute.Provider.XKIRO
-        else WorkspaceWebsiteRoute.choose(openRouterKey, groqKey, groqFreeEnabled)
+        val primary = when {
+            zaiCodingApproved -> WorkspaceWebsiteRoute.Provider.ZAI
+            xKiroApproved && WorkspaceXKiroFree.validKey(xKiroKey) -> WorkspaceWebsiteRoute.Provider.XKIRO
+            else -> WorkspaceWebsiteRoute.choose(openRouterKey, groqKey, groqFreeEnabled)
+        }
         if (primary == null) {
-            error("Website request saved locally. Save a valid OpenRouter Free key, or enable " +
-                "Groq Free/ZDR with a valid Groq Free key in API & Cloud Settings. No source was sent.")
+            error("Website request saved locally. Enable Z.ai Work coding with a valid Z.ai key, save a valid OpenRouter Free key, or enable Groq Free/ZDR with a valid Groq Free key. No source was sent.")
             return
         }
         runCatching { WorkspaceWebsiteGeneration.finishPreviousForNewRequest(files, projects, id) }
@@ -152,24 +181,37 @@ internal class WorkspaceChatCodingFlow(
                     WorkspaceWebsiteGroqFallback.request(groqKey, snapshot)
                 WorkspaceWebsiteRoute.Provider.XKIRO ->
                     WorkspaceXKiroFree.websiteRequest(xKiroKey, snapshot)
+                WorkspaceWebsiteRoute.Provider.ZAI ->
+                    WorkspaceZaiFree.websiteRequest(zaiKey, snapshot, zaiModel,
+                        sourceApproved = zaiCodingApproved)
             }
         }.getOrElse { error("Free website request refused: ${it.message}"); return }
         val serial = ++generation
         val client = when (primary) {
             WorkspaceWebsiteRoute.Provider.GROQ -> WorkspaceWebsiteGroqFallback.client
             WorkspaceWebsiteRoute.Provider.XKIRO -> WorkspaceXKiroFree.client
+            WorkspaceWebsiteRoute.Provider.ZAI -> WorkspaceZaiFree.websiteClient
             WorkspaceWebsiteRoute.Provider.OPENROUTER -> WorkspaceWebsiteGeneration.client
         }
         val call = client.newCall(outgoing)
         websiteAttempts = 1
         request = call
-        report(if (primary == WorkspaceWebsiteRoute.Provider.XKIRO)
-            "Building website · xKiro Free attempt 1/1 · Stop ■ to cancel."
-        else "Building website · free attempt 1/3 · Stop ■ to cancel.")
+        report(when (primary) {
+            WorkspaceWebsiteRoute.Provider.ZAI ->
+                "Building website · Z.ai ${WorkspaceZaiFree.displayName(zaiModel)} · attempt 1/1 · Stop ■ to cancel."
+            WorkspaceWebsiteRoute.Provider.XKIRO ->
+                "Building website · xKiro Free attempt 1/1 · Stop ■ to cancel."
+            else -> "Building website · free attempt 1/3 · Stop ■ to cancel."
+        })
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 val message = if (primary == WorkspaceWebsiteRoute.Provider.XKIRO &&
                     e.message?.startsWith("xKiro Free") == true) e.message!!
+                else if (primary == WorkspaceWebsiteRoute.Provider.ZAI &&
+                    (e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException))
+                    "Z.ai website request timed out. No uncertain request was resent; no files changed."
+                else if (primary == WorkspaceWebsiteRoute.Provider.ZAI)
+                    "Z.ai website connection failed; no result received. No cross-provider or paid fallback."
                 else if (e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException)
                     "Website provider timed out. No incomplete code was saved."
                 else "Website provider connection failed; no result received. No paid fallback."
@@ -334,7 +376,7 @@ internal class WorkspaceChatCodingFlow(
     }
 
     private fun prepareSource(id: String, instruction: String, key: String,
-                              usingXKiro: Boolean) {
+                              usingXKiro: Boolean, usingZai: Boolean, zaiModel: String) {
         if (!current(id)) return
         val project = projects.getProject(id) ?: return
         var paths = runCatching { WorkspaceSourceContext.choices(files, id) }
@@ -360,11 +402,11 @@ internal class WorkspaceChatCodingFlow(
         val prepared = runCatching {
             WorkspaceAiHandoff.prepare(files, tasks, projects, id, selected, instruction)
         }.getOrElse { error("Source review blocked: ${it.message}"); return }
-        send(id, key, prepared, usingXKiro)
+        send(id, key, prepared, usingXKiro, usingZai, zaiModel)
     }
 
     private fun send(id: String, key: String, prepared: WorkspaceAiHandoff.Draft,
-                     usingXKiro: Boolean) {
+                     usingXKiro: Boolean, usingZai: Boolean, zaiModel: String) {
         if (isRunning || !current(id) || !WorkspaceAiHandoff.stillCurrent(files, tasks, projects, id, prepared)) {
             error("Project or source changed; request stopped. No source was sent.")
             return
@@ -372,23 +414,41 @@ internal class WorkspaceChatCodingFlow(
         val provider = WorkspaceChatGateway.Provider.OPENROUTER_FREE
         val messages = listOf(WorkspaceConversationStore.Message("explicit-one-file-prompt", "user",
             prepared.prompt, System.currentTimeMillis()))
-        val outgoing = runCatching { if (usingXKiro) WorkspaceXKiroFree.editRequest(key, prepared.prompt)
-        else WorkspaceChatGateway.request(provider, key, messages) }
-            .getOrElse { error("Provider request refused: ${it.message}"); return }
+        val outgoing = runCatching {
+            when {
+                usingZai -> WorkspaceZaiFree.editRequest(key, prepared.prompt, zaiModel,
+                    sourceApproved = true)
+                usingXKiro -> WorkspaceXKiroFree.editRequest(key, prepared.prompt)
+                else -> WorkspaceChatGateway.request(provider, key, messages)
+            }
+        }.getOrElse { error("Provider request refused: ${it.message}"); return }
         val serial = ++generation
-        val call = (if (usingXKiro) WorkspaceXKiroFree.client
-            else WorkspaceChatGateway.client).newCall(outgoing)
+        val call = (when {
+            usingZai -> WorkspaceZaiFree.client
+            usingXKiro -> WorkspaceXKiroFree.client
+            else -> WorkspaceChatGateway.client
+        }).newCall(outgoing)
         request = call
-        report("Working on ${prepared.context.path} · Stop ■ to cancel. One-file Safe Edit only.")
+        val route = when {
+            usingZai -> "Z.ai ${WorkspaceZaiFree.displayName(zaiModel)}"
+            usingXKiro -> "xKiro Free"
+            else -> "OpenRouter Free"
+        }
+        report("Working on ${prepared.context.path} · $route · Stop ■ to cancel. One-file Safe Edit only.")
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = complete(call, serial, id, prepared,
                 Result.failure(IllegalStateException(if (usingXKiro &&
                     e.message?.startsWith("xKiro Free") == true) e.message!!
                 else WorkspaceFreeAiSuggestion.networkFailure(e))))
             override fun onResponse(call: Call, response: Response) = complete(call, serial, id,
-                prepared, runCatching { if (usingXKiro) WorkspaceXKiroFree.readEdit(response)
-                    else WorkspaceChatGateway.read(provider, response) },
-                if (usingXKiro) WorkspaceCodingAutoFallback.displayName(response.request.url.toString()) else null)
+                prepared, runCatching {
+                    when {
+                        usingZai -> WorkspaceZaiFree.readEdit(response)
+                        usingXKiro -> WorkspaceXKiroFree.readEdit(response)
+                        else -> WorkspaceChatGateway.read(provider, response)
+                    }
+                }, if (usingXKiro)
+                    WorkspaceCodingAutoFallback.displayName(response.request.url.toString()) else null)
         })
     }
 

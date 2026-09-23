@@ -182,6 +182,8 @@ internal object WorkspaceWebsiteGeneration {
                     WorkspaceWebsiteProviderError.openRouterCategory(
                         result.body?.let { result.peekBody(8_193L).string() }.orEmpty()) +
                     "; no automatic retry or paid fallback; project files unchanged."
+            } else if (result.request.url.toString() == WorkspaceZaiFree.ENDPOINT) {
+                WorkspaceZaiFree.websiteHttpFailure(result.code)
             } else WorkspaceFreeAiSuggestion.httpFailure(result.code, result.header("Retry-After"))
         }
         val bytes = result.peekBody(130_001L).bytes()
