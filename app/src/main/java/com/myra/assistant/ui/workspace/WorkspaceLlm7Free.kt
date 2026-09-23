@@ -6,6 +6,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONObject
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
 
 /**
  * Text-only LLM7 Free candidate for ordinary Workspace Chat.
@@ -23,7 +27,26 @@ internal object WorkspaceLlm7Free {
     private const val MAX_RESPONSE_BYTES = 96_000L
 
     // Dedicated client: do not inherit OpenRouter memory injection or cross-provider retry.
-    val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder().build()
+    // OkHttp defaults readTimeout to 10s; that was shorter than LYRA's intended 35s total
+    // window and could cut a valid free-provider reply early on mobile networks.
+    val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(35, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
+    internal fun networkFailure(error: IOException): String = when (error) {
+        is SocketTimeoutException ->
+            "LLM7 connection/read timed out before LYRA's 35-second overall request limit. No HTTP response was confirmed; no paid fallback."
+        is InterruptedIOException ->
+            "LLM7 reached LYRA's 35-second overall request limit. No HTTP response was confirmed; no paid fallback."
+        else ->
+            "LLM7 phone/network connection failed before a usable response. No HTTP status confirmed; no paid fallback."
+    }
 
     fun validKey(key: String): Boolean =
         key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)
