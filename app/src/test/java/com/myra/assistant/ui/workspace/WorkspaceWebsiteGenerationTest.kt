@@ -160,4 +160,21 @@ class WorkspaceWebsiteGenerationTest {
         assertEquals(2, body.getJSONArray("messages").length())
         assertTrue(body.getInt("max_tokens") > 2048)
     }
+    @Test fun zaiWebsite429UsesDirectProviderCategoryWithoutLeakingBody() {
+        val s = fixture()
+        val snapshot = WorkspaceWebsiteGeneration.prepare(s.files, s.tasks, s.projects, "site")
+        val request = WorkspaceZaiFree.websiteRequest("zai_test_key", snapshot,
+            WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = true)
+        val response = okhttp3.Response.Builder().request(request)
+            .protocol(okhttp3.Protocol.HTTP_1_1).code(429).message("Too Many Requests")
+            .body("SECRET_PROVIDER_BODY".toResponseBody()).build()
+        val failure = runCatching { WorkspaceWebsiteGeneration.readResponse(response) }.exceptionOrNull()
+        assertNotNull(failure)
+        assertTrue(failure!!.message.orEmpty().contains("Z.ai Free HTTP 429"))
+        assertFalse(failure.message.orEmpty().contains("OpenRouter"))
+        assertFalse(failure.message.orEmpty().contains("SECRET_PROVIDER_BODY"))
+        assertTrue(s.files.list("site").isEmpty())
+    }
+
+
 }

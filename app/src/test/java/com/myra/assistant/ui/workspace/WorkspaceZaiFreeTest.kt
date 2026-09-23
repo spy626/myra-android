@@ -39,6 +39,38 @@ class WorkspaceZaiFreeTest {
         assertTrue(body(request).toString().contains("data:image/png;base64,cG5n"))
     }
 
+    @Test fun codingSourceNeedsSeparateConsentAndNeverAddsAnotherProvider() {
+        assertTrue(runCatching {
+            WorkspaceZaiFree.editRequest("zai-only-key", "replace selected file",
+                WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = false)
+        }.isFailure)
+        val edit = WorkspaceZaiFree.editRequest("zai-only-key", "replace selected file",
+            WorkspaceZaiFree.ALT_TEXT_MODEL, sourceApproved = true)
+        val editBody = body(edit)
+        assertEquals(WorkspaceZaiFree.ENDPOINT, edit.url.toString())
+        assertEquals(WorkspaceZaiFree.ALT_TEXT_MODEL, editBody.getString("model"))
+        assertFalse(editBody.has("provider"))
+        assertFalse(editBody.has("plugins"))
+        assertEquals(1, editBody.getJSONArray("messages").length())
+
+        val snapshot = WorkspaceWebsiteGeneration.Snapshot("site", "task", "spec",
+            "Build a dark landing page", mapOf(
+                "index.html" to null, "style.css" to null, "script.js" to null))
+        assertTrue(runCatching {
+            WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
+                WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = false)
+        }.isFailure)
+        val website = WorkspaceZaiFree.websiteRequest("zai-only-key", snapshot,
+            WorkspaceZaiFree.DEFAULT_TEXT_MODEL, sourceApproved = true)
+        val websiteBody = body(website)
+        assertEquals(WorkspaceZaiFree.DEFAULT_TEXT_MODEL, websiteBody.getString("model"))
+        assertFalse(websiteBody.has("provider"))
+        assertFalse(websiteBody.has("plugins"))
+        assertEquals(2, websiteBody.getJSONArray("messages").length())
+        assertTrue(websiteBody.toString().contains("Build a dark landing page"))
+        assertFalse(websiteBody.toString().contains("zai-only-key"))
+    }
+
     @Test fun rateLimitAndIncompleteReplyFailWithoutEchoingSecrets() {
         val request = Request.Builder().url(WorkspaceZaiFree.ENDPOINT).build()
         val response = Response.Builder().request(request).protocol(Protocol.HTTP_1_1)

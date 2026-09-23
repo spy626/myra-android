@@ -45,6 +45,11 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         b.zaiWorkSwitch.setOnCheckedChangeListener { _, enabled ->
             workspacePrefs.edit().putBoolean(WorkspaceZaiFree.PREFERENCE_KEY, enabled).apply()
         }
+        b.zaiCodingSwitch.isChecked = workspacePrefs.getBoolean(
+            WorkspaceZaiFree.CODING_PREFERENCE_KEY, false)
+        b.zaiCodingSwitch.setOnCheckedChangeListener { _, enabled ->
+            workspacePrefs.edit().putBoolean(WorkspaceZaiFree.CODING_PREFERENCE_KEY, enabled).apply()
+        }
         b.zaiVisionSwitch.isChecked = workspacePrefs.getBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, false)
         b.zaiVisionSwitch.setOnCheckedChangeListener { _, enabled ->
             workspacePrefs.edit().putBoolean(WorkspaceZaiFree.VISION_PREFERENCE_KEY, enabled).apply()

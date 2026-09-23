@@ -41,6 +41,17 @@ class WorkspaceWebsiteRouteTest {
             WorkspaceWebsiteRoute.choose("", "gsk_test_key", true, false))
     }
 
+    @Test fun explicitZaiCodingConsentIsStickyAndNeverFallsThrough() {
+        assertEquals(WorkspaceWebsiteRoute.Provider.ZAI,
+            WorkspaceWebsiteRoute.choose("sk-or-test", "gsk_test_key", true, true,
+                "zai_test_key", true))
+        assertNull(WorkspaceWebsiteRoute.choose("sk-or-test", "gsk_test_key", true, true,
+            "bad key", true))
+        assertEquals(WorkspaceWebsiteRoute.Provider.GROQ,
+            WorkspaceWebsiteRoute.choose("sk-or-test", "gsk_test_key", true, true,
+                "zai_test_key", false))
+    }
+
     @Test fun groqOnlyRequestUsesStrictFreeWebsiteJsonWithoutOpenRouterAuthorization() {
         val snapshot = WorkspaceWebsiteGeneration.Snapshot("site", "task", "spec", "Build Minicoy", mapOf(
             "index.html" to null, "style.css" to null, "script.js" to null))
