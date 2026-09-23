@@ -49,6 +49,46 @@ jobs:
           LYRA_KEYSTORE_PASSWORD: ${{ secrets.LYRA_KEYSTORE_PASSWORD }}
           LYRA_KEY_ALIAS: ${{ secrets.LYRA_KEY_ALIAS }}
           LYRA_KEY_PASSWORD: ${{ secrets.LYRA_KEY_PASSWORD }}
+
+      # AGP may legitimately omit v1 signing for minSdk 26 even when the signing
+      # config requests it. Some Android file managers still reject such APKs
+      # before handing them to Package Installer, so normalize the test APK with
+      # apksigner explicitly. Never publish unless the result verifies afterwards.
+      - name: Normalize phone-test APK signatures
+        shell: bash
+        env:
+          LYRA_KEYSTORE_PASSWORD: ${{ secrets.LYRA_KEYSTORE_PASSWORD }}
+          LYRA_KEY_ALIAS: ${{ secrets.LYRA_KEY_ALIAS }}
+          LYRA_KEY_PASSWORD: ${{ secrets.LYRA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$apksigner"
+
+          if [ -s "$RUNNER_TEMP/lyra-ci.jks" ] &&
+             [ -n "$LYRA_KEYSTORE_PASSWORD" ] &&
+             [ -n "$LYRA_KEY_ALIAS" ] &&
+             [ -n "$LYRA_KEY_PASSWORD" ]; then
+            ks="$RUNNER_TEMP/lyra-ci.jks"
+            alias="$LYRA_KEY_ALIAS"
+            store_pass="$LYRA_KEYSTORE_PASSWORD"
+            key_pass="$LYRA_KEY_PASSWORD"
+            echo "Re-signing isolated phone-test APK with configured stable key."
+          else
+            ks="$HOME/.android/debug.keystore"
+            alias="androiddebugkey"
+            store_pass="android"
+            key_pass="android"
+            echo "Re-signing isolated phone-test APK with this run's Android debug key."
+          fi
+          test -s "$ks"
+
+          "$apksigner" sign             --ks "$ks"             --ks-key-alias "$alias"             --ks-pass "pass:$store_pass"             --key-pass "pass:$key_pass"             --v1-signing-enabled true             --v2-signing-enabled true             --v3-signing-enabled true             --v4-signing-enabled false             --out "$RUNNER_TEMP/lyra-phone-test-signed.apk"             "$apk"
+
+          mv "$RUNNER_TEMP/lyra-phone-test-signed.apk" "$apk"
+
       - name: Verify phone-test APK identity and signatures
         shell: bash
         run: |
@@ -64,11 +104,13 @@ jobs:
           "$apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
           grep -F "Verified using v1 scheme (JAR signing): true" "$RUNNER_TEMP/apksigner.txt"
           grep -F "Verified using v2 scheme (APK Signature Scheme v2): true" "$RUNNER_TEMP/apksigner.txt"
+          grep -F "Verified using v3 scheme (APK Signature Scheme v3): true" "$RUNNER_TEMP/apksigner.txt"
 
           "$aapt" dump badging "$apk" | head -n 1 | tee "$RUNNER_TEMP/apk-package.txt"
           grep -F "package: name='com.myra.assistant.phonetest'" "$RUNNER_TEMP/apk-package.txt"
 
-          echo "Phone-test APK has isolated package identity and verified v1/v2 signatures."
+          echo "Phone-test APK has isolated package identity and verified v1/v2/v3 signatures."
+
       - uses: actions/upload-artifact@v4
         with:
           name: lyra-phone-test-apk
@@ -88,9 +130,7 @@ jobs:
           if response=$(curl --fail-with-body --silent --show-error "${auth[@]}" "$api/releases/tags/$tag"); then
             :
           else
-            response=$(curl --fail-with-body --silent --show-error "${auth[@]}" \
-              -X POST "$api/releases" \
-              -d "{\"tag_name\":\"$tag\",\"target_commitish\":\"$COMMIT_SHA\",\"name\":\"LYRA Phone Test $tag\",\"body\":\"Isolated com.myra.assistant.phonetest debug APK for physical Android acceptance. Existing LYRA is not replaced. PHONE PASS is not claimed.\",\"draft\":false,\"prerelease\":true}")
+            response=$(curl --fail-with-body --silent --show-error "${auth[@]}"               -X POST "$api/releases"               -d "{\"tag_name\":\"$tag\",\"target_commitish\":\"$COMMIT_SHA\",\"name\":\"LYRA Phone Test $tag\",\"body\":\"Isolated com.myra.assistant.phonetest debug APK for physical Android acceptance. Existing LYRA is not replaced. APK is CI-verified for v1/v2/v3 signatures. PHONE PASS is not claimed.\",\"draft\":false,\"prerelease\":true}")
           fi
           release_id=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
           upload_url=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"].split("{")[0])')
@@ -102,12 +142,7 @@ jobs:
             if [ -n "$asset_id" ]; then
               curl --fail-with-body --silent --show-error "${auth[@]}" -X DELETE "$api/releases/assets/$asset_id"
             fi
-            if curl --fail-with-body --silent --show-error --max-time 600 \
-              -o /dev/null -X POST \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Content-Type: application/vnd.android.package-archive" \
-              --data-binary @app/build/outputs/apk/debug/app-debug.apk \
-              "$upload_url?name=lyra-phone-test.apk"; then
+            if curl --fail-with-body --silent --show-error --max-time 600               -o /dev/null -X POST               -H "Authorization: Bearer $GH_TOKEN"               -H "Content-Type: application/vnd.android.package-archive"               --data-binary @app/build/outputs/apk/debug/app-debug.apk               "$upload_url?name=lyra-phone-test.apk"; then
               uploaded=true
               break
             fi
