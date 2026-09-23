@@ -801,18 +801,25 @@ class WorkspaceActivity : AppCompatActivity() {
         val openRouterAvailable = keys.get(ApiKeyStore.OPENROUTER).isNotBlank()
         val groqAvailable = keys.get(ApiKeyStore.GROQ).isNotBlank()
         val groqApproved = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
+        val llm7Key = keys.get(ApiKeyStore.LLM7)
+        val llm7Available = WorkspaceLlm7Free.validKey(llm7Key)
+        val llm7Approved = preferences.getBoolean(WorkspaceLlm7Free.PREFERENCE_KEY, false)
         val history = selectedId?.let { runCatching { conversations.read(it) }.getOrNull() }
         // Retry of an existing assistant reply uses its preceding user turn.
         val candidate = if (history?.lastOrNull()?.role == "assistant") history.dropLast(1) else history
         val groqFits = candidate?.takeIf { it.lastOrNull()?.role == "user" }
             ?.let { WorkspaceGroqFree.withinBudget(it) } ?: false
+        val llm7Fits = candidate?.takeIf { it.lastOrNull()?.role == "user" }
+            ?.let { WorkspaceLlm7Free.withinBudget(it) } ?: false
         return WorkspaceFreeProviderSelection.choose(
-            openRouterAvailable, groqAvailable, groqApproved, groqFits, hasAttachments)
+            openRouterAvailable, groqAvailable, groqApproved, groqFits, hasAttachments,
+            llm7Available, llm7Approved, llm7Fits)
     }
 
     private fun keyFor(provider: WorkspaceChatGateway.Provider): String = when (provider) {
         WorkspaceChatGateway.Provider.OPENROUTER_FREE -> keys.get(ApiKeyStore.OPENROUTER)
         WorkspaceChatGateway.Provider.GROQ_FREE -> keys.get(ApiKeyStore.GROQ)
+        WorkspaceChatGateway.Provider.LLM7_FREE -> keys.get(ApiKeyStore.LLM7)
     }
 
     private fun addAttachment(uri: Uri, photo: Boolean) {
@@ -915,14 +922,17 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         val picked = attachments.toList()
-        // The Groq Free opt-in covers text chat only. Never silently send photos or files
-        // to OpenRouter merely because an OpenRouter key also exists.
-        if (intent == null && current.type == WorkspaceProjectType.CHAT && picked.isNotEmpty() &&
-            preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false) &&
-            keys.get(ApiKeyStore.GROQ).isNotBlank()) {
-            statusMessage = "Groq Free is text-only. Remove the attachment or turn Groq OFF in Settings before sending. Nothing was sent."
-            render()
-            return
+        // Text-only provider opt-ins never silently reroute attachments to another company.
+        if (intent == null && current.type == WorkspaceProjectType.CHAT && picked.isNotEmpty()) {
+            val llm7TextOnly = preferences.getBoolean(WorkspaceLlm7Free.PREFERENCE_KEY, false) &&
+                WorkspaceLlm7Free.validKey(keys.get(ApiKeyStore.LLM7))
+            val groqTextOnly = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false) &&
+                keys.get(ApiKeyStore.GROQ).isNotBlank()
+            if (llm7TextOnly || groqTextOnly) {
+                statusMessage = "The enabled free text route does not accept attachments in LYRA. Remove the attachment or turn that text route OFF; nothing was sent."
+                render()
+                return
+            }
         }
         val stored = runCatching { conversations.append(id, "user", text) }
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
@@ -972,7 +982,7 @@ class WorkspaceActivity : AppCompatActivity() {
             statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
             render()
             AlertDialog.Builder(this).setTitle("No eligible Workspace free route")
-                .setMessage("Save a valid OpenRouter Free key, or enable Groq Free/ZDR with a valid Groq key. Z.ai is coding-only. No paid fallback.")
+                .setMessage("Save a valid OpenRouter Free key, enable Groq Free/ZDR with a valid Groq key, or enable LLM7 Free with a valid free token. Z.ai is coding-only. No paid fallback.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("API settings") { _, _ ->
                     startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
@@ -1002,8 +1012,9 @@ class WorkspaceActivity : AppCompatActivity() {
             toast("Conversation changed; request cancelled")
             return
         }
-        if (provider == WorkspaceChatGateway.Provider.GROQ_FREE && picked.isNotEmpty()) {
-            statusMessage = "Groq Free is text-only; no selected photo/file was sent."
+        if ((provider == WorkspaceChatGateway.Provider.GROQ_FREE ||
+                provider == WorkspaceChatGateway.Provider.LLM7_FREE) && picked.isNotEmpty()) {
+            statusMessage = "Selected free route is text-only; no selected photo/file was sent."
             render()
             return
         }
@@ -1030,7 +1041,7 @@ class WorkspaceActivity : AppCompatActivity() {
             WorkspaceChatGateway.request(provider, keyFor(provider), enriched, image)
         }.getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
-        val call = WorkspaceChatGateway.client.newCall(outgoing)
+        val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
         activeRequest = call
         statusMessage = ""
         render()
