@@ -21,18 +21,20 @@ class WorkspaceWebsiteJsonEnvelopeTest {
 
     @Test fun boundedMarkdownWrappersAroundCompleteOutputsRecoverWithoutGuessing() {
         val valid = envelope()
-        val wrappedJson = "Here is the complete website:\n```json\n$valid\n```\nDone."
+        val wrappedJson = "Here is the complete website:\n```json\n$valid\n```"
         assertEquals(html, WorkspaceWebsiteGeneration.parse(wrappedJson).getValue("index.html"))
 
         val labelled = "Here are the complete files:\n\n### **index.html**\n```html\n$html\n```" +
             "\n### **style.css**\n```css\nbody { color: blue; }\n```" +
-            "\n### **script.js**\n```javascript\nconsole.log('hello');\n```\nAll three files are complete."
+            "\n### **script.js**\n```javascript\nconsole.log('hello');\n```"
         val parsed = WorkspaceWebsiteGeneration.parse(labelled)
         assertEquals(html, parsed.getValue("index.html"))
         assertEquals("body { color: blue; }", parsed.getValue("style.css"))
         assertEquals("console.log('hello');", parsed.getValue("script.js"))
 
         listOf(
+            wrappedJson + "\nDone.",
+            labelled + "\nMore output",
             labelled + "\n```txt\nextra\n```",
             labelled + "\n{\\\"extra\\\":true}",
             labelled + "\n" + labelled
