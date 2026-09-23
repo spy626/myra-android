@@ -9,11 +9,27 @@ import org.json.JSONTokener
  * secret screening, source freshness and atomic Undo/Keep before a file can be saved.
  */
 internal object WorkspaceWebsiteJsonEnvelope {
-    private val fence = Regex("""(?s)^```(?:json)?[ \t]*\r?\n(.*?)\r?\n?```[ \t]*$""", RegexOption.IGNORE_CASE)
-    private val prefixedFence = Regex(
-        """(?s)^[^{}\r\n`]{1,160}\r?\n```(?:json)?[ \t]*\r?\n(.*?)\r?\n?```[ \t]*$""",
+    private val jsonFence = Regex(
+        """(?s)```(?:json)?[ \\t]*\\r?\\n(.*?)\\r?\\n?```""",
         RegexOption.IGNORE_CASE)
 
+    private fun boundedWrapper(text: String): Boolean {
+        val value = text.trim()
+        return value.length <= 160 && value.none { it == '{' || it == '}' || it == '`' }
+    }
+
+    private fun isFileLabel(raw: String, path: String): Boolean {
+        var label = raw.trim()
+        val hashes = label.takeWhile { it == '#' }.length
+        if (hashes in 1..6) label = label.drop(hashes).trimStart()
+        for (marker in listOf("**", "__", "`")) {
+            if (label.startsWith(marker) && label.endsWith(marker) &&
+                label.length > marker.length * 2) {
+                label = label.substring(marker.length, label.length - marker.length).trim()
+            }
+        }
+        return label == path
+    }
     /** A completed, explicitly labelled triple of standalone code fences is not free-form
      * prose. The order and labels are exact; an extra block, preface, duplicate path, nested
      * fence or trailing explanation causes rejection rather than a guessed project write.
@@ -25,11 +41,13 @@ internal object WorkspaceWebsiteJsonEnvelope {
             "index.html" to setOf("```html", "```"),
             "style.css" to setOf("```css", "```"),
             "script.js" to setOf("```javascript", "```js", "```"))
+        val start = lines.indexOfFirst { isFileLabel(it, WorkspaceWebsiteGeneration.PATHS.first()) }
+        if (start < 0 || !boundedWrapper(lines.take(start).joinToString("\n"))) return null
         val files = LinkedHashMap<String, String>()
-        var line = 0
+        var line = start
         for ((index, path) in WorkspaceWebsiteGeneration.PATHS.withIndex()) {
-            val label = lines.getOrNull(line)?.trim() ?: return null
-            if (label != path && label != "### $path") return null
+            val label = lines.getOrNull(line) ?: return null
+            if (!isFileLabel(label, path)) return null
             line++
             val opening = lines.getOrNull(line)?.trim()?.lowercase() ?: return null
             if (opening !in languages.getValue(path)) return null
@@ -53,12 +71,11 @@ internal object WorkspaceWebsiteJsonEnvelope {
                 }
             }
         }
-        if (line != lines.size) return null
+        if (!boundedWrapper(lines.drop(line).joinToString("\n"))) return null
         val fileObject = JSONObject()
         files.forEach { (path, source) -> fileObject.put(path, source) }
         return JSONObject().put("files", fileObject).toString()
     }
-
     /** Diagnose a completed response without persisting any raw model text, source, or keys.
      * This is not an opportunity to retry an uncertain request or relax file validation.
      */
@@ -84,9 +101,15 @@ internal object WorkspaceWebsiteJsonEnvelope {
     fun normalize(raw: String): String {
         val trimmed = raw.trim().trimStart('\uFEFF').trim()
         exactLabelledFiles(trimmed)?.let { return it }
-        val unwrapped = fence.matchEntire(trimmed)?.groupValues?.get(1)?.trim()
-            ?: prefixedFence.matchEntire(trimmed)?.groupValues?.get(1)?.trim()
-            ?: trimmed
+        val fenced = jsonFence.findAll(trimmed).toList()
+        val unwrapped = if (fenced.size == 1) {
+            val match = fenced.single()
+            val before = trimmed.substring(0, match.range.first)
+            val after = trimmed.substring(match.range.last + 1)
+            if (boundedWrapper(before) && boundedWrapper(after))
+                match.groupValues[1].trim()
+            else trimmed
+        } else trimmed
         val start = unwrapped.indexOf('{')
         val end = unwrapped.lastIndexOf('}')
         if (start < 0 || end <= start) return completeObjectOrFail(unwrapped, trimmed)
