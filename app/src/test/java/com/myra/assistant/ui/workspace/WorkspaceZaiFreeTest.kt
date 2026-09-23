@@ -39,6 +39,34 @@ class WorkspaceZaiFreeTest {
         assertTrue(body(request).toString().contains("data:image/png;base64,cG5n"))
     }
 
+    @Test fun chatClientDoesNotInheritTenSecondReadTimeoutAndNeverRetries() {
+        assertEquals(15_000, WorkspaceZaiFree.client.connectTimeoutMillis)
+        assertEquals(20_000, WorkspaceZaiFree.client.writeTimeoutMillis)
+        assertEquals(40_000, WorkspaceZaiFree.client.readTimeoutMillis)
+        assertEquals(45_000, WorkspaceZaiFree.client.callTimeoutMillis)
+        assertFalse(WorkspaceZaiFree.client.retryOnConnectionFailure)
+        assertFalse(WorkspaceZaiFree.client.followRedirects)
+        assertFalse(WorkspaceZaiFree.client.followSslRedirects)
+    }
+
+    @Test fun rateLimitCarriesOnlyBoundedRetryAfterAndNeverClaimsDailyExhaustion() {
+        val limited = WorkspaceZaiFree.rateLimitFailure("17")
+        assertEquals(17_000L, limited.retryAfterMillis)
+        assertTrue(limited.message.orEmpty().contains("Wait 17 seconds"))
+        assertTrue(limited.message.orEmpty().contains("does not prove a daily quota"))
+        assertTrue(limited.message.orEmpty().contains("No automatic retry"))
+        assertNull(WorkspaceZaiFree.rateLimitFailure("301").retryAfterMillis)
+        assertNull(WorkspaceZaiFree.rateLimitFailure("private").retryAfterMillis)
+    }
+
+    @Test fun zaiTimeoutDiagnosticMatchesActualBoundedClientWindows() {
+        val message = WorkspaceZaiFree.networkFailure(java.net.SocketTimeoutException("test"))
+        assertTrue(message.contains("40s read"))
+        assertTrue(message.contains("45s total"))
+        assertFalse(message.contains("35 seconds"))
+        assertTrue(message.contains("No automatic retry"))
+    }
+
     @Test fun websiteClientHasLongReadWindowButRemainsGloballyBounded() {
         assertEquals(20_000, WorkspaceZaiFree.websiteClient.connectTimeoutMillis)
         assertEquals(30_000, WorkspaceZaiFree.websiteClient.writeTimeoutMillis)

@@ -63,6 +63,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private var workTab = false
     private var requestGeneration = 0L
     private var activeRequest: Call? = null
+    // Monotonic, in-memory only. Used only when Z.ai explicitly supplies Retry-After.
+    // App restart clears it; no durable profiling or provider state is created.
+    private var zaiRetryNotBeforeElapsedMs = 0L
     private var statusMessage = ""
     // Latest saved user turn only; Retry never appends a duplicate message.
     private var codingRetryTarget: Pair<String, String>? = null
@@ -489,7 +492,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun showChatFailure(id: String, messageId: String,
                                 replacingAssistantId: String?, provider: WorkspaceChatGateway.Provider,
-                                picked: List<Attachment>, reason: String) {
+                                picked: List<Attachment>, failure: Throwable, reason: String) {
         if (selectedId != id || workTab || isBusy()) return
         val history = runCatching { conversations.read(id) }.getOrNull() ?: return
         val eligible = if (replacingAssistantId == null)
@@ -498,14 +501,17 @@ class WorkspaceActivity : AppCompatActivity() {
             history.last().id == replacingAssistantId &&
             history[history.lastIndex - 1].id == messageId
         if (!eligible) return
-        AlertDialog.Builder(this).setTitle("LYRA couldn't reply")
-            .setMessage("$reason\n\nRetry the same complete message? " +
-                "The same selected attachments will be read again, if any. No paid fallback.")
+        val retry = WorkspaceChatRetryPolicy.decision(provider, failure)
+        val dialog = AlertDialog.Builder(this).setTitle("LYRA couldn't reply")
+            .setMessage("$reason\n\n" + retry.note(picked.isNotEmpty()))
             .setNegativeButton("Later", null)
-            .setPositiveButton("Retry once") { _, _ ->
+        if (retry.allowImmediateRetry) {
+            dialog.setPositiveButton("Retry once") { _, _ ->
                 if (selectedId == id && !workTab && !isBusy())
                     requestReply(id, messageId, provider, picked, replacingAssistantId)
-            }.show()
+            }
+        } else dialog.setPositiveButton("Close", null)
+        dialog.show()
     }
 
     private fun retryAssistant(id: String, assistantId: String) {
@@ -993,6 +999,16 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun requestReply(id: String, messageId: String, provider: WorkspaceChatGateway.Provider,
                              picked: List<Attachment>, replacingAssistantId: String? = null) {
         if (selectedId != id || isBusy() || workTab) return
+        if (provider == WorkspaceChatGateway.Provider.ZAI_FREE) {
+            val remainingMs = zaiRetryNotBeforeElapsedMs - android.os.SystemClock.elapsedRealtime()
+            if (remainingMs > 0L) {
+                val seconds = (remainingMs + 999L) / 1_000L
+                statusMessage = "Z.ai asked LYRA to wait about $seconds more second(s) before sending again. " +
+                    "Nothing was sent; no automatic retry or provider switch."
+                render()
+                return
+            }
+        }
         val history = runCatching { conversations.read(id) }
             .getOrElse { toast("Conversation unavailable"); return }
         val transcript = if (replacingAssistantId == null) history else {
@@ -1048,7 +1064,9 @@ class WorkspaceActivity : AppCompatActivity() {
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
                 messageId, replacingAssistantId, provider, picked,
-                Result.failure(IllegalStateException(WorkspaceFreeAiSuggestion.networkFailure(error))))
+                Result.failure(IllegalStateException(if (provider == WorkspaceChatGateway.Provider.ZAI_FREE)
+                    WorkspaceZaiFree.networkFailure(error)
+                else WorkspaceFreeAiSuggestion.networkFailure(error))))
             override fun onResponse(call: Call, response: Response) =
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
                     runCatching { WorkspaceChatGateway.read(provider, response) })
@@ -1073,6 +1091,13 @@ class WorkspaceActivity : AppCompatActivity() {
                 } else reply
             }
             val failure = checked.exceptionOrNull()
+            if (provider == WorkspaceChatGateway.Provider.ZAI_FREE &&
+                failure is WorkspaceZaiFree.RateLimitException) {
+                failure.retryAfterMillis?.let { wait ->
+                    zaiRetryNotBeforeElapsedMs = maxOf(zaiRetryNotBeforeElapsedMs,
+                        android.os.SystemClock.elapsedRealtime() + wait)
+                }
+            }
             checked.onSuccess { reply ->
                 runCatching {
                     if (replacingAssistantId == null) {
@@ -1086,7 +1111,7 @@ class WorkspaceActivity : AppCompatActivity() {
             }.onFailure { statusMessage = it.message ?: "Provider failed; original reply preserved." }
             render()
             if (failure != null) showChatFailure(id, userMessageId, replacingAssistantId,
-                provider, picked, statusMessage)
+                provider, picked, failure, statusMessage)
         }
     }
 }

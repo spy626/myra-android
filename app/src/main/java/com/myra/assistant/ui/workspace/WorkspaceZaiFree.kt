@@ -6,6 +6,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okio.Buffer
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -23,8 +26,15 @@ internal object WorkspaceZaiFree {
     private const val MAX_RESPONSE_BYTES = 32_768L
     private const val MAX_CODING_PROMPT_CHARS = 12_000
 
-    // No existing cross-provider, memory, or retry interceptors are attached.
-    val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder().build()
+    // Ordinary Z.ai Chat gets its own bounded network windows. Do not inherit
+    // OkHttp's ~10s read timeout from the base free client. This client still has no
+    // retry/fallback interceptor, so an uncertain timeout is never resent automatically.
+    val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(40, TimeUnit.SECONDS)
+        .callTimeout(45, TimeUnit.SECONDS)
+        .build()
 
     // Website generation needs longer server-thinking/read time than ordinary chat.
     // Keep the whole operation bounded to 80s, but do not inherit OkHttp's ~10s read
@@ -125,13 +135,46 @@ internal object WorkspaceZaiFree {
 
     fun readEdit(response: Response): String = read(response)
 
+    internal class RateLimitException(
+        val retryAfterMillis: Long?,
+        message: String,
+    ) : IllegalStateException(message)
+
+    private fun retryAfterMillis(header: String?): Long? {
+        val seconds = header?.takeIf { it.length in 1..3 && it.all(Char::isDigit) }
+            ?.toLongOrNull() ?: return null
+        return seconds.takeIf { it in 1..300 }?.times(1_000L)
+    }
+
+    internal fun rateLimitFailure(retryAfter: String?): RateLimitException {
+        val wait = retryAfterMillis(retryAfter)
+        val hint = if (wait != null)
+            " Wait ${wait / 1_000L} seconds before sending again."
+        else " Wait before sending again."
+        return RateLimitException(wait,
+            "Z.ai free model is rate-limited (HTTP 429).$hint " +
+                "This does not prove a daily quota is exhausted. No automatic retry or paid fallback.")
+    }
+
+    internal fun networkFailure(error: IOException): String = when (error) {
+        is SocketTimeoutException, is InterruptedIOException ->
+            "Z.ai Chat request timed out within LYRA's bounded network windows " +
+                "(15s connect / 20s write / 40s read / 45s total). " +
+                "No HTTP response was confirmed; no automatic retry or paid fallback."
+        else -> "Z.ai Chat connection failed before a usable HTTP response. " +
+            "No automatic retry or paid fallback."
+    }
+
     fun read(response: Response): String = response.use {
-        require(it.isSuccessful) {
+        if (!it.isSuccessful) {
             when (it.code) {
-                401, 403 -> "Z.ai refused the API key or free model access (HTTP ${it.code}). No paid fallback."
-                402 -> "Z.ai requested payment (HTTP 402); LYRA stopped. No paid fallback."
-                429 -> "Z.ai free model is rate-limited (HTTP 429); try later. No automatic retry."
-                else -> "Z.ai free request failed (HTTP ${it.code}). No paid fallback."
+                401, 403 -> throw IllegalArgumentException(
+                    "Z.ai refused the API key or free model access (HTTP ${it.code}). No paid fallback.")
+                402 -> throw IllegalArgumentException(
+                    "Z.ai requested payment (HTTP 402); LYRA stopped. No paid fallback.")
+                429 -> throw rateLimitFailure(it.header("Retry-After"))
+                else -> throw IllegalArgumentException(
+                    "Z.ai free request failed (HTTP ${it.code}). No paid fallback.")
             }
         }
         val bytes = it.peekBody(MAX_RESPONSE_BYTES + 1).bytes()
