@@ -414,6 +414,26 @@ Unify metadata for current providers:
 - cooldown/definitive error state;
 - sticky/fallback rules.
 
+#### Slice D2 — runtime provider health/cooldown
+- ephemeral per-session health from definitive HTTP/provider evidence;
+- never retry/resend an uncertain timeout;
+- cooldown repeated 429/temporary-unavailable routes;
+- do not persist a hidden provider reputation score.
+
+#### Slice D3 — custom API provider profiles
+- OpenAI-compatible custom Base URL first;
+- encrypted key slot + model + conservative budgets;
+- explicit source/attachment permissions;
+- synthetic non-sensitive connection test;
+- unknown cost stays manual-only and excluded from automatic free fallback.
+
+#### Slice D4 — bounded multi-provider deliberation
+- existing LYRA Core mediates proposer/reviewer roles;
+- no direct provider-to-provider channel;
+- proposal-only critique by default;
+- source sharing is separately approved per provider;
+- models never gain write/completion authority.
+
 ### Slice E — Agent Reach-style link capability
 URL/platform detection + approved read adapters + provenance + fallback health.
 
@@ -422,6 +442,24 @@ DOM/accessibility/console/network evidence where available, with Eye/screenshot 
 
 ### Slice G — personality/proactive layer
 Neuro/Super-Agent-Party-style natural behavior and Spark-triggered proactive conversation, while serious Work remains bounded by the same task authority.
+
+### Slice H — skill manager
+Install/import capability-scoped SKILL.md workflows at pinned revisions. Scripts are disabled by default;
+learned improvements use sidecar overlays rather than silently rewriting imported skills.
+
+### Slice I — declarative plugin manager
+Capability manifests + bounded HTTPS tool adapters first. No arbitrary Android DEX/APK/JNI loading;
+mutating tools require explicit confirmation.
+
+### Slice J — evidence-driven self-improvement lab
+Mine bounded non-secret run evidence into improvement candidates, test baseline vs candidate, prefer
+skill/rule improvements before code changes, and never equate model agreement with verification.
+
+### Slice K — safe self-extension
+GitHub idea -> pinned research -> architecture/license/permission review -> isolated branch patch -> CI/
+verification -> explicit user-approved app install. Never main, force-push or silent self-update.
+
+Detailed contract: [LYRA_SELF_IMPROVEMENT_SKILLS_PLUGINS_ARCHITECTURE_2026-09-25.md](LYRA_SELF_IMPROVEMENT_SKILLS_PLUGINS_ARCHITECTURE_2026-09-25.md).
 
 ## 14. First implementation slice acceptance
 

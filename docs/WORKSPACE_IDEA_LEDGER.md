@@ -105,6 +105,18 @@ Every provider must be verified at the **exact route/model/account tier** immedi
 | iFlow old API; Gemini CLI OAuth proxy; LLM7; SiliconFlow | Previously rejected/dead/quarantined under $0/security rule | REJECT/QUARANTINE unless explicit new audit |
 | OpenCode Zen promotion | Promotion-only; never recurring backbone | BACKUP CANDIDATE ONLY |
 
+## 2026-09-25 self-improvement / skills / plugins architecture addition
+
+Detailed design: [LYRA_SELF_IMPROVEMENT_SKILLS_PLUGINS_ARCHITECTURE_2026-09-25.md](LYRA_SELF_IMPROVEMENT_SKILLS_PLUGINS_ARCHITECTURE_2026-09-25.md).
+
+Pinned upstream references inspected for this design:
+- `addyosmani/agent-skills@bcab6a1b8503100e8618c3b4e32cc78de43de769`: skill lifecycle and verification gates.
+- `open-jarvis/OpenJarvis@309a4f1044ccfb2032264832a31fef2f1d314586`: GitHub skill import, capability gating, scripts off by default, overlays, trace discovery and skill benchmarks.
+- `obra/superpowers@5bf4e78011075bcfc0dc295f0724994cd123ee71`: evidence-before-completion, isolated development and review gates.
+- `heshengtao/super-agent-party@b3af7a0b4a3d15c23d0206f57bde3caa625b6f1c`: extension system, skill injection and custom provider interface ideas.
+
+Decision: BORROW the concepts under one LYRA Core. REJECT uncontrolled provider swarms, direct provider-to-provider channels, silent source transitive sharing, arbitrary executable plugin loading, auto-running GitHub install scripts and silent self-updates. Custom Base URL routes are manual-only while cost is unverified.
+
 ## Per-phase accounting gate
 
 For each new repo/idea: record source and exact revision, useful concept, existing implementation match, duplicates, license, trust/permissions, zero-cost impact, owner layer, phase, tests and `INTEGRATED / MERGED / DEFERRED / REJECTED` reason. Reconcile every row again before final integration. Model/provider rows remain **unverified** until a live check; do not silently spend or claim that the free-router phase is already built.
