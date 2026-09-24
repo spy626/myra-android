@@ -34,10 +34,18 @@ internal object WorkspaceWebsiteEditRouting {
     )
 
     private val clauseSeparator = Regex(
-        """(?i)[.!?;,\n]+|\b(?:but|however|lekin|lakin|magar|instead|rather|and|aur|while)\b"""
+        """(?i)[!?;,\n]+|\.(?=\s|$)|\b(?:but|however|lekin|lakin|magar|instead|rather|while)\b"""
     )
     private val negation = Regex(
         """(?i)\b(?:don't|dont|do\s+not|never|avoid|not|mat|nahi|nahin|nehi)\b|(?:नहीं|मत)"""
+    )
+    private val negativeTailStart = Regex(
+        """(?ix)
+        \bwithout\b
+        |
+        \b(?:and|aur)\b(?=[^!?;,\n]{0,64}
+            \b(?:don't|dont|do\s+not|never|avoid|mat|nahi|nahin|nehi)\b)
+        """.trimIndent()
     )
     private const val NEGATIVE_TAIL = "__LYRA_NEGATIVE_TAIL__"
 
@@ -49,7 +57,7 @@ internal object WorkspaceWebsiteEditRouting {
      */
     private fun positiveMutationScope(instruction: String): String {
         val marked = instruction.trim()
-            .replace(Regex("""(?i)\bwithout\b"""), "\n$NEGATIVE_TAIL\n")
+            .replace(negativeTailStart, "\n$NEGATIVE_TAIL\n")
             .replace(clauseSeparator, "\n")
         var skipNext = false
         val positive = mutableListOf<String>()

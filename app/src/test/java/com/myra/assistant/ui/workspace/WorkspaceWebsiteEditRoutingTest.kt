@@ -50,6 +50,8 @@ class WorkspaceWebsiteEditRoutingTest {
         val styleOnly = listOf(
             "Make the homepage background darker but don't change layout or JavaScript.",
             "Make the homepage background darker without changing JavaScript.",
+            "Make the homepage background darker and don't change JavaScript.",
+            "Background dark karo aur JavaScript mat badlo.",
             "Don't change JavaScript; make the background darker.",
             "Change style.css but don't touch script.js.",
             "Background dark karo lekin JavaScript mat badlo."
@@ -68,6 +70,12 @@ class WorkspaceWebsiteEditRoutingTest {
             "index.html",
             WorkspaceWebsiteEditRouting.decide(
                 "Update the heading but don't change CSS or JavaScript.", complete
+            ).path
+        )
+        assertEquals(
+            "index.html",
+            WorkspaceWebsiteEditRouting.decide(
+                "Don't change CSS and JavaScript; update the heading.", complete
             ).path
         )
     }
