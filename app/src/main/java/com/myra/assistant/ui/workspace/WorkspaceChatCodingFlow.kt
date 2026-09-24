@@ -374,12 +374,29 @@ internal class WorkspaceChatCodingFlow(
                 runCatching {
                     WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, review.files)
                 }.onSuccess {
+                    val verification = WorkspaceSelfVerification.settleUnknown(
+                        WorkspaceSelfVerification.verifyWebsite(
+                            files, tasks, projects, snapshot, review.files
+                        ),
+                        reobserve = {
+                            WorkspaceSelfVerification.verifyWebsite(
+                                files, tasks, projects, snapshot, review.files
+                            )
+                        }
+                    )
+                    if (!verification.passed) {
+                        error("Website local verification ${verification.status.name.lowercase()}: " +
+                            "${verification.summary} Protected rollback was left in place.")
+                        return@onSuccess
+                    }
                     val summary = WorkspaceCodingResult.websiteSuccess(snapshot.original, review.files) +
-                        review.chatNote() + (when (via) {
+                        review.chatNote() +
+                        "\nLocal saved-file verification passed; Preview/visual interaction is still not a phone pass." +
+                        (when (via) {
                             null -> ""
                             else -> " Completed via $via after xKiro was unavailable."
                         })
-                    terminal(summary, "") // The durable Chat reply is the single success message.
+                    terminal(summary, "") // The durable Chat reply is the single verified local success message.
                     activity.startActivity(WorkspacePreviewActivity.intent(activity, id))
                 }.onFailure {
                     error("Website files were not fully saved: ${it.message}. " +
@@ -493,10 +510,27 @@ internal class WorkspaceChatCodingFlow(
                     }
                     suggestions.save(files, tasks, projects, id, reply, draft)
                     WorkspaceScopedEdit.apply(files, tasks, projects, draft.context, draft.proposal)
-                }.onSuccess {
+                    draft
+                }.onSuccess { draft ->
                     runCatching { suggestions.discard(id) }
+                    val verification = WorkspaceSelfVerification.settleUnknown(
+                        WorkspaceSelfVerification.verifyScopedEdit(
+                            files, tasks, projects, draft.proposal
+                        ),
+                        reobserve = {
+                            WorkspaceSelfVerification.verifyScopedEdit(
+                                files, tasks, projects, draft.proposal
+                            )
+                        }
+                    )
+                    if (!verification.passed) {
+                        error("Local edit verification ${verification.status.name.lowercase()}: " +
+                            "${verification.summary} Protected rollback was left in place.")
+                        return@onSuccess
+                    }
                     terminal("Updated ${prepared.context.path} in your existing project. " +
-                        "Review the file and use Undo / Keep in Chat. Preview/build is not verified." +
+                        "Local saved-file verification passed. Review the file and use Undo / Keep in Chat. " +
+                        "Preview/build is not verified." +
                         (when (via) {
                             null -> ""
                             else -> " Completed via $via after xKiro was unavailable."
@@ -521,11 +555,25 @@ internal class WorkspaceChatCodingFlow(
             .setNegativeButton("Later", null)
             .setPositiveButton("Apply saved change") { _, _ ->
                 if (!current(id)) return@setPositiveButton
-                runCatching { WorkspaceScopedEdit.apply(files, tasks, projects, draft.context, draft.proposal) }
-                    .onSuccess {
-                        runCatching { suggestions.discard(id) }
-                        report("Applied one saved file edit with protected rollback. Check Preview and Undo / Keep in Chat.")
-                    }.onFailure { error("Apply refused: ${it.message}. Check protected rollback in Chat.") }
+                runCatching {
+                    WorkspaceScopedEdit.apply(files, tasks, projects, draft.context, draft.proposal)
+                    draft.proposal
+                }.onSuccess { proposal ->
+                    runCatching { suggestions.discard(id) }
+                    val verification = WorkspaceSelfVerification.settleUnknown(
+                        WorkspaceSelfVerification.verifyScopedEdit(files, tasks, projects, proposal),
+                        reobserve = {
+                            WorkspaceSelfVerification.verifyScopedEdit(files, tasks, projects, proposal)
+                        }
+                    )
+                    if (verification.passed) {
+                        report("Applied one saved file edit with protected rollback. " +
+                            "Local saved-file verification passed. Check Preview and Undo / Keep in Chat.")
+                    } else {
+                        error("Saved edit local verification ${verification.status.name.lowercase()}: " +
+                            "${verification.summary} Protected rollback was left in place.")
+                    }
+                }.onFailure { error("Apply refused: ${it.message}. Check protected rollback in Chat.") }
             }.show()
     }
 
