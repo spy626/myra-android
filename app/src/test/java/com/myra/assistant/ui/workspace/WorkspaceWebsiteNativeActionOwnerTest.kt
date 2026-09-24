@@ -32,7 +32,7 @@ class WorkspaceWebsiteNativeActionOwnerTest {
         assertFalse(result.getValue("script.js").contains("preventDefault"))
         assertTrue(result.getValue("script.js").contains("LYRA omitted"))
         assertTrue(WorkspaceCodingResult.websiteSuccess(fresh.original, result)
-            .contains("unverified generated Explore JavaScript"))
+            .contains("local safe action owner"))
         assertEquals(result, WorkspaceWebsiteConsistency.verify(fresh, result))
     }
 
