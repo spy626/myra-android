@@ -1,5 +1,7 @@
 package com.myra.assistant.ui.workspace
 
+import java.util.ArrayDeque
+
 /** Observable Workspace activity only. It never stores private chain-of-thought. */
 internal enum class WorkspaceWorkPhase {
     THINKING,
