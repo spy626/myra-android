@@ -132,7 +132,8 @@ internal object WorkspaceXKiroFree {
         val openKey = runCatching { keys.get(ApiKeyStore.OPENROUTER) }.getOrDefault("")
         val groqKey = runCatching { keys.get(ApiKeyStore.GROQ) }.getOrDefault("")
         val groqAllowed = WorkspaceCodingAutoFallback.groqPermitted(approved,
-            prefs!!.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false), groqKey)
+            prefs!!.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false), groqKey) &&
+            WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.GROQ_FREE)
         val snapshot = payloadSnapshot(original)
         fun requestForGroq(): Request? = if (!groqAllowed) null else runCatching {
             if (snapshot != null) WorkspaceWebsiteGroqFallback.request(groqKey, snapshot)
@@ -147,7 +148,8 @@ internal object WorkspaceXKiroFree {
         // A definitive key/account rejection cannot receive the project source.
         // If the read-only check is unavailable, preserve the existing consented free route.
         val openAllowed = openKeyWellFormed &&
-            openKeyCheck != WorkspaceOpenRouterKeyPreflight.Result.ACCESS_REFUSED
+            openKeyCheck != WorkspaceOpenRouterKeyPreflight.Result.ACCESS_REFUSED &&
+            WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.OPENROUTER_FREE)
         val open = if (openAllowed) runCatching {
             if (snapshot != null) WorkspaceWebsiteGeneration.request(openKey, snapshot)
             else WorkspaceChatGateway.request(WorkspaceChatGateway.Provider.OPENROUTER_FREE, openKey,
@@ -156,12 +158,17 @@ internal object WorkspaceXKiroFree {
         }.getOrNull() else null
         var openRouterResult = when {
             !openKeyWellFormed -> "OpenRouter Free key missing or invalid"
+            WorkspaceProviderSessionHealth.cooldownMessage(
+                WorkspaceProviderRegistry.Id.OPENROUTER_FREE).isNotBlank() ->
+                WorkspaceProviderSessionHealth.cooldownMessage(
+                    WorkspaceProviderRegistry.Id.OPENROUTER_FREE)
             !openAllowed -> "OpenRouter Free key/account access refused by read-only key check; no source sent to OpenRouter"
             else -> "OpenRouter Free request could not be prepared"
         }
         if (open != null) {
             if (chain.call().isCanceled()) throw IOException("Work request cancelled; no fallback sent")
             val second = chain.proceed(open) // Any network ambiguity ends the chain.
+            WorkspaceProviderSessionHealth.recordResponse(second)
             if (!WorkspaceCodingAutoFallback.openRouterRejected(second.code)) return second
             openRouterResult = if (second.code == 429) {
                 // Only a bounded response preview and numeric Retry-After are used. Never echo

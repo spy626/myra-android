@@ -1279,6 +1279,13 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun requestReply(id: String, messageId: String, provider: WorkspaceChatGateway.Provider,
                              picked: List<Attachment>, replacingAssistantId: String? = null) {
         if (selectedId != id || isBusy() || workTab) return
+        val cooldown = WorkspaceProviderSessionHealth.cooldownMessage(
+            WorkspaceProviderRegistry.id(provider))
+        if (cooldown.isNotBlank()) {
+            statusMessage = cooldown
+            render()
+            return
+        }
         workTrace.clear()
         workTraceExpanded = true
         workTraceMessageId = messageId

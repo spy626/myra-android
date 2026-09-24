@@ -195,6 +195,15 @@ internal class WorkspaceChatCodingFlow(
             error("Coding request saved locally. Configure a free Workspace route in API & Cloud Settings.")
             return
         }
+        val selectedProviderId = when {
+            usingZai -> WorkspaceProviderRegistry.Id.ZAI_FREE
+            usingXKiro -> WorkspaceProviderRegistry.Id.XKIRO_FREE
+            else -> WorkspaceProviderRegistry.Id.OPENROUTER_FREE
+        }
+        WorkspaceProviderSessionHealth.cooldownMessage(selectedProviderId).takeIf { it.isNotBlank() }?.let {
+            error(it + " Coding request remains local; no source was sent.")
+            return
+        }
         // The explicit Send instruction authorizes only this bounded task and selected file.
         // All existing task/source freshness checks remain enforced by the canonical owners.
         runCatching {
@@ -246,6 +255,11 @@ internal class WorkspaceChatCodingFlow(
         }
         if (primary == null) {
             error("Website request saved locally. Enable Z.ai Work coding with a valid Z.ai key, save a valid OpenRouter Free key, or enable Groq Free/ZDR with a valid Groq Free key. No source was sent.")
+            return
+        }
+        WorkspaceProviderSessionHealth.cooldownMessage(
+            WorkspaceProviderRegistry.id(primary)).takeIf { it.isNotBlank() }?.let {
+            error(it + " Website request remains local; no source was sent.")
             return
         }
         runCatching { WorkspaceWebsiteGeneration.finishPreviousForNewRequest(files, projects, id) }
@@ -394,6 +408,12 @@ internal class WorkspaceChatCodingFlow(
             if (!WorkspaceWebsiteGroqFallback.canAttempt(websiteAttempts)) {
                 completeWebsite(first, serial, id, snapshot, Result.failure(
                     IllegalStateException("All eligible free website attempts failed; no files changed.")))
+                return@runOnUiThread
+            }
+            WorkspaceProviderSessionHealth.cooldownMessage(
+                WorkspaceProviderRegistry.Id.GROQ_FREE).takeIf { it.isNotBlank() }?.let {
+                completeWebsite(first, serial, id, snapshot, Result.failure(
+                    IllegalStateException(it + " Groq website fallback was not sent; project files unchanged.")))
                 return@runOnUiThread
             }
             val preferences = activity.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)

@@ -51,6 +51,17 @@ class WorkspaceProviderSessionHealthTest {
             h.snapshot(WorkspaceProviderRegistry.Id.XKIRO_FREE, nowMs = 2_000L)?.state)
     }
 
+    @Test fun onlyRateLimitAndTemporaryOutageBlockNewSends() {
+        h.recordHttp(WorkspaceProviderRegistry.Id.OPENROUTER_FREE, 401, nowMs = 1_000L)
+        assertTrue(h.canSend(WorkspaceProviderRegistry.Id.OPENROUTER_FREE, nowMs = 1_000L))
+        h.recordHttp(WorkspaceProviderRegistry.Id.OPENROUTER_FREE, 402, nowMs = 2_000L)
+        assertTrue(h.canSend(WorkspaceProviderRegistry.Id.OPENROUTER_FREE, nowMs = 2_000L))
+        h.recordHttp(WorkspaceProviderRegistry.Id.OPENROUTER_FREE, 429, "2", nowMs = 3_000L)
+        assertFalse(h.canSend(WorkspaceProviderRegistry.Id.OPENROUTER_FREE, nowMs = 4_000L))
+        assertEquals("", h.cooldownMessage(
+            WorkspaceProviderRegistry.Id.OPENROUTER_FREE, nowMs = 5_000L))
+    }
+
     @Test fun successClearsPriorCooldown() {
         h.recordHttp(WorkspaceProviderRegistry.Id.LLM7_FREE, 429, nowMs = 1_000L)
         assertFalse(h.canSend(WorkspaceProviderRegistry.Id.LLM7_FREE, nowMs = 2_000L))

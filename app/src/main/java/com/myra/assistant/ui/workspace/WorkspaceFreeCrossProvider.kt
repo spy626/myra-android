@@ -34,6 +34,8 @@ internal object WorkspaceFreeCrossProvider {
             val prefs = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             if (!prefs.getBoolean(PREFERENCE_KEY, false) ||
                 !prefs.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)) return@runCatching null
+            if (!WorkspaceProviderSessionHealth.canSend(
+                    WorkspaceProviderRegistry.Id.OPENROUTER_FREE)) return@runCatching null
             val key = ApiKeyStore(context).get(ApiKeyStore.OPENROUTER)
             openRouterRequest(original, key)
         }.getOrNull() // Secure-key or preference failures must fail closed.
