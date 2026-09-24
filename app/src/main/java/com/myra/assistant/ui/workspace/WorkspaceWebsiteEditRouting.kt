@@ -33,23 +33,56 @@ internal object WorkspaceWebsiteEditRouting {
         """(?i)\b(?:html|heading|headline|title|paragraph|copy|wording|content|section|placeholder|label|link\s+text|alt\s+text)\b"""
     )
 
+    private val clauseSeparator = Regex(
+        """(?i)[.!?;,\\n]+|\\b(?:but|however|lekin|lakin|magar|instead|rather|and|aur|while)\\b"""
+    )
+    private val negation = Regex(
+        """(?i)\\b(?:don't|dont|do\\s+not|never|avoid|not|mat|nahi|nahin|nehi)\\b|(?:नहीं|मत)"""
+    )
+    private const val NEGATIVE_TAIL = "__LYRA_NEGATIVE_TAIL__"
+
+    /**
+     * Route only from affirmative mutation scope. A preservation clause can name another file
+     * without authorizing or requiring an edit to it.
+     * The word without is marked before generic clause splitting so only its governed tail is
+     * removed; the affirmative text before it remains routable.
+     */
+    private fun positiveMutationScope(instruction: String): String {
+        val marked = instruction.trim()
+            .replace(Regex("""(?i)\\bwithout\\b"""), "\\n$NEGATIVE_TAIL\\n")
+            .replace(clauseSeparator, "\\n")
+        var skipNext = false
+        val positive = mutableListOf<String>()
+        marked.lineSequence().map(String::trim).filter(String::isNotBlank).forEach { clause ->
+            if (clause == NEGATIVE_TAIL) {
+                skipNext = true
+            } else if (skipNext) {
+                skipNext = false
+            } else if (!negation.containsMatchIn(clause)) {
+                positive += clause
+            }
+        }
+        return positive.joinToString("\\n")
+    }
     fun decide(instruction: String, existingPaths: Set<String>): Decision {
         val canonical = WorkspaceWebsiteGeneration.PATHS.toSet()
         if (!existingPaths.containsAll(canonical)) return Decision(null)
 
         val clean = instruction.trim()
-        if (clean.isEmpty() || buildOrRedesign.containsMatchIn(clean)) return Decision(null)
+        if (clean.isEmpty()) return Decision(null)
+        val positive = positiveMutationScope(clean)
+        if (positive.isEmpty() || buildOrRedesign.containsMatchIn(positive)) return Decision(null)
 
         val explicit = WorkspaceWebsiteGeneration.PATHS.filter { path ->
             Regex("""(?i)(?:^|\s|[("'`])${Regex.escape(path)}(?:$|\s|[)"'`,.;:])""")
-                .containsMatchIn(clean)
+                .containsMatchIn(positive)
         }
         if (explicit.size > 1) return Decision(null)
         if (explicit.size == 1) return Decision(explicit.single())
 
-        val style = styleSignal.containsMatchIn(clean)
-        val script = scriptSignal.containsMatchIn(clean)
-        val html = htmlSignal.containsMatchIn(clean)
+        val style = styleSignal.containsMatchIn(positive)
+        val script = scriptSignal.containsMatchIn(positive)
+        val html = htmlSignal.containsMatchIn(positive)
         val matches = listOf(style, script, html).count { it }
         if (matches != 1) return Decision(null)
 

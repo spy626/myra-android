@@ -46,6 +46,41 @@ class WorkspaceWebsiteEditRoutingTest {
             WorkspaceWebsiteEditRouting.decide("Edit script.js to change the existing handler", complete).path)
     }
 
+    @Test fun preservationClausesDoNotCreateFalseMultiFileSignals() {
+        val styleOnly = listOf(
+            "Make the homepage background darker but don't change layout or JavaScript.",
+            "Make the homepage background darker without changing JavaScript.",
+            "Don't change JavaScript; make the background darker.",
+            "Change style.css but don't touch script.js.",
+            "Background dark karo lekin JavaScript mat badlo."
+        )
+        styleOnly.forEach {
+            assertEquals("style.css", WorkspaceWebsiteEditRouting.decide(it, complete).path)
+        }
+
+        assertEquals(
+            "script.js",
+            WorkspaceWebsiteEditRouting.decide(
+                "Fix the click behavior but don't change the page content.", complete
+            ).path
+        )
+        assertEquals(
+            "index.html",
+            WorkspaceWebsiteEditRouting.decide(
+                "Update the heading but don't change CSS or JavaScript.", complete
+            ).path
+        )
+    }
+
+    @Test fun negatedRebuildMentionDoesNotForceFullWebsiteRoute() {
+        assertEquals(
+            "style.css",
+            WorkspaceWebsiteEditRouting.decide(
+                "Don't rebuild the website; just change the background color.", complete
+            ).path
+        )
+    }
+
     @Test fun buildsAmbiguousAndMultiFileChangesStayOnFullWebsiteRoute() {
         listOf(
             "Build a website with a dark background",
