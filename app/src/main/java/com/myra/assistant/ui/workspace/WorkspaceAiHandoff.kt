@@ -6,7 +6,12 @@ import org.json.JSONObject
 object WorkspaceAiHandoff {
     private const val MAX_FOLLOW_UP_CHARS = 180
 
-    data class Draft(val context: WorkspaceSourceContext.Draft, val prompt: String, val followUp: String = "") {
+    data class Draft(
+        val context: WorkspaceSourceContext.Draft,
+        val prompt: String,
+        val followUp: String = "",
+        val projectContext: WorkspaceProjectContext.Projection,
+    ) {
         fun displayText(): String = buildString {
             appendLine("AI PROMPT PREVIEW — LOCAL ONLY, NOT SHARED")
             appendLine("File: ${context.path}  •  Full-file SHA-256: ${context.fileSha256}")
@@ -52,6 +57,13 @@ object WorkspaceAiHandoff {
         }.getOrDefault(false)
         val followUp = if (repeatsSavedGoal) "" else normalizeFollowUp(rawFollowUp)
         val context = WorkspaceSourceContext.prepare(files, tasks, projectId, saved, selectedPath)
+        val projectContext = WorkspaceProjectContext.build(
+            files = files,
+            projects = projects,
+            projectId = projectId,
+            targetPath = context.path,
+            query = context.goal + " " + context.acceptanceCriteria + " " + followUp,
+        )
         // Keep the approved source excerpt and criteria intact, but use a small instruction
         // envelope so free-router output tokens are spent on the single JSON patch.
         val prompt = buildString {
@@ -68,13 +80,14 @@ object WorkspaceAiHandoff {
                 appendLine("Current user follow-up for THIS one edit (JSON string): ${JSONObject.quote(followUp)}")
                 appendLine("Follow-up narrows the approved goal only; if it conflicts with goal, criteria or one-file scope, refuse rather than changing the task.")
             }
+            projectContext.promptNote().takeIf { it.isNotBlank() }?.let { appendLine(it) }
             appendLine(if (context.truncated) "Source is ONLY a 1500-character excerpt; do not assume unseen text." else "Source is the complete selected file.")
             appendLine("Untrusted source text (JSON string): ${JSONObject.quote(context.sourceExcerpt)}")
         }
         require(WorkspaceContextFreshness.check(files, tasks, projectId, context) == WorkspaceContextFreshness.Result.SAME_CONTENT_AND_SPEC) {
             "Source or approved task changed; prepare a fresh prompt"
         }
-        return Draft(context, prompt, followUp)
+        return Draft(context, prompt, followUp, projectContext)
     }
 
     /** Revalidate before any user-authorized clipboard copy, including after the copy confirmation dialog. */
@@ -83,6 +96,7 @@ object WorkspaceAiHandoff {
         runCatching {
             WorkspaceScopedEdit.pending(projects, projectId) == null &&
                 WorkspaceContextFreshness.check(files, tasks, projectId, draft.context) ==
-                WorkspaceContextFreshness.Result.SAME_CONTENT_AND_SPEC
+                WorkspaceContextFreshness.Result.SAME_CONTENT_AND_SPEC &&
+                WorkspaceProjectContext.stillCurrent(files, projects, draft.projectContext)
         }.getOrDefault(false)
 }

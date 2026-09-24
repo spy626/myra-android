@@ -38,9 +38,9 @@ object WorkspaceSourceContext {
     }
 
     fun choices(files: WorkspaceFileStore, projectId: String): List<String> =
-        WorkspaceSourcePreview.choices(files, projectId).filter(::eligiblePath)
+        WorkspaceSourcePreview.choices(files, projectId).filter(::isEligibleProjectPath)
 
-    private fun eligiblePath(path: String): Boolean {
+    internal fun isEligibleProjectPath(path: String): Boolean {
         val parts = path.split('/')
         val name = parts.lastOrNull().orEmpty()
         return parts.all { it.isNotEmpty() && !it.startsWith('.') } &&
