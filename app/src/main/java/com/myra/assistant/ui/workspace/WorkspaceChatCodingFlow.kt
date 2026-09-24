@@ -353,6 +353,7 @@ internal class WorkspaceChatCodingFlow(
             val second = WorkspaceWebsiteGroqFallback.client.newCall(alternate)
             websiteAttempts++
             request = second
+            workEvent(WorkspaceWorkPhase.RECOVERING, "Trying compatible free format", "Groq Free · attempt $websiteAttempts/3")
             report("Trying compatible Groq Free format · attempt $websiteAttempts/3 · Stop ■ to cancel.")
             second.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
@@ -399,6 +400,7 @@ internal class WorkspaceChatCodingFlow(
             val second = WorkspaceWebsiteGroqFallback.client.newCall(secondRequest)
             websiteAttempts++
             request = second
+            workEvent(WorkspaceWorkPhase.RECOVERING, "Switching free route", "Groq Free · attempt $websiteAttempts/3")
             report("Switching to Groq Free · attempt $websiteAttempts/3 · Stop ■ to cancel.")
             second.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
