@@ -22,7 +22,8 @@ internal class WorkspaceMiniLyraView(context: Context) : View(context) {
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
-    private var phase: WorkspaceWorkPhase = WorkspaceWorkPhase.THINKING
+    // Stay static while the compact indicator is hidden; animation starts on a real active phase.
+    private var phase: WorkspaceWorkPhase = WorkspaceWorkPhase.DONE
     private var progress = 0f
 
     private val animator = ValueAnimator.ofFloat(0f, 1f).apply {
