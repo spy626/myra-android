@@ -86,8 +86,15 @@ internal class WorkspaceChatCodingFlow(
     private fun verifyWebsiteWithRecovery(
         snapshot: WorkspaceWebsiteGeneration.Snapshot,
         expected: Map<String, String>,
+        announce: Boolean = true,
     ): WorkspaceVerificationResult {
-        workEvent(WorkspaceWorkPhase.VERIFYING, "Verifying website files", "index.html · style.css · script.js")
+        if (announce) {
+            workEvent(
+                WorkspaceWorkPhase.VERIFYING,
+                "Verifying website files",
+                "index.html · style.css · script.js"
+            )
+        }
         var verification = WorkspaceSelfVerification.verifyWebsite(
             files, tasks, projects, snapshot, expected
         )
@@ -428,6 +435,22 @@ internal class WorkspaceChatCodingFlow(
         }
     }
 
+    /**
+     * Yield one ordinary main-loop turn after a visible work event.
+     *
+     * This is not a timer and intentionally has no artificial delay. The preceding render can
+     * reach Android's traversal/draw pass before the next real local stage starts, so quick
+     * check/save/verify work does not collapse into one visual pop.
+     */
+    private fun afterVisibleStage(serial: Long, id: String, action: () -> Unit) {
+        activity.window.decorView.post {
+            if (activity.isFinishing || activity.isDestroyed || serial != generation || !current(id)) {
+                return@post
+            }
+            action()
+        }
+    }
+
     private fun completeWebsite(call: Call, serial: Long, id: String,
                                 snapshot: WorkspaceWebsiteGeneration.Snapshot,
                                 result: Result<Map<String, String>>,
@@ -437,52 +460,90 @@ internal class WorkspaceChatCodingFlow(
                 request !== call || !current(id)) return@runOnUiThread
             request = null
             websiteAttempts = 0
-            result.onSuccess { generated ->
-                workEvent(WorkspaceWorkPhase.VERIFYING, "Checking generated website", "Validating complete three-file output.")
+
+            val generated = result.getOrElse {
+                error(it.message ?: "Free website provider failed; project files unchanged.")
+                return@runOnUiThread
+            }
+
+            // Each label is emitted only when its corresponding real stage is about to run.
+            workEvent(
+                WorkspaceWorkPhase.VERIFYING,
+                "Checking generated website",
+                "Validating complete three-file output."
+            )
+            afterVisibleStage(serial, id) check@{
                 val review = runCatching { WorkspaceWebsiteVisualQuality.review(snapshot, generated) }
                     .getOrElse { issue ->
                         error("Website result rejected: ${issue.message}. No files changed.")
-                        return@runOnUiThread
+                        return@check
                     }
-                runCatching {
-                    workEvent(WorkspaceWorkPhase.CODING, "Saving website files", "index.html · style.css · script.js")
-                    val first = runCatching {
-                        WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, review.files)
-                    }
-                    if (first.isFailure) {
-                        val recovered = runCatching {
-                            WorkspaceWebsiteGeneration.recoverExpectedWrites(
-                                files, tasks, projects, snapshot, review.files
-                            )
+
+                workEvent(
+                    WorkspaceWorkPhase.CODING,
+                    "Saving website files",
+                    "index.html · style.css · script.js"
+                )
+                afterVisibleStage(serial, id) save@{
+                    val saved = runCatching {
+                        val first = runCatching {
+                            WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, review.files)
                         }
-                        if (recovered.isFailure) {
-                            throw IllegalStateException(
-                                "Initial local save failed: ${first.exceptionOrNull()?.message}. " +
-                                    "Targeted local recovery was not safe: ${recovered.exceptionOrNull()?.message}"
-                            )
+                        if (first.isFailure) {
+                            val recovered = runCatching {
+                                WorkspaceWebsiteGeneration.recoverExpectedWrites(
+                                    files, tasks, projects, snapshot, review.files
+                                )
+                            }
+                            if (recovered.isFailure) {
+                                throw IllegalStateException(
+                                    "Initial local save failed: ${first.exceptionOrNull()?.message}. " +
+                                        "Targeted local recovery was not safe: ${recovered.exceptionOrNull()?.message}"
+                                )
+                            }
                         }
                     }
-                }.onSuccess {
-                    val verification = verifyWebsiteWithRecovery(snapshot, review.files)
-                    if (!verification.passed) {
-                        error("Website local verification ${verification.status.name.lowercase()}: " +
-                            "${verification.summary} Protected rollback was left in place.")
-                        return@onSuccess
+                    if (saved.isFailure) {
+                        error("Website files were not fully saved: ${saved.exceptionOrNull()?.message}. " +
+                            "If a backup is pending, use Review website · Undo in Chat.")
+                        return@save
                     }
-                    val summary = WorkspaceCodingResult.websiteSuccess(snapshot.original, review.files) +
-                        review.chatNote() +
-                        (when (via) {
-                            null -> ""
-                            else -> " Completed via $via after xKiro was unavailable."
-                        })
-                    workEvent(WorkspaceWorkPhase.DONE, "Website verified", "Saved files match the approved generated output.")
-                    terminal(summary, "") // The durable Chat reply is the single verified local success message.
-                    activity.startActivity(WorkspacePreviewActivity.intent(activity, id))
-                }.onFailure {
-                    error("Website files were not fully saved: ${it.message}. " +
-                        "If a backup is pending, use Review website · Undo in Chat.")
+
+                    workEvent(
+                        WorkspaceWorkPhase.VERIFYING,
+                        "Verifying website files",
+                        "index.html · style.css · script.js"
+                    )
+                    afterVisibleStage(serial, id) verify@{
+                        val verification = verifyWebsiteWithRecovery(
+                            snapshot,
+                            review.files,
+                            announce = false,
+                        )
+                        if (!verification.passed) {
+                            error("Website local verification ${verification.status.name.lowercase()}: " +
+                                "${verification.summary} Protected rollback was left in place.")
+                            return@verify
+                        }
+
+                        val summary = WorkspaceCodingResult.websiteSuccess(snapshot.original, review.files) +
+                            review.chatNote() +
+                            (when (via) {
+                                null -> ""
+                                else -> " Completed via $via after xKiro was unavailable."
+                            })
+                        workEvent(
+                            WorkspaceWorkPhase.DONE,
+                            "Website verified",
+                            "Saved files match the approved generated output."
+                        )
+                        afterVisibleStage(serial, id) {
+                            terminal(summary, "") // Durable Chat reply follows the verified local stage.
+                            activity.startActivity(WorkspacePreviewActivity.intent(activity, id))
+                        }
+                    }
                 }
-            }.onFailure { error(it.message ?: "Free website provider failed; project files unchanged.") }
+            }
         }
     }
 
