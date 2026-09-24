@@ -155,7 +155,7 @@ object WorkspaceProjectContext {
                         reason = "matches task terms"
                     }
                     sameDir(evidence.path, targetPath) -> {
-                        score += 8
+                        // pathScore already accounts for proximity; do not double-count it.
                         reason = "same source area"
                     }
                 }
