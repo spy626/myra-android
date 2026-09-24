@@ -34,10 +34,10 @@ internal object WorkspaceWebsiteEditRouting {
     )
 
     private val clauseSeparator = Regex(
-        """(?i)[.!?;,\\n]+|\\b(?:but|however|lekin|lakin|magar|instead|rather|and|aur|while)\\b"""
+        """(?i)[.!?;,\n]+|\b(?:but|however|lekin|lakin|magar|instead|rather|and|aur|while)\b"""
     )
     private val negation = Regex(
-        """(?i)\\b(?:don't|dont|do\\s+not|never|avoid|not|mat|nahi|nahin|nehi)\\b|(?:नहीं|मत)"""
+        """(?i)\b(?:don't|dont|do\s+not|never|avoid|not|mat|nahi|nahin|nehi)\b|(?:नहीं|मत)"""
     )
     private const val NEGATIVE_TAIL = "__LYRA_NEGATIVE_TAIL__"
 
@@ -49,8 +49,8 @@ internal object WorkspaceWebsiteEditRouting {
      */
     private fun positiveMutationScope(instruction: String): String {
         val marked = instruction.trim()
-            .replace(Regex("""(?i)\\bwithout\\b"""), "\\n$NEGATIVE_TAIL\\n")
-            .replace(clauseSeparator, "\\n")
+            .replace(Regex("""(?i)\bwithout\b"""), "\n$NEGATIVE_TAIL\n")
+            .replace(clauseSeparator, "\n")
         var skipNext = false
         val positive = mutableListOf<String>()
         marked.lineSequence().map(String::trim).filter(String::isNotBlank).forEach { clause ->
@@ -62,7 +62,7 @@ internal object WorkspaceWebsiteEditRouting {
                 positive += clause
             }
         }
-        return positive.joinToString("\\n")
+        return positive.joinToString("\n")
     }
     fun decide(instruction: String, existingPaths: Set<String>): Decision {
         val canonical = WorkspaceWebsiteGeneration.PATHS.toSet()
