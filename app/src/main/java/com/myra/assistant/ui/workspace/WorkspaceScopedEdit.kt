@@ -141,6 +141,51 @@ object WorkspaceScopedEdit {
         return backup
     }
 
+    /**
+     * One bounded local recovery for a write that was not observed after approval.
+     * It never calls a provider and writes only when the file is still byte-for-byte at the
+     * approved base state and the durable rollback record exactly matches this proposal.
+     */
+    @Synchronized fun recoverExpectedWrite(
+        files: WorkspaceFileStore,
+        tasks: WorkspaceTaskStore,
+        projects: WorkspaceProjectStore,
+        proposal: Proposal,
+    ): Backup {
+        val task = requireNotNull(tasks.get(proposal.projectId)) { "Saved task missing" }
+        require(task.taskId == proposal.taskId &&
+            WorkspaceTaskContract.specToken(task) == proposal.specToken &&
+            WorkspaceTaskContract.isSpecApproved(task) &&
+            task.status != WorkspaceTaskStatus.PAUSED) {
+            "Task/spec changed; local write recovery refused"
+        }
+        val backup = requireNotNull(pending(projects, proposal.projectId)) {
+            "No matching rollback exists; local write recovery refused"
+        }
+        require(backup.taskId == proposal.taskId && backup.path == proposal.path &&
+            backup.beforeSha256 == proposal.baseSha256 &&
+            backup.afterSha256 == proposal.resultSha256) {
+            "Rollback does not match the approved edit; local write recovery refused"
+        }
+        val current = files.readFile(proposal.projectId, proposal.path)
+        require(sha(current) == proposal.baseSha256) {
+            "Source is not the approved pre-edit state; newer work will not be overwritten"
+        }
+        val start = current.indexOf(proposal.oldText)
+        require(start >= 0 && current.indexOf(proposal.oldText, start + 1) == -1) {
+            "Approved exact replacement is no longer uniquely grounded"
+        }
+        val changed = current.replaceRange(start, start + proposal.oldText.length, proposal.newText)
+        require(sha(changed) == proposal.resultSha256) {
+            "Recovered edit does not match the approved result hash"
+        }
+        files.saveFile(proposal.projectId, proposal.path, changed)
+        check(sha(files.readFile(proposal.projectId, proposal.path)) == proposal.resultSha256) {
+            "Recovered file write could not be verified; rollback retained"
+        }
+        return backup
+    }
+
     /** No approval needed to restore an earlier user-authorized edit; NEVER overwrite later work. */
     @Synchronized fun undo(files: WorkspaceFileStore, projects: WorkspaceProjectStore, projectId: String): Boolean {
         val backup = requireNotNull(pending(projects, projectId)) { "No edit to undo" }
