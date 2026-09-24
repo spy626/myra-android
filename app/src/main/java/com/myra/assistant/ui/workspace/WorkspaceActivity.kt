@@ -65,7 +65,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private var activeRequest: Call? = null
     private var statusMessage = ""
     private val workTrace = WorkspaceWorkTrace()
-    private var workTraceExpanded = false
+    private var workTraceExpanded = true
+    // The live receipt belongs inside the exact user turn that started the work.
+    private var workTraceMessageId: String? = null
     // Latest saved user turn only; Retry never appends a duplicate message.
     private var codingRetryTarget: Pair<String, String>? = null
     private val coding by lazy {
@@ -86,12 +88,6 @@ class WorkspaceActivity : AppCompatActivity() {
     private lateinit var scroll: ScrollView
     private lateinit var content: LinearLayout
     private lateinit var composerArea: LinearLayout
-    private lateinit var workIndicator: LinearLayout
-    private lateinit var workIndicatorRow: LinearLayout
-    private lateinit var workIcon: WorkspaceMiniLyraView
-    private lateinit var workIndicatorText: TextView
-    private lateinit var workChevron: TextView
-    private lateinit var workDetails: LinearLayout
     private lateinit var statusBanner: TextView
     private lateinit var composer: EditText
     private lateinit var sendButton: ImageButton
@@ -226,59 +222,7 @@ class WorkspaceActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(4), dp(12), dp(12))
         }
-        // Compact Codex-style work receipt. It shows observable actions, never hidden reasoning.
-        workIndicator = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-            background = GradientDrawable().apply {
-                setColor(Color.rgb(10, 19, 31))
-                cornerRadius = dp(12).toFloat()
-                setStroke(dp(1), Color.rgb(35, 68, 104))
-            }
-        }
-        workIndicatorRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(36)
-            setPadding(dp(8), dp(3), dp(7), dp(3))
-            isClickable = true
-            isFocusable = true
-            contentDescription = "LYRA work activity"
-            setOnClickListener {
-                workTraceExpanded = !workTraceExpanded
-                updateWorkIndicator()
-            }
-        }
-        workIcon = WorkspaceMiniLyraView(this)
-        workIndicatorRow.addView(workIcon, LinearLayout.LayoutParams(dp(24), dp(24)).apply {
-            rightMargin = dp(7)
-        })
-        workIndicatorText = label("", 12.5f).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setTextColor(Color.rgb(221, 235, 255))
-            setPadding(0, 0, 0, 0)
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        workIndicatorRow.addView(workIndicatorText, LinearLayout.LayoutParams(0, dp(30), 1f))
-        workChevron = label("⌄", 14f).apply {
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(132, 181, 235))
-            setPadding(0, 0, 0, 0)
-        }
-        workIndicatorRow.addView(workChevron, LinearLayout.LayoutParams(dp(24), dp(30)))
-        workIndicator.addView(workIndicatorRow, LinearLayout.LayoutParams(-1, dp(36)))
-        workDetails = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-            setPadding(dp(39), 0, dp(10), dp(8))
-        }
-        workIndicator.addView(workDetails, LinearLayout.LayoutParams(-1, -2))
-        composerArea.addView(workIndicator, LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(5)
-        })
-
-        // Legacy status remains for local validation errors that are not part of a work trace.
+        // Status banner is reserved for validation/setup errors that are not part of live work.
         statusBanner = label("", 12f).apply {
             visibility = View.GONE
             background = rounded(Color.rgb(20, 37, 28), 12)
@@ -397,50 +341,79 @@ class WorkspaceActivity : AppCompatActivity() {
         WorkspaceChatGateway.Provider.LLM7_FREE -> "LLM7 Free"
     }
 
-    private fun updateWorkIndicator() {
-        if (!::workIndicator.isInitialized) return
+    private fun createInlineWorkIndicator(): View? {
         val snapshot = workTrace.snapshot()
-        val current = snapshot.current
-        val visible = !workTab && current != null
-        workIndicator.visibility = if (visible) View.VISIBLE else View.GONE
-        if (!visible || current == null) return
+        val current = snapshot.current ?: return null
 
-        workIcon.setPhase(current.phase)
-        workIndicatorText.text = snapshot.compactLabel(System.currentTimeMillis())
-        workChevron.text = if (workTraceExpanded) "⌃" else "⌄"
-        workChevron.visibility = if (snapshot.events.size > 1 || current.detail != null) View.VISIBLE else View.INVISIBLE
-        workDetails.removeAllViews()
-        workDetails.visibility = if (workTraceExpanded) View.VISIBLE else View.GONE
-        if (!workTraceExpanded) return
-
-        val start = snapshot.startedAtMs ?: current.atMs
-        snapshot.events.takeLast(14).forEach { event ->
-            val seconds = ((event.atMs - start).coerceAtLeast(0L) / 1_000L)
-            val mark = when (event.phase) {
-                WorkspaceWorkPhase.DONE -> "✓"
-                WorkspaceWorkPhase.ERROR -> "!"
-                WorkspaceWorkPhase.RECOVERING -> "↻"
-                else -> "•"
-            }
-            val line = label("$mark  ${event.label}   +${seconds}s", 11.5f).apply {
-                setTextColor(when (event.phase) {
-                    WorkspaceWorkPhase.DONE -> Color.rgb(139, 231, 173)
-                    WorkspaceWorkPhase.ERROR -> Color.rgb(255, 151, 151)
-                    else -> Color.rgb(201, 220, 244)
-                })
-                setPadding(0, dp(3), 0, if (event.detail == null) dp(3) else 0)
-                maxLines = 2
-            }
-            workDetails.addView(line, LinearLayout.LayoutParams(-1, -2))
-            event.detail?.let { detail ->
-                workDetails.addView(label(detail, 10.5f).apply {
-                    setTextColor(Color.rgb(133, 158, 188))
-                    setPadding(dp(15), 0, 0, dp(4))
-                    maxLines = 3
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                }, LinearLayout.LayoutParams(-1, -2))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), dp(5), dp(2), dp(8))
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(32)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "LYRA work activity"
+            setOnClickListener {
+                workTraceExpanded = !workTraceExpanded
+                render()
             }
         }
+        val icon = WorkspaceMiniLyraView(this).apply { setPhase(current.phase) }
+        header.addView(icon, LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+            rightMargin = dp(8)
+        })
+        val title = label(
+            if (snapshot.active) current.label else snapshot.compactLabel(System.currentTimeMillis()),
+            12.5f
+        ).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setTextColor(Color.rgb(205, 225, 250))
+            setPadding(0, 0, 0, 0)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        header.addView(title, LinearLayout.LayoutParams(0, dp(30), 1f))
+        val chevron = label(if (workTraceExpanded) "⌃" else "⌄", 13f).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(123, 165, 214))
+            setPadding(0, 0, 0, 0)
+        }
+        header.addView(chevron, LinearLayout.LayoutParams(dp(22), dp(30)))
+        box.addView(header, LinearLayout.LayoutParams(-1, dp(32)))
+
+        if (workTraceExpanded) {
+            val start = snapshot.startedAtMs ?: current.atMs
+            snapshot.events.takeLast(14).forEach { event ->
+                val seconds = ((event.atMs - start).coerceAtLeast(0L) / 1_000L)
+                val mark = when (event.phase) {
+                    WorkspaceWorkPhase.DONE -> "✓"
+                    WorkspaceWorkPhase.ERROR -> "!"
+                    WorkspaceWorkPhase.RECOVERING -> "↻"
+                    else -> "•"
+                }
+                box.addView(label("$mark  ${event.label}   +${seconds}s", 11.5f).apply {
+                    setTextColor(when (event.phase) {
+                        WorkspaceWorkPhase.DONE -> Color.rgb(127, 224, 165)
+                        WorkspaceWorkPhase.ERROR -> Color.rgb(255, 142, 142)
+                        else -> Color.rgb(191, 211, 236)
+                    })
+                    setPadding(dp(32), dp(2), dp(4), if (event.detail == null) dp(4) else 0)
+                    maxLines = 2
+                }, LinearLayout.LayoutParams(-1, -2))
+                event.detail?.let { detail ->
+                    box.addView(label(detail, 10.5f).apply {
+                        setTextColor(Color.rgb(126, 151, 181))
+                        setPadding(dp(47), 0, dp(4), dp(4))
+                        maxLines = 3
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }, LinearLayout.LayoutParams(-1, -2))
+                }
+            }
+        }
+        return box
     }
 
     private fun updateSendButton() {
@@ -486,7 +459,6 @@ class WorkspaceActivity : AppCompatActivity() {
         workTabButton.setTextColor(if (workTab) Color.rgb(223, 245, 227) else Color.rgb(148, 171, 153))
         composerArea.visibility = if (workTab) View.GONE else View.VISIBLE
         updateSendButton()
-        updateWorkIndicator()
         statusBanner.text = statusMessage
         statusBanner.visibility = if (!workTab && statusMessage.isNotBlank() &&
             workTrace.snapshot().current == null) View.VISIBLE else View.GONE
@@ -733,7 +705,15 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
                 line.addView(bubble, LinearLayout.LayoutParams(-2, -2))
                 item.addView(line, LinearLayout.LayoutParams(-1, -2))
-                if (mine && WorkspaceMessageDisplayPolicy.shouldCollapse(message.text)) {
+                if (mine && message.id == workTraceMessageId) {
+                createInlineWorkIndicator()?.let { traceView ->
+                    item.addView(traceView, LinearLayout.LayoutParams(-1, -2).apply {
+                        topMargin = dp(5)
+                        bottomMargin = dp(4)
+                    })
+                }
+            }
+            if (mine && WorkspaceMessageDisplayPolicy.shouldCollapse(message.text)) {
                     val messageKey = "${current.projectId}:${message.id}"
                     val toggle = label("Show more", 12f).apply {
                         gravity = Gravity.END
@@ -903,7 +883,8 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.text.clear()
         statusMessage = ""
         workTrace.clear()
-        workTraceExpanded = false
+        workTraceExpanded = true
+        workTraceMessageId = null
         render()
     }
 
@@ -932,7 +913,8 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.setText(localDrafts[id].orEmpty())
         statusMessage = ""
         workTrace.clear()
-        workTraceExpanded = false
+        workTraceExpanded = true
+        workTraceMessageId = null
         render()
     }
 
@@ -1079,6 +1061,9 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val stored = runCatching { conversations.append(id, "user", text) }
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
+        workTrace.clear()
+        workTraceExpanded = true
+        workTraceMessageId = stored.id
         composer.text.clear()
         // Keep the keyboard's typing target after Send; opening the keyboard is still user-driven.
         composer.requestFocus()
@@ -1140,6 +1125,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun requestReply(id: String, messageId: String, provider: WorkspaceChatGateway.Provider,
                              picked: List<Attachment>, replacingAssistantId: String? = null) {
         if (selectedId != id || isBusy() || workTab) return
+        workTrace.clear()
+        workTraceExpanded = true
+        workTraceMessageId = messageId
         val history = runCatching { conversations.read(id) }
             .getOrElse { toast("Conversation unavailable"); return }
         val transcript = if (replacingAssistantId == null) history else {
