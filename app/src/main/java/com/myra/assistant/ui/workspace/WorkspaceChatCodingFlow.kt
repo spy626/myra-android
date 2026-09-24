@@ -30,13 +30,15 @@ internal class WorkspaceChatCodingFlow(
     // Counts actual provider calls, including retries; reset only at terminal/cancel.
     private var websiteAttempts = 0
     private var activeTurn: Pair<String, String>? = null
-    val isRunning: Boolean get() = request != null
+    private var localStageRunning = false
+    val isRunning: Boolean get() = request != null || localStageRunning
 
     fun cancel() {
-        val wasRunning = request != null
+        val wasRunning = request != null || localStageRunning
         generation++
         request?.cancel()
         request = null
+        localStageRunning = false
         websiteAttempts = 0
         activeTurn = null
         if (wasRunning) workEvent(WorkspaceWorkPhase.ERROR, "Stopped", "Request cancelled; no partial result saved.")
@@ -44,6 +46,7 @@ internal class WorkspaceChatCodingFlow(
 
     /** Source writes are finished before the result enters the private transcript. */
     private fun terminal(message: String, status: String = message) {
+        localStageRunning = false
         val turn = activeTurn
         activeTurn = null
         val result = if (turn == null) Result.success(Unit)
@@ -465,6 +468,7 @@ internal class WorkspaceChatCodingFlow(
                 error(it.message ?: "Free website provider failed; project files unchanged.")
                 return@runOnUiThread
             }
+            localStageRunning = true
 
             // Each label is emitted only when its corresponding real stage is about to run.
             workEvent(

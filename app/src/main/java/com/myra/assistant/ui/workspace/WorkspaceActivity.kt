@@ -16,6 +16,7 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -68,6 +69,17 @@ class WorkspaceActivity : AppCompatActivity() {
     private var workTraceExpanded = true
     // The live receipt belongs inside the exact user turn that started the work.
     private var workTraceMessageId: String? = null
+    private data class LiveWorkRow(
+        val event: WorkspaceWorkEvent,
+        val icon: WorkspaceMiniLyraView,
+        val title: TextView,
+    )
+    // Display-only references. Keeping the live rows mounted lets entrance animations finish
+    // while the next real stage continues; no work is delayed for animation.
+    private var liveWorkTranscript: LinearLayout? = null
+    private var liveWorkTranscriptMessageId: String? = null
+    private val liveWorkRows = mutableListOf<LiveWorkRow>()
+    private var liveWorkDurationView: TextView? = null
     // Latest saved user turn only; Retry never appends a duplicate message.
     private var codingRetryTarget: Pair<String, String>? = null
     private val coding by lazy {
@@ -77,7 +89,11 @@ class WorkspaceActivity : AppCompatActivity() {
                 conversations.completeCodingTurn(id, userId, summary)
             }, report = { message ->
                 statusMessage = message
-                if (::root.isInitialized) render() // Failure is already in Chat; no duplicate modal.
+                if (::root.isInitialized) {
+                    // Active work is already updating the inline transcript directly. Rebuilding
+                    // the whole chat here would cancel its entrance animation.
+                    if (workTrace.snapshot().active) updateSendButton() else render()
+                }
             }, workEvent = { phase, label, detail ->
                 recordWorkEvent(phase, label, detail)
             })
@@ -317,22 +333,29 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun recordWorkEvent(phase: WorkspaceWorkPhase, label: String, detail: String? = null) {
-        val snapshot = workTrace.snapshot()
+        val before = workTrace.snapshot()
         when (phase) {
             WorkspaceWorkPhase.DONE -> {
-                if (snapshot.events.isEmpty()) workTrace.begin(WorkspaceWorkPhase.DONE, label, detail)
+                if (before.events.isEmpty()) workTrace.begin(WorkspaceWorkPhase.DONE, label, detail)
                 else workTrace.finishSuccess(label, detail)
             }
             WorkspaceWorkPhase.ERROR -> {
-                if (snapshot.events.isEmpty()) workTrace.begin(WorkspaceWorkPhase.ERROR, label, detail)
+                if (before.events.isEmpty()) workTrace.begin(WorkspaceWorkPhase.ERROR, label, detail)
                 else workTrace.finishError(label, detail)
             }
             else -> {
-                if (snapshot.events.isEmpty()) workTrace.begin(phase, label, detail)
+                if (before.events.isEmpty()) workTrace.begin(phase, label, detail)
                 else workTrace.add(phase, label, detail)
             }
         }
-        if (::root.isInitialized) render()
+        if (!::root.isInitialized) return
+        val host = liveWorkTranscript
+        if (!workTab && host != null && liveWorkTranscriptMessageId == workTraceMessageId) {
+            syncLiveWorkTranscript(animateNew = true)
+            updateSendButton()
+        } else {
+            render()
+        }
     }
 
     private fun providerLabel(provider: WorkspaceChatGateway.Provider): String = when (provider) {
@@ -341,85 +364,177 @@ class WorkspaceActivity : AppCompatActivity() {
         WorkspaceChatGateway.Provider.LLM7_FREE -> "LLM7 Free"
     }
 
-    private fun createInlineWorkTranscript(): View? {
+    private fun completedWorkColor(phase: WorkspaceWorkPhase): Int = when (phase) {
+        WorkspaceWorkPhase.DONE -> Color.rgb(137, 220, 166)
+        WorkspaceWorkPhase.ERROR -> Color.rgb(245, 150, 150)
+        else -> Color.rgb(168, 178, 191)
+    }
+
+    private fun settlePreviousLiveWorkRow() {
+        val previous = liveWorkRows.lastOrNull() ?: return
+        previous.icon.setPhase(previous.event.phase, animate = false)
+        previous.icon.layoutParams = (previous.icon.layoutParams as LinearLayout.LayoutParams).apply {
+            width = dp(20)
+            height = dp(20)
+            topMargin = dp(2)
+            rightMargin = dp(12)
+        }
+        previous.title.setTextColor(completedWorkColor(previous.event.phase))
+    }
+
+    private fun createWorkEventRow(
+        event: WorkspaceWorkEvent,
+        isCurrent: Boolean,
+        active: Boolean,
+        animateEntry: Boolean,
+    ): LiveWorkRow {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+            setPadding(0, dp(2), 0, dp(3))
+        }
+        val iconSize = if (isCurrent) 24 else 20
+        val icon = WorkspaceMiniLyraView(this).apply {
+            setPhase(event.phase, animate = isCurrent && active)
+        }
+        row.addView(icon, LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)).apply {
+            topMargin = if (iconSize < 24) dp(2) else 0
+            rightMargin = if (iconSize < 24) dp(12) else dp(8)
+        })
+
+        val textColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val title = label(event.label, 13.5f).apply {
+            setTextColor(if (isCurrent && active) Color.rgb(226, 233, 242)
+                else completedWorkColor(event.phase))
+            setPadding(0, 0, dp(4), 0)
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        textColumn.addView(title, LinearLayout.LayoutParams(-1, -2))
+        event.detail?.let { detail ->
+            textColumn.addView(label(detail, 11.25f).apply {
+                setTextColor(Color.rgb(125, 138, 154))
+                setPadding(0, dp(1), dp(4), 0)
+                maxLines = 3
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
+        row.addView(textColumn, LinearLayout.LayoutParams(0, -2, 1f))
+
+        if (animateEntry) {
+            // Visual-only animation. It never gates, schedules or slows the real work stage.
+            row.alpha = 0f
+            row.translationY = dp(5).toFloat()
+            row.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(160L)
+                .setInterpolator(DecelerateInterpolator())
+                .start()
+        }
+        return LiveWorkRow(event, icon, title).also {
+            row.tag = it
+        }
+    }
+
+    private fun appendWorkEventRow(
+        host: LinearLayout,
+        event: WorkspaceWorkEvent,
+        snapshot: WorkspaceWorkSnapshot,
+        animateEntry: Boolean,
+    ) {
+        settlePreviousLiveWorkRow()
+        val liveRow = createWorkEventRow(
+            event = event,
+            isCurrent = true,
+            active = snapshot.active,
+            animateEntry = animateEntry,
+        )
+        val rowView = liveRow.title.parent?.parent as? View
+            ?: error("LYRA work row could not be created")
+        host.addView(rowView, LinearLayout.LayoutParams(-1, -2))
+        liveWorkRows.add(liveRow)
+        while (liveWorkRows.size > 14) {
+            liveWorkRows.removeAt(0)
+            host.removeViewAt(0)
+        }
+    }
+
+    private fun addWorkDuration(host: LinearLayout, snapshot: WorkspaceWorkSnapshot, animateEntry: Boolean) {
+        if (snapshot.active || snapshot.startedAtMs == null || liveWorkDurationView != null) return
+        val end = snapshot.endedAtMs ?: System.currentTimeMillis()
+        val seconds = ((end - snapshot.startedAtMs).coerceAtLeast(0L) / 1_000L).coerceAtLeast(1L)
+        val duration = label("Worked for ${seconds}s", 11.25f).apply {
+            setTextColor(Color.rgb(120, 133, 149))
+            setPadding(dp(32), dp(3), dp(4), dp(2))
+            isClickable = true
+            isFocusable = true
+            contentDescription = if (workTraceExpanded) "Hide work details" else "Show work details"
+            setOnClickListener {
+                workTraceExpanded = !workTraceExpanded
+                render()
+            }
+            if (animateEntry) {
+                alpha = 0f
+                translationY = dp(3).toFloat()
+                animate().alpha(1f).translationY(0f).setDuration(140L)
+                    .setInterpolator(DecelerateInterpolator()).start()
+            }
+        }
+        liveWorkDurationView = duration
+        host.addView(duration, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    private fun syncLiveWorkTranscript(animateNew: Boolean) {
+        val host = liveWorkTranscript ?: return
         val snapshot = workTrace.snapshot()
-        val current = snapshot.current ?: return null
-        val stream = LinearLayout(this).apply {
+        val visibleEvents = if (!snapshot.active && !workTraceExpanded)
+            snapshot.events.takeLast(1) else snapshot.events.takeLast(14)
+
+        // Incremental updates are used only while expanded/live. Collapse uses a full render.
+        if (visibleEvents.size < liveWorkRows.size ||
+            liveWorkRows.indices.any { liveWorkRows[it].event != visibleEvents[it] }) {
+            render()
+            return
+        }
+
+        visibleEvents.drop(liveWorkRows.size).forEach { event ->
+            appendWorkEventRow(host, event, snapshot, animateEntry = animateNew)
+        }
+        addWorkDuration(host, snapshot, animateEntry = animateNew)
+        scroll.post { scroll.scrollTo(0, content.height) }
+    }
+
+    private fun createInlineWorkTranscript(): LinearLayout? {
+        val snapshot = workTrace.snapshot()
+        if (snapshot.current == null) return null
+        val host = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             // Deliberately transparent: this is part of the chat transcript, not a status card.
             setPadding(dp(2), dp(3), dp(2), dp(3))
         }
-        val allEvents = snapshot.events.takeLast(14)
-        val visibleEvents = if (!snapshot.active && !workTraceExpanded) allEvents.takeLast(1) else allEvents
+        liveWorkTranscript = host
+        liveWorkTranscriptMessageId = workTraceMessageId
+        liveWorkRows.clear()
+        liveWorkDurationView = null
 
-        visibleEvents.forEach { event ->
-            val isCurrent = event == current
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.TOP
-                setPadding(0, dp(2), 0, dp(3))
-            }
-
-            val iconSize = if (isCurrent) 24 else 20
-            row.addView(
-                WorkspaceMiniLyraView(this).apply {
-                    // Only the live action animates. Completed transcript history stays quiet.
-                    setPhase(event.phase, animate = isCurrent && snapshot.active)
-                },
-                LinearLayout.LayoutParams(dp(24), dp(24)).apply {
-                    rightMargin = dp(8)
-                    if (iconSize < 24) {
-                        width = dp(iconSize)
-                        height = dp(iconSize)
-                        topMargin = dp(2)
-                        rightMargin = dp(12)
-                    }
-                }
+        val visibleEvents = if (!snapshot.active && !workTraceExpanded)
+            snapshot.events.takeLast(1) else snapshot.events.takeLast(14)
+        visibleEvents.forEachIndexed { index, event ->
+            val isNewest = index == visibleEvents.lastIndex
+            val liveRow = createWorkEventRow(
+                event = event,
+                isCurrent = isNewest,
+                active = isNewest && snapshot.active,
+                animateEntry = isNewest && snapshot.active,
             )
-
-            val textColumn = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-            }
-            textColumn.addView(label(event.label, 13.5f).apply {
-                setTextColor(when {
-                    event.phase == WorkspaceWorkPhase.DONE -> Color.rgb(137, 220, 166)
-                    event.phase == WorkspaceWorkPhase.ERROR -> Color.rgb(245, 150, 150)
-                    isCurrent -> Color.rgb(226, 233, 242)
-                    else -> Color.rgb(168, 178, 191)
-                })
-                setPadding(0, 0, dp(4), 0)
-                maxLines = 2
-                ellipsize = android.text.TextUtils.TruncateAt.END
-            }, LinearLayout.LayoutParams(-1, -2))
-
-            event.detail?.let { detail ->
-                textColumn.addView(label(detail, 11.25f).apply {
-                    setTextColor(Color.rgb(125, 138, 154))
-                    setPadding(0, dp(1), dp(4), 0)
-                    maxLines = 3
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                }, LinearLayout.LayoutParams(-1, -2))
-            }
-            row.addView(textColumn, LinearLayout.LayoutParams(0, -2, 1f))
-            stream.addView(row, LinearLayout.LayoutParams(-1, -2))
+            val rowView = liveRow.title.parent?.parent as? View
+                ?: error("LYRA work row could not be created")
+            host.addView(rowView, LinearLayout.LayoutParams(-1, -2))
+            liveWorkRows.add(liveRow)
         }
-
-        if (!snapshot.active && snapshot.startedAtMs != null) {
-            val end = snapshot.endedAtMs ?: System.currentTimeMillis()
-            val seconds = ((end - snapshot.startedAtMs).coerceAtLeast(0L) / 1_000L).coerceAtLeast(1L)
-            stream.addView(label("Worked for ${seconds}s", 11.25f).apply {
-                setTextColor(Color.rgb(120, 133, 149))
-                setPadding(dp(32), dp(3), dp(4), dp(2))
-                isClickable = true
-                isFocusable = true
-                contentDescription = if (workTraceExpanded) "Hide work details" else "Show work details"
-                setOnClickListener {
-                    workTraceExpanded = !workTraceExpanded
-                    render()
-                }
-            }, LinearLayout.LayoutParams(-1, -2))
-        }
-        return stream
+        addWorkDuration(host, snapshot, animateEntry = false)
+        return host
     }
 
     private fun updateSendButton() {
@@ -468,6 +583,10 @@ class WorkspaceActivity : AppCompatActivity() {
         statusBanner.text = statusMessage
         statusBanner.visibility = if (!workTab && statusMessage.isNotBlank() &&
             workTrace.snapshot().current == null) View.VISIBLE else View.GONE
+        liveWorkTranscript = null
+        liveWorkTranscriptMessageId = null
+        liveWorkRows.clear()
+        liveWorkDurationView = null
         content.removeAllViews()
         if (workTab) renderWork(current) else renderChat(current)
         renderAttachments()
