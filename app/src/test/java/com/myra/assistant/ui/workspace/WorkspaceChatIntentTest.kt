@@ -58,6 +58,37 @@ class WorkspaceChatIntentTest {
         }
     }
 
+    @Test fun specificPreservationConstraintDoesNotCancelAffirmativeEdit() {
+        listOf(
+            "Make the homepage background darker but don't change layout or JavaScript.",
+            "Update the heading, but do not remove login.",
+            "Fix the button alignment and don't modify the navigation.",
+            "Change the card color; don't edit the animation."
+        ).forEach {
+            assertTrue("Preservation constraint cancelled coding: $it",
+                WorkspaceChatIntent.isCodingFollowUp(it))
+        }
+
+        assertEquals(
+            WorkspaceProjectType.WEBSITE,
+            WorkspaceChatIntent.requestedProjectType(
+                "Build a website but don't create a login page."
+            )
+        )
+    }
+
+    @Test fun broadNegativeStillCancelsEarlierEdit() {
+        listOf(
+            "Make the homepage darker, but don't change anything.",
+            "Update the page, but don't edit the code.",
+            "Fix the button, but don't change this file.",
+            "Change the colors, but don't do anything yet."
+        ).forEach {
+            assertFalse("Broad stop unexpectedly executed: $it",
+                WorkspaceChatIntent.isCodingFollowUp(it))
+        }
+    }
+
     @Test fun laterAffirmativeInstructionCanOverrideEarlierConstraint() {
         assertEquals(
             WorkspaceProjectType.WEBSITE,

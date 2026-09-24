@@ -63,6 +63,30 @@ internal object WorkspaceExecutionAuthority {
         """\b(?:don't\s+do|dont\s+do|do\s+not\s+do|nothing\s+yet|no\s+changes?|change\s+nothing|kuch\s+mat|abhi\s+nahi)\b"""
     )
 
+    // A specific negative clause after an affirmative edit is usually a preservation boundary,
+    // not a cancellation: "make X darker, but don't change layout or JavaScript".
+    // Broad/pronoun-only negatives still withhold execution.
+    private val constraintToken = Regex("""[\p{L}\p{N}_./-]{2,}""")
+    private val broadConstraintWords = setOf(
+        "a", "an", "the", "any", "anything", "everything", "nothing", "all", "else",
+        "other", "others", "it", "this", "that", "these", "those", "thing", "things",
+        "code", "source", "sources", "file", "files", "project", "app", "application",
+        "website", "site", "changes", "change", "yet", "now", "abhi", "kuch", "sab",
+        "mat", "nahi", "nahin", "nehi", "do", "not", "dont", "don't", "never", "avoid"
+    )
+
+    private fun isSpecificPreservationConstraint(clause: String, actions: Regex): Boolean {
+        if (!negation.containsMatchIn(clause) ||
+            deferred.containsMatchIn(clause) ||
+            generalStop.containsMatchIn(clause) ||
+            restrictedConversation.containsMatchIn(clause)
+        ) return false
+        val action = actions.find(clause) ?: return false
+        val tail = clause.substring(action.range.last + 1)
+        return constraintToken.findAll(tail).map { it.value.lowercase() }
+            .any { it !in broadConstraintWords }
+    }
+
     private fun normalize(raw: String): String = raw.lowercase()
         .replace('’', '\'')
         .replace(Regex("""[\s\p{Z}]+"""), " ")
@@ -105,12 +129,15 @@ internal object WorkspaceExecutionAuthority {
                 (negation.containsMatchIn(clause) || deferred.containsMatchIn(clause))
             val explicitConversationOnly = restrictedConversation.containsMatchIn(clause)
             val explicitStop = generalStop.containsMatchIn(clause)
+            val preservesEarlierExecution = state == State.EXECUTE && blockedAction &&
+                isSpecificPreservationConstraint(clause, actions)
 
             when {
                 explicitConversationOnly || explicitStop -> {
                     state = State.WITHHOLD
                     chosenType = null
                 }
+                preservesEarlierExecution -> Unit
                 actionFound && (governedByInformation || metaRequest || blockedAction) -> {
                     state = State.WITHHOLD
                     chosenType = null
