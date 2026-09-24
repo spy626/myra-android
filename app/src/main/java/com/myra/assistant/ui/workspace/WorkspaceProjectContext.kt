@@ -195,6 +195,10 @@ internal object WorkspaceProjectContext {
         val currentPaths = files.list(projection.projectId).asSequence()
             .filter { !it.folder && WorkspaceSourceContext.isEligibleProjectPath(it.path) }
             .map { it.path }.distinct().sorted().toList()
-        listingSha(currentPaths) == projection.eligibleListingSha256
+        if (listingSha(currentPaths) != projection.eligibleListingSha256) return@runCatching false
+        projection.indexed.all { evidence ->
+            evidence.path in currentPaths &&
+                sha256(files.readFile(projection.projectId, evidence.path)) == evidence.sha256
+        }
     }.getOrDefault(false)
 }

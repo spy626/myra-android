@@ -56,6 +56,22 @@ class WorkspaceProjectContextTest {
         assertFalse(projection.promptNote().contains("abcdefghijklmnop"))
     }
 
+    @Test fun fileHashCatchesMutationEvenWhenProjectClockDoesNotAdvance() {
+        val projects = WorkspaceProjectStore(temp.newFolder("fixed-clock"), nowMillis = { 1000L },
+            idFactory = { "site" })
+        projects.createProject("Site", WorkspaceProjectType.WEBSITE)
+        val files = WorkspaceFileStore(projects)
+        files.createFile("site", "index.html")
+        files.createFile("site", "style.css")
+        files.saveFile("site", "index.html", """<link href="style.css">""")
+        files.saveFile("site", "style.css", "body{}")
+        val projection = WorkspaceProjectContext.build(
+            files, projects, "site", "index.html", "Improve style")
+        assertTrue(WorkspaceProjectContext.stillCurrent(files, projects, projection))
+        files.saveFile("site", "style.css", "body{margin:1rem}")
+        assertFalse(WorkspaceProjectContext.stillCurrent(files, projects, projection))
+    }
+
     @Test fun projectMutationInvalidatesPreparedContextWithoutSecondStore() {
         val s = fixture()
         val projection = WorkspaceProjectContext.build(
