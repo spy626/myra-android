@@ -72,7 +72,9 @@ internal object WorkspaceExecutionAuthority {
         "other", "others", "it", "this", "that", "these", "those", "thing", "things",
         "code", "source", "sources", "file", "files", "project", "app", "application",
         "website", "site", "changes", "change", "yet", "now", "abhi", "kuch", "sab",
-        "mat", "nahi", "nahin", "nehi", "do", "not", "dont", "don't", "never", "avoid"
+        "mat", "nahi", "nahin", "nehi", "do", "not", "dont", "don't", "never", "avoid",
+        "and", "or", "aur", "ya", "to", "of", "in", "on", "at", "for", "with", "without",
+        "from", "as", "is", "be", "only", "just", "please"
     )
 
     private fun isSpecificPreservationConstraint(clause: String, actions: Regex): Boolean {

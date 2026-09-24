@@ -82,7 +82,8 @@ class WorkspaceChatIntentTest {
             "Make the homepage darker, but don't change anything.",
             "Update the page, but don't edit the code.",
             "Fix the button, but don't change this file.",
-            "Change the colors, but don't do anything yet."
+            "Change the colors, but don't do anything yet.",
+            "Make it red, but don't change it or this."
         ).forEach {
             assertFalse("Broad stop unexpectedly executed: $it",
                 WorkspaceChatIntent.isCodingFollowUp(it))
