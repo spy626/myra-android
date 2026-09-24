@@ -139,6 +139,34 @@ class WorkspaceActivity : AppCompatActivity() {
             topMargin = dp(10)
         })
     }
+
+    /** Compact transcript action for pending review. Unlike Work-tab controls, this should read
+     * like part of the conversation instead of a full-width dashboard button. */
+    private fun addChatAction(value: String, action: () -> Unit) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START
+            setPadding(dp(10), 0, 0, 0)
+        }
+        val chip = label(value, 12.5f).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(205, 225, 211))
+            setPadding(dp(13), 0, dp(13), 0)
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(15, 25, 21))
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), Color.rgb(55, 78, 63))
+            }
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { action() }
+        }
+        row.addView(chip, LinearLayout.LayoutParams(-2, dp(36)))
+        content.addView(row, LinearLayout.LayoutParams(-1, dp(44)).apply {
+            topMargin = dp(2)
+            bottomMargin = dp(4)
+        })
+    }
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_LONG).show()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -892,11 +920,11 @@ class WorkspaceActivity : AppCompatActivity() {
             // A new instruction is sent through the chat composer; review requires a real backup.
             when (WorkspaceCodingActionPolicy.next(websitePending != null, pending != null, savedProposal)) {
                 WorkspaceCodingActionPolicy.Action.REVIEW_WEBSITE ->
-                    addControl("Review website · Undo / Keep") { coding.reviewPending(id) }
+                    addChatAction("Review website") { coding.reviewPending(id) }
                 WorkspaceCodingActionPolicy.Action.REVIEW_EDIT ->
-                    addControl("Review edit · Undo / Keep") { coding.reviewPending(id) }
+                    addChatAction("Review edit") { coding.reviewPending(id) }
                 WorkspaceCodingActionPolicy.Action.REVIEW_SAVED_PROPOSAL ->
-                    addControl("Review saved code change") { coding.reviewSaved(id) }
+                    addChatAction("Review saved change") { coding.reviewSaved(id) }
                 WorkspaceCodingActionPolicy.Action.NONE -> Unit
             }
         }
