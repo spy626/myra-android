@@ -52,6 +52,59 @@ internal class WorkspaceChatCodingFlow(
     private fun error(message: String) = terminal(WorkspaceCodingResult.failure(message), "")
     private fun current(id: String) = activeProject() == id && projects.getProject(id) != null
 
+    private fun verifyScopedWithRecovery(
+        proposal: WorkspaceScopedEdit.Proposal,
+    ): WorkspaceVerificationResult {
+        var verification = WorkspaceSelfVerification.verifyScopedEdit(files, tasks, projects, proposal)
+        if (verification.status == WorkspaceVerificationStatus.FAIL_FIXABLE) {
+            val recovered = runCatching {
+                WorkspaceScopedEdit.recoverExpectedWrite(files, tasks, projects, proposal)
+            }
+            if (recovered.isFailure) {
+                return WorkspaceVerificationResult(
+                    WorkspaceVerificationStatus.BLOCKED,
+                    verification.failure,
+                    "Targeted local recovery was refused: ${recovered.exceptionOrNull()?.message ?: "unknown local error"}",
+                    verification.evidence + "local_recovery_refused",
+                )
+            }
+            verification = WorkspaceSelfVerification.verifyScopedEdit(files, tasks, projects, proposal)
+        }
+        return WorkspaceSelfVerification.settleUnknown(verification, reobserve = {
+            WorkspaceSelfVerification.verifyScopedEdit(files, tasks, projects, proposal)
+        })
+    }
+
+    private fun verifyWebsiteWithRecovery(
+        snapshot: WorkspaceWebsiteGeneration.Snapshot,
+        expected: Map<String, String>,
+    ): WorkspaceVerificationResult {
+        var verification = WorkspaceSelfVerification.verifyWebsite(
+            files, tasks, projects, snapshot, expected
+        )
+        if (verification.status == WorkspaceVerificationStatus.FAIL_FIXABLE) {
+            val recovered = runCatching {
+                WorkspaceWebsiteGeneration.recoverExpectedWrites(
+                    files, tasks, projects, snapshot, expected
+                )
+            }
+            if (recovered.isFailure) {
+                return WorkspaceVerificationResult(
+                    WorkspaceVerificationStatus.BLOCKED,
+                    verification.failure,
+                    "Targeted local recovery was refused: ${recovered.exceptionOrNull()?.message ?: "unknown local error"}",
+                    verification.evidence + "local_recovery_refused",
+                )
+            }
+            verification = WorkspaceSelfVerification.verifyWebsite(
+                files, tasks, projects, snapshot, expected
+            )
+        }
+        return WorkspaceSelfVerification.settleUnknown(verification, reobserve = {
+            WorkspaceSelfVerification.verifyWebsite(files, tasks, projects, snapshot, expected)
+        })
+    }
+
     fun continueRequest(id: String, instruction: String, userMessageId: String? = null) {
         if (!current(id)) return
         val project = projects.getProject(id) ?: return
@@ -372,18 +425,24 @@ internal class WorkspaceChatCodingFlow(
                         return@runOnUiThread
                     }
                 runCatching {
-                    WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, review.files)
-                }.onSuccess {
-                    val verification = WorkspaceSelfVerification.settleUnknown(
-                        WorkspaceSelfVerification.verifyWebsite(
-                            files, tasks, projects, snapshot, review.files
-                        ),
-                        reobserve = {
-                            WorkspaceSelfVerification.verifyWebsite(
+                    val first = runCatching {
+                        WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, review.files)
+                    }
+                    if (first.isFailure) {
+                        val recovered = runCatching {
+                            WorkspaceWebsiteGeneration.recoverExpectedWrites(
                                 files, tasks, projects, snapshot, review.files
                             )
                         }
-                    )
+                        if (recovered.isFailure) {
+                            throw IllegalStateException(
+                                "Initial local save failed: ${first.exceptionOrNull()?.message}. " +
+                                    "Targeted local recovery was not safe: ${recovered.exceptionOrNull()?.message}"
+                            )
+                        }
+                    }
+                }.onSuccess {
+                    val verification = verifyWebsiteWithRecovery(snapshot, review.files)
                     if (!verification.passed) {
                         error("Website local verification ${verification.status.name.lowercase()}: " +
                             "${verification.summary} Protected rollback was left in place.")
@@ -509,20 +568,26 @@ internal class WorkspaceChatCodingFlow(
                         "AI proposal targeted a different file or outdated task"
                     }
                     suggestions.save(files, tasks, projects, id, reply, draft)
-                    WorkspaceScopedEdit.apply(files, tasks, projects, draft.context, draft.proposal)
-                    draft
-                }.onSuccess { draft ->
-                    runCatching { suggestions.discard(id) }
-                    val verification = WorkspaceSelfVerification.settleUnknown(
-                        WorkspaceSelfVerification.verifyScopedEdit(
-                            files, tasks, projects, draft.proposal
-                        ),
-                        reobserve = {
-                            WorkspaceSelfVerification.verifyScopedEdit(
+                    val first = runCatching {
+                        WorkspaceScopedEdit.apply(files, tasks, projects, draft.context, draft.proposal)
+                    }
+                    if (first.isFailure) {
+                        val recovered = runCatching {
+                            WorkspaceScopedEdit.recoverExpectedWrite(
                                 files, tasks, projects, draft.proposal
                             )
                         }
-                    )
+                        if (recovered.isFailure) {
+                            throw IllegalStateException(
+                                "Initial local apply failed: ${first.exceptionOrNull()?.message}. " +
+                                    "Targeted local recovery was not safe: ${recovered.exceptionOrNull()?.message}"
+                            )
+                        }
+                    }
+                    draft
+                }.onSuccess { draft ->
+                    runCatching { suggestions.discard(id) }
+                    val verification = verifyScopedWithRecovery(draft.proposal)
                     if (!verification.passed) {
                         error("Local edit verification ${verification.status.name.lowercase()}: " +
                             "${verification.summary} Protected rollback was left in place.")
@@ -560,12 +625,7 @@ internal class WorkspaceChatCodingFlow(
                     draft.proposal
                 }.onSuccess { proposal ->
                     runCatching { suggestions.discard(id) }
-                    val verification = WorkspaceSelfVerification.settleUnknown(
-                        WorkspaceSelfVerification.verifyScopedEdit(files, tasks, projects, proposal),
-                        reobserve = {
-                            WorkspaceSelfVerification.verifyScopedEdit(files, tasks, projects, proposal)
-                        }
-                    )
+                    val verification = verifyScopedWithRecovery(proposal)
                     if (verification.passed) {
                         report("Applied one saved file edit with protected rollback. " +
                             "Local saved-file verification passed. Check Preview and Undo / Keep in Chat.")
