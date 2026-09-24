@@ -360,28 +360,22 @@ class WorkspaceActivity : AppCompatActivity() {
                 setPadding(0, dp(2), 0, dp(3))
             }
 
-            if (isCurrent) {
-                row.addView(
-                    WorkspaceMiniLyraView(this).apply { setPhase(event.phase) },
-                    LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(8) }
-                )
-            } else {
-                val mark = when (event.phase) {
-                    WorkspaceWorkPhase.DONE -> "✓"
-                    WorkspaceWorkPhase.ERROR -> "!"
-                    WorkspaceWorkPhase.RECOVERING -> "↻"
-                    else -> "•"
+            val iconSize = if (isCurrent) 24 else 20
+            row.addView(
+                WorkspaceMiniLyraView(this).apply {
+                    // Only the live action animates. Completed transcript history stays quiet.
+                    setPhase(event.phase, animate = isCurrent && snapshot.active)
+                },
+                LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                    rightMargin = dp(8)
+                    if (iconSize < 24) {
+                        width = dp(iconSize)
+                        height = dp(iconSize)
+                        topMargin = dp(2)
+                        rightMargin = dp(12)
+                    }
                 }
-                row.addView(label(mark, 12.5f).apply {
-                    gravity = Gravity.CENTER
-                    setTextColor(when (event.phase) {
-                        WorkspaceWorkPhase.DONE -> Color.rgb(117, 208, 151)
-                        WorkspaceWorkPhase.ERROR -> Color.rgb(238, 132, 132)
-                        else -> Color.rgb(139, 151, 166)
-                    })
-                    setPadding(0, 0, 0, 0)
-                }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(8) })
-            }
+            )
 
             val textColumn = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL

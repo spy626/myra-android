@@ -24,6 +24,7 @@ internal class WorkspaceMiniLyraView(context: Context) : View(context) {
     }
     // Stay static while the compact indicator is hidden; animation starts on a real active phase.
     private var phase: WorkspaceWorkPhase = WorkspaceWorkPhase.DONE
+    private var animatePhase = false
     private var progress = 0f
 
     private val animator = ValueAnimator.ofFloat(0f, 1f).apply {
@@ -40,23 +41,22 @@ internal class WorkspaceMiniLyraView(context: Context) : View(context) {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
-    fun setPhase(value: WorkspaceWorkPhase) {
-        if (phase == value) return
+    fun setPhase(value: WorkspaceWorkPhase, animate: Boolean = true) {
+        val active = animate && value !in setOf(WorkspaceWorkPhase.DONE, WorkspaceWorkPhase.ERROR)
+        if (phase == value && animatePhase == active) return
         phase = value
-        val active = value !in setOf(WorkspaceWorkPhase.DONE, WorkspaceWorkPhase.ERROR)
-        if (active && !animator.isStarted) animator.start()
-        if (!active && animator.isStarted) {
+        animatePhase = active
+        if (animatePhase && !animator.isStarted) animator.start()
+        if (!animatePhase && animator.isStarted) {
             animator.cancel()
             progress = 0f
-            invalidate()
         }
+        invalidate()
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        if (phase !in setOf(WorkspaceWorkPhase.DONE, WorkspaceWorkPhase.ERROR) && !animator.isStarted) {
-            animator.start()
-        }
+        if (animatePhase && !animator.isStarted) animator.start()
     }
 
     override fun onDetachedFromWindow() {
@@ -70,7 +70,7 @@ internal class WorkspaceMiniLyraView(context: Context) : View(context) {
 
         val w = width.toFloat()
         val h = height.toFloat()
-        val bob = if (phase in setOf(WorkspaceWorkPhase.DONE, WorkspaceWorkPhase.ERROR)) 0f
+        val bob = if (!animatePhase) 0f
         else sin(progress * 2f * PI).toFloat() * h * 0.035f
         canvas.save()
         canvas.translate(0f, bob)
