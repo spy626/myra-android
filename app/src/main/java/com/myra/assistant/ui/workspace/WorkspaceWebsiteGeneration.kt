@@ -355,6 +355,58 @@ internal object WorkspaceWebsiteGeneration {
         }
     }
 
+    /**
+     * One bounded local recovery for an interrupted/vanished website write.
+     * It reuses the existing durable backup and never calls a provider. A path is written only
+     * when it is still exactly at the approved original state; mixed/newer content blocks recovery.
+     */
+    @Synchronized fun recoverExpectedWrites(
+        files: WorkspaceFileStore,
+        tasks: WorkspaceTaskStore,
+        projects: WorkspaceProjectStore,
+        snapshot: Snapshot,
+        expected: Map<String, String>,
+    ) {
+        require(projects.getProject(snapshot.projectId)?.type == WorkspaceProjectType.WEBSITE) {
+            "Website project changed; local recovery refused"
+        }
+        require(expected.keys == PATHS.toSet()) { "Expected website result is incomplete" }
+        val task = requireNotNull(tasks.get(snapshot.projectId)) { "Website task unavailable" }
+        require(task.taskId == snapshot.taskId &&
+            WorkspaceTaskContract.specToken(task) == snapshot.specToken &&
+            WorkspaceTaskContract.isSpecApproved(task) &&
+            task.status != WorkspaceTaskStatus.PAUSED) {
+            "Website task/spec changed; local recovery refused"
+        }
+        val record = requireNotNull(pending(projects, snapshot.projectId)) {
+            "No matching website rollback exists; local recovery refused"
+        }
+        val expectedHashes = PATHS.associateWith { sha(expected.getValue(it)) }
+        require(record.projectId == snapshot.projectId && record.original == snapshot.original &&
+            record.afterHashes == expectedHashes) {
+            "Website rollback does not match the approved generation; local recovery refused"
+        }
+
+        val present = files.list(snapshot.projectId).filterNot { it.folder }.map { it.path }.toSet()
+        val actual = PATHS.associateWith { path ->
+            if (path in present) files.readFile(snapshot.projectId, path) else null
+        }
+        PATHS.forEach { path ->
+            require(actual[path] == expected[path] || actual[path] == snapshot.original[path]) {
+                "$path contains newer or unexpected work; local recovery will not overwrite it"
+            }
+        }
+        PATHS.forEach { path ->
+            if (actual[path] != expected[path]) {
+                if (actual[path] == null) files.createFile(snapshot.projectId, path)
+                files.saveFile(snapshot.projectId, path, expected.getValue(path))
+            }
+            check(current(files, snapshot.projectId, path) == expected[path]) {
+                "$path local recovery could not be verified; rollback retained"
+            }
+        }
+    }
+
     @Synchronized fun undo(files: WorkspaceFileStore, projects: WorkspaceProjectStore, id: String) {
         val record = requireNotNull(pending(projects, id)) { "No website build to undo" }
         PATHS.forEach { path ->
