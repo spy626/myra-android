@@ -64,6 +64,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private var requestGeneration = 0L
     private var activeRequest: Call? = null
     private var statusMessage = ""
+    private val workTrace = WorkspaceWorkTrace()
+    private var workTraceExpanded = false
     // Latest saved user turn only; Retry never appends a duplicate message.
     private var codingRetryTarget: Pair<String, String>? = null
     private val coding by lazy {
@@ -74,6 +76,8 @@ class WorkspaceActivity : AppCompatActivity() {
             }, report = { message ->
                 statusMessage = message
                 if (::root.isInitialized) render() // Failure is already in Chat; no duplicate modal.
+            }, workEvent = { phase, label, detail ->
+                recordWorkEvent(phase, label, detail)
             })
     }
     private lateinit var root: LinearLayout
@@ -82,6 +86,12 @@ class WorkspaceActivity : AppCompatActivity() {
     private lateinit var scroll: ScrollView
     private lateinit var content: LinearLayout
     private lateinit var composerArea: LinearLayout
+    private lateinit var workIndicator: LinearLayout
+    private lateinit var workIndicatorRow: LinearLayout
+    private lateinit var workIcon: WorkspaceMiniLyraView
+    private lateinit var workIndicatorText: TextView
+    private lateinit var workChevron: TextView
+    private lateinit var workDetails: LinearLayout
     private lateinit var statusBanner: TextView
     private lateinit var composer: EditText
     private lateinit var sendButton: ImageButton
@@ -216,7 +226,58 @@ class WorkspaceActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(4), dp(12), dp(12))
         }
-        // Kept outside the transcript scroll, directly above the composer and keyboard.
+        // Compact Codex-style work receipt. It shows observable actions, never hidden reasoning.
+        workIndicator = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(10, 19, 31))
+                cornerRadius = dp(12).toFloat()
+                setStroke(dp(1), Color.rgb(35, 68, 104))
+            }
+        }
+        workIndicatorRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(36)
+            setPadding(dp(8), dp(3), dp(7), dp(3))
+            isClickable = true
+            isFocusable = true
+            contentDescription = "LYRA work activity"
+            setOnClickListener {
+                workTraceExpanded = !workTraceExpanded
+                updateWorkIndicator()
+            }
+        }
+        workIcon = WorkspaceMiniLyraView(this)
+        workIndicatorRow.addView(workIcon, LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+            rightMargin = dp(7)
+        })
+        workIndicatorText = label("", 12.5f).apply {
+            setTextColor(Color.rgb(221, 235, 255))
+            setPadding(0, 0, 0, 0)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        workIndicatorRow.addView(workIndicatorText, LinearLayout.LayoutParams(0, dp(30), 1f))
+        workChevron = label("⌄", 14f).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(132, 181, 235))
+            setPadding(0, 0, 0, 0)
+        }
+        workIndicatorRow.addView(workChevron, LinearLayout.LayoutParams(dp(24), dp(30)))
+        workIndicator.addView(workIndicatorRow, LinearLayout.LayoutParams(-1, dp(36)))
+        workDetails = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(dp(39), 0, dp(10), dp(8))
+        }
+        workIndicator.addView(workDetails, LinearLayout.LayoutParams(-1, -2))
+        composerArea.addView(workIndicator, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(5)
+        })
+
+        // Legacy status remains for local validation errors that are not part of a work trace.
         statusBanner = label("", 12f).apply {
             visibility = View.GONE
             background = rounded(Color.rgb(20, 37, 28), 12)
@@ -296,14 +357,89 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun stopReply() {
         if (!isBusy()) return
+        val normalChatWasRunning = activeRequest != null
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
+        if (normalChatWasRunning) {
+            workTrace.finishError("Stopped", "Request cancelled; no partial reply was saved.")
+        }
         coding.cancel()
         codingRetryTarget = null
         statusMessage = "Stopped. No partial reply was saved."
         render()
         if (!workTab) composer.requestFocus()
+    }
+
+    private fun recordWorkEvent(phase: WorkspaceWorkPhase, label: String, detail: String? = null) {
+        val snapshot = workTrace.snapshot()
+        when (phase) {
+            WorkspaceWorkPhase.DONE -> {
+                if (snapshot.events.isEmpty()) workTrace.begin(WorkspaceWorkPhase.DONE, label, detail)
+                else workTrace.finishSuccess(label, detail)
+            }
+            WorkspaceWorkPhase.ERROR -> {
+                if (snapshot.events.isEmpty()) workTrace.begin(WorkspaceWorkPhase.ERROR, label, detail)
+                else workTrace.finishError(label, detail)
+            }
+            else -> {
+                if (snapshot.events.isEmpty()) workTrace.begin(phase, label, detail)
+                else workTrace.add(phase, label, detail)
+            }
+        }
+        if (::root.isInitialized) render()
+    }
+
+    private fun providerLabel(provider: WorkspaceChatGateway.Provider): String = when (provider) {
+        WorkspaceChatGateway.Provider.OPENROUTER_FREE -> "OpenRouter Free"
+        WorkspaceChatGateway.Provider.GROQ_FREE -> "Groq Free"
+        WorkspaceChatGateway.Provider.LLM7_FREE -> "LLM7 Free"
+    }
+
+    private fun updateWorkIndicator() {
+        if (!::workIndicator.isInitialized) return
+        val snapshot = workTrace.snapshot()
+        val current = snapshot.current
+        val visible = !workTab && current != null
+        workIndicator.visibility = if (visible) View.VISIBLE else View.GONE
+        if (!visible || current == null) return
+
+        workIcon.setPhase(current.phase)
+        workIndicatorText.text = snapshot.compactLabel(System.currentTimeMillis())
+        workChevron.text = if (workTraceExpanded) "⌃" else "⌄"
+        workChevron.visibility = if (snapshot.events.size > 1 || current.detail != null) View.VISIBLE else View.INVISIBLE
+        workDetails.removeAllViews()
+        workDetails.visibility = if (workTraceExpanded) View.VISIBLE else View.GONE
+        if (!workTraceExpanded) return
+
+        val start = snapshot.startedAtMs ?: current.atMs
+        snapshot.events.takeLast(14).forEach { event ->
+            val seconds = ((event.atMs - start).coerceAtLeast(0L) / 1_000L)
+            val mark = when (event.phase) {
+                WorkspaceWorkPhase.DONE -> "✓"
+                WorkspaceWorkPhase.ERROR -> "!"
+                WorkspaceWorkPhase.RECOVERING -> "↻"
+                else -> "•"
+            }
+            val line = label("$mark  ${event.label}   +${seconds}s", 11.5f).apply {
+                setTextColor(when (event.phase) {
+                    WorkspaceWorkPhase.DONE -> Color.rgb(139, 231, 173)
+                    WorkspaceWorkPhase.ERROR -> Color.rgb(255, 151, 151)
+                    else -> Color.rgb(201, 220, 244)
+                })
+                setPadding(0, dp(3), 0, if (event.detail == null) dp(3) else 0)
+                maxLines = 2
+            }
+            workDetails.addView(line, LinearLayout.LayoutParams(-1, -2))
+            event.detail?.let { detail ->
+                workDetails.addView(label(detail, 10.5f).apply {
+                    setTextColor(Color.rgb(133, 158, 188))
+                    setPadding(dp(15), 0, 0, dp(4))
+                    maxLines = 3
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(-1, -2))
+            }
+        }
     }
 
     private fun updateSendButton() {
@@ -349,8 +485,10 @@ class WorkspaceActivity : AppCompatActivity() {
         workTabButton.setTextColor(if (workTab) Color.rgb(223, 245, 227) else Color.rgb(148, 171, 153))
         composerArea.visibility = if (workTab) View.GONE else View.VISIBLE
         updateSendButton()
+        updateWorkIndicator()
         statusBanner.text = statusMessage
-        statusBanner.visibility = if (!workTab && statusMessage.isNotBlank()) View.VISIBLE else View.GONE
+        statusBanner.visibility = if (!workTab && statusMessage.isNotBlank() &&
+            workTrace.snapshot().current == null) View.VISIBLE else View.GONE
         content.removeAllViews()
         if (workTab) renderWork(current) else renderChat(current)
         renderAttachments()
@@ -763,6 +901,8 @@ class WorkspaceActivity : AppCompatActivity() {
         attachments.clear()
         composer.text.clear()
         statusMessage = ""
+        workTrace.clear()
+        workTraceExpanded = false
         render()
     }
 
@@ -790,6 +930,8 @@ class WorkspaceActivity : AppCompatActivity() {
         attachments.clear()
         composer.setText(localDrafts[id].orEmpty())
         statusMessage = ""
+        workTrace.clear()
+        workTraceExpanded = false
         render()
     }
 
@@ -1018,6 +1160,11 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
+        if (picked.isNotEmpty()) {
+            workTrace.begin(WorkspaceWorkPhase.READING, "Reading attachment",
+                "${picked.size} selected item${if (picked.size == 1) "" else "s"}")
+            if (::root.isInitialized) render()
+        }
         val enriched = runCatching {
             val addition = picked.filterNot { it.mime.startsWith("image/") }
                 .joinToString("\n\n") { "Document ${it.name}:\n${readAttachmentText(it)}" }
@@ -1043,6 +1190,11 @@ class WorkspaceActivity : AppCompatActivity() {
         val serial = ++requestGeneration
         val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
         activeRequest = call
+        if (workTrace.snapshot().events.isEmpty()) {
+            workTrace.begin(WorkspaceWorkPhase.THINKING, "Thinking", providerLabel(provider))
+        } else {
+            workTrace.add(WorkspaceWorkPhase.THINKING, "Thinking", providerLabel(provider))
+        }
         statusMessage = ""
         render()
         call.enqueue(object : Callback {
@@ -1081,9 +1233,17 @@ class WorkspaceActivity : AppCompatActivity() {
                         }
                         conversations.append(id, "assistant", reply)
                     } else conversations.replaceNewestAssistant(id, replacingAssistantId, userMessageId, reply)
-                }.onSuccess { statusMessage = "" }
-                    .onFailure { statusMessage = it.message ?: "Response could not be saved; no source changed." }
-            }.onFailure { statusMessage = it.message ?: "Provider failed; original reply preserved." }
+                }.onSuccess {
+                    statusMessage = ""
+                    workTrace.finishSuccess("Reply ready")
+                }.onFailure {
+                    statusMessage = it.message ?: "Response could not be saved; no source changed."
+                    workTrace.finishError("Reply not saved", statusMessage)
+                }
+            }.onFailure {
+                statusMessage = it.message ?: "Provider failed; original reply preserved."
+                workTrace.finishError("Reply failed", statusMessage)
+            }
             render()
             if (failure != null) showChatFailure(id, userMessageId, replacingAssistantId,
                 provider, picked, statusMessage)
