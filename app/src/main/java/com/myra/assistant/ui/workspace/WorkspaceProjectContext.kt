@@ -160,7 +160,7 @@ object WorkspaceProjectContext {
                     }
                 }
                 evidence to (score to reason)
-            }.filter { it.second.first > 0 }
+            }.filter { it.second.first >= 8 }
             .sortedWith(compareByDescending<Pair<FileEvidence, Pair<Int, String>>> { it.second.first }
                 .thenBy { it.first.path })
             .take(MAX_SELECTED_NEIGHBORS)

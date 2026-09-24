@@ -22,8 +22,8 @@ class WorkspaceProjectContextTest {
         }
         files.saveFile("site", "index.html",
             """<link rel="stylesheet" href="style.css"><main id="hero">Hi</main><script src="script.js"></script>""")
-        files.saveFile("site", "style.css", "body { margin: 0 } .hero { color: white }")
-        files.saveFile("site", "script.js", "function explore(){ return true }")
+        files.saveFile("site", "style.css", "body { margin: 0 } .hero { color: white }\n".repeat(30))
+        files.saveFile("site", "script.js", "function explore(){ return true }\n".repeat(30))
         files.saveFile("site", "notes.md", "unrelated private design notes but no secret")
         return Fixture(projects, files)
     }
@@ -35,6 +35,7 @@ class WorkspaceProjectContextTest {
         assertTrue(projection.indexed.size <= 12)
         assertTrue(projection.selected.any { it.path == "style.css" })
         assertTrue(projection.selected.any { it.path == "script.js" })
+        assertFalse(projection.selected.any { it.path == "notes.md" })
         val note = projection.promptNote()
         assertTrue(note.contains("metadata only"))
         assertTrue(note.contains("style.css"))
