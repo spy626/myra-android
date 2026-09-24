@@ -5,22 +5,13 @@ internal object WorkspaceCodingResult {
     fun websiteSuccess(previous: Map<String, String?>, generated: Map<String, String>): String {
         val changed = WorkspaceWebsiteGeneration.PATHS.filter { previous[it] != generated[it] }
         val files = if (changed.isEmpty())
-            "Generated website matches the previous saved files; no content changes."
-        else "Website files saved: ${changed.joinToString(", ")}."
-        val titles = Regex("(?is)<h[1-6]\\b[^>]*>(.*?)</h[1-6]\\s*>")
-            .findAll(generated["index.html"].orEmpty()).map { match ->
-                match.groupValues[1].replace(Regex("<[^>]*>"), " ")
-                    .replace(Regex("\\s+"), " ").trim().take(65)
-            }.filter { it.isNotEmpty() && it.none(Char::isISOControl) }
-            .distinct().take(5).toList()
-        val headings = if (titles.isEmpty()) "" else "\nSaved page headings: ${titles.joinToString(", ")}."
+            "Saved website already matched the generated result."
+        else "Saved ${changed.joinToString(", ")}."
         val nativeNote = if (generated["script.js"] == WorkspaceWebsiteNativeActionOwner.REPLACEMENT)
-            "\nLYRA omitted unverified generated Explore JavaScript on this new one-action page; " +
-                "the native link and CSS target feedback own the click. Test it in Preview before Keep."
+            " Explore uses LYRA's local safe action owner; test the interaction in Preview."
         else ""
-        return "$files$headings$nativeNote\nWork → Preview mein result check karo. " +
-            "Review website · Undo / Keep sirf pending change ke liye hai. " +
-            "Visual aur button testing aapko phone par confirm karni hai."
+        return "Done — $files Local saved-file verification passed. Preview is ready." +
+            nativeNote + " Review website has Undo / Keep; visual phone testing remains separate."
     }
 
     fun failure(reason: String): String = "LYRA coding request complete nahi kar paayi: $reason " +
