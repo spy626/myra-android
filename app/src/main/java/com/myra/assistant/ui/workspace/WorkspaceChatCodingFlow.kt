@@ -471,7 +471,6 @@ internal class WorkspaceChatCodingFlow(
                     }
                     val summary = WorkspaceCodingResult.websiteSuccess(snapshot.original, review.files) +
                         review.chatNote() +
-                        "\nLocal saved-file verification passed; Preview/visual interaction is still not a phone pass." +
                         (when (via) {
                             null -> ""
                             else -> " Completed via $via after xKiro was unavailable."

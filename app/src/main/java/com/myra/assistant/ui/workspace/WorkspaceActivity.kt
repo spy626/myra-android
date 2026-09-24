@@ -341,79 +341,91 @@ class WorkspaceActivity : AppCompatActivity() {
         WorkspaceChatGateway.Provider.LLM7_FREE -> "LLM7 Free"
     }
 
-    private fun createInlineWorkIndicator(): View? {
+    private fun createInlineWorkTranscript(): View? {
         val snapshot = workTrace.snapshot()
         val current = snapshot.current ?: return null
-
-        val box = LinearLayout(this).apply {
+        val stream = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(2), dp(5), dp(2), dp(8))
+            // Deliberately transparent: this is part of the chat transcript, not a status card.
+            setPadding(dp(2), dp(3), dp(2), dp(3))
         }
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(32)
-            isClickable = true
-            isFocusable = true
-            contentDescription = "LYRA work activity"
-            setOnClickListener {
-                workTraceExpanded = !workTraceExpanded
-                render()
-            }
-        }
-        val icon = WorkspaceMiniLyraView(this).apply { setPhase(current.phase) }
-        header.addView(icon, LinearLayout.LayoutParams(dp(24), dp(24)).apply {
-            rightMargin = dp(8)
-        })
-        val title = label(
-            if (snapshot.active) current.label else snapshot.compactLabel(System.currentTimeMillis()),
-            12.5f
-        ).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setTextColor(Color.rgb(205, 225, 250))
-            setPadding(0, 0, 0, 0)
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        header.addView(title, LinearLayout.LayoutParams(0, dp(30), 1f))
-        val chevron = label(if (workTraceExpanded) "⌃" else "⌄", 13f).apply {
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(123, 165, 214))
-            setPadding(0, 0, 0, 0)
-        }
-        header.addView(chevron, LinearLayout.LayoutParams(dp(22), dp(30)))
-        box.addView(header, LinearLayout.LayoutParams(-1, dp(32)))
+        val allEvents = snapshot.events.takeLast(14)
+        val visibleEvents = if (!snapshot.active && !workTraceExpanded) allEvents.takeLast(1) else allEvents
 
-        if (workTraceExpanded) {
-            val start = snapshot.startedAtMs ?: current.atMs
-            snapshot.events.takeLast(14).forEach { event ->
-                val seconds = ((event.atMs - start).coerceAtLeast(0L) / 1_000L)
+        visibleEvents.forEach { event ->
+            val isCurrent = event == current
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+                setPadding(0, dp(2), 0, dp(3))
+            }
+
+            if (isCurrent) {
+                row.addView(
+                    WorkspaceMiniLyraView(this).apply { setPhase(event.phase) },
+                    LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(8) }
+                )
+            } else {
                 val mark = when (event.phase) {
                     WorkspaceWorkPhase.DONE -> "✓"
                     WorkspaceWorkPhase.ERROR -> "!"
                     WorkspaceWorkPhase.RECOVERING -> "↻"
                     else -> "•"
                 }
-                box.addView(label("$mark  ${event.label}   +${seconds}s", 11.5f).apply {
+                row.addView(label(mark, 12.5f).apply {
+                    gravity = Gravity.CENTER
                     setTextColor(when (event.phase) {
-                        WorkspaceWorkPhase.DONE -> Color.rgb(127, 224, 165)
-                        WorkspaceWorkPhase.ERROR -> Color.rgb(255, 142, 142)
-                        else -> Color.rgb(191, 211, 236)
+                        WorkspaceWorkPhase.DONE -> Color.rgb(117, 208, 151)
+                        WorkspaceWorkPhase.ERROR -> Color.rgb(238, 132, 132)
+                        else -> Color.rgb(139, 151, 166)
                     })
-                    setPadding(dp(32), dp(2), dp(4), if (event.detail == null) dp(4) else 0)
-                    maxLines = 2
-                }, LinearLayout.LayoutParams(-1, -2))
-                event.detail?.let { detail ->
-                    box.addView(label(detail, 10.5f).apply {
-                        setTextColor(Color.rgb(126, 151, 181))
-                        setPadding(dp(47), 0, dp(4), dp(4))
-                        maxLines = 3
-                        ellipsize = android.text.TextUtils.TruncateAt.END
-                    }, LinearLayout.LayoutParams(-1, -2))
-                }
+                    setPadding(0, 0, 0, 0)
+                }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { rightMargin = dp(8) })
             }
+
+            val textColumn = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            textColumn.addView(label(event.label, 13.5f).apply {
+                setTextColor(when {
+                    event.phase == WorkspaceWorkPhase.DONE -> Color.rgb(137, 220, 166)
+                    event.phase == WorkspaceWorkPhase.ERROR -> Color.rgb(245, 150, 150)
+                    isCurrent -> Color.rgb(226, 233, 242)
+                    else -> Color.rgb(168, 178, 191)
+                })
+                setPadding(0, 0, dp(4), 0)
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(-1, -2))
+
+            event.detail?.let { detail ->
+                textColumn.addView(label(detail, 11.25f).apply {
+                    setTextColor(Color.rgb(125, 138, 154))
+                    setPadding(0, dp(1), dp(4), 0)
+                    maxLines = 3
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(-1, -2))
+            }
+            row.addView(textColumn, LinearLayout.LayoutParams(0, -2, 1f))
+            stream.addView(row, LinearLayout.LayoutParams(-1, -2))
         }
-        return box
+
+        if (!snapshot.active && snapshot.startedAtMs != null) {
+            val end = snapshot.endedAtMs ?: System.currentTimeMillis()
+            val seconds = ((end - snapshot.startedAtMs).coerceAtLeast(0L) / 1_000L).coerceAtLeast(1L)
+            stream.addView(label("Worked for ${seconds}s", 11.25f).apply {
+                setTextColor(Color.rgb(120, 133, 149))
+                setPadding(dp(32), dp(3), dp(4), dp(2))
+                isClickable = true
+                isFocusable = true
+                contentDescription = if (workTraceExpanded) "Hide work details" else "Show work details"
+                setOnClickListener {
+                    workTraceExpanded = !workTraceExpanded
+                    render()
+                }
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
+        return stream
     }
 
     private fun updateSendButton() {
@@ -705,14 +717,6 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
                 line.addView(bubble, LinearLayout.LayoutParams(-2, -2))
                 item.addView(line, LinearLayout.LayoutParams(-1, -2))
-                if (mine && message.id == workTraceMessageId) {
-                createInlineWorkIndicator()?.let { traceView ->
-                    item.addView(traceView, LinearLayout.LayoutParams(-1, -2).apply {
-                        topMargin = dp(5)
-                        bottomMargin = dp(4)
-                    })
-                }
-            }
             if (mine && WorkspaceMessageDisplayPolicy.shouldCollapse(message.text)) {
                     val messageKey = "${current.projectId}:${message.id}"
                     val toggle = label("Show more", 12f).apply {
@@ -752,6 +756,15 @@ class WorkspaceActivity : AppCompatActivity() {
                 item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(40)))
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+            if (mine && message.id == workTraceMessageId) {
+                createInlineWorkTranscript()?.let { traceView ->
+                    content.addView(traceView, LinearLayout.LayoutParams(-1, -2).apply {
+                        leftMargin = dp(10)
+                        rightMargin = dp(6)
+                        bottomMargin = dp(8)
+                    })
+                }
+            }
         }
         if (current.type != WorkspaceProjectType.CHAT) {
             val id = current.projectId
