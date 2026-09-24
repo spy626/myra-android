@@ -48,6 +48,7 @@ internal class WorkspaceFreeRouteRetry(
             // OkHttp's original 35-second call timeout covers both attempts and fallback.
             if (chain.call().isCanceled()) throw IOException("Workspace request cancelled")
             val response = chain.proceed(request)
+            WorkspaceProviderSessionHealth.recordResponse(response)
             val wait = if (retries < MAX_RETRIES)
                 waitMillis(response.code, response.header("Retry-After")) else null
             if (wait == null || chain.call().isCanceled()) {

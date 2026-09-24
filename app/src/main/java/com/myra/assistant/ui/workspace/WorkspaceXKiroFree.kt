@@ -106,6 +106,7 @@ internal object WorkspaceXKiroFree {
                 preflightFailure.message.orEmpty(), preflightFailure)
             if (chain.call().isCanceled()) throw IOException("xKiro Free request cancelled; no source sent")
             val response = chain.proceed(request) // Network failure/timeout propagates; NEVER replay.
+            WorkspaceProviderSessionHealth.recordResponse(response)
             if (!WorkspaceCodingAutoFallback.xKiroRejected(response.code)) return response
             val code = response.code
             response.close() // Definitive rejected HTTP, not a completed/partial output.

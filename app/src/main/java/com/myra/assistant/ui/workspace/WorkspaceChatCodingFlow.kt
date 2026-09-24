@@ -299,6 +299,8 @@ internal class WorkspaceChatCodingFlow(
         })
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
+                WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
+                    WorkspaceProviderRegistry.id(primary))
                 val message = if (primary == WorkspaceWebsiteRoute.Provider.XKIRO &&
                     e.message?.startsWith("xKiro Free") == true) e.message!!
                 else if (primary == WorkspaceWebsiteRoute.Provider.ZAI &&
@@ -313,6 +315,7 @@ internal class WorkspaceChatCodingFlow(
                     Result.failure(IllegalStateException(message)))
             }
             override fun onResponse(call: Call, response: Response) {
+                WorkspaceProviderSessionHealth.recordResponse(response)
                 val rejectedStatus = response.code
                 if (WorkspaceWebsiteGroqFallback.compatibilityEligible(primary, rejectedStatus)) {
                     response.close() // Definitive HTTP rejection, not an uncertain timeout.
@@ -367,13 +370,17 @@ internal class WorkspaceChatCodingFlow(
             report("Trying compatible Groq Free format · attempt $websiteAttempts/3 · Stop ■ to cancel.")
             second.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
+                    WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
+                        WorkspaceProviderRegistry.Id.GROQ_FREE)
                     completeWebsite(call, serial, id, snapshot, Result.failure(
                         IllegalStateException("Groq Free compatibility attempt could not complete. " +
                             "No uncertain request was resent; project files unchanged.")))
                 }
-                override fun onResponse(call: Call, response: Response) = completeWebsite(
-                    call, serial, id, snapshot,
-                    runCatching { WorkspaceWebsiteGeneration.readResponse(response) })
+                override fun onResponse(call: Call, response: Response) {
+                    WorkspaceProviderSessionHealth.recordResponse(response)
+                    completeWebsite(call, serial, id, snapshot,
+                        runCatching { WorkspaceWebsiteGeneration.readResponse(response) })
+                }
             })
         }
     }
@@ -414,6 +421,8 @@ internal class WorkspaceChatCodingFlow(
             report("Switching to Groq Free · attempt $websiteAttempts/3 · Stop ■ to cancel.")
             second.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
+                    WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
+                        WorkspaceProviderRegistry.Id.GROQ_FREE)
                     val message = if (e is java.net.SocketTimeoutException ||
                         e is java.io.InterruptedIOException)
                         "Groq Free website fallback timed out. No uncertain request was resent."
@@ -422,6 +431,7 @@ internal class WorkspaceChatCodingFlow(
                         Result.failure(IllegalStateException(message)))
                 }
                 override fun onResponse(call: Call, response: Response) {
+                    WorkspaceProviderSessionHealth.recordResponse(response)
                     // Phone failure: Groq was the SECOND provider, so the primary-Groq
                     // branch never ran. One definite 400 permits the THIRD request,
                     // with the exact same approved snapshot in JSON Object Mode.
@@ -620,12 +630,21 @@ internal class WorkspaceChatCodingFlow(
         workEvent(WorkspaceWorkPhase.CODING, "Editing ${prepared.context.path}", route)
         report("Working on ${prepared.context.path} · $route · Stop ■ to cancel. One-file Safe Edit only.")
         call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) = complete(call, serial, id, prepared,
-                Result.failure(IllegalStateException(if (usingXKiro &&
-                    e.message?.startsWith("xKiro Free") == true) e.message!!
-                else WorkspaceFreeAiSuggestion.networkFailure(e))))
-            override fun onResponse(call: Call, response: Response) = complete(call, serial, id,
-                prepared, runCatching {
+            override fun onFailure(call: Call, e: IOException) {
+                val selected = when {
+                    usingZai -> WorkspaceProviderRegistry.Id.ZAI_FREE
+                    usingXKiro -> WorkspaceProviderRegistry.Id.XKIRO_FREE
+                    else -> WorkspaceProviderRegistry.Id.OPENROUTER_FREE
+                }
+                WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(selected)
+                complete(call, serial, id, prepared,
+                    Result.failure(IllegalStateException(if (usingXKiro &&
+                        e.message?.startsWith("xKiro Free") == true) e.message!!
+                    else WorkspaceFreeAiSuggestion.networkFailure(e))))
+            }
+            override fun onResponse(call: Call, response: Response) {
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                complete(call, serial, id, prepared, runCatching {
                     when {
                         usingZai -> WorkspaceZaiFree.readEdit(response)
                         usingXKiro -> WorkspaceXKiroFree.readEdit(response)
@@ -633,6 +652,7 @@ internal class WorkspaceChatCodingFlow(
                     }
                 }, if (usingXKiro)
                     WorkspaceCodingAutoFallback.displayName(response.request.url.toString()) else null)
+            }
         })
     }
 

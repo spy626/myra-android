@@ -1341,12 +1341,17 @@ class WorkspaceActivity : AppCompatActivity() {
         statusMessage = ""
         render()
         call.enqueue(object : Callback {
-            override fun onFailure(call: Call, error: IOException) = complete(call, serial, id,
-                messageId, replacingAssistantId, provider, picked,
-                Result.failure(IllegalStateException(WorkspaceChatGateway.networkFailure(provider, error))))
-            override fun onResponse(call: Call, response: Response) =
+            override fun onFailure(call: Call, error: IOException) {
+                WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
+                    WorkspaceProviderRegistry.id(provider))
+                complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
+                    Result.failure(IllegalStateException(WorkspaceChatGateway.networkFailure(provider, error))))
+            }
+            override fun onResponse(call: Call, response: Response) {
+                WorkspaceProviderSessionHealth.recordResponse(response)
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
                     runCatching { WorkspaceChatGateway.read(provider, response) })
+            }
         })
     }
 

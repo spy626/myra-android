@@ -52,8 +52,14 @@ internal object WorkspaceProviderSessionHealth {
         }
     }
 
-    fun recordUncertainNetworkFailure(id: WorkspaceProviderRegistry.Id) {
-        state[id] = Snapshot(WorkspaceProviderRegistry.HealthState.UNCERTAIN_OUTCOME, null)
+    fun recordUncertainNetworkFailure(
+        id: WorkspaceProviderRegistry.Id,
+        nowMs: Long = System.currentTimeMillis(),
+    ) {
+        state.compute(id) { _, current ->
+            if (current?.blockedUntilMs?.let { it > nowMs } == true) current
+            else Snapshot(WorkspaceProviderRegistry.HealthState.UNCERTAIN_OUTCOME, null)
+        }
     }
 
     fun snapshot(

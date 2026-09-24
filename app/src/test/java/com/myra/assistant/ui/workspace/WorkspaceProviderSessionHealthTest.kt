@@ -43,6 +43,14 @@ class WorkspaceProviderSessionHealthTest {
         assertEquals(0L, h.remainingMillis(WorkspaceProviderRegistry.Id.ZAI_FREE, nowMs = 1_000L))
     }
 
+    @Test fun uncertainFailureDoesNotEraseActiveDefiniteCooldown() {
+        h.recordHttp(WorkspaceProviderRegistry.Id.XKIRO_FREE, 429, "20", nowMs = 1_000L)
+        h.recordUncertainNetworkFailure(WorkspaceProviderRegistry.Id.XKIRO_FREE, nowMs = 2_000L)
+        assertFalse(h.canSend(WorkspaceProviderRegistry.Id.XKIRO_FREE, nowMs = 2_000L))
+        assertEquals(WorkspaceProviderRegistry.HealthState.COOLDOWN,
+            h.snapshot(WorkspaceProviderRegistry.Id.XKIRO_FREE, nowMs = 2_000L)?.state)
+    }
+
     @Test fun successClearsPriorCooldown() {
         h.recordHttp(WorkspaceProviderRegistry.Id.LLM7_FREE, 429, nowMs = 1_000L)
         assertFalse(h.canSend(WorkspaceProviderRegistry.Id.LLM7_FREE, nowMs = 2_000L))
