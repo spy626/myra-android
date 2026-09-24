@@ -265,7 +265,7 @@ internal class WorkspaceChatCodingFlow(
         request = call
         report(when (primary) {
             WorkspaceWebsiteRoute.Provider.ZAI ->
-                "Building website · Z.ai ${WorkspaceZaiFree.displayName(zaiModel)} · attempt 1/1 · Stop ■ to cancel."
+                "Building website · Z.ai ${WorkspaceZaiFree.displayName(zaiModel)} · attempt 1/1 · max 75s · Stop ■ to cancel."
             WorkspaceWebsiteRoute.Provider.XKIRO ->
                 "Building website · xKiro Free attempt 1/1 · Stop ■ to cancel."
             else -> "Building website · free attempt 1/3 · Stop ■ to cancel."
