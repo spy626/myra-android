@@ -67,8 +67,10 @@ internal class WorkspaceWorkTrace(
             val flat = raw.replace(Regex("""[\r\n\t]+"""), " ")
                 .replace(Regex("""\s{2,}"""), " ")
                 .trim()
-            val redacted = flat.replace(secretAssignment, "$1=[redacted]")
-                .replace(bearer, "Bearer [redacted]")
+            // Redact bearer credentials first so an Authorization assignment cannot consume
+            // only the word "Bearer" and leave the credential visible behind it.
+            val redacted = flat.replace(bearer, "Bearer [redacted]")
+                .replace(secretAssignment, "$1=[redacted]")
                 .replace(knownKey, "[redacted]")
             return redacted.filterNot(Char::isISOControl).take(max)
         }
