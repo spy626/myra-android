@@ -22,7 +22,9 @@ internal object WorkspaceFreeCrossProvider {
     private const val MAX_BODY_BYTES = 128_000L
 
     /** Only a definite upstream rejection, not a timeout, a partial reply or a payment error. */
-    internal fun eligibleStatus(code: Int): Boolean = code in setOf(429, 502, 503, 504)
+    internal fun eligibleStatus(code: Int): Boolean =
+        WorkspaceProviderRegistry.definitiveFallbackAllowed(
+            WorkspaceProviderRegistry.Id.GROQ_FREE, code)
 
     fun fallbackRequest(original: Request): Request? {
         // Avoid touching Android, encrypted keys or preferences for any other endpoint.
