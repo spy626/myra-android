@@ -27,14 +27,16 @@ internal object WorkspaceZaiFree {
         .callTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    /** Website generation can legitimately stay silent longer than a one-file edit, so keep
-     * a wider but still hard-bounded window. One request only; no retry or provider fallback.
+    /** Website generation normally completes slower than one-file edits, but a failed request
+     * must not leave the user waiting for minutes. One request only; no retry or provider fallback.
+     * The 75-second hard ceiling keeps the known ~40-45 second success case viable while failing
+     * substantially earlier when the provider stalls.
      */
     val websiteClient: OkHttpClient = client.newBuilder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
-        .callTimeout(140, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(75, TimeUnit.SECONDS)
         .build()
 
     fun validKey(key: String): Boolean =
