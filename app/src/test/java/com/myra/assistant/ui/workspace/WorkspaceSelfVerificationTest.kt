@@ -118,6 +118,53 @@ class WorkspaceSelfVerificationTest {
         assertTrue(result.evidence.contains("all_saved_files_match"))
     }
 
+    @Test fun scopedTargetedRecoveryReappliesOnlyExactApprovedBase() {
+        val s = fixture()
+        val (context, proposal) = scopedDraft(s)
+        WorkspaceScopedEdit.apply(s.files, s.tasks, s.projects, context, proposal)
+        s.files.saveFile("site", "index.html", "<h1>Hello</h1>\n")
+
+        WorkspaceScopedEdit.recoverExpectedWrite(s.files, s.tasks, s.projects, proposal)
+        val verified = WorkspaceSelfVerification.verifyScopedEdit(
+            s.files, s.tasks, s.projects, proposal
+        )
+        assertEquals(WorkspaceVerificationStatus.PASS, verified.status)
+
+        s.files.saveFile("site", "index.html", "<h1>Newer manual work</h1>\n")
+        assertTrue(runCatching {
+            WorkspaceScopedEdit.recoverExpectedWrite(s.files, s.tasks, s.projects, proposal)
+        }.isFailure)
+        assertEquals("<h1>Newer manual work</h1>\n", s.files.readFile("site", "index.html"))
+    }
+
+    @Test fun websiteTargetedRecoveryCompletesOnlyOriginalOrAlreadyExpectedPaths() {
+        val s = fixture()
+        val snapshot = WorkspaceWebsiteGeneration.prepare(s.files, s.tasks, s.projects, "site")
+        val generated = mapOf(
+            "index.html" to "<!doctype html><html><head><link rel=\"stylesheet\" href=\"style.css\"></head><body><h1>Welcome</h1><script src=\"script.js\"></script></body></html>",
+            "style.css" to "body { background: #fff; }",
+            "script.js" to "console.log('ready');",
+        )
+        WorkspaceWebsiteGeneration.apply(s.files, s.tasks, s.projects, snapshot, generated)
+        s.files.delete("site", "script.js")
+
+        WorkspaceWebsiteGeneration.recoverExpectedWrites(
+            s.files, s.tasks, s.projects, snapshot, generated
+        )
+        val verified = WorkspaceSelfVerification.verifyWebsite(
+            s.files, s.tasks, s.projects, snapshot, generated
+        )
+        assertEquals(WorkspaceVerificationStatus.PASS, verified.status)
+
+        s.files.saveFile("site", "style.css", "/* newer manual work */")
+        assertTrue(runCatching {
+            WorkspaceWebsiteGeneration.recoverExpectedWrites(
+                s.files, s.tasks, s.projects, snapshot, generated
+            )
+        }.isFailure)
+        assertEquals("/* newer manual work */", s.files.readFile("site", "style.css"))
+    }
+
     @Test fun unknownEvidenceIsOnlyReobservedWithinBound() {
         val unknown = WorkspaceVerificationResult(
             WorkspaceVerificationStatus.UNKNOWN,
