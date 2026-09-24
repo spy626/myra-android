@@ -73,11 +73,11 @@ class WorkspaceZaiFreeTest {
         }.isFailure)
     }
 
-    @Test fun websiteClientHasLongerBoundedWindow() {
-        assertEquals(20_000, WorkspaceZaiFree.websiteClient.connectTimeoutMillis)
-        assertEquals(30_000, WorkspaceZaiFree.websiteClient.writeTimeoutMillis)
-        assertEquals(120_000, WorkspaceZaiFree.websiteClient.readTimeoutMillis)
-        assertEquals(140_000, WorkspaceZaiFree.websiteClient.callTimeoutMillis)
+    @Test fun websiteClientHasResponsiveBoundedWindow() {
+        assertEquals(15_000, WorkspaceZaiFree.websiteClient.connectTimeoutMillis)
+        assertEquals(20_000, WorkspaceZaiFree.websiteClient.writeTimeoutMillis)
+        assertEquals(60_000, WorkspaceZaiFree.websiteClient.readTimeoutMillis)
+        assertEquals(75_000, WorkspaceZaiFree.websiteClient.callTimeoutMillis)
         assertFalse(WorkspaceZaiFree.websiteClient.retryOnConnectionFailure)
         assertFalse(WorkspaceZaiFree.websiteClient.followRedirects)
         assertFalse(WorkspaceZaiFree.websiteClient.followSslRedirects)
