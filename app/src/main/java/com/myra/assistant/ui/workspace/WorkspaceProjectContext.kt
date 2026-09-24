@@ -9,7 +9,7 @@ import java.security.MessageDigest
  * inspected locally only to derive bounded structure evidence; the provider projection contains
  * paths/relationships only, never those contents.
  */
-internal object WorkspaceProjectContext {
+object WorkspaceProjectContext {
     private const val MAX_INDEX_FILES = 12
     private const val MAX_SCAN_CHARS_PER_FILE = 6_000
     private const val MAX_SYMBOLS_PER_FILE = 8
