@@ -57,6 +57,16 @@ class WorkspaceProviderRegistryTest {
         assertFalse(r.definitiveFallbackAllowed(WorkspaceProviderRegistry.Id.LLM7_FREE, 503))
     }
 
+    @Test fun endpointsAndWebsiteProvidersMapToCanonicalIds() {
+        assertEquals(WorkspaceProviderRegistry.Id.OPENROUTER_FREE,
+            r.idForEndpoint(WorkspaceFreeAiSuggestion.ENDPOINT))
+        assertEquals(WorkspaceProviderRegistry.Id.XKIRO_FREE,
+            r.idForEndpoint(WorkspaceXKiroFree.ENDPOINT))
+        assertEquals(WorkspaceProviderRegistry.Id.ZAI_FREE,
+            r.id(WorkspaceWebsiteRoute.Provider.ZAI))
+        assertNull(r.idForEndpoint("https://example.invalid/v1/chat/completions"))
+    }
+
     @Test fun healthClassificationKeepsPaymentAndUncertainOutcomesTerminal() {
         assertEquals(WorkspaceProviderRegistry.HealthState.ACCESS_REFUSED,
             r.classifyHttp(WorkspaceProviderRegistry.Id.OPENROUTER_FREE, 401).state)

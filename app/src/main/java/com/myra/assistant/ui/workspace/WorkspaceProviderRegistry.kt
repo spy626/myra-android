@@ -188,4 +188,20 @@ internal object WorkspaceProviderRegistry {
         WorkspaceChatGateway.Provider.GROQ_FREE -> Id.GROQ_FREE
         WorkspaceChatGateway.Provider.LLM7_FREE -> Id.LLM7_FREE
     }
+
+    fun id(provider: WorkspaceWebsiteRoute.Provider): Id = when (provider) {
+        WorkspaceWebsiteRoute.Provider.OPENROUTER -> Id.OPENROUTER_FREE
+        WorkspaceWebsiteRoute.Provider.GROQ -> Id.GROQ_FREE
+        WorkspaceWebsiteRoute.Provider.XKIRO -> Id.XKIRO_FREE
+        WorkspaceWebsiteRoute.Provider.ZAI -> Id.ZAI_FREE
+    }
+
+    fun idForEndpoint(url: String): Id? = when (url) {
+        WorkspaceFreeAiSuggestion.ENDPOINT -> Id.OPENROUTER_FREE
+        WorkspaceGroqFree.ENDPOINT -> Id.GROQ_FREE
+        WorkspaceLlm7Free.ENDPOINT -> Id.LLM7_FREE
+        WorkspaceXKiroFree.ENDPOINT -> Id.XKIRO_FREE
+        WorkspaceZaiFree.ENDPOINT -> Id.ZAI_FREE
+        else -> null
+    }
 }
