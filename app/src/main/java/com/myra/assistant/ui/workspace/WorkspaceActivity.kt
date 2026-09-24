@@ -254,6 +254,7 @@ class WorkspaceActivity : AppCompatActivity() {
             rightMargin = dp(7)
         })
         workIndicatorText = label("", 12.5f).apply {
+            gravity = Gravity.CENTER_VERTICAL
             setTextColor(Color.rgb(221, 235, 255))
             setPadding(0, 0, 0, 0)
             maxLines = 1
