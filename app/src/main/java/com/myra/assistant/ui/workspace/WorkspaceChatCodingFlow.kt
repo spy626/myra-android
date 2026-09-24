@@ -23,6 +23,7 @@ internal class WorkspaceChatCodingFlow(
     private val activeProject: () -> String?,
     private val report: (String) -> Unit,
     private val onCompleted: (String, String, String) -> Unit,
+    private val workEvent: (WorkspaceWorkPhase, String, String?) -> Unit = { _, _, _ -> },
 ) {
     private var generation = 0L
     private var request: Call? = null
@@ -32,11 +33,13 @@ internal class WorkspaceChatCodingFlow(
     val isRunning: Boolean get() = request != null
 
     fun cancel() {
+        val wasRunning = request != null
         generation++
         request?.cancel()
         request = null
         websiteAttempts = 0
         activeTurn = null
+        if (wasRunning) workEvent(WorkspaceWorkPhase.ERROR, "Stopped", "Request cancelled; no partial result saved.")
     }
 
     /** Source writes are finished before the result enters the private transcript. */
@@ -49,14 +52,19 @@ internal class WorkspaceChatCodingFlow(
             "${result.exceptionOrNull()?.message}. Check Work files before retrying.")
         else report(status)
     }
-    private fun error(message: String) = terminal(WorkspaceCodingResult.failure(message), "")
+    private fun error(message: String) {
+        workEvent(WorkspaceWorkPhase.ERROR, "Work stopped", message)
+        terminal(WorkspaceCodingResult.failure(message), "")
+    }
     private fun current(id: String) = activeProject() == id && projects.getProject(id) != null
 
     private fun verifyScopedWithRecovery(
         proposal: WorkspaceScopedEdit.Proposal,
     ): WorkspaceVerificationResult {
+        workEvent(WorkspaceWorkPhase.VERIFYING, "Verifying saved edit", proposal.path)
         var verification = WorkspaceSelfVerification.verifyScopedEdit(files, tasks, projects, proposal)
         if (verification.status == WorkspaceVerificationStatus.FAIL_FIXABLE) {
+            workEvent(WorkspaceWorkPhase.RECOVERING, "Recovering local write", proposal.path)
             val recovered = runCatching {
                 WorkspaceScopedEdit.recoverExpectedWrite(files, tasks, projects, proposal)
             }
@@ -79,10 +87,12 @@ internal class WorkspaceChatCodingFlow(
         snapshot: WorkspaceWebsiteGeneration.Snapshot,
         expected: Map<String, String>,
     ): WorkspaceVerificationResult {
+        workEvent(WorkspaceWorkPhase.VERIFYING, "Verifying website files", "index.html · style.css · script.js")
         var verification = WorkspaceSelfVerification.verifyWebsite(
             files, tasks, projects, snapshot, expected
         )
         if (verification.status == WorkspaceVerificationStatus.FAIL_FIXABLE) {
+            workEvent(WorkspaceWorkPhase.RECOVERING, "Recovering website write", "Local files only; provider is not called again.")
             val recovered = runCatching {
                 WorkspaceWebsiteGeneration.recoverExpectedWrites(
                     files, tasks, projects, snapshot, expected
@@ -263,6 +273,13 @@ internal class WorkspaceChatCodingFlow(
         val call = client.newCall(outgoing)
         websiteAttempts = 1
         request = call
+        val workRoute = when (primary) {
+            WorkspaceWebsiteRoute.Provider.ZAI -> "Z.ai ${WorkspaceZaiFree.displayName(zaiModel)}"
+            WorkspaceWebsiteRoute.Provider.XKIRO -> "xKiro Free"
+            WorkspaceWebsiteRoute.Provider.GROQ -> "Groq Free"
+            WorkspaceWebsiteRoute.Provider.OPENROUTER -> "OpenRouter Free"
+        }
+        workEvent(WorkspaceWorkPhase.CODING, "Building website", workRoute)
         report(when (primary) {
             WorkspaceWebsiteRoute.Provider.ZAI ->
                 "Building website · Z.ai ${WorkspaceZaiFree.displayName(zaiModel)} · attempt 1/1 · max 75s · Stop ■ to cancel."
@@ -419,12 +436,14 @@ internal class WorkspaceChatCodingFlow(
             request = null
             websiteAttempts = 0
             result.onSuccess { generated ->
+                workEvent(WorkspaceWorkPhase.VERIFYING, "Checking generated website", "Validating complete three-file output.")
                 val review = runCatching { WorkspaceWebsiteVisualQuality.review(snapshot, generated) }
                     .getOrElse { issue ->
                         error("Website result rejected: ${issue.message}. No files changed.")
                         return@runOnUiThread
                     }
                 runCatching {
+                    workEvent(WorkspaceWorkPhase.CODING, "Saving website files", "index.html · style.css · script.js")
                     val first = runCatching {
                         WorkspaceWebsiteGeneration.apply(files, tasks, projects, snapshot, review.files)
                     }
@@ -455,6 +474,7 @@ internal class WorkspaceChatCodingFlow(
                             null -> ""
                             else -> " Completed via $via after xKiro was unavailable."
                         })
+                    workEvent(WorkspaceWorkPhase.DONE, "Website verified", "Saved files match the approved generated output.")
                     terminal(summary, "") // The durable Chat reply is the single verified local success message.
                     activity.startActivity(WorkspacePreviewActivity.intent(activity, id))
                 }.onFailure {
@@ -531,6 +551,7 @@ internal class WorkspaceChatCodingFlow(
             usingXKiro -> "xKiro Free"
             else -> "OpenRouter Free"
         }
+        workEvent(WorkspaceWorkPhase.CODING, "Editing ${prepared.context.path}", route)
         report("Working on ${prepared.context.path} · $route · Stop ■ to cancel. One-file Safe Edit only.")
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = complete(call, serial, id, prepared,
@@ -560,6 +581,7 @@ internal class WorkspaceChatCodingFlow(
                 return@runOnUiThread
             }
             result.onSuccess { reply ->
+                workEvent(WorkspaceWorkPhase.VERIFYING, "Checking code proposal", prepared.context.path)
                 runCatching {
                     val draft = WorkspaceStructuredEdit.prepare(files, tasks, projects, id, reply)
                     require(draft.context.path == prepared.context.path &&
@@ -568,6 +590,7 @@ internal class WorkspaceChatCodingFlow(
                         "AI proposal targeted a different file or outdated task"
                     }
                     suggestions.save(files, tasks, projects, id, reply, draft)
+                    workEvent(WorkspaceWorkPhase.CODING, "Applying Safe Edit", draft.context.path)
                     val first = runCatching {
                         WorkspaceScopedEdit.apply(files, tasks, projects, draft.context, draft.proposal)
                     }
@@ -593,6 +616,7 @@ internal class WorkspaceChatCodingFlow(
                             "${verification.summary} Protected rollback was left in place.")
                         return@onSuccess
                     }
+                    workEvent(WorkspaceWorkPhase.DONE, "Edit verified", prepared.context.path)
                     terminal("Updated ${prepared.context.path} in your existing project. " +
                         "Local saved-file verification passed. Review the file and use Undo / Keep in Chat. " +
                         "Preview/build is not verified." +
@@ -620,6 +644,7 @@ internal class WorkspaceChatCodingFlow(
             .setNegativeButton("Later", null)
             .setPositiveButton("Apply saved change") { _, _ ->
                 if (!current(id)) return@setPositiveButton
+                workEvent(WorkspaceWorkPhase.CODING, "Applying saved edit", draft.context.path)
                 runCatching {
                     WorkspaceScopedEdit.apply(files, tasks, projects, draft.context, draft.proposal)
                     draft.proposal
@@ -627,6 +652,7 @@ internal class WorkspaceChatCodingFlow(
                     runCatching { suggestions.discard(id) }
                     val verification = verifyScopedWithRecovery(proposal)
                     if (verification.passed) {
+                        workEvent(WorkspaceWorkPhase.DONE, "Edit verified", proposal.path)
                         report("Applied one saved file edit with protected rollback. " +
                             "Local saved-file verification passed. Check Preview and Undo / Keep in Chat.")
                     } else {
