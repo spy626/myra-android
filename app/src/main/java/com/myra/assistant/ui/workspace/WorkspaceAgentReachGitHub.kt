@@ -55,6 +55,16 @@ internal object WorkspaceAgentReachGitHub {
         return clean
     }
 
+    private fun requireRef(value: String): String {
+        val clean = value.trim()
+        require(clean.length in 1..200 && clean.first() != '/' && clean.last() != '/' &&
+            clean.all { it.isLetterOrDigit() || it in "._/-" } &&
+            clean.split('/').all { it.isNotBlank() && it != "." && it != ".." }) {
+            "GitHub ref is invalid"
+        }
+        return clean
+    }
+
     fun selection(target: WorkspaceAgentReachPolicy.Target): Selection {
         require(target.platform == WorkspaceAgentReachPolicy.Platform.GITHUB) {
             "GitHub adapter requires a GitHub Agent Reach target"
@@ -74,14 +84,14 @@ internal object WorkspaceAgentReachGitHub {
                 require(parts.size >= 5 && parts[2] == "blob") {
                     "GitHub blob URL is incomplete"
                 }
-                val ref = requireName(parts[3], "ref")
+                val ref = requireRef(parts[3])
                 val filePath = parts.drop(4).joinToString("/")
                 requireSafePath(filePath)
                 Selection(target, owner, repo, ref, filePath, isRepositoryRead = false)
             }
             WorkspaceAgentReachPolicy.GitHubKind.RAW_FILE -> {
                 require(parts.size >= 4) { "GitHub raw-file URL is incomplete" }
-                val ref = requireName(parts[2], "ref")
+                val ref = requireRef(parts[2])
                 val filePath = parts.drop(3).joinToString("/")
                 requireSafePath(filePath)
                 Selection(target, owner, repo, ref, filePath, isRepositoryRead = false)
@@ -118,7 +128,7 @@ internal object WorkspaceAgentReachGitHub {
     fun commitRequest(selection: Selection, ref: String): Request {
         val owner = encode(selection.owner)
         val repo = encode(selection.repo)
-        val cleanRef = requireName(ref, "ref")
+        val cleanRef = requireRef(ref)
         return request(apiUrl("/repos/$owner/$repo/commits/${encode(cleanRef)}"))
     }
 
@@ -202,7 +212,7 @@ internal object WorkspaceAgentReachGitHub {
     fun readRepositoryMeta(response: Response): RepositoryMeta {
         val root = readJson(response)
         val fullName = root.getString("full_name").trim()
-        val defaultBranch = requireName(root.getString("default_branch"), "default branch")
+        val defaultBranch = requireRef(root.getString("default_branch"))
         val html = WorkspaceAgentReachPolicy.parse(root.getString("html_url"))
         require(html.platform == WorkspaceAgentReachPolicy.Platform.GITHUB &&
             html.host == "github.com") { "GitHub metadata returned an invalid repository URL" }
