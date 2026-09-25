@@ -31,6 +31,7 @@ internal class WorkspaceSkillStore(
         private const val SCHEMA_VERSION = 2
         private const val LEGACY_SCHEMA_VERSION = 1
         private const val CATALOG_FILE = "catalog.json"
+        internal const val APP_DIRECTORY = "workspace-skills"
         private const val PACKAGES_DIR = "packages"
         private const val MAX_CATALOG_BYTES = 512 * 1024L
         private const val MAX_ENTRIES = 128
