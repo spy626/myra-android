@@ -145,7 +145,10 @@ internal object WorkspaceBrowserVerificationEvidence {
           if ((el.getAttribute('aria-label') || '').trim()) return true;
           if ((el.getAttribute('aria-labelledby') || '').trim()) return true;
           if ((el.getAttribute('title') || '').trim()) return true;
-          if (el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]')) return true;
+          if (el.id) {
+            var labels = Array.prototype.slice.call(document.getElementsByTagName('label'), 0, 300);
+            if (labels.some(function(label){return label.htmlFor === el.id;})) return true;
+          }
           if (el.closest && el.closest('label')) return true;
           if (el.tagName === 'INPUT' && (el.getAttribute('placeholder') || '').trim()) return true;
           return (el.textContent || '').trim().length > 0;
