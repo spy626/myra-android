@@ -12,6 +12,7 @@ internal object WorkspaceCustomProviderStore {
     private const val PREFERENCES = "workspace_ui"
     private const val PROFILE_KEY = "workspace_custom_provider_profile_v1"
     const val DEFAULT_PROFILE_ID = "custom_manual"
+    const val CHAT_PREFERENCE_KEY = "workspace_custom_provider_manual_chat"
 
     fun encode(profile: WorkspaceCustomProviderProfile.Validated): String =
         JSONObject()
@@ -72,8 +73,17 @@ internal object WorkspaceCustomProviderStore {
             .edit().putString(PROFILE_KEY, encode(profile)).apply()
     }
 
+    fun chatEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(CHAT_PREFERENCE_KEY, false)
+
+    fun setChatEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(CHAT_PREFERENCE_KEY, enabled).apply()
+    }
+
     fun clear(context: Context) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .edit().remove(PROFILE_KEY).apply()
+            .edit().remove(PROFILE_KEY).remove(CHAT_PREFERENCE_KEY).apply()
     }
 }

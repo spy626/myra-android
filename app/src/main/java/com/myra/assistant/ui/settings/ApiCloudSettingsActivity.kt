@@ -46,6 +46,8 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         b.customProviderModel.setText(customProfile?.modelId.orEmpty())
         b.customProviderKey.setText(customProfile?.let { keys.get(it.encryptedKeySlot) }.orEmpty())
         b.customProviderLocalSwitch.isChecked = customProfile?.localEndpoint == true
+        b.customProviderChatSwitch.isChecked = customProfile != null &&
+            WorkspaceCustomProviderStore.chatEnabled(this)
         // One-time retirement of old encrypted credentials and opt-in settings.
         keys.remove("cloudflare_workers_ai_token")
         keys.remove("cloudflare_workers_ai_account")
@@ -209,6 +211,8 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
                 }
                 WorkspaceCustomProviderStore.save(this, profile)
                 keys.put(profile.encryptedKeySlot, customKey)
+                WorkspaceCustomProviderStore.setChatEnabled(
+                    this, b.customProviderChatSwitch.isChecked)
             }
             // Never touch the Gemini key or legacy conversation_provider preference here.
             keys.put(ApiKeyStore.OPENROUTER, b.openRouterKey.text.toString())
