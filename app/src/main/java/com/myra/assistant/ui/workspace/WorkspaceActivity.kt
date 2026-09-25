@@ -1631,6 +1631,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     call, serial, id, messageId, replacingAssistantId,
                     Result.failure(IllegalStateException(
                         WorkspaceCustomProviderChat.networkFailure(error))),
+                    skillProjection,
                 )
             }
 
@@ -1638,6 +1639,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 completeCustomReply(
                     call, serial, id, messageId, replacingAssistantId,
                     runCatching { WorkspaceCustomProviderChat.read(response) },
+                    skillProjection,
                 )
             }
         })
@@ -1650,6 +1652,7 @@ class WorkspaceActivity : AppCompatActivity() {
         userMessageId: String,
         replacingAssistantId: String?,
         result: Result<String>,
+        skillProjection: WorkspaceSkillInvocation.Projection? = null,
     ) {
         runOnUiThread {
             if (isFinishing || isDestroyed || serial != requestGeneration ||
@@ -1664,8 +1667,11 @@ class WorkspaceActivity : AppCompatActivity() {
                     WorkspaceChatTurnFrame.verify(actual, reply)
                 } else reply
             }
-            val failure = checked.exceptionOrNull()
-            checked.onSuccess { reply ->
+            val finalized = checked.mapCatching { reply ->
+                WorkspaceSkillInvocationReceipt.attach(reply, skillProjection)
+            }
+            val failure = finalized.exceptionOrNull()
+            finalized.onSuccess { reply ->
                 runCatching {
                     if (replacingAssistantId == null) {
                         require(conversations.read(id).lastOrNull()?.id == userMessageId) {
@@ -1823,19 +1829,22 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
                     WorkspaceProviderRegistry.id(provider))
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
-                    Result.failure(IllegalStateException(WorkspaceChatGateway.networkFailure(provider, error))))
+                    Result.failure(IllegalStateException(WorkspaceChatGateway.networkFailure(provider, error))),
+                    skillProjection)
             }
             override fun onResponse(call: Call, response: Response) {
                 WorkspaceProviderSessionHealth.recordResponse(response)
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
-                    runCatching { WorkspaceChatGateway.read(provider, response) })
+                    runCatching { WorkspaceChatGateway.read(provider, response) },
+                    skillProjection)
             }
         })
     }
 
     private fun complete(call: Call, serial: Long, id: String, userMessageId: String,
                          replacingAssistantId: String?, provider: WorkspaceChatGateway.Provider,
-                         picked: List<Attachment>, result: Result<String>) {
+                         picked: List<Attachment>, result: Result<String>,
+                         skillProjection: WorkspaceSkillInvocation.Projection? = null) {
         runOnUiThread {
             if (isFinishing || isDestroyed || serial != requestGeneration ||
                 activeRequest !== call || selectedId != id) return@runOnUiThread
@@ -1850,8 +1859,11 @@ class WorkspaceActivity : AppCompatActivity() {
                     WorkspaceChatTurnFrame.verify(actual, reply)
                 } else reply
             }
-            val failure = checked.exceptionOrNull()
-            checked.onSuccess { reply ->
+            val finalized = checked.mapCatching { reply ->
+                WorkspaceSkillInvocationReceipt.attach(reply, skillProjection)
+            }
+            val failure = finalized.exceptionOrNull()
+            finalized.onSuccess { reply ->
                 runCatching {
                     if (replacingAssistantId == null) {
                         require(conversations.read(id).lastOrNull()?.id == userMessageId) {
