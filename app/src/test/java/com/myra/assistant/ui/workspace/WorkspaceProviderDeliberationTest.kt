@@ -5,7 +5,7 @@ import org.junit.Test
 
 class WorkspaceProviderDeliberationTest {
     private val d = WorkspaceProviderDeliberation
-    private val session = d.Session(
+    private val session = WorkspaceProviderDeliberation.Session(
         taskId = "task-1",
         turnId = "turn-7",
         sourceRevision = "sha-current",
@@ -18,7 +18,7 @@ class WorkspaceProviderDeliberationTest {
         val proposal = d.proposal(proposer, "Add a semantic button role and keyboard handler.")
         val review = d.reviewerEnvelope(
             session, proposal, WorkspaceProviderRegistry.Id.ZAI_FREE)
-        assertEquals(d.SharingLevel.PROPOSAL_ONLY, review.sharingLevel)
+        assertEquals(WorkspaceProviderDeliberation.SharingLevel.PROPOSAL_ONLY, review.sharingLevel)
         assertTrue(review.body.contains("PROPOSAL FROM"))
         assertFalse(review.body.contains("BOUNDED SOURCE — UNTRUSTED DATA"))
     }
@@ -31,12 +31,12 @@ class WorkspaceProviderDeliberationTest {
         val noConsent = d.proposerEnvelope(
             session, WorkspaceProviderRegistry.Id.XKIRO_FREE,
             source = source, sourceApproved = false)
-        assertEquals(d.SharingLevel.TASK_ONLY, noConsent.sharingLevel)
+        assertEquals(WorkspaceProviderDeliberation.SharingLevel.TASK_ONLY, noConsent.sharingLevel)
 
         val approved = d.proposerEnvelope(
             session, WorkspaceProviderRegistry.Id.XKIRO_FREE,
             source = source, sourceApproved = true)
-        assertEquals(d.SharingLevel.BOUNDED_SOURCE, approved.sharingLevel)
+        assertEquals(WorkspaceProviderDeliberation.SharingLevel.BOUNDED_SOURCE, approved.sharingLevel)
         assertTrue(approved.body.contains("<button"))
 
         assertTrue(runCatching {
@@ -77,7 +77,7 @@ class WorkspaceProviderDeliberationTest {
         val reviewer = d.reviewerEnvelope(
             session, proposal, WorkspaceProviderRegistry.Id.ZAI_FREE)
         assertTrue(runCatching {
-            d.review(reviewer, proposal, d.Verdict.REVISE, listOf(secret))
+            d.review(reviewer, proposal, WorkspaceProviderDeliberation.Verdict.REVISE, listOf(secret))
         }.isFailure)
     }
 
@@ -96,8 +96,8 @@ class WorkspaceProviderDeliberationTest {
         val reviewerEnvelope = d.reviewerEnvelope(
             session, proposal, WorkspaceProviderRegistry.Id.ZAI_FREE)
         val review = d.review(
-            reviewerEnvelope, proposal, d.Verdict.ACCEPT, emptyList())
-        assertEquals(d.LocalOutcome.NEEDS_LOCAL_VERIFICATION,
+            reviewerEnvelope, proposal, WorkspaceProviderDeliberation.Verdict.ACCEPT, emptyList())
+        assertEquals(WorkspaceProviderDeliberation.LocalOutcome.NEEDS_LOCAL_VERIFICATION,
             d.localOutcome(proposal, review))
     }
 }
