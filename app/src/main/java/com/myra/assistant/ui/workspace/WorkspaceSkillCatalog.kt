@@ -9,8 +9,8 @@ import java.security.MessageDigest
  * package bytes + permission preview that the user approved, and every admitted skill starts disabled.
  */
 internal object WorkspaceSkillCatalog {
-    private const val MAX_PACKAGE_BYTES = 512 * 1024
-    private const val MAX_FILE_BYTES = 128 * 1024
+    internal const val MAX_PACKAGE_BYTES = 512 * 1024
+    internal const val MAX_FILE_BYTES = 128 * 1024
     private const val APPROVAL_PREFIX = "lyra-skill-approve-v1:"
 
     enum class State { INSTALLED_DISABLED }
