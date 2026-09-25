@@ -127,7 +127,9 @@ Require deterministic evidence.
         val second = install(store, skill, 99L)
         assertEquals(first.entry, second.entry)
         assertEquals(10L, second.entry.installedAtMs)
-    }    @Test fun readinessApprovedSkillCanEnablePersistAndDisableWithoutChangingPackage() {
+    }
+
+    @Test fun readinessApprovedSkillCanEnablePersistAndDisableWithoutChangingPackage() {
         val root = temp.newFolder("enable-disable")
         val store = WorkspaceSkillStore(root)
         val installed = install(store, parsed())
@@ -137,7 +139,7 @@ Require deterministic evidence.
         val enabled = store.enable(
             "review-code", environment(), request, request.approvalToken, 30L)
         assertEquals(WorkspaceSkillCatalog.State.ENABLED, enabled.entry.state)
-        assertEquals(30L, enabled.entry.enabledAtMs)
+        assertEquals(30L, enabled.entry.enabledAtMs ?: -1L)
         assertEquals(request.readinessSha256, enabled.entry.enableReadinessSha256)
         assertEquals(request.environmentSha256, enabled.entry.enableEnvironmentSha256)
         assertEquals(installed.snapshot.packageSha256, enabled.snapshot.packageSha256)

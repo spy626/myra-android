@@ -271,7 +271,9 @@ internal object WorkspaceSkillEnablement {
             approvalToken = ENABLE_APPROVAL_PREFIX + sha256(material),
             warnings = warnings,
         )
-    }    fun validateApproval(
+    }
+
+    fun validateApproval(
         installed: WorkspaceSkillStore.Installed,
         environment: Environment,
         request: EnableRequest,
