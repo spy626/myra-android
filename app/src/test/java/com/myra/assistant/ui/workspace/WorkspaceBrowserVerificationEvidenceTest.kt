@@ -8,41 +8,41 @@ class WorkspaceBrowserVerificationEvidenceTest {
     private val e = WorkspaceBrowserVerificationEvidence
 
     @Test fun clearBoundedEvidenceNeverClaimsPhoneOrVisualPass() {
-        val snapshot = e.Snapshot(
+        val snapshot = WorkspaceBrowserVerificationEvidence.Snapshot(
             pageUrl = "http://127.0.0.1:1234/p/x/index.html",
             capturedAtMs = 1L,
-            dom = e.DomSignals(
+            dom = WorkspaceBrowserVerificationEvidence.DomSignals(
                 overflow = false,
                 brokenImages = 0,
                 emptyMedia = 0,
                 interactiveControls = 3,
                 unlabeledControls = 0,
             ),
-            runtime = e.RuntimeSignals(),
+            runtime = WorkspaceBrowserVerificationEvidence.RuntimeSignals(),
         )
         val result = e.assess(snapshot)
-        assertEquals(e.Assessment.BOUNDED_CLEAR, result.assessment)
-        assertTrue(e.Plane.DOM in result.planes)
-        assertTrue(e.Plane.ACCESSIBILITY in result.planes)
-        assertTrue(e.Plane.CONSOLE in result.planes)
-        assertTrue(e.Plane.NETWORK in result.planes)
+        assertEquals(WorkspaceBrowserVerificationEvidence.Assessment.BOUNDED_CLEAR, result.assessment)
+        assertTrue(WorkspaceBrowserVerificationEvidence.Plane.DOM in result.planes)
+        assertTrue(WorkspaceBrowserVerificationEvidence.Plane.ACCESSIBILITY in result.planes)
+        assertTrue(WorkspaceBrowserVerificationEvidence.Plane.CONSOLE in result.planes)
+        assertTrue(WorkspaceBrowserVerificationEvidence.Plane.NETWORK in result.planes)
         assertTrue(result.statusText().contains("phone/visual verification"))
         assertFalse(result.statusText().contains("PASS"))
     }
 
     @Test fun deterministicRuntimeAndDomIssuesAreReported() {
-        val result = e.assess(e.Snapshot(
+        val result = e.assess(WorkspaceBrowserVerificationEvidence.Snapshot(
             pageUrl = "http://127.0.0.1/preview",
             capturedAtMs = 2L,
-            dom = e.DomSignals(true, 2, 1, 4, 1),
-            runtime = e.RuntimeSignals(
+            dom = WorkspaceBrowserVerificationEvidence.DomSignals(true, 2, 1, 4, 1),
+            runtime = WorkspaceBrowserVerificationEvidence.RuntimeSignals(
                 consoleErrors = 2,
                 consoleWarnings = 3,
                 networkFailures = 1,
                 httpErrors = 1,
             ),
         ))
-        assertEquals(e.Assessment.ISSUES_FOUND, result.assessment)
+        assertEquals(WorkspaceBrowserVerificationEvidence.Assessment.ISSUES_FOUND, result.assessment)
         assertTrue(result.findings.any { it.contains("horizontal overflow") })
         assertTrue(result.findings.any { it.contains("broken image") })
         assertTrue(result.findings.any { it.contains("unlabeled") })
@@ -52,13 +52,13 @@ class WorkspaceBrowserVerificationEvidenceTest {
     }
 
     @Test fun missingDomObservationIsUnknownNotSuccess() {
-        val result = e.assess(e.Snapshot(
+        val result = e.assess(WorkspaceBrowserVerificationEvidence.Snapshot(
             pageUrl = "http://127.0.0.1/preview",
             capturedAtMs = 3L,
             dom = null,
-            runtime = e.RuntimeSignals(),
+            runtime = WorkspaceBrowserVerificationEvidence.RuntimeSignals(),
         ))
-        assertEquals(e.Assessment.UNKNOWN, result.assessment)
+        assertEquals(WorkspaceBrowserVerificationEvidence.Assessment.UNKNOWN, result.assessment)
         assertTrue(result.statusText().contains("do not treat this as PASS"))
     }
 
