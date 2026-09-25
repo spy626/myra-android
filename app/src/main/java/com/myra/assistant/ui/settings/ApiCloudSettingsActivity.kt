@@ -5,6 +5,10 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.widget.Toast
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
+import java.io.IOException
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.databinding.ActivityApiCloudSettingsBinding
@@ -16,11 +20,14 @@ import com.myra.assistant.ui.workspace.WorkspaceXKiroFree
 import com.myra.assistant.ui.workspace.WorkspaceZaiFree
 import com.myra.assistant.ui.workspace.WorkspaceCustomProviderProfile
 import com.myra.assistant.ui.workspace.WorkspaceCustomProviderStore
+import com.myra.assistant.ui.workspace.WorkspaceCustomProviderConnection
 import com.myra.assistant.ui.workspace.WorkspaceWebsiteGroqFallback
 import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
 
 /** Non-voice provider credentials only. Gemini Live is configured in Voice & AI Models. */
 class ApiCloudSettingsActivity : AppCompatActivity() {
+    private var customProviderTestCall: Call? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val b = ActivityApiCloudSettingsBinding.inflate(layoutInflater)
@@ -56,6 +63,62 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             b.customProviderControls.visibility = if (opening) View.VISIBLE else View.GONE
             b.customProviderToggle.text = if (opening) "Custom API Base URL ▴"
                 else "Custom API Base URL ▾"
+        }
+        b.customProviderTestButton.setOnClickListener {
+            if (customProviderTestCall != null) {
+                Toast.makeText(this, "Custom API connection test is already running",
+                    Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val profile = runCatching {
+                WorkspaceCustomProviderProfile.validate(
+                    WorkspaceCustomProviderProfile.userDraft(
+                        id = WorkspaceCustomProviderStore.DEFAULT_PROFILE_ID,
+                        displayName = b.customProviderName.text.toString(),
+                        baseUrl = b.customProviderBaseUrl.text.toString(),
+                        modelId = b.customProviderModel.text.toString(),
+                        localEndpoint = b.customProviderLocalSwitch.isChecked,
+                    )
+                )
+            }.getOrElse {
+                b.customProviderTestStatus.text = it.message ?: "Custom API profile is invalid"
+                return@setOnClickListener
+            }
+            val key = b.customProviderKey.text.toString().trim()
+            val request = runCatching {
+                WorkspaceCustomProviderConnection.request(profile, key)
+            }.getOrElse {
+                b.customProviderTestStatus.text = it.message ?: "Custom API request is invalid"
+                return@setOnClickListener
+            }
+            val call = WorkspaceCustomProviderConnection.client(profile).newCall(request)
+            customProviderTestCall = call
+            b.customProviderTestButton.isEnabled = false
+            b.customProviderTestStatus.text =
+                "Testing with synthetic text only · no chat, memory or project source is sent."
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    runOnUiThread {
+                        if (customProviderTestCall === call) customProviderTestCall = null
+                        b.customProviderTestButton.isEnabled = true
+                        b.customProviderTestStatus.text =
+                            "Connection failed or timed out. No project source was sent."
+                    }
+                }
+                override fun onResponse(call: Call, response: Response) {
+                    val result = runCatching {
+                        WorkspaceCustomProviderConnection.read(response)
+                    }.fold(
+                        onSuccess = { it },
+                        onFailure = { it.message ?: "Custom API connection was not accepted." }
+                    )
+                    runOnUiThread {
+                        if (customProviderTestCall === call) customProviderTestCall = null
+                        b.customProviderTestButton.isEnabled = true
+                        b.customProviderTestStatus.text = result
+                    }
+                }
+            })
         }
         // Z.ai is coding-only. Retire stale Chat/vision/model prefs from older test builds.
         workspacePrefs.edit()
@@ -156,5 +219,11 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             keys.put(ApiKeyStore.DEEPSEEK, b.deepseekKey.text.toString())
             Toast.makeText(this, "API configuration saved", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    override fun onDestroy() {
+        customProviderTestCall?.cancel()
+        customProviderTestCall = null
+        super.onDestroy()
     }
 }
