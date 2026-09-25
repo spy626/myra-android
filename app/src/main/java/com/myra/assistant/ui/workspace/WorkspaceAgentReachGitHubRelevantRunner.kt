@@ -31,8 +31,9 @@ internal class WorkspaceAgentReachGitHubRelevantRunner(
     data class Completion(
         val commitSha: String,
         val pathMap: WorkspaceAgentReachGitHub.RepositoryPathMap,
-        val repoIndex: WorkspaceAgentReachGitHubRepoIndex.Index,
         val files: List<FileEvidence>,
+        val repoIndex: WorkspaceAgentReachGitHubRepoIndex.Index =
+            WorkspaceAgentReachGitHubRepoIndex.build(pathMap),
     )
 
     interface Listener {
@@ -213,8 +214,8 @@ internal class WorkspaceAgentReachGitHubRelevantRunner(
             Completion(
                 commitSha = built.commitSha,
                 pathMap = built.pathMap,
-                repoIndex = built.repoIndex,
                 files = evidence.toList(),
+                repoIndex = built.repoIndex,
             )
         }
         val noun = if (result.files.size == 1) "file" else "files"
