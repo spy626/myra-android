@@ -73,8 +73,8 @@ Require pinned provenance.
         }"""
         val skill = c.parse(md, json, packagePaths = listOf("SKILL.md", "skill.json"))
         assertEquals(listOf("api.github.com"), skill.permissionPreview.networkDomains)
-        assertEquals(c.SourceSharing.BOUNDED, skill.permissionPreview.sourceSharing)
-        assertEquals(c.MemoryAccess.READ, skill.permissionPreview.memoryAccess)
+        assertEquals(WorkspaceSkillContract.SourceSharing.BOUNDED, skill.permissionPreview.sourceSharing)
+        assertEquals(WorkspaceSkillContract.MemoryAccess.READ, skill.permissionPreview.memoryAccess)
         assertTrue(skill.permissionPreview.modelInvocable)
         assertTrue(skill.permissionPreview.warnings.any {
             it.contains("explicit approval", ignoreCase = true)
@@ -149,12 +149,12 @@ description: Pinned skill.
 ---
 Instructions.
 """
-        val pinned = c.Provenance(
-            c.Origin.GITHUB_PINNED,
+        val pinned = WorkspaceSkillContract.Provenance(
+            WorkspaceSkillContract.Origin.GITHUB_PINNED,
             "https://github.com/example/repo/blob/main/SKILL.md",
             "1234567890abcdef1234567890abcdef12345678",
         )
-        assertEquals(c.Origin.GITHUB_PINNED, c.parse(md, provenance = pinned).provenance.origin)
+        assertEquals(WorkspaceSkillContract.Origin.GITHUB_PINNED, c.parse(md, provenance = pinned).provenance.origin)
 
         assertTrue(runCatching {
             c.parse(md, provenance = pinned.copy(pinnedRevision = "main"))
