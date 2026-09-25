@@ -14,6 +14,8 @@ import com.myra.assistant.ui.workspace.WorkspaceGroqFree
 import com.myra.assistant.ui.workspace.WorkspaceLlm7Free
 import com.myra.assistant.ui.workspace.WorkspaceXKiroFree
 import com.myra.assistant.ui.workspace.WorkspaceZaiFree
+import com.myra.assistant.ui.workspace.WorkspaceCustomProviderProfile
+import com.myra.assistant.ui.workspace.WorkspaceCustomProviderStore
 import com.myra.assistant.ui.workspace.WorkspaceWebsiteGroqFallback
 import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
 
@@ -31,6 +33,12 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         b.zaiKey.setText(keys.get(ApiKeyStore.ZAI))
         b.deepseekKey.setText(keys.get(ApiKeyStore.DEEPSEEK))
         val workspacePrefs = getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
+        val customProfile = WorkspaceCustomProviderStore.load(this)
+        b.customProviderName.setText(customProfile?.displayName.orEmpty())
+        b.customProviderBaseUrl.setText(customProfile?.baseUrl.orEmpty())
+        b.customProviderModel.setText(customProfile?.modelId.orEmpty())
+        b.customProviderKey.setText(customProfile?.let { keys.get(it.encryptedKeySlot) }.orEmpty())
+        b.customProviderLocalSwitch.isChecked = customProfile?.localEndpoint == true
         // One-time retirement of old encrypted credentials and opt-in settings.
         keys.remove("cloudflare_workers_ai_token")
         keys.remove("cloudflare_workers_ai_account")
@@ -42,6 +50,12 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             b.advancedProviderControls.visibility = if (opening) View.VISIBLE else View.GONE
             b.advancedProviderToggle.text = if (opening) "Advanced · Privacy & fallback ▴"
                 else "Advanced · Privacy & fallback ▾"
+        }
+        b.customProviderToggle.setOnClickListener {
+            val opening = b.customProviderControls.visibility != View.VISIBLE
+            b.customProviderControls.visibility = if (opening) View.VISIBLE else View.GONE
+            b.customProviderToggle.text = if (opening) "Custom API Base URL ▴"
+                else "Custom API Base URL ▾"
         }
         // Z.ai is coding-only. Retire stale Chat/vision/model prefs from older test builds.
         workspacePrefs.edit()
@@ -100,6 +114,39 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             startActivity(Intent(this, DeepResearchSettingsActivity::class.java))
         }
         b.saveButton.setOnClickListener {
+            val customName = b.customProviderName.text.toString().trim()
+            val customBase = b.customProviderBaseUrl.text.toString().trim()
+            val customModel = b.customProviderModel.text.toString().trim()
+            val customKey = b.customProviderKey.text.toString().trim()
+            val customAllBlank = customName.isBlank() && customBase.isBlank() &&
+                customModel.isBlank() && customKey.isBlank()
+            if (customAllBlank) {
+                WorkspaceCustomProviderStore.load(this)?.let { keys.remove(it.encryptedKeySlot) }
+                WorkspaceCustomProviderStore.clear(this)
+            } else {
+                val profile = runCatching {
+                    WorkspaceCustomProviderProfile.validate(
+                        WorkspaceCustomProviderProfile.userDraft(
+                            id = WorkspaceCustomProviderStore.DEFAULT_PROFILE_ID,
+                            displayName = customName,
+                            baseUrl = customBase,
+                            modelId = customModel,
+                            localEndpoint = b.customProviderLocalSwitch.isChecked,
+                        )
+                    )
+                }.getOrElse {
+                    Toast.makeText(this, it.message ?: "Custom API profile is invalid",
+                        Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                if (customKey.length > 512 || customKey.any { it == '\n' || it == '\r' }) {
+                    Toast.makeText(this, "Custom API key is too long or contains line breaks",
+                        Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                WorkspaceCustomProviderStore.save(this, profile)
+                keys.put(profile.encryptedKeySlot, customKey)
+            }
             // Never touch the Gemini key or legacy conversation_provider preference here.
             keys.put(ApiKeyStore.OPENROUTER, b.openRouterKey.text.toString())
             keys.put(ApiKeyStore.GROQ, b.groqKey.text.toString())
