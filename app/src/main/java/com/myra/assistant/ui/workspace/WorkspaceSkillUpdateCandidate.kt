@@ -69,8 +69,7 @@ internal object WorkspaceSkillUpdateCandidate {
             addAll(replacement)
             addAll(lines.subList(after, lines.size))
         }
-        return rebuilt.joinToString("
-")
+        return rebuilt.joinToString(10.toChar().toString())
     }
 
     private fun appendExamples(skillMd: String, examples: List<String>): String {
