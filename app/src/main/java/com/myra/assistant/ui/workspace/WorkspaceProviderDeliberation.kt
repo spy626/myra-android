@@ -75,6 +75,19 @@ internal object WorkspaceProviderDeliberation {
         return clean
     }
 
+    private fun requireProviderBudget(
+        provider: WorkspaceProviderRegistry.Id,
+        body: String,
+    ) {
+        val max = WorkspaceProviderRegistry.budget(
+            provider, WorkspaceProviderRegistry.TaskKind.CODE_EDIT)?.maxPromptChars
+        if (max != null) {
+            require(body.length <= max) {
+                "${WorkspaceProviderRegistry.capability(provider).displayName} deliberation context exceeds its conservative prompt budget"
+            }
+        }
+    }
+
     private fun sessionText(session: Session): Pair<String, String> {
         require(session.taskId.isNotBlank() && session.turnId.isNotBlank()) {
             "Task/turn identity is required"
@@ -126,6 +139,7 @@ internal object WorkspaceProviderDeliberation {
             }
             append("Return one bounded proposal only. Do not claim verification or completion.")
         }
+        requireProviderBudget(provider, body)
         return Envelope(
             provider = provider,
             role = Role.PROPOSER,
@@ -178,6 +192,7 @@ internal object WorkspaceProviderDeliberation {
             append("Review only. List concrete issues against the task/criteria. " +
                 "Do not write files, dispatch another agent, or claim verification/completion.")
         }
+        requireProviderBudget(reviewer, body)
         return Envelope(
             provider = reviewer,
             role = Role.REVIEWER,

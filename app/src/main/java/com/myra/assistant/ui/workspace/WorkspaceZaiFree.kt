@@ -60,6 +60,29 @@ internal object WorkspaceZaiFree {
         require(approved) { "Z.ai Work coding source permission is OFF; no project source was sent" }
     }
 
+    internal fun deliberationRequest(
+        key: String,
+        prompt: String,
+        textModel: String,
+        sourceIncluded: Boolean,
+        sourceApproved: Boolean,
+    ): Request {
+        requireKey(key)
+        if (sourceIncluded) requireCodingConsent(sourceApproved)
+        require(prompt.isNotBlank() && prompt.length <= MAX_CODING_PROMPT_CHARS) {
+            "Z.ai deliberation context exceeds safe request limit"
+        }
+        val payload = JSONObject()
+            .put("model", WorkspaceZaiFree.textModel(textModel))
+            .put("stream", false)
+            .put("max_tokens", WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS)
+            .put("temperature", 0.2)
+            .put("messages", JSONArray().put(
+                JSONObject().put("role", "user").put("content", prompt)
+            ))
+        return directRequest(key, payload)
+    }
+
     fun editRequest(key: String, prompt: String, textModel: String,
                     sourceApproved: Boolean): Request {
         requireKey(key)

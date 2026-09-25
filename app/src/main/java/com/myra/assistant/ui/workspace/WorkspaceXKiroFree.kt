@@ -10,6 +10,7 @@ import android.content.Context
 import com.myra.assistant.MyApplication
 import com.myra.assistant.ai.ApiKeyStore
 import okio.Buffer
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.math.BigDecimal
@@ -114,6 +115,40 @@ internal object WorkspaceXKiroFree {
         }
     }
 
+    /** Deliberation is provider-sticky: free preflight then exactly one xKiro POST, no fallback. */
+    private class StrictDeliberationFreeOnlyGate : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            val header = request.header("Authorization").orEmpty()
+            val key = header.removePrefix("Bearer ")
+            if (request.method != "POST" || request.url.toString() != ENDPOINT ||
+                !header.startsWith("Bearer ") || !validKey(key)) {
+                throw IOException("xKiro Free deliberation request refused; nothing sent")
+            }
+            try {
+                if (!catalogIsFree(checkedGet(MODELS))) {
+                    throw NoSourcePreflight(
+                        "xKiro Free deliberation preflight: exact model/zero price unverified; nothing sent")
+                }
+                if (!quotaIsFree(checkedGet(USAGE, key))) {
+                    throw NoSourcePreflight(
+                        "xKiro Free deliberation preflight: remaining free quota unverified; nothing sent")
+                }
+            } catch (failure: NoSourcePreflight) {
+                throw failure
+            } catch (_: Exception) {
+                throw NoSourcePreflight(
+                    "xKiro Free deliberation preflight unavailable; nothing sent")
+            }
+            if (chain.call().isCanceled()) {
+                throw IOException("xKiro Free deliberation cancelled; nothing sent")
+            }
+            val response = chain.proceed(request)
+            WorkspaceProviderSessionHealth.recordResponse(response)
+            return response
+        }
+    }
+
     /** A single user-selected source can cross companies after a definite rejection or
      * before xKiro sent ANY source. No uncertain resend or nested automatic retry chain.
      */
@@ -214,6 +249,29 @@ internal object WorkspaceXKiroFree {
         .readTimeout(95, TimeUnit.SECONDS)
         .callTimeout(240, TimeUnit.SECONDS) // Total bound includes up to two definite free fallbacks.
         .addInterceptor(FreeOnlyGate()).build()
+
+    /** D4 read-only client: no retry, no cross-provider fallback, no hidden paid route. */
+    internal val deliberationClient: OkHttpClient = OkHttpClient.Builder()
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(95, TimeUnit.SECONDS)
+        .callTimeout(110, TimeUnit.SECONDS)
+        .addInterceptor(StrictDeliberationFreeOnlyGate())
+        .build()
+
+    internal fun deliberationRequest(key: String, prompt: String): Request {
+        require(prompt.isNotBlank() && prompt.length <= 24_000) {
+            "xKiro deliberation context is missing or too large"
+        }
+        val canonical = JSONObject()
+            .put("messages", JSONArray().put(
+                JSONObject().put("role", "user").put("content", prompt)))
+        return transform(key, canonical, WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS)
+    }
+
+    internal fun readDeliberation(response: Response): String = readEdit(response)
 
     private fun transform(key: String, canonical: JSONObject, maxTokens: Int): Request {
         require(validKey(key)) { "Save a valid xKiro Free key in API & Cloud Settings" }

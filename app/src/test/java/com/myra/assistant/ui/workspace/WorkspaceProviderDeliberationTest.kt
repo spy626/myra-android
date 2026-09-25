@@ -81,6 +81,15 @@ class WorkspaceProviderDeliberationTest {
         }.isFailure)
     }
 
+    @Test fun providerSpecificPromptBudgetFailsClosedBeforeSend() {
+        val nearLimit = d.boundedSource("sha-current", "x".repeat(11_900))
+        assertTrue(runCatching {
+            d.proposerEnvelope(
+                session, WorkspaceProviderRegistry.Id.ZAI_FREE,
+                source = nearLimit, sourceApproved = true)
+        }.isFailure)
+    }
+
     @Test fun providerCannotReviewItsOwnProposal() {
         val proposer = d.proposerEnvelope(session, WorkspaceProviderRegistry.Id.XKIRO_FREE)
         val proposal = d.proposal(proposer, "Use semantic markup.")
