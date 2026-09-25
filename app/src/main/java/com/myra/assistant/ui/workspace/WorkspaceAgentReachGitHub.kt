@@ -164,7 +164,9 @@ internal object WorkspaceAgentReachGitHub {
             "GitHub API request escaped the read-only GitHub capability"
         }
         return Request.Builder()
-            .url(target.canonicalUrl)
+            // URL is internally constructed from validated/encoded components above. Keep its
+            // percent-encoded ref/path semantics after policy validation instead of reserializing it.
+            .url(url)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .header("User-Agent", "LYRA-AgentReach/1")
