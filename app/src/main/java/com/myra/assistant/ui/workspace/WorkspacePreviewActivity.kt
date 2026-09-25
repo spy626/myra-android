@@ -3,10 +3,12 @@ package com.myra.assistant.ui.workspace
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.webkit.ConsoleMessage
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -33,6 +35,45 @@ class WorkspacePreviewActivity : AppCompatActivity() {
     private lateinit var projectId: String
     private var server: WorkspacePreviewServer? = null
     private var failed = false
+    private var browserEvidenceGeneration = 0L
+    private var browserDomSignals: WorkspaceBrowserVerificationEvidence.DomSignals? = null
+    private var browserConsoleErrors = 0
+    private var browserConsoleWarnings = 0
+    private var browserNetworkFailures = 0
+    private var browserHttpErrors = 0
+
+    private fun resetBrowserEvidence() {
+        browserEvidenceGeneration++
+        browserDomSignals = null
+        browserConsoleErrors = 0
+        browserConsoleWarnings = 0
+        browserNetworkFailures = 0
+        browserHttpErrors = 0
+    }
+
+    private fun incrementBounded(value: Int): Int = (value + 1).coerceAtMost(500)
+
+    private fun browserEvidenceResult(url: String): WorkspaceBrowserVerificationEvidence.Result =
+        WorkspaceBrowserVerificationEvidence.assess(
+            WorkspaceBrowserVerificationEvidence.Snapshot(
+                pageUrl = url,
+                capturedAtMs = System.currentTimeMillis(),
+                dom = browserDomSignals,
+                runtime = WorkspaceBrowserVerificationEvidence.RuntimeSignals(
+                    consoleErrors = browserConsoleErrors,
+                    consoleWarnings = browserConsoleWarnings,
+                    networkFailures = browserNetworkFailures,
+                    httpErrors = browserHttpErrors,
+                ),
+            )
+        )
+
+    private fun refreshBrowserEvidenceStatus(url: String?) {
+        if (failed || url.isNullOrBlank() || browserDomSignals == null) return
+        val parsed = runCatching { Uri.parse(url) }.getOrNull() ?: return
+        if (!isLocalPreviewUrl(parsed) || binding.previewWebView.url != url) return
+        binding.previewStatus.text = browserEvidenceResult(url).statusText()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,39 +111,72 @@ class WorkspacePreviewActivity : AppCompatActivity() {
             settings.safeBrowsingEnabled = true
             webChromeClient = object : WebChromeClient() {
                 override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
+
+                override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                    when (consoleMessage.messageLevel()) {
+                        ConsoleMessage.MessageLevel.ERROR ->
+                            browserConsoleErrors = incrementBounded(browserConsoleErrors)
+                        ConsoleMessage.MessageLevel.WARNING ->
+                            browserConsoleWarnings = incrementBounded(browserConsoleWarnings)
+                        else -> Unit
+                    }
+                    // Never store raw console text: it may contain page data or secrets.
+                    refreshBrowserEvidenceStatus(binding.previewWebView.url)
+                    return true
+                }
             }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
                     !isLocalPreviewUrl(request.url)
 
+                override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                    if (isLocalPreviewUrl(Uri.parse(url))) {
+                        failed = false
+                        resetBrowserEvidence()
+                        binding.previewStatus.text = "Loading saved website · collecting browser evidence…"
+                    }
+                }
+
                 override fun onReceivedError(view: WebView, request: WebResourceRequest,
                                              error: WebResourceError) {
+                    browserNetworkFailures = incrementBounded(browserNetworkFailures)
                     if (request.isForMainFrame) {
                         failed = true
                         binding.previewStatus.text = "Preview failed: ${error.description}"
+                    } else {
+                        refreshBrowserEvidenceStatus(view.url)
                     }
                 }
 
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest,
                                                  errorResponse: WebResourceResponse) {
-                    if (request.isForMainFrame && errorResponse.statusCode >= 400) {
-                        failed = true
-                        binding.previewStatus.text = "Preview HTTP ${errorResponse.statusCode}"
+                    if (errorResponse.statusCode >= 400) {
+                        browserHttpErrors = incrementBounded(browserHttpErrors)
+                        if (request.isForMainFrame) {
+                            failed = true
+                            binding.previewStatus.text = "Preview HTTP ${errorResponse.statusCode}"
+                        } else {
+                            refreshBrowserEvidenceStatus(view.url)
+                        }
                     }
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
                     if (failed || !isLocalPreviewUrl(Uri.parse(url))) return
-                    binding.previewStatus.text = "Preview loaded · checking phone layout…"
-                    // Fixed, read-only DOM metrics for the saved page. No JS bridge or
-                    // model transfer. A late callback cannot overwrite another page's status.
-                    view.evaluateJavascript(WorkspaceWebsiteVisualQuality.DOM_AUDIT_SCRIPT) { encoded ->
+                    val observationGeneration = browserEvidenceGeneration
+                    binding.previewStatus.text = "Preview loaded · checking browser evidence…"
+                    // Fixed, count-only DOM/accessibility metrics. No JS bridge, page text, storage,
+                    // console bodies, request URLs or provider transfer.
+                    view.evaluateJavascript(
+                        WorkspaceBrowserVerificationEvidence.DOM_AUDIT_SCRIPT
+                    ) { encoded ->
                         if (!failed && !isFinishing && !isDestroyed &&
+                            observationGeneration == browserEvidenceGeneration &&
                             binding.previewWebView.url == url &&
                             isLocalPreviewUrl(Uri.parse(url))) {
-                            val audit = WorkspaceWebsiteVisualQuality.decodeDomResult(encoded)
-                            binding.previewStatus.text = audit?.status() ?:
-                                "Preview loaded · layout check unavailable; inspect on phone."
+                            browserDomSignals =
+                                WorkspaceBrowserVerificationEvidence.decodeDomResult(encoded)
+                            binding.previewStatus.text = browserEvidenceResult(url).statusText()
                         }
                     }
                 }
