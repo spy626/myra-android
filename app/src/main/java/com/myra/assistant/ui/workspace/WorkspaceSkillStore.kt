@@ -370,6 +370,69 @@ internal class WorkspaceSkillStore(
         return load(skill.name)
     }
 
+    @Synchronized fun update(
+        name: String,
+        candidate: WorkspaceSkillContract.ParsedSkill,
+        packageFiles: Map<String, ByteArray>,
+        promotion: WorkspaceSkillOverlayPromotion.Promotion,
+        request: WorkspaceSkillUpdate.Request,
+        approvedToken: String,
+        updatedAtMs: Long,
+    ): Installed {
+        require(NAME.matches(name) && candidate.name == name) {
+            "Skill update name does not match the installed skill"
+        }
+        val current = load(name)
+        val snapshot = WorkspaceSkillCatalog.snapshot(candidate, packageFiles)
+        val updated = WorkspaceSkillUpdate.updatedEntry(
+            current = current,
+            candidate = candidate,
+            candidateSnapshot = snapshot,
+            promotion = promotion,
+            request = request,
+            approvedToken = approvedToken,
+            updatedAtMs = updatedAtMs,
+        )
+
+        val before = readCatalog()
+        val currentEntry = before.entries.firstOrNull { it.name == name }
+            ?: throw IllegalArgumentException("Skill is not installed")
+        require(currentEntry == current.entry) {
+            "Skill catalog changed during update; retry from fresh state"
+        }
+
+        // Content-addressed package write is append-only for a new hash. The old package directory
+        // remains untouched for a separately approval-bound rollback path.
+        writePackage(snapshot, packageFiles)
+
+        // Re-open exactly what was persisted before switching the catalog pointer.
+        val persistedFiles = readPackageFiles(updated)
+        val persistedSkill = WorkspaceSkillContract.parse(
+            skillMd = strictUtf8(
+                persistedFiles["SKILL.md"]
+                    ?: throw IllegalArgumentException("Updated skill is missing SKILL.md"),
+                "Updated SKILL.md",
+            ),
+            skillJson = persistedFiles["skill.json"]?.let {
+                strictUtf8(it, "Updated skill.json")
+            },
+            provenance = updated.provenance,
+            packagePaths = persistedFiles.keys,
+        )
+        val persistedSnapshot = WorkspaceSkillCatalog.snapshot(persistedSkill, persistedFiles)
+        require(persistedSkill.contentSha256 == candidate.contentSha256 &&
+            persistedSnapshot == snapshot) {
+            "Persisted skill update package did not match the approved candidate"
+        }
+
+        val after = WorkspaceSkillCatalog.Catalog(
+            before.entries.map { if (it.name == name) updated else it }
+                .sortedBy { it.name }
+        )
+        writeCatalog(after)
+        return load(name)
+    }
+
     @Synchronized fun enable(
         name: String,
         environment: WorkspaceSkillEnablement.Environment,

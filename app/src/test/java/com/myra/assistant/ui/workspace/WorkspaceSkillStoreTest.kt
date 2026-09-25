@@ -222,4 +222,136 @@ Require deterministic evidence.
     }
 
 
+
+    @Test fun approvedUpdateSwitchesCatalogDisabledAndPreservesOldPackageBytes() {
+        val root = temp.newFolder("skill-update")
+        val store = WorkspaceSkillStore(root)
+        val old = parsed()
+        val current = install(store, old, 10L)
+
+        val changed = parsed(description = "Improved reviewed skill.")
+        val changedFiles = files(changed)
+        val changedSnapshot = WorkspaceSkillCatalog.snapshot(changed, changedFiles)
+        val ref = "verify:review-code:update"
+        val overlay = WorkspaceSkillOverlay.Overlay(
+            baseContentSha256 = old.contentSha256,
+            descriptionOverride = changed.description,
+            evidenceRefs = listOf(ref),
+            createdAtMs = 15L,
+        )
+        val evidence = WorkspaceSkillImprovementEvidence.Record(
+            ref = ref,
+            skillName = old.name,
+            baseContentSha256 = old.contentSha256,
+            kind = WorkspaceSkillImprovementEvidence.Kind.DETERMINISTIC_VERIFICATION,
+            signal = WorkspaceSkillImprovementEvidence.Signal.SUPPORTS_IMPROVEMENT,
+            capturedAtMs = 15L,
+            sourceRevision = "source-2",
+        )
+        val promotion = WorkspaceSkillOverlayPromotion.evaluate(
+            old, overlay, listOf(evidence))
+        val request = WorkspaceSkillUpdate.request(
+            current, changed, changedSnapshot, promotion)
+
+        val updated = store.update(
+            old.name, changed, changedFiles, promotion,
+            request, request.approvalToken, 20L)
+
+        assertEquals(changedSnapshot.packageSha256, updated.entry.packageSha256)
+        assertEquals(changed.contentSha256, updated.entry.contentSha256)
+        assertEquals(WorkspaceSkillCatalog.State.INSTALLED_DISABLED, updated.entry.state)
+        assertNull(updated.entry.enabledAtMs)
+        assertTrue(File(
+            root, "packages/${current.snapshot.packageSha256}/SKILL.md").isFile)
+        assertTrue(File(
+            root, "packages/${changedSnapshot.packageSha256}/SKILL.md").isFile)
+    }
+
+    @Test fun updatingEnabledSkillAlwaysReturnsToDisabledState() {
+        val root = temp.newFolder("skill-update-enabled")
+        val store = WorkspaceSkillStore(root)
+        val old = parsed()
+        val installed = install(store, old, 10L)
+        val report = WorkspaceSkillEnablement.test(installed, environment(), 11L)
+        val enable = WorkspaceSkillEnablement.enableRequest(installed, report)
+        val current = store.enable(
+            old.name, environment(), enable, enable.approvalToken, 12L)
+        assertEquals(WorkspaceSkillCatalog.State.ENABLED, current.entry.state)
+
+        val changed = parsed(description = "Improved reviewed skill.")
+        val changedFiles = files(changed)
+        val snapshot = WorkspaceSkillCatalog.snapshot(changed, changedFiles)
+        val ref = "verify:review-code:update-enabled"
+        val overlay = WorkspaceSkillOverlay.Overlay(
+            baseContentSha256 = old.contentSha256,
+            descriptionOverride = changed.description,
+            evidenceRefs = listOf(ref),
+            createdAtMs = 13L,
+        )
+        val evidence = WorkspaceSkillImprovementEvidence.Record(
+            ref = ref,
+            skillName = old.name,
+            baseContentSha256 = old.contentSha256,
+            kind = WorkspaceSkillImprovementEvidence.Kind.USER_CONFIRMED,
+            signal = WorkspaceSkillImprovementEvidence.Signal.SUPPORTS_IMPROVEMENT,
+            capturedAtMs = 13L,
+            sourceRevision = "source-3",
+        )
+        val promotion = WorkspaceSkillOverlayPromotion.evaluate(
+            old, overlay, listOf(evidence))
+        val request = WorkspaceSkillUpdate.request(
+            current, changed, snapshot, promotion)
+
+        val updated = store.update(
+            old.name, changed, changedFiles, promotion,
+            request, request.approvalToken, 14L)
+        assertEquals(WorkspaceSkillCatalog.State.INSTALLED_DISABLED, updated.entry.state)
+        assertNull(updated.entry.enableReadinessSha256)
+        assertNull(updated.entry.enableEnvironmentSha256)
+        assertNull(updated.entry.enableBindingSha256)
+    }
+
+    @Test fun rejectedUpdateDoesNotSwitchCatalogOrDeleteOldPackage() {
+        val root = temp.newFolder("skill-update-reject")
+        val store = WorkspaceSkillStore(root)
+        val old = parsed()
+        val current = install(store, old, 10L)
+
+        val changed = parsed(description = "Changed.")
+        val changedFiles = files(changed)
+        val snapshot = WorkspaceSkillCatalog.snapshot(changed, changedFiles)
+        val ref = "verify:review-code:update-reject"
+        val overlay = WorkspaceSkillOverlay.Overlay(
+            baseContentSha256 = old.contentSha256,
+            descriptionOverride = changed.description,
+            evidenceRefs = listOf(ref),
+            createdAtMs = 15L,
+        )
+        val evidence = WorkspaceSkillImprovementEvidence.Record(
+            ref = ref,
+            skillName = old.name,
+            baseContentSha256 = old.contentSha256,
+            kind = WorkspaceSkillImprovementEvidence.Kind.DETERMINISTIC_VERIFICATION,
+            signal = WorkspaceSkillImprovementEvidence.Signal.SUPPORTS_IMPROVEMENT,
+            capturedAtMs = 15L,
+            sourceRevision = "source-2",
+        )
+        val promotion = WorkspaceSkillOverlayPromotion.evaluate(
+            old, overlay, listOf(evidence))
+        val request = WorkspaceSkillUpdate.request(
+            current, changed, snapshot, promotion)
+
+        assertTrue(runCatching {
+            store.update(
+                old.name, changed, changedFiles, promotion,
+                request, "wrong-token", 20L)
+        }.isFailure)
+
+        val reopened = store.load(old.name)
+        assertEquals(current.entry, reopened.entry)
+        assertTrue(File(
+            root, "packages/${current.snapshot.packageSha256}/SKILL.md").isFile)
+        assertFalse(File(root, "packages/${snapshot.packageSha256}").exists())
+    }
+
 }
