@@ -100,6 +100,31 @@ Instructions.
         }
     }
 
+    @Test fun manifestPathAndManifestBytesMustMatchExactly() {
+        val md = """---
+name: safe-skill
+description: Safe skill.
+---
+Instructions.
+"""
+        assertTrue(runCatching {
+            c.parse(md, """{"version":"1.0.0"}""")
+        }.isFailure)
+        assertTrue(runCatching {
+            c.parse(md, null, packagePaths = listOf("SKILL.md", "skill.json"))
+        }.isFailure)
+        assertTrue(runCatching {
+            c.parse(md, "", packagePaths = listOf("SKILL.md", "skill.json"))
+        }.isFailure)
+
+        val parsed = c.parse(
+            md,
+            """{"version":"1.0.0"}""",
+            packagePaths = listOf("SKILL.md", "skill.json"),
+        )
+        assertEquals("1.0.0", parsed.manifest.version)
+    }
+
     @Test fun executableOrUnknownManifestFieldsFailClosed() {
         val md = """---
 name: safe-skill

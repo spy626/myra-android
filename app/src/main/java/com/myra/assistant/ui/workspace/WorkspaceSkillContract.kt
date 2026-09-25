@@ -375,6 +375,14 @@ internal object WorkspaceSkillContract {
     ): ParsedSkill {
         validateProvenance(provenance)
         validatePackagePaths(packagePaths)
+        val normalizedPaths = packagePaths.map { it.trim().replace('\\', '/') }
+        val declaresManifest = normalizedPaths.any { it == "skill.json" }
+        require(declaresManifest == (skillJson != null)) {
+            "skill.json package path and bytes must be present together"
+        }
+        if (skillJson != null) {
+            require(skillJson.isNotBlank()) { "skill.json is empty" }
+        }
         val front = parseFrontmatter(skillMd)
         val name = front.values["name"]?.trim().orEmpty()
         require(skillName.matches(name)) {
