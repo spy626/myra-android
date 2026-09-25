@@ -16,7 +16,7 @@ class WorkspaceCustomProviderProfileTest {
         assertEquals("https://api.example.com/openai/v1", validated.baseUrl)
         assertEquals("https://api.example.com/openai/v1/chat/completions",
             validated.chatCompletionsUrl)
-        assertEquals(p.CostState.UNVERIFIED_COST, validated.costState)
+        assertEquals(WorkspaceCustomProviderProfile.CostState.UNVERIFIED_COST, validated.costState)
         assertFalse(validated.automaticRouting)
         assertFalse(validated.sourceAllowed)
         assertTrue(validated.encryptedKeySlot.startsWith("custom_provider_api_key_"))
@@ -80,7 +80,7 @@ class WorkspaceCustomProviderProfileTest {
         val base = p.userDraft("manual", "Manual", "https://example.com/v1", "model")
         assertTrue(runCatching { p.validate(base.copy(automaticRouting = true)) }.isFailure)
         val verified = p.validate(base.copy(
-            costState = p.CostState.VERIFIED_ZERO_COST,
+            costState = WorkspaceCustomProviderProfile.CostState.VERIFIED_ZERO_COST,
             automaticRouting = true))
         assertTrue(verified.automaticRouting)
     }
