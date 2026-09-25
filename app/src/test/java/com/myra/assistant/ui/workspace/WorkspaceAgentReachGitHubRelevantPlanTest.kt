@@ -49,6 +49,10 @@ class WorkspaceAgentReachGitHubRelevantPlanTest {
         )
 
         assertEquals(sha, plan.commitSha)
+        assertEquals(sha, plan.repoIndex.commitSha)
+        assertEquals(
+            WorkspaceAgentReachGitHubRepoIndex.Category.SKILLS_PLUGINS,
+            plan.repoIndex.entries.first { it.path == "SKILL.md" }.category)
         assertTrue(plan.files.isNotEmpty())
         assertTrue(plan.files.size <= 4)
         assertEquals("SKILL.md", plan.files.first().candidate.path)

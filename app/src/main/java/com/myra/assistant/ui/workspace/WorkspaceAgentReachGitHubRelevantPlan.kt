@@ -21,6 +21,7 @@ internal object WorkspaceAgentReachGitHubRelevantPlan {
         val selection: WorkspaceAgentReachGitHub.Selection,
         val commitSha: String,
         val pathMap: WorkspaceAgentReachGitHub.RepositoryPathMap,
+        val repoIndex: WorkspaceAgentReachGitHubRepoIndex.Index,
         val files: List<PlannedFile>,
     ) {
         init {
@@ -53,6 +54,7 @@ internal object WorkspaceAgentReachGitHubRelevantPlan {
         require(pathMap.commitSha == commitSha.lowercase()) {
             "Relevant-file path map does not match the pinned GitHub revision"
         }
+        val repoIndex = WorkspaceAgentReachGitHubRepoIndex.build(pathMap)
 
         var declaredBudget = 0
         val selected = WorkspaceAgentReachGitHubRelevance.select(userRequest, pathMap)
@@ -70,6 +72,7 @@ internal object WorkspaceAgentReachGitHubRelevantPlan {
             selection = selection,
             commitSha = pathMap.commitSha,
             pathMap = pathMap,
+            repoIndex = repoIndex,
             files = selected.map { candidate ->
                 PlannedFile(
                     candidate = candidate,

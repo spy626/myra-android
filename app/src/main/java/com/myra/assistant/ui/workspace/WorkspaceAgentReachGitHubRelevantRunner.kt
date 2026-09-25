@@ -31,6 +31,7 @@ internal class WorkspaceAgentReachGitHubRelevantRunner(
     data class Completion(
         val commitSha: String,
         val pathMap: WorkspaceAgentReachGitHub.RepositoryPathMap,
+        val repoIndex: WorkspaceAgentReachGitHubRepoIndex.Index,
         val files: List<FileEvidence>,
     )
 
@@ -212,6 +213,7 @@ internal class WorkspaceAgentReachGitHubRelevantRunner(
             Completion(
                 commitSha = built.commitSha,
                 pathMap = built.pathMap,
+                repoIndex = built.repoIndex,
                 files = evidence.toList(),
             )
         }

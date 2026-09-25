@@ -117,6 +117,9 @@ class WorkspaceAgentReachGitHubRelevantRunnerTest {
         assertNull(events.error)
         val done = requireNotNull(events.completion)
         assertEquals(sha, done.commitSha)
+        assertEquals(
+            1,
+            done.repoIndex.count(WorkspaceAgentReachGitHubRepoIndex.Category.SKILLS_PLUGINS))
         assertEquals(2, done.files.size)
         assertTrue(done.files.all { it.evidence.provenance.revision == sha })
         assertFalse(done.files.any { it.candidate.path == "README.md" })
