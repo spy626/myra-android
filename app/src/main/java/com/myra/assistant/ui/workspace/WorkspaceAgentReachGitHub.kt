@@ -406,6 +406,27 @@ internal object WorkspaceAgentReachGitHub {
         )
     }
 
+    fun readPinnedRepositoryContent(
+        response: Response,
+        selection: Selection,
+        commitSha: String,
+        expectedPath: String,
+        fetchedAtMs: Long,
+    ): WorkspaceAgentReachEvidence.Evidence {
+        require(selection.isRepositoryRead) {
+            "Pinned repository content requires a repository read target"
+        }
+        requireSafePath(expectedPath)
+        val sha = requireSha(commitSha)
+        val evidence = readContent(response, selection, sha, fetchedAtMs)
+        val finalPath = URI(evidence.provenance.finalUrl).path.orEmpty()
+        val expectedSuffix = "/blob/$sha/$expectedPath"
+        require(finalPath.endsWith(expectedSuffix)) {
+            "GitHub file provenance did not match the planned pinned path"
+        }
+        return evidence
+    }
+
     fun readContent(
         response: Response,
         selection: Selection,
