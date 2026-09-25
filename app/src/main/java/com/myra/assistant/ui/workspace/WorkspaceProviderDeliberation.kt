@@ -189,8 +189,9 @@ internal object WorkspaceProviderDeliberation {
                 appendLine(sourceText)
                 appendLine("END BOUNDED SOURCE")
             }
-            append("Review only. List concrete issues against the task/criteria. " +
-                "Do not write files, dispatch another agent, or claim verification/completion.")
+            append("Review only. Do not write files, dispatch another agent, or claim verification/completion. " +
+                "Return exactly one JSON object with verdict ACCEPT, REVISE, or REJECT and a findings string array: " +
+                """{"verdict":"REVISE","findings":["Concrete issue"]}""")
         }
         requireProviderBudget(reviewer, body)
         return Envelope(
