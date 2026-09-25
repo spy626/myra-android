@@ -199,7 +199,9 @@ class WorkspaceActivity : AppCompatActivity() {
                     }
                 }
 
-                override fun onComplete(evidence: WorkspaceAgentReachEvidence.Evidence) {
+                override fun onComplete(
+                    completion: WorkspaceAgentReachGitHubRunner.Completion
+                ) {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
                         val id = agentReachProjectId
@@ -211,7 +213,8 @@ class WorkspaceActivity : AppCompatActivity() {
                                 "Conversation changed; GitHub read receipt was not saved"
                             }
                             conversations.append(
-                                id, "assistant", WorkspaceAgentReachReceipt.github(evidence))
+                                id, "assistant", WorkspaceAgentReachReceipt.github(
+                                    completion.evidence, completion.repositoryIndex))
                         }.onSuccess {
                             statusMessage = ""
                         }.onFailure {

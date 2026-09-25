@@ -15,10 +15,23 @@ class WorkspaceAgentReachReceiptTest {
             fetchedAtMs = 1L,
             revision = "1234567890abcdef1234567890abcdef12345678",
         )
-        val receipt = WorkspaceAgentReachReceipt.github(evidence)
+        val index = WorkspaceAgentReachGitHub.RepositoryIndex(
+            commitSha = "1234567890abcdef1234567890abcdef12345678",
+            entries = listOf(
+                WorkspaceAgentReachGitHub.RootEntry(
+                    "src", "src", WorkspaceAgentReachGitHub.RootEntryKind.DIRECTORY,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", null),
+                WorkspaceAgentReachGitHub.RootEntry(
+                    "README.md", "README.md", WorkspaceAgentReachGitHub.RootEntryKind.FILE,
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 120),
+            )
+        )
+        val receipt = WorkspaceAgentReachReceipt.github(evidence, index)
         assertTrue(receipt.contains("Pinned revision: 1234567890ab"))
         assertTrue(receipt.contains(evidence.provenance.contentSha256))
         assertFalse(receipt.contains("UNTRUSTED README BODY"))
+        assertTrue(receipt.contains("Pinned root index: 2 entries"))
+        assertTrue(receipt.contains("Root items: README.md, src/"))
         assertTrue(receipt.contains("AI provider"))
     }
 }

@@ -53,7 +53,7 @@ class WorkspaceAgentReachGitHubRunnerTest {
     private class Events : WorkspaceAgentReachGitHubRunner.Listener {
         val phases = mutableListOf<WorkspaceWorkPhase>()
         val labels = mutableListOf<String>()
-        var evidence: WorkspaceAgentReachEvidence.Evidence? = null
+        var completion: WorkspaceAgentReachGitHubRunner.Completion? = null
         var error: String? = null
 
         override fun onEvent(phase: WorkspaceWorkPhase, label: String, detail: String?) {
@@ -61,8 +61,8 @@ class WorkspaceAgentReachGitHubRunnerTest {
             labels += label
         }
 
-        override fun onComplete(evidence: WorkspaceAgentReachEvidence.Evidence) {
-            this.evidence = evidence
+        override fun onComplete(completion: WorkspaceAgentReachGitHubRunner.Completion) {
+            this.completion = completion
         }
 
         override fun onError(message: String) {
@@ -127,7 +127,8 @@ class WorkspaceAgentReachGitHubRunnerTest {
         executor.respond(file(sha, "# hello"))
         assertEquals(0, executor.pending.size)
         assertEquals(WorkspaceWorkPhase.DONE, events.phases.last())
-        assertEquals(sha, events.evidence?.provenance?.revision)
+        assertEquals(sha, events.completion?.evidence?.provenance?.revision)
+        assertEquals(2, events.completion?.repositoryIndex?.entries?.size)
         assertNull(events.error)
     }
 

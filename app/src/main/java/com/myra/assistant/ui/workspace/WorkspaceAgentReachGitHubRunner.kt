@@ -26,9 +26,15 @@ internal class WorkspaceAgentReachGitHubRunner(
         fun enqueue(request: Request, callback: (Result<Response>) -> Unit): Cancelable
     }
 
+    data class Completion(
+        val evidence: WorkspaceAgentReachEvidence.Evidence,
+        val repositoryMeta: WorkspaceAgentReachGitHub.RepositoryMeta?,
+        val repositoryIndex: WorkspaceAgentReachGitHub.RepositoryIndex?,
+    )
+
     interface Listener {
         fun onEvent(phase: WorkspaceWorkPhase, label: String, detail: String? = null)
-        fun onComplete(evidence: WorkspaceAgentReachEvidence.Evidence)
+        fun onComplete(completion: Completion)
         fun onError(message: String)
     }
 
@@ -167,7 +173,13 @@ internal class WorkspaceAgentReachGitHubRunner(
                         "GitHub read complete",
                         done.commitSha?.take(12),
                     )
-                    listener.onComplete(requireNotNull(done.evidence))
+                    listener.onComplete(
+                        Completion(
+                            evidence = requireNotNull(done.evidence),
+                            repositoryMeta = done.repositoryMeta,
+                            repositoryIndex = done.repositoryIndex,
+                        )
+                    )
                     null
                 }
                 WorkspaceAgentReachGitHubReadSession.Phase.COMPLETE ->
