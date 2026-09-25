@@ -195,6 +195,25 @@ internal object WorkspaceAgentReachGitHub {
         return request(apiUrl("/repos/$owner/$repo/readme", "ref=${encode(sha)}"))
     }
 
+    fun pinnedRepositoryFileRequest(
+        selection: Selection,
+        commitSha: String,
+        path: String,
+    ): Request {
+        require(selection.isRepositoryRead) {
+            "Pinned repository-file request requires a repository read target"
+        }
+        val sha = requireSha(commitSha)
+        requireSafePath(path)
+        val owner = encode(selection.owner)
+        val repo = encode(selection.repo)
+        val encodedPath = path.split('/').joinToString("/") { encode(it) }
+        return request(apiUrl(
+            "/repos/$owner/$repo/contents/$encodedPath",
+            "ref=${encode(sha)}",
+        ))
+    }
+
     fun fileRequest(selection: Selection, commitSha: String): Request {
         require(!selection.isRepositoryRead && selection.path != null) {
             "File request requires a GitHub file target"

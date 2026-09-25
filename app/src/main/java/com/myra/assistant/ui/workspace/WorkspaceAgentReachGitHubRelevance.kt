@@ -88,6 +88,7 @@ internal object WorkspaceAgentReachGitHubRelevance {
             .filter { it.kind == WorkspaceAgentReachGitHub.PathEntryKind.FILE }
             .filter { it.size == null || it.size in 1..MAX_FILE_BYTES }
             .filter { textLike(it.path) && !isBlockedPath(it.path) }
+            .filter { !it.path.substringAfterLast('/').lowercase(Locale.US).startsWith("readme") }
             .mapNotNull { entry ->
                 val lower = entry.path.lowercase(Locale.US)
                 val name = lower.substringAfterLast('/')
