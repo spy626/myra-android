@@ -4,6 +4,7 @@ import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
 import java.net.URI
@@ -43,6 +44,24 @@ internal object WorkspaceAgentReachGitHub {
         val fork: Boolean,
         val licenseSpdx: String?,
     )
+
+    enum class RootEntryKind { FILE, DIRECTORY, SYMLINK, SUBMODULE }
+
+    data class RootEntry(
+        val name: String,
+        val path: String,
+        val kind: RootEntryKind,
+        val sha: String,
+        val size: Int?,
+    )
+
+    data class RepositoryIndex(
+        val commitSha: String,
+        val entries: List<RootEntry>,
+    ) {
+        val files: Int get() = entries.count { it.kind == RootEntryKind.FILE }
+        val directories: Int get() = entries.count { it.kind == RootEntryKind.DIRECTORY }
+    }
 
     private fun encode(value: String): String =
         URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
@@ -132,6 +151,14 @@ internal object WorkspaceAgentReachGitHub {
         return request(apiUrl("/repos/$owner/$repo/commits/${encode(cleanRef)}"))
     }
 
+    fun rootIndexRequest(selection: Selection, commitSha: String): Request {
+        require(selection.isRepositoryRead) { "Root index requires a repository read target" }
+        val sha = requireSha(commitSha)
+        val owner = encode(selection.owner)
+        val repo = encode(selection.repo)
+        return request(apiUrl("/repos/$owner/$repo/contents", "ref=${encode(sha)}"))
+    }
+
     fun readmeRequest(selection: Selection, commitSha: String): Request {
         require(selection.isRepositoryRead) { "README request requires a repository read target" }
         val sha = requireSha(commitSha)
@@ -192,7 +219,7 @@ internal object WorkspaceAgentReachGitHub {
         .dns(guardedDns)
         .build()
 
-    private fun readJson(response: Response): JSONObject {
+    private fun readBytes(response: Response): ByteArray {
         response.use {
             require(it.code !in 300..399) { "GitHub Agent Reach redirect was refused" }
             require(it.isSuccessful) {
@@ -206,10 +233,17 @@ internal object WorkspaceAgentReachGitHub {
             require(body.isNotEmpty() && body.size.toLong() <= MAX_JSON_BYTES) {
                 "GitHub response was empty or too large"
             }
-            return runCatching { JSONObject(String(body, Charsets.UTF_8)) }
-                .getOrElse { throw IllegalArgumentException("GitHub returned invalid JSON") }
+            return body
         }
     }
+
+    private fun readJson(response: Response): JSONObject =
+        runCatching { JSONObject(String(readBytes(response), Charsets.UTF_8)) }
+            .getOrElse { throw IllegalArgumentException("GitHub returned invalid JSON object") }
+
+    private fun readJsonArray(response: Response): JSONArray =
+        runCatching { JSONArray(String(readBytes(response), Charsets.UTF_8)) }
+            .getOrElse { throw IllegalArgumentException("GitHub returned invalid JSON array") }
 
     fun readRepositoryMeta(response: Response): RepositoryMeta {
         val root = readJson(response)
@@ -232,6 +266,49 @@ internal object WorkspaceAgentReachGitHub {
 
     fun readCommitSha(response: Response): String =
         requireSha(readJson(response).getString("sha"))
+
+    fun readRootIndex(
+        response: Response,
+        commitSha: String,
+    ): RepositoryIndex {
+        val sha = requireSha(commitSha)
+        val array = readJsonArray(response)
+        require(array.length() <= 500) { "GitHub root index exceeds Agent Reach bound" }
+        val entries = buildList {
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i)
+                    ?: throw IllegalArgumentException("GitHub root index entry is invalid")
+                val name = item.optString("name").trim()
+                val path = item.optString("path").trim()
+                require(name.isNotBlank() && name.length <= 255 &&
+                    path.isNotBlank() && path.length <= 1_024 &&
+                    name.none(Char::isISOControl) && path.none(Char::isISOControl)) {
+                    "GitHub root index contains an unsafe path"
+                }
+                require(!path.split('/').any { it == "." || it == ".." }) {
+                    "GitHub root index contains path traversal"
+                }
+                val kind = when (item.optString("type")) {
+                    "file" -> RootEntryKind.FILE
+                    "dir" -> RootEntryKind.DIRECTORY
+                    "symlink" -> RootEntryKind.SYMLINK
+                    "submodule" -> RootEntryKind.SUBMODULE
+                    else -> throw IllegalArgumentException(
+                        "GitHub root index contains unsupported entry type")
+                }
+                val entrySha = requireSha(item.optString("sha"))
+                val rawSize = item.optInt("size", -1)
+                add(RootEntry(
+                    name = name,
+                    path = path,
+                    kind = kind,
+                    sha = entrySha,
+                    size = rawSize.takeIf { it >= 0 },
+                ))
+            }
+        }
+        return RepositoryIndex(sha, entries.sortedBy { it.path.lowercase(Locale.US) })
+    }
 
     fun readContent(
         response: Response,

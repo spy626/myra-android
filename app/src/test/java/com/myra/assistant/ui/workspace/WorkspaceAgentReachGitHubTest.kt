@@ -74,6 +74,28 @@ class WorkspaceAgentReachGitHubTest {
                 JSONObject().put("sha", sha).toString())))
     }
 
+    @Test fun rootIndexIsPinnedBoundedAndSorted() {
+        val selection = WorkspaceAgentReachGitHub.selection(
+            WorkspaceAgentReachPolicy.parse("https://github.com/a/b"))
+        val sha = "1234567890abcdef1234567890abcdef12345678"
+        val request = WorkspaceAgentReachGitHub.rootIndexRequest(selection, sha)
+        assertEquals("https://api.github.com/repos/a/b/contents?ref=$sha", request.url.toString())
+
+        val body = org.json.JSONArray()
+            .put(JSONObject().put("name", "src").put("path", "src").put("type", "dir")
+                .put("sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+            .put(JSONObject().put("name", "README.md").put("path", "README.md").put("type", "file")
+                .put("sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").put("size", 120))
+            .toString()
+        val index = WorkspaceAgentReachGitHub.readRootIndex(
+            response(request.url.toString(), 200, body), sha)
+        assertEquals(sha, index.commitSha)
+        assertEquals(2, index.entries.size)
+        assertEquals(1, index.directories)
+        assertEquals(1, index.files)
+        assertEquals("README.md", index.entries.first().path)
+    }
+
     @Test fun fileReadProducesPinnedUntrustedEvidence() {
         val target = WorkspaceAgentReachPolicy.parse(
             "https://github.com/a/b/blob/main/README.md")
