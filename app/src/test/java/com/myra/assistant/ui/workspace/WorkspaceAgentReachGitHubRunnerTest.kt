@@ -126,7 +126,8 @@ class WorkspaceAgentReachGitHubRunnerTest {
 
         executor.respond(file(sha, "# hello"))
         assertEquals(0, executor.pending.size)
-        assertEquals(WorkspaceWorkPhase.DONE, events.phases.last())
+        assertEquals(WorkspaceWorkPhase.VERIFYING, events.phases.last())
+        assertEquals("Pinned GitHub base read ready", events.labels.last())
         assertEquals(sha, events.completion?.evidence?.provenance?.revision)
         assertEquals(2, events.completion?.repositoryIndex?.entries?.size)
         assertNull(events.error)

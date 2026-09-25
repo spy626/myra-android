@@ -2,9 +2,18 @@ package com.myra.assistant.ui.workspace
 
 /** Local-only receipt for a completed Agent Reach read. No external content is copied into Chat. */
 internal object WorkspaceAgentReachReceipt {
+    data class RelevantFile(
+        val path: String,
+        val reason: String,
+        val contentSha256: String,
+    )
+
     fun github(
         evidence: WorkspaceAgentReachEvidence.Evidence,
         index: WorkspaceAgentReachGitHub.RepositoryIndex? = null,
+        relevantFiles: List<RelevantFile> = emptyList(),
+        relevantPathCount: Int? = null,
+        relevantError: String? = null,
     ): String {
         val p = evidence.provenance
         require(p.platform == WorkspaceAgentReachPolicy.Platform.GITHUB) {
@@ -31,6 +40,16 @@ internal object WorkspaceAgentReachReceipt {
                         "Root items: $preview" +
                             if (it.entries.size > 12) ", …" else "")
                 }
+            }
+            relevantPathCount?.let { total ->
+                appendLine("Relevant-file scan: ${relevantFiles.size} selected from $total indexed paths.")
+                relevantFiles.forEach { file ->
+                    appendLine("• ${file.path} — ${file.reason}")
+                    appendLine("  SHA-256: ${file.contentSha256}")
+                }
+            }
+            relevantError?.takeIf { it.isNotBlank() }?.let {
+                appendLine("Relevant-file scan stopped safely: $it")
             }
             appendLine()
             append("I only read public content. Nothing was cloned, installed, executed, " +

@@ -169,8 +169,10 @@ internal class WorkspaceAgentReachGitHubRunner(
                         if (run != generation) return@runCatching null
                     }
                     listener.onEvent(
-                        WorkspaceWorkPhase.DONE,
-                        "GitHub read complete",
+                        if (done.selection.isRepositoryRead) WorkspaceWorkPhase.VERIFYING
+                        else WorkspaceWorkPhase.DONE,
+                        if (done.selection.isRepositoryRead) "Pinned GitHub base read ready"
+                        else "GitHub read complete",
                         done.commitSha?.take(12),
                     )
                     listener.onComplete(

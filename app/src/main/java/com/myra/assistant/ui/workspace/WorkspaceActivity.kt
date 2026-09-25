@@ -68,7 +68,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private var agentReachTarget: WorkspaceAgentReachPolicy.Target? = null
     private var agentReachProjectId: String? = null
     private var agentReachMessageId: String? = null
+    private var agentReachUserRequest: String? = null
+    private var agentReachBaseCompletion: WorkspaceAgentReachGitHubRunner.Completion? = null
     private var agentReachRunner: WorkspaceAgentReachGitHubRunner? = null
+    private var agentReachRelevantRunner: WorkspaceAgentReachGitHubRelevantRunner? = null
     private var statusMessage = ""
     private val workTrace = WorkspaceWorkTrace()
     private var workTraceExpanded = true
@@ -204,28 +207,16 @@ class WorkspaceActivity : AppCompatActivity() {
                 ) {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
-                        val id = agentReachProjectId
-                        val messageId = agentReachMessageId
-                        clearAgentReachState(cancel = false)
-                        if (id == null || messageId == null || selectedId != id) return@runOnUiThread
-                        runCatching {
-                            require(conversations.read(id).lastOrNull()?.id == messageId) {
-                                "Conversation changed; GitHub read receipt was not saved"
-                            }
-                            conversations.append(
-                                id, "assistant", WorkspaceAgentReachReceipt.github(
-                                    completion.evidence, completion.repositoryIndex))
-                        }.onSuccess {
-                            statusMessage = ""
-                        }.onFailure {
-                            statusMessage = it.message ?: "GitHub read receipt could not be saved."
-                            recordWorkEvent(
-                                WorkspaceWorkPhase.ERROR,
-                                "GitHub receipt not saved",
-                                statusMessage,
-                            )
+                        val target = agentReachTarget
+                        val request = agentReachUserRequest
+                        val revision = completion.evidence.provenance.revision
+                        if (completion.repositoryIndex != null && target != null &&
+                            request != null && revision != null) {
+                            agentReachBaseCompletion = completion
+                            githubRelevantRunner().start(target, revision, request)
+                        } else {
+                            finishGitHubReach(completion)
                         }
-                        render()
                     }
                 }
 
@@ -241,24 +232,119 @@ class WorkspaceActivity : AppCompatActivity() {
         ).also { agentReachRunner = it }
     }
 
+    private fun githubRelevantRunner(): WorkspaceAgentReachGitHubRelevantRunner {
+        agentReachRelevantRunner?.let { return it }
+        return WorkspaceAgentReachGitHubRelevantRunner(
+            currentTarget = { if (agentReachActive) agentReachTarget else null },
+            listener = object : WorkspaceAgentReachGitHubRelevantRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(
+                    completion: WorkspaceAgentReachGitHubRelevantRunner.Completion
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        val base = agentReachBaseCompletion ?: return@runOnUiThread
+                        finishGitHubReach(base, completion)
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        val base = agentReachBaseCompletion
+                        if (base != null) {
+                            finishGitHubReach(base, relevantError = message)
+                        } else {
+                            clearAgentReachState(cancel = false)
+                            statusMessage = message
+                            render()
+                        }
+                    }
+                }
+            },
+        ).also { agentReachRelevantRunner = it }
+    }
+
+    private fun finishGitHubReach(
+        base: WorkspaceAgentReachGitHubRunner.Completion,
+        relevant: WorkspaceAgentReachGitHubRelevantRunner.Completion? = null,
+        relevantError: String? = null,
+    ) {
+        val id = agentReachProjectId
+        val messageId = agentReachMessageId
+        val relevantReceipt = relevant?.files.orEmpty().map { file ->
+            WorkspaceAgentReachReceipt.RelevantFile(
+                path = file.candidate.path,
+                reason = file.candidate.reason,
+                contentSha256 = file.evidence.provenance.contentSha256,
+            )
+        }
+        val pathCount = relevant?.pathMap?.entries?.size
+        clearAgentReachState(cancel = false)
+        if (id == null || messageId == null || selectedId != id) return
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == messageId) {
+                "Conversation changed; GitHub read receipt was not saved"
+            }
+            conversations.append(
+                id,
+                "assistant",
+                WorkspaceAgentReachReceipt.github(
+                    evidence = base.evidence,
+                    index = base.repositoryIndex,
+                    relevantFiles = relevantReceipt,
+                    relevantPathCount = pathCount,
+                    relevantError = relevantError,
+                ),
+            )
+        }.onSuccess {
+            statusMessage = ""
+        }.onFailure {
+            statusMessage = it.message ?: "GitHub read receipt could not be saved."
+            recordWorkEvent(
+                WorkspaceWorkPhase.ERROR,
+                "GitHub receipt not saved",
+                statusMessage,
+            )
+        }
+        render()
+    }
+
     private fun clearAgentReachState(cancel: Boolean = true) {
-        if (cancel) agentReachRunner?.cancel()
+        if (cancel) {
+            agentReachRunner?.cancel()
+            agentReachRelevantRunner?.cancel()
+        }
         agentReachActive = false
         agentReachTarget = null
         agentReachProjectId = null
         agentReachMessageId = null
+        agentReachUserRequest = null
+        agentReachBaseCompletion = null
     }
 
     private fun startGitHubReach(
         id: String,
         messageId: String,
         target: WorkspaceAgentReachPolicy.Target,
+        userRequest: String,
     ) {
         clearAgentReachState()
         agentReachActive = true
         agentReachTarget = target
         agentReachProjectId = id
         agentReachMessageId = messageId
+        agentReachUserRequest = userRequest
         statusMessage = ""
         render()
         githubReachRunner().start(target)
@@ -1354,7 +1440,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     return
                 }
                 decision.target?.let { target ->
-                    startGitHubReach(id, stored.id, target)
+                    startGitHubReach(id, stored.id, target, text)
                     return
                 }
             }
