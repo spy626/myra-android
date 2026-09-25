@@ -63,6 +63,23 @@ internal object WorkspaceAgentReachGitHub {
         val directories: Int get() = entries.count { it.kind == RootEntryKind.DIRECTORY }
     }
 
+    enum class PathEntryKind { FILE, DIRECTORY, SUBMODULE }
+
+    data class PathEntry(
+        val path: String,
+        val kind: PathEntryKind,
+        val sha: String,
+        val size: Int?,
+    )
+
+    data class RepositoryPathMap(
+        val commitSha: String,
+        val entries: List<PathEntry>,
+    ) {
+        val files: Int get() = entries.count { it.kind == PathEntryKind.FILE }
+        val directories: Int get() = entries.count { it.kind == PathEntryKind.DIRECTORY }
+    }
+
     private fun encode(value: String): String =
         URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 
@@ -157,6 +174,17 @@ internal object WorkspaceAgentReachGitHub {
         val owner = encode(selection.owner)
         val repo = encode(selection.repo)
         return request(apiUrl("/repos/$owner/$repo/contents", "ref=${encode(sha)}"))
+    }
+
+    fun pathMapRequest(selection: Selection, commitSha: String): Request {
+        require(selection.isRepositoryRead) { "Path map requires a repository read target" }
+        val sha = requireSha(commitSha)
+        val owner = encode(selection.owner)
+        val repo = encode(selection.repo)
+        return request(apiUrl(
+            "/repos/$owner/$repo/git/trees/${encode(sha)}",
+            "recursive=1",
+        ))
     }
 
     fun readmeRequest(selection: Selection, commitSha: String): Request {
@@ -308,6 +336,55 @@ internal object WorkspaceAgentReachGitHub {
             }
         }
         return RepositoryIndex(sha, entries.sortedBy { it.path.lowercase(Locale.US) })
+    }
+
+    fun readPathMap(
+        response: Response,
+        commitSha: String,
+    ): RepositoryPathMap {
+        val sha = requireSha(commitSha)
+        val root = readJson(response)
+        val returnedSha = requireSha(root.getString("sha"))
+        require(returnedSha == sha) { "GitHub path map revision did not match pinned commit" }
+        require(!root.optBoolean("truncated", false)) {
+            "GitHub recursive path map was truncated; bounded Agent Reach will not guess"
+        }
+        val tree = root.optJSONArray("tree")
+            ?: throw IllegalArgumentException("GitHub path map is missing tree entries")
+        require(tree.length() <= 1_500) {
+            "GitHub path map exceeds Agent Reach entry bound"
+        }
+        val entries = buildList {
+            for (i in 0 until tree.length()) {
+                val item = tree.optJSONObject(i)
+                    ?: throw IllegalArgumentException("GitHub path map entry is invalid")
+                val path = item.optString("path").trim()
+                require(path.isNotBlank() && path.length <= 1_024 &&
+                    path.none(Char::isISOControl) &&
+                    path.split('/').all { it.isNotBlank() && it != "." && it != ".." }) {
+                    "GitHub path map contains an unsafe path"
+                }
+                val kind = when (item.optString("type")) {
+                    "blob" -> PathEntryKind.FILE
+                    "tree" -> PathEntryKind.DIRECTORY
+                    "commit" -> PathEntryKind.SUBMODULE
+                    else -> throw IllegalArgumentException(
+                        "GitHub path map contains unsupported entry type")
+                }
+                val entrySha = requireSha(item.optString("sha"))
+                val rawSize = item.optInt("size", -1)
+                add(PathEntry(
+                    path = path,
+                    kind = kind,
+                    sha = entrySha,
+                    size = rawSize.takeIf { it >= 0 },
+                ))
+            }
+        }
+        return RepositoryPathMap(
+            commitSha = sha,
+            entries = entries.sortedBy { it.path.lowercase(Locale.US) },
+        )
     }
 
     fun readContent(

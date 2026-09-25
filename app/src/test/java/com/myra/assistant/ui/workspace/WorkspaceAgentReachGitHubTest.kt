@@ -96,6 +96,39 @@ class WorkspaceAgentReachGitHubTest {
         assertEquals("README.md", index.entries.first().path)
     }
 
+    @Test fun recursivePathMapIsPinnedBoundedAndRejectsTruncation() {
+        val selection = WorkspaceAgentReachGitHub.selection(
+            WorkspaceAgentReachPolicy.parse("https://github.com/a/b"))
+        val sha = "1234567890abcdef1234567890abcdef12345678"
+        val request = WorkspaceAgentReachGitHub.pathMapRequest(selection, sha)
+        assertEquals(
+            "https://api.github.com/repos/a/b/git/trees/$sha?recursive=1",
+            request.url.toString())
+
+        val body = JSONObject()
+            .put("sha", sha)
+            .put("truncated", false)
+            .put("tree", org.json.JSONArray()
+                .put(JSONObject().put("path", "src").put("type", "tree")
+                    .put("sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+                .put(JSONObject().put("path", "src/App.kt").put("type", "blob")
+                    .put("sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                    .put("size", 420)))
+            .toString()
+        val map = WorkspaceAgentReachGitHub.readPathMap(
+            response(request.url.toString(), 200, body), sha)
+        assertEquals(sha, map.commitSha)
+        assertEquals(2, map.entries.size)
+        assertEquals(1, map.files)
+        assertEquals(1, map.directories)
+
+        val truncated = JSONObject(body).put("truncated", true).toString()
+        assertTrue(runCatching {
+            WorkspaceAgentReachGitHub.readPathMap(
+                response(request.url.toString(), 200, truncated), sha)
+        }.isFailure)
+    }
+
     @Test fun fileReadProducesPinnedUntrustedEvidence() {
         val target = WorkspaceAgentReachPolicy.parse(
             "https://github.com/a/b/blob/main/README.md")
