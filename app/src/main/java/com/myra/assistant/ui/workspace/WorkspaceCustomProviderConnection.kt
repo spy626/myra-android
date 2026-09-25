@@ -24,16 +24,19 @@ internal object WorkspaceCustomProviderConnection {
                     it.startsWith("fea") || it.startsWith("feb")
             }
 
-    private fun dns(profile: WorkspaceCustomProviderProfile.Validated): Dns = Dns { hostname ->
-        val resolved = Dns.SYSTEM.lookup(hostname)
-        require(resolved.isNotEmpty()) { "Custom API host could not be resolved" }
-        if (!profile.localEndpoint) {
-            require(resolved.none(::unsafePublicResolution)) {
-                "Public Custom API host resolved to a local/private address; connection blocked"
+    private fun dns(profile: WorkspaceCustomProviderProfile.Validated): Dns =
+        object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                val resolved = Dns.SYSTEM.lookup(hostname)
+                require(resolved.isNotEmpty()) { "Custom API host could not be resolved" }
+                if (!profile.localEndpoint) {
+                    require(resolved.none(::unsafePublicResolution)) {
+                        "Public Custom API host resolved to a local/private address; connection blocked"
+                    }
+                }
+                return resolved
             }
         }
-        resolved
-    }
 
     fun client(profile: WorkspaceCustomProviderProfile.Validated): OkHttpClient =
         OkHttpClient.Builder()
