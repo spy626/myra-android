@@ -792,6 +792,13 @@ class WorkspaceActivity : AppCompatActivity() {
             toast("Retry is available for the latest LYRA reply only")
             return
         }
+        if (WorkspaceCustomProviderRoutePolicy.useManualTextChat(
+                WorkspaceCustomProviderStore.chatEnabled(this),
+                projects.getProject(id)?.type,
+                hasAttachments = false)) {
+            requestCustomReply(id, user.id, assistantId)
+            return
+        }
         val provider = runCatching { selectedProvider() }
             .getOrElse { toast("Secure provider key storage unavailable"); return }
         if (provider == null) {
@@ -1207,8 +1214,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceLlm7Free.validKey(keys.get(ApiKeyStore.LLM7))
             val groqTextOnly = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false) &&
                 keys.get(ApiKeyStore.GROQ).isNotBlank()
-            if (llm7TextOnly || groqTextOnly) {
-                statusMessage = "The enabled free text route does not accept attachments in LYRA. Remove the attachment or turn that text route OFF; nothing was sent."
+            val customTextOnly = WorkspaceCustomProviderStore.chatEnabled(this)
+            if (llm7TextOnly || groqTextOnly || customTextOnly) {
+                statusMessage = "The enabled text route does not accept attachments in LYRA. Remove the attachment or turn that text route OFF; nothing was sent."
                 render()
                 return
             }
@@ -1258,6 +1266,15 @@ class WorkspaceActivity : AppCompatActivity() {
                 return
             }
         }
+        if (WorkspaceCustomProviderRoutePolicy.useManualTextChat(
+                WorkspaceCustomProviderStore.chatEnabled(this),
+                projects.getProject(id)?.type,
+                picked.isNotEmpty())) {
+            statusMessage = ""
+            render()
+            requestCustomReply(id, stored.id)
+            return
+        }
         val provider = runCatching { selectedProvider(picked.isNotEmpty()) }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
         if (provider == null) {
@@ -1274,6 +1291,172 @@ class WorkspaceActivity : AppCompatActivity() {
         statusMessage = ""
         render()
         requestReply(id, stored.id, provider, picked)
+    }
+
+    private fun requestCustomReply(
+        id: String,
+        messageId: String,
+        replacingAssistantId: String? = null,
+    ) {
+        if (selectedId != id || isBusy() || workTab) return
+        if (!WorkspaceCustomProviderStore.chatEnabled(this)) {
+            statusMessage = "Custom provider manual Chat route is OFF. Message remains local."
+            render()
+            return
+        }
+        val profile = WorkspaceCustomProviderStore.load(this)
+        if (profile == null) {
+            statusMessage = "Custom provider profile is missing or invalid. Message remains local; no fallback was sent."
+            render()
+            return
+        }
+        val history = runCatching { conversations.read(id) }
+            .getOrElse {
+                statusMessage = "Conversation unavailable; no Custom provider request was sent."
+                render()
+                return
+            }
+        val transcript = if (replacingAssistantId == null) history else {
+            if (history.size < 2 || history.last().id != replacingAssistantId ||
+                history.last().role != "assistant" ||
+                history[history.lastIndex - 1].id != messageId ||
+                history[history.lastIndex - 1].role != "user") {
+                statusMessage = "Conversation changed; Custom provider retry cancelled."
+                render()
+                return
+            }
+            history.dropLast(1)
+        }
+        if (transcript.lastOrNull()?.id != messageId || transcript.lastOrNull()?.role != "user") {
+            statusMessage = "Conversation changed; Custom provider request cancelled."
+            render()
+            return
+        }
+
+        val key = runCatching { keys.get(profile.encryptedKeySlot) }
+            .getOrElse {
+                statusMessage = "Custom provider key storage unavailable; no request was sent."
+                render()
+                return
+            }
+        val outgoing = runCatching {
+            WorkspaceCustomProviderChat.request(profile, key, transcript)
+        }.getOrElse {
+            statusMessage = it.message ?: "Custom provider request is unavailable."
+            render()
+            return
+        }
+        val serial = ++requestGeneration
+        val call = WorkspaceCustomProviderConnection.client(profile).newCall(outgoing)
+        activeRequest = call
+        workTrace.clear()
+        workTraceExpanded = true
+        workTraceMessageId = messageId
+        workTrace.begin(
+            WorkspaceWorkPhase.THINKING,
+            "Thinking",
+            "${profile.displayName} · Custom manual",
+        )
+        statusMessage = ""
+        render()
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                completeCustomReply(
+                    call, serial, id, messageId, replacingAssistantId,
+                    Result.failure(IllegalStateException(
+                        WorkspaceCustomProviderChat.networkFailure(error))),
+                )
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                completeCustomReply(
+                    call, serial, id, messageId, replacingAssistantId,
+                    runCatching { WorkspaceCustomProviderChat.read(response) },
+                )
+            }
+        })
+    }
+
+    private fun completeCustomReply(
+        call: Call,
+        serial: Long,
+        id: String,
+        userMessageId: String,
+        replacingAssistantId: String?,
+        result: Result<String>,
+    ) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed || serial != requestGeneration ||
+                activeRequest !== call || selectedId != id) return@runOnUiThread
+            activeRequest = null
+
+            val checked = result.mapCatching { reply ->
+                if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
+                    val saved = conversations.read(id)
+                    val actual = if (replacingAssistantId != null &&
+                        saved.lastOrNull()?.id == replacingAssistantId) saved.dropLast(1) else saved
+                    WorkspaceChatTurnFrame.verify(actual, reply)
+                } else reply
+            }
+            val failure = checked.exceptionOrNull()
+            checked.onSuccess { reply ->
+                runCatching {
+                    if (replacingAssistantId == null) {
+                        require(conversations.read(id).lastOrNull()?.id == userMessageId) {
+                            "Conversation changed; response was not applied"
+                        }
+                        conversations.append(id, "assistant", reply)
+                    } else {
+                        conversations.replaceNewestAssistant(
+                            id, replacingAssistantId, userMessageId, reply)
+                    }
+                }.onSuccess {
+                    statusMessage = ""
+                    workTrace.finishSuccess("Reply ready")
+                }.onFailure {
+                    statusMessage = it.message ?: "Custom provider reply could not be saved."
+                    workTrace.finishError("Reply not saved", statusMessage)
+                }
+            }.onFailure {
+                statusMessage = it.message ?: "Custom provider failed; no fallback was sent."
+                workTrace.finishError("Reply failed", statusMessage)
+            }
+            render()
+            if (failure != null) {
+                showCustomChatFailure(
+                    id, userMessageId, replacingAssistantId, statusMessage)
+            }
+        }
+    }
+
+    private fun showCustomChatFailure(
+        id: String,
+        messageId: String,
+        replacingAssistantId: String?,
+        reason: String,
+    ) {
+        if (selectedId != id || workTab || isBusy() ||
+            !WorkspaceCustomProviderStore.chatEnabled(this)) return
+        val history = runCatching { conversations.read(id) }.getOrNull() ?: return
+        val eligible = if (replacingAssistantId == null) {
+            history.lastOrNull()?.let { it.role == "user" && it.id == messageId } == true
+        } else {
+            history.size >= 2 && history.last().role == "assistant" &&
+                history.last().id == replacingAssistantId &&
+                history[history.lastIndex - 1].id == messageId
+        }
+        if (!eligible) return
+
+        AlertDialog.Builder(this)
+            .setTitle("Custom provider couldn't reply")
+            .setMessage(
+                "$reason\n\nNo retry, paid fallback, or other provider was sent this chat. " +
+                    "Check Custom API settings or send a new message when ready.")
+            .setNegativeButton("Close", null)
+            .setPositiveButton("API settings") { _, _ ->
+                startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
+            }
+            .show()
     }
 
     private fun requestReply(id: String, messageId: String, provider: WorkspaceChatGateway.Provider,
