@@ -14,8 +14,9 @@ import java.util.UUID
 /**
  * Private on-device persistence for approved instruction-only skills.
  *
- * Imported package bytes live under a content-addressed immutable directory. This store never enables,
- * invokes or executes a skill. Catalog metadata and package bytes are revalidated on every load.
+ * Imported package bytes live under a content-addressed immutable directory. Enabling is allowed only
+ * after exact readiness approval; this store never invokes or executes a skill. Package/catalog
+ * integrity is revalidated on every load.
  */
 internal class WorkspaceSkillStore(
     private val root: File,
@@ -27,7 +28,8 @@ internal class WorkspaceSkillStore(
     )
 
     companion object {
-        private const val SCHEMA_VERSION = 1
+        private const val SCHEMA_VERSION = 2
+        private const val LEGACY_SCHEMA_VERSION = 1
         private const val CATALOG_FILE = "catalog.json"
         private const val PACKAGES_DIR = "packages"
         private const val MAX_CATALOG_BYTES = 512 * 1024L
@@ -118,8 +120,15 @@ internal class WorkspaceSkillStore(
             .put("provenance", provenanceJson(entry.provenance))
             .put("installedAtMs", entry.installedAtMs)
             .put("state", entry.state.name)
+            .put("enabledAtMs", entry.enabledAtMs ?: JSONObject.NULL)
+            .put("enableReadinessSha256", entry.enableReadinessSha256 ?: JSONObject.NULL)
+            .put("enableEnvironmentSha256", entry.enableEnvironmentSha256 ?: JSONObject.NULL)
+            .put("enableBindingSha256", entry.enableBindingSha256 ?: JSONObject.NULL)
 
-    private fun parseEntry(root: JSONObject): WorkspaceSkillCatalog.Entry {
+    private fun parseEntry(
+        root: JSONObject,
+        schemaVersion: Int,
+    ): WorkspaceSkillCatalog.Entry {
         val name = root.getString("name")
         require(NAME.matches(name)) { "Stored skill name is invalid" }
         val description = root.getString("description")
@@ -149,10 +158,24 @@ internal class WorkspaceSkillStore(
         val state = runCatching {
             WorkspaceSkillCatalog.State.valueOf(root.getString("state"))
         }.getOrElse { throw IllegalArgumentException("Stored skill state is invalid") }
-        require(state == WorkspaceSkillCatalog.State.INSTALLED_DISABLED) {
-            "This skill store phase accepts disabled skills only"
+        val enabledAt = if (!root.has("enabledAtMs") || root.isNull("enabledAtMs"))
+            null else root.getLong("enabledAtMs")
+        val readiness = if (!root.has("enableReadinessSha256") ||
+            root.isNull("enableReadinessSha256")) null
+        else root.getString("enableReadinessSha256")
+        val environment = if (!root.has("enableEnvironmentSha256") ||
+            root.isNull("enableEnvironmentSha256")) null
+        else root.getString("enableEnvironmentSha256")
+        val binding = if (!root.has("enableBindingSha256") ||
+            root.isNull("enableBindingSha256")) null
+        else root.getString("enableBindingSha256")
+        if (schemaVersion == LEGACY_SCHEMA_VERSION) {
+            require(state == WorkspaceSkillCatalog.State.INSTALLED_DISABLED &&
+                enabledAt == null && readiness == null && environment == null && binding == null) {
+                "Legacy skill catalog cannot contain enabled entries"
+            }
         }
-        return WorkspaceSkillCatalog.Entry(
+        val entry = WorkspaceSkillCatalog.Entry(
             name = name,
             description = description,
             contentSha256 = content,
@@ -161,7 +184,13 @@ internal class WorkspaceSkillStore(
             provenance = provenance,
             installedAtMs = installedAt,
             state = state,
+            enabledAtMs = enabledAt,
+            enableReadinessSha256 = readiness,
+            enableEnvironmentSha256 = environment,
+            enableBindingSha256 = binding,
         )
+        WorkspaceSkillEnablement.validateStoredState(entry)
+        return entry
     }
 
     @Synchronized fun readCatalog(): WorkspaceSkillCatalog.Catalog {
@@ -173,12 +202,15 @@ internal class WorkspaceSkillStore(
             "Skill catalog is unavailable or too large"
         }
         val document = JSONObject(file.readText(Charsets.UTF_8))
-        require(document.getInt("schemaVersion") == SCHEMA_VERSION) {
+        val schemaVersion = document.getInt("schemaVersion")
+        require(schemaVersion == LEGACY_SCHEMA_VERSION || schemaVersion == SCHEMA_VERSION) {
             "Unsupported skill catalog schema"
         }
         val array = document.getJSONArray("entries")
         require(array.length() <= MAX_ENTRIES) { "Skill catalog exceeds local entry limit" }
-        val entries = (0 until array.length()).map { parseEntry(array.getJSONObject(it)) }
+        val entries = (0 until array.length()).map {
+            parseEntry(array.getJSONObject(it), schemaVersion)
+        }
         require(entries.map { it.name }.toSet().size == entries.size) {
             "Skill catalog contains duplicate names"
         }
@@ -335,6 +367,50 @@ internal class WorkspaceSkillStore(
         verifyEntry(provisionalEntry)
         if (after != before) writeCatalog(after)
         return load(skill.name)
+    }
+
+    @Synchronized fun enable(
+        name: String,
+        environment: WorkspaceSkillEnablement.Environment,
+        request: WorkspaceSkillEnablement.EnableRequest,
+        approvedToken: String,
+        enabledAtMs: Long,
+    ): Installed {
+        require(NAME.matches(name)) { "Invalid skill name" }
+        val installed = load(name)
+        val updated = WorkspaceSkillEnablement.enabledEntry(
+            installed, environment, request, approvedToken, enabledAtMs)
+        val before = readCatalog()
+        val current = before.entries.firstOrNull { it.name == name }
+            ?: throw IllegalArgumentException("Skill is not installed")
+        require(current == installed.entry) {
+            "Skill catalog changed during enablement; retry from fresh state"
+        }
+        val after = WorkspaceSkillCatalog.Catalog(
+            before.entries.map { if (it.name == name) updated else it }
+                .sortedBy { it.name }
+        )
+        writeCatalog(after)
+        return load(name)
+    }
+
+    @Synchronized fun disable(name: String): Installed {
+        require(NAME.matches(name)) { "Invalid skill name" }
+        val installed = load(name)
+        val updated = WorkspaceSkillEnablement.disabledEntry(installed.entry)
+        if (updated == installed.entry) return installed
+        val before = readCatalog()
+        val current = before.entries.firstOrNull { it.name == name }
+            ?: throw IllegalArgumentException("Skill is not installed")
+        require(current == installed.entry) {
+            "Skill catalog changed during disablement; retry from fresh state"
+        }
+        val after = WorkspaceSkillCatalog.Catalog(
+            before.entries.map { if (it.name == name) updated else it }
+                .sortedBy { it.name }
+        )
+        writeCatalog(after)
+        return load(name)
     }
 
     @Synchronized fun load(name: String): Installed {

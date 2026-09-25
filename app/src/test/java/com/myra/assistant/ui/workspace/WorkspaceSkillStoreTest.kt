@@ -31,6 +31,11 @@ Require deterministic evidence.
             "references/checklist.md" to "Check current source revision.".toByteArray(),
         )
 
+    private fun environment() = WorkspaceSkillEnablement.Environment(
+        availableTools = setOf("read_file"),
+        boundedSourceGateAvailable = true,
+    )
+
     private fun install(
         store: WorkspaceSkillStore,
         skill: WorkspaceSkillContract.ParsedSkill,
@@ -122,5 +127,97 @@ Require deterministic evidence.
         val second = install(store, skill, 99L)
         assertEquals(first.entry, second.entry)
         assertEquals(10L, second.entry.installedAtMs)
+    }    @Test fun readinessApprovedSkillCanEnablePersistAndDisableWithoutChangingPackage() {
+        val root = temp.newFolder("enable-disable")
+        val store = WorkspaceSkillStore(root)
+        val installed = install(store, parsed())
+        val report = WorkspaceSkillEnablement.test(installed, environment(), 20L)
+        val request = WorkspaceSkillEnablement.enableRequest(installed, report)
+
+        val enabled = store.enable(
+            "review-code", environment(), request, request.approvalToken, 30L)
+        assertEquals(WorkspaceSkillCatalog.State.ENABLED, enabled.entry.state)
+        assertEquals(30L, enabled.entry.enabledAtMs)
+        assertEquals(request.readinessSha256, enabled.entry.enableReadinessSha256)
+        assertEquals(request.environmentSha256, enabled.entry.enableEnvironmentSha256)
+        assertEquals(installed.snapshot.packageSha256, enabled.snapshot.packageSha256)
+
+        val reopened = WorkspaceSkillStore(root).load("review-code")
+        assertEquals(enabled.entry, reopened.entry)
+
+        val disabled = WorkspaceSkillStore(root).disable("review-code")
+        assertEquals(WorkspaceSkillCatalog.State.INSTALLED_DISABLED, disabled.entry.state)
+        assertNull(disabled.entry.enabledAtMs)
+        assertNull(disabled.entry.enableReadinessSha256)
+        assertNull(disabled.entry.enableEnvironmentSha256)
+        assertNull(disabled.entry.enableBindingSha256)
+        assertEquals(installed.snapshot.packageSha256, disabled.snapshot.packageSha256)
     }
+
+    @Test fun wrongEnableTokenOrChangedEnvironmentLeavesSkillDisabled() {
+        val root = temp.newFolder("enable-reject")
+        val store = WorkspaceSkillStore(root)
+        val installed = install(store, parsed())
+        val report = WorkspaceSkillEnablement.test(installed, environment(), 20L)
+        val request = WorkspaceSkillEnablement.enableRequest(installed, report)
+
+        assertTrue(runCatching {
+            store.enable("review-code", environment(), request, "wrong", 30L)
+        }.isFailure)
+        assertEquals(WorkspaceSkillCatalog.State.INSTALLED_DISABLED,
+            store.load("review-code").entry.state)
+
+        assertTrue(runCatching {
+            store.enable(
+                "review-code",
+                WorkspaceSkillEnablement.Environment(availableTools = setOf("read_file")),
+                request,
+                request.approvalToken,
+                30L,
+            )
+        }.isFailure)
+        assertEquals(WorkspaceSkillCatalog.State.INSTALLED_DISABLED,
+            store.load("review-code").entry.state)
+    }
+
+    @Test fun legacyDisabledCatalogRemainsReadableAndMigratesOnEnable() {
+        val root = temp.newFolder("legacy")
+        val store = WorkspaceSkillStore(root)
+        val installed = install(store, parsed())
+        val catalog = File(root, "catalog.json")
+        catalog.writeText(catalog.readText().replace(
+            "\"schemaVersion\":2",
+            "\"schemaVersion\":1",
+        ))
+
+        val legacy = WorkspaceSkillStore(root).load("review-code")
+        assertEquals(WorkspaceSkillCatalog.State.INSTALLED_DISABLED, legacy.entry.state)
+
+        val report = WorkspaceSkillEnablement.test(legacy, environment(), 20L)
+        val request = WorkspaceSkillEnablement.enableRequest(legacy, report)
+        WorkspaceSkillStore(root).enable(
+            "review-code", environment(), request, request.approvalToken, 30L)
+        assertTrue(catalog.readText().contains("\"schemaVersion\":2"))
+    }
+
+    @Test fun corruptedEnabledActivationMetadataFailsClosedOnLoad() {
+        val root = temp.newFolder("activation-corrupt")
+        val store = WorkspaceSkillStore(root)
+        val installed = install(store, parsed())
+        val report = WorkspaceSkillEnablement.test(installed, environment(), 20L)
+        val request = WorkspaceSkillEnablement.enableRequest(installed, report)
+        val enabled = store.enable(
+            "review-code", environment(), request, request.approvalToken, 30L)
+
+        val catalog = File(root, "catalog.json")
+        catalog.writeText(catalog.readText().replace(
+            enabled.entry.enableBindingSha256!!,
+            "0".repeat(64),
+        ))
+        assertTrue(runCatching {
+            WorkspaceSkillStore(root).load("review-code")
+        }.isFailure)
+    }
+
+
 }

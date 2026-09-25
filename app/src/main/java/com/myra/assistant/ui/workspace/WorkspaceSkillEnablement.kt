@@ -271,5 +271,115 @@ internal object WorkspaceSkillEnablement {
             approvalToken = ENABLE_APPROVAL_PREFIX + sha256(material),
             warnings = warnings,
         )
+    }    fun validateApproval(
+        installed: WorkspaceSkillStore.Installed,
+        environment: Environment,
+        request: EnableRequest,
+        approvedToken: String,
+    ) {
+        val currentReport = test(installed, environment, request.testedAtMs)
+        val expected = enableRequest(installed, currentReport)
+        require(request == expected && approvedToken == expected.approvalToken) {
+            "Skill enable approval is stale, changed, or does not match the current environment"
+        }
     }
+
+    private fun activationBinding(
+        name: String,
+        contentSha256: String,
+        packageSha256: String,
+        permissionSha256: String,
+        environmentSha256: String,
+        readinessSha256: String,
+        enabledAtMs: Long,
+    ): String = sha256(buildString {
+        appendLine("name=$name")
+        appendLine("content=$contentSha256")
+        appendLine("package=$packageSha256")
+        appendLine("permissions=$permissionSha256")
+        appendLine("environment=$environmentSha256")
+        appendLine("readiness=$readinessSha256")
+        append("enabledAt=$enabledAtMs")
+    })
+
+    fun enabledEntry(
+        installed: WorkspaceSkillStore.Installed,
+        environment: Environment,
+        request: EnableRequest,
+        approvedToken: String,
+        enabledAtMs: Long,
+    ): WorkspaceSkillCatalog.Entry {
+        require(enabledAtMs >= request.testedAtMs) {
+            "Skill enable timestamp predates readiness verification"
+        }
+        validateApproval(installed, environment, request, approvedToken)
+        val entry = installed.entry
+        require(entry.state == WorkspaceSkillCatalog.State.INSTALLED_DISABLED) {
+            "Only an installed-disabled skill can be enabled"
+        }
+        val binding = activationBinding(
+            entry.name,
+            entry.contentSha256,
+            entry.packageSha256,
+            entry.permissionSha256,
+            request.environmentSha256,
+            request.readinessSha256,
+            enabledAtMs,
+        )
+        return entry.copy(
+            state = WorkspaceSkillCatalog.State.ENABLED,
+            enabledAtMs = enabledAtMs,
+            enableReadinessSha256 = request.readinessSha256,
+            enableEnvironmentSha256 = request.environmentSha256,
+            enableBindingSha256 = binding,
+        )
+    }
+
+    fun disabledEntry(entry: WorkspaceSkillCatalog.Entry): WorkspaceSkillCatalog.Entry {
+        validateStoredState(entry)
+        return entry.copy(
+            state = WorkspaceSkillCatalog.State.INSTALLED_DISABLED,
+            enabledAtMs = null,
+            enableReadinessSha256 = null,
+            enableEnvironmentSha256 = null,
+            enableBindingSha256 = null,
+        )
+    }
+
+    fun validateStoredState(entry: WorkspaceSkillCatalog.Entry) {
+        when (entry.state) {
+            WorkspaceSkillCatalog.State.INSTALLED_DISABLED -> {
+                require(entry.enabledAtMs == null &&
+                    entry.enableReadinessSha256 == null &&
+                    entry.enableEnvironmentSha256 == null &&
+                    entry.enableBindingSha256 == null) {
+                    "Disabled skill contains stale activation metadata"
+                }
+            }
+            WorkspaceSkillCatalog.State.ENABLED -> {
+                val enabledAt = entry.enabledAtMs
+                    ?: throw IllegalArgumentException("Enabled skill is missing enable timestamp")
+                val readiness = entry.enableReadinessSha256.orEmpty()
+                val environment = entry.enableEnvironmentSha256.orEmpty()
+                val binding = entry.enableBindingSha256.orEmpty()
+                require(enabledAt >= entry.installedAtMs &&
+                    sha.matches(readiness) && sha.matches(environment) && sha.matches(binding)) {
+                    "Enabled skill activation metadata is invalid"
+                }
+                val expected = activationBinding(
+                    entry.name,
+                    entry.contentSha256,
+                    entry.packageSha256,
+                    entry.permissionSha256,
+                    environment,
+                    readiness,
+                    enabledAt,
+                )
+                require(binding == expected) {
+                    "Enabled skill activation binding is corrupt or stale"
+                }
+            }
+        }
+    }
+
 }

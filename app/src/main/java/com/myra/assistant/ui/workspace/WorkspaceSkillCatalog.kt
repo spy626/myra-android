@@ -13,7 +13,7 @@ internal object WorkspaceSkillCatalog {
     internal const val MAX_FILE_BYTES = 128 * 1024
     private const val APPROVAL_PREFIX = "lyra-skill-approve-v1:"
 
-    enum class State { INSTALLED_DISABLED }
+    enum class State { INSTALLED_DISABLED, ENABLED }
 
     data class FileDigest(
         val path: String,
@@ -46,6 +46,10 @@ internal object WorkspaceSkillCatalog {
         val provenance: WorkspaceSkillContract.Provenance,
         val installedAtMs: Long,
         val state: State = State.INSTALLED_DISABLED,
+        val enabledAtMs: Long? = null,
+        val enableReadinessSha256: String? = null,
+        val enableEnvironmentSha256: String? = null,
+        val enableBindingSha256: String? = null,
     )
 
     data class Catalog(
