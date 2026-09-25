@@ -21,7 +21,7 @@ internal object WorkspaceSkillContract {
     private const val MAX_PATH_CHARS = 240
     private const val MAX_LIST_ITEMS = 48
 
-    enum class Origin { USER_SUPPLIED, GITHUB_PINNED }
+    enum class Origin { USER_SUPPLIED, GITHUB_PINNED, LOCAL_DERIVED }
     enum class SourceSharing { NONE, BOUNDED }
     enum class MemoryAccess { NONE, READ, READ_WRITE }
 
@@ -324,6 +324,22 @@ internal object WorkspaceSkillContract {
                 }
                 require(commitSha.matches(provenance.pinnedRevision.orEmpty())) {
                     "Pinned GitHub skill needs an immutable commit SHA"
+                }
+            }
+            Origin.LOCAL_DERIVED -> {
+                val url = provenance.sourceUrl
+                val revision = provenance.pinnedRevision
+                require((url == null) == (revision == null)) {
+                    "Locally derived skill ancestry must include both source URL and revision or neither"
+                }
+                if (url != null) {
+                    val target = WorkspaceAgentReachPolicy.parse(url)
+                    require(target.platform == WorkspaceAgentReachPolicy.Platform.GITHUB) {
+                        "Locally derived upstream source must be GitHub when ancestry is recorded"
+                    }
+                    require(commitSha.matches(revision.orEmpty())) {
+                        "Locally derived GitHub ancestry needs the immutable upstream revision"
+                    }
                 }
             }
         }
