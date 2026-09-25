@@ -64,6 +64,11 @@ class WorkspaceActivity : AppCompatActivity() {
     private var workTab = false
     private var requestGeneration = 0L
     private var activeRequest: Call? = null
+    private var agentReachActive = false
+    private var agentReachTarget: WorkspaceAgentReachPolicy.Target? = null
+    private var agentReachProjectId: String? = null
+    private var agentReachMessageId: String? = null
+    private var agentReachRunner: WorkspaceAgentReachGitHubRunner? = null
     private var statusMessage = ""
     private val workTrace = WorkspaceWorkTrace()
     private var workTraceExpanded = true
@@ -178,6 +183,84 @@ class WorkspaceActivity : AppCompatActivity() {
         render()
     }
 
+    private fun githubReachRunner(): WorkspaceAgentReachGitHubRunner {
+        agentReachRunner?.let { return it }
+        return WorkspaceAgentReachGitHubRunner(
+            currentTarget = { if (agentReachActive) agentReachTarget else null },
+            listener = object : WorkspaceAgentReachGitHubRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(evidence: WorkspaceAgentReachEvidence.Evidence) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        val id = agentReachProjectId
+                        val messageId = agentReachMessageId
+                        clearAgentReachState(cancel = false)
+                        if (id == null || messageId == null || selectedId != id) return@runOnUiThread
+                        runCatching {
+                            require(conversations.read(id).lastOrNull()?.id == messageId) {
+                                "Conversation changed; GitHub read receipt was not saved"
+                            }
+                            conversations.append(
+                                id, "assistant", WorkspaceAgentReachReceipt.github(evidence))
+                        }.onSuccess {
+                            statusMessage = ""
+                        }.onFailure {
+                            statusMessage = it.message ?: "GitHub read receipt could not be saved."
+                            recordWorkEvent(
+                                WorkspaceWorkPhase.ERROR,
+                                "GitHub receipt not saved",
+                                statusMessage,
+                            )
+                        }
+                        render()
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        clearAgentReachState(cancel = false)
+                        statusMessage = message
+                        render()
+                    }
+                }
+            },
+        ).also { agentReachRunner = it }
+    }
+
+    private fun clearAgentReachState(cancel: Boolean = true) {
+        if (cancel) agentReachRunner?.cancel()
+        agentReachActive = false
+        agentReachTarget = null
+        agentReachProjectId = null
+        agentReachMessageId = null
+    }
+
+    private fun startGitHubReach(
+        id: String,
+        messageId: String,
+        target: WorkspaceAgentReachPolicy.Target,
+    ) {
+        clearAgentReachState()
+        agentReachActive = true
+        agentReachTarget = target
+        agentReachProjectId = id
+        agentReachMessageId = messageId
+        statusMessage = ""
+        render()
+        githubReachRunner().start(target)
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("workspace_work_tab", workTab)
         outState.putString("workspace_selected_id", selectedId)
@@ -200,6 +283,7 @@ class WorkspaceActivity : AppCompatActivity() {
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
+        clearAgentReachState()
         coding.cancel()
         super.onStop()
     }
@@ -342,16 +426,24 @@ class WorkspaceActivity : AppCompatActivity() {
         updateSendButton()
     }
 
-    private fun isBusy(): Boolean = activeRequest != null || coding.isRunning
+    private fun isBusy(): Boolean =
+        activeRequest != null || coding.isRunning || agentReachActive
 
     private fun stopReply() {
         if (!isBusy()) return
         val normalChatWasRunning = activeRequest != null
+        val githubReadWasRunning = agentReachActive
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
         if (normalChatWasRunning) {
             workTrace.finishError("Stopped", "Request cancelled; no partial reply was saved.")
+        }
+        if (githubReadWasRunning) {
+            clearAgentReachState()
+            workTrace.finishError(
+                "Stopped",
+                "GitHub read cancelled; no content was installed, executed, or sent to a provider.")
         }
         coding.cancel()
         codingRetryTarget = null
@@ -995,6 +1087,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     requestGeneration++
                     activeRequest?.cancel()
                     activeRequest = null
+                    clearAgentReachState()
                     coding.cancel()
                     codingRetryTarget = null
                 }
@@ -1036,6 +1129,7 @@ class WorkspaceActivity : AppCompatActivity() {
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
+        clearAgentReachState()
         coding.cancel()
         codingRetryTarget = null
         selectedId = null
@@ -1066,6 +1160,7 @@ class WorkspaceActivity : AppCompatActivity() {
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
+        clearAgentReachState()
         coding.cancel()
         codingRetryTarget = null
         selectedId = id
@@ -1246,6 +1341,20 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             coding.continueRequest(id, text, stored.id)
             return
+        }
+        if (picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
+            WorkspaceAgentReachChatIntent.decide(text)?.let { decision ->
+                decision.localError?.let { reason ->
+                    statusMessage = reason
+                    recordWorkEvent(WorkspaceWorkPhase.ERROR, "GitHub read not started", reason)
+                    render()
+                    return
+                }
+                decision.target?.let { target ->
+                    startGitHubReach(id, stored.id, target)
+                    return
+                }
+            }
         }
         // User-authored recall is answered from the exact selected-chat transcript.
         // Never let a model's earlier guess become evidence; do not spend another Free call.
