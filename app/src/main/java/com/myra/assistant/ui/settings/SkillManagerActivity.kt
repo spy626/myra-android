@@ -1,6 +1,7 @@
 package com.myra.assistant.ui.settings
 
 import android.graphics.Color
+import android.content.Intent
 import android.graphics.Typeface
 import android.os.Bundle
 import android.view.Gravity
@@ -104,6 +105,13 @@ class SkillManagerActivity : AppCompatActivity() {
             addView(detail(item.accessSummary))
             addView(detail(item.activationSummary))
             addView(detail(item.identitySummary))
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Open read-only details for " + item.name
+            setOnClickListener {
+                startActivity(Intent(this@SkillManagerActivity, SkillDetailActivity::class.java)
+                    .putExtra(SkillDetailActivity.EXTRA_SKILL_NAME, item.name))
+            }
         }
 
     private fun detail(value: String) = TextView(this).apply {
