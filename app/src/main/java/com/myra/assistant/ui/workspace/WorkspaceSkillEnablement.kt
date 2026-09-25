@@ -139,6 +139,13 @@ internal object WorkspaceSkillEnablement {
                 "Immutable package, content hash and approved permissions revalidated.",
             ),
             check(
+                "secret-screen",
+                !WorkspaceSourceContext.containsPossibleSecret(installed.skill.body),
+                if (!WorkspaceSourceContext.containsPossibleSecret(installed.skill.body))
+                    "Skill instruction body passed the local secret screen."
+                else "Possible secret detected in skill instruction body.",
+            ),
+            check(
                 "verification-gate",
                 installed.skill.hasVerificationGate,
                 if (installed.skill.hasVerificationGate)
