@@ -78,7 +78,10 @@ internal object WorkspaceChatGateway {
             .build()
     }
 
-    fun openRouterBody(messages: List<WorkspaceConversationStore.Message>, image: Image? = null): String {
+    internal fun openAiMessages(
+        messages: List<WorkspaceConversationStore.Message>,
+        image: Image? = null,
+    ): JSONArray {
         val entries = JSONArray()
         val recent = WorkspaceLongInputPolicy.outbound(messages)
         val latest = recent.lastOrNull()?.takeIf { it.role == "user" }?.text
@@ -118,6 +121,11 @@ internal object WorkspaceChatGateway {
             } else message.text
             entries.put(JSONObject().put("role", message.role).put("content", content))
         }
+        return entries
+    }
+
+    fun openRouterBody(messages: List<WorkspaceConversationStore.Message>, image: Image? = null): String {
+        val entries = openAiMessages(messages, image)
         return JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
             .put("stream", false).put("max_tokens", 2_048)
             // A free label alone is insufficient: reject every endpoint with a nonzero
