@@ -48,8 +48,13 @@ internal object WorkspaceChatGateway {
         .build()
 
     /** Each request includes only bounded messages from the explicitly selected project. */
-    fun request(provider: Provider, key: String, messages: List<WorkspaceConversationStore.Message>,
-                image: Image? = null): Request {
+    fun request(
+        provider: Provider,
+        key: String,
+        messages: List<WorkspaceConversationStore.Message>,
+        image: Image? = null,
+        extraSystemInstructions: String? = null,
+    ): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "Set a valid provider key in API & Cloud Settings"
         }
@@ -58,8 +63,12 @@ internal object WorkspaceChatGateway {
         require(WorkspaceLongInputPolicy.requestFits(messages)) {
             "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
-        if (provider == Provider.GROQ_FREE) return WorkspaceGroqFree.request(key, messages, image)
-        if (provider == Provider.LLM7_FREE) return WorkspaceLlm7Free.request(key, messages, image)
+        if (provider == Provider.GROQ_FREE) {
+            return WorkspaceGroqFree.request(key, messages, image, extraSystemInstructions)
+        }
+        if (provider == Provider.LLM7_FREE) {
+            return WorkspaceLlm7Free.request(key, messages, image, extraSystemInstructions)
+        }
         image?.let {
             require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
             require(it.base64.length in 1..2_700_000 &&
@@ -68,7 +77,7 @@ internal object WorkspaceChatGateway {
             }
         }
         // Inspect earlier user intent locally when needed, but transmit only recent raw turns.
-        val body = openRouterBody(messages, image)
+        val body = openRouterBody(messages, image, extraSystemInstructions)
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder()
             .url(WorkspaceFreeAiSuggestion.ENDPOINT)
@@ -81,6 +90,7 @@ internal object WorkspaceChatGateway {
     internal fun openAiMessages(
         messages: List<WorkspaceConversationStore.Message>,
         image: Image? = null,
+        extraSystemInstructions: String? = null,
     ): JSONArray {
         val entries = JSONArray()
         val recent = WorkspaceLongInputPolicy.outbound(messages)
@@ -102,13 +112,23 @@ internal object WorkspaceChatGateway {
         val earlier = if (revisionKind == null && contextDecision == null)
             WorkspaceContextProjection.earlierUserContext(messages) else ""
         val codeInstructions = latest?.let(WorkspaceCodePrompt::instructions).orEmpty()
+        val extra = extraSystemInstructions?.trim().orEmpty()
+        require(extra.length <= 24_000 && !extra.contains('\u0000')) {
+            "One-turn system instructions are invalid or exceed the bounded prompt limit"
+        }
         // AIRI-style turn state is a bounded, read-only projection of this same Chat.
         // Dedicated writing, follow-up, coding and task prompts are never replaced.
         val turnFrame = if (revisionKind == null && contextDecision == null &&
             writingInstructions.isBlank() && codeInstructions.isBlank())
             WorkspaceChatTurnFrame.instructions(recent) else ""
-        val instructions = listOf(CHAT_REPLY_DISCIPLINE, turnFrame, writingInstructions, earlier, codeInstructions)
-            .filter(String::isNotBlank).joinToString("\n\n")
+        val instructions = listOf(
+            CHAT_REPLY_DISCIPLINE,
+            extra,
+            turnFrame,
+            writingInstructions,
+            earlier,
+            codeInstructions,
+        ).filter(String::isNotBlank).joinToString("\n\n")
         if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", instructions))
         recent.forEachIndexed { index, message ->
@@ -124,8 +144,12 @@ internal object WorkspaceChatGateway {
         return entries
     }
 
-    fun openRouterBody(messages: List<WorkspaceConversationStore.Message>, image: Image? = null): String {
-        val entries = openAiMessages(messages, image)
+    fun openRouterBody(
+        messages: List<WorkspaceConversationStore.Message>,
+        image: Image? = null,
+        extraSystemInstructions: String? = null,
+    ): String {
+        val entries = openAiMessages(messages, image, extraSystemInstructions)
         return JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
             .put("stream", false).put("max_tokens", 2_048)
             // A free label alone is insufficient: reject every endpoint with a nonzero

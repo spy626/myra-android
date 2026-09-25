@@ -51,9 +51,13 @@ internal object WorkspaceLlm7Free {
     fun validKey(key: String): Boolean =
         key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)
 
-    internal fun withinBudget(messages: List<WorkspaceConversationStore.Message>): Boolean =
+    internal fun withinBudget(
+        messages: List<WorkspaceConversationStore.Message>,
+        extraSystemInstructions: String? = null,
+    ): Boolean =
         runCatching {
-            val json = JSONObject(WorkspaceChatGateway.openRouterBody(messages))
+            val json = JSONObject(WorkspaceChatGateway.openRouterBody(
+                messages, extraSystemInstructions = extraSystemInstructions))
             val entries = json.getJSONArray("messages")
             (0 until entries.length()).sumOf { i ->
                 (entries.getJSONObject(i).opt("content") as? String)?.length
@@ -61,11 +65,15 @@ internal object WorkspaceLlm7Free {
             } <= MAX_PROMPT_CHARS
         }.getOrDefault(false)
 
-    fun body(messages: List<WorkspaceConversationStore.Message>,
-             image: WorkspaceChatGateway.Image? = null): String {
+    fun body(
+        messages: List<WorkspaceConversationStore.Message>,
+        image: WorkspaceChatGateway.Image? = null,
+        extraSystemInstructions: String? = null,
+    ): String {
         require(image == null) { "LLM7 Free is text-only in LYRA; attachment was not sent" }
-        val json = JSONObject(WorkspaceChatGateway.openRouterBody(messages))
-        require(withinBudget(messages)) {
+        val json = JSONObject(WorkspaceChatGateway.openRouterBody(
+            messages, extraSystemInstructions = extraSystemInstructions))
+        require(withinBudget(messages, extraSystemInstructions)) {
             "LLM7 Free request exceeds LYRA's conservative free-route budget; full message saved locally, nothing sent"
         }
         json.put("model", MODEL)
@@ -78,10 +86,14 @@ internal object WorkspaceLlm7Free {
         return json.toString()
     }
 
-    fun request(key: String, messages: List<WorkspaceConversationStore.Message>,
-                image: WorkspaceChatGateway.Image? = null): Request {
+    fun request(
+        key: String,
+        messages: List<WorkspaceConversationStore.Message>,
+        image: WorkspaceChatGateway.Image? = null,
+        extraSystemInstructions: String? = null,
+    ): Request {
         require(validKey(key)) { "Set a valid LLM7 free token in API & Cloud Settings" }
-        val payload = body(messages, image)
+        val payload = body(messages, image, extraSystemInstructions)
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder().url(ENDPOINT)
             .header("Authorization", "Bearer $key")

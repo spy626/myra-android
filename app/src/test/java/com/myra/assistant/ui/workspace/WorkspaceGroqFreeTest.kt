@@ -31,6 +31,19 @@ class WorkspaceGroqFreeTest {
         assertEquals(null, request.header("x-goog-api-key"))
     }
 
+    @Test fun oneTurnInstructionsStayOnGroqAndCountAgainstBudget() {
+        val body = JSONObject(WorkspaceGroqFree.body(
+            listOf(message("user", "Task")),
+            extraSystemInstructions = "SKILL-ONE-TURN"))
+        assertEquals(WorkspaceGroqFree.MODEL, body.getString("model"))
+        assertFalse(body.has("provider"))
+        assertTrue(body.getJSONArray("messages").getJSONObject(0)
+            .getString("content").contains("SKILL-ONE-TURN"))
+        assertFalse(WorkspaceGroqFree.withinBudget(
+            listOf(message("user", "Task")),
+            "x".repeat(WorkspaceGroqFree.MAX_PROMPT_CHARS)))
+    }
+
     @Test fun fullLatestMessagePreservedOrRequestRejectedWithoutTruncating() {
         val latest = "START\n" + "Hinglish kahani.\n".repeat(300) + "END"
         val outbound = JSONObject(WorkspaceGroqFree.body(listOf(message("user", latest))))

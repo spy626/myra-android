@@ -35,6 +35,19 @@ class WorkspaceLlm7FreeTest {
         assertFalse(body.toString().contains("free-token"))
     }
 
+    @Test fun oneTurnInstructionsStayOnLlm7AndCountAgainstBudget() {
+        val body = JSONObject(WorkspaceLlm7Free.body(
+            listOf(message("user", "Task")),
+            extraSystemInstructions = "SKILL-ONE-TURN"))
+        assertEquals(WorkspaceLlm7Free.MODEL, body.getString("model"))
+        assertFalse(body.has("provider"))
+        assertTrue(body.getJSONArray("messages").getJSONObject(0)
+            .getString("content").contains("SKILL-ONE-TURN"))
+        assertFalse(WorkspaceLlm7Free.withinBudget(
+            listOf(message("user", "Task")),
+            "x".repeat(WorkspaceLlm7Free.MAX_PROMPT_CHARS)))
+    }
+
     @Test fun routeIsTextOnlyAndConservativelyBounded() {
         assertTrue(WorkspaceLlm7Free.withinBudget(listOf(message("user", "hello"))))
         val tooLong = "x".repeat(WorkspaceLlm7Free.MAX_PROMPT_CHARS + 1)

@@ -46,6 +46,28 @@ class WorkspaceChatGatewayTest {
         assertEquals("openrouter.ai", request.url.host)
     }
 
+    @Test fun oneTurnSystemInstructionsAreOptionalBoundedAndDoNotRewriteUserTurn() {
+        val messages = listOf(message("user", "Review this response"))
+        val baseline = WorkspaceChatGateway.openRouterBody(messages)
+        assertEquals(baseline, WorkspaceChatGateway.openRouterBody(
+            messages, extraSystemInstructions = null))
+
+        val extra = "LYRA ENABLED SKILL — TEST ONLY"
+        val body = JSONObject(WorkspaceChatGateway.openRouterBody(
+            messages, extraSystemInstructions = extra))
+        val projected = body.getJSONArray("messages")
+        val system = projected.getJSONObject(0).getString("content")
+        assertTrue(system.contains(extra))
+        assertEquals(1, Regex(Regex.escape(extra)).findAll(system).count())
+        assertEquals("Review this response",
+            projected.getJSONObject(projected.length() - 1).getString("content"))
+
+        assertTrue(runCatching {
+            WorkspaceChatGateway.openRouterBody(
+                messages, extraSystemInstructions = "x".repeat(24_001))
+        }.isFailure)
+    }
+
     @Test fun longPastedMessageIsSentInFullWithoutSlicing() {
         val original = "START\n" + "हॉरर कहानी और AI companion\n".repeat(850) + "\nEND"
         val olderThatFits = message("assistant", "old".repeat(15000))

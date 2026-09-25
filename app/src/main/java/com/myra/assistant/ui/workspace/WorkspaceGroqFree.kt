@@ -20,8 +20,15 @@ internal object WorkspaceGroqFree {
     private const val MAX_RESPONSE_BYTES = 96_000L
 
     /** Includes generated system instructions, not just raw chat characters. */
-    internal fun withinBudget(messages: List<WorkspaceConversationStore.Message>): Boolean =
-        runCatching { withinBudget(JSONObject(WorkspaceChatGateway.openRouterBody(messages))) }
+    internal fun withinBudget(
+        messages: List<WorkspaceConversationStore.Message>,
+        extraSystemInstructions: String? = null,
+    ): Boolean =
+        runCatching {
+            withinBudget(JSONObject(
+                WorkspaceChatGateway.openRouterBody(
+                    messages, extraSystemInstructions = extraSystemInstructions)))
+        }
             .getOrDefault(false)
 
     private fun withinBudget(json: JSONObject): Boolean {
@@ -32,9 +39,14 @@ internal object WorkspaceGroqFree {
         } <= MAX_PROMPT_CHARS
     }
 
-    fun body(messages: List<WorkspaceConversationStore.Message>, image: WorkspaceChatGateway.Image? = null): String {
+    fun body(
+        messages: List<WorkspaceConversationStore.Message>,
+        image: WorkspaceChatGateway.Image? = null,
+        extraSystemInstructions: String? = null,
+    ): String {
         require(image == null) { "Groq Free text route does not accept photos; nothing was sent" }
-        val json = JSONObject(WorkspaceChatGateway.openRouterBody(messages))
+        val json = JSONObject(WorkspaceChatGateway.openRouterBody(
+            messages, extraSystemInstructions = extraSystemInstructions))
         require(withinBudget(json)) {
             "Groq Free request exceeds LYRA's conservative free-quota budget; complete prompt saved locally, nothing sent. Use OpenRouter Free for a larger request."
         }
@@ -46,12 +58,17 @@ internal object WorkspaceGroqFree {
         return json.toString()
     }
 
-    fun request(key: String, messages: List<WorkspaceConversationStore.Message>,
-                image: WorkspaceChatGateway.Image? = null): Request {
+    fun request(
+        key: String,
+        messages: List<WorkspaceConversationStore.Message>,
+        image: WorkspaceChatGateway.Image? = null,
+        extraSystemInstructions: String? = null,
+    ): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "A valid Groq key is required in API & Cloud Settings"
         }
-        val payload = body(messages, image).toRequestBody("application/json; charset=utf-8".toMediaType())
+        val payload = body(messages, image, extraSystemInstructions)
+            .toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder().url(ENDPOINT)
             .header("Authorization", "Bearer $key")
             .header("Content-Type", "application/json")

@@ -38,6 +38,19 @@ class WorkspaceCustomProviderChatTest {
         assertFalse(raw.contains("secret"))
     }
 
+    @Test fun oneTurnInstructionsAreIncludedWithoutPersistingOrLeakingKey() {
+        val request = WorkspaceCustomProviderChat.request(
+            profile(), "secret", listOf(message("user", "Task", "u1")),
+            extraSystemInstructions = "SKILL-ONE-TURN")
+        val buffer = Buffer()
+        requireNotNull(request.body).writeTo(buffer)
+        val raw = buffer.readUtf8()
+        val json = JSONObject(raw)
+        assertTrue(json.getJSONArray("messages").getJSONObject(0)
+            .getString("content").contains("SKILL-ONE-TURN"))
+        assertFalse(raw.contains("secret"))
+    }
+
     @Test fun responseParserAcceptsCompleteTextAndHidesRawFailureBody() {
         val request = Request.Builder().url(profile().chatCompletionsUrl).build()
         val ok = Response.Builder().request(request).protocol(Protocol.HTTP_1_1)

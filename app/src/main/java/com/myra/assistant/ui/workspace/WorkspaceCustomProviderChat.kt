@@ -23,6 +23,7 @@ internal object WorkspaceCustomProviderChat {
         profile: WorkspaceCustomProviderProfile.Validated,
         apiKey: String,
         messages: List<WorkspaceConversationStore.Message>,
+        extraSystemInstructions: String? = null,
     ): Request {
         require(WorkspaceProviderRegistry.TaskKind.CHAT_TEXT in profile.tasks) {
             "Custom provider is not configured for text chat"
@@ -49,7 +50,8 @@ internal object WorkspaceCustomProviderChat {
             .put("stream", false)
             .put("max_tokens", profile.maxOutputTokens)
             .put("temperature", 0.2)
-            .put("messages", WorkspaceChatGateway.openAiMessages(messages))
+            .put("messages", WorkspaceChatGateway.openAiMessages(
+                messages, extraSystemInstructions = extraSystemInstructions))
             .toString()
             .toRequestBody("application/json; charset=utf-8".toMediaType())
 
