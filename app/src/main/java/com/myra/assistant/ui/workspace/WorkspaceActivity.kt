@@ -1668,7 +1668,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
-                WorkspaceSkillInvocationReceipt.attach(reply, skillProjection)
+                WorkspaceSkillResultBoundary.attach(reply, skillProjection)
             }
             val failure = finalized.exceptionOrNull()
             finalized.onSuccess { reply ->
@@ -1860,7 +1860,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
-                WorkspaceSkillInvocationReceipt.attach(reply, skillProjection)
+                WorkspaceSkillResultBoundary.attach(reply, skillProjection)
             }
             val failure = finalized.exceptionOrNull()
             finalized.onSuccess { reply ->
