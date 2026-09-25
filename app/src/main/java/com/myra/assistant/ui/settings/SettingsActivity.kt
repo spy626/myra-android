@@ -18,6 +18,7 @@ class SettingsActivity : AppCompatActivity() {
         b.backButton.setOnClickListener { finish() }
         b.apiCloudCard.setOnClickListener { startActivity(Intent(this, ApiCloudSettingsActivity::class.java)) }
         b.voiceAiCard.setOnClickListener { startActivity(Intent(this, VoiceAiSettingsActivity::class.java)) }
+        b.skillsCard.setOnClickListener { startActivity(Intent(this, SkillManagerActivity::class.java)) }
         b.memoryCard.setOnClickListener { startActivity(Intent(this, MemorySettingsActivity::class.java)) }
         b.screenVisionCard.setOnClickListener { startActivity(Intent(this, ScreenVisionSettingsActivity::class.java)) }
         b.permissionsCard.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }

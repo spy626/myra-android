@@ -20,6 +20,11 @@
             <TextView style="@style/MyraSettingsIcon" android:text="◉" />
             <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Voice &amp; AI Models" /><TextView style="@style/MyraSettingsSubtitle" android:text="Gemini key, Live model, voice and personality" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
         </LinearLayout>
+        <TextView style="@style/MyraLabel" android:text="SKILLS" />
+        <LinearLayout android:id="@+id/skillsCard" style="@style/MyraSettingsCard">
+            <TextView style="@style/MyraSettingsIcon" android:text="◇" />
+            <LinearLayout style="@style/MyraSettingsTextGroup"><TextView style="@style/MyraSettingsTitle" android:text="Skills" /><TextView style="@style/MyraSettingsSubtitle" android:text="Installed skill state, permissions and provenance" /></LinearLayout><TextView style="@style/MyraSettingsChevron" />
+        </LinearLayout>
         <TextView style="@style/MyraLabel" android:text="PERSONALIZATION" />
         <LinearLayout android:id="@+id/memoryCard" style="@style/MyraSettingsCard">
             <TextView style="@style/MyraSettingsIcon" android:text="◆" />
