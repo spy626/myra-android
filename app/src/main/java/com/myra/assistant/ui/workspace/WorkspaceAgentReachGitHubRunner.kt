@@ -139,7 +139,7 @@ internal class WorkspaceAgentReachGitHubRunner(
             return
         }
 
-        runCatching {
+        runCatching<WorkspaceAgentReachGitHubReadSession.Step?> {
             when (state.phase) {
                 WorkspaceAgentReachGitHubReadSession.Phase.AWAITING_METADATA ->
                     WorkspaceAgentReachGitHubReadSession.acceptMetadata(
@@ -151,7 +151,7 @@ internal class WorkspaceAgentReachGitHubRunner(
                     val done = WorkspaceAgentReachGitHubReadSession.acceptContent(
                         state, current, response, nowMs())
                     synchronized(this) {
-                        if (run != generation) return@runCatching
+                        if (run != generation) return@runCatching null
                     }
                     listener.onEvent(
                         WorkspaceWorkPhase.DONE,
@@ -159,13 +159,13 @@ internal class WorkspaceAgentReachGitHubRunner(
                         done.commitSha?.take(12),
                     )
                     listener.onComplete(requireNotNull(done.evidence))
-                    return
+                    null
                 }
                 WorkspaceAgentReachGitHubReadSession.Phase.COMPLETE ->
                     error("GitHub read was already complete")
             }
         }.onSuccess { next ->
-            if (next is WorkspaceAgentReachGitHubReadSession.Step) {
+            if (next != null) {
                 synchronized(this) {
                     if (run != generation) return@onSuccess
                     dispatch(run, next)
