@@ -12,6 +12,7 @@ internal object WorkspaceAgentReachGitHubReadSession {
     enum class Phase {
         AWAITING_METADATA,
         AWAITING_COMMIT,
+        AWAITING_INDEX,
         AWAITING_CONTENT,
         COMPLETE,
     }
@@ -22,6 +23,7 @@ internal object WorkspaceAgentReachGitHubReadSession {
         val repositoryMeta: WorkspaceAgentReachGitHub.RepositoryMeta? = null,
         val ref: String? = null,
         val commitSha: String? = null,
+        val repositoryIndex: WorkspaceAgentReachGitHub.RepositoryIndex? = null,
         val evidence: WorkspaceAgentReachEvidence.Evidence? = null,
     )
 
@@ -85,16 +87,38 @@ internal object WorkspaceAgentReachGitHubReadSession {
         }
         requireCurrent(state, current)
         val sha = WorkspaceAgentReachGitHub.readCommitSha(response)
+        return if (state.selection.isRepositoryRead) {
+            val next = state.copy(
+                phase = Phase.AWAITING_INDEX,
+                commitSha = sha,
+            )
+            Step(next, WorkspaceAgentReachGitHub.rootIndexRequest(state.selection, sha))
+        } else {
+            val next = state.copy(
+                phase = Phase.AWAITING_CONTENT,
+                commitSha = sha,
+            )
+            Step(next, WorkspaceAgentReachGitHub.fileRequest(state.selection, sha))
+        }
+    }
+
+    fun acceptIndex(
+        state: State,
+        current: WorkspaceAgentReachPolicy.Target,
+        response: Response,
+    ): Step {
+        require(state.phase == Phase.AWAITING_INDEX && state.selection.isRepositoryRead) {
+            "GitHub repository index is not expected in this phase"
+        }
+        requireCurrent(state, current)
+        val sha = requireNotNull(state.commitSha) { "Pinned GitHub commit is unavailable" }
+        val index = WorkspaceAgentReachGitHub.readRootIndex(response, sha)
+        require(index.commitSha == sha) { "GitHub index revision did not match pinned commit" }
         val next = state.copy(
             phase = Phase.AWAITING_CONTENT,
-            commitSha = sha,
+            repositoryIndex = index,
         )
-        val request = if (state.selection.isRepositoryRead) {
-            WorkspaceAgentReachGitHub.readmeRequest(state.selection, sha)
-        } else {
-            WorkspaceAgentReachGitHub.fileRequest(state.selection, sha)
-        }
-        return Step(next, request)
+        return Step(next, WorkspaceAgentReachGitHub.readmeRequest(state.selection, sha))
     }
 
     fun acceptContent(

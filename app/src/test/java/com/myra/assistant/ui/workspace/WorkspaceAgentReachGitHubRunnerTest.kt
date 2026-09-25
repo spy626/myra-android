@@ -112,6 +112,16 @@ class WorkspaceAgentReachGitHubRunnerTest {
 
         executor.respond(commit(sha))
         assertEquals(1, executor.pending.size)
+        assertEquals("Indexing repository", events.labels.last())
+
+        val indexBody = org.json.JSONArray()
+            .put(JSONObject().put("name", "README.md").put("path", "README.md").put("type", "file")
+                .put("sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").put("size", 10))
+            .put(JSONObject().put("name", "src").put("path", "src").put("type", "dir")
+                .put("sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+            .toString()
+        executor.respond(indexBody)
+        assertEquals(1, executor.pending.size)
         assertEquals("Reading GitHub README", events.labels.last())
 
         executor.respond(file(sha, "# hello"))

@@ -61,13 +61,27 @@ class WorkspaceAgentReachGitHubReadSessionTest {
         val afterCommit = WorkspaceAgentReachGitHubReadSession.acceptCommit(
             afterMeta.state, target,
             response(afterMeta.request.url.toString(), body = commit(sha)))
-        assertEquals(WorkspaceAgentReachGitHubReadSession.Phase.AWAITING_CONTENT,
+        assertEquals(WorkspaceAgentReachGitHubReadSession.Phase.AWAITING_INDEX,
             afterCommit.state.phase)
-        assertTrue(afterCommit.request.url.toString().contains("/readme?ref=$sha"))
+        assertTrue(afterCommit.request.url.toString().contains("/contents?ref=$sha"))
+
+        val indexBody = org.json.JSONArray()
+            .put(JSONObject().put("name", "README.md").put("path", "README.md").put("type", "file")
+                .put("sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").put("size", 10))
+            .put(JSONObject().put("name", "src").put("path", "src").put("type", "dir")
+                .put("sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+            .toString()
+        val afterIndex = WorkspaceAgentReachGitHubReadSession.acceptIndex(
+            afterCommit.state, target,
+            response(afterCommit.request.url.toString(), body = indexBody))
+        assertEquals(WorkspaceAgentReachGitHubReadSession.Phase.AWAITING_CONTENT,
+            afterIndex.state.phase)
+        assertEquals(2, afterIndex.state.repositoryIndex?.entries?.size)
+        assertTrue(afterIndex.request.url.toString().contains("/readme?ref=$sha"))
 
         val done = WorkspaceAgentReachGitHubReadSession.acceptContent(
-            afterCommit.state, target,
-            response(afterCommit.request.url.toString(), body = file(sha, "# Hello")),
+            afterIndex.state, target,
+            response(afterIndex.request.url.toString(), body = file(sha, "# Hello")),
             fetchedAtMs = 123L)
         assertEquals(WorkspaceAgentReachGitHubReadSession.Phase.COMPLETE, done.phase)
         assertEquals(sha, done.evidence?.provenance?.revision)

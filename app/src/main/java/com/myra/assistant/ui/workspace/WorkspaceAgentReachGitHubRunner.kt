@@ -93,6 +93,12 @@ internal class WorkspaceAgentReachGitHubRunner(
                     "Pinning GitHub revision",
                     state.ref,
                 )
+            WorkspaceAgentReachGitHubReadSession.Phase.AWAITING_INDEX ->
+                listener.onEvent(
+                    WorkspaceWorkPhase.READING,
+                    "Indexing repository",
+                    "Pinned root structure",
+                )
             WorkspaceAgentReachGitHubReadSession.Phase.AWAITING_CONTENT ->
                 listener.onEvent(
                     WorkspaceWorkPhase.READING,
@@ -146,6 +152,9 @@ internal class WorkspaceAgentReachGitHubRunner(
                         state, current, response)
                 WorkspaceAgentReachGitHubReadSession.Phase.AWAITING_COMMIT ->
                     WorkspaceAgentReachGitHubReadSession.acceptCommit(
+                        state, current, response)
+                WorkspaceAgentReachGitHubReadSession.Phase.AWAITING_INDEX ->
+                    WorkspaceAgentReachGitHubReadSession.acceptIndex(
                         state, current, response)
                 WorkspaceAgentReachGitHubReadSession.Phase.AWAITING_CONTENT -> {
                     val done = WorkspaceAgentReachGitHubReadSession.acceptContent(
