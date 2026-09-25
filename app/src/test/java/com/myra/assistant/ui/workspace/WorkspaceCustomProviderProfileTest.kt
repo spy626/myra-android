@@ -28,10 +28,16 @@ class WorkspaceCustomProviderProfileTest {
         assertTrue(runCatching { p.validate(p.userDraft(
             "local_wrong_mode", "Local", "https://127.0.0.1:8000/v1", "model")) }.isFailure)
 
-        val local = p.validate(p.userDraft(
-            "local_ok", "Local", "http://192.168.1.20:8080/v1", "model", localEndpoint = true))
-        assertEquals("http://192.168.1.20:8080/v1", local.baseUrl)
-        assertTrue(local.localEndpoint)
+        val loopback = p.validate(p.userDraft(
+            "local_ok", "Local", "http://127.0.0.1:8080/v1", "model", localEndpoint = true))
+        assertEquals("http://127.0.0.1:8080/v1", loopback.baseUrl)
+        assertTrue(loopback.localEndpoint)
+
+        val privateHttps = p.validate(p.userDraft(
+            "lan_https", "LAN", "https://192.168.1.20:8443/v1", "model", localEndpoint = true))
+        assertEquals("https://192.168.1.20:8443/v1", privateHttps.baseUrl)
+        assertTrue(runCatching { p.validate(p.userDraft(
+            "lan_http", "LAN", "http://192.168.1.20:8080/v1", "model", localEndpoint = true)) }.isFailure)
 
         assertTrue(runCatching { p.validate(p.userDraft(
             "fake_local", "Fake", "http://example.com/v1", "model", localEndpoint = true)) }.isFailure)

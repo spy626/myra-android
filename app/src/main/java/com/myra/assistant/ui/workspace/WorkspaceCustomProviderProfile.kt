@@ -67,6 +67,12 @@ internal object WorkspaceCustomProviderProfile {
         return parts
     }
 
+    internal fun isLoopbackHost(hostRaw: String): Boolean {
+        val host = hostRaw.trim().removePrefix("[").removeSuffix("]").lowercase(Locale.US)
+        return host == "localhost" || host.endsWith(".localhost") ||
+            host == "127.0.0.1" || host == "::1"
+    }
+
     internal fun isLocalHost(hostRaw: String): Boolean {
         val host = hostRaw.trim().removePrefix("[").removeSuffix("]").lowercase(Locale.US)
         if (host == "localhost" || host.endsWith(".localhost") ||
@@ -106,8 +112,12 @@ internal object WorkspaceCustomProviderProfile {
         }
 
         val localHost = isLocalHost(uri.host)
+        val loopbackHost = isLoopbackHost(uri.host)
         if (localEndpoint) {
             require(localHost) { "Local endpoint mode accepts only loopback/private-network hosts" }
+            require(scheme == "https" || loopbackHost) {
+                "Private-network Custom API endpoints must use HTTPS; cleartext HTTP is limited to phone loopback"
+            }
         } else {
             require(scheme == "https") { "Internet Custom API endpoints must use HTTPS" }
             require(!localHost) { "Loopback/private hosts require Local endpoint mode" }

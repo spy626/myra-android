@@ -4,5 +4,6 @@
     <!-- Only this phone's ephemeral read-only Workspace preview may use HTTP. -->
     <domain-config cleartextTrafficPermitted="true">
         <domain>127.0.0.1</domain>
+        <domain>localhost</domain>
     </domain-config>
 </network-security-config>
