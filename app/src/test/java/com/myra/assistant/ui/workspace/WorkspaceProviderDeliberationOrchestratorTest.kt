@@ -120,7 +120,7 @@ class WorkspaceProviderDeliberationOrchestratorTest {
         }.isFailure)
 
         WorkspaceProviderSessionHealth.recordHttp(
-            WorkspaceProviderRegistry.Id.XKIRO_FREE, 429, "60", nowMs = 1_000L)
+            WorkspaceProviderRegistry.Id.XKIRO_FREE, 429, "60")
         assertTrue(runCatching {
             WorkspaceProviderDeliberationOrchestrator.start(
                 current, xKiro(), zai())
