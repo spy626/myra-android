@@ -87,6 +87,13 @@ internal object WorkspaceAgentReachPolicy {
     }
 
     private fun githubInfo(host: String, path: String): Triple<GitHubKind?, String?, String?> {
+        if (host == "api.github.com") {
+            val parts = path.trim('/').split('/').filter(String::isNotBlank)
+            if (parts.getOrNull(0) == "repos") {
+                return Triple(GitHubKind.OTHER, parts.getOrNull(1), parts.getOrNull(2))
+            }
+            return Triple(GitHubKind.OTHER, null, null)
+        }
         if (host == "raw.githubusercontent.com") {
             val parts = path.trim('/').split('/').filter(String::isNotBlank)
             return Triple(GitHubKind.RAW_FILE, parts.getOrNull(0), parts.getOrNull(1))
@@ -134,7 +141,7 @@ internal object WorkspaceAgentReachPolicy {
         }
 
         val platform = when {
-            host in setOf("github.com", "raw.githubusercontent.com") -> Platform.GITHUB
+            host in setOf("github.com", "api.github.com", "raw.githubusercontent.com") -> Platform.GITHUB
             hostMatches(host, "youtube.com") || host == "youtu.be" -> Platform.YOUTUBE
             hostMatches(host, "reddit.com") -> Platform.REDDIT
             hostMatches(host, "x.com") || hostMatches(host, "twitter.com") -> Platform.X
