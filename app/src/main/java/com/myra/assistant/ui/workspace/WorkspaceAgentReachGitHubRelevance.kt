@@ -36,8 +36,8 @@ internal object WorkspaceAgentReachGitHubRelevance {
         ".env", ".env.local", ".env.production", "id_rsa", "id_ed25519"
     )
     private val highSignalNames = mapOf(
-        "skill.md" to 70,
-        "agents.md" to 65,
+        "skill.md" to 100,
+        "agents.md" to 80,
         "agent.md" to 55,
         "architecture.md" to 60,
         "security.md" to 55,
