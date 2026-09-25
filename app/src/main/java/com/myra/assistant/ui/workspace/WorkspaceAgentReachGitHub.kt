@@ -244,7 +244,7 @@ internal object WorkspaceAgentReachGitHub {
             "GitHub file size did not match the bounded response"
         }
         val content = String(bytes, Charsets.UTF_8)
-        require(!content.contains(' ')) { "Binary GitHub file is not accepted as text evidence" }
+        require(!content.contains('\u0000')) { "Binary GitHub file is not accepted as text evidence" }
 
         val htmlUrl = root.optString("html_url").takeIf { it.isNotBlank() }
             ?: selection.requested.canonicalUrl
