@@ -38,10 +38,7 @@ internal object WorkspaceSkillUpdateCandidate {
         original: String,
         description: String,
     ): String {
-        val normalized = original.replace("
-", "
-").replace('', '
-')
+        val normalized = original.lines().joinToString(10.toChar().toString())
         val lines = normalized.lines().toMutableList()
         require(lines.firstOrNull()?.trim() == "---") {
             "Installed SKILL.md frontmatter is unavailable"
