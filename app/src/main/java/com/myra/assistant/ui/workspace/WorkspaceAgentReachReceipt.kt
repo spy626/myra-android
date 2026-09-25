@@ -21,7 +21,8 @@ internal object WorkspaceAgentReachReceipt {
                 appendLine(
                     "Pinned root index: ${it.entries.size} entries " +
                         "(${it.directories} directories, ${it.files} files)")
-                val preview = it.entries.take(12).joinToString(", ") { entry ->
+                val preview = it.entries.sortedBy { entry -> entry.path.lowercase() }
+                    .take(12).joinToString(", ") { entry ->
                     if (entry.kind == WorkspaceAgentReachGitHub.RootEntryKind.DIRECTORY)
                         "${entry.name}/" else entry.name
                 }
