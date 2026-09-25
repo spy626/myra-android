@@ -54,6 +54,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private val suggestions by lazy {
         WorkspaceAiSuggestionDraftStore(File(noBackupFilesDir, "workspace-ai-drafts"))
     }
+    private val skillStore by lazy {
+        WorkspaceSkillStore(File(noBackupFilesDir, WorkspaceSkillStore.APP_DIRECTORY))
+    }
     private val keys by lazy { ApiKeyStore(this) }
     private val preferences by lazy { getSharedPreferences("workspace_ui", Context.MODE_PRIVATE) }
     private val localDrafts = mutableMapOf<String, String>()
@@ -1267,7 +1270,10 @@ class WorkspaceActivity : AppCompatActivity() {
      * Attachments use the existing OpenRouter route or stay local; no auto retry or paid route.
      * Groq Free/ZDR opt-in does not certify an account that is later upgraded to paid.
      */
-    private fun selectedProvider(hasAttachments: Boolean = false): WorkspaceChatGateway.Provider? {
+    private fun selectedProvider(
+        hasAttachments: Boolean = false,
+        extraSystemInstructions: String? = null,
+    ): WorkspaceChatGateway.Provider? {
         val openRouterAvailable = keys.get(ApiKeyStore.OPENROUTER).isNotBlank()
         val groqAvailable = keys.get(ApiKeyStore.GROQ).isNotBlank()
         val groqApproved = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
@@ -1278,9 +1284,9 @@ class WorkspaceActivity : AppCompatActivity() {
         // Retry of an existing assistant reply uses its preceding user turn.
         val candidate = if (history?.lastOrNull()?.role == "assistant") history.dropLast(1) else history
         val groqFits = candidate?.takeIf { it.lastOrNull()?.role == "user" }
-            ?.let { WorkspaceGroqFree.withinBudget(it) } ?: false
+            ?.let { WorkspaceGroqFree.withinBudget(it, extraSystemInstructions) } ?: false
         val llm7Fits = candidate?.takeIf { it.lastOrNull()?.role == "user" }
-            ?.let { WorkspaceLlm7Free.withinBudget(it) } ?: false
+            ?.let { WorkspaceLlm7Free.withinBudget(it, extraSystemInstructions) } ?: false
         return WorkspaceFreeProviderSelection.choose(
             openRouterAvailable, groqAvailable, groqApproved, groqFits, hasAttachments,
             llm7Available, llm7Approved, llm7Fits)
@@ -1377,6 +1383,13 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
+        val skillCommand = runCatching {
+            WorkspaceSkillUserCommand.parse(text)
+        }.getOrElse {
+            statusMessage = it.message ?: "Skill command is invalid; nothing was sent."
+            render()
+            return
+        }
         val intent = WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
             val title = text.lineSequence().firstOrNull().orEmpty()
@@ -1387,6 +1400,16 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val id = selectedId ?: return
         val current = projects.getProject(id) ?: return
+        if (skillCommand != null && current.type != WorkspaceProjectType.CHAT) {
+            statusMessage = "Enabled skills are available only in normal Workspace Chat in this phase; nothing was sent."
+            render()
+            return
+        }
+        if (skillCommand != null && attachments.isNotEmpty()) {
+            statusMessage = "Skill invocation is instruction-only in this phase. Remove attachments and resend; nothing was sent."
+            render()
+            return
+        }
         if (intent != null && current.type != WorkspaceProjectType.CHAT && current.type != intent) {
             toast("This is a different project type. Start a New Chat for that request.")
             return
@@ -1431,7 +1454,23 @@ class WorkspaceActivity : AppCompatActivity() {
             coding.continueRequest(id, text, stored.id)
             return
         }
-        if (picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
+        val skillProjection = if (skillCommand != null) {
+            runCatching {
+                requireNotNull(WorkspaceSkillUserEntry.prepare(
+                    skillStore, id, stored.id, text)).projection
+            }.getOrElse {
+                statusMessage = it.message ?: "Enabled skill could not be invoked. Message remains local."
+                recordWorkEvent(
+                    WorkspaceWorkPhase.ERROR,
+                    "Skill not invoked",
+                    statusMessage,
+                )
+                render()
+                return
+            }
+        } else null
+        if (skillProjection == null &&
+            picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
             WorkspaceAgentReachChatIntent.decide(text)?.let { decision ->
                 decision.localError?.let { reason ->
                     statusMessage = reason
@@ -1447,7 +1486,8 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         // User-authored recall is answered from the exact selected-chat transcript.
         // Never let a model's earlier guess become evidence; do not spend another Free call.
-        if (picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
+        if (skillProjection == null &&
+            picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
             val grounded = runCatching {
                 val selectedChat = conversations.read(id)
                 WorkspaceChatRecallGrounding.answer(selectedChat)
@@ -1470,10 +1510,15 @@ class WorkspaceActivity : AppCompatActivity() {
                 picked.isNotEmpty())) {
             statusMessage = ""
             render()
-            requestCustomReply(id, stored.id)
+            requestCustomReply(id, stored.id, skillProjection = skillProjection)
             return
         }
-        val provider = runCatching { selectedProvider(picked.isNotEmpty()) }
+        val provider = runCatching {
+            selectedProvider(
+                picked.isNotEmpty(),
+                extraSystemInstructions = skillProjection?.prompt,
+            )
+        }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
         if (provider == null) {
             statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
@@ -1488,13 +1533,17 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         statusMessage = ""
         render()
-        requestReply(id, stored.id, provider, picked)
+        requestReply(
+            id, stored.id, provider, picked,
+            skillProjection = skillProjection,
+        )
     }
 
     private fun requestCustomReply(
         id: String,
         messageId: String,
         replacingAssistantId: String? = null,
+        skillProjection: WorkspaceSkillInvocation.Projection? = null,
     ) {
         if (selectedId != id || isBusy() || workTab) return
         if (!WorkspaceCustomProviderStore.chatEnabled(this)) {
@@ -1537,8 +1586,14 @@ class WorkspaceActivity : AppCompatActivity() {
                 render()
                 return
             }
+        require(replacingAssistantId == null || skillProjection == null) {
+            "Skill projection cannot be reused on retry"
+        }
         val outgoing = runCatching {
-            WorkspaceCustomProviderChat.request(profile, key, transcript)
+            WorkspaceCustomProviderChat.request(
+                profile, key, transcript,
+                extraSystemInstructions = skillProjection?.prompt,
+            )
         }.getOrElse {
             statusMessage = it.message ?: "Custom provider request is unavailable."
             render()
@@ -1550,11 +1605,24 @@ class WorkspaceActivity : AppCompatActivity() {
         workTrace.clear()
         workTraceExpanded = true
         workTraceMessageId = messageId
-        workTrace.begin(
-            WorkspaceWorkPhase.THINKING,
-            "Thinking",
-            "${profile.displayName} · Custom manual",
-        )
+        if (skillProjection != null) {
+            workTrace.begin(
+                WorkspaceWorkPhase.READING,
+                "Using enabled skill",
+                skillProjection.skillName,
+            )
+            workTrace.add(
+                WorkspaceWorkPhase.THINKING,
+                "Thinking",
+                "${profile.displayName} · Custom manual",
+            )
+        } else {
+            workTrace.begin(
+                WorkspaceWorkPhase.THINKING,
+                "Thinking",
+                "${profile.displayName} · Custom manual",
+            )
+        }
         statusMessage = ""
         render()
         call.enqueue(object : Callback {
@@ -1657,8 +1725,14 @@ class WorkspaceActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun requestReply(id: String, messageId: String, provider: WorkspaceChatGateway.Provider,
-                             picked: List<Attachment>, replacingAssistantId: String? = null) {
+    private fun requestReply(
+        id: String,
+        messageId: String,
+        provider: WorkspaceChatGateway.Provider,
+        picked: List<Attachment>,
+        replacingAssistantId: String? = null,
+        skillProjection: WorkspaceSkillInvocation.Projection? = null,
+    ) {
         if (selectedId != id || isBusy() || workTab) return
         val cooldown = WorkspaceProviderSessionHealth.cooldownMessage(
             WorkspaceProviderRegistry.id(provider))
@@ -1715,12 +1789,28 @@ class WorkspaceActivity : AppCompatActivity() {
                     android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
             }.getOrElse { statusMessage = it.message ?: "Photo unavailable"; render(); return }
         }
+        require(replacingAssistantId == null || skillProjection == null) {
+            "Skill projection cannot be reused on retry"
+        }
         val outgoing = runCatching {
-            WorkspaceChatGateway.request(provider, keyFor(provider), enriched, image)
+            WorkspaceChatGateway.request(
+                provider,
+                keyFor(provider),
+                enriched,
+                image,
+                extraSystemInstructions = skillProjection?.prompt,
+            )
         }.getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
         val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
         activeRequest = call
+        if (skillProjection != null && workTrace.snapshot().events.isEmpty()) {
+            workTrace.begin(
+                WorkspaceWorkPhase.READING,
+                "Using enabled skill",
+                skillProjection.skillName,
+            )
+        }
         if (workTrace.snapshot().events.isEmpty()) {
             workTrace.begin(WorkspaceWorkPhase.THINKING, "Thinking", providerLabel(provider))
         } else {
