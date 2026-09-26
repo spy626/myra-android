@@ -111,6 +111,18 @@ internal class WorkspaceSkillStore(
             .put("sourceUrl", value.sourceUrl ?: JSONObject.NULL)
             .put("pinnedRevision", value.pinnedRevision ?: JSONObject.NULL)
 
+    private fun rollbackPointJson(
+        point: WorkspaceSkillCatalog.RollbackPoint,
+    ): JSONObject =
+        JSONObject()
+            .put("name", point.name)
+            .put("description", point.description)
+            .put("contentSha256", point.contentSha256)
+            .put("packageSha256", point.packageSha256)
+            .put("permissionSha256", point.permissionSha256)
+            .put("provenance", provenanceJson(point.provenance))
+            .put("installedAtMs", point.installedAtMs)
+
     private fun entryJson(entry: WorkspaceSkillCatalog.Entry): JSONObject =
         JSONObject()
             .put("name", entry.name)
@@ -125,6 +137,48 @@ internal class WorkspaceSkillStore(
             .put("enableReadinessSha256", entry.enableReadinessSha256 ?: JSONObject.NULL)
             .put("enableEnvironmentSha256", entry.enableEnvironmentSha256 ?: JSONObject.NULL)
             .put("enableBindingSha256", entry.enableBindingSha256 ?: JSONObject.NULL)
+            .put(
+                "rollbackPoint",
+                entry.rollbackPoint?.let(::rollbackPointJson) ?: JSONObject.NULL,
+            )
+
+    private fun parseRollbackPoint(
+        root: JSONObject,
+        currentName: String,
+        currentPackageSha256: String,
+    ): WorkspaceSkillCatalog.RollbackPoint {
+        val name = root.getString("name")
+        require(NAME.matches(name) && name == currentName) {
+            "Stored rollback skill name is invalid"
+        }
+        val description = root.getString("description")
+        require(description.isNotBlank() && description.length <= 1_024 &&
+            description.none(Char::isISOControl)) {
+            "Stored rollback description is invalid"
+        }
+        val content = root.getString("contentSha256")
+        val packageHash = root.getString("packageSha256")
+        val permissions = root.getString("permissionSha256")
+        require(SHA.matches(content) && SHA.matches(packageHash) &&
+            SHA.matches(permissions) && packageHash != currentPackageSha256) {
+            "Stored rollback hash is invalid"
+        }
+        val provenanceJson = root.getJSONObject("provenance")
+        val origin = runCatching {
+            WorkspaceSkillContract.Origin.valueOf(provenanceJson.getString("origin"))
+        }.getOrElse { throw IllegalArgumentException("Stored rollback origin is invalid") }
+        val provenance = WorkspaceSkillContract.Provenance(
+            origin = origin,
+            sourceUrl = provenanceJson.optString("sourceUrl")
+                .takeIf { it.isNotBlank() && it != "null" },
+            pinnedRevision = provenanceJson.optString("pinnedRevision")
+                .takeIf { it.isNotBlank() && it != "null" },
+        )
+        val installedAt = root.getLong("installedAtMs")
+        require(installedAt >= 0L) { "Stored rollback timestamp is invalid" }
+        return WorkspaceSkillCatalog.RollbackPoint(
+            name, description, content, packageHash, permissions, provenance, installedAt)
+    }
 
     private fun parseEntry(
         root: JSONObject,
@@ -170,6 +224,10 @@ internal class WorkspaceSkillStore(
         val binding = if (!root.has("enableBindingSha256") ||
             root.isNull("enableBindingSha256")) null
         else root.getString("enableBindingSha256")
+        val rollbackPoint =
+            if (!root.has("rollbackPoint") || root.isNull("rollbackPoint")) null
+            else parseRollbackPoint(
+                root.getJSONObject("rollbackPoint"), name, packageHash)
         if (schemaVersion == LEGACY_SCHEMA_VERSION) {
             require(state == WorkspaceSkillCatalog.State.INSTALLED_DISABLED &&
                 enabledAt == null && readiness == null && environment == null && binding == null) {
@@ -189,6 +247,7 @@ internal class WorkspaceSkillStore(
             enableReadinessSha256 = readiness,
             enableEnvironmentSha256 = environment,
             enableBindingSha256 = binding,
+            rollbackPoint = rollbackPoint,
         )
         WorkspaceSkillEnablement.validateStoredState(entry)
         return entry
@@ -599,6 +658,32 @@ internal class WorkspaceSkillStore(
         )
         writeCatalog(after)
         return load(name)
+    }
+
+    /**
+     * H12 read-only verification of the one retained previous immutable version.
+     */
+    @Synchronized fun loadRollback(name: String): Installed {
+        require(NAME.matches(name)) { "Invalid skill name" }
+        val current = load(name)
+        val point = current.entry.rollbackPoint
+            ?: throw IllegalArgumentException("No verified rollback version is recorded")
+        val rollbackEntry = WorkspaceSkillCatalog.Entry(
+            name = point.name,
+            description = point.description,
+            contentSha256 = point.contentSha256,
+            packageSha256 = point.packageSha256,
+            permissionSha256 = point.permissionSha256,
+            provenance = point.provenance,
+            installedAtMs = point.installedAtMs,
+            state = WorkspaceSkillCatalog.State.INSTALLED_DISABLED,
+        )
+        val verified = verifyEntry(rollbackEntry)
+        require(verified.entry.name == current.entry.name &&
+            verified.entry.packageSha256 != current.entry.packageSha256) {
+            "Rollback package identity is invalid"
+        }
+        return verified
     }
 
     @Synchronized fun load(name: String): Installed {

@@ -151,6 +151,7 @@ internal object WorkspaceSkillUpdate {
             enableReadinessSha256 = null,
             enableEnvironmentSha256 = null,
             enableBindingSha256 = null,
+            rollbackPoint = WorkspaceSkillCatalog.rollbackPoint(current.entry),
         )
     }
 }

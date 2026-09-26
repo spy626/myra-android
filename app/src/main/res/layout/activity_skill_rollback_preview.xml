@@ -34,22 +34,22 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Skill details"
+                    android:text="Rollback preview"
                     android:textColor="#EEEEEE"
                     android:textSize="25sp"
                     android:textStyle="bold" />
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Exact approved metadata from the verified installed package"
+                    android:text="Verified current package vs retained previous package"
                     android:textColor="#777077"
                     android:textSize="12sp" />
             </LinearLayout>
         </LinearLayout>
 
         <TextView
-            android:id="@+id/skillState"
-            android:layout_width="wrap_content"
+            android:id="@+id/status"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
             android:text="VERIFYING"
@@ -58,86 +58,53 @@
             android:textStyle="bold" />
 
         <TextView
-            android:id="@+id/skillName"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="Skill"
-            android:textColor="#EEEEEE"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/skillDescription"
+            android:id="@+id/detail"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:text=""
             android:textColor="#C9C4C9"
-            android:textSize="14sp" />
+            android:textSize="13sp" />
 
         <TextView
+            android:id="@+id/activationImpact"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="12dp"
             android:background="@drawable/bg_field"
             android:padding="14dp"
-            android:text="Details are revalidated from the immutable local package. State changes require explicit local approval; disabling removes activation only and keeps the installed package."
-            android:textColor="#8E888E"
-            android:textSize="11sp" />
-
-        <Button
-            android:id="@+id/readinessButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="16dp"
-            android:background="@drawable/bg_button"
-            android:text="CHECK READINESS"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/disableButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="16dp"
-            android:background="@drawable/bg_field"
-            android:text="DISABLE SKILL"
-            android:textColor="#FF7189"
-            android:textStyle="bold"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/updatePreviewButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/bg_field"
-            android:text="PREVIEW UPDATE"
-            android:textColor="#EEEEEE"
-            android:textStyle="bold"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/rollbackPreviewButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/bg_field"
-            android:text="PREVIEW ROLLBACK"
-            android:textColor="#EEEEEE"
-            android:textStyle="bold"
-            android:visibility="gone" />
+            android:text=""
+            android:textColor="#C9C4C9"
+            android:textSize="12sp" />
 
         <TextView
             style="@style/MyraLabel"
-            android:text="APPROVED DETAILS" />
+            android:text="IDENTITY &amp; PROVENANCE" />
 
         <LinearLayout
-            android:id="@+id/detailList"
+            android:id="@+id/identityRows"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical" />
+
+        <TextView
+            style="@style/MyraLabel"
+            android:text="ROLLBACK PERMISSION DELTA" />
+
+        <LinearLayout
+            android:id="@+id/permissionRows"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_field"
+            android:padding="14dp"
+            android:text="PREVIEW ONLY · No approval token is created, no catalog pointer changes, no package is deleted, and no activation state changes on this screen."
+            android:textColor="#8E888E"
+            android:textSize="11sp" />
     </LinearLayout>
 </ScrollView>

@@ -37,6 +37,26 @@ internal object WorkspaceSkillCatalog {
         val warnings: List<String>,
     )
 
+    data class RollbackPoint(
+        val name: String,
+        val description: String,
+        val contentSha256: String,
+        val packageSha256: String,
+        val permissionSha256: String,
+        val provenance: WorkspaceSkillContract.Provenance,
+        val installedAtMs: Long,
+    )
+
+    fun rollbackPoint(entry: Entry): RollbackPoint = RollbackPoint(
+        name = entry.name,
+        description = entry.description,
+        contentSha256 = entry.contentSha256,
+        packageSha256 = entry.packageSha256,
+        permissionSha256 = entry.permissionSha256,
+        provenance = entry.provenance,
+        installedAtMs = entry.installedAtMs,
+    )
+
     data class Entry(
         val name: String,
         val description: String,
@@ -50,6 +70,7 @@ internal object WorkspaceSkillCatalog {
         val enableReadinessSha256: String? = null,
         val enableEnvironmentSha256: String? = null,
         val enableBindingSha256: String? = null,
+        val rollbackPoint: RollbackPoint? = null,
     )
 
     data class Catalog(

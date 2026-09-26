@@ -40,6 +40,7 @@
         <activity android:name=".ui.settings.SkillDetailActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.SkillReadinessActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.SkillUpdatePreviewActivity" android:exported="false" android:screenOrientation="portrait" />
+        <activity android:name=".ui.settings.SkillRollbackPreviewActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.MemorySettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.ScreenVisionSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".ui.settings.ApiCloudSettingsActivity" android:exported="false" android:screenOrientation="portrait" />
