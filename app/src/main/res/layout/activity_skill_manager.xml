@@ -53,9 +53,19 @@
             android:layout_marginTop="12dp"
             android:background="@drawable/bg_field"
             android:padding="14dp"
-            android:text="READ ONLY · This screen cannot install, enable, invoke, update or roll back a skill. Those actions stay behind separate approval flows."
+            android:text="Installed skills stay approval-bound. Local import preview can inspect SKILL.md and optional skill.json, but previewing does not install or enable anything."
             android:textColor="#8E888E"
             android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/previewImportButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_button"
+            android:text="PREVIEW LOCAL SKILL"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
 
         <TextView
             style="@style/MyraLabel"
@@ -75,7 +85,7 @@
             android:layout_width="match_parent"
             android:layout_height="110dp"
             android:gravity="center"
-            android:text="No skills installed yet.\nImport and install actions are intentionally not part of this slice."
+            android:text="No skills installed yet.\nYou can preview a local skill above; installation remains a separate approval step."
             android:textAlignment="center"
             android:textColor="#777077"
             android:textSize="14sp" />

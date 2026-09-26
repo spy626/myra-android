@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#050505"
+    android:fillViewport="true"
+    android:overScrollMode="never">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="18dp"
+        android:paddingBottom="32dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:gravity="center_vertical">
+            <TextView
+                android:id="@+id/backButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:gravity="center"
+                android:text="‹"
+                android:textColor="#EEEEEE"
+                android:textSize="36sp" />
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Import preview"
+                    android:textColor="#EEEEEE"
+                    android:textSize="25sp"
+                    android:textStyle="bold" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Local inspection only · nothing is installed"
+                    android:textColor="#777077"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_field"
+            android:padding="14dp"
+            android:text="H6 inspects only the selected SKILL.md and optional skill.json. Executable manifest fields are rejected, exact network domains are validated, and possible secrets are blocked. No selected bytes are copied into the skill store."
+            android:textColor="#8E888E"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/chooseSkillMdButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_button"
+            android:text="CHOOSE SKILL.MD"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/skillMdState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="No SKILL.md selected"
+            android:textColor="#777077"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/chooseSkillJsonButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_field"
+            android:text="ADD OPTIONAL SKILL.JSON"
+            android:textColor="#EEEEEE"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/skillJsonState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="No skill.json selected"
+            android:textColor="#777077"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/clearManifestButton"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/bg_field"
+            android:text="REMOVE SKILL.JSON"
+            android:textColor="#FF9EAE"
+            android:visibility="gone" />
+
+        <TextView
+            style="@style/MyraLabel"
+            android:text="LOCAL PREVIEW" />
+
+        <TextView
+            android:id="@+id/previewStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SELECT SKILL.MD"
+            android:textColor="#8E888E"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/previewName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="No skill preview yet"
+            android:textColor="#EEEEEE"
+            android:textSize="21sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/previewDescription"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:text="Choose SKILL.md first. skill.json is optional."
+            android:textColor="#C9C4C9"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:id="@+id/previewCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/previewResult"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_field"
+                android:padding="14dp"
+                android:text=""
+                android:textColor="#C9C4C9"
+                android:textSize="13sp" />
+
+            <TextView
+                style="@style/MyraLabel"
+                android:text="PERMISSIONS &amp; PROVENANCE" />
+
+            <LinearLayout
+                android:id="@+id/previewRows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                style="@style/MyraLabel"
+                android:text="WARNINGS" />
+
+            <LinearLayout
+                android:id="@+id/warningRows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

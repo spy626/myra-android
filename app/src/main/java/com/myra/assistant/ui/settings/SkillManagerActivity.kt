@@ -32,6 +32,9 @@ class SkillManagerActivity : AppCompatActivity() {
         binding = ActivitySkillManagerBinding.inflate(layoutInflater)
         setContentView(binding.root)
         binding.backButton.setOnClickListener { finish() }
+        binding.previewImportButton.setOnClickListener {
+            startActivity(Intent(this, SkillImportPreviewActivity::class.java))
+        }
     }
 
     override fun onResume() {
