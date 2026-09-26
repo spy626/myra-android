@@ -13,6 +13,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillManagerBinding
+import com.myra.assistant.ui.workspace.WorkspaceSkillDependencyAudit
 import com.myra.assistant.ui.workspace.WorkspaceSkillReadOnlySummary
 import com.myra.assistant.ui.workspace.WorkspaceSkillStore
 import java.io.File
@@ -42,6 +43,7 @@ class SkillManagerActivity : AppCompatActivity() {
             startActivity(Intent(this, SkillGitHubPreviewActivity::class.java))
         }
         binding.auditStorageButton.setOnClickListener { renderRetentionAudit() }
+        binding.auditDependenciesButton.setOnClickListener { renderDependencyAudit() }
         binding.cleanupStorageButton.setOnClickListener {
             pendingRetentionAudit?.let(::confirmStorageCleanup)
         }
@@ -51,6 +53,7 @@ class SkillManagerActivity : AppCompatActivity() {
         super.onResume()
         renderSkills()
         renderRetentionAudit()
+        renderDependencyAudit()
     }
 
     private fun renderRetentionAudit() {
@@ -83,6 +86,76 @@ class SkillManagerActivity : AppCompatActivity() {
         }
         binding.cleanupStorageButton.visibility =
             if (reclaimable > 0) View.VISIBLE else View.GONE
+    }
+
+    private fun renderDependencyAudit() {
+        val result = runCatching {
+            WorkspaceSkillDependencyAudit.analyze(skillStore.listVerified())
+        }
+        result.onFailure { error ->
+            binding.dependencyStatus.setTextColor(Color.rgb(255, 80, 110))
+            binding.dependencyStatus.text =
+                error.message ?: "Skill dependency integrity could not be audited."
+            return
+        }
+
+        val audit = result.getOrThrow()
+        val advisoryOnly =
+            audit.disabledDependencyReferences.isNotEmpty() &&
+                audit.enabledDependencyBreaks.isEmpty()
+        binding.dependencyStatus.setTextColor(
+            when {
+                !audit.healthy -> Color.rgb(255, 80, 110)
+                advisoryOnly -> Color.rgb(255, 180, 90)
+                else -> Color.rgb(108, 194, 145)
+            }
+        )
+        binding.dependencyStatus.text = buildString {
+            append(if (audit.healthy) "DEPENDENCY INTEGRITY: PASS" else "DEPENDENCY INTEGRITY: ATTENTION")
+            append("\nInstalled skills: ").append(audit.installedSkillCount)
+            append("\nDeclared dependency edges: ").append(audit.declaredDependencyCount)
+
+            if (audit.duplicateSkillNames.isNotEmpty()) {
+                append("\nDuplicate installed names: ")
+                append(audit.duplicateSkillNames.joinToString(", "))
+            }
+            if (audit.missingDependencies.isNotEmpty()) {
+                append("\nMissing dependencies:")
+                audit.missingDependencies.take(8).forEach {
+                    append("\n• ").append(it.skillName).append(" → ").append(it.dependencyName)
+                }
+                val extra = audit.missingDependencies.size - 8
+                if (extra > 0) append("\n• +").append(extra).append(" more")
+            }
+            if (audit.enabledDependencyBreaks.isNotEmpty()) {
+                append("\nEnabled skills with disabled dependencies:")
+                audit.enabledDependencyBreaks.take(8).forEach {
+                    append("\n• ").append(it.skillName).append(" → ").append(it.dependencyName)
+                }
+                val extra = audit.enabledDependencyBreaks.size - 8
+                if (extra > 0) append("\n• +").append(extra).append(" more")
+            }
+            val advisory = audit.disabledDependencyReferences.filterNot {
+                it in audit.enabledDependencyBreaks
+            }
+            if (advisory.isNotEmpty()) {
+                append("\nDisabled dependency references (not active runtime breaks):")
+                advisory.take(8).forEach {
+                    append("\n• ").append(it.skillName).append(" → ").append(it.dependencyName)
+                }
+                val extra = advisory.size - 8
+                if (extra > 0) append("\n• +").append(extra).append(" more")
+            }
+            if (audit.cycles.isNotEmpty()) {
+                append("\nDependency cycles:")
+                audit.cycles.take(6).forEach {
+                    append("\n• ").append(it.joinToString(" ↔ "))
+                }
+                val extra = audit.cycles.size - 6
+                if (extra > 0) append("\n• +").append(extra).append(" more")
+            }
+            append("\nREAD ONLY · no dependency state was changed.")
+        }
     }
 
     private fun confirmStorageCleanup(audit: WorkspaceSkillStore.RetentionAudit) {
