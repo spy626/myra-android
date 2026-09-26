@@ -1,32 +1,23 @@
 package com.myra.assistant.ui.settings
 
-import android.graphics.Color
 import android.content.Intent
+import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillManagerBinding
-import com.myra.assistant.ui.workspace.WorkspaceSkillDependencyAudit
 import com.myra.assistant.ui.workspace.WorkspaceSkillReadOnlySummary
 import com.myra.assistant.ui.workspace.WorkspaceSkillStore
 import java.io.File
 
-/**
- * Skill Manager.
- *
- * Installed-skill actions stay on their separately approval-bound flows. H15 adds only a bounded
- * storage audit plus explicit cleanup of exact catalog-unreferenced immutable package directories.
- */
+/** Simple installed-skills surface. Backend verification and lifecycle safety remain unchanged. */
 class SkillManagerActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySkillManagerBinding
-    private var pendingRetentionAudit: WorkspaceSkillStore.RetentionAudit? = null
     private val skillStore by lazy {
         WorkspaceSkillStore(File(noBackupFilesDir, WorkspaceSkillStore.APP_DIRECTORY))
     }
@@ -36,187 +27,19 @@ class SkillManagerActivity : AppCompatActivity() {
         binding = ActivitySkillManagerBinding.inflate(layoutInflater)
         setContentView(binding.root)
         binding.backButton.setOnClickListener { finish() }
-        binding.previewImportButton.setOnClickListener {
-            startActivity(Intent(this, SkillImportPreviewActivity::class.java))
-        }
-        binding.previewGithubButton.setOnClickListener {
-            startActivity(Intent(this, SkillGitHubPreviewActivity::class.java))
-        }
-        binding.auditStorageButton.setOnClickListener { renderRetentionAudit() }
-        binding.auditDependenciesButton.setOnClickListener { renderDependencyAudit() }
-        binding.cleanupStorageButton.setOnClickListener {
-            pendingRetentionAudit?.let(::confirmStorageCleanup)
-        }
     }
 
     override fun onResume() {
         super.onResume()
         renderSkills()
-        renderRetentionAudit()
-        renderDependencyAudit()
-    }
-
-    private fun renderRetentionAudit() {
-        pendingRetentionAudit = null
-        binding.cleanupStorageButton.visibility = View.GONE
-        val audit = runCatching { skillStore.retentionAudit() }.getOrElse { error ->
-            binding.storageStatus.setTextColor(Color.rgb(255, 80, 110))
-            binding.storageStatus.text =
-                error.message ?: "Skill package storage could not be audited."
-            return
-        }
-
-        pendingRetentionAudit = audit
-        val reclaimable = audit.reclaimablePackageSha256.size
-        binding.storageStatus.setTextColor(
-            if (reclaimable > 0) Color.rgb(255, 180, 90)
-            else Color.rgb(108, 194, 145)
-        )
-        binding.storageStatus.text = buildString {
-            append("Protected current packages: ")
-            append(audit.currentPackageSha256.size)
-            append("\nProtected rollback packages: ")
-            append(audit.rollbackPackageSha256.size)
-            append("\nReclaimable unreferenced packages: ")
-            append(reclaimable)
-            if (audit.ignoredEntryCount > 0) {
-                append("\nIgnored non-package entries: ")
-                append(audit.ignoredEntryCount)
-            }
-        }
-        binding.cleanupStorageButton.visibility =
-            if (reclaimable > 0) View.VISIBLE else View.GONE
-    }
-
-    private fun renderDependencyAudit() {
-        val result = runCatching {
-            WorkspaceSkillDependencyAudit.analyze(skillStore.listVerified())
-        }
-        result.onFailure { error ->
-            binding.dependencyStatus.setTextColor(Color.rgb(255, 80, 110))
-            binding.dependencyStatus.text =
-                error.message ?: "Skill dependency integrity could not be audited."
-            return
-        }
-
-        val audit = result.getOrThrow()
-        val advisoryOnly =
-            audit.disabledDependencyReferences.isNotEmpty() &&
-                audit.enabledDependencyBreaks.isEmpty()
-        binding.dependencyStatus.setTextColor(
-            when {
-                !audit.healthy -> Color.rgb(255, 80, 110)
-                advisoryOnly -> Color.rgb(255, 180, 90)
-                else -> Color.rgb(108, 194, 145)
-            }
-        )
-        binding.dependencyStatus.text = buildString {
-            append(if (audit.healthy) "DEPENDENCY INTEGRITY: PASS" else "DEPENDENCY INTEGRITY: ATTENTION")
-            append("\nInstalled skills: ").append(audit.installedSkillCount)
-            append("\nDeclared dependency edges: ").append(audit.declaredDependencyCount)
-
-            if (audit.duplicateSkillNames.isNotEmpty()) {
-                append("\nDuplicate installed names: ")
-                append(audit.duplicateSkillNames.joinToString(", "))
-            }
-            if (audit.missingDependencies.isNotEmpty()) {
-                append("\nMissing dependencies:")
-                audit.missingDependencies.take(8).forEach {
-                    append("\n• ").append(it.skillName).append(" → ").append(it.dependencyName)
-                }
-                val extra = audit.missingDependencies.size - 8
-                if (extra > 0) append("\n• +").append(extra).append(" more")
-            }
-            if (audit.enabledDependencyBreaks.isNotEmpty()) {
-                append("\nEnabled skills with disabled dependencies:")
-                audit.enabledDependencyBreaks.take(8).forEach {
-                    append("\n• ").append(it.skillName).append(" → ").append(it.dependencyName)
-                }
-                val extra = audit.enabledDependencyBreaks.size - 8
-                if (extra > 0) append("\n• +").append(extra).append(" more")
-            }
-            val advisory = audit.disabledDependencyReferences.filterNot {
-                it in audit.enabledDependencyBreaks
-            }
-            if (advisory.isNotEmpty()) {
-                append("\nDisabled dependency references (not active runtime breaks):")
-                advisory.take(8).forEach {
-                    append("\n• ").append(it.skillName).append(" → ").append(it.dependencyName)
-                }
-                val extra = advisory.size - 8
-                if (extra > 0) append("\n• +").append(extra).append(" more")
-            }
-            if (audit.cycles.isNotEmpty()) {
-                append("\nDependency cycles:")
-                audit.cycles.take(6).forEach {
-                    append("\n• ").append(it.joinToString(" ↔ "))
-                }
-                val extra = audit.cycles.size - 6
-                if (extra > 0) append("\n• +").append(extra).append(" more")
-            }
-            append("\nREAD ONLY · no dependency state was changed.")
-        }
-    }
-
-    private fun confirmStorageCleanup(audit: WorkspaceSkillStore.RetentionAudit) {
-        val targets = audit.reclaimablePackageSha256
-        if (targets.isEmpty()) {
-            renderRetentionAudit()
-            return
-        }
-        val preview = targets.take(8).joinToString("\n") { "• " + it.take(12) }
-        val extra = (targets.size - 8).coerceAtLeast(0)
-        val message = buildString {
-            append("Delete only the exact unreferenced immutable package directories from this audit.")
-            append("\n\nCurrent and rollback packages stay protected.")
-            append("\n\nReclaimable packages:\n")
-            append(preview)
-            if (extra > 0) append("\n• +").append(extra).append(" more")
-            append("\n\nIf storage changes before confirmation, cleanup will fail closed.")
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Clean " + targets.size + " unreferenced package" +
-                if (targets.size == 1) "?" else "s?")
-            .setMessage(message)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Clean packages") { _, _ ->
-                binding.cleanupStorageButton.isEnabled = false
-                val outcome = runCatching { skillStore.cleanupAuditedPackages(audit) }
-                outcome.onSuccess { deleted ->
-                    Toast.makeText(
-                        this,
-                        deleted.size.toString() + " unreferenced package" +
-                            if (deleted.size == 1) " cleaned" else "s cleaned",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                }.onFailure { error ->
-                    Toast.makeText(
-                        this,
-                        error.message ?: "Skill storage cleanup was not applied",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                }
-                binding.cleanupStorageButton.isEnabled = true
-                renderRetentionAudit()
-            }
-            .show()
     }
 
     private fun renderSkills() {
         binding.skillsList.removeAllViews()
-        val verified = runCatching { skillStore.listVerified() }.getOrElse {
-            binding.catalogStatus.text =
-                "Skill catalog could not be verified. No skill action was performed."
-            binding.catalogStatus.setTextColor(Color.rgb(255, 80, 110))
-            binding.emptyText.visibility = View.GONE
-            return
-        }
         val items = runCatching {
-            verified.map(WorkspaceSkillReadOnlySummary::from)
+            skillStore.listVerified().map(WorkspaceSkillReadOnlySummary::from)
         }.getOrElse {
-            binding.catalogStatus.text =
-                "Installed skill metadata could not be verified. No skill action was performed."
+            binding.catalogStatus.text = "Skills unavailable"
             binding.catalogStatus.setTextColor(Color.rgb(255, 80, 110))
             binding.emptyText.visibility = View.GONE
             return
@@ -224,9 +47,9 @@ class SkillManagerActivity : AppCompatActivity() {
 
         binding.catalogStatus.setTextColor(Color.rgb(119, 112, 119))
         binding.catalogStatus.text = when (items.size) {
-            0 -> "No installed skill packages"
-            1 -> "1 verified installed skill package"
-            else -> items.size.toString() + " verified installed skill packages"
+            0 -> "No skills added"
+            1 -> "1 skill"
+            else -> items.size.toString() + " skills"
         }
         binding.emptyText.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
         items.forEach { binding.skillsList.addView(skillCard(it)) }
@@ -243,20 +66,10 @@ class SkillManagerActivity : AppCompatActivity() {
             ).apply { bottomMargin = dp(10) }
 
             addView(TextView(this@SkillManagerActivity).apply {
-                text = item.stateLabel
-                setTextColor(
-                    if (item.stateLabel == "ENABLED") Color.rgb(108, 194, 145)
-                    else Color.rgb(145, 137, 145)
-                )
-                textSize = 11f
-                typeface = Typeface.DEFAULT_BOLD
-            })
-            addView(TextView(this@SkillManagerActivity).apply {
                 text = item.name
                 setTextColor(Color.rgb(238, 238, 238))
                 textSize = 17f
                 typeface = Typeface.DEFAULT_BOLD
-                setPadding(0, dp(4), 0, 0)
             })
             addView(TextView(this@SkillManagerActivity).apply {
                 text = item.description
@@ -264,27 +77,27 @@ class SkillManagerActivity : AppCompatActivity() {
                 textSize = 13f
                 setPadding(0, dp(5), 0, 0)
             })
-            addView(detail(item.originLabel))
-            addView(detail(item.permissionSummary))
-            addView(detail(item.accessSummary))
-            addView(detail(item.activationSummary))
-            addView(detail(item.identitySummary))
+            addView(TextView(this@SkillManagerActivity).apply {
+                text = if (item.stateLabel == "ENABLED") "Enabled" else "Disabled"
+                setTextColor(
+                    if (item.stateLabel == "ENABLED") Color.rgb(108, 194, 145)
+                    else Color.rgb(145, 137, 145)
+                )
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.START
+                setPadding(0, dp(8), 0, 0)
+            })
             isClickable = true
             isFocusable = true
-            contentDescription = "Open read-only details for " + item.name
+            contentDescription = "Open " + item.name
             setOnClickListener {
-                startActivity(Intent(this@SkillManagerActivity, SkillDetailActivity::class.java)
-                    .putExtra(SkillDetailActivity.EXTRA_SKILL_NAME, item.name))
+                startActivity(
+                    Intent(this@SkillManagerActivity, SkillDetailActivity::class.java)
+                        .putExtra(SkillDetailActivity.EXTRA_SKILL_NAME, item.name)
+                )
             }
         }
-
-    private fun detail(value: String) = TextView(this).apply {
-        text = value
-        setTextColor(Color.rgb(119, 112, 119))
-        textSize = 11f
-        gravity = Gravity.START
-        setPadding(0, dp(6), 0, 0)
-    }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 }

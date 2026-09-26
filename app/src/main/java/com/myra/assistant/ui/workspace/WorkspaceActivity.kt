@@ -45,6 +45,7 @@ import java.nio.charset.StandardCharsets
 /** Private general Chat; typed coding project only after an explicit request. Voice is untouched. */
 class WorkspaceActivity : AppCompatActivity() {
     private data class Attachment(val uri: Uri, val name: String, val mime: String, val size: Long)
+    private data class SkillAttachment(val uri: Uri, val name: String, val size: Long)
     private val projects by lazy { WorkspaceProjectStore(File(filesDir, "workspace/projects")) }
     private val files by lazy { WorkspaceFileStore(projects) }
     private val conversations by lazy {
@@ -63,6 +64,7 @@ class WorkspaceActivity : AppCompatActivity() {
     // Display-only state: never alters persisted messages, Copy or provider requests.
     private val expandedMessageIds = mutableSetOf<String>()
     private val attachments = mutableListOf<Attachment>()
+    private var skillAttachment: SkillAttachment? = null
     private var selectedId: String? = null
     private var workTab = false
     private var requestGeneration = 0L
@@ -125,6 +127,9 @@ class WorkspaceActivity : AppCompatActivity() {
     }
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { addAttachment(it, false) }
+    }
+    private val skillPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(::addSkillAttachment)
     }
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density + .5f).toInt()
@@ -365,6 +370,7 @@ class WorkspaceActivity : AppCompatActivity() {
             if (selectedId != null && projects.getProject(selectedId!!) == null) {
                 selectedId = null
                 attachments.clear()
+                skillAttachment = null
                 statusMessage = "Selected conversation is unavailable. Choose another chat."
             }
             render()
@@ -473,7 +479,7 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val plusButton = label("+", 27f).apply {
             gravity = Gravity.CENTER
-            contentDescription = "Add photo or file"
+            contentDescription = "Add photo, file, or skill"
             isClickable = true
             isFocusable = true
             setOnClickListener { showAttachmentMenu(this) }
@@ -766,16 +772,43 @@ class WorkspaceActivity : AppCompatActivity() {
         PopupMenu(this, anchor).apply {
             menu.add(0, 1, 0, "Photos")
             menu.add(0, 2, 1, "Files")
+            menu.add(0, 3, 2, "Skill")
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     1 -> photoPicker.launch(arrayOf("image/jpeg", "image/png"))
                     2 -> documentPicker.launch(arrayOf("text/plain", "text/html", "text/css",
                         "application/json", "application/javascript", "application/pdf"))
+                    3 -> showSkillMenu()
                 }
                 true
             }
             show()
         }
+    }
+
+    private fun showSkillMenu() {
+        if (workTab || isBusy()) return
+        AlertDialog.Builder(this)
+            .setTitle("Skill")
+            .setItems(arrayOf("Add skill", "Create a skill")) { _, which ->
+                when (which) {
+                    0 -> skillPicker.launch(arrayOf("text/*", "application/octet-stream"))
+                    1 -> startCreateSkillDraft()
+                }
+            }
+            .show()
+    }
+
+    private fun startCreateSkillDraft() {
+        val starter = WorkspaceSkillChatAttachment.CREATE_SKILL_PROMPT
+        if (composer.text.isBlank()) {
+            composer.setText(starter)
+        } else {
+            if (!composer.text.endsWith("\n")) composer.append("\n")
+            composer.append(starter)
+        }
+        composer.setSelection(composer.text.length)
+        composer.requestFocus()
     }
 
     private fun project() = selectedId?.let(projects::getProject)
@@ -1227,6 +1260,7 @@ class WorkspaceActivity : AppCompatActivity() {
         selectedId = null
         workTab = false
         attachments.clear()
+        skillAttachment = null
         composer.text.clear()
         statusMessage = ""
         workTrace.clear()
@@ -1258,6 +1292,7 @@ class WorkspaceActivity : AppCompatActivity() {
         selectedId = id
         projects.markOpened(id)
         attachments.clear()
+        skillAttachment = null
         composer.setText(localDrafts[id].orEmpty())
         statusMessage = ""
         workTrace.clear()
@@ -1296,6 +1331,41 @@ class WorkspaceActivity : AppCompatActivity() {
         WorkspaceChatGateway.Provider.OPENROUTER_FREE -> keys.get(ApiKeyStore.OPENROUTER)
         WorkspaceChatGateway.Provider.GROQ_FREE -> keys.get(ApiKeyStore.GROQ)
         WorkspaceChatGateway.Provider.LLM7_FREE -> keys.get(ApiKeyStore.LLM7)
+    }
+
+    private fun addSkillAttachment(uri: Uri) {
+        if (workTab || isBusy()) {
+            toast("Wait for the current reply before adding a skill")
+            return
+        }
+        if (uri.scheme != "content") {
+            toast("Only Android document-provider files are accepted")
+            return
+        }
+        val item = runCatching {
+            var name = ""
+            var size = -1L
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let {
+                        name = cursor.getString(it).orEmpty()
+                    }
+                    cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let {
+                        if (!cursor.isNull(it)) size = cursor.getLong(it)
+                    }
+                }
+            }
+            if (size < 0L) contentResolver.openFileDescriptor(uri, "r")?.use { size = it.statSize }
+            val verified = WorkspaceSkillChatAttachment.validate(name, size)
+            SkillAttachment(uri, verified.name, verified.size)
+        }.getOrElse {
+            toast(it.message ?: "Skill file could not be attached")
+            return
+        }
+        skillAttachment = item
+        statusMessage = ""
+        renderAttachments()
     }
 
     private fun addAttachment(uri: Uri, photo: Boolean) {
@@ -1341,6 +1411,12 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun renderAttachments() {
         if (!::attachmentList.isInitialized) return
         attachmentList.removeAllViews()
+        skillAttachment?.let { attachment ->
+            attachmentList.addView(control("${attachment.name} · Skill  ✕") {
+                skillAttachment = null
+                renderAttachments()
+            }, LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(4) })
+        }
         attachments.toList().forEach { attachment ->
             attachmentList.addView(control("${attachment.name} · ${attachment.size} bytes  ✕") {
                 attachments.remove(attachment)
@@ -1380,6 +1456,11 @@ class WorkspaceActivity : AppCompatActivity() {
         if (!WorkspaceLongInputPolicy.sendable(text)) {
             statusMessage = "The complete pasted draft is still in the chat box. " +
                 "This app supports up to ${WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS} characters per message; nothing was sent."
+            render()
+            return
+        }
+        if (skillAttachment != null) {
+            statusMessage = "Skill file is attached and kept local. Conversational skill analysis and approval are not active yet; nothing was sent."
             render()
             return
         }

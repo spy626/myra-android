@@ -5,7 +5,6 @@
     android:background="#050505"
     android:fillViewport="true"
     android:overScrollMode="never">
-
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -13,7 +12,6 @@
         android:paddingHorizontal="20dp"
         android:paddingTop="18dp"
         android:paddingBottom="32dp">
-
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="56dp"
@@ -41,124 +39,29 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Verified installed packages and current activation state"
+                    android:text="Installed skills"
                     android:textColor="#777077"
                     android:textSize="12sp" />
             </LinearLayout>
         </LinearLayout>
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/bg_field"
-            android:padding="14dp"
-            android:text="Installed skills stay approval-bound. Local import preview can inspect SKILL.md and optional skill.json, but previewing does not install or enable anything."
-            android:textColor="#8E888E"
-            android:textSize="11sp" />
-
-        <Button
-            android:id="@+id/previewImportButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="16dp"
-            android:background="@drawable/bg_button"
-            android:text="PREVIEW LOCAL SKILL"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/previewGithubButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="10dp"
-            android:background="@drawable/bg_field"
-            android:text="PREVIEW GITHUB SKILL"
-            android:textColor="#EEEEEE"
-            android:textStyle="bold" />
-
-        <TextView
-            style="@style/MyraLabel"
-            android:text="SKILL STORAGE" />
-
-        <TextView
-            android:id="@+id/storageStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_field"
-            android:padding="14dp"
-            android:text="Auditing retained immutable packages…"
-            android:textColor="#777077"
-            android:textSize="12sp" />
-
-        <Button
-            android:id="@+id/auditStorageButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="10dp"
-            android:background="@drawable/bg_field"
-            android:text="REFRESH STORAGE AUDIT"
-            android:textColor="#EEEEEE"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/cleanupStorageButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="10dp"
-            android:background="@drawable/bg_button"
-            android:text="REVIEW &amp; CLEAN UNREFERENCED"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold"
-            android:visibility="gone" />
-
-        <TextView
-            style="@style/MyraLabel"
-            android:text="SKILL DEPENDENCIES" />
-
-        <TextView
-            android:id="@+id/dependencyStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_field"
-            android:padding="14dp"
-            android:text="Auditing installed dependency integrity…"
-            android:textColor="#777077"
-            android:textSize="12sp" />
-
-        <Button
-            android:id="@+id/auditDependenciesButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="10dp"
-            android:background="@drawable/bg_field"
-            android:text="REFRESH DEPENDENCY AUDIT"
-            android:textColor="#EEEEEE"
-            android:textStyle="bold" />
-
-        <TextView
-            style="@style/MyraLabel"
-            android:text="INSTALLED SKILLS" />
-
         <TextView
             android:id="@+id/catalogStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
             android:paddingBottom="10dp"
-            android:text="Verifying installed skill packages…"
+            android:text="Loading skills…"
             android:textColor="#777077"
             android:textSize="12sp" />
-
         <TextView
             android:id="@+id/emptyText"
             android:layout_width="match_parent"
-            android:layout_height="110dp"
+            android:layout_height="150dp"
             android:gravity="center"
-            android:text="No skills installed yet.\nYou can preview a local skill above; installation remains a separate approval step."
+            android:text="No skills added yet."
             android:textAlignment="center"
             android:textColor="#777077"
             android:textSize="14sp" />
-
         <LinearLayout
             android:id="@+id/skillsList"
             android:layout_width="match_parent"
