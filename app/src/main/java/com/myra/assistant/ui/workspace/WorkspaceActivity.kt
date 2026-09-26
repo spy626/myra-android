@@ -40,6 +40,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.myra.assistant.R
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.ui.settings.ApiCloudSettingsActivity
+import com.myra.assistant.ui.settings.SkillManagerActivity
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Response
@@ -1500,6 +1501,7 @@ class WorkspaceActivity : AppCompatActivity() {
             titleFor = ::chatTitle,
             onNewChat = { newChat() },
             onPlugins = { showPlugins() },
+            onSkills = { startActivity(Intent(this, SkillManagerActivity::class.java)) },
             onApiSettings = { startActivity(Intent(this, ApiCloudSettingsActivity::class.java)) },
             onSelectProject = { selectProject(it) },
             onTogglePin = { id ->
