@@ -7,12 +7,20 @@ import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillGithubPreviewBinding
+import com.myra.assistant.ui.workspace.WorkspaceAgentReachPolicy
+import com.myra.assistant.ui.workspace.WorkspaceSkillCatalog
+import com.myra.assistant.ui.workspace.WorkspaceSkillGitHubInstallApproval
+import com.myra.assistant.ui.workspace.WorkspaceSkillGitHubInstallRunner
 import com.myra.assistant.ui.workspace.WorkspaceSkillGitHubPreviewRunner
 import com.myra.assistant.ui.workspace.WorkspaceSkillGitHubReadSession
 import com.myra.assistant.ui.workspace.WorkspaceSkillImportPreview
+import com.myra.assistant.ui.workspace.WorkspaceSkillStore
+import java.io.File
 
 /**
  * H8 pinned GitHub skill preview only.
@@ -23,11 +31,72 @@ import com.myra.assistant.ui.workspace.WorkspaceSkillImportPreview
 class SkillGitHubPreviewActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySkillGithubPreviewBinding
     private lateinit var runner: WorkspaceSkillGitHubPreviewRunner
+    private lateinit var installRunner: WorkspaceSkillGitHubInstallRunner
+    private var pendingInstall: WorkspaceSkillGitHubInstallApproval.Prepared? = null
+    private val skillStore by lazy {
+        WorkspaceSkillStore(File(noBackupFilesDir, WorkspaceSkillStore.APP_DIRECTORY))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivitySkillGithubPreviewBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        installRunner = WorkspaceSkillGitHubInstallRunner(
+            object : WorkspaceSkillGitHubInstallRunner.Listener {
+                override fun onStage(message: String) = runOnUiThread {
+                    binding.progressText.text = message
+                }
+
+                override fun onValidated(
+                    validated: WorkspaceSkillGitHubInstallApproval.Validated,
+                ) = runOnUiThread {
+                    val outcome = runCatching {
+                        val fresh = validated.fresh
+                        val installed = skillStore.installNew(
+                            skill = fresh.skill,
+                            packageFiles = fresh.packageFiles,
+                            approval = fresh.approval,
+                            approvedToken =
+                                validated.prepared.installPrepared.approval.approvalToken,
+                            installedAtMs = System.currentTimeMillis(),
+                        )
+                        require(
+                            installed.entry.state ==
+                                WorkspaceSkillCatalog.State.INSTALLED_DISABLED
+                        ) { "Pinned GitHub skill unexpectedly gained activation authority" }
+                        installed
+                    }
+                    outcome.onSuccess { installed ->
+                        Toast.makeText(
+                            this@SkillGitHubPreviewActivity,
+                            installed.entry.name + " installed disabled",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        finish()
+                    }.onFailure { error ->
+                        setBusy(false)
+                        binding.installButton.visibility = View.VISIBLE
+                        Toast.makeText(
+                            this@SkillGitHubPreviewActivity,
+                            error.message ?: "Pinned GitHub skill was not installed",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+
+                override fun onError(message: String) = runOnUiThread {
+                    setBusy(false)
+                    binding.installButton.visibility =
+                        if (pendingInstall != null) View.VISIBLE else View.GONE
+                    Toast.makeText(
+                        this@SkillGitHubPreviewActivity,
+                        message,
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        )
 
         runner = WorkspaceSkillGitHubPreviewRunner(
             object : WorkspaceSkillGitHubPreviewRunner.Listener {
@@ -57,6 +126,9 @@ class SkillGitHubPreviewActivity : AppCompatActivity() {
         )
 
         binding.backButton.setOnClickListener { finish() }
+        binding.installButton.setOnClickListener {
+            pendingInstall?.let(::confirmInstall)
+        }
         binding.previewButton.setOnClickListener {
             val url = binding.githubUrl.text?.toString().orEmpty().trim()
             if (url.isBlank()) {
@@ -67,6 +139,8 @@ class SkillGitHubPreviewActivity : AppCompatActivity() {
             binding.resultCard.visibility = View.GONE
             binding.previewRows.removeAllViews()
             binding.warningRows.removeAllViews()
+            binding.installButton.visibility = View.GONE
+            pendingInstall = null
             setBusy(true)
             runner.start(url)
         }
@@ -74,6 +148,7 @@ class SkillGitHubPreviewActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         runner.cancel()
+        installRunner.cancel()
         super.onDestroy()
     }
 
@@ -110,6 +185,74 @@ class SkillGitHubPreviewActivity : AppCompatActivity() {
         preview.warnings.forEach {
             binding.warningRows.addView(row("WARNING", it, warning = true))
         }
+
+        binding.installButton.visibility = View.GONE
+        pendingInstall = null
+        if (preview.status == WorkspaceSkillImportPreview.Status.READY_FOR_INSTALL_REVIEW) {
+            val prepared = runCatching {
+                WorkspaceSkillGitHubInstallApproval.prepare(completion)
+            }.getOrElse { error ->
+                binding.warningRows.addView(
+                    row(
+                        "BLOCKED",
+                        error.message ?: "Pinned install approval could not be prepared.",
+                        warning = true,
+                    )
+                )
+                return
+            }
+            val alreadyInstalled = runCatching {
+                skillStore.listVerified().any { it.entry.name == prepared.skillName }
+            }.getOrElse {
+                binding.warningRows.addView(
+                    row(
+                        "BLOCKED",
+                        "Installed skill catalog could not be verified; install remains unavailable.",
+                        warning = true,
+                    )
+                )
+                return
+            }
+            if (alreadyInstalled) {
+                binding.warningRows.addView(
+                    row(
+                        "ALREADY INSTALLED",
+                        "This skill name already exists. Use the separate update flow instead.",
+                        warning = true,
+                    )
+                )
+            } else {
+                pendingInstall = prepared
+                binding.installButton.visibility = View.VISIBLE
+            }
+        }
+    }
+
+    private fun confirmInstall(prepared: WorkspaceSkillGitHubInstallApproval.Prepared) {
+        val currentUrlMatches = runCatching {
+            WorkspaceAgentReachPolicy.parse(
+                binding.githubUrl.text?.toString().orEmpty().trim()
+            ).canonicalUrl == prepared.requestedCanonicalUrl
+        }.getOrDefault(false)
+        if (!currentUrlMatches) {
+            Toast.makeText(
+                this,
+                "GitHub URL changed after preview. Preview it again before installing.",
+                Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Install " + prepared.skillName + "?")
+            .setMessage(prepared.approvalSummary)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Install disabled") { _, _ ->
+                setBusy(true)
+                binding.installButton.visibility = View.GONE
+                installRunner.start(prepared)
+            }
+            .show()
     }
 
     private fun row(label: String, value: String, warning: Boolean = false): View =

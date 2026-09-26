@@ -39,6 +39,10 @@ internal object WorkspaceSkillGitHubReadSession {
         val sourceUrl: String,
         val manifestPresent: Boolean,
         val repositoryLicenseSpdx: String?,
+        val selection: WorkspaceAgentReachGitHub.Selection,
+        val skillPath: String,
+        val manifestPath: String,
+        val installPrepared: WorkspaceSkillInstallApproval.Prepared?,
     )
 
     private fun companionManifest(path: String): String =
@@ -179,17 +183,31 @@ internal object WorkspaceSkillGitHubReadSession {
             sourceUrl = skillEvidence.provenance.finalUrl,
             pinnedRevision = sha,
         )
+        val skillMdBytes = skillEvidence.content.toByteArray(Charsets.UTF_8)
+        val skillJsonBytes = manifestEvidence?.content?.toByteArray(Charsets.UTF_8)
         val preview = WorkspaceSkillImportPreview.inspect(
-            skillMdBytes = skillEvidence.content.toByteArray(Charsets.UTF_8),
-            skillJsonBytes = manifestEvidence?.content?.toByteArray(Charsets.UTF_8),
+            skillMdBytes = skillMdBytes,
+            skillJsonBytes = skillJsonBytes,
             provenance = provenance,
         )
+        val installPrepared =
+            if (preview.status == WorkspaceSkillImportPreview.Status.READY_FOR_INSTALL_REVIEW)
+                WorkspaceSkillInstallApproval.prepare(
+                    skillMdBytes = skillMdBytes,
+                    skillJsonBytes = skillJsonBytes,
+                    provenance = provenance,
+                )
+            else null
         return Completion(
             preview = preview,
             commitSha = sha,
             sourceUrl = skillEvidence.provenance.finalUrl,
             manifestPresent = manifestEvidence != null,
             repositoryLicenseSpdx = state.repositoryMeta?.licenseSpdx,
+            selection = state.selection,
+            skillPath = state.skillPath,
+            manifestPath = state.manifestPath,
+            installPrepared = installPrepared,
         )
     }
 }

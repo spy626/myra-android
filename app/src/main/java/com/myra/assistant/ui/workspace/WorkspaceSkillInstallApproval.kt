@@ -34,8 +34,13 @@ internal object WorkspaceSkillInstallApproval {
     private fun fresh(
         skillMdBytes: ByteArray,
         skillJsonBytes: ByteArray?,
+        provenance: WorkspaceSkillContract.Provenance,
     ): Pair<WorkspaceSkillImportPreview.Preview, Fresh> {
-        val preview = WorkspaceSkillImportPreview.inspect(skillMdBytes, skillJsonBytes)
+        val preview = WorkspaceSkillImportPreview.inspect(
+            skillMdBytes = skillMdBytes,
+            skillJsonBytes = skillJsonBytes,
+            provenance = provenance,
+        )
         require(preview.status == WorkspaceSkillImportPreview.Status.READY_FOR_INSTALL_REVIEW) {
             "Blocked skill preview cannot enter installation approval"
         }
@@ -50,9 +55,7 @@ internal object WorkspaceSkillInstallApproval {
         val skill = WorkspaceSkillContract.parse(
             skillMd = skillMd,
             skillJson = skillJson,
-            provenance = WorkspaceSkillContract.Provenance(
-                WorkspaceSkillContract.Origin.USER_SUPPLIED,
-            ),
+            provenance = provenance,
             packagePaths = files.keys,
         )
         val snapshot = WorkspaceSkillCatalog.snapshot(skill, files)
@@ -74,8 +77,10 @@ internal object WorkspaceSkillInstallApproval {
     fun prepare(
         skillMdBytes: ByteArray,
         skillJsonBytes: ByteArray? = null,
+        provenance: WorkspaceSkillContract.Provenance =
+            WorkspaceSkillContract.Provenance(WorkspaceSkillContract.Origin.USER_SUPPLIED),
     ): Prepared {
-        val (preview, fresh) = fresh(skillMdBytes, skillJsonBytes)
+        val (preview, fresh) = fresh(skillMdBytes, skillJsonBytes, provenance)
         val p = fresh.skill.permissionPreview
         val warnings = fresh.approval.warnings
             .takeIf { it.isNotEmpty() }
@@ -83,9 +88,18 @@ internal object WorkspaceSkillInstallApproval {
             ?: "None"
 
         val summary = buildString {
-            appendLine("Install only this exact inspected local skill:")
+            appendLine(
+                if (provenance.origin == WorkspaceSkillContract.Origin.GITHUB_PINNED)
+                    "Install only this exact inspected pinned GitHub skill:"
+                else
+                    "Install only this exact inspected local skill:"
+            )
             appendLine()
             appendLine("Skill: " + fresh.approval.skillName)
+            if (provenance.origin == WorkspaceSkillContract.Origin.GITHUB_PINNED) {
+                appendLine("Source: " + requireNotNull(provenance.sourceUrl))
+                appendLine("Pinned revision: " + requireNotNull(provenance.pinnedRevision))
+            }
             appendLine("Content: " + short(fresh.approval.contentSha256))
             appendLine("Package: " + short(fresh.approval.packageSha256))
             appendLine("Permissions: " + short(fresh.approval.permissionSha256))
@@ -131,8 +145,10 @@ internal object WorkspaceSkillInstallApproval {
         prepared: Prepared,
         skillMdBytes: ByteArray,
         skillJsonBytes: ByteArray? = null,
+        provenance: WorkspaceSkillContract.Provenance =
+            WorkspaceSkillContract.Provenance(WorkspaceSkillContract.Origin.USER_SUPPLIED),
     ): Fresh {
-        val (_, fresh) = fresh(skillMdBytes, skillJsonBytes)
+        val (_, fresh) = fresh(skillMdBytes, skillJsonBytes, provenance)
         require(
             prepared.skillName == fresh.approval.skillName &&
                 prepared.contentSha256 == fresh.approval.contentSha256 &&

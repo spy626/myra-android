@@ -135,7 +135,7 @@
                 android:layout_marginTop="12dp"
                 android:background="@drawable/bg_field"
                 android:padding="14dp"
-                android:text="EXTERNAL UNTRUSTED DATA · Preview does not grant tool, network, source, memory, model, install or verification authority."
+                android:text="EXTERNAL UNTRUSTED DATA · Preview grants no authority. Installation, when offered, requires explicit approval and a fresh re-read of the same immutable commit before a disabled package can be written."
                 android:textColor="#8E888E"
                 android:textSize="11sp" />
 
@@ -148,6 +148,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical" />
+
+            <Button
+                android:id="@+id/installButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/bg_button"
+                android:text="REVIEW &amp; INSTALL PINNED SKILL"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:visibility="gone" />
 
             <TextView
                 style="@style/MyraLabel"
