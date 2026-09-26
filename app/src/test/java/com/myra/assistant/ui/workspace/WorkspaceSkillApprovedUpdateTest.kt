@@ -48,6 +48,12 @@ Require deterministic evidence.
         return store.install(skill, packageFiles, approval, approval.approvalToken, 1L)
     }
 
+    private fun enableEnvironment() = WorkspaceSkillEnablement.Environment(
+        availableTools = setOf("read_file"),
+        boundedSourceGateAvailable = true,
+        memoryReadGateAvailable = true,
+    )
+
     private fun candidate(skill: WorkspaceSkillContract.ParsedSkill):
         WorkspaceSkillUpdatePreview.Candidate {
         val packageFiles = files(skill)
@@ -95,7 +101,7 @@ Require deterministic evidence.
         val old = parsed("Old.")
         var current = install(store, old)
 
-        val environment = WorkspaceSkillEnablement.Environment()
+        val environment = enableEnvironment()
         val report = WorkspaceSkillEnablement.test(current, environment, 2L)
         val enable = WorkspaceSkillEnablement.enableRequest(current, report)
         current = store.enable(
@@ -139,7 +145,7 @@ Require deterministic evidence.
         ))
         val prepared = WorkspaceSkillApprovedUpdate.prepare(current, safe)
 
-        val environment = WorkspaceSkillEnablement.Environment()
+        val environment = enableEnvironment()
         val report = WorkspaceSkillEnablement.test(current, environment, 2L)
         val enable = WorkspaceSkillEnablement.enableRequest(current, report)
         current = store.enable(
