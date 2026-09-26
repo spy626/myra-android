@@ -27,6 +27,13 @@ internal class WorkspaceSkillStore(
         val snapshot: WorkspaceSkillCatalog.PackageSnapshot,
     )
 
+    data class RetentionAudit(
+        val currentPackageSha256: List<String>,
+        val rollbackPackageSha256: List<String>,
+        val reclaimablePackageSha256: List<String>,
+        val ignoredEntryCount: Int,
+    )
+
     companion object {
         private const val SCHEMA_VERSION = 2
         private const val LEGACY_SCHEMA_VERSION = 1
@@ -369,33 +376,96 @@ internal class WorkspaceSkillStore(
     }
 
     /**
-     * H14 bounded immutable-package retention.
+     * H15 read-only retention audit.
      *
-     * The catalog owns package liveness: every current package and the single recorded rollback
-     * package for every skill is retained. Only well-formed, non-symlink package directories that
-     * are no longer referenced by that fresh catalog are eligible for deletion.
+     * Catalog references remain authoritative: active packages and each skill's one rollback point
+     * are protected. Unknown, malformed, symlink, or non-directory entries are reported only and are
+     * never deletion candidates.
      */
-    @Synchronized fun pruneUnreferencedPackages(): List<String> {
+    @Synchronized fun retentionAudit(): RetentionAudit {
         val catalog = readCatalog()
-        val referenced = buildSet {
-            catalog.entries.forEach { entry ->
-                add(entry.packageSha256)
-                entry.rollbackPoint?.let { add(it.packageSha256) }
-            }
-        }
+        val current = catalog.entries.map { it.packageSha256 }.distinct().sorted()
+        val rollback = catalog.entries.mapNotNull { it.rollbackPoint?.packageSha256 }
+            .distinct().sorted()
+        val referenced = (current + rollback).toSet()
         val parent = packagesRoot()
-        val deleted = mutableListOf<String>()
+        val reclaimable = mutableListOf<String>()
+        var ignored = 0
+
         parent.listFiles().orEmpty()
             .sortedBy { it.name }
             .forEach { child ->
-                if (!SHA.matches(child.name) || child.name in referenced) return@forEach
-                if (Files.isSymbolicLink(child.toPath()) || !child.isDirectory) return@forEach
-                val canonical = child.canonicalFile
-                if (canonical.parentFile != parent) return@forEach
-                deleteTree(canonical)
-                if (!canonical.exists()) deleted += child.name
+                if (child.name in referenced) return@forEach
+                if (!SHA.matches(child.name) ||
+                    Files.isSymbolicLink(child.toPath()) ||
+                    !child.isDirectory) {
+                    ignored += 1
+                    return@forEach
+                }
+                val canonical = runCatching { child.canonicalFile }.getOrNull()
+                if (canonical == null || canonical.parentFile != parent) {
+                    ignored += 1
+                    return@forEach
+                }
+                reclaimable += child.name
             }
+
+        return RetentionAudit(
+            currentPackageSha256 = current,
+            rollbackPackageSha256 = rollback,
+            reclaimablePackageSha256 = reclaimable,
+            ignoredEntryCount = ignored,
+        )
+    }
+
+    private fun deleteAuditedPackages(packageSha256: List<String>): List<String> {
+        val parent = packagesRoot()
+        val deleted = mutableListOf<String>()
+        packageSha256.distinct().sorted().forEach { hash ->
+            require(SHA.matches(hash)) { "Invalid reclaimable skill package hash" }
+
+            // Re-read authoritative catalog before each deletion. A package that became current or
+            // rollback-protected after the audit is skipped rather than deleted.
+            val fresh = readCatalog()
+            val referenced = buildSet {
+                fresh.entries.forEach { entry ->
+                    add(entry.packageSha256)
+                    entry.rollbackPoint?.let { add(it.packageSha256) }
+                }
+            }
+            if (hash in referenced) return@forEach
+
+            val child = File(parent, hash)
+            if (!child.exists() ||
+                Files.isSymbolicLink(child.toPath()) ||
+                !child.isDirectory) return@forEach
+            val canonical = runCatching { child.canonicalFile }.getOrNull() ?: return@forEach
+            if (canonical.parentFile != parent) return@forEach
+
+            deleteTree(canonical)
+            if (!canonical.exists()) deleted += hash
+        }
         return deleted
+    }
+
+    /**
+     * H14 automatic post-update hygiene. This never needs provider/model authority and only removes
+     * the same catalog-unreferenced package directories surfaced by the H15 audit.
+     */
+    @Synchronized fun pruneUnreferencedPackages(): List<String> =
+        deleteAuditedPackages(retentionAudit().reclaimablePackageSha256)
+
+    /**
+     * H15 explicit user cleanup. The confirmation is bound to the exact audit snapshot: if catalog
+     * references or the eligible package set changed after review, cleanup fails closed and the user
+     * must audit again.
+     */
+    @Synchronized fun cleanupAuditedPackages(expected: RetentionAudit): List<String> {
+        val fresh = retentionAudit()
+        require(fresh == expected) {
+            "Skill storage audit changed; review the current storage audit again"
+        }
+        return deleteAuditedPackages(expected.reclaimablePackageSha256)
     }
 
     /**

@@ -79,6 +79,41 @@
 
         <TextView
             style="@style/MyraLabel"
+            android:text="SKILL STORAGE" />
+
+        <TextView
+            android:id="@+id/storageStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_field"
+            android:padding="14dp"
+            android:text="Auditing retained immutable packages…"
+            android:textColor="#777077"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/auditStorageButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_field"
+            android:text="REFRESH STORAGE AUDIT"
+            android:textColor="#EEEEEE"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/cleanupStorageButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_button"
+            android:text="REVIEW &amp; CLEAN UNREFERENCED"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <TextView
+            style="@style/MyraLabel"
             android:text="INSTALLED SKILLS" />
 
         <TextView
