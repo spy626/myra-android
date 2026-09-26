@@ -34,7 +34,7 @@ class WorkspacePhotoMarkupActivity : AppCompatActivity() {
         const val EXTRA_IMAGE_URI = "image_uri"
         const val EXTRA_RESULT_URI = "result_uri"
         const val EXTRA_RESULT_NAME = "result_name"
-        private const val MAX_DECODE_PIXELS = 12_000_000L
+        private const val MAX_DECODE_PIXELS = 6_000_000L
     }
 
     private lateinit var markupView: WorkspacePhotoMarkupView
@@ -151,14 +151,22 @@ class WorkspacePhotoMarkupActivity : AppCompatActivity() {
             val dir = File(cacheDir, "workspace-photo").apply { mkdirs() }
             require(dir.isDirectory) { "Photo cache is unavailable" }
             val file = File(dir, "marked-${System.currentTimeMillis()}.jpg")
-            FileOutputStream(file).use { stream ->
-                require(markupView.renderBitmap().compress(Bitmap.CompressFormat.JPEG, 92, stream)) {
-                    "Marked photo could not be saved"
+            val rendered = markupView.renderBitmap()
+            var quality = 92
+            var saved = false
+            while (quality >= 52) {
+                FileOutputStream(file).use { stream ->
+                    require(rendered.compress(Bitmap.CompressFormat.JPEG, quality, stream)) {
+                        "Marked photo could not be saved"
+                    }
                 }
+                if (file.length() in 1L..2_000_000L) {
+                    saved = true
+                    break
+                }
+                quality -= 10
             }
-            require(file.length() in 1L..2_000_000L) {
-                "Marked photo exceeds LYRA's 2 MB image limit"
-            }
+            require(saved) { "Marked photo exceeds LYRA's 2 MB image limit" }
             file
         }.getOrElse {
             Toast.makeText(this, it.message ?: "Marked photo could not be saved", Toast.LENGTH_LONG).show()
@@ -294,7 +302,9 @@ private class WorkspacePhotoMarkupView(
     }
 
     fun renderBitmap(): Bitmap {
-        val output = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val output = requireNotNull(bitmap.copy(Bitmap.Config.ARGB_8888, true)) {
+            "Photo copy could not be created"
+        }
         val canvas = Canvas(output)
         strokes.forEach { stroke ->
             strokePaint.strokeWidth = stroke.widthOnBitmap
