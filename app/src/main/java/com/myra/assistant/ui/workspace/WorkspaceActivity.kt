@@ -1703,9 +1703,13 @@ class WorkspaceActivity : AppCompatActivity() {
         }
 
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(source.uri)?.use {
+        val boundsStream = contentResolver.openInputStream(source.uri)
+            ?: throw IllegalArgumentException("Photo cannot be read")
+        boundsStream.use {
+            // BitmapFactory returns null by design when inJustDecodeBounds=true.
+            // Success is represented by populated outWidth/outHeight, not a Bitmap result.
             BitmapFactory.decodeStream(it, null, bounds)
-        } ?: throw IllegalArgumentException("Photo cannot be read")
+        }
         require(bounds.outWidth > 0 && bounds.outHeight > 0) {
             "Photo format is not supported"
         }
@@ -1885,13 +1889,16 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun thumbnail(uri: Uri): Bitmap? = runCatching {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(uri)?.use {
+        val boundsStream = contentResolver.openInputStream(uri) ?: return@runCatching null
+        boundsStream.use {
+            // decodeStream returns null in bounds-only mode even for a valid image.
             BitmapFactory.decodeStream(it, null, bounds)
-        } ?: return@runCatching null
+        }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
         var sample = 1
         while (bounds.outWidth / sample > 320 || bounds.outHeight / sample > 320) sample *= 2
-        contentResolver.openInputStream(uri)?.use {
+        val decodeStream = contentResolver.openInputStream(uri) ?: return@runCatching null
+        decodeStream.use {
             BitmapFactory.decodeStream(
                 it,
                 null,
