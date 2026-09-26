@@ -612,6 +612,74 @@ internal class WorkspaceSkillStore(
         return reopened
     }
 
+    /**
+     * H13 exact human-approved rollback.
+     *
+     * Both the active package and recorded rollback package are re-opened and re-hashed before the
+     * catalog pointer changes. No package directory is deleted. The replaced active version becomes
+     * the next one-step rollback point and restored activation always starts disabled.
+     */
+    @Synchronized fun rollbackApproved(
+        name: String,
+        request: WorkspaceSkillApprovedRollback.Request,
+        approvedToken: String,
+        rolledBackAtMs: Long,
+    ): Installed {
+        require(NAME.matches(name)) { "Invalid skill name" }
+
+        // Fresh package verification happens inside these two loads.
+        val current = load(name)
+        val rollback = loadRollback(name)
+
+        val restored = WorkspaceSkillApprovedRollback.rolledBackEntry(
+            current = current,
+            rollback = rollback,
+            request = request,
+            approvedToken = approvedToken,
+            rolledBackAtMs = rolledBackAtMs,
+        )
+
+        val before = readCatalog()
+        val currentEntry = before.entries.firstOrNull { it.name == name }
+            ?: throw IllegalArgumentException("Skill is not installed")
+        require(currentEntry == current.entry) {
+            "Skill catalog changed after rollback approval; preview again"
+        }
+
+        // Revalidate the exact retained bytes immediately before the catalog switch.
+        val verifiedTarget = loadRollback(name)
+        WorkspaceSkillApprovedRollback.validate(
+            WorkspaceSkillApprovedRollback.Prepared(
+                request = request,
+                approvalSummary = "",
+            ),
+            current = current,
+            rollback = verifiedTarget,
+        )
+
+        val after = WorkspaceSkillCatalog.Catalog(
+            before.entries.map { if (it.name == name) restored else it }
+                .sortedBy { it.name }
+        )
+        writeCatalog(after)
+
+        val reopened = load(name)
+        require(
+            reopened.entry.packageSha256 == rollback.entry.packageSha256 &&
+                reopened.entry.contentSha256 == rollback.entry.contentSha256 &&
+                reopened.entry.permissionSha256 == rollback.entry.permissionSha256 &&
+                reopened.entry.provenance == rollback.entry.provenance &&
+                reopened.entry.state == WorkspaceSkillCatalog.State.INSTALLED_DISABLED &&
+                reopened.entry.enabledAtMs == null &&
+                reopened.entry.enableReadinessSha256 == null &&
+                reopened.entry.enableEnvironmentSha256 == null &&
+                reopened.entry.enableBindingSha256 == null &&
+                reopened.entry.rollbackPoint ==
+                    WorkspaceSkillCatalog.rollbackPoint(current.entry)
+        ) { "Rolled-back skill did not preserve the exact approved disabled transition" }
+        return reopened
+    }
+
     @Synchronized fun enable(
         name: String,
         environment: WorkspaceSkillEnablement.Environment,

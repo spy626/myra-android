@@ -6,9 +6,12 @@ import android.os.Bundle
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillRollbackPreviewBinding
+import com.myra.assistant.ui.workspace.WorkspaceSkillApprovedRollback
 import com.myra.assistant.ui.workspace.WorkspaceSkillRollbackPreview
 import com.myra.assistant.ui.workspace.WorkspaceSkillStore
 import java.io.File
@@ -19,6 +22,7 @@ import java.io.File
  */
 class SkillRollbackPreviewActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySkillRollbackPreviewBinding
+    private var pendingRollback: WorkspaceSkillApprovedRollback.Prepared? = null
 
     private val skillStore by lazy {
         WorkspaceSkillStore(File(noBackupFilesDir, WorkspaceSkillStore.APP_DIRECTORY))
@@ -29,15 +33,22 @@ class SkillRollbackPreviewActivity : AppCompatActivity() {
         binding = ActivitySkillRollbackPreviewBinding.inflate(layoutInflater)
         setContentView(binding.root)
         binding.backButton.setOnClickListener { finish() }
+        binding.rollbackButton.setOnClickListener {
+            pendingRollback?.let(::confirmRollback)
+        }
         render()
     }
 
     private fun render() {
+        pendingRollback = null
+        binding.rollbackButton.visibility = View.GONE
         val name = intent.getStringExtra(SkillDetailActivity.EXTRA_SKILL_NAME).orEmpty()
         val result = runCatching {
             val current = skillStore.load(name)
             val rollback = skillStore.loadRollback(name)
-            WorkspaceSkillRollbackPreview.compare(current, rollback)
+            val preview = WorkspaceSkillRollbackPreview.compare(current, rollback)
+            val approval = WorkspaceSkillApprovedRollback.prepare(current, rollback)
+            Triple(current, preview, approval)
         }
         result.onFailure { error ->
             binding.status.text = "ROLLBACK PREVIEW UNAVAILABLE"
@@ -51,7 +62,9 @@ class SkillRollbackPreviewActivity : AppCompatActivity() {
             return
         }
 
-        val preview = result.getOrThrow()
+        val (_, preview, approval) = result.getOrThrow()
+        pendingRollback = approval
+        binding.rollbackButton.visibility = View.VISIBLE
         binding.status.text = preview.status.name.replace('_', ' ')
         binding.status.setTextColor(
             if (preview.status ==
@@ -107,6 +120,41 @@ class SkillRollbackPreviewActivity : AppCompatActivity() {
                 )
             )
         }
+    }
+
+    private fun confirmRollback(prepared: WorkspaceSkillApprovedRollback.Prepared) {
+        AlertDialog.Builder(this)
+            .setTitle("Rollback " + prepared.request.skillName + "?")
+            .setMessage(prepared.approvalSummary)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Rollback disabled") { _, _ ->
+                binding.rollbackButton.isEnabled = false
+                val outcome = runCatching {
+                    skillStore.rollbackApproved(
+                        name = prepared.request.skillName,
+                        request = prepared.request,
+                        approvedToken = prepared.request.approvalToken,
+                        rolledBackAtMs = System.currentTimeMillis(),
+                    )
+                }
+                outcome.onSuccess { installed ->
+                    Toast.makeText(
+                        this,
+                        installed.entry.name + " rolled back · disabled",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    finish()
+                }.onFailure { error ->
+                    binding.rollbackButton.isEnabled = true
+                    Toast.makeText(
+                        this,
+                        error.message ?: "Skill rollback was not applied",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    render()
+                }
+            }
+            .show()
     }
 
     private fun values(values: List<String>): String =
