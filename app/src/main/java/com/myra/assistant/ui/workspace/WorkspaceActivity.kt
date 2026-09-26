@@ -17,17 +17,18 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.animation.DecelerateInterpolator
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.myra.assistant.R
 import com.myra.assistant.ai.ApiKeyStore
 import com.myra.assistant.ui.settings.ApiCloudSettingsActivity
@@ -479,10 +480,10 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val plusButton = label("+", 27f).apply {
             gravity = Gravity.CENTER
-            contentDescription = "Add photo, file, or skill"
+            contentDescription = "Add to chat"
             isClickable = true
             isFocusable = true
-            setOnClickListener { showAttachmentMenu(this) }
+            setOnClickListener { showAttachmentMenu() }
         }
         entry.addView(plusButton, LinearLayout.LayoutParams(dp(43), dp(50)))
         composer = EditText(this).apply {
@@ -767,36 +768,255 @@ class WorkspaceActivity : AppCompatActivity() {
         sendButton.imageTintList = ColorStateList.valueOf(if (ready) Color.rgb(20, 30, 22) else Color.WHITE)
     }
 
-    private fun showAttachmentMenu(anchor: View) {
-        if (workTab || isBusy()) return
-        PopupMenu(this, anchor).apply {
-            menu.add(0, 1, 0, "Photos")
-            menu.add(0, 2, 1, "Files")
-            menu.add(0, 3, 2, "Skill")
-            setOnMenuItemClickListener { item ->
-                when (item.itemId) {
-                    1 -> photoPicker.launch(arrayOf("image/jpeg", "image/png"))
-                    2 -> documentPicker.launch(arrayOf("text/plain", "text/html", "text/css",
-                        "application/json", "application/javascript", "application/pdf"))
-                    3 -> showSkillMenu()
-                }
-                true
-            }
-            show()
+    private fun hideComposerKeyboard() {
+        val token = currentFocus?.windowToken ?: composer.windowToken
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(token, 0)
+    }
+
+    private fun showComposerKeyboard() {
+        composer.post {
+            composer.requestFocus()
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.showSoftInput(composer, InputMethodManager.SHOW_IMPLICIT)
         }
+    }
+
+    private fun sheetRoot(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(8), dp(16), dp(28))
+        background = GradientDrawable().apply {
+            setColor(Color.rgb(17, 20, 18))
+            cornerRadius = dp(28).toFloat()
+        }
+    }
+
+    private fun sheetHeader(dialog: BottomSheetDialog, title: String): FrameLayout =
+        FrameLayout(this).apply {
+            val close = label("×", 28f).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(230, 234, 231))
+                setPadding(0, 0, 0, 0)
+                contentDescription = "Close"
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { dialog.dismiss() }
+            }
+            addView(close, FrameLayout.LayoutParams(dp(44), dp(48), Gravity.START or Gravity.CENTER_VERTICAL))
+
+            val heading = label(title, 18f).apply {
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                setPadding(dp(52), 0, dp(52), 0)
+            }
+            addView(heading, FrameLayout.LayoutParams(-1, dp(48), Gravity.CENTER))
+        }
+
+    private fun sheetCard(
+        title: String,
+        iconRes: Int,
+        action: () -> Unit,
+    ): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        setPadding(dp(8), dp(14), dp(8), dp(12))
+        background = GradientDrawable().apply {
+            setColor(Color.rgb(30, 34, 31))
+            cornerRadius = dp(20).toFloat()
+            setStroke(dp(1), Color.rgb(45, 51, 47))
+        }
+        isClickable = true
+        isFocusable = true
+        contentDescription = title
+        setOnClickListener { action() }
+
+        addView(ImageButton(this@WorkspaceActivity).apply {
+            setImageResource(iconRes)
+            imageTintList = ColorStateList.valueOf(Color.rgb(236, 239, 237))
+            background = rounded(Color.rgb(52, 57, 53), 22)
+            scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            isClickable = false
+            isFocusable = false
+            contentDescription = null
+        }, LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+            bottomMargin = dp(7)
+        })
+
+        addView(label(title, 14f).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(241, 243, 242))
+            setPadding(0, 0, 0, 0)
+        }, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    private fun sheetRow(
+        title: String,
+        iconRes: Int,
+        action: () -> Unit,
+    ): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), dp(10), dp(12), dp(10))
+        background = GradientDrawable().apply {
+            setColor(Color.rgb(30, 34, 31))
+            cornerRadius = dp(18).toFloat()
+            setStroke(dp(1), Color.rgb(45, 51, 47))
+        }
+        isClickable = true
+        isFocusable = true
+        contentDescription = title
+        setOnClickListener { action() }
+
+        addView(ImageButton(this@WorkspaceActivity).apply {
+            setImageResource(iconRes)
+            imageTintList = ColorStateList.valueOf(Color.rgb(232, 236, 233))
+            background = rounded(Color.rgb(52, 57, 53), 20)
+            scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(9), dp(9), dp(9), dp(9))
+            isClickable = false
+            isFocusable = false
+            contentDescription = null
+        }, LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+            rightMargin = dp(12)
+        })
+
+        addView(label(title, 15f).apply {
+            setTextColor(Color.rgb(241, 243, 242))
+            setPadding(0, 0, 0, 0)
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+
+        addView(label("›", 27f).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(143, 151, 146))
+            setPadding(dp(8), 0, dp(2), 0)
+        }, LinearLayout.LayoutParams(dp(34), dp(40)))
+    }
+
+    private fun showAttachmentMenu() {
+        if (workTab || isBusy()) return
+        hideComposerKeyboard()
+
+        val dialog = BottomSheetDialog(this)
+        val sheet = sheetRoot()
+        sheet.addView(sheetHeader(dialog, "Add to chat"), LinearLayout.LayoutParams(-1, dp(52)))
+
+        val cards = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        val cardParams = { left: Int, right: Int ->
+            LinearLayout.LayoutParams(0, dp(114), 1f).apply {
+                leftMargin = dp(left)
+                rightMargin = dp(right)
+            }
+        }
+        cards.addView(
+            sheetCard("Photos", android.R.drawable.ic_menu_gallery) {
+                dialog.dismiss()
+                photoPicker.launch(arrayOf("image/jpeg", "image/png"))
+            },
+            cardParams(0, 4),
+        )
+        cards.addView(
+            sheetCard("Files", android.R.drawable.ic_menu_save) {
+                dialog.dismiss()
+                documentPicker.launch(arrayOf(
+                    "text/plain",
+                    "text/html",
+                    "text/css",
+                    "application/json",
+                    "application/javascript",
+                    "application/pdf",
+                ))
+            },
+            cardParams(4, 4),
+        )
+        cards.addView(
+            sheetCard("Skill", android.R.drawable.ic_menu_manage) {
+                dialog.dismiss()
+                showSkillMenu()
+            },
+            cardParams(4, 0),
+        )
+        sheet.addView(cards, LinearLayout.LayoutParams(-1, dp(114)).apply {
+            topMargin = dp(8)
+        })
+
+        sheet.addView(
+            sheetRow("Connectors", android.R.drawable.ic_menu_share) {
+                dialog.dismiss()
+                showConnectorsShell()
+            },
+            LinearLayout.LayoutParams(-1, dp(62)).apply {
+                topMargin = dp(14)
+            },
+        )
+
+        dialog.setContentView(sheet)
+        dialog.setOnShowListener {
+            dialog.findViewById<FrameLayout>(
+                com.google.android.material.R.id.design_bottom_sheet
+            )?.setBackgroundColor(Color.TRANSPARENT)
+        }
+        dialog.show()
     }
 
     private fun showSkillMenu() {
         if (workTab || isBusy()) return
-        AlertDialog.Builder(this)
-            .setTitle("Skill")
-            .setItems(arrayOf("Add skill", "Create a skill")) { _, which ->
-                when (which) {
-                    0 -> skillPicker.launch(arrayOf("text/*", "application/octet-stream"))
-                    1 -> startCreateSkillDraft()
-                }
-            }
-            .show()
+        hideComposerKeyboard()
+
+        val dialog = BottomSheetDialog(this)
+        val sheet = sheetRoot()
+        sheet.addView(sheetHeader(dialog, "Skill"), LinearLayout.LayoutParams(-1, dp(52)))
+        sheet.addView(
+            sheetRow("Add skill", android.R.drawable.ic_input_add) {
+                dialog.dismiss()
+                skillPicker.launch(arrayOf("text/*", "application/octet-stream"))
+            },
+            LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(8) },
+        )
+        sheet.addView(
+            sheetRow("Create a skill", android.R.drawable.ic_menu_edit) {
+                dialog.dismiss()
+                startCreateSkillDraft()
+            },
+            LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(10) },
+        )
+        dialog.setContentView(sheet)
+        dialog.setOnShowListener {
+            dialog.findViewById<FrameLayout>(
+                com.google.android.material.R.id.design_bottom_sheet
+            )?.setBackgroundColor(Color.TRANSPARENT)
+        }
+        dialog.show()
+    }
+
+    private fun showConnectorsShell() {
+        if (workTab || isBusy()) return
+        hideComposerKeyboard()
+
+        val dialog = BottomSheetDialog(this)
+        val sheet = sheetRoot()
+        sheet.addView(sheetHeader(dialog, "Connectors"), LinearLayout.LayoutParams(-1, dp(52)))
+        sheet.addView(label("No connectors added yet.", 16f).apply {
+            setTextColor(Color.rgb(239, 242, 240))
+            setPadding(dp(6), dp(14), dp(6), dp(6))
+        })
+        sheet.addView(label(
+            "Connector setup is not active in this S1 UX correction. Nothing is connected and no server is contacted from this screen.",
+            13f,
+        ).apply {
+            setTextColor(Color.rgb(155, 165, 159))
+            setPadding(dp(6), dp(2), dp(6), dp(12))
+        })
+        dialog.setContentView(sheet)
+        dialog.setOnShowListener {
+            dialog.findViewById<FrameLayout>(
+                com.google.android.material.R.id.design_bottom_sheet
+            )?.setBackgroundColor(Color.TRANSPARENT)
+        }
+        dialog.show()
     }
 
     private fun startCreateSkillDraft() {
@@ -808,7 +1028,7 @@ class WorkspaceActivity : AppCompatActivity() {
             composer.append(starter)
         }
         composer.setSelection(composer.text.length)
-        composer.requestFocus()
+        showComposerKeyboard()
     }
 
     private fun project() = selectedId?.let(projects::getProject)
