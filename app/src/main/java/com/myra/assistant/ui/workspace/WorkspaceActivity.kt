@@ -9,6 +9,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -22,6 +23,7 @@ import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -134,7 +136,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private val photoPicker =
         registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            uri?.let { addAttachment(it, requirePhoto = true) }
+            uri?.let { addAttachment(it) }
         }
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { addAttachment(it) }
@@ -500,17 +502,35 @@ class WorkspaceActivity : AppCompatActivity() {
         composerArea.addView(statusBanner, LinearLayout.LayoutParams(-1, -2).apply {
             bottomMargin = dp(5)
         })
-        attachmentList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        composerArea.addView(attachmentList)
         val entry = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             minimumHeight = dp(52)
+            setPadding(dp(6), dp(5), dp(6), dp(5))
             background = GradientDrawable().apply {
                 setColor(Color.rgb(18, 28, 24))
                 cornerRadius = dp(28).toFloat()
                 setStroke(dp(1), Color.rgb(72, 101, 79))
             }
+        }
+        attachmentList = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            setPadding(dp(3), dp(3), dp(3), dp(2))
+        }
+        entry.addView(
+            HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
+                addView(attachmentList, HorizontalScrollView.LayoutParams(-2, -2))
+            },
+            LinearLayout.LayoutParams(-1, -2),
+        )
+
+        val inputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(50)
         }
         val plusButton = label("+", 27f).apply {
             gravity = Gravity.CENTER
@@ -519,7 +539,7 @@ class WorkspaceActivity : AppCompatActivity() {
             isFocusable = true
             setOnClickListener { showAttachmentMenu() }
         }
-        entry.addView(plusButton, LinearLayout.LayoutParams(dp(43), dp(50)))
+        inputRow.addView(plusButton, LinearLayout.LayoutParams(dp(43), dp(50)))
         composer = EditText(this).apply {
             hint = "Ask LYRA"
             setTextColor(Color.WHITE)
@@ -535,7 +555,7 @@ class WorkspaceActivity : AppCompatActivity() {
             filters = emptyArray<InputFilter>()
             setPadding(dp(2), dp(10), dp(6), dp(10))
         }
-        entry.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
+        inputRow.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
         sendButton = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_menu_send)
             imageTintList = ColorStateList.valueOf(Color.WHITE)
@@ -545,9 +565,10 @@ class WorkspaceActivity : AppCompatActivity() {
             contentDescription = "Send message"
             setOnClickListener { if (isBusy()) stopReply() else sendMessage() }
         }
-        entry.addView(sendButton, LinearLayout.LayoutParams(dp(42), dp(42)).apply {
-            rightMargin = dp(5)
+        inputRow.addView(sendButton, LinearLayout.LayoutParams(dp(42), dp(42)).apply {
+            rightMargin = dp(1)
         })
+        entry.addView(inputRow, LinearLayout.LayoutParams(-1, -2))
         composer.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = updateSendButton()
@@ -988,7 +1009,7 @@ class WorkspaceActivity : AppCompatActivity() {
             sheetCard("Photos", android.R.drawable.ic_menu_gallery) {
                 dialog.dismiss()
                 photoPicker.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                 )
             },
             cardParams(3, 3),
@@ -1862,6 +1883,16 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }.getOrNull()
 
+    private fun videoThumbnail(uri: Uri): Bitmap? = runCatching {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(this, uri)
+            retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } finally {
+            retriever.release()
+        }
+    }.getOrNull()
+
     private fun photoAttachmentView(attachment: Attachment): View {
         val frame = FrameLayout(this).apply {
             background = rounded(Color.rgb(20, 25, 22), 18)
@@ -1919,40 +1950,153 @@ class WorkspaceActivity : AppCompatActivity() {
         return frame
     }
 
+    private fun compactAttachmentCard(
+        title: String,
+        subtitle: String,
+        thumbnail: Bitmap? = null,
+        onRemove: () -> Unit,
+    ): View = FrameLayout(this).apply {
+        background = rounded(Color.rgb(31, 36, 32), 16)
+
+        if (thumbnail != null) {
+            addView(
+                ImageView(this@WorkspaceActivity).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    setImageBitmap(thumbnail)
+                    background = rounded(Color.rgb(40, 45, 41), 14)
+                    clipToOutline = true
+                },
+                FrameLayout.LayoutParams(dp(58), dp(58), Gravity.START or Gravity.CENTER_VERTICAL).apply {
+                    leftMargin = dp(7)
+                },
+            )
+        } else {
+            addView(
+                label(title.take(2).uppercase(), 11f).apply {
+                    gravity = Gravity.CENTER
+                    setPadding(0, 0, 0, 0)
+                    setTextColor(Color.rgb(220, 229, 222))
+                    background = rounded(Color.rgb(49, 56, 51), 16)
+                },
+                FrameLayout.LayoutParams(dp(46), dp(46), Gravity.START or Gravity.CENTER_VERTICAL).apply {
+                    leftMargin = dp(8)
+                },
+            )
+        }
+
+        val textColumn = LinearLayout(this@WorkspaceActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        textColumn.addView(label(title.take(28), 12.5f).apply {
+            setPadding(0, 0, 0, 0)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setTextColor(Color.rgb(240, 243, 241))
+        })
+        textColumn.addView(label(subtitle, 10.5f).apply {
+            setPadding(0, dp(2), 0, 0)
+            maxLines = 1
+            setTextColor(Color.rgb(154, 164, 157))
+        })
+        addView(
+            textColumn,
+            FrameLayout.LayoutParams(dp(102), dp(58), Gravity.END or Gravity.CENTER_VERTICAL).apply {
+                rightMargin = dp(30)
+            },
+        )
+
+        addView(
+            label("×", 19f).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, 0, 0, 0)
+                setTextColor(Color.WHITE)
+                background = rounded(Color.rgb(67, 72, 68), 14)
+                isClickable = true
+                isFocusable = true
+                contentDescription = "Remove attachment"
+                setOnClickListener { onRemove() }
+            },
+            FrameLayout.LayoutParams(dp(28), dp(28), Gravity.END or Gravity.TOP).apply {
+                rightMargin = dp(5)
+                topMargin = dp(5)
+            },
+        )
+    }
+
     private fun renderAttachments() {
         if (!::attachmentList.isInitialized) return
         attachmentList.removeAllViews()
+
         skillAttachment?.let { attachment ->
             attachmentList.addView(
-                control("${attachment.name} · Skill  ✕") {
-                    skillAttachment = null
-                    renderAttachments()
-                },
-                LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(4) },
-            )
-        }
-        attachments.toList().forEach { attachment ->
-            val kind = WorkspaceAttachmentPolicy.kind(attachment.mime)
-            if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
-                attachmentList.addView(
-                    photoAttachmentView(attachment),
-                    LinearLayout.LayoutParams(dp(118), dp(112)).apply {
-                        bottomMargin = dp(6)
-                    },
-                )
-            } else {
-                val localOnly = if (WorkspaceAttachmentPolicy.sendableNow(kind)) "" else " · local only"
-                attachmentList.addView(
-                    control(
-                        "${attachment.name} · ${WorkspaceAttachmentPolicy.label(kind)}$localOnly  ✕"
-                    ) {
-                        attachments.remove(attachment)
+                compactAttachmentCard(
+                    title = attachment.name,
+                    subtitle = "Skill",
+                    onRemove = {
+                        skillAttachment = null
                         renderAttachments()
                     },
-                    LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(4) },
-                )
+                ),
+                LinearLayout.LayoutParams(dp(186), dp(76)).apply {
+                    rightMargin = dp(7)
+                    bottomMargin = dp(3)
+                },
+            )
+        }
+
+        attachments.toList().forEach { attachment ->
+            val kind = WorkspaceAttachmentPolicy.kind(attachment.mime)
+            when (kind) {
+                WorkspaceAttachmentPolicy.Kind.IMAGE -> {
+                    attachmentList.addView(
+                        photoAttachmentView(attachment),
+                        LinearLayout.LayoutParams(dp(118), dp(112)).apply {
+                            rightMargin = dp(7)
+                            bottomMargin = dp(3)
+                        },
+                    )
+                }
+                WorkspaceAttachmentPolicy.Kind.VIDEO -> {
+                    attachmentList.addView(
+                        compactAttachmentCard(
+                            title = attachment.name,
+                            subtitle = "Video · local only",
+                            thumbnail = videoThumbnail(attachment.uri),
+                            onRemove = {
+                                attachments.remove(attachment)
+                                renderAttachments()
+                            },
+                        ),
+                        LinearLayout.LayoutParams(dp(186), dp(76)).apply {
+                            rightMargin = dp(7)
+                            bottomMargin = dp(3)
+                        },
+                    )
+                }
+                else -> {
+                    val localOnly =
+                        if (WorkspaceAttachmentPolicy.sendableNow(kind)) "" else " · local only"
+                    attachmentList.addView(
+                        compactAttachmentCard(
+                            title = attachment.name,
+                            subtitle = WorkspaceAttachmentPolicy.label(kind) + localOnly,
+                            onRemove = {
+                                attachments.remove(attachment)
+                                renderAttachments()
+                            },
+                        ),
+                        LinearLayout.LayoutParams(dp(186), dp(76)).apply {
+                            rightMargin = dp(7)
+                            bottomMargin = dp(3)
+                        },
+                    )
+                }
             }
         }
+
+        attachmentList.visibility =
+            if (skillAttachment != null || attachments.isNotEmpty()) View.VISIBLE else View.GONE
     }
 
     private fun InputStream.readBounded(max: Int): ByteArray {
