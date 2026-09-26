@@ -6,19 +6,25 @@ import android.os.Bundle
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillUninstallPreviewBinding
+import com.myra.assistant.ui.workspace.WorkspaceSkillApprovedUninstall
 import com.myra.assistant.ui.workspace.WorkspaceSkillUninstallPreview
 import com.myra.assistant.ui.workspace.WorkspaceSkillStore
 import java.io.File
 
 /**
- * H16 uninstall preview only. Current package and any recorded rollback package are freshly verified
- * before display. This screen has no uninstall confirmation and performs no mutation.
+ * H16 preview plus H17 exact human-approved uninstall.
+ *
+ * Preview remains read-only. H17 only exposes a local confirmation prepared from freshly verified
+ * current/rollback identities; the store revalidates them again before catalog removal.
  */
 class SkillUninstallPreviewActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySkillUninstallPreviewBinding
+    private var pendingUninstall: WorkspaceSkillApprovedUninstall.Prepared? = null
 
     private val skillStore by lazy {
         WorkspaceSkillStore(File(noBackupFilesDir, WorkspaceSkillStore.APP_DIRECTORY))
@@ -29,18 +35,24 @@ class SkillUninstallPreviewActivity : AppCompatActivity() {
         binding = ActivitySkillUninstallPreviewBinding.inflate(layoutInflater)
         setContentView(binding.root)
         binding.backButton.setOnClickListener { finish() }
+        binding.uninstallButton.setOnClickListener {
+            pendingUninstall?.let(::confirmUninstall)
+        }
         render()
     }
 
     private fun render() {
         binding.impactRows.removeAllViews()
+        binding.uninstallButton.visibility = View.GONE
+        pendingUninstall = null
         val name = intent.getStringExtra(SkillDetailActivity.EXTRA_SKILL_NAME).orEmpty()
         val result = runCatching {
             val current = skillStore.load(name)
             val rollback = if (current.entry.rollbackPoint != null) {
                 skillStore.loadRollback(name)
             } else null
-            WorkspaceSkillUninstallPreview.from(current, rollback)
+            val preview = WorkspaceSkillUninstallPreview.from(current, rollback)
+            preview to WorkspaceSkillApprovedUninstall.prepare(current, rollback)
         }
         result.onFailure { error ->
             binding.status.text = "UNINSTALL PREVIEW UNAVAILABLE"
@@ -53,15 +65,51 @@ class SkillUninstallPreviewActivity : AppCompatActivity() {
             return
         }
 
-        val preview = result.getOrThrow()
+        val (preview, prepared) = result.getOrThrow()
+        pendingUninstall = prepared
         binding.status.text = preview.status
         binding.status.setTextColor(Color.rgb(255, 180, 90))
         binding.detail.text = preview.name + "\n" + preview.summary
         binding.safety.text =
-            "PREVIEW ONLY · H16 does not uninstall, disable, delete package bytes, remove rollback " +
-                "metadata or create an approval token."
+            "H17 APPROVAL · Uninstall requires a separate confirmation bound to this exact verified " +
+                "current state and rollback identity. Package bytes are never deleted here."
+        binding.uninstallButton.visibility = View.VISIBLE
         binding.impactRows.visibility = View.VISIBLE
         preview.rows.forEach { binding.impactRows.addView(row(it)) }
+    }
+
+    private fun confirmUninstall(prepared: WorkspaceSkillApprovedUninstall.Prepared) {
+        AlertDialog.Builder(this)
+            .setTitle("Uninstall " + prepared.request.skillName + "?")
+            .setMessage(prepared.approvalSummary)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Uninstall") { _, _ ->
+                binding.uninstallButton.isEnabled = false
+                val outcome = runCatching {
+                    skillStore.uninstallApproved(
+                        name = prepared.request.skillName,
+                        request = prepared.request,
+                        approvedToken = prepared.request.approvalToken,
+                    )
+                }
+                outcome.onSuccess {
+                    Toast.makeText(
+                        this,
+                        prepared.request.skillName + " uninstalled",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    finish()
+                }.onFailure { error ->
+                    Toast.makeText(
+                        this,
+                        error.message ?: "Skill was not uninstalled",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    binding.uninstallButton.isEnabled = true
+                    render()
+                }
+            }
+            .show()
     }
 
     private fun row(item: WorkspaceSkillUninstallPreview.Row): View =

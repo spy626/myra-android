@@ -791,6 +791,65 @@ internal class WorkspaceSkillStore(
         return reopened
     }
 
+    /**
+     * H17 exact human-approved uninstall.
+     *
+     * Current and retained rollback packages are freshly re-opened and verified before the catalog
+     * entry is removed. Package directories are intentionally retained; H15 remains the only explicit
+     * user cleanup authority for catalog-unreferenced immutable packages.
+     */
+    @Synchronized fun uninstallApproved(
+        name: String,
+        request: WorkspaceSkillApprovedUninstall.Request,
+        approvedToken: String,
+    ) {
+        require(NAME.matches(name)) { "Invalid skill name" }
+
+        val current = load(name)
+        val rollback = if (current.entry.rollbackPoint != null) loadRollback(name) else null
+        WorkspaceSkillApprovedUninstall.validate(
+            current = current,
+            rollback = rollback,
+            request = request,
+            approvedToken = approvedToken,
+        )
+
+        val before = readCatalog()
+        val currentEntry = before.entries.firstOrNull { it.name == name }
+            ?: throw IllegalArgumentException("Skill is not installed")
+        require(currentEntry == current.entry) {
+            "Skill catalog changed after uninstall approval; preview again"
+        }
+
+        // Freshly verify the exact retained bytes immediately before removing catalog authority.
+        val verifiedCurrent = load(name)
+        val verifiedRollback =
+            if (verifiedCurrent.entry.rollbackPoint != null) loadRollback(name) else null
+        WorkspaceSkillApprovedUninstall.validate(
+            current = verifiedCurrent,
+            rollback = verifiedRollback,
+            request = request,
+            approvedToken = approvedToken,
+        )
+
+        val after = WorkspaceSkillCatalog.Catalog(
+            before.entries.filterNot { it.name == name }.sortedBy { it.name }
+        )
+        writeCatalog(after)
+
+        require(readCatalog().entries.none { it.name == name }) {
+            "Skill uninstall catalog removal could not be verified"
+        }
+        require(packageDir(verifiedCurrent.entry.packageSha256).isDirectory) {
+            "Uninstall unexpectedly removed the current immutable package"
+        }
+        verifiedRollback?.let {
+            require(packageDir(it.entry.packageSha256).isDirectory) {
+                "Uninstall unexpectedly removed the rollback immutable package"
+            }
+        }
+    }
+
     @Synchronized fun enable(
         name: String,
         environment: WorkspaceSkillEnablement.Environment,

@@ -87,13 +87,24 @@
             android:layout_height="wrap_content"
             android:orientation="vertical" />
 
+        <Button
+            android:id="@+id/uninstallButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_button"
+            android:text="REVIEW &amp; UNINSTALL"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:background="@drawable/bg_field"
             android:padding="14dp"
-            android:text="H16 SAFETY · No uninstall button exists on this screen. Actual removal must be a separate exact human-approved slice."
+            android:text="H17 SAFETY · Confirmation is bound to the exact freshly verified current identity, activation authority and rollback identity. Uninstall removes only catalog authority; immutable package bytes remain for separate bounded cleanup."
             android:textColor="#8E888E"
             android:textSize="11sp" />
     </LinearLayout>
