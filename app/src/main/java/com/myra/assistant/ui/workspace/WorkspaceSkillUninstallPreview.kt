@@ -26,6 +26,7 @@ internal object WorkspaceSkillUninstallPreview {
     fun from(
         current: WorkspaceSkillStore.Installed,
         rollback: WorkspaceSkillStore.Installed?,
+        dependents: List<WorkspaceSkillUninstallDependencyGuard.Dependent> = emptyList(),
     ): Preview {
         WorkspaceSkillEnablement.validateStoredState(current.entry)
         require(
@@ -75,6 +76,23 @@ internal object WorkspaceSkillUninstallPreview {
             }
 
         val rows = mutableListOf<Row>()
+        if (dependents.isNotEmpty()) {
+            rows += Row(
+                "Dependency safety",
+                "BLOCKED · uninstall would break installed skills that declare this skill as a dependency."
+            )
+            rows += Row(
+                "Dependent skills",
+                dependents.joinToString("\n") {
+                    it.skillName + " · " + it.state.name + " · " + it.packageSha256.take(12)
+                }
+            )
+        } else {
+            rows += Row(
+                "Dependency safety",
+                "PASS · no other verified installed skill declares this skill as a dependency."
+            )
+        }
         rows += Row("Current state", current.entry.state.name)
         rows += Row("Description", current.skill.description)
         rows += Row("Content SHA-256", current.entry.contentSha256)
@@ -93,10 +111,15 @@ internal object WorkspaceSkillUninstallPreview {
 
         return Preview(
             name = current.entry.name,
-            status = "UNINSTALL PREVIEW",
-            summary =
+            status = if (dependents.isEmpty()) "UNINSTALL PREVIEW"
+                else "UNINSTALL BLOCKED · DEPENDENTS",
+            summary = if (dependents.isEmpty()) {
                 "Exact verified removal impact only. No approval token is created and no catalog " +
-                    "entry, activation binding, rollback point or package directory is changed.",
+                    "entry, activation binding, rollback point or package directory is changed."
+            } else {
+                "Uninstall is blocked because another installed skill depends on this skill. " +
+                    "No cascade, auto-disable, approval or catalog mutation is performed."
+            },
             rows = rows,
         )
     }

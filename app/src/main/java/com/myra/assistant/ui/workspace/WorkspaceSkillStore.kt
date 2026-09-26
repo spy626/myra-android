@@ -807,6 +807,11 @@ internal class WorkspaceSkillStore(
 
         val current = load(name)
         val rollback = if (current.entry.rollbackPoint != null) loadRollback(name) else null
+        val dependencyImpact = WorkspaceSkillUninstallDependencyGuard.analyze(
+            targetSkillName = name,
+            installedSkills = listVerified(),
+        )
+        WorkspaceSkillUninstallDependencyGuard.requireSafe(dependencyImpact)
         WorkspaceSkillApprovedUninstall.validate(
             current = current,
             rollback = rollback,
@@ -830,6 +835,12 @@ internal class WorkspaceSkillStore(
             rollback = verifiedRollback,
             request = request,
             approvedToken = approvedToken,
+        )
+        WorkspaceSkillUninstallDependencyGuard.requireSafe(
+            WorkspaceSkillUninstallDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = listVerified(),
+            )
         )
 
         val after = WorkspaceSkillCatalog.Catalog(

@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillUninstallPreviewBinding
 import com.myra.assistant.ui.workspace.WorkspaceSkillApprovedUninstall
+import com.myra.assistant.ui.workspace.WorkspaceSkillUninstallDependencyGuard
 import com.myra.assistant.ui.workspace.WorkspaceSkillUninstallPreview
 import com.myra.assistant.ui.workspace.WorkspaceSkillStore
 import java.io.File
@@ -51,8 +52,18 @@ class SkillUninstallPreviewActivity : AppCompatActivity() {
             val rollback = if (current.entry.rollbackPoint != null) {
                 skillStore.loadRollback(name)
             } else null
-            val preview = WorkspaceSkillUninstallPreview.from(current, rollback)
-            preview to WorkspaceSkillApprovedUninstall.prepare(current, rollback)
+            val dependencyImpact = WorkspaceSkillUninstallDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = skillStore.listVerified(),
+            )
+            val preview = WorkspaceSkillUninstallPreview.from(
+                current = current,
+                rollback = rollback,
+                dependents = dependencyImpact.dependents,
+            )
+            val prepared = if (dependencyImpact.blocked) null
+                else WorkspaceSkillApprovedUninstall.prepare(current, rollback)
+            preview to prepared
         }
         result.onFailure { error ->
             binding.status.text = "UNINSTALL PREVIEW UNAVAILABLE"
@@ -71,9 +82,15 @@ class SkillUninstallPreviewActivity : AppCompatActivity() {
         binding.status.setTextColor(Color.rgb(255, 180, 90))
         binding.detail.text = preview.name + "\n" + preview.summary
         binding.safety.text =
-            "H17 APPROVAL · Uninstall requires a separate confirmation bound to this exact verified " +
-                "current state and rollback identity. Package bytes are never deleted here."
-        binding.uninstallButton.visibility = View.VISIBLE
+            if (prepared == null) {
+                "H18 DEPENDENCY BLOCK · Handle every listed dependent skill explicitly first. " +
+                    "LYRA will not cascade uninstall or auto-disable another skill."
+            } else {
+                "H17 APPROVAL · Uninstall requires a separate confirmation bound to this exact verified " +
+                    "current state and rollback identity. Package bytes are never deleted here."
+            }
+        binding.uninstallButton.visibility =
+            if (prepared == null) View.GONE else View.VISIBLE
         binding.impactRows.visibility = View.VISIBLE
         preview.rows.forEach { binding.impactRows.addView(row(it)) }
     }
