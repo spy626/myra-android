@@ -25,7 +25,7 @@ internal object WorkspaceChatRecallGrounding {
         """(?iu)[?؟]|\b(?:what|where|when|which|who|did|kya|kahan|kahaan|kab|kaun|kis|""" +
             """yaad|remember|remind)\b|क्या|कहाँ|कब|याद|کیا|کہاں|کب""")
     private val previousMessageReference = Regex(
-        """(?iu)\\b(?:previous|last|pichla|pichli|pichhle)\\s+(?:user\\s+)?(?:message|msg|text|turn)\\b"""
+        """(?iu)\b(?:previous|last|pichla|pichli|pichhle)\s+(?:user\s+)?(?:message|msg|text|turn)\b"""
     )
     private val ignored = setOf(
         "i", "we", "did", "you", "your", "my", "me", "what", "where", "when", "which", "who",
@@ -74,7 +74,7 @@ internal object WorkspaceChatRecallGrounding {
         if (candidates.isEmpty()) return unknown
         if (previousMessageReference.containsMatchIn(latest)) {
             val excerpt = literalExcerpt(candidates.first(), emptySet()) ?: return unknown
-            return if (Regex("""(?iu)\\b(?:what|where|when|which|who|did|remember)\\b""").containsMatchIn(latest))
+            return if (Regex("""(?iu)\b(?:what|where|when|which|who|did|remember)\b""").containsMatchIn(latest))
                 "You said: “$excerpt”"
             else "Tumne kaha tha: “$excerpt”"
         }
