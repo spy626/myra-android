@@ -7,6 +7,8 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -195,14 +197,11 @@ internal object WorkspaceAgentReachGitHub {
         return request(apiUrl("/repos/$owner/$repo/readme", "ref=${encode(sha)}"))
     }
 
-    fun pinnedRepositoryFileRequest(
+    fun pinnedFileRequest(
         selection: Selection,
         commitSha: String,
         path: String,
     ): Request {
-        require(selection.isRepositoryRead) {
-            "Pinned repository-file request requires a repository read target"
-        }
         val sha = requireSha(commitSha)
         requireSafePath(path)
         val owner = encode(selection.owner)
@@ -212,6 +211,17 @@ internal object WorkspaceAgentReachGitHub {
             "/repos/$owner/$repo/contents/$encodedPath",
             "ref=${encode(sha)}",
         ))
+    }
+
+    fun pinnedRepositoryFileRequest(
+        selection: Selection,
+        commitSha: String,
+        path: String,
+    ): Request {
+        require(selection.isRepositoryRead) {
+            "Pinned repository-file request requires a repository read target"
+        }
+        return pinnedFileRequest(selection, commitSha, path)
     }
 
     fun fileRequest(selection: Selection, commitSha: String): Request {
@@ -406,6 +416,30 @@ internal object WorkspaceAgentReachGitHub {
         )
     }
 
+    fun readPinnedFileContent(
+        response: Response,
+        selection: Selection,
+        commitSha: String,
+        expectedPath: String,
+        fetchedAtMs: Long,
+    ): WorkspaceAgentReachEvidence.Evidence {
+        requireSafePath(expectedPath)
+        val sha = requireSha(commitSha)
+        val evidence = readContent(response, selection, sha, fetchedAtMs)
+        val finalTarget = WorkspaceAgentReachPolicy.parse(evidence.provenance.finalUrl)
+        require(
+            finalTarget.platform == WorkspaceAgentReachPolicy.Platform.GITHUB &&
+                finalTarget.githubOwner.equals(selection.owner, ignoreCase = true) &&
+                finalTarget.githubRepo.equals(selection.repo, ignoreCase = true)
+        ) { "GitHub file provenance repository did not match the requested repository" }
+        val finalPath = URI(evidence.provenance.finalUrl).path.orEmpty()
+        val expectedSuffix = "/blob/$sha/$expectedPath"
+        require(finalPath.endsWith(expectedSuffix)) {
+            "GitHub file provenance did not match the planned pinned path"
+        }
+        return evidence
+    }
+
     fun readPinnedRepositoryContent(
         response: Response,
         selection: Selection,
@@ -416,15 +450,13 @@ internal object WorkspaceAgentReachGitHub {
         require(selection.isRepositoryRead) {
             "Pinned repository content requires a repository read target"
         }
-        requireSafePath(expectedPath)
-        val sha = requireSha(commitSha)
-        val evidence = readContent(response, selection, sha, fetchedAtMs)
-        val finalPath = URI(evidence.provenance.finalUrl).path.orEmpty()
-        val expectedSuffix = "/blob/$sha/$expectedPath"
-        require(finalPath.endsWith(expectedSuffix)) {
-            "GitHub file provenance did not match the planned pinned path"
-        }
-        return evidence
+        return readPinnedFileContent(
+            response = response,
+            selection = selection,
+            commitSha = commitSha,
+            expectedPath = expectedPath,
+            fetchedAtMs = fetchedAtMs,
+        )
     }
 
     fun readContent(
@@ -449,7 +481,15 @@ internal object WorkspaceAgentReachGitHub {
         require(bytes.size <= MAX_CONTENT_BYTES && declared == bytes.size) {
             "GitHub file size did not match the bounded response"
         }
-        val content = String(bytes, Charsets.UTF_8)
+        val content = runCatching {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes))
+                .toString()
+        }.getOrElse {
+            throw IllegalArgumentException("GitHub text file is not valid UTF-8")
+        }
         require(!content.contains('\u0000')) { "Binary GitHub file is not accepted as text evidence" }
 
         val htmlUrl = root.optString("html_url").takeIf { it.isNotBlank() }

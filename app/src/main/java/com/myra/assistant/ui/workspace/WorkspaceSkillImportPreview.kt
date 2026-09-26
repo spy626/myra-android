@@ -48,6 +48,8 @@ internal object WorkspaceSkillImportPreview {
     fun inspect(
         skillMdBytes: ByteArray,
         skillJsonBytes: ByteArray? = null,
+        provenance: WorkspaceSkillContract.Provenance =
+            WorkspaceSkillContract.Provenance(WorkspaceSkillContract.Origin.USER_SUPPLIED),
     ): Preview {
         val total = skillMdBytes.size.toLong() + (skillJsonBytes?.size ?: 0)
         require(total <= WorkspaceSkillCatalog.MAX_PACKAGE_BYTES) {
@@ -62,9 +64,7 @@ internal object WorkspaceSkillImportPreview {
         val skill = WorkspaceSkillContract.parse(
             skillMd = skillMd,
             skillJson = skillJson,
-            provenance = WorkspaceSkillContract.Provenance(
-                WorkspaceSkillContract.Origin.USER_SUPPLIED,
-            ),
+            provenance = provenance,
             packagePaths = files.keys,
         )
         val snapshot = WorkspaceSkillCatalog.snapshot(skill, files)
@@ -79,7 +79,21 @@ internal object WorkspaceSkillImportPreview {
         val p = skill.permissionPreview
         val m = skill.manifest
         val rows = buildList {
-            add(Row("Origin", "User supplied · local preview only"))
+            add(Row(
+                "Origin",
+                when (provenance.origin) {
+                    WorkspaceSkillContract.Origin.USER_SUPPLIED ->
+                        "User supplied · local preview only"
+                    WorkspaceSkillContract.Origin.GITHUB_PINNED ->
+                        "GitHub · pinned revision"
+                    WorkspaceSkillContract.Origin.LOCAL_DERIVED ->
+                        "Local derived"
+                }
+            ))
+            if (provenance.origin == WorkspaceSkillContract.Origin.GITHUB_PINNED) {
+                add(Row("Source URL", requireNotNull(provenance.sourceUrl)))
+                add(Row("Pinned revision", requireNotNull(provenance.pinnedRevision)))
+            }
             add(Row("Verification gate", if (skill.hasVerificationGate) "Declared" else "Missing"))
             add(Row("Declared license", skill.declaredLicense ?: "Not declared"))
             add(Row("Compatibility", skill.compatibility ?: "Not declared"))

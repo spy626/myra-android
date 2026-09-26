@@ -35,6 +35,9 @@ class SkillManagerActivity : AppCompatActivity() {
         binding.previewImportButton.setOnClickListener {
             startActivity(Intent(this, SkillImportPreviewActivity::class.java))
         }
+        binding.previewGithubButton.setOnClickListener {
+            startActivity(Intent(this, SkillGitHubPreviewActivity::class.java))
+        }
     }
 
     override fun onResume() {

@@ -67,6 +67,16 @@
             android:textColor="#FFFFFF"
             android:textStyle="bold" />
 
+        <Button
+            android:id="@+id/previewGithubButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_field"
+            android:text="PREVIEW GITHUB SKILL"
+            android:textColor="#EEEEEE"
+            android:textStyle="bold" />
+
         <TextView
             style="@style/MyraLabel"
             android:text="INSTALLED SKILLS" />
