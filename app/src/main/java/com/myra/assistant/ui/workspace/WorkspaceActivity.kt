@@ -139,7 +139,7 @@ class WorkspaceActivity : AppCompatActivity() {
             uri?.let { addAttachment(it) }
         }
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { addAttachment(it) }
+        uri?.let(::routePickedDocument)
     }
     private val cameraCapture =
         registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
@@ -1640,6 +1640,38 @@ class WorkspaceActivity : AppCompatActivity() {
         WorkspaceChatGateway.Provider.OPENROUTER_FREE -> keys.get(ApiKeyStore.OPENROUTER)
         WorkspaceChatGateway.Provider.GROQ_FREE -> keys.get(ApiKeyStore.GROQ)
         WorkspaceChatGateway.Provider.LLM7_FREE -> keys.get(ApiKeyStore.LLM7)
+    }
+
+    private fun routePickedDocument(uri: Uri) {
+        if (workTab || isBusy()) {
+            toast("Wait for the current reply before adding a file")
+            return
+        }
+        val name = runCatching {
+            var value = ""
+            contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let {
+                        value = cursor.getString(it).orEmpty()
+                    }
+                }
+            }
+            value
+        }.getOrDefault("")
+
+        // Exact SKILL.md is a reserved local Skill package input. Route it into the existing
+        // Skill attachment path instead of ever treating it as a generic provider attachment.
+        if (name == "SKILL.md") {
+            addSkillAttachment(uri)
+        } else {
+            addAttachment(uri)
+        }
     }
 
     private fun addSkillAttachment(uri: Uri) {
