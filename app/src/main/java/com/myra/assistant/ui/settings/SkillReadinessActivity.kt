@@ -7,10 +7,13 @@ import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillReadinessBinding
 import com.myra.assistant.ui.workspace.WorkspaceSkillCatalog
+import com.myra.assistant.ui.workspace.WorkspaceSkillEnableApproval
 import com.myra.assistant.ui.workspace.WorkspaceSkillEnablement
 import com.myra.assistant.ui.workspace.WorkspaceSkillReadinessSurface
 import com.myra.assistant.ui.workspace.WorkspaceSkillStore
@@ -25,6 +28,7 @@ import java.io.File
  */
 class SkillReadinessActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySkillReadinessBinding
+    private var pendingEnable: WorkspaceSkillEnableApproval.Prepared? = null
     private val skillStore by lazy {
         WorkspaceSkillStore(File(noBackupFilesDir, WorkspaceSkillStore.APP_DIRECTORY))
     }
@@ -34,6 +38,7 @@ class SkillReadinessActivity : AppCompatActivity() {
         binding = ActivitySkillReadinessBinding.inflate(layoutInflater)
         setContentView(binding.root)
         binding.backButton.setOnClickListener { finish() }
+        binding.enableButton.setOnClickListener { pendingEnable?.let(::confirmEnable) }
     }
 
     override fun onResume() {
@@ -43,6 +48,8 @@ class SkillReadinessActivity : AppCompatActivity() {
 
     private fun renderReadiness() {
         binding.checkList.removeAllViews()
+        binding.enableButton.visibility = View.GONE
+        pendingEnable = null
         val name = intent.getStringExtra(SkillDetailActivity.EXTRA_SKILL_NAME).orEmpty()
         val result = runCatching {
             val installed = skillStore.load(name)
@@ -57,7 +64,7 @@ class SkillReadinessActivity : AppCompatActivity() {
                 environment = environment,
                 testedAtMs = System.currentTimeMillis(),
             )
-            installed to WorkspaceSkillReadinessSurface.view(report)
+            Triple(installed, environment, report)
         }
 
         result.onFailure { error ->
@@ -71,7 +78,12 @@ class SkillReadinessActivity : AppCompatActivity() {
             return
         }
 
-        val (installed, view) = result.getOrThrow()
+        val (installed, environment, report) = result.getOrThrow()
+        val view = WorkspaceSkillReadinessSurface.view(report)
+        if (view.status == WorkspaceSkillEnablement.Status.PASS) {
+            pendingEnable = WorkspaceSkillEnableApproval.prepare(installed, environment, report)
+            binding.enableButton.visibility = View.VISIBLE
+        }
         binding.checkList.visibility = View.VISIBLE
         binding.reportMeta.visibility = View.VISIBLE
         binding.skillName.text = installed.entry.name
@@ -90,6 +102,49 @@ class SkillReadinessActivity : AppCompatActivity() {
             "environment " + view.environmentSha256.take(12) +
                 " · report " + view.reportSha256.take(12)
         view.rows.forEach { binding.checkList.addView(checkRow(it)) }
+    }
+
+    private fun confirmEnable(prepared: WorkspaceSkillEnableApproval.Prepared) {
+        AlertDialog.Builder(this)
+            .setTitle("Enable " + prepared.skillName + "?")
+            .setMessage(prepared.approvalSummary)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Enable") { _, _ ->
+                val outcome = runCatching {
+                    // Re-read the package and environment after the human tap. Any intervening
+                    // catalog/package change makes the earlier approval request fail closed.
+                    val freshInstalled = skillStore.load(prepared.skillName)
+                    require(freshInstalled.entry.state ==
+                        WorkspaceSkillCatalog.State.INSTALLED_DISABLED) {
+                        "Skill state changed before enablement"
+                    }
+                    val freshEnvironment = WorkspaceSkillReadinessSurface.currentEnvironment(
+                        skillStore.listVerified())
+                    skillStore.enable(
+                        name = prepared.skillName,
+                        environment = freshEnvironment,
+                        request = prepared.request,
+                        approvedToken = prepared.request.approvalToken,
+                        enabledAtMs = System.currentTimeMillis(),
+                    )
+                }
+                outcome.onSuccess {
+                    Toast.makeText(
+                        this,
+                        prepared.skillName + " enabled",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    finish()
+                }.onFailure { error ->
+                    Toast.makeText(
+                        this,
+                        error.message ?: "Skill was not enabled",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    renderReadiness()
+                }
+            }
+            .show()
     }
 
     private fun checkRow(row: WorkspaceSkillReadinessSurface.Row): View =

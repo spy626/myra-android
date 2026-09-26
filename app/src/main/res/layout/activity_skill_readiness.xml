@@ -41,7 +41,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Fresh local checks only · no enable action"
+                    android:text="Fresh local checks · explicit approval required to enable"
                     android:textColor="#777077"
                     android:textSize="12sp" />
             </LinearLayout>
@@ -91,9 +91,20 @@
             android:layout_marginTop="16dp"
             android:background="@drawable/bg_field"
             android:padding="14dp"
-            android:text="READ ONLY · Current Phase-1 skill invocation does not grant tools, capabilities, network, source, memory or model selection. This report mirrors those real gates instead of inventing availability."
+            android:text="Readiness mirrors the real Phase-1 gates. Enable appears only after a fresh PASS and still requires an explicit approval dialog bound to this exact package, permissions and environment."
             android:textColor="#8E888E"
             android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/enableButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_button"
+            android:text="ENABLE THIS VERIFIED SKILL"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:visibility="gone" />
 
         <TextView
             style="@style/MyraLabel"
