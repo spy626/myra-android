@@ -19,7 +19,7 @@ class WorkspaceSkillUninstallDependencyGuardTest {
             append("{\"allowedTools\":[]")
             if (dependencySkills.isNotEmpty()) {
                 append(",\"dependencySkills\":[")
-                append(dependencySkills.joinToString(",") { "\\"" + it + "\\"" })
+                append(dependencySkills.joinToString(",") { "\"" + it + "\"" })
                 append("]")
             }
             append("}")
