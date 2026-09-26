@@ -41,7 +41,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Local inspection only · nothing is installed"
+                    android:text="Inspect first · explicit approval required to install"
                     android:textColor="#777077"
                     android:textSize="12sp" />
             </LinearLayout>
@@ -53,7 +53,7 @@
             android:layout_marginTop="12dp"
             android:background="@drawable/bg_field"
             android:padding="14dp"
-            android:text="H6 inspects only the selected SKILL.md and optional skill.json. Executable manifest fields are rejected, exact network domains are validated, and possible secrets are blocked. No selected bytes are copied into the skill store."
+            android:text="Selected SKILL.md and optional skill.json are inspected locally first. A clean preview can proceed only through an explicit install dialog bound to the exact package and permissions. Installation always starts disabled."
             android:textColor="#8E888E"
             android:textSize="11sp" />
 
@@ -164,6 +164,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical" />
+
+            <Button
+                android:id="@+id/installButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/bg_button"
+                android:text="REVIEW &amp; INSTALL DISABLED"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:visibility="gone" />
 
             <TextView
                 style="@style/MyraLabel"

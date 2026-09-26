@@ -370,6 +370,40 @@ internal class WorkspaceSkillStore(
         return load(skill.name)
     }
 
+    /**
+     * H7 admission path for a genuinely new local skill name.
+     *
+     * It deliberately refuses to reuse install() as an update/re-enable operation. A name already
+     * present in the catalog must go through the separate update flow.
+     */
+    @Synchronized fun installNew(
+        skill: WorkspaceSkillContract.ParsedSkill,
+        packageFiles: Map<String, ByteArray>,
+        approval: WorkspaceSkillCatalog.ApprovalRequest,
+        approvedToken: String,
+        installedAtMs: Long,
+    ): Installed {
+        val before = readCatalog()
+        require(before.entries.none { it.name == skill.name }) {
+            "A skill with this name is already installed; use the separate update flow"
+        }
+        val installed = install(
+            skill = skill,
+            packageFiles = packageFiles,
+            approval = approval,
+            approvedToken = approvedToken,
+            installedAtMs = installedAtMs,
+        )
+        require(
+            installed.entry.state == WorkspaceSkillCatalog.State.INSTALLED_DISABLED &&
+                installed.entry.enabledAtMs == null &&
+                installed.entry.enableReadinessSha256 == null &&
+                installed.entry.enableEnvironmentSha256 == null &&
+                installed.entry.enableBindingSha256 == null
+        ) { "Newly installed skill unexpectedly gained activation authority" }
+        return installed
+    }
+
     @Synchronized fun update(
         name: String,
         candidate: WorkspaceSkillContract.ParsedSkill,
