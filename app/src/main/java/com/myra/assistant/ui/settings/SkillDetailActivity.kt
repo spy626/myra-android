@@ -60,6 +60,13 @@ class SkillDetailActivity : AppCompatActivity() {
                     .putExtra(EXTRA_SKILL_NAME, name)
             )
         }
+        binding.uninstallPreviewButton.setOnClickListener {
+            val name = intent.getStringExtra(EXTRA_SKILL_NAME).orEmpty()
+            startActivity(
+                Intent(this, SkillUninstallPreviewActivity::class.java)
+                    .putExtra(EXTRA_SKILL_NAME, name)
+            )
+        }
     }
 
     override fun onResume() {
@@ -73,6 +80,7 @@ class SkillDetailActivity : AppCompatActivity() {
         binding.disableButton.visibility = View.GONE
         binding.updatePreviewButton.visibility = View.GONE
         binding.rollbackPreviewButton.visibility = View.GONE
+        binding.uninstallPreviewButton.visibility = View.GONE
         pendingDisable = null
         val name = intent.getStringExtra(EXTRA_SKILL_NAME).orEmpty()
         val loaded = runCatching {
@@ -90,6 +98,7 @@ class SkillDetailActivity : AppCompatActivity() {
 
         val (installed, detail) = loaded
         binding.updatePreviewButton.visibility = View.VISIBLE
+        binding.uninstallPreviewButton.visibility = View.VISIBLE
         if (installed.entry.rollbackPoint != null) {
             binding.rollbackPreviewButton.visibility = View.VISIBLE
         }
