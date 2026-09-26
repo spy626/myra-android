@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillRollbackPreviewBinding
 import com.myra.assistant.ui.workspace.WorkspaceSkillApprovedRollback
+import com.myra.assistant.ui.workspace.WorkspaceSkillDisableDependencyGuard
 import com.myra.assistant.ui.workspace.WorkspaceSkillRollbackPreview
 import com.myra.assistant.ui.workspace.WorkspaceSkillStore
 import java.io.File
@@ -47,8 +48,14 @@ class SkillRollbackPreviewActivity : AppCompatActivity() {
             val current = skillStore.load(name)
             val rollback = skillStore.loadRollback(name)
             val preview = WorkspaceSkillRollbackPreview.compare(current, rollback)
-            val approval = WorkspaceSkillApprovedRollback.prepare(current, rollback)
-            Triple(current, preview, approval)
+            val dependencyImpact = WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = skillStore.listVerified(),
+            )
+            val approval =
+                if (dependencyImpact.blocked) null
+                else WorkspaceSkillApprovedRollback.prepare(current, rollback)
+            Triple(preview, dependencyImpact, approval)
         }
         result.onFailure { error ->
             binding.status.text = "ROLLBACK PREVIEW UNAVAILABLE"
@@ -62,23 +69,34 @@ class SkillRollbackPreviewActivity : AppCompatActivity() {
             return
         }
 
-        val (_, preview, approval) = result.getOrThrow()
+        val (preview, dependencyImpact, approval) = result.getOrThrow()
         pendingRollback = approval
-        binding.rollbackButton.visibility = View.VISIBLE
-        binding.status.text = preview.status.name.replace('_', ' ')
+        binding.rollbackButton.visibility =
+            if (approval == null) View.GONE else View.VISIBLE
+        binding.status.text =
+            if (dependencyImpact.blocked) "ROLLBACK BLOCKED · ENABLED DEPENDENTS"
+            else preview.status.name.replace('_', ' ')
         binding.status.setTextColor(
-            if (preview.status ==
-                WorkspaceSkillRollbackPreview.Status.RESTORES_BROADER_PERMISSIONS)
-                Color.rgb(255, 180, 90)
-            else Color.rgb(108, 194, 145)
+            when {
+                dependencyImpact.blocked -> Color.rgb(255, 80, 110)
+                preview.status ==
+                    WorkspaceSkillRollbackPreview.Status.RESTORES_BROADER_PERMISSIONS ->
+                    Color.rgb(255, 180, 90)
+                else -> Color.rgb(108, 194, 145)
+            }
         )
         binding.detail.text =
-            if (preview.status ==
-                WorkspaceSkillRollbackPreview.Status.RESTORES_BROADER_PERMISSIONS)
-                "The retained version is verified, but rollback would restore at least one " +
-                    "permission/invocation boundary removed by the current version."
-            else
-                "The retained previous immutable version is verified. This is comparison only."
+            when {
+                dependencyImpact.blocked ->
+                    "Rollback would clear this dependency's activation authority while enabled " +
+                        "skills still depend on it. Disable those dependents explicitly first."
+                preview.status ==
+                    WorkspaceSkillRollbackPreview.Status.RESTORES_BROADER_PERMISSIONS ->
+                    "The retained version is verified, but rollback would restore at least one " +
+                        "permission/invocation boundary removed by the current version."
+                else ->
+                    "The retained previous immutable version is verified. This is comparison only."
+            }
         binding.activationImpact.text = preview.activationImpact
 
         binding.identityRows.removeAllViews()
@@ -117,6 +135,17 @@ class SkillRollbackPreviewActivity : AppCompatActivity() {
                     delta.label + " · " + delta.classification,
                     delta.current + " → " + delta.rollback,
                     warning = delta.classification == "RESTORED",
+                )
+            )
+        }
+        if (dependencyImpact.blocked) {
+            binding.permissionRows.addView(
+                row(
+                    "DEPENDENCY SAFETY",
+                    dependencyImpact.enabledDependents.joinToString("\n") {
+                        it.skillName + " · " + it.packageSha256.take(12)
+                    },
+                    warning = true,
                 )
             )
         }

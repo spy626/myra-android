@@ -584,6 +584,13 @@ internal class WorkspaceSkillStore(
             "Skill update name does not match the installed skill"
         }
         val current = load(name)
+        WorkspaceSkillDisableDependencyGuard.requireSafe(
+            WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = listVerified(),
+            ),
+            WorkspaceSkillDisableDependencyGuard.Operation.UPDATE,
+        )
         val snapshot = WorkspaceSkillCatalog.snapshot(candidate, packageFiles)
         val updated = WorkspaceSkillUpdate.updatedEntry(
             current = current,
@@ -625,6 +632,13 @@ internal class WorkspaceSkillStore(
             persistedSnapshot == snapshot) {
             "Persisted skill update package did not match the approved candidate"
         }
+        WorkspaceSkillDisableDependencyGuard.requireSafe(
+            WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = listVerified(),
+            ),
+            WorkspaceSkillDisableDependencyGuard.Operation.UPDATE,
+        )
 
         val after = WorkspaceSkillCatalog.Catalog(
             before.entries.map { if (it.name == name) updated else it }
@@ -655,6 +669,13 @@ internal class WorkspaceSkillStore(
         }
 
         val current = load(name)
+        WorkspaceSkillDisableDependencyGuard.requireSafe(
+            WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = listVerified(),
+            ),
+            WorkspaceSkillDisableDependencyGuard.Operation.UPDATE,
+        )
         val packageFiles = candidate.packageFiles.mapValues { it.value.copyOf() }
         val snapshot = WorkspaceSkillCatalog.snapshot(candidate.skill, packageFiles)
         val candidateApproval =
@@ -704,6 +725,13 @@ internal class WorkspaceSkillStore(
                 persistedSnapshot == candidate.snapshot &&
                 persistedApproval.permissionSha256 == candidate.permissionSha256
         ) { "Persisted skill update package did not match the human-approved candidate" }
+        WorkspaceSkillDisableDependencyGuard.requireSafe(
+            WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = listVerified(),
+            ),
+            WorkspaceSkillDisableDependencyGuard.Operation.UPDATE,
+        )
 
         val after = WorkspaceSkillCatalog.Catalog(
             before.entries.map { if (it.name == name) updated else it }
@@ -741,6 +769,13 @@ internal class WorkspaceSkillStore(
         // Fresh package verification happens inside these two loads.
         val current = load(name)
         val rollback = loadRollback(name)
+        WorkspaceSkillDisableDependencyGuard.requireSafe(
+            WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = listVerified(),
+            ),
+            WorkspaceSkillDisableDependencyGuard.Operation.ROLLBACK,
+        )
 
         val restored = WorkspaceSkillApprovedRollback.rolledBackEntry(
             current = current,
@@ -766,6 +801,13 @@ internal class WorkspaceSkillStore(
             ),
             current = current,
             rollback = verifiedTarget,
+        )
+        WorkspaceSkillDisableDependencyGuard.requireSafe(
+            WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = listVerified(),
+            ),
+            WorkspaceSkillDisableDependencyGuard.Operation.ROLLBACK,
         )
 
         val after = WorkspaceSkillCatalog.Catalog(

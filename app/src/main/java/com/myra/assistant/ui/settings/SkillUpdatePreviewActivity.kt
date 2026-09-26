@@ -16,6 +16,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillUpdatePreviewBinding
 import com.myra.assistant.ui.workspace.WorkspaceSkillApprovedUpdate
+import com.myra.assistant.ui.workspace.WorkspaceSkillDisableDependencyGuard
 import com.myra.assistant.ui.workspace.WorkspaceSkillGitHubInstallApproval
 import com.myra.assistant.ui.workspace.WorkspaceSkillGitHubInstallRunner
 import com.myra.assistant.ui.workspace.WorkspaceSkillGitHubPreviewRunner
@@ -218,7 +219,11 @@ class SkillUpdatePreviewActivity : AppCompatActivity() {
         val name = intent.getStringExtra(SkillDetailActivity.EXTRA_SKILL_NAME).orEmpty()
         val result = runCatching {
             val current = skillStore.load(name)
-            WorkspaceSkillUpdatePreview.compare(current, candidate)
+            val dependencyImpact = WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = skillStore.listVerified(),
+            )
+            WorkspaceSkillUpdatePreview.compare(current, candidate) to dependencyImpact
         }
         result.onFailure { error ->
             showBlocked(
@@ -227,7 +232,7 @@ class SkillUpdatePreviewActivity : AppCompatActivity() {
             )
             return
         }
-        val preview = result.getOrThrow()
+        val (preview, dependencyImpact) = result.getOrThrow()
         binding.resultCard.visibility = View.VISIBLE
         binding.resultRows.removeAllViews()
         binding.diffRows.removeAllViews()
@@ -282,6 +287,23 @@ class SkillUpdatePreviewActivity : AppCompatActivity() {
         }
 
         if (preview.status == WorkspaceSkillUpdatePreview.Status.NON_WIDENING_PREVIEW) {
+            if (dependencyImpact.blocked) {
+                binding.resultStatus.text = "UPDATE BLOCKED · ENABLED DEPENDENTS"
+                binding.resultStatus.setTextColor(Color.rgb(255, 80, 110))
+                binding.resultDetail.text =
+                    "This update would clear the dependency's activation authority while enabled " +
+                        "skills still depend on it. Disable those dependents explicitly first."
+                binding.diffRows.addView(
+                    row(
+                        "DEPENDENCY SAFETY",
+                        dependencyImpact.enabledDependents.joinToString("\n") {
+                            it.skillName + " · " + it.packageSha256.take(12)
+                        },
+                        warning = true,
+                    )
+                )
+                return
+            }
             val prepared = runCatching {
                 val freshCurrent = skillStore.load(preview.currentName)
                 WorkspaceSkillApprovedUpdate.prepare(freshCurrent, candidate)

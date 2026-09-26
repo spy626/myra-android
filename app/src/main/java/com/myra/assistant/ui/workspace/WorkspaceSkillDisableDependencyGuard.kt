@@ -7,6 +7,12 @@ package com.myra.assistant.ui.workspace
  * no runtime activation authority. This policy never cascades disablement and never mutates state.
  */
 internal object WorkspaceSkillDisableDependencyGuard {
+    enum class Operation(val verb: String) {
+        DISABLE("disable"),
+        UPDATE("update"),
+        ROLLBACK("roll back"),
+    }
+
     data class Dependent(
         val skillName: String,
         val packageSha256: String,
@@ -65,13 +71,19 @@ internal object WorkspaceSkillDisableDependencyGuard {
         )
     }
 
-    fun requireSafe(impact: Impact) {
+    fun requireSafe(impact: Impact) =
+        requireSafe(impact, Operation.DISABLE)
+
+    fun requireSafe(
+        impact: Impact,
+        operation: Operation,
+    ) {
         if (!impact.blocked) return
         val shown = impact.enabledDependents.take(4).joinToString(", ") { it.skillName }
         val suffix = if (impact.enabledDependents.size <= 4) ""
             else " (+${impact.enabledDependents.size - 4} more)"
         throw IllegalArgumentException(
-            "Cannot disable ${impact.targetSkillName} while enabled skills depend on it: " +
+            "Cannot ${operation.verb} ${impact.targetSkillName} while enabled skills depend on it: " +
                 shown + suffix
         )
     }
