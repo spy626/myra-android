@@ -157,6 +157,32 @@ Check exact local evidence.
         assertEquals(WorkspaceSkillCatalog.State.INSTALLED_DISABLED, back.entry.state)
     }
 
+    @Test fun thirdApprovedUpdatePrunesOnlyPackagesOutsideCurrentAndRollbackSet() {
+        val root = temp.newFolder("bounded-retention")
+        val store = WorkspaceSkillStore(root)
+        val first = install(store, skill("V1.", """{"allowedTools":[]}"""), 1L)
+        val second = update(store, first, skill("V2.", """{"allowedTools":[]}"""), 2L)
+
+        val orphanHash = "f".repeat(64)
+        val orphan = File(root, "packages/" + orphanHash)
+        assertTrue(orphan.mkdirs())
+        File(orphan, "junk").writeText("unreferenced")
+
+        val third = update(store, second, skill("V3.", """{"allowedTools":[]}"""), 3L)
+
+        val rollback = store.loadRollback("review-code")
+        assertEquals(second.entry.packageSha256, rollback.entry.packageSha256)
+        assertEquals(third.entry.packageSha256, store.load("review-code").entry.packageSha256)
+        assertFalse(File(root, "packages/" + first.entry.packageSha256).exists())
+        assertFalse(orphan.exists())
+        assertTrue(File(root, "packages/" + second.entry.packageSha256).isDirectory)
+        assertTrue(File(root, "packages/" + third.entry.packageSha256).isDirectory)
+        assertEquals(
+            emptyList<String>(),
+            store.pruneUnreferencedPackages(),
+        )
+    }
+
     @Test fun staleStateWrongTokenAndTamperedRollbackFailClosed() {
         val root = temp.newFolder("rollback-fail-closed")
         val store = WorkspaceSkillStore(root)

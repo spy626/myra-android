@@ -368,6 +368,44 @@ internal class WorkspaceSkillStore(
         file.delete()
     }
 
+    /**
+     * H14 bounded immutable-package retention.
+     *
+     * The catalog owns package liveness: every current package and the single recorded rollback
+     * package for every skill is retained. Only well-formed, non-symlink package directories that
+     * are no longer referenced by that fresh catalog are eligible for deletion.
+     */
+    @Synchronized fun pruneUnreferencedPackages(): List<String> {
+        val catalog = readCatalog()
+        val referenced = buildSet {
+            catalog.entries.forEach { entry ->
+                add(entry.packageSha256)
+                entry.rollbackPoint?.let { add(it.packageSha256) }
+            }
+        }
+        val parent = packagesRoot()
+        val deleted = mutableListOf<String>()
+        parent.listFiles().orEmpty()
+            .sortedBy { it.name }
+            .forEach { child ->
+                if (!SHA.matches(child.name) || child.name in referenced) return@forEach
+                if (Files.isSymbolicLink(child.toPath()) || !child.isDirectory) return@forEach
+                val canonical = child.canonicalFile
+                if (canonical.parentFile != parent) return@forEach
+                deleteTree(canonical)
+                if (!canonical.exists()) deleted += child.name
+            }
+        return deleted
+    }
+
+    /**
+     * Package cleanup is storage hygiene, never mutation authority. Once a catalog switch has been
+     * verified, cleanup failure must not make callers believe the already-committed update failed.
+     */
+    private fun pruneAfterSuccessfulMutation() {
+        runCatching { pruneUnreferencedPackages() }
+    }
+
     private fun readPackageFiles(entry: WorkspaceSkillCatalog.Entry): Map<String, ByteArray> {
         val dir = packageDir(entry.packageSha256)
         require(dir.isDirectory && !Files.isSymbolicLink(dir.toPath())) {
@@ -523,7 +561,9 @@ internal class WorkspaceSkillStore(
                 .sortedBy { it.name }
         )
         writeCatalog(after)
-        return load(name)
+        val reopened = load(name)
+        pruneAfterSuccessfulMutation()
+        return reopened
     }
 
     /**
@@ -609,6 +649,7 @@ internal class WorkspaceSkillStore(
                 reopened.entry.enableEnvironmentSha256 == null &&
                 reopened.entry.enableBindingSha256 == null
         ) { "Updated skill unexpectedly retained activation authority" }
+        pruneAfterSuccessfulMutation()
         return reopened
     }
 
