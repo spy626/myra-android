@@ -7,9 +7,13 @@ import android.os.Bundle
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillDetailBinding
+import com.myra.assistant.ui.workspace.WorkspaceSkillCatalog
+import com.myra.assistant.ui.workspace.WorkspaceSkillDisableApproval
 import com.myra.assistant.ui.workspace.WorkspaceSkillReadOnlyDetail
 import com.myra.assistant.ui.workspace.WorkspaceSkillStore
 import java.io.File
@@ -26,6 +30,7 @@ class SkillDetailActivity : AppCompatActivity() {
     }
 
     private lateinit var binding: ActivitySkillDetailBinding
+    private var pendingDisable: WorkspaceSkillDisableApproval.Prepared? = null
     private val skillStore by lazy {
         WorkspaceSkillStore(File(noBackupFilesDir, WorkspaceSkillStore.APP_DIRECTORY))
     }
@@ -40,6 +45,7 @@ class SkillDetailActivity : AppCompatActivity() {
             startActivity(Intent(this, SkillReadinessActivity::class.java)
                 .putExtra(EXTRA_SKILL_NAME, name))
         }
+        binding.disableButton.setOnClickListener { pendingDisable?.let(::confirmDisable) }
     }
 
     override fun onResume() {
@@ -49,9 +55,13 @@ class SkillDetailActivity : AppCompatActivity() {
 
     private fun renderDetail() {
         binding.detailList.removeAllViews()
+        binding.readinessButton.visibility = View.GONE
+        binding.disableButton.visibility = View.GONE
+        pendingDisable = null
         val name = intent.getStringExtra(EXTRA_SKILL_NAME).orEmpty()
-        val detail = runCatching {
-            WorkspaceSkillReadOnlyDetail.from(skillStore.load(name))
+        val loaded = runCatching {
+            val installed = skillStore.load(name)
+            installed to WorkspaceSkillReadOnlyDetail.from(installed)
         }.getOrElse {
             binding.skillName.text = "Skill unavailable"
             binding.skillState.text = "NOT VERIFIED"
@@ -60,6 +70,17 @@ class SkillDetailActivity : AppCompatActivity() {
                 "This installed skill could not be re-opened and verified. No skill action was performed."
             binding.detailList.visibility = View.GONE
             return
+        }
+
+        val (installed, detail) = loaded
+        when (installed.entry.state) {
+            WorkspaceSkillCatalog.State.INSTALLED_DISABLED -> {
+                binding.readinessButton.visibility = View.VISIBLE
+            }
+            WorkspaceSkillCatalog.State.ENABLED -> {
+                pendingDisable = WorkspaceSkillDisableApproval.prepare(installed)
+                binding.disableButton.visibility = View.VISIBLE
+            }
         }
 
         binding.detailList.visibility = View.VISIBLE
@@ -71,6 +92,38 @@ class SkillDetailActivity : AppCompatActivity() {
         )
         binding.skillDescription.text = detail.description
         detail.rows.forEach { binding.detailList.addView(row(it)) }
+    }
+
+    private fun confirmDisable(prepared: WorkspaceSkillDisableApproval.Prepared) {
+        AlertDialog.Builder(this)
+            .setTitle("Disable " + prepared.skillName + "?")
+            .setMessage(prepared.approvalSummary)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Disable") { _, _ ->
+                val outcome = runCatching {
+                    skillStore.disable(
+                        name = prepared.skillName,
+                        request = prepared.request,
+                        approvedToken = prepared.request.approvalToken,
+                    )
+                }
+                outcome.onSuccess {
+                    Toast.makeText(
+                        this,
+                        prepared.skillName + " disabled",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    renderDetail()
+                }.onFailure { error ->
+                    Toast.makeText(
+                        this,
+                        error.message ?: "Skill was not disabled",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    renderDetail()
+                }
+            }
+            .show()
     }
 
     private fun row(item: WorkspaceSkillReadOnlyDetail.Row): View =

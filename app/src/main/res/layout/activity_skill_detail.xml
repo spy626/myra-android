@@ -82,7 +82,7 @@
             android:layout_marginTop="16dp"
             android:background="@drawable/bg_field"
             android:padding="14dp"
-            android:text="READ ONLY · Details are revalidated from the immutable local package. This screen grants no tool, network, source, memory, update or verification authority."
+            android:text="Details are revalidated from the immutable local package. State changes require explicit local approval; disabling removes activation only and keeps the installed package."
             android:textColor="#8E888E"
             android:textSize="11sp" />
 
@@ -94,7 +94,19 @@
             android:background="@drawable/bg_button"
             android:text="CHECK READINESS"
             android:textColor="#FFFFFF"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/disableButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_field"
+            android:text="DISABLE SKILL"
+            android:textColor="#FF7189"
+            android:textStyle="bold"
+            android:visibility="gone" />
 
         <TextView
             style="@style/MyraLabel"

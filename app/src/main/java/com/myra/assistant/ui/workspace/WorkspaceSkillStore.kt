@@ -458,11 +458,15 @@ internal class WorkspaceSkillStore(
         return load(name)
     }
 
-    @Synchronized fun disable(name: String): Installed {
+    @Synchronized fun disable(
+        name: String,
+        request: WorkspaceSkillDisableApproval.Request,
+        approvedToken: String,
+    ): Installed {
         require(NAME.matches(name)) { "Invalid skill name" }
         val installed = load(name)
+        WorkspaceSkillDisableApproval.validate(installed, request, approvedToken)
         val updated = WorkspaceSkillEnablement.disabledEntry(installed.entry)
-        if (updated == installed.entry) return installed
         val before = readCatalog()
         val current = before.entries.firstOrNull { it.name == name }
             ?: throw IllegalArgumentException("Skill is not installed")

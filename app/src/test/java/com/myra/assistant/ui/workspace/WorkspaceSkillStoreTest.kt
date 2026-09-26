@@ -147,13 +147,38 @@ Require deterministic evidence.
         val reopened = WorkspaceSkillStore(root).load("review-code")
         assertEquals(enabled.entry, reopened.entry)
 
-        val disabled = WorkspaceSkillStore(root).disable("review-code")
+        val disableApproval = WorkspaceSkillDisableApproval.prepare(reopened)
+        val disabled = WorkspaceSkillStore(root).disable(
+            "review-code",
+            disableApproval.request,
+            disableApproval.request.approvalToken,
+        )
         assertEquals(WorkspaceSkillCatalog.State.INSTALLED_DISABLED, disabled.entry.state)
         assertNull(disabled.entry.enabledAtMs)
         assertNull(disabled.entry.enableReadinessSha256)
         assertNull(disabled.entry.enableEnvironmentSha256)
         assertNull(disabled.entry.enableBindingSha256)
         assertEquals(installed.snapshot.packageSha256, disabled.snapshot.packageSha256)
+    }
+
+    @Test fun wrongDisableTokenLeavesEnabledSkillAndPackageUntouched() {
+        val root = temp.newFolder("disable-reject")
+        val store = WorkspaceSkillStore(root)
+        val installed = install(store, parsed())
+        val report = WorkspaceSkillEnablement.test(installed, environment(), 20L)
+        val enable = WorkspaceSkillEnablement.enableRequest(installed, report)
+        val enabled = store.enable(
+            "review-code", environment(), enable, enable.approvalToken, 30L)
+        val disable = WorkspaceSkillDisableApproval.prepare(enabled)
+
+        assertTrue(runCatching {
+            store.disable("review-code", disable.request, "wrong-token")
+        }.isFailure)
+
+        val reopened = store.load("review-code")
+        assertEquals(WorkspaceSkillCatalog.State.ENABLED, reopened.entry.state)
+        assertEquals(enabled.entry.enableBindingSha256, reopened.entry.enableBindingSha256)
+        assertEquals(enabled.snapshot.packageSha256, reopened.snapshot.packageSha256)
     }
 
     @Test fun wrongEnableTokenOrChangedEnvironmentLeavesSkillDisabled() {
