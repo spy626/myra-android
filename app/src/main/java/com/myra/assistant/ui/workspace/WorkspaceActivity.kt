@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -21,14 +23,17 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.myra.assistant.R
 import com.myra.assistant.ai.ApiKeyStore
@@ -67,6 +72,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private val expandedMessageIds = mutableSetOf<String>()
     private val attachments = mutableListOf<Attachment>()
     private var skillAttachment: SkillAttachment? = null
+    private var pendingCameraFile: File? = null
+    private var pendingCameraUri: Uri? = null
+    private var markupTargetUri: Uri? = null
     private var selectedId: String? = null
     private var workTab = false
     private var requestGeneration = 0L
@@ -124,12 +132,37 @@ class WorkspaceActivity : AppCompatActivity() {
     private lateinit var sendButton: ImageButton
     private lateinit var attachmentList: LinearLayout
 
-    private val photoPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { addAttachment(it, true) }
-    }
+    private val photoPicker =
+        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            uri?.let { addAttachment(it, requirePhoto = true) }
+        }
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { addAttachment(it, false) }
+        uri?.let { addAttachment(it) }
     }
+    private val cameraCapture =
+        registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+            val uri = pendingCameraUri
+            val file = pendingCameraFile
+            pendingCameraUri = null
+            pendingCameraFile = null
+            if (success && uri != null) {
+                addAttachment(uri, requirePhoto = true)
+            } else {
+                file?.delete()
+            }
+        }
+    private val markupEditor =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val original = markupTargetUri
+            markupTargetUri = null
+            if (result.resultCode != RESULT_OK || original == null) return@registerForActivityResult
+            val data = result.data ?: return@registerForActivityResult
+            val resultUri = data.getStringExtra(WorkspacePhotoMarkupActivity.EXTRA_RESULT_URI)
+                ?.let(Uri::parse) ?: return@registerForActivityResult
+            val resultName = data.getStringExtra(WorkspacePhotoMarkupActivity.EXTRA_RESULT_NAME)
+                ?.takeIf { it.isNotBlank() } ?: "marked-photo.jpg"
+            replaceMarkedPhoto(original, resultUri, resultName)
+        }
     private val skillPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(::addSkillAttachment)
     }
@@ -783,6 +816,38 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }
 
+    private fun startCameraCapture() {
+        if (workTab || isBusy()) return
+        val file = runCatching {
+            val dir = File(cacheDir, "workspace-photo").apply { mkdirs() }
+            require(dir.isDirectory) { "Photo cache is unavailable" }
+            File(dir, "camera-${System.currentTimeMillis()}.jpg")
+        }.getOrElse {
+            toast(it.message ?: "Camera photo could not be prepared")
+            return
+        }
+        val uri = runCatching {
+            FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+        }.getOrElse {
+            file.delete()
+            toast("Camera photo could not be prepared")
+            return
+        }
+        pendingCameraFile = file
+        pendingCameraUri = uri
+        cameraCapture.launch(uri)
+    }
+
+    private fun openPhotoMarkup(attachment: Attachment) {
+        if (workTab || isBusy()) return
+        markupTargetUri = attachment.uri
+        markupEditor.launch(
+            Intent(this, WorkspacePhotoMarkupActivity::class.java)
+                .putExtra(WorkspacePhotoMarkupActivity.EXTRA_IMAGE_URI, attachment.uri.toString())
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        )
+    }
+
     private fun sheetRoot(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(16), dp(8), dp(16), dp(28))
@@ -907,40 +972,42 @@ class WorkspaceActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         val cardParams = { left: Int, right: Int ->
-            LinearLayout.LayoutParams(0, dp(114), 1f).apply {
+            LinearLayout.LayoutParams(0, dp(108), 1f).apply {
                 leftMargin = dp(left)
                 rightMargin = dp(right)
             }
         }
         cards.addView(
-            sheetCard("Photos", android.R.drawable.ic_menu_gallery) {
+            sheetCard("Camera", android.R.drawable.ic_menu_camera) {
                 dialog.dismiss()
-                photoPicker.launch(arrayOf("image/jpeg", "image/png"))
+                startCameraCapture()
             },
-            cardParams(0, 4),
+            cardParams(0, 3),
         )
         cards.addView(
-            sheetCard("Files", android.R.drawable.ic_menu_save) {
+            sheetCard("Photos", android.R.drawable.ic_menu_gallery) {
                 dialog.dismiss()
-                documentPicker.launch(arrayOf(
-                    "text/plain",
-                    "text/html",
-                    "text/css",
-                    "application/json",
-                    "application/javascript",
-                    "application/pdf",
-                ))
+                photoPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
             },
-            cardParams(4, 4),
+            cardParams(3, 3),
+        )
+        cards.addView(
+            sheetCard("Files", android.R.drawable.ic_menu_agenda) {
+                dialog.dismiss()
+                documentPicker.launch(arrayOf("*/*"))
+            },
+            cardParams(3, 3),
         )
         cards.addView(
             sheetCard("Skill", android.R.drawable.ic_menu_manage) {
                 dialog.dismiss()
                 showSkillMenu()
             },
-            cardParams(4, 0),
+            cardParams(3, 0),
         )
-        sheet.addView(cards, LinearLayout.LayoutParams(-1, dp(114)).apply {
+        sheet.addView(cards, LinearLayout.LayoutParams(-1, dp(108)).apply {
             topMargin = dp(8)
         })
 
@@ -1589,17 +1656,30 @@ class WorkspaceActivity : AppCompatActivity() {
         renderAttachments()
     }
 
-    private fun addAttachment(uri: Uri, photo: Boolean) {
-        if (selectedId == null) { toast("Send a first message before attaching files"); return }
-        if (workTab || isBusy()) { toast("Wait for the current reply before adding files"); return }
-        if (attachments.size >= 3) { toast("Maximum three local attachments"); return }
-        if (uri.scheme != "content") { toast("Only Android document-provider files are accepted"); return }
+    private fun addAttachment(uri: Uri, requirePhoto: Boolean = false) {
+        if (workTab || isBusy()) {
+            toast("Wait for the current reply before adding files")
+            return
+        }
+        if (attachments.size >= 3) {
+            toast("Maximum three local attachments")
+            return
+        }
+        if (uri.scheme != "content") {
+            toast("Only Android document-provider files are accepted")
+            return
+        }
         val item = runCatching {
-            val mime = contentResolver.getType(uri).orEmpty().lowercase()
+            var mime = contentResolver.getType(uri).orEmpty().lowercase()
             var name = "attachment"
             var size = -1L
-            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
-                null, null, null)?.use { cursor ->
+            contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let {
                         name = cursor.getString(it) ?: name
@@ -1609,40 +1689,201 @@ class WorkspaceActivity : AppCompatActivity() {
                     }
                 }
             }
-            if (size < 0L) contentResolver.openFileDescriptor(uri, "r")?.use { size = it.statSize }
-            require(name.length in 1..120 && name.none(Char::isISOControl)) { "Invalid attachment name" }
-            require(size >= 0L) { "Cannot verify file size; choose a local file" }
-            if (photo) {
-                require(mime == "image/jpeg" || mime == "image/png") { "Only JPEG and PNG are supported" }
-                require(size in 1..2_000_000) { "Photo must be 2 MB or smaller" }
-                require(attachments.none { it.mime.startsWith("image/") }) { "Only one photo per request" }
-            } else {
-                require(mime in setOf("text/plain", "text/html", "text/css", "application/json",
-                    "application/javascript")) {
-                    "PDF or this document format is not supported yet. Nothing was uploaded."
+            if (size < 0L) {
+                contentResolver.openFileDescriptor(uri, "r")?.use { size = it.statSize }
+            }
+            if (mime.isBlank()) {
+                mime = when {
+                    name.endsWith(".jpg", true) || name.endsWith(".jpeg", true) -> "image/jpeg"
+                    name.endsWith(".png", true) -> "image/png"
+                    else -> ""
                 }
-                require(size in 1..3_000) { "Text document must be 3 KB or smaller" }
+            }
+
+            require(name.length in 1..120 && name.none(Char::isISOControl)) {
+                "Invalid attachment name"
+            }
+            require(size >= 0L) { "Cannot verify file size; choose a local file" }
+
+            val kind = WorkspaceAttachmentPolicy.kind(mime)
+            require(kind != WorkspaceAttachmentPolicy.Kind.UNSUPPORTED) {
+                "This file type is not supported in LYRA yet"
+            }
+            if (requirePhoto) {
+                require(kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
+                    "Choose a JPEG or PNG photo"
+                }
+            }
+            val max = WorkspaceAttachmentPolicy.maxBytes(kind)
+            require(size in 1L..max) {
+                when (kind) {
+                    WorkspaceAttachmentPolicy.Kind.IMAGE -> "Photo must be 2 MB or smaller"
+                    WorkspaceAttachmentPolicy.Kind.TEXT -> "Text document must be 3 KB or smaller"
+                    WorkspaceAttachmentPolicy.Kind.AUDIO,
+                    WorkspaceAttachmentPolicy.Kind.VIDEO ->
+                        "Audio/video file must be 50 MB or smaller"
+                    WorkspaceAttachmentPolicy.Kind.UNSUPPORTED -> "Unsupported attachment"
+                }
+            }
+            if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
+                require(attachments.none {
+                    WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.IMAGE
+                }) { "Only one photo per request" }
             }
             Attachment(uri, name, mime, size)
-        }.getOrElse { toast(it.message ?: "Attachment unavailable"); return }
+        }.getOrElse {
+            toast(it.message ?: "Attachment unavailable")
+            return
+        }
         attachments.add(item)
+        statusMessage = ""
         renderAttachments()
+    }
+
+    private fun replaceMarkedPhoto(original: Uri, replacement: Uri, name: String) {
+        val index = attachments.indexOfFirst { it.uri == original }
+        if (index < 0) return
+        val updated = runCatching {
+            var size = -1L
+            contentResolver.query(
+                replacement,
+                arrayOf(OpenableColumns.SIZE),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let {
+                        if (!cursor.isNull(it)) size = cursor.getLong(it)
+                    }
+                }
+            }
+            if (size < 0L) {
+                contentResolver.openFileDescriptor(replacement, "r")?.use { size = it.statSize }
+            }
+            require(size in 1L..2_000_000L) { "Marked photo must be 2 MB or smaller" }
+            attachments[index].copy(
+                uri = replacement,
+                name = name.take(120),
+                mime = "image/jpeg",
+                size = size,
+            )
+        }.getOrElse {
+            toast(it.message ?: "Marked photo could not be attached")
+            return
+        }
+        attachments[index] = updated
+        statusMessage = ""
+        renderAttachments()
+    }
+
+    private fun thumbnail(uri: Uri): Bitmap? = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        } ?: return@runCatching null
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+        var sample = 1
+        while (bounds.outWidth / sample > 320 || bounds.outHeight / sample > 320) sample *= 2
+        contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(
+                it,
+                null,
+                BitmapFactory.Options().apply { inSampleSize = sample },
+            )
+        }
+    }.getOrNull()
+
+    private fun photoAttachmentView(attachment: Attachment): View {
+        val frame = FrameLayout(this).apply {
+            background = rounded(Color.rgb(20, 25, 22), 18)
+            contentDescription = "Selected photo. Tap to mark in red."
+        }
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = rounded(Color.rgb(31, 36, 32), 16)
+            clipToOutline = true
+            thumbnail(attachment.uri)?.let(::setImageBitmap)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Open selected photo and mark it"
+            setOnClickListener { openPhotoMarkup(attachment) }
+        }
+        frame.addView(
+            image,
+            FrameLayout.LayoutParams(dp(104), dp(104), Gravity.START or Gravity.CENTER_VERTICAL),
+        )
+
+        val hint = label("Tap to mark", 10.5f).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(dp(8), dp(3), dp(8), dp(3))
+            background = rounded(Color.argb(205, 16, 19, 17), 12)
+        }
+        frame.addView(
+            hint,
+            FrameLayout.LayoutParams(dp(86), dp(24), Gravity.START or Gravity.BOTTOM).apply {
+                leftMargin = dp(9)
+                bottomMargin = dp(7)
+            },
+        )
+
+        val remove = label("×", 20f).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(0, 0, 0, 0)
+            background = rounded(Color.argb(225, 42, 46, 43), 16)
+            contentDescription = "Remove selected photo"
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                attachments.remove(attachment)
+                renderAttachments()
+            }
+        }
+        frame.addView(
+            remove,
+            FrameLayout.LayoutParams(dp(30), dp(30), Gravity.START or Gravity.TOP).apply {
+                leftMargin = dp(84)
+                topMargin = dp(4)
+            },
+        )
+        return frame
     }
 
     private fun renderAttachments() {
         if (!::attachmentList.isInitialized) return
         attachmentList.removeAllViews()
         skillAttachment?.let { attachment ->
-            attachmentList.addView(control("${attachment.name} · Skill  ✕") {
-                skillAttachment = null
-                renderAttachments()
-            }, LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(4) })
+            attachmentList.addView(
+                control("${attachment.name} · Skill  ✕") {
+                    skillAttachment = null
+                    renderAttachments()
+                },
+                LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(4) },
+            )
         }
         attachments.toList().forEach { attachment ->
-            attachmentList.addView(control("${attachment.name} · ${attachment.size} bytes  ✕") {
-                attachments.remove(attachment)
-                renderAttachments()
-            }, LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(4) })
+            val kind = WorkspaceAttachmentPolicy.kind(attachment.mime)
+            if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
+                attachmentList.addView(
+                    photoAttachmentView(attachment),
+                    LinearLayout.LayoutParams(dp(118), dp(112)).apply {
+                        bottomMargin = dp(6)
+                    },
+                )
+            } else {
+                val localOnly = if (WorkspaceAttachmentPolicy.sendableNow(kind)) "" else " · local only"
+                attachmentList.addView(
+                    control(
+                        "${attachment.name} · ${WorkspaceAttachmentPolicy.label(kind)}$localOnly  ✕"
+                    ) {
+                        attachments.remove(attachment)
+                        renderAttachments()
+                    },
+                    LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(4) },
+                )
+            }
         }
     }
 
@@ -1692,6 +1933,19 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
+        val picked = attachments.toList()
+        val localOnly = picked.filter {
+            !WorkspaceAttachmentPolicy.sendableNow(WorkspaceAttachmentPolicy.kind(it.mime))
+        }
+        if (localOnly.isNotEmpty()) {
+            val types = localOnly.map {
+                WorkspaceAttachmentPolicy.label(WorkspaceAttachmentPolicy.kind(it.mime))
+            }.distinct().joinToString(" / ")
+            statusMessage =
+                "$types attachment is selected locally, but audio/video model sending is not active yet. Nothing was sent."
+            render()
+            return
+        }
         val intent = WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
             val title = text.lineSequence().firstOrNull().orEmpty()
@@ -1716,7 +1970,6 @@ class WorkspaceActivity : AppCompatActivity() {
             toast("This is a different project type. Start a New Chat for that request.")
             return
         }
-        val picked = attachments.toList()
         // Text-only provider opt-ins never silently reroute attachments to another company.
         if (intent == null && current.type == WorkspaceProjectType.CHAT && picked.isNotEmpty()) {
             val llm7TextOnly = preferences.getBoolean(WorkspaceLlm7Free.PREFERENCE_KEY, false) &&
