@@ -1678,9 +1678,28 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun preparePhotoAttachment(source: Attachment): Attachment {
+        val dir = File(cacheDir, "workspace-photo").apply { mkdirs() }
+        require(dir.isDirectory) { "Photo cache is unavailable" }
+
+        // Photo Picker URIs are temporary capabilities. Never keep one as composer state:
+        // copy a bounded JPEG/PNG immediately while the grant is fresh so thumbnail, markup
+        // and send all use LYRA-owned local bytes.
         if ((source.mime == "image/jpeg" || source.mime == "image/png") &&
             source.size in 1L..2_000_000L) {
-            return source
+            val extension = if (source.mime == "image/png") ".png" else ".jpg"
+            val output = File(dir, "photo-${System.currentTimeMillis()}$extension")
+            val bytes = contentResolver.openInputStream(source.uri)?.use {
+                it.readBounded(2_000_000)
+            } ?: throw IllegalArgumentException("Photo cannot be read")
+            require(bytes.isNotEmpty()) { "Photo is empty" }
+            output.writeBytes(bytes)
+            require(output.length() in 1L..2_000_000L) { "Photo copy is invalid" }
+            val uri = FileProvider.getUriForFile(
+                this,
+                "${packageName}.fileprovider",
+                output,
+            )
+            return source.copy(uri = uri, size = output.length())
         }
 
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -1707,8 +1726,6 @@ class WorkspaceActivity : AppCompatActivity() {
             )
         } ?: throw IllegalArgumentException("Photo cannot be decoded")
 
-        val dir = File(cacheDir, "workspace-photo").apply { mkdirs() }
-        require(dir.isDirectory) { "Photo cache is unavailable" }
         val output = File(dir, "photo-${System.currentTimeMillis()}.jpg")
         var quality = 92
         var saved = false
