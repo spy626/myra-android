@@ -11,6 +11,10 @@ class WorkspaceAttachmentPolicyTest {
             WorkspaceAttachmentPolicy.kind("image/jpeg"))
         assertEquals(WorkspaceAttachmentPolicy.Kind.TEXT,
             WorkspaceAttachmentPolicy.kind("text/plain"))
+        assertEquals(WorkspaceAttachmentPolicy.Kind.TEXT,
+            WorkspaceAttachmentPolicy.kind("text/markdown"))
+        assertEquals(WorkspaceAttachmentPolicy.Kind.TEXT,
+            WorkspaceAttachmentPolicy.kind("text/x-markdown"))
         assertEquals(WorkspaceAttachmentPolicy.Kind.AUDIO,
             WorkspaceAttachmentPolicy.kind("audio/mpeg"))
         assertEquals(WorkspaceAttachmentPolicy.Kind.VIDEO,
