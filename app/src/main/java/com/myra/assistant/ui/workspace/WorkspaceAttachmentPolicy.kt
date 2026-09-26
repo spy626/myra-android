@@ -6,7 +6,7 @@ internal object WorkspaceAttachmentPolicy {
     enum class Kind { IMAGE, TEXT, AUDIO, VIDEO, UNSUPPORTED }
 
     fun kind(mime: String): Kind = when {
-        mime == "image/jpeg" || mime == "image/png" -> Kind.IMAGE
+        mime.startsWith("image/") -> Kind.IMAGE
         mime in setOf(
             "text/plain",
             "text/html",
@@ -20,7 +20,8 @@ internal object WorkspaceAttachmentPolicy {
     }
 
     fun maxBytes(kind: Kind): Long = when (kind) {
-        Kind.IMAGE -> 2_000_000L
+        // Source photos are normalized into LYRA's <=2 MB outbound JPEG boundary.
+        Kind.IMAGE -> 30_000_000L
         Kind.TEXT -> 3_000L
         Kind.AUDIO, Kind.VIDEO -> 50_000_000L
         Kind.UNSUPPORTED -> 0L
