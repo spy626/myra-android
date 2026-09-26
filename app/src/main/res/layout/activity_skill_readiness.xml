@@ -34,25 +34,25 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Skill details"
+                    android:text="Skill readiness"
                     android:textColor="#EEEEEE"
                     android:textSize="25sp"
                     android:textStyle="bold" />
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Exact approved metadata from the verified installed package"
+                    android:text="Fresh local checks only · no enable action"
                     android:textColor="#777077"
                     android:textSize="12sp" />
             </LinearLayout>
         </LinearLayout>
 
         <TextView
-            android:id="@+id/skillState"
+            android:id="@+id/reportStatus"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
-            android:text="VERIFYING"
+            android:text="CHECKING"
             android:textColor="#8E888E"
             android:textSize="11sp"
             android:textStyle="bold" />
@@ -68,13 +68,22 @@
             android:textStyle="bold" />
 
         <TextView
-            android:id="@+id/skillDescription"
+            android:id="@+id/reportSummary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="8dp"
             android:text=""
             android:textColor="#C9C4C9"
             android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/reportMeta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text=""
+            android:textColor="#777077"
+            android:textSize="11sp" />
 
         <TextView
             android:layout_width="match_parent"
@@ -82,26 +91,16 @@
             android:layout_marginTop="16dp"
             android:background="@drawable/bg_field"
             android:padding="14dp"
-            android:text="READ ONLY · Details are revalidated from the immutable local package. This screen grants no tool, network, source, memory, update or verification authority."
+            android:text="READ ONLY · Current Phase-1 skill invocation does not grant tools, capabilities, network, source, memory or model selection. This report mirrors those real gates instead of inventing availability."
             android:textColor="#8E888E"
             android:textSize="11sp" />
 
-        <Button
-            android:id="@+id/readinessButton"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginTop="16dp"
-            android:background="@drawable/bg_button"
-            android:text="CHECK READINESS"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold" />
-
         <TextView
             style="@style/MyraLabel"
-            android:text="APPROVED DETAILS" />
+            android:text="READINESS CHECKS" />
 
         <LinearLayout
-            android:id="@+id/detailList"
+            android:id="@+id/checkList"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical" />

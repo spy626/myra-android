@@ -1,5 +1,6 @@
 package com.myra.assistant.ui.settings
 
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -34,6 +35,11 @@ class SkillDetailActivity : AppCompatActivity() {
         binding = ActivitySkillDetailBinding.inflate(layoutInflater)
         setContentView(binding.root)
         binding.backButton.setOnClickListener { finish() }
+        binding.readinessButton.setOnClickListener {
+            val name = intent.getStringExtra(EXTRA_SKILL_NAME).orEmpty()
+            startActivity(Intent(this, SkillReadinessActivity::class.java)
+                .putExtra(EXTRA_SKILL_NAME, name))
+        }
     }
 
     override fun onResume() {
