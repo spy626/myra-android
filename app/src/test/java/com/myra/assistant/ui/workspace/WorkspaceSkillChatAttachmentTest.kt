@@ -27,6 +27,6 @@ class WorkspaceSkillChatAttachmentTest {
     }
 
     @Test fun createSkillStarterIsShortAndExplicit() {
-        assertEquals("Create a skill that ", WorkspaceSkillChatAttachment.CREATE_SKILL_PROMPT)
+        assertEquals("Let’s create a skill together using LYRA’s skill creator. First ask me what the skill should do.", WorkspaceSkillChatAttachment.CREATE_SKILL_PROMPT)
     }
 }
