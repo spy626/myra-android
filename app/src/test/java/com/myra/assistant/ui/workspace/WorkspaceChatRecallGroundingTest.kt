@@ -18,6 +18,25 @@ class WorkspaceChatRecallGroundingTest {
         assertFalse(reply.contains("Manali"))
     }
 
+    @Test fun previousMessageRecallUsesImmediatelyPreviousUserTurn() {
+        val history = listOf(
+            u("My code word is mango77"),
+            a("Got it."),
+            u("Hi Lyra"),
+            a("Hi! Welcome."),
+            u("What did I say in my previous message?"))
+        assertEquals("You said: “Hi Lyra”", WorkspaceChatRecallGrounding.answer(history))
+
+        val lastMessage = listOf(
+            u("Older topic about tea."),
+            a("Okay."),
+            u("Newest user turn"),
+            a("Noted."),
+            u("What did I say in my last message?"))
+        assertEquals("You said: “Newest user turn”",
+            WorkspaceChatRecallGrounding.answer(lastMessage))
+    }
+
     @Test fun worksForDifferentTopicsAndEnglishWithoutPlaceSpecificRules() {
         val history = listOf(u("My friend's name is Kareem and we study together."),
             a("I think the name is Rehan."), u("What did I say about my friend?"))
