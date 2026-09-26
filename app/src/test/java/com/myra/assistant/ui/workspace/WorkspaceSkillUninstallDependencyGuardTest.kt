@@ -101,19 +101,32 @@ Check exact local evidence.
             skill("child-review", dependencySkills = listOf("base-review")),
             2L,
         )
-        val environment = WorkspaceSkillEnablement.Environment(
-            installedSkills = setOf("base-review", "child-review"),
+        val baseEnvironment = WorkspaceSkillReadinessSurface.currentEnvironment(
+            store.listVerified()
         )
-        val readiness = WorkspaceSkillEnablement.test(child, environment, 3L)
+        val baseReadiness = WorkspaceSkillEnablement.test(base, baseEnvironment, 3L)
+        val baseEnable = WorkspaceSkillEnablement.enableRequest(base, baseReadiness)
+        val enabledBase = store.enable(
+            "base-review",
+            baseEnvironment,
+            baseEnable,
+            baseEnable.approvalToken,
+            4L,
+        )
+
+        val environment = WorkspaceSkillReadinessSurface.currentEnvironment(
+            store.listVerified()
+        )
+        val readiness = WorkspaceSkillEnablement.test(child, environment, 5L)
         val enable = WorkspaceSkillEnablement.enableRequest(child, readiness)
         child = store.enable(
             "child-review",
             environment,
             enable,
             enable.approvalToken,
-            4L,
+            6L,
         )
-        val prepared = WorkspaceSkillApprovedUninstall.prepare(base, null)
+        val prepared = WorkspaceSkillApprovedUninstall.prepare(enabledBase, null)
 
         assertTrue(runCatching {
             store.uninstallApproved(

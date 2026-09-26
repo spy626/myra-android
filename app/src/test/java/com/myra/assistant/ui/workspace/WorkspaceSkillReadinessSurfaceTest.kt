@@ -42,12 +42,13 @@ Require deterministic verification.
         return WorkspaceSkillStore.Installed(entry, skill, snapshot)
     }
 
-    @Test fun currentEnvironmentExposesOnlyInstalledDependencyNames() {
+    @Test fun currentEnvironmentSeparatesInstalledAndEnabledDependencyNames() {
         val a = installed("alpha")
         val b = installed("beta")
         val env = WorkspaceSkillReadinessSurface.currentEnvironment(listOf(a, b))
 
         assertEquals(setOf("alpha", "beta"), env.installedSkills)
+        assertTrue(env.enabledSkills.isEmpty())
         assertTrue(env.availableTools.isEmpty())
         assertTrue(env.availableCapabilities.isEmpty())
         assertFalse(env.boundedSourceGateAvailable)

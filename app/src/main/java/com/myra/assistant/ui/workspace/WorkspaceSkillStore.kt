@@ -870,6 +870,24 @@ internal class WorkspaceSkillStore(
     ): Installed {
         require(NAME.matches(name)) { "Invalid skill name" }
         val installed = load(name)
+
+        val declaredDependencies = installed.skill.manifest.dependencySkills
+        if (declaredDependencies.isNotEmpty()) {
+            val freshByName = listVerified().associateBy { it.entry.name }
+            val missing = declaredDependencies - freshByName.keys
+            require(missing.isEmpty()) {
+                "Skill enablement has missing dependencies: " +
+                    missing.sorted().joinToString(",")
+            }
+            val disabled = declaredDependencies.filter {
+                freshByName[it]?.entry?.state != WorkspaceSkillCatalog.State.ENABLED
+            }.toSortedSet()
+            require(disabled.isEmpty()) {
+                "Skill enablement requires enabled dependencies: " +
+                    disabled.joinToString(",")
+            }
+        }
+
         val updated = WorkspaceSkillEnablement.enabledEntry(
             installed, environment, request, approvedToken, enabledAtMs)
         val before = readCatalog()

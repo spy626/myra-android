@@ -5,7 +5,8 @@ package com.myra.assistant.ui.workspace
  *
  * Current Phase-1 explicit skill invocation has no per-invocation grants for tools, capabilities,
  * network, project source, memory or model selection. This surface mirrors that reality instead of
- * inventing availability. Installed skill names are the only dependency information projected.
+ * inventing availability. Dependency readiness projects both verified installed names and the
+ * subset that currently hold valid ENABLED activation state.
  */
 internal object WorkspaceSkillReadinessSurface {
     data class Row(
@@ -27,6 +28,10 @@ internal object WorkspaceSkillReadinessSurface {
     ): WorkspaceSkillEnablement.Environment =
         WorkspaceSkillEnablement.Environment(
             installedSkills = installedSkills.map { it.entry.name }.toSet(),
+            enabledSkills = installedSkills
+                .filter { it.entry.state == WorkspaceSkillCatalog.State.ENABLED }
+                .map { it.entry.name }
+                .toSet(),
         )
 
     fun view(report: WorkspaceSkillEnablement.ReadinessReport): View =

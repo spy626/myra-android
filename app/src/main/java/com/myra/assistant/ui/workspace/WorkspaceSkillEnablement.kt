@@ -17,6 +17,7 @@ internal object WorkspaceSkillEnablement {
         val availableTools: Set<String> = emptySet(),
         val availableCapabilities: Set<String> = emptySet(),
         val installedSkills: Set<String> = emptySet(),
+        val enabledSkills: Set<String> = emptySet(),
         val boundedSourceGateAvailable: Boolean = false,
         val networkGateAvailable: Boolean = false,
         val memoryReadGateAvailable: Boolean = false,
@@ -75,6 +76,7 @@ internal object WorkspaceSkillEnablement {
         appendLine("tools=${canonicalSet(environment.availableTools)}")
         appendLine("capabilities=${canonicalSet(environment.availableCapabilities)}")
         appendLine("skills=${canonicalSet(environment.installedSkills)}")
+        appendLine("enabledSkills=${canonicalSet(environment.enabledSkills)}")
         appendLine("sourceGate=${environment.boundedSourceGateAvailable}")
         appendLine("networkGate=${environment.networkGateAvailable}")
         appendLine("memoryReadGate=${environment.memoryReadGateAvailable}")
@@ -113,6 +115,9 @@ internal object WorkspaceSkillEnablement {
         testedAtMs: Long,
     ): ReadinessReport {
         require(testedAtMs >= 0L) { "Skill readiness timestamp is invalid" }
+        require(environment.enabledSkills.all { it in environment.installedSkills }) {
+            "Enabled skill environment contains a skill that is not installed"
+        }
         require(installed.entry.state == WorkspaceSkillCatalog.State.INSTALLED_DISABLED) {
             "Only installed-disabled skills enter readiness testing"
         }
@@ -131,6 +136,7 @@ internal object WorkspaceSkillEnablement {
         val missingTools = manifest.allowedTools - environment.availableTools
         val missingCapabilities = manifest.requiredCapabilities - environment.availableCapabilities
         val missingDependencies = manifest.dependencySkills - environment.installedSkills
+        val inactiveDependencies = manifest.dependencySkills - environment.enabledSkills
 
         val checks = listOf(
             check(
@@ -169,6 +175,13 @@ internal object WorkspaceSkillEnablement {
                 missingDependencies.isEmpty(),
                 if (missingDependencies.isEmpty()) "All declared skill dependencies are installed."
                 else "Missing skill dependencies: ${summarize(missingDependencies)}",
+            ),
+            check(
+                "dependency-activation",
+                inactiveDependencies.isEmpty(),
+                if (inactiveDependencies.isEmpty())
+                    "All declared skill dependencies are currently enabled."
+                else "Dependencies not currently enabled: ${summarize(inactiveDependencies)}",
             ),
             check(
                 "bounded-source-gate",

@@ -78,10 +78,33 @@ $body
                 availableTools = setOf("read_file"),
                 availableCapabilities = setOf("project:read"),
                 installedSkills = setOf("base-review"),
+                enabledSkills = setOf("base-review"),
             ),
             21L,
         )
         assertEquals(WorkspaceSkillEnablement.Status.PASS, pass.status)
+    }
+
+    @Test fun installedButDisabledDependencyBlocksReadiness() {
+        val json = """{
+          "dependencySkills":["base-review"]
+        }"""
+        val installed = installed(json)
+        val report = WorkspaceSkillEnablement.test(
+            installed,
+            WorkspaceSkillEnablement.Environment(
+                installedSkills = setOf("base-review"),
+                enabledSkills = emptySet(),
+            ),
+            21L,
+        )
+
+        assertEquals(WorkspaceSkillEnablement.Status.BLOCKED, report.status)
+        assertTrue(report.checks.first { it.id == "dependencies" }.passed)
+        assertFalse(report.checks.first { it.id == "dependency-activation" }.passed)
+        assertTrue(runCatching {
+            WorkspaceSkillEnablement.enableRequest(installed, report)
+        }.isFailure)
     }
 
     @Test fun sensitiveCapabilitiesNeedIndependentGates() {

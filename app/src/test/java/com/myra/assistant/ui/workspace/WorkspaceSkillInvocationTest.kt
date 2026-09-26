@@ -27,6 +27,44 @@ $body
         if (skillJson != null) files["skill.json"] = skillJson.toByteArray()
         val root = temp.newFolder()
         val store = WorkspaceSkillStore(root)
+        skill.manifest.dependencySkills.sorted().forEachIndexed { index, dependencyName ->
+            val dependencyMd = """---
+name: $dependencyName
+description: Dependency skill.
+---
+## Verification
+Confirm deterministic evidence.
+"""
+            val dependency = WorkspaceSkillContract.parse(dependencyMd)
+            val dependencyFiles = mapOf("SKILL.md" to dependencyMd.toByteArray())
+            val dependencySnapshot = WorkspaceSkillCatalog.snapshot(dependency, dependencyFiles)
+            val dependencyInstall =
+                WorkspaceSkillCatalog.approvalRequest(dependency, dependencySnapshot)
+            val installedDependency = store.install(
+                dependency,
+                dependencyFiles,
+                dependencyInstall,
+                dependencyInstall.approvalToken,
+                1L + index,
+            )
+            val dependencyEnvironment = WorkspaceSkillReadinessSurface.currentEnvironment(
+                store.listVerified()
+            )
+            val dependencyReport = WorkspaceSkillEnablement.test(
+                installedDependency,
+                dependencyEnvironment,
+                5L + index,
+            )
+            val dependencyEnable =
+                WorkspaceSkillEnablement.enableRequest(installedDependency, dependencyReport)
+            store.enable(
+                dependencyName,
+                dependencyEnvironment,
+                dependencyEnable,
+                dependencyEnable.approvalToken,
+                6L + index,
+            )
+        }
         val snapshot = WorkspaceSkillCatalog.snapshot(skill, files)
         val installApproval = WorkspaceSkillCatalog.approvalRequest(skill, snapshot)
         val installed = store.install(
@@ -126,6 +164,7 @@ Verify.
             availableTools = setOf("read_file"),
             availableCapabilities = setOf("project:read"),
             installedSkills = setOf("base-review"),
+            enabledSkills = setOf("base-review"),
             boundedSourceGateAvailable = true,
             networkGateAvailable = true,
             memoryReadGateAvailable = true,
@@ -164,6 +203,7 @@ Verify.
         }"""
         val env = WorkspaceSkillEnablement.Environment(
             installedSkills = setOf("base-review"),
+            enabledSkills = setOf("base-review"),
             networkGateAvailable = true)
         val skill = enabled(json, environment = env)
 

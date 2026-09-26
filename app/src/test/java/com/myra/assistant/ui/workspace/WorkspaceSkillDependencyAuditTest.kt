@@ -56,10 +56,12 @@ Check exact local evidence.
         store: WorkspaceSkillStore,
         installed: WorkspaceSkillStore.Installed,
         installedNames: Set<String>,
+        enabledNames: Set<String>,
         at: Long,
     ): WorkspaceSkillStore.Installed {
         val environment = WorkspaceSkillEnablement.Environment(
             installedSkills = installedNames,
+            enabledSkills = enabledNames,
         )
         val readiness = WorkspaceSkillEnablement.test(installed, environment, at)
         val request = WorkspaceSkillEnablement.enableRequest(installed, readiness)
@@ -99,13 +101,27 @@ Check exact local evidence.
         assertEquals(1, disabledAudit.disabledDependencyReferences.size)
         assertTrue(disabledAudit.enabledDependencyBreaks.isEmpty())
 
-        enable(
-            store,
-            child,
-            installedNames = setOf("base", "child"),
-            at = 3L,
+        // Model a legacy enabled child snapshot that was approved when base was enabled,
+        // then audit it beside a currently disabled base. H20 prevents creating this state anew.
+        val legacyEnvironment = WorkspaceSkillEnablement.Environment(
+            installedSkills = setOf("base", "child"),
+            enabledSkills = setOf("base"),
         )
-        val enabledAudit = WorkspaceSkillDependencyAudit.analyze(store.listVerified())
+        val legacyReport = WorkspaceSkillEnablement.test(child, legacyEnvironment, 3L)
+        val legacyRequest = WorkspaceSkillEnablement.enableRequest(child, legacyReport)
+        val legacyEnabledChild = child.copy(
+            entry = WorkspaceSkillEnablement.enabledEntry(
+                child,
+                legacyEnvironment,
+                legacyRequest,
+                legacyRequest.approvalToken,
+                4L,
+            )
+        )
+
+        val enabledAudit = WorkspaceSkillDependencyAudit.analyze(
+            listOf(store.load("base"), legacyEnabledChild)
+        )
         assertFalse(enabledAudit.healthy)
         assertEquals(
             listOf("child" to "base"),
@@ -132,9 +148,21 @@ Check exact local evidence.
         val base = install(store, skill("base"), 1L)
         install(store, skill("child", listOf("base")), 2L)
 
-        enable(store, base, setOf("base", "child"), 3L)
+        enable(
+            store,
+            base,
+            installedNames = setOf("base", "child"),
+            enabledNames = emptySet(),
+            at = 3L,
+        )
         val child = store.load("child")
-        enable(store, child, setOf("base", "child"), 5L)
+        enable(
+            store,
+            child,
+            installedNames = setOf("base", "child"),
+            enabledNames = setOf("base"),
+            at = 5L,
+        )
 
         val audit = WorkspaceSkillDependencyAudit.analyze(store.listVerified())
 
