@@ -19,6 +19,7 @@ internal object WorkspaceSkillInvocationReceipt {
             projection.contentSha256,
             projection.packageSha256,
             projection.permissionSha256,
+            projection.activationBindingSha256,
             projection.invocationSha256,
         ).all(sha256::matches)) { "Skill receipt hash is invalid" }
         require(projection.taskId.isNotBlank() && projection.turnId.isNotBlank()) {
@@ -29,7 +30,8 @@ internal object WorkspaceSkillInvocationReceipt {
         return buildString {
             appendLine("Skill receipt · ${projection.skillName} · one turn")
             appendLine("content ${short(projection.contentSha256)} · package ${short(projection.packageSha256)}")
-            appendLine("permissions ${short(projection.permissionSha256)} · invocation ${short(projection.invocationSha256)}")
+            appendLine("permissions ${short(projection.permissionSha256)} · activation ${short(projection.activationBindingSha256)}")
+            appendLine("invocation ${short(projection.invocationSha256)}")
             append("Local LYRA receipt only — not proof of task completion or verification.")
         }
     }

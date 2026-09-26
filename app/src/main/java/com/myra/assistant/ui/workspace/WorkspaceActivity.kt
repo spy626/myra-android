@@ -1668,6 +1668,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
+                skillProjection?.let {
+                    WorkspaceSkillInvocationFreshness.requireCurrent(skillStore, it)
+                }
                 WorkspaceSkillResultBoundary.attach(reply, skillProjection)
             }
             val failure = finalized.exceptionOrNull()
@@ -1860,6 +1863,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
+                skillProjection?.let {
+                    WorkspaceSkillInvocationFreshness.requireCurrent(skillStore, it)
+                }
                 WorkspaceSkillResultBoundary.attach(reply, skillProjection)
             }
             val failure = finalized.exceptionOrNull()

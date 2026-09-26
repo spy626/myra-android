@@ -12,6 +12,7 @@ class WorkspaceSkillInvocationReceiptTest {
         contentSha256 = "a".repeat(64),
         packageSha256 = "b".repeat(64),
         permissionSha256 = "c".repeat(64),
+        activationBindingSha256 = "e".repeat(64),
         invocationSha256 = "d".repeat(64),
         prompt = "SECRET SKILL BODY MUST NOT APPEAR",
         origin = origin,
@@ -28,6 +29,7 @@ class WorkspaceSkillInvocationReceiptTest {
         assertTrue(text.contains("b".repeat(12)))
         assertTrue(text.contains("c".repeat(12)))
         assertTrue(text.contains("d".repeat(12)))
+        assertTrue(text.contains("e".repeat(12)))
         assertFalse(text.contains("SECRET SKILL BODY"))
         assertTrue(text.contains("not proof", ignoreCase = true))
     }

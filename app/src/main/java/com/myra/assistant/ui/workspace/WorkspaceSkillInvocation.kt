@@ -42,6 +42,7 @@ internal object WorkspaceSkillInvocation {
         val contentSha256: String,
         val packageSha256: String,
         val permissionSha256: String,
+        val activationBindingSha256: String,
         val invocationSha256: String,
         val prompt: String,
         val origin: Origin,
@@ -80,6 +81,9 @@ internal object WorkspaceSkillInvocation {
         WorkspaceSkillEnablement.validateStoredState(entry)
         require(entry.state == WorkspaceSkillCatalog.State.ENABLED) {
             "Skill is installed but not enabled"
+        }
+        val activationBindingSha256 = requireNotNull(entry.enableBindingSha256) {
+            "Enabled skill is missing activation binding"
         }
         require(entry.name == installed.skill.name &&
             entry.contentSha256 == installed.skill.contentSha256 &&
@@ -193,6 +197,7 @@ internal object WorkspaceSkillInvocation {
             appendLine("content=${entry.contentSha256}")
             appendLine("package=${entry.packageSha256}")
             appendLine("permissions=${entry.permissionSha256}")
+            appendLine("activation=$activationBindingSha256")
             appendLine("invocation=$invocationId")
             appendLine("origin=${context.origin.name}")
             appendLine("task=$taskId")
@@ -214,6 +219,7 @@ internal object WorkspaceSkillInvocation {
             contentSha256 = entry.contentSha256,
             packageSha256 = entry.packageSha256,
             permissionSha256 = entry.permissionSha256,
+            activationBindingSha256 = activationBindingSha256,
             invocationSha256 = hash,
             prompt = prompt,
             origin = context.origin,

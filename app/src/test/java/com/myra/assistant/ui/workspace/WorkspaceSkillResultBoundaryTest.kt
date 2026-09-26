@@ -9,6 +9,7 @@ class WorkspaceSkillResultBoundaryTest {
         contentSha256 = "a".repeat(64),
         packageSha256 = "b".repeat(64),
         permissionSha256 = "c".repeat(64),
+        activationBindingSha256 = "e".repeat(64),
         invocationSha256 = "d".repeat(64),
         prompt = "UNTRUSTED SKILL PROMPT",
         origin = WorkspaceSkillInvocation.Origin.USER_EXPLICIT,
