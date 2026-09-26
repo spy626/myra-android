@@ -43,6 +43,7 @@ internal object WorkspaceSkillGitHubReadSession {
         val skillPath: String,
         val manifestPath: String,
         val installPrepared: WorkspaceSkillInstallApproval.Prepared?,
+        val updateCandidate: WorkspaceSkillUpdatePreview.Candidate? = null,
     )
 
     private fun companionManifest(path: String): String =
@@ -198,6 +199,14 @@ internal object WorkspaceSkillGitHubReadSession {
                     provenance = provenance,
                 )
             else null
+        val updateCandidate =
+            if (preview.status == WorkspaceSkillImportPreview.Status.READY_FOR_INSTALL_REVIEW)
+                WorkspaceSkillUpdatePreview.candidateFromBytes(
+                    skillMdBytes = skillMdBytes,
+                    skillJsonBytes = skillJsonBytes,
+                    provenance = provenance,
+                )
+            else null
         return Completion(
             preview = preview,
             commitSha = sha,
@@ -208,6 +217,7 @@ internal object WorkspaceSkillGitHubReadSession {
             skillPath = state.skillPath,
             manifestPath = state.manifestPath,
             installPrepared = installPrepared,
+            updateCandidate = updateCandidate,
         )
     }
 }

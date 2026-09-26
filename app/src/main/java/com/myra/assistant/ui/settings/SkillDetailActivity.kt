@@ -46,6 +46,13 @@ class SkillDetailActivity : AppCompatActivity() {
                 .putExtra(EXTRA_SKILL_NAME, name))
         }
         binding.disableButton.setOnClickListener { pendingDisable?.let(::confirmDisable) }
+        binding.updatePreviewButton.setOnClickListener {
+            val name = intent.getStringExtra(EXTRA_SKILL_NAME).orEmpty()
+            startActivity(
+                Intent(this, SkillUpdatePreviewActivity::class.java)
+                    .putExtra(EXTRA_SKILL_NAME, name)
+            )
+        }
     }
 
     override fun onResume() {
@@ -57,6 +64,7 @@ class SkillDetailActivity : AppCompatActivity() {
         binding.detailList.removeAllViews()
         binding.readinessButton.visibility = View.GONE
         binding.disableButton.visibility = View.GONE
+        binding.updatePreviewButton.visibility = View.GONE
         pendingDisable = null
         val name = intent.getStringExtra(EXTRA_SKILL_NAME).orEmpty()
         val loaded = runCatching {
@@ -73,6 +81,7 @@ class SkillDetailActivity : AppCompatActivity() {
         }
 
         val (installed, detail) = loaded
+        binding.updatePreviewButton.visibility = View.VISIBLE
         when (installed.entry.state) {
             WorkspaceSkillCatalog.State.INSTALLED_DISABLED -> {
                 binding.readinessButton.visibility = View.VISIBLE
