@@ -1,7 +1,6 @@
 package com.myra.assistant.ui.workspace
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -45,7 +44,7 @@ Check.
             "review-code", candidate, prepared.request, prepared.request.approvalToken, 2L)
 
         val reopened = WorkspaceSkillStore(root).load("review-code")
-        val point = assertNotNull(reopened.entry.rollbackPoint)
+        val point = requireNotNull(reopened.entry.rollbackPoint)
         assertEquals(oldSnapshot.packageSha256, point.packageSha256)
         assertEquals(old.contentSha256, point.contentSha256)
         assertEquals(current.entry.permissionSha256, point.permissionSha256)
