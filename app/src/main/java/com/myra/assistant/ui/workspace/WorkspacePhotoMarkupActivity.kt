@@ -128,8 +128,12 @@ class WorkspacePhotoMarkupActivity : AppCompatActivity() {
 
     private fun decodeBounded(uri: Uri): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        val boundsStream = contentResolver.openInputStream(uri)
             ?: throw IllegalArgumentException("Photo cannot be read")
+        boundsStream.use {
+            // Bounds-only decoding intentionally returns null; outWidth/outHeight carry success.
+            BitmapFactory.decodeStream(it, null, bounds)
+        }
         require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Photo format is not supported" }
 
         var sample = 1
@@ -141,7 +145,9 @@ class WorkspacePhotoMarkupActivity : AppCompatActivity() {
             inSampleSize = sample
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
-        return contentResolver.openInputStream(uri)?.use {
+        val decodeStream = contentResolver.openInputStream(uri)
+            ?: throw IllegalArgumentException("Photo cannot be read")
+        return decodeStream.use {
             BitmapFactory.decodeStream(it, null, options)
         } ?: throw IllegalArgumentException("Photo cannot be decoded")
     }
