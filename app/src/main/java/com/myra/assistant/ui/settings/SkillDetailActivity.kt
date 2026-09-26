@@ -14,6 +14,7 @@ import com.myra.assistant.R
 import com.myra.assistant.databinding.ActivitySkillDetailBinding
 import com.myra.assistant.ui.workspace.WorkspaceSkillCatalog
 import com.myra.assistant.ui.workspace.WorkspaceSkillDisableApproval
+import com.myra.assistant.ui.workspace.WorkspaceSkillDisableDependencyGuard
 import com.myra.assistant.ui.workspace.WorkspaceSkillReadOnlyDetail
 import com.myra.assistant.ui.workspace.WorkspaceSkillStore
 import java.io.File
@@ -85,7 +86,15 @@ class SkillDetailActivity : AppCompatActivity() {
         val name = intent.getStringExtra(EXTRA_SKILL_NAME).orEmpty()
         val loaded = runCatching {
             val installed = skillStore.load(name)
-            installed to WorkspaceSkillReadOnlyDetail.from(installed)
+            val detail = WorkspaceSkillReadOnlyDetail.from(installed)
+            val disableImpact =
+                if (installed.entry.state == WorkspaceSkillCatalog.State.ENABLED) {
+                    WorkspaceSkillDisableDependencyGuard.analyze(
+                        targetSkillName = name,
+                        installedSkills = skillStore.listVerified(),
+                    )
+                } else null
+            Triple(installed, detail, disableImpact)
         }.getOrElse {
             binding.skillName.text = "Skill unavailable"
             binding.skillState.text = "NOT VERIFIED"
@@ -96,7 +105,7 @@ class SkillDetailActivity : AppCompatActivity() {
             return
         }
 
-        val (installed, detail) = loaded
+        val (installed, detail, disableImpact) = loaded
         binding.updatePreviewButton.visibility = View.VISIBLE
         binding.uninstallPreviewButton.visibility = View.VISIBLE
         if (installed.entry.rollbackPoint != null) {
@@ -107,8 +116,13 @@ class SkillDetailActivity : AppCompatActivity() {
                 binding.readinessButton.visibility = View.VISIBLE
             }
             WorkspaceSkillCatalog.State.ENABLED -> {
-                pendingDisable = WorkspaceSkillDisableApproval.prepare(installed)
-                binding.disableButton.visibility = View.VISIBLE
+                if (disableImpact?.blocked == true) {
+                    pendingDisable = null
+                    binding.disableButton.visibility = View.GONE
+                } else {
+                    pendingDisable = WorkspaceSkillDisableApproval.prepare(installed)
+                    binding.disableButton.visibility = View.VISIBLE
+                }
             }
         }
 
@@ -121,6 +135,27 @@ class SkillDetailActivity : AppCompatActivity() {
         )
         binding.skillDescription.text = detail.description
         detail.rows.forEach { binding.detailList.addView(row(it)) }
+        if (disableImpact?.blocked == true) {
+            binding.detailList.addView(
+                row(
+                    WorkspaceSkillReadOnlyDetail.Row(
+                        "Disable safety",
+                        "BLOCKED · disabling this skill would break currently enabled dependents. " +
+                            "LYRA will not cascade or auto-disable them.",
+                    )
+                )
+            )
+            binding.detailList.addView(
+                row(
+                    WorkspaceSkillReadOnlyDetail.Row(
+                        "Enabled dependents",
+                        disableImpact.enabledDependents.joinToString("\n") {
+                            it.skillName + " · " + it.packageSha256.take(12)
+                        },
+                    )
+                )
+            )
+        }
     }
 
     private fun confirmDisable(prepared: WorkspaceSkillDisableApproval.Prepared) {

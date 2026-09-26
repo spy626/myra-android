@@ -911,6 +911,12 @@ internal class WorkspaceSkillStore(
     ): Installed {
         require(NAME.matches(name)) { "Invalid skill name" }
         val installed = load(name)
+        WorkspaceSkillDisableDependencyGuard.requireSafe(
+            WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = listVerified(),
+            )
+        )
         WorkspaceSkillDisableApproval.validate(installed, request, approvedToken)
         val updated = WorkspaceSkillEnablement.disabledEntry(installed.entry)
         val before = readCatalog()
@@ -919,6 +925,12 @@ internal class WorkspaceSkillStore(
         require(current == installed.entry) {
             "Skill catalog changed during disablement; retry from fresh state"
         }
+        WorkspaceSkillDisableDependencyGuard.requireSafe(
+            WorkspaceSkillDisableDependencyGuard.analyze(
+                targetSkillName = name,
+                installedSkills = listVerified(),
+            )
+        )
         val after = WorkspaceSkillCatalog.Catalog(
             before.entries.map { if (it.name == name) updated else it }
                 .sortedBy { it.name }
