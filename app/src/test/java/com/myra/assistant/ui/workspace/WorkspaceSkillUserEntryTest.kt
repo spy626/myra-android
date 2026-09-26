@@ -135,7 +135,9 @@ Verify.
         val store = WorkspaceSkillStore(temp.newFolder())
         installEnabled(store, name = "base-review")
         val env = WorkspaceSkillEnablement.Environment(
-            installedSkills = setOf("base-review"))
+            installedSkills = setOf("base-review"),
+            enabledSkills = setOf("base-review"),
+        )
         installEnabled(
             store,
             name = "review-code",
