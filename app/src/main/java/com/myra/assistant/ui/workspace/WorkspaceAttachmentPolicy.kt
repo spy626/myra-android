@@ -11,6 +11,8 @@ internal object WorkspaceAttachmentPolicy {
             "text/plain",
             "text/html",
             "text/css",
+            "text/markdown",
+            "text/x-markdown",
             "application/json",
             "application/javascript",
         ) -> Kind.TEXT
