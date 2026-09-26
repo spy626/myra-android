@@ -1,0 +1,192 @@
+package com.myra.assistant.commands
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Test
+
+class CommandParserTest {
+    @Test fun parsesHinglishDeviceCommands() {
+        assertEquals(CommandType.CURRENT_TIME, CommandParser.parse("Time kya hai?").type)
+        assertEquals(CommandType.BATTERY_LEVEL, CommandParser.parse("Battery kitni hai").type)
+        assertEquals(CommandType.FLASHLIGHT_ON, CommandParser.parse("Torch chalu karo").type)
+        assertEquals(CommandType.GO_BACK, CommandParser.parse("peeche jao").type)
+        assertEquals(CommandType.CURRENT_TIME, CommandParser.parse("Time kitna hua?").type)
+        assertEquals(CommandType.FLASHLIGHT_ON, CommandParser.parse("No, meri phone ka torch open on karo").type)
+        assertEquals(CommandType.OPEN_APP, CommandParser.parse("Mmm, YouTube open karo").type)
+        assertEquals(CommandType.OPEN_APP, CommandParser.parse("WhatsApp open karo, sun rahe ho kya?").type)
+        assertEquals(CommandType.FLASHLIGHT_OFF, CommandParser.parse("Flash band karo").type)
+        assertEquals(CommandType.BATTERY_LEVEL, CommandParser.parse("Mere phone ki battery percentage batao").type)
+        assertEquals(CommandType.UNKNOWN, CommandParser.parse("Torch karo").type)
+        assertEquals(true, com.myra.assistant.ai.CommandParser.isAmbiguousFlashlightCommand("Torch karo"))
+        assertEquals(false, com.myra.assistant.ai.CommandParser.isExplicitOpenCommand("YouTube"))
+        assertEquals(true, com.myra.assistant.ai.CommandParser.isExplicitOpenCommand("YouTube open karo"))
+    }
+    @Test fun featureQuestionsRemainConversationInsteadOfPhoneActions() {
+        listOf(
+            "tum kya kya kar sakti ho",
+            "what can you do",
+            "features improve karne hain",
+            "LYRA ke features ke bare mein baat karte hain"
+        ).forEach { phrase ->
+            assertEquals(CommandType.UNKNOWN, CommandParser.parse(phrase).type)
+        }
+    }
+
+    @Test fun removingFeatureListDoesNotAffectRealDeviceCommands() {
+        assertEquals(CommandType.FLASHLIGHT_ON, CommandParser.parse("flashlight on").type)
+        assertEquals(CommandType.BATTERY_LEVEL, CommandParser.parse("battery batao").type)
+        assertEquals(CommandType.GO_HOME, CommandParser.parse("home jao").type)
+    }
+
+    @Test fun obsoleteFeatureCapabilityAndFixedSpeechAreAbsentFromRepository() {
+        val appRoot = java.io.File("src").takeIf { it.exists() } ?: java.io.File("app/src")
+        val source = appRoot.walkTopDown()
+            .filter { it.isFile && it.extension in setOf("kt", "java", "xml") }
+            .joinToString("\n") { it.readText() }
+        val toolName = "LIST_" + "FEATURES"
+        val commandName = "List" + "Features"
+        val fixedSpeech = "Haan jaan, main YouTube " + "open aur band"
+        assertFalse(source.contains(toolName))
+        assertFalse(source.contains(commandName))
+        assertFalse(source.contains(fixedSpeech))
+    }
+
+    @Test fun contextFreeSearchIsNotOwnedByLegacyYouTubeParserAndScrollingRemainsSupported() {
+        listOf(
+            "search karo new song",
+            "Jonathan Gaming search karo"
+        ).forEach { phrase ->
+            assertEquals(CommandType.UNKNOWN, CommandParser.parse(phrase).type)
+        }
+        val explicit = CommandParser.parse("YouTube pe new song search karo")
+        assertEquals(CommandType.SEARCH_YOUTUBE, explicit.type)
+        assertEquals("new song", explicit.content)
+
+        val parser = com.myra.assistant.ai.CommandParser
+        assertEquals(
+            com.myra.assistant.model.AppCommand.ScrollDirection.DOWN,
+            (parser.parseDirectMediaControl("niche scroll karo") as com.myra.assistant.model.AppCommand.ScrollYouTube).direction
+        )
+        assertEquals(
+            com.myra.assistant.model.AppCommand.ScrollDirection.UP,
+            (parser.parseDirectMediaControl("upper scroll karo") as com.myra.assistant.model.AppCommand.ScrollYouTube).direction
+        )
+        assertEquals(
+            null,
+            (parser.parseDirectMediaControl("scroll karo") as com.myra.assistant.model.AppCommand.ScrollYouTube).direction
+        )
+    }
+
+    @Test fun parsesNaturalYouTubePlayRequests() {
+        listOf(
+            "mai bore ho raha hun koi video open karo" to null,
+            "main bore ho raha hoon ek video chalao" to null,
+            "mujhe new song sunna hai" to "new song",
+            "I need to hear new song" to "new song"
+        ).forEach { (phrase, expectedQuery) ->
+            val command = CommandParser.parse(phrase)
+            assertEquals(CommandType.PLAY_YOUTUBE, command.type)
+            assertEquals(expectedQuery, command.content)
+        }
+    }
+
+    @Test fun parsesContextualShortsAndReelsIntentions() {
+        listOf(
+            "YouTube home page shorts open karo",
+            "shorts dekhna hai",
+            "mujhe youtube shorts dekhni hai"
+        ).forEach { phrase ->
+            assertEquals(CommandType.OPEN_YOUTUBE_SHORTS, CommandParser.parse(phrase).type)
+        }
+        listOf(
+            "mujhe reel dekhna hai",
+            "mujhe Instagram reels dekhni hain",
+            "I want to watch reels"
+        ).forEach { phrase ->
+            assertEquals(CommandType.REQUEST_INSTAGRAM_REELS, CommandParser.parse(phrase).type)
+        }
+    }
+
+    @Test fun parsesScreenshotRequests() {
+        listOf(
+            "screenshot lo",
+            "take screenshot",
+            "is screen ka screenshot le lo",
+            "jo dikh raha hai use save kar lo"
+        ).forEach { phrase ->
+            assertEquals(CommandType.TAKE_SCREENSHOT, CommandParser.parse(phrase).type)
+        }
+    }
+
+    @Test fun preservesExistingYouTubeCommand() {
+        val command = CommandParser.parse("YouTube mein Lols Gaming search karo")
+        assertEquals(CommandType.SEARCH_YOUTUBE, command.type)
+        assertEquals("lols gaming", command.content)
+    }
+    @Test fun parsesStrictMediaControlPhrasesWithoutWakeWord() {
+        val parser = com.myra.assistant.ai.CommandParser
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.PAUSE,
+            (parser.parseDirectMediaControl("video pause karo") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.PLAY,
+            (parser.parseDirectMediaControl("video play karo") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        listOf(
+            "next video chalao",
+            "next video chala",
+            "next video chalo",
+            "next video play karo",
+            "next video open karo",
+            "next video khol do",
+            "agla video play kar do"
+        ).forEach { phrase ->
+            assertEquals(
+                com.myra.assistant.model.AppCommand.MediaAction.NEXT,
+                (parser.parseDirectMediaControl(phrase) as com.myra.assistant.model.AppCommand.ControlMedia).action
+            )
+            assertEquals(
+                com.myra.assistant.model.AppCommand.MediaAction.NEXT,
+                (parser.parse(phrase) as com.myra.assistant.model.AppCommand.ControlMedia).action
+            )
+        }
+        listOf(
+            "pichhla video lagao",
+            "pichle video open karo",
+            "previous video kholo",
+            "peeche wala video play karo"
+        ).forEach { phrase ->
+            assertEquals(
+                com.myra.assistant.model.AppCommand.MediaAction.PREVIOUS,
+                (parser.parseDirectMediaControl(phrase) as com.myra.assistant.model.AppCommand.ControlMedia).action
+            )
+            assertEquals(
+                com.myra.assistant.model.AppCommand.MediaAction.PREVIOUS,
+                (parser.parse(phrase) as com.myra.assistant.model.AppCommand.ControlMedia).action
+            )
+        }
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.FIRST,
+            (parser.parseDirectMediaControl("first video chalao") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.FIRST,
+            (parser.parse("pehla video lagao") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        assertEquals(
+            com.myra.assistant.model.AppCommand.MediaAction.FIRST,
+            (parser.parse("first video kholo") as com.myra.assistant.model.AppCommand.ControlMedia).action
+        )
+        assertEquals(null, parser.parseDirectMediaControl("ruko"))
+        assertEquals(null, parser.parseDirectMediaControl("video bahut achha hai"))
+    }
+
+    @Test fun acceptsLiveYouTubeCloseVariants() {
+        val parser = com.myra.assistant.ai.CommandParser
+        assertEquals(true, parser.parseDirectMediaControl("YouTube close karo") is com.myra.assistant.model.AppCommand.CloseCurrentApp)
+        assertEquals(true, parser.parseDirectMediaControl("YouTube ko close kar do") is com.myra.assistant.model.AppCommand.CloseCurrentApp)
+        assertEquals(true, parser.parseDirectMediaControl("go to close karo") is com.myra.assistant.model.AppCommand.CloseCurrentApp)
+        assertEquals(true, parser.parseDirectMediaControl("some streamed words YouTube close karo") is com.myra.assistant.model.AppCommand.CloseCurrentApp)
+    }
+}

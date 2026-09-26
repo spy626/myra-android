@@ -1,0 +1,15 @@
+# LYRA Workspace Phase 5 slice 7 — one-file local AI-context draft with conservative privacy gate
+
+Date: 2026-09-17. Baseline: slice 6 source snapshot phone-accepted. Main `docs/WORKSPACE_IDEA_LEDGER.md` and earlier accounting addenda are preserved unchanged. Phase 5 remains open.
+
+## Saved-idea accounting
+
+- Source concepts: AIRI/Plast-Mem separation of untrusted source data from authoritative current turn and trusted evidence; `github/spec-kit` bounded existing-project specification/approval (`45db690bab85924ce53f85a9377076abaca6f1fb`, MIT), and the saved ledger's `context-mode` bounded prompt projection / privacy-gate concepts (exact context-mode upstream repo still needs re-audit). BORROW concepts, no upstream source or CLI copied, no new dependency.
+- Existing owners reused: one `WorkspaceTaskStore` project-local spec and approval, `WorkspaceFileStore` project-confined reader, `WorkspaceSourcePreview` content fingerprint. MERGED `WorkspaceSourceContext` as a local nonpersistent projection helper and one task-screen opt-in button; NOT a second memory, coordinator, router, planner or executor.
+- Requirement: a saved, unchanged, explicitly planning-approved, unpaused specification and explicit choice of ONE allowed project text file. The projection includes the saved goal/criteria, one bounded 1,500-character source excerpt, full-file fingerprint and read time; re-reads full source to confirm fingerprint and screens full 256-KB-bounded text and goal/criteria for common credential patterns. Dotfiles and obviously sensitive filenames/extensions are excluded. Failed checks show a generic block reason without projecting source. No request, analytics, logs, cloud sync, network, AI inference, write, build or token billed.
+- Caveats: pattern screening is conservative and incomplete, NOT a security clearance or permission to upload. A future provider projection needs a separate user review/consent gate, independent credentials/privacy audit, trusted run-owned freshness check immediately before send, user-scoped action authorization, and trusted execution/verification. Current display is ephemeral; task.json, personal memory, file bytes and approval do not change. UI draft is not trusted step evidence.
+- Tests: allowed explicit one-file projection, bound, SHA, snapshot, no task/file writes; missing/revoked/stale approval and paused task rejection; whole-file secret beyond excerpt rejection with no raw secret in error; hidden/credential/cross-project/deleted file exclusion, dialog list visibility/palette. Android CI unit tests and debug APK required; physical-phone acceptance pending.
+
+## Remaining saved ideas (deferred, not lost)
+
+Trusted observation provenance with run ownership and freshness, robust privacy/redaction and explicit upload consent, actual spec-to-plan generation, step/action approval, scoped AI coding worker with checkpoint/rollback, verified recurring $0 model route and privacy audit (no card/AutoPay/paid fallback), browser/build tools, task-state reconciliation and final verification. Neither model routing nor AI coding is complete in this slice.

@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="match_parent" android:background="#020609">
+    <ImageButton android:id="@+id/taskBack" android:layout_width="48dp" android:layout_height="48dp"
+        android:layout_marginStart="12dp" android:layout_marginTop="12dp"
+        android:background="?attr/selectableItemBackgroundBorderless" android:src="@drawable/ic_arrow_back"
+        android:tint="#A8FFB2" android:contentDescription="Back to project"
+        app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent" />
+    <TextView android:id="@+id/taskHeading" android:layout_width="0dp" android:layout_height="48dp"
+        android:layout_marginStart="6dp" android:layout_marginEnd="16dp" android:layout_marginTop="12dp"
+        android:gravity="center_vertical" android:ellipsize="end" android:maxLines="1"
+        android:text="Task brief" android:textColor="#F1FFF3" android:textSize="20sp" android:textStyle="bold"
+        app:layout_constraintStart_toEndOf="@id/taskBack" app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+    <ScrollView android:layout_width="0dp" android:layout_height="0dp" android:fillViewport="true"
+        android:clipToPadding="false" android:paddingBottom="32dp" android:scrollbars="none"
+        app:layout_constraintTop_toBottomOf="@id/taskHeading" app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent" app:layout_constraintEnd_toEndOf="parent">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:paddingStart="22dp" android:paddingEnd="22dp" android:paddingTop="20dp">
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="WHAT SHOULD LYRA BUILD?" android:letterSpacing="0.12"
+                android:textSize="11sp" android:textStyle="bold" android:textColor="#9BD9A6" />
+            <EditText android:id="@+id/taskGoalInput" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:minHeight="112dp" android:layout_marginTop="14dp"
+                android:background="@drawable/bg_workspace_dialog_input" android:padding="17dp"
+                android:inputType="textMultiLine|textCapSentences" android:gravity="top|start"
+                android:maxLength="500" android:minLines="3" android:maxLines="7"
+                android:hint="e.g. Make a mobile-first food delivery homepage"
+                android:textColor="#F1FFF3" android:textColorHint="#8CA795" android:textSize="15sp" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="22dp" android:text="HOW WILL WE KNOW IT WORKS?"
+                android:letterSpacing="0.12" android:textSize="11sp" android:textStyle="bold"
+                android:textColor="#9BD9A6" />
+            <EditText android:id="@+id/taskAcceptanceInput" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:minHeight="86dp" android:layout_marginTop="12dp"
+                android:background="@drawable/bg_workspace_dialog_input" android:padding="17dp"
+                android:inputType="textMultiLine|textCapSentences" android:gravity="top|start"
+                android:maxLength="500" android:minLines="2" android:maxLines="6"
+                android:hint="e.g. Search works and cards fit on my phone"
+                android:textColor="#F1FFF3" android:textColorHint="#8CA795" android:textSize="15sp" />
+            <TextView android:id="@+id/taskSave" android:layout_width="match_parent" android:layout_height="54dp"
+                android:layout_marginTop="13dp" android:background="@drawable/bg_field"
+                android:gravity="center" android:text="Save task brief" android:textColor="#F1FFF3"
+                android:textSize="15sp" android:textStyle="bold" android:clickable="true" android:focusable="true" />
+            <TextView android:id="@+id/taskStatus" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="19dp" android:text="No task saved yet" android:textColor="#A6D9AF"
+                android:textSize="13sp" />
+            <TextView android:id="@+id/taskApprovalState" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="9dp" android:lineSpacingExtra="2dp"
+                android:text="Planning approval pending. No AI work or file edits authorized."
+                android:textColor="#D9F3DE" android:textSize="12sp" />
+            <TextView android:id="@+id/taskSpecApproval" android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_dialog_input"
+                android:gravity="center" android:text="Approve saved spec (planning only)" android:textColor="#D4F8D9"
+                android:textSize="13sp" android:clickable="true" android:focusable="true" android:visibility="gone" />
+            <TextView android:id="@+id/taskPause" android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginTop="9dp" android:background="@drawable/bg_workspace_dialog_input"
+                android:gravity="center" android:text="Pause task" android:textColor="#D4F8D9"
+                android:textSize="13sp" android:clickable="true" android:focusable="true" android:visibility="gone" />
+            <TextView android:id="@+id/taskInspect" android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_dialog_input"
+                android:gravity="center" android:text="Inspect project files (read-only)" android:textColor="#D4F8D9"
+                android:textSize="13sp" android:clickable="true" android:focusable="true" android:visibility="gone" />
+            <TextView android:id="@+id/taskInspection" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_project_card"
+                android:padding="18dp" android:lineSpacingExtra="3dp" android:textColor="#D9F3DE"
+                android:textSize="12sp" android:visibility="gone" />
+            <TextView android:id="@+id/taskSource" android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_dialog_input"
+                android:gravity="center" android:text="Review one source file (read-only)" android:textColor="#D4F8D9"
+                android:textSize="13sp" android:clickable="true" android:focusable="true" android:visibility="gone" />
+            <TextView android:id="@+id/taskSourcePreview" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_project_card"
+                android:padding="18dp" android:lineSpacingExtra="3dp" android:textColor="#D9F3DE"
+                android:textSize="12sp" android:visibility="gone" android:textIsSelectable="true" />
+            <TextView android:id="@+id/taskContext" android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_dialog_input"
+                android:gravity="center" android:text="Prepare AI context (local only)" android:textColor="#D4F8D9"
+                android:textSize="13sp" android:clickable="true" android:focusable="true" android:visibility="gone" />
+            <TextView android:id="@+id/taskContextPreview" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_project_card"
+                android:padding="18dp" android:lineSpacingExtra="3dp" android:textColor="#D9F3DE"
+                android:textSize="12sp" android:visibility="gone" android:textIsSelectable="true" />
+            <TextView android:id="@+id/taskContextRecheck" android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginTop="10dp" android:background="@drawable/bg_workspace_dialog_input"
+                android:gravity="center" android:text="Recheck context freshness (local only)" android:textColor="#D4F8D9"
+                android:textSize="13sp" android:clickable="true" android:focusable="true" android:visibility="gone" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="28dp" android:text="EXECUTION CHECKLIST" android:letterSpacing="0.11"
+                android:textColor="#9BD9A6" android:textSize="11sp" android:textStyle="bold" />
+            <TextView android:id="@+id/taskPlan" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:background="@drawable/bg_workspace_project_card"
+                android:padding="20dp" android:lineSpacingExtra="4dp" android:textColor="#D9F3DE" android:textSize="13sp" />
+            <TextView android:id="@+id/taskNotice" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="14dp" android:lineSpacingExtra="3dp"
+                android:textColor="#95BBA0" android:textSize="12sp" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="22dp" android:orientation="horizontal">
+                <TextView android:id="@+id/taskFiles" android:layout_width="0dp" android:layout_height="50dp"
+                    android:layout_weight="1" android:background="@drawable/bg_workspace_dialog_input"
+                    android:gravity="center" android:text="☷  Files" android:textColor="#D4F8D9"
+                    android:clickable="true" android:focusable="true" />
+                <TextView android:id="@+id/taskPreview" android:layout_width="0dp" android:layout_height="50dp"
+                    android:layout_marginStart="10dp" android:layout_weight="1"
+                    android:background="@drawable/bg_workspace_dialog_input" android:gravity="center"
+                    android:text="↗  Preview" android:textColor="#D4F8D9"
+                    android:clickable="true" android:focusable="true" android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+</androidx.constraintlayout.widget.ConstraintLayout>

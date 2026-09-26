@@ -1,0 +1,50 @@
+name: One-time Work website Groq single-attempt guard
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/workspace-website-groq-single-attempt-once.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'spy626/myra-android' && github.ref == 'refs/heads/agent/myra-phase-1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Isolate Groq fallback as exactly one network attempt
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          python3 -m py_compile scripts/workspace_website_groq_single_attempt_once.py
+          python3 scripts/workspace_website_groq_single_attempt_once.py
+          git diff --check
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatCodingFlow.kt \
+            app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGroqFallbackTest.kt
+          git diff --cached --stat
+          if git diff --cached --quiet; then
+            echo 'No scoped single-attempt change applied' >&2
+            exit 1
+          fi
+      - name: Unit tests and debug APK build
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Fast-forward only phase branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(workspace): prevent retries on Groq website fallback'
+          git push origin HEAD:agent/myra-phase-1
