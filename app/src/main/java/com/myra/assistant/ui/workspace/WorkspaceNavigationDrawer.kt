@@ -30,6 +30,7 @@ internal object WorkspaceNavigationDrawer {
         titleFor: (WorkspaceProject) -> String,
         onNewChat: () -> Unit,
         onPlugins: () -> Unit,
+        onSkills: () -> Unit,
         onApiSettings: () -> Unit,
         onSelectProject: (String) -> Unit,
         onTogglePin: (String) -> Unit,
@@ -94,6 +95,7 @@ internal object WorkspaceNavigationDrawer {
         panel.addView(header)
         panel.addView(item("＋   New Chat", action = onNewChat))
         panel.addView(item("◉   Plugins", action = onPlugins))
+        panel.addView(item("◇   Skills", action = onSkills))
         panel.addView(item("⚙   API & Cloud Settings", action = onApiSettings))
         panel.addView(View(activity).apply { setBackgroundColor(Color.rgb(68, 68, 68)) },
             LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(18); bottomMargin = dp(12) })
