@@ -2,7 +2,7 @@ package com.myra.assistant.ui.workspace
 
 /** UI-only contract for the simple Chat skill entry point. */
 internal object WorkspaceSkillChatAttachment {
-    const val CREATE_SKILL_PROMPT = "Create a skill that "
+    const val CREATE_SKILL_PROMPT = "Let’s create a skill together using LYRA’s skill creator. First ask me what the skill should do."
 
     data class Verified(
         val name: String,
