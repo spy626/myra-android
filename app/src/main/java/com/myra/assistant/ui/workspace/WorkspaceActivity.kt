@@ -55,7 +55,12 @@ import java.nio.charset.StandardCharsets
 /** Private general Chat; typed coding project only after an explicit request. Voice is untouched. */
 class WorkspaceActivity : AppCompatActivity() {
     private data class Attachment(val uri: Uri, val name: String, val mime: String, val size: Long)
-    private data class SkillAttachment(val uri: Uri, val name: String, val size: Long)
+    private data class SkillAttachment(
+        val uri: Uri,
+        val name: String,
+        val size: Long,
+        val bytes: ByteArray,
+    )
     private val projects by lazy { WorkspaceProjectStore(File(filesDir, "workspace/projects")) }
     private val files by lazy { WorkspaceFileStore(projects) }
     private val conversations by lazy {
@@ -75,6 +80,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private val expandedMessageIds = mutableSetOf<String>()
     private val attachments = mutableListOf<Attachment>()
     private var skillAttachment: SkillAttachment? = null
+    private var pendingSkillAdd: WorkspaceSkillConversationalAdd.Prepared? = null
     private var pendingCameraFile: File? = null
     private var pendingCameraUri: Uri? = null
     private var markupTargetUri: Uri? = null
@@ -1572,6 +1578,7 @@ class WorkspaceActivity : AppCompatActivity() {
         workTab = false
         attachments.clear()
         skillAttachment = null
+        pendingSkillAdd = null
         composer.text.clear()
         statusMessage = ""
         workTrace.clear()
@@ -1604,6 +1611,7 @@ class WorkspaceActivity : AppCompatActivity() {
         projects.markOpened(id)
         attachments.clear()
         skillAttachment = null
+        pendingSkillAdd = null
         composer.setText(localDrafts[id].orEmpty())
         statusMessage = ""
         workTrace.clear()
@@ -1700,13 +1708,18 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
             }
             if (size < 0L) contentResolver.openFileDescriptor(uri, "r")?.use { size = it.statSize }
-            val verified = WorkspaceSkillChatAttachment.validate(name, size)
-            SkillAttachment(uri, verified.name, verified.size)
+            WorkspaceSkillChatAttachment.validate(name, size)
+            val bytes = contentResolver.openInputStream(uri)?.use {
+                it.readBounded(WorkspaceSkillImportPreview.MAX_FILE_BYTES)
+            } ?: throw IllegalArgumentException("SKILL.md could not be read")
+            val verified = WorkspaceSkillChatAttachment.validate(name, bytes.size.toLong())
+            SkillAttachment(uri, verified.name, verified.size, bytes.copyOf())
         }.getOrElse {
             toast(it.message ?: "Skill file could not be attached")
             return
         }
         skillAttachment = item
+        pendingSkillAdd = null
         statusMessage = ""
         renderAttachments()
     }
@@ -2093,6 +2106,8 @@ class WorkspaceActivity : AppCompatActivity() {
                     subtitle = "Skill",
                     onRemove = {
                         skillAttachment = null
+                        pendingSkillAdd = null
+                        statusMessage = ""
                         renderAttachments()
                     },
                 ),
@@ -2180,6 +2195,166 @@ class WorkspaceActivity : AppCompatActivity() {
             .decode(ByteBuffer.wrap(bytes)).toString().also { require(it.isNotBlank()) { "Document is empty" } }
     }
 
+    private fun ensureSkillConversation(text: String): String? {
+        if (selectedId == null) {
+            val title = text.lineSequence().firstOrNull().orEmpty()
+                .replace(Regex("\\s+"), " ").trim().take(72).trim().ifBlank { "New chat" }
+            val created = runCatching {
+                projects.createProject(title, WorkspaceProjectType.CHAT)
+            }.getOrElse {
+                toast(it.message ?: "Cannot start chat")
+                return null
+            }
+            selectedId = created.projectId
+        }
+        val id = selectedId ?: return null
+        if (projects.getProject(id) == null) {
+            toast("Conversation is unavailable")
+            return null
+        }
+        return id
+    }
+
+    private fun finishLocalSkillTurn(
+        id: String,
+        userText: String,
+        assistantText: String,
+    ) {
+        val saved = runCatching {
+            conversations.append(id, "user", userText)
+            conversations.append(id, "assistant", assistantText)
+        }
+        saved.onFailure {
+            statusMessage = it.message ?: "Skill conversation could not be saved"
+            render()
+            return
+        }
+        composer.text.clear()
+        localDrafts.remove(id)
+        workTrace.clear()
+        workTraceExpanded = true
+        workTraceMessageId = null
+        statusMessage = ""
+        render()
+        composer.requestFocus()
+    }
+
+    private fun handleConversationalSkillAdd(text: String): Boolean {
+        val attachment = skillAttachment
+        val prepared = pendingSkillAdd
+        if (attachment == null && prepared == null) return false
+
+        if (attachments.isNotEmpty()) {
+            statusMessage =
+                "Remove other attachments before adding a skill. SKILL.md stays local; nothing was sent."
+            render()
+            return true
+        }
+
+        val intent = WorkspaceSkillConversationalAdd.classify(
+            text = text,
+            awaitingConfirmation = prepared != null,
+        )
+
+        if (prepared == null) {
+            if (attachment == null) return false
+            if (intent != WorkspaceSkillConversationalAdd.Intent.ADD_REQUEST) {
+                statusMessage =
+                    "SKILL.md is attached locally. Say “Is skill ko add karo” to review it, or remove it."
+                render()
+                return true
+            }
+            val id = ensureSkillConversation(text) ?: return true
+            val review = runCatching {
+                WorkspaceSkillConversationalAdd.prepare(
+                    skillMdBytes = attachment.bytes,
+                    store = skillStore,
+                    testedAtMs = System.currentTimeMillis(),
+                )
+            }
+            review.onSuccess {
+                pendingSkillAdd = it
+                finishLocalSkillTurn(id, text, it.userSummary)
+            }.onFailure { error ->
+                pendingSkillAdd = null
+                finishLocalSkillTurn(
+                    id,
+                    text,
+                    "I couldn’t add this skill safely: " +
+                        (error.message ?: "local skill checks failed") +
+                        "\n\nNothing was installed or enabled.",
+                )
+            }
+            return true
+        }
+
+        val id = ensureSkillConversation(text) ?: return true
+        when (intent) {
+            WorkspaceSkillConversationalAdd.Intent.CANCEL -> {
+                pendingSkillAdd = null
+                skillAttachment = null
+                finishLocalSkillTurn(id, text, "Okay — the skill was not added.")
+                renderAttachments()
+            }
+            WorkspaceSkillConversationalAdd.Intent.CONFIRM -> {
+                val currentAttachment = attachment
+                if (currentAttachment == null) {
+                    pendingSkillAdd = null
+                    statusMessage = "The reviewed SKILL.md is no longer attached. Choose it again."
+                    render()
+                    return true
+                }
+                val outcome = runCatching {
+                    WorkspaceSkillConversationalAdd.applyApproved(
+                        prepared = prepared,
+                        skillMdBytes = currentAttachment.bytes,
+                        store = skillStore,
+                        confirmedAtMs = System.currentTimeMillis(),
+                    )
+                }
+                outcome.onSuccess { applied ->
+                    pendingSkillAdd = null
+                    skillAttachment = null
+                    finishLocalSkillTurn(
+                        id,
+                        text,
+                        "✅ " + applied.installed.entry.name + " added to Skills and enabled.",
+                    )
+                    renderAttachments()
+                }.onFailure { error ->
+                    val installed = runCatching { skillStore.load(prepared.skillName) }.getOrNull()
+                    pendingSkillAdd = null
+                    if (installed?.entry?.state ==
+                        WorkspaceSkillCatalog.State.INSTALLED_DISABLED) {
+                        skillAttachment = null
+                        finishLocalSkillTurn(
+                            id,
+                            text,
+                            prepared.skillName +
+                                " was installed but kept Disabled because the final safety state changed. " +
+                                "Nothing was enabled. Open Workspace → Skills to review it.",
+                        )
+                        renderAttachments()
+                    } else {
+                        finishLocalSkillTurn(
+                            id,
+                            text,
+                            "I couldn’t add this skill: " +
+                                (error.message ?: "the final safety check failed") +
+                                "\n\nNothing was enabled. Review the skill again before retrying.",
+                        )
+                    }
+                }
+            }
+            WorkspaceSkillConversationalAdd.Intent.ADD_REQUEST,
+            WorkspaceSkillConversationalAdd.Intent.OTHER -> {
+                statusMessage = "Please reply “Haan add karo” to confirm, or “No” to cancel."
+                render()
+            }
+        }
+        return true
+    }
+
     private fun sendMessage() {
         if (workTab) return
         if (isBusy()) { stopReply(); return }
@@ -2191,11 +2366,7 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
-        if (skillAttachment != null) {
-            statusMessage = "Skill file is attached and kept local. Conversational skill analysis and approval are not active yet; nothing was sent."
-            render()
-            return
-        }
+        if (handleConversationalSkillAdd(text)) return
         val skillCommand = runCatching {
             WorkspaceSkillUserCommand.parse(text)
         }.getOrElse {
