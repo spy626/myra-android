@@ -467,6 +467,92 @@ internal class WorkspaceSkillStore(
         return load(name)
     }
 
+    /**
+     * H11 explicit human-approved immutable package replacement.
+     *
+     * This path is intentionally separate from evidence-backed overlay promotion. It still uses the
+     * same single local store, same non-widening permission policy, append-only content-addressed
+     * packages and atomic catalog pointer switch. The previous package is retained for rollback.
+     */
+    @Synchronized fun updateApprovedPackage(
+        name: String,
+        candidate: WorkspaceSkillUpdatePreview.Candidate,
+        request: WorkspaceSkillApprovedUpdate.Request,
+        approvedToken: String,
+        updatedAtMs: Long,
+    ): Installed {
+        require(NAME.matches(name) && candidate.skill.name == name) {
+            "Skill update name does not match the installed skill"
+        }
+
+        val current = load(name)
+        val packageFiles = candidate.packageFiles.mapValues { it.value.copyOf() }
+        val snapshot = WorkspaceSkillCatalog.snapshot(candidate.skill, packageFiles)
+        val candidateApproval =
+            WorkspaceSkillCatalog.approvalRequest(candidate.skill, snapshot)
+        require(
+            snapshot == candidate.snapshot &&
+                candidateApproval.permissionSha256 == candidate.permissionSha256
+        ) { "Skill update candidate no longer matches the reviewed package" }
+
+        val updated = WorkspaceSkillApprovedUpdate.updatedEntry(
+            current = current,
+            candidate = candidate,
+            request = request,
+            approvedToken = approvedToken,
+            updatedAtMs = updatedAtMs,
+        )
+
+        val before = readCatalog()
+        val currentEntry = before.entries.firstOrNull { it.name == name }
+            ?: throw IllegalArgumentException("Skill is not installed")
+        require(currentEntry == current.entry) {
+            "Skill catalog changed after update approval; preview again"
+        }
+
+        // Append-only content-addressed write. The previous immutable package remains untouched.
+        writePackage(snapshot, packageFiles)
+
+        // Re-open and hash exactly what landed on disk before the catalog pointer changes.
+        val persistedFiles = readPackageFiles(updated)
+        val persistedSkill = WorkspaceSkillContract.parse(
+            skillMd = strictUtf8(
+                persistedFiles["SKILL.md"]
+                    ?: throw IllegalArgumentException("Updated skill is missing SKILL.md"),
+                "Updated SKILL.md",
+            ),
+            skillJson = persistedFiles["skill.json"]?.let {
+                strictUtf8(it, "Updated skill.json")
+            },
+            provenance = updated.provenance,
+            packagePaths = persistedFiles.keys,
+        )
+        val persistedSnapshot = WorkspaceSkillCatalog.snapshot(persistedSkill, persistedFiles)
+        val persistedApproval =
+            WorkspaceSkillCatalog.approvalRequest(persistedSkill, persistedSnapshot)
+        require(
+            persistedSkill.contentSha256 == candidate.skill.contentSha256 &&
+                persistedSnapshot == candidate.snapshot &&
+                persistedApproval.permissionSha256 == candidate.permissionSha256
+        ) { "Persisted skill update package did not match the human-approved candidate" }
+
+        val after = WorkspaceSkillCatalog.Catalog(
+            before.entries.map { if (it.name == name) updated else it }
+                .sortedBy { it.name }
+        )
+        writeCatalog(after)
+
+        val reopened = load(name)
+        require(
+            reopened.entry.state == WorkspaceSkillCatalog.State.INSTALLED_DISABLED &&
+                reopened.entry.enabledAtMs == null &&
+                reopened.entry.enableReadinessSha256 == null &&
+                reopened.entry.enableEnvironmentSha256 == null &&
+                reopened.entry.enableBindingSha256 == null
+        ) { "Updated skill unexpectedly retained activation authority" }
+        return reopened
+    }
+
     @Synchronized fun enable(
         name: String,
         environment: WorkspaceSkillEnablement.Environment,

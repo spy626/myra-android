@@ -49,9 +49,11 @@ Require deterministic evidence.
         val packageFiles = files(skill)
         val snapshot = WorkspaceSkillCatalog.snapshot(skill, packageFiles)
         return WorkspaceSkillUpdatePreview.Candidate(
-            skill,
-            snapshot,
-            WorkspaceSkillCatalog.approvalRequest(skill, snapshot).permissionSha256,
+            skill = skill,
+            snapshot = snapshot,
+            permissionSha256 =
+                WorkspaceSkillCatalog.approvalRequest(skill, snapshot).permissionSha256,
+            packageFiles = packageFiles.mapValues { it.value.copyOf() },
         )
     }
 
@@ -138,9 +140,11 @@ Check.
         val otherFiles = mapOf("SKILL.md" to other.originalSkillMd.toByteArray())
         val otherSnapshot = WorkspaceSkillCatalog.snapshot(other, otherFiles)
         val otherCandidate = WorkspaceSkillUpdatePreview.Candidate(
-            other,
-            otherSnapshot,
-            WorkspaceSkillCatalog.approvalRequest(other, otherSnapshot).permissionSha256,
+            skill = other,
+            snapshot = otherSnapshot,
+            permissionSha256 =
+                WorkspaceSkillCatalog.approvalRequest(other, otherSnapshot).permissionSha256,
+            packageFiles = otherFiles.mapValues { it.value.copyOf() },
         )
         assertEquals(
             WorkspaceSkillUpdatePreview.Status.BLOCKED_NAME_MISMATCH,

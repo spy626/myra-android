@@ -18,6 +18,7 @@ internal object WorkspaceSkillUpdatePreview {
         val skill: WorkspaceSkillContract.ParsedSkill,
         val snapshot: WorkspaceSkillCatalog.PackageSnapshot,
         val permissionSha256: String,
+        val packageFiles: Map<String, ByteArray>,
     )
 
     data class SetDelta(
@@ -162,7 +163,12 @@ internal object WorkspaceSkillUpdatePreview {
         )
         val snapshot = WorkspaceSkillCatalog.snapshot(skill, files)
         val permission = WorkspaceSkillCatalog.approvalRequest(skill, snapshot).permissionSha256
-        return Candidate(skill, snapshot, permission)
+        return Candidate(
+            skill = skill,
+            snapshot = snapshot,
+            permissionSha256 = permission,
+            packageFiles = files.mapValues { it.value.copyOf() },
+        )
     }
 
     fun compare(

@@ -54,7 +54,7 @@
             android:layout_marginTop="12dp"
             android:background="@drawable/bg_field"
             android:padding="14dp"
-            android:text="H10 is comparison only. It re-opens the installed immutable skill, inspects a local or pinned GitHub candidate, shows exact permission deltas, and never updates the catalog or package store."
+            android:text="Compare first. Only a NON-WIDENING candidate can proceed to an explicit update approval. Confirmation is bound to the exact current package and exact candidate; every accepted update starts disabled."
             android:textColor="#8E888E"
             android:textSize="11sp" />
 
@@ -214,13 +214,24 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical" />
 
+            <Button
+                android:id="@+id/applyUpdateButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/bg_button"
+                android:text="REVIEW &amp; UPDATE DISABLED"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:background="@drawable/bg_field"
                 android:padding="14dp"
-                android:text="NO UPDATE ACTION · This screen creates no approval token/request and writes nothing. A later slice must revalidate the exact candidate and current installed state before any update can occur."
+                android:text="UPDATE SAFETY · Permission widening, identical packages and name mismatches cannot proceed. The old immutable package stays on-device; accepted replacement clears all activation authority."
                 android:textColor="#8E888E"
                 android:textSize="11sp" />
         </LinearLayout>
