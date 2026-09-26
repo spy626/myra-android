@@ -522,7 +522,7 @@ class WorkspaceActivity : AppCompatActivity() {
             HorizontalScrollView(this).apply {
                 isHorizontalScrollBarEnabled = false
                 overScrollMode = View.OVER_SCROLL_NEVER
-                addView(attachmentList, HorizontalScrollView.LayoutParams(-2, -2))
+                addView(attachmentList, FrameLayout.LayoutParams(-2, -2))
             },
             LinearLayout.LayoutParams(-1, -2),
         )
