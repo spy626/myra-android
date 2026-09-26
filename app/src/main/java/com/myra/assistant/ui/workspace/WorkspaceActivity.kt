@@ -1656,6 +1656,69 @@ class WorkspaceActivity : AppCompatActivity() {
         renderAttachments()
     }
 
+    private fun preparePhotoAttachment(source: Attachment): Attachment {
+        if ((source.mime == "image/jpeg" || source.mime == "image/png") &&
+            source.size in 1L..2_000_000L) {
+            return source
+        }
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(source.uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        } ?: throw IllegalArgumentException("Photo cannot be read")
+        require(bounds.outWidth > 0 && bounds.outHeight > 0) {
+            "Photo format is not supported"
+        }
+
+        var sample = 1
+        while ((bounds.outWidth.toLong() / sample) * (bounds.outHeight.toLong() / sample) >
+            6_000_000L) {
+            sample *= 2
+        }
+        val bitmap = contentResolver.openInputStream(source.uri)?.use {
+            BitmapFactory.decodeStream(
+                it,
+                null,
+                BitmapFactory.Options().apply {
+                    inSampleSize = sample
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                },
+            )
+        } ?: throw IllegalArgumentException("Photo cannot be decoded")
+
+        val dir = File(cacheDir, "workspace-photo").apply { mkdirs() }
+        require(dir.isDirectory) { "Photo cache is unavailable" }
+        val output = File(dir, "photo-${System.currentTimeMillis()}.jpg")
+        var quality = 92
+        var saved = false
+        while (quality >= 52) {
+            java.io.FileOutputStream(output).use { stream ->
+                require(bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)) {
+                    "Photo could not be prepared"
+                }
+            }
+            if (output.length() in 1L..2_000_000L) {
+                saved = true
+                break
+            }
+            quality -= 10
+        }
+        require(saved) { "Photo could not be reduced below LYRA's 2 MB send limit" }
+
+        val uri = FileProvider.getUriForFile(
+            this,
+            "${packageName}.fileprovider",
+            output,
+        )
+        val base = source.name.substringBeforeLast('.', source.name).take(96).ifBlank { "photo" }
+        return source.copy(
+            uri = uri,
+            name = "$base.jpg",
+            mime = "image/jpeg",
+            size = output.length(),
+        )
+    }
+
     private fun addAttachment(uri: Uri, requirePhoto: Boolean = false) {
         if (workTab || isBusy()) {
             toast("Wait for the current reply before adding files")
@@ -1717,7 +1780,7 @@ class WorkspaceActivity : AppCompatActivity() {
             val max = WorkspaceAttachmentPolicy.maxBytes(kind)
             require(size in 1L..max) {
                 when (kind) {
-                    WorkspaceAttachmentPolicy.Kind.IMAGE -> "Photo must be 2 MB or smaller"
+                    WorkspaceAttachmentPolicy.Kind.IMAGE -> "Photo must be 30 MB or smaller"
                     WorkspaceAttachmentPolicy.Kind.TEXT -> "Text document must be 3 KB or smaller"
                     WorkspaceAttachmentPolicy.Kind.AUDIO,
                     WorkspaceAttachmentPolicy.Kind.VIDEO ->
@@ -1730,7 +1793,12 @@ class WorkspaceActivity : AppCompatActivity() {
                     WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.IMAGE
                 }) { "Only one photo per request" }
             }
-            Attachment(uri, name, mime, size)
+            val source = Attachment(uri, name, mime, size)
+            if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
+                preparePhotoAttachment(source)
+            } else {
+                source
+            }
         }.getOrElse {
             toast(it.message ?: "Attachment unavailable")
             return
