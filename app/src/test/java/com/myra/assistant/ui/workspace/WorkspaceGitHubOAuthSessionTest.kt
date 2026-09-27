@@ -18,10 +18,31 @@ class WorkspaceGitHubOAuthSessionTest {
             "https://lyra-github.example.workers.dev",
             p,
         )
-        assertTrue(url.startsWith("https://lyra-github.example.workers.dev/github/connect?"))
+        assertTrue(url.startsWith("https://lyra-github.example.workers.dev/github/authorize?"))
         assertTrue(url.contains("state=" + p.state))
         assertTrue(url.contains("code_challenge=" + p.challenge))
         assertTrue(!url.contains(p.verifier))
+    }
+
+    @Test fun restoredPendingRequiresMatchingPkcePair() {
+        val p = pending()
+        assertEquals(
+            p,
+            WorkspaceGitHubOAuthSession.restore(
+                p.state,
+                p.verifier,
+                p.challenge,
+                p.createdAtMs,
+            ),
+        )
+        assertTrue(runCatching {
+            WorkspaceGitHubOAuthSession.restore(
+                p.state,
+                p.verifier,
+                "A".repeat(43),
+                p.createdAtMs,
+            )
+        }.isFailure)
     }
 
     @Test fun callbackRequiresExactStateAndReturnsCode() {

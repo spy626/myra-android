@@ -59,6 +59,26 @@ internal object WorkspaceGitHubOAuthSession {
         return Pending(state, verifier, challenge, nowMs)
     }
 
+    fun restore(
+        state: String,
+        verifier: String,
+        challenge: String,
+        createdAtMs: Long,
+    ): Pending {
+        require(createdAtMs >= 0L) { "OAuth timestamp is invalid" }
+        val cleanState = requireUrlSafe(state, "OAuth state")
+        val cleanVerifier = requireUrlSafe(verifier, "PKCE verifier")
+        val cleanChallenge = requireUrlSafe(challenge, "PKCE challenge")
+        require(cleanVerifier.length in 43..128) { "PKCE verifier length is invalid" }
+        require(cleanChallenge.length == 43) { "PKCE challenge length is invalid" }
+        val expectedChallenge = base64Url(
+            MessageDigest.getInstance("SHA-256")
+                .digest(cleanVerifier.toByteArray(StandardCharsets.US_ASCII))
+        )
+        require(expectedChallenge == cleanChallenge) { "PKCE challenge does not match verifier" }
+        return Pending(cleanState, cleanVerifier, cleanChallenge, createdAtMs)
+    }
+
     fun connectUrl(authBaseUrl: String, pending: Pending): String {
         val base = URI(authBaseUrl.trim())
         require(base.scheme == "https" && !base.host.isNullOrBlank() &&
@@ -67,7 +87,7 @@ internal object WorkspaceGitHubOAuthSession {
         }
         requireUrlSafe(pending.state, "OAuth state")
         requireUrlSafe(pending.challenge, "PKCE challenge")
-        val path = base.path.orEmpty().trimEnd('/') + "/github/connect"
+        val path = base.path.orEmpty().trimEnd('/') + "/github/authorize"
         val query = "state=" + encode(pending.state) +
             "&code_challenge=" + encode(pending.challenge)
         return URI("https", null, base.host, base.port, path, query, null).toASCIIString()

@@ -133,22 +133,49 @@ function callbackUrl(request) {
   return workerOrigin(request) + "/github/callback";
 }
 
-async function connect(request, env) {
+function authorizationUrl(request, env, verified) {
+  const authorize = new URL("https://github.com/login/oauth/authorize");
+  authorize.searchParams.set("client_id", requireEnv(env, "GITHUB_CLIENT_ID"));
+  authorize.searchParams.set("redirect_uri", callbackUrl(request));
+  authorize.searchParams.set("state", verified.state);
+  authorize.searchParams.set("code_challenge", verified.challenge);
+  authorize.searchParams.set("code_challenge_method", "S256");
+  authorize.searchParams.set("prompt", "select_account");
+  return authorize.toString();
+}
+
+function authorizationInput(request) {
   const url = new URL(request.url);
-  const state = requireUrlSafe(url.searchParams.get("state"), "OAuth state", 20, 160);
-  const challenge = requireUrlSafe(
-    url.searchParams.get("code_challenge"),
-    "PKCE challenge",
-    43,
-    128,
-  );
+  return {
+    state: requireUrlSafe(url.searchParams.get("state"), "OAuth state", 20, 160),
+    challenge: requireUrlSafe(
+      url.searchParams.get("code_challenge"),
+      "PKCE challenge",
+      43,
+      128,
+    ),
+  };
+}
+
+async function connect(request, env) {
+  const verified = authorizationInput(request);
   const appSlug = requireEnv(env, "GITHUB_APP_SLUG");
   if (!/^[A-Za-z0-9-]{1,100}$/.test(appSlug)) {
     throw new Error("GitHub App slug is invalid");
   }
-  const session = await signedSession(env, state, challenge);
-  return redirect(
+  const session = await signedSession(env, verified.state, verified.challenge);
+  const install = new URL(
     "https://github.com/apps/" + encodeURIComponent(appSlug) + "/installations/new",
+  );
+  install.searchParams.set("state", verified.state);
+  return redirect(install.toString(), { "set-cookie": sessionCookie(session) });
+}
+
+async function authorize(request, env) {
+  const verified = authorizationInput(request);
+  const session = await signedSession(env, verified.state, verified.challenge);
+  return redirect(
+    authorizationUrl(request, env, verified),
     { "set-cookie": sessionCookie(session) },
   );
 }
@@ -156,15 +183,7 @@ async function connect(request, env) {
 async function installed(request, env) {
   const session = cookieValue(request, "lyra_gh_session");
   const verified = await verifySession(env, session);
-  const clientId = requireEnv(env, "GITHUB_CLIENT_ID");
-  const authorize = new URL("https://github.com/login/oauth/authorize");
-  authorize.searchParams.set("client_id", clientId);
-  authorize.searchParams.set("redirect_uri", callbackUrl(request));
-  authorize.searchParams.set("state", verified.state);
-  authorize.searchParams.set("code_challenge", verified.challenge);
-  authorize.searchParams.set("code_challenge_method", "S256");
-  authorize.searchParams.set("prompt", "select_account");
-  return redirect(authorize.toString());
+  return redirect(authorizationUrl(request, env, verified));
 }
 
 async function callback(request, env) {
@@ -293,6 +312,9 @@ export default {
       }
       if (url.pathname === "/github/connect" && request.method === "GET") {
         return await connect(request, env);
+      }
+      if (url.pathname === "/github/authorize" && request.method === "GET") {
+        return await authorize(request, env);
       }
       if (url.pathname === "/github/installed" && request.method === "GET") {
         return await installed(request, env);

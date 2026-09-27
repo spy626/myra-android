@@ -1,13 +1,13 @@
 package com.myra.assistant.ui.workspace
 
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
-import android.text.InputType
 import android.view.Gravity
 import android.view.View
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -19,20 +19,17 @@ import okhttp3.Response
 import java.io.IOException
 
 /**
- * GitHub Connector C1: verify identity + exact repository + safe feature branch.
+ * GitHub Connector C1.1: browser OAuth + exact repository + safe feature branch verification.
  *
- * C1 intentionally does not execute GitHub writes. The token is persisted only after all three
- * remote checks pass and is stored in encrypted connector-only preferences.
+ * Model output never receives OAuth codes/tokens. The broker holds the GitHub client secret;
+ * Android keeps PKCE state and returned user tokens in encrypted connector-only preferences.
+ * GitHub writes remain blocked in this slice.
  */
 class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
     private val store by lazy { WorkspaceConnectorCredentialStore(this) }
     private var activeCall: Call? = null
-    private var root: LinearLayout? = null
     private var status: TextView? = null
     private var connectButton: TextView? = null
-    private var tokenField: EditText? = null
-    private var repositoryField: EditText? = null
-    private var branchField: EditText? = null
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
 
@@ -62,26 +59,6 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         setPadding(0, dp(22), 0, dp(8))
     }
 
-    private fun field(hint: String, password: Boolean = false) = EditText(this).apply {
-        this.hint = hint
-        setTextColor(Color.WHITE)
-        setHintTextColor(Color.rgb(121, 134, 126))
-        textSize = 14f
-        maxLines = 1
-        isSingleLine = true
-        inputType = if (password) {
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        } else {
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-        }
-        background = rounded(
-            Color.rgb(22, 28, 25),
-            14,
-            Color.rgb(56, 68, 61),
-        )
-        setPadding(dp(14), 0, dp(14), 0)
-    }
-
     private fun button(
         label: String,
         destructive: Boolean = false,
@@ -101,6 +78,19 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         render()
+        handleOAuthCallback(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        render()
+        handleOAuthCallback(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (activeCall == null) setBusy(false)
     }
 
     override fun onDestroy() {
@@ -110,6 +100,8 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
     }
 
     private fun render() {
+        status = null
+        connectButton = null
         val connection = runCatching { store.loadGitHub() }.getOrNull()
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.rgb(3, 7, 6))
@@ -119,7 +111,6 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(26), dp(24), dp(32))
         }
-        root = column
         scroll.addView(column, android.widget.FrameLayout.LayoutParams(-1, -2))
 
         val header = LinearLayout(this).apply {
@@ -139,7 +130,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         column.addView(header, LinearLayout.LayoutParams(-1, dp(58)))
 
         column.addView(text(
-            "Connect one GitHub account and bind LYRA to one exact repository + feature branch.",
+            "Connect GitHub securely. LYRA is locked to one repository and one feature branch.",
             14f,
             Color.rgb(174, 186, 178),
         ).apply { setPadding(0, dp(8), 0, dp(4)) })
@@ -151,25 +142,34 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
     private fun renderDisconnected(column: LinearLayout) {
         column.addView(sectionTitle("Connect GitHub"))
 
-        tokenField = field("Fine-grained GitHub token", password = true)
-        repositoryField = field("owner/repository").apply { setText("spy626/myra-android") }
-        branchField = field("feature branch").apply { setText("agent/myra-phase-1") }
-
-        column.addView(tokenField, LinearLayout.LayoutParams(-1, dp(54)))
-        column.addView(repositoryField, LinearLayout.LayoutParams(-1, dp(54)).apply {
-            topMargin = dp(10)
-        })
-        column.addView(branchField, LinearLayout.LayoutParams(-1, dp(54)).apply {
-            topMargin = dp(10)
-        })
-
         column.addView(text(
-            "Use a fine-grained token with only the repository access you intend to give LYRA. " +
-                "The token is encrypted on this phone and sent only to api.github.com. " +
-                "It is never added to AI prompts. C1 verifies read access only; GitHub writes stay blocked.",
-            12.5f,
-            Color.rgb(145, 156, 149),
-        ).apply { setPadding(0, dp(12), 0, dp(12)) })
+            "Sign in with the official GitHub browser flow. No PAT, GitHub password, client secret, " +
+                "or repository token is typed into LYRA.",
+            14f,
+            Color.rgb(188, 202, 193),
+        ).apply { setPadding(0, dp(4), 0, dp(14)) })
+
+        val binding = WorkspaceConnectorPolicy.binding(EXPECTED_REPOSITORY, EXPECTED_BRANCH)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = rounded(
+                Color.rgb(16, 24, 20),
+                16,
+                Color.rgb(52, 66, 58),
+            )
+        }
+        card.addView(text("Repository", 11.5f, Color.rgb(128, 139, 132)))
+        card.addView(text(binding.repository, 14f, Color.WHITE).apply {
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(3), 0, dp(9))
+        })
+        card.addView(text("Protected self-edit branch", 11.5f, Color.rgb(128, 139, 132)))
+        card.addView(text(binding.branch, 13.5f, Color.rgb(134, 210, 157)).apply {
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(3), 0, 0)
+        })
+        column.addView(card, LinearLayout.LayoutParams(-1, -2))
 
         status = text("", 13f, Color.rgb(175, 205, 183)).apply {
             visibility = View.GONE
@@ -177,17 +177,19 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
             background = rounded(Color.rgb(17, 31, 23), 12)
         }
         column.addView(status, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(14)
             bottomMargin = dp(12)
         })
 
-        connectButton = button("VERIFY & CONNECT") { verifyAndConnect() }
+        connectButton = button("CONNECT GITHUB") { beginOAuth() }
         column.addView(connectButton, LinearLayout.LayoutParams(-1, dp(52)))
 
         column.addView(sectionTitle("C1 permissions"))
         permissionRows(column)
         column.addView(text(
-            "OAuth/Device Flow and custom MCP sign-in are not active in this slice. " +
-                "No hidden server or connector is contacted from this screen.",
+            "GitHub opens outside LYRA. OAuth state + PKCE are generated on this phone, the client " +
+                "secret stays in the Cloudflare broker, and the returned token is encrypted locally. " +
+                "C1 still performs read verification only.",
             12.5f,
             Color.rgb(125, 136, 130),
         ).apply { setPadding(0, dp(14), 0, 0) })
@@ -216,7 +218,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         card.addView(text(connection.branch, 13f, Color.rgb(120, 203, 148)).apply {
             setPadding(0, dp(5), 0, 0)
         })
-        card.addView(text("Verified connection", 12f, Color.rgb(120, 203, 148)).apply {
+        card.addView(text("OAuth verified connection", 12f, Color.rgb(120, 203, 148)).apply {
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, dp(8), 0, 0)
         })
@@ -236,14 +238,13 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
             AlertDialog.Builder(this)
                 .setTitle("Disconnect GitHub?")
                 .setMessage(
-                    "Remove the encrypted GitHub token and repository binding from LYRA? " +
+                    "Remove the encrypted GitHub OAuth tokens and repository binding from LYRA? " +
                         "Installed Skills and chats are not changed."
                 )
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Disconnect") { _, _ ->
                     runCatching { store.disconnectGitHub() }
                         .onSuccess { render() }
-                        .onFailure { showStatus(it.message ?: "Could not disconnect GitHub", true) }
                 }
                 .show()
         }, LinearLayout.LayoutParams(-1, dp(52)))
@@ -279,37 +280,139 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
 
     private fun setBusy(busy: Boolean) {
         connectButton?.isEnabled = !busy
-        tokenField?.isEnabled = !busy
-        repositoryField?.isEnabled = !busy
-        branchField?.isEnabled = !busy
         connectButton?.alpha = if (busy) .55f else 1f
     }
 
-    private fun verifyAndConnect() {
+    private fun beginOAuth() {
         if (activeCall != null) return
-        val token = tokenField?.text?.toString().orEmpty()
-        val repository = repositoryField?.text?.toString().orEmpty()
-        val branch = branchField?.text?.toString().orEmpty()
-        val input = runCatching {
-            Triple(
-                WorkspaceGitHubConnector.requireToken(token),
-                WorkspaceConnectorPolicy.requireRepository(repository),
-                WorkspaceConnectorPolicy.requireFeatureBranch(branch),
+        val pending = runCatching { WorkspaceGitHubOAuthSession.create() }
+            .getOrElse {
+                showStatus("Could not create a secure GitHub authorization session.", true)
+                return
+            }
+        val stored = runCatching { store.saveGitHubOAuthPending(pending) }
+        if (stored.isFailure) {
+            showStatus("Could not save the secure GitHub authorization state.", true)
+            return
+        }
+        val url = runCatching {
+            WorkspaceGitHubOAuthSession.connectUrl(
+                WorkspaceGitHubConnector.OAUTH_BROKER,
+                pending,
             )
         }.getOrElse {
-            showStatus(it.message ?: "GitHub connector details are invalid", true)
+            runCatching { store.clearGitHubOAuthPending() }
+            showStatus(it.message ?: "GitHub authorization URL is invalid", true)
             return
         }
 
+        showStatus("Opening official GitHub sign-in…")
+        val browser = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+        }
+        runCatching { startActivity(browser) }
+            .onSuccess {
+                setBusy(false)
+                showStatus("Finish GitHub authorization in the browser.")
+            }
+            .onFailure {
+                runCatching { store.clearGitHubOAuthPending() }
+                showStatus("No browser could open the GitHub authorization page.", true)
+            }
+    }
+
+    private fun handleOAuthCallback(incoming: Intent?) {
+        val callbackUri = incoming?.data ?: return
+        if (callbackUri.scheme != "lyra" ||
+            callbackUri.host != "github" ||
+            callbackUri.path != "/callback") return
+
+        setIntent(Intent(incoming).setData(null))
+        if (runCatching { store.loadGitHub() }.getOrNull() != null) {
+            runCatching { store.clearGitHubOAuthPending() }
+            return
+        }
+
+        val pending = store.loadGitHubOAuthPending()
+        if (pending == null) {
+            showStatus("GitHub authorization session is missing. Tap Connect GitHub again.", true)
+            return
+        }
+        val parsed = runCatching {
+            WorkspaceGitHubOAuthSession.parseCallback(callbackUri.toString(), pending)
+        }.getOrElse {
+            runCatching { store.clearGitHubOAuthPending() }
+            showStatus(it.message ?: "GitHub callback was rejected", true)
+            return
+        }
+
+        when (parsed) {
+            is WorkspaceGitHubOAuthSession.Callback.Denied -> {
+                runCatching { store.clearGitHubOAuthPending() }
+                showStatus("GitHub authorization was cancelled.", true)
+            }
+            is WorkspaceGitHubOAuthSession.Callback.Success ->
+                exchangeOAuthCode(parsed.code, pending)
+        }
+    }
+
+    private fun exchangeOAuthCode(
+        code: String,
+        pending: WorkspaceGitHubOAuthSession.Pending,
+    ) {
+        if (activeCall != null) return
         setBusy(true)
-        showStatus("Checking GitHub account…")
+        showStatus("Finishing secure GitHub sign-in…")
+        val request = runCatching {
+            WorkspaceGitHubConnector.oauthExchangeRequest(
+                code = code,
+                state = pending.state,
+                verifier = pending.verifier,
+            )
+        }.getOrElse {
+            runCatching { store.clearGitHubOAuthPending() }
+            setBusy(false)
+            showStatus(it.message ?: "GitHub token exchange request is invalid", true)
+            return
+        }
+
+        val call = WorkspaceGitHubConnector.client.newCall(request)
+        activeCall = call
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                fail(call, "GitHub sign-in could not finish. Check network and connect again.")
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val tokens = runCatching { WorkspaceGitHubConnector.readOAuthTokens(response) }
+                    .getOrElse {
+                        runCatching { store.clearGitHubOAuthPending() }
+                        fail(call, it.message ?: "GitHub token exchange failed")
+                        return
+                    }
+                val cleared = runCatching { store.clearGitHubOAuthPending() }
+                if (cleared.isFailure) {
+                    fail(call, "GitHub authorization state could not be cleared securely.")
+                    return
+                }
+                verifyAccount(call, tokens)
+            }
+        })
+    }
+
+    private fun verifyAccount(
+        previous: Call,
+        tokens: WorkspaceGitHubConnector.OAuthTokens,
+    ) {
+        runOnUiThread { showStatus("Checking GitHub account…") }
+        if (activeCall !== previous) return
         val call = WorkspaceGitHubConnector.client.newCall(
-            WorkspaceGitHubConnector.userRequest(input.first)
+            WorkspaceGitHubConnector.userRequest(tokens.accessToken)
         )
         activeCall = call
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                fail(call, "GitHub connection failed. Check network and try again.")
+                fail(call, "GitHub account verification failed. Connect again.")
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -318,22 +421,20 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
                         fail(call, it.message ?: "GitHub account verification failed")
                         return
                     }
-                verifyRepository(call, input.first, input.second, input.third, account)
+                verifyRepository(call, tokens, account)
             }
         })
     }
 
     private fun verifyRepository(
         previous: Call,
-        token: String,
-        repository: String,
-        branch: String,
+        tokens: WorkspaceGitHubConnector.OAuthTokens,
         account: WorkspaceGitHubConnector.Account,
     ) {
-        runOnUiThread { showStatus("Checking repository access…") }
+        runOnUiThread { showStatus("Checking selected repository access…") }
         if (activeCall !== previous) return
         val call = WorkspaceGitHubConnector.client.newCall(
-            WorkspaceGitHubConnector.repositoryRequest(token, repository)
+            WorkspaceGitHubConnector.repositoryRequest(tokens.accessToken, EXPECTED_REPOSITORY)
         )
         activeCall = call
         call.enqueue(object : Callback {
@@ -343,27 +444,34 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
 
             override fun onResponse(call: Call, response: Response) {
                 val verifiedRepo = runCatching {
-                    WorkspaceGitHubConnector.readRepository(response, repository)
+                    WorkspaceGitHubConnector.readRepository(response, EXPECTED_REPOSITORY)
                 }.getOrElse {
-                    fail(call, it.message ?: "GitHub repository verification failed")
+                    fail(
+                        call,
+                        "LYRA GitHub App does not have access to $EXPECTED_REPOSITORY. " +
+                            "No connection was saved."
+                    )
                     return
                 }
-                verifyBranch(call, token, verifiedRepo.fullName, branch, account)
+                verifyBranch(call, tokens, verifiedRepo.fullName, account)
             }
         })
     }
 
     private fun verifyBranch(
         previous: Call,
-        token: String,
+        tokens: WorkspaceGitHubConnector.OAuthTokens,
         repository: String,
-        branch: String,
         account: WorkspaceGitHubConnector.Account,
     ) {
         runOnUiThread { showStatus("Checking protected feature branch…") }
         if (activeCall !== previous) return
         val call = WorkspaceGitHubConnector.client.newCall(
-            WorkspaceGitHubConnector.branchRequest(token, repository, branch)
+            WorkspaceGitHubConnector.branchRequest(
+                tokens.accessToken,
+                repository,
+                EXPECTED_BRANCH,
+            )
         )
         activeCall = call
         call.enqueue(object : Callback {
@@ -373,16 +481,23 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
 
             override fun onResponse(call: Call, response: Response) {
                 val verifiedBranch = runCatching {
-                    WorkspaceGitHubConnector.readBranch(response, branch)
+                    WorkspaceGitHubConnector.readBranch(response, EXPECTED_BRANCH)
                 }.getOrElse {
                     fail(call, it.message ?: "GitHub branch verification failed")
                     return
                 }
                 runOnUiThread {
                     if (activeCall !== call || isFinishing || isDestroyed) return@runOnUiThread
+                    val now = System.currentTimeMillis()
                     val saved = runCatching {
                         store.saveGitHub(
-                            token = token,
+                            token = tokens.accessToken,
+                            refreshToken = tokens.refreshToken,
+                            tokenExpiresAtMs = expiryAt(now, tokens.expiresInSeconds),
+                            refreshTokenExpiresAtMs = expiryAt(
+                                now,
+                                tokens.refreshTokenExpiresInSeconds,
+                            ),
                             login = account.login,
                             repository = repository,
                             branch = verifiedBranch.name,
@@ -402,6 +517,13 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         })
     }
 
+    private fun expiryAt(nowMs: Long, seconds: Long?): Long? {
+        if (seconds == null) return null
+        return runCatching {
+            Math.addExact(nowMs, Math.multiplyExact(seconds, 1_000L))
+        }.getOrNull()
+    }
+
     private fun fail(call: Call, message: String) {
         runOnUiThread {
             if (activeCall !== call || isFinishing || isDestroyed) return@runOnUiThread
@@ -409,5 +531,10 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
             setBusy(false)
             showStatus(message, true)
         }
+    }
+
+    private companion object {
+        const val EXPECTED_REPOSITORY = "spy626/myra-android"
+        const val EXPECTED_BRANCH = "agent/myra-phase-1"
     }
 }
