@@ -1098,17 +1098,72 @@ class WorkspaceActivity : AppCompatActivity() {
         val dialog = BottomSheetDialog(this)
         val sheet = sheetRoot()
         sheet.addView(sheetHeader(dialog, "Connectors"), LinearLayout.LayoutParams(-1, dp(52)))
-        sheet.addView(label("No connectors added yet.", 16f).apply {
-            setTextColor(Color.rgb(239, 242, 240))
-            setPadding(dp(6), dp(14), dp(6), dp(6))
+
+        val github = runCatching {
+            WorkspaceConnectorCredentialStore(this).loadGitHub()
+        }.getOrNull()
+
+        if (github != null) {
+            sheet.addView(label("CONNECTED", 11.5f).apply {
+                setTextColor(Color.rgb(133, 149, 139))
+                setPadding(dp(6), dp(12), dp(6), dp(5))
+            })
+            sheet.addView(
+                sheetRow("GitHub · @" + github.login, android.R.drawable.ic_menu_share) {
+                    dialog.dismiss()
+                    startActivity(Intent(this, WorkspaceGitHubConnectorActivity::class.java))
+                },
+                LinearLayout.LayoutParams(-1, dp(62)),
+            )
+            sheet.addView(label(
+                github.repository + "\n" + github.branch,
+                12.5f,
+            ).apply {
+                setTextColor(Color.rgb(139, 189, 153))
+                setPadding(dp(58), 0, dp(8), dp(8))
+            })
+        } else {
+            sheet.addView(label("BROWSE CONNECTORS", 11.5f).apply {
+                setTextColor(Color.rgb(133, 149, 139))
+                setPadding(dp(6), dp(12), dp(6), dp(5))
+            })
+            sheet.addView(
+                sheetRow("GitHub", android.R.drawable.ic_menu_share) {
+                    dialog.dismiss()
+                    startActivity(Intent(this, WorkspaceGitHubConnectorActivity::class.java))
+                },
+                LinearLayout.LayoutParams(-1, dp(62)),
+            )
+            sheet.addView(label(
+                "Connect one account, repository, and protected feature branch.",
+                12.5f,
+            ).apply {
+                setTextColor(Color.rgb(151, 162, 155))
+                setPadding(dp(58), 0, dp(8), dp(8))
+            })
+        }
+
+        sheet.addView(label("MORE PLATFORMS", 11.5f).apply {
+            setTextColor(Color.rgb(133, 149, 139))
+            setPadding(dp(6), dp(12), dp(6), dp(5))
         })
+        listOf("Google Drive", "Notion", "Slack", "Custom MCP").forEach { name ->
+            sheet.addView(
+                sheetRow(name + " · Later", android.R.drawable.ic_menu_share) {
+                    toast(name + " connector is not active yet. No server was contacted.")
+                },
+                LinearLayout.LayoutParams(-1, dp(58)).apply { topMargin = dp(4) },
+            )
+        }
+
         sheet.addView(label(
-            "Connector setup is not active in this S1 UX correction. Nothing is connected and no server is contacted from this screen.",
-            13f,
+            "GitHub C1 is verified-connect + read foundation only. Write actions remain blocked until the dedicated safe-write phase.",
+            12f,
         ).apply {
-            setTextColor(Color.rgb(155, 165, 159))
-            setPadding(dp(6), dp(2), dp(6), dp(12))
+            setTextColor(Color.rgb(128, 138, 132))
+            setPadding(dp(6), dp(12), dp(6), dp(8))
         })
+
         dialog.setContentView(sheet)
         dialog.setOnShowListener {
             dialog.findViewById<FrameLayout>(
