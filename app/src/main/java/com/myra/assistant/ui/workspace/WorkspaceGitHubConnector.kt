@@ -1,7 +1,7 @@
 package com.myra.assistant.ui.workspace
 
 import okhttp3.Dns
-import okhttp3.FormBody
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -111,14 +111,15 @@ internal object WorkspaceGitHubConnector {
 
     fun deviceCodeRequest(clientId: String = GITHUB_APP_CLIENT_ID): Request {
         val cleanClientId = requireUrlSafe(clientId, "GitHub client ID", 10, 100)
-        val body = FormBody.Builder()
-            .add("client_id", cleanClientId)
+        val url = (GITHUB_WEB + "/login/device/code").toHttpUrl()
+            .newBuilder()
+            .addQueryParameter("client_id", cleanClientId)
             .build()
         return Request.Builder()
-            .url(GITHUB_WEB + "/login/device/code")
+            .url(url)
             .header("Accept", "application/json")
             .header("User-Agent", "LYRA-Connector/1")
-            .post(body)
+            .post(ByteArray(0).toRequestBody(null))
             .build()
     }
 
@@ -128,16 +129,20 @@ internal object WorkspaceGitHubConnector {
     ): Request {
         val cleanClientId = requireUrlSafe(clientId, "GitHub client ID", 10, 100)
         val cleanDeviceCode = requireUrlSafe(deviceCode, "GitHub device code", 20, 160)
-        val body = FormBody.Builder()
-            .add("client_id", cleanClientId)
-            .add("device_code", cleanDeviceCode)
-            .add("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+        val url = (GITHUB_WEB + "/login/oauth/access_token").toHttpUrl()
+            .newBuilder()
+            .addQueryParameter("client_id", cleanClientId)
+            .addQueryParameter("device_code", cleanDeviceCode)
+            .addQueryParameter(
+                "grant_type",
+                "urn:ietf:params:oauth:grant-type:device_code",
+            )
             .build()
         return Request.Builder()
-            .url(GITHUB_WEB + "/login/oauth/access_token")
+            .url(url)
             .header("Accept", "application/json")
             .header("User-Agent", "LYRA-Connector/1")
-            .post(body)
+            .post(ByteArray(0).toRequestBody(null))
             .build()
     }
 

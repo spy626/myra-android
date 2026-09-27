@@ -1,6 +1,5 @@
 package com.myra.assistant.ui.workspace
 
-import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,35 +25,35 @@ class WorkspaceGitHubConnectorTest {
         assertTrue(branch.url.encodedPath.contains("agent%2Fmyra-phase-1"))
     }
 
-    @Test fun deviceCodeRequestUsesOfficialGithubPost() {
+    @Test fun deviceCodeRequestUsesOfficialGithubQueryParameter() {
         val request = WorkspaceGitHubConnector.deviceCodeRequest()
 
         assertEquals("POST", request.method)
         assertEquals("https", request.url.scheme)
         assertEquals("github.com", request.url.host)
         assertEquals("/login/device/code", request.url.encodedPath)
-
-        val buffer = Buffer()
-        request.body!!.writeTo(buffer)
-        val body = buffer.readUtf8()
-        assertTrue(body.contains("client_id="))
-        assertTrue(body.contains(WorkspaceGitHubConnector.GITHUB_APP_CLIENT_ID))
+        assertEquals(
+            WorkspaceGitHubConnector.GITHUB_APP_CLIENT_ID,
+            request.url.queryParameter("client_id"),
+        )
     }
 
-    @Test fun deviceTokenRequestKeepsDeviceCodeOutOfUrl() {
+    @Test fun deviceTokenRequestUsesOfficialGithubQueryParameters() {
         val deviceCode = "0123456789abcdef0123456789abcdef01234567"
         val request = WorkspaceGitHubConnector.deviceTokenRequest(deviceCode)
 
         assertEquals("POST", request.method)
         assertEquals("github.com", request.url.host)
         assertEquals("/login/oauth/access_token", request.url.encodedPath)
-        assertTrue(!request.url.toString().contains(deviceCode))
-
-        val buffer = Buffer()
-        request.body!!.writeTo(buffer)
-        val body = buffer.readUtf8()
-        assertTrue(body.contains("device_code=$deviceCode"))
-        assertTrue(body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"))
+        assertEquals(
+            WorkspaceGitHubConnector.GITHUB_APP_CLIENT_ID,
+            request.url.queryParameter("client_id"),
+        )
+        assertEquals(deviceCode, request.url.queryParameter("device_code"))
+        assertEquals(
+            "urn:ietf:params:oauth:grant-type:device_code",
+            request.url.queryParameter("grant_type"),
+        )
     }
 
     @Test fun unsafeTokenAndMainBranchAreRejectedBeforeNetworking() {
