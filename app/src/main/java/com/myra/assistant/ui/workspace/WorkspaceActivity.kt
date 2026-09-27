@@ -81,6 +81,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private val attachments = mutableListOf<Attachment>()
     private var skillAttachment: SkillAttachment? = null
     private var pendingSkillAdd: WorkspaceSkillConversationalAdd.Prepared? = null
+    private var createSkillMode = false
+    private var createSkillStarted = false
+    private var pendingSkillCreate: WorkspaceSkillConversationalCreate.Prepared? = null
     private var pendingCameraFile: File? = null
     private var pendingCameraUri: Uri? = null
     private var markupTargetUri: Uri? = null
@@ -1116,6 +1119,18 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun startCreateSkillDraft() {
+        if (project()?.type?.let { it != WorkspaceProjectType.CHAT } == true) {
+            toast("Create a Skill is available in normal Chat. Start a New Chat first.")
+            return
+        }
+        if (skillAttachment != null || attachments.isNotEmpty()) {
+            toast("Remove attachments before creating a skill")
+            return
+        }
+        createSkillMode = true
+        createSkillStarted = false
+        pendingSkillCreate = null
+        pendingSkillAdd = null
         val starter = WorkspaceSkillChatAttachment.CREATE_SKILL_PROMPT
         if (composer.text.isBlank()) {
             composer.setText(starter)
@@ -1579,6 +1594,9 @@ class WorkspaceActivity : AppCompatActivity() {
         attachments.clear()
         skillAttachment = null
         pendingSkillAdd = null
+        createSkillMode = false
+        createSkillStarted = false
+        pendingSkillCreate = null
         composer.text.clear()
         statusMessage = ""
         workTrace.clear()
@@ -1612,6 +1630,9 @@ class WorkspaceActivity : AppCompatActivity() {
         attachments.clear()
         skillAttachment = null
         pendingSkillAdd = null
+        createSkillMode = false
+        createSkillStarted = false
+        pendingSkillCreate = null
         composer.setText(localDrafts[id].orEmpty())
         statusMessage = ""
         workTrace.clear()
@@ -2239,6 +2260,277 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.requestFocus()
     }
 
+    private fun requestSkillCreatorDraft(id: String, messageId: String) {
+        if (selectedId != id || isBusy() || workTab || !createSkillMode) return
+        val installedNames = runCatching {
+            skillStore.listVerified().map { it.entry.name }
+        }.getOrElse {
+            statusMessage = it.message ?: "Installed Skills could not be verified."
+            render()
+            return
+        }
+        val systemPrompt = WorkspaceSkillConversationalCreate.systemPrompt(installedNames)
+        val provider = runCatching {
+            selectedProvider(hasAttachments = false, extraSystemInstructions = systemPrompt)
+        }.getOrElse {
+            statusMessage = "Secure provider key storage unavailable. Skill brief stays local."
+            render()
+            return
+        }
+        if (provider == null) {
+            statusMessage =
+                "Skill brief saved locally. Configure a free Chat route in API & Cloud Settings; no request was sent."
+            render()
+            return
+        }
+        val transcript = runCatching { conversations.read(id) }
+            .getOrElse {
+                statusMessage = "Skill Creator conversation is unavailable."
+                render()
+                return
+            }
+        if (transcript.lastOrNull()?.id != messageId ||
+            transcript.lastOrNull()?.role != "user") {
+            statusMessage = "Conversation changed; Skill Creator request cancelled."
+            render()
+            return
+        }
+        val outgoing = runCatching {
+            WorkspaceChatGateway.request(
+                provider = provider,
+                key = keyFor(provider),
+                messages = transcript,
+                image = null,
+                extraSystemInstructions = systemPrompt,
+            )
+        }.getOrElse {
+            statusMessage = it.message ?: "Skill Creator provider request is unavailable."
+            render()
+            return
+        }
+
+        val serial = ++requestGeneration
+        val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
+        activeRequest = call
+        workTrace.clear()
+        workTraceExpanded = true
+        workTraceMessageId = messageId
+        workTrace.begin(
+            WorkspaceWorkPhase.THINKING,
+            "Creating skill draft",
+            providerLabel(provider),
+        )
+        statusMessage = ""
+        render()
+
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
+                    WorkspaceProviderRegistry.id(provider)
+                )
+                completeSkillCreatorDraft(
+                    call = call,
+                    serial = serial,
+                    id = id,
+                    userMessageId = messageId,
+                    provider = provider,
+                    result = Result.failure(
+                        IllegalStateException(WorkspaceChatGateway.networkFailure(provider, error))
+                    ),
+                )
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                completeSkillCreatorDraft(
+                    call = call,
+                    serial = serial,
+                    id = id,
+                    userMessageId = messageId,
+                    provider = provider,
+                    result = runCatching { WorkspaceChatGateway.read(provider, response) },
+                )
+            }
+        })
+    }
+
+    private fun completeSkillCreatorDraft(
+        call: Call,
+        serial: Long,
+        id: String,
+        userMessageId: String,
+        provider: WorkspaceChatGateway.Provider,
+        result: Result<String>,
+    ) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed || serial != requestGeneration ||
+                activeRequest !== call || selectedId != id || !createSkillMode) {
+                return@runOnUiThread
+            }
+            activeRequest = null
+
+            val processed = result.mapCatching {
+                WorkspaceSkillConversationalCreate.parseProviderReply(it)
+            }.mapCatching { providerResult ->
+                require(conversations.read(id).lastOrNull()?.id == userMessageId) {
+                    "Conversation changed; generated skill draft was not applied"
+                }
+                when (providerResult) {
+                    is WorkspaceSkillConversationalCreate.ProviderResult.Question -> {
+                        pendingSkillCreate = null
+                        conversations.append(id, "assistant", providerResult.text)
+                        "question"
+                    }
+                    is WorkspaceSkillConversationalCreate.ProviderResult.Draft -> {
+                        val prepared = WorkspaceSkillConversationalCreate.prepare(
+                            skillMdBytes = providerResult.skillMdBytes,
+                            store = skillStore,
+                            testedAtMs = System.currentTimeMillis(),
+                        )
+                        pendingSkillCreate = prepared
+                        conversations.append(id, "assistant", prepared.userSummary)
+                        "draft"
+                    }
+                }
+            }
+
+            processed.onSuccess { kind ->
+                statusMessage = ""
+                workTrace.finishSuccess(
+                    if (kind == "draft") "Skill draft ready" else "Question ready"
+                )
+            }.onFailure { error ->
+                pendingSkillCreate = null
+                val reason = error.message ?: "Skill Creator could not prepare a safe draft"
+                runCatching {
+                    if (conversations.read(id).lastOrNull()?.id == userMessageId) {
+                        conversations.append(
+                            id,
+                            "assistant",
+                            "I couldn’t prepare a safe skill draft: $reason\n\n" +
+                                "Nothing was installed or enabled. You can describe the skill differently and try again.",
+                        )
+                    }
+                }
+                statusMessage = ""
+                workTrace.finishError("Skill draft not created", reason)
+            }
+            render()
+            composer.requestFocus()
+        }
+    }
+
+    private fun handleConversationalSkillCreate(text: String): Boolean {
+        if (!createSkillMode) return false
+
+        if (skillAttachment != null || attachments.isNotEmpty()) {
+            statusMessage =
+                "Remove attachments before creating a skill. Nothing was installed or sent yet."
+            render()
+            return true
+        }
+
+        val prepared = pendingSkillCreate
+        if (prepared != null) {
+            val intent = WorkspaceSkillConversationalAdd.classify(
+                text = text,
+                awaitingConfirmation = true,
+            )
+            val id = ensureSkillConversation(text) ?: return true
+            when (intent) {
+                WorkspaceSkillConversationalAdd.Intent.CANCEL -> {
+                    pendingSkillCreate = null
+                    createSkillMode = false
+                    createSkillStarted = false
+                    finishLocalSkillTurn(id, text, "Okay — the skill draft was not created.")
+                }
+                WorkspaceSkillConversationalAdd.Intent.CONFIRM -> {
+                    val outcome = runCatching {
+                        WorkspaceSkillConversationalCreate.applyApproved(
+                            prepared = prepared,
+                            store = skillStore,
+                            confirmedAtMs = System.currentTimeMillis(),
+                        )
+                    }
+                    outcome.onSuccess { applied ->
+                        pendingSkillCreate = null
+                        createSkillMode = false
+                        createSkillStarted = false
+                        finishLocalSkillTurn(
+                            id,
+                            text,
+                            "✅ " + applied.installed.entry.name +
+                                " created, added to Skills, and enabled.",
+                        )
+                    }.onFailure { error ->
+                        val installed = runCatching {
+                            skillStore.load(prepared.skillName)
+                        }.getOrNull()
+                        pendingSkillCreate = null
+                        createSkillMode = false
+                        createSkillStarted = false
+                        if (installed?.entry?.state ==
+                            WorkspaceSkillCatalog.State.INSTALLED_DISABLED) {
+                            finishLocalSkillTurn(
+                                id,
+                                text,
+                                prepared.skillName +
+                                    " was created but kept Disabled because the final safety state changed. " +
+                                    "Nothing was enabled. Open Workspace → Skills to review it.",
+                            )
+                        } else {
+                            finishLocalSkillTurn(
+                                id,
+                                text,
+                                "I couldn’t create this skill: " +
+                                    (error.message ?: "the final safety check failed") +
+                                    "\n\nNothing was enabled. Start Create a skill again to retry.",
+                            )
+                        }
+                    }
+                }
+                WorkspaceSkillConversationalAdd.Intent.ADD_REQUEST,
+                WorkspaceSkillConversationalAdd.Intent.OTHER -> {
+                    statusMessage =
+                        "Please reply “Haan create karo” to confirm, or “No” to cancel."
+                    render()
+                }
+            }
+            return true
+        }
+
+        val id = ensureSkillConversation(text) ?: return true
+        if (!createSkillStarted &&
+            text.trim() == WorkspaceSkillChatAttachment.CREATE_SKILL_PROMPT) {
+            createSkillStarted = true
+            finishLocalSkillTurn(
+                id,
+                text,
+                WorkspaceSkillConversationalCreate.FIRST_QUESTION,
+            )
+            return true
+        }
+
+        val stored = runCatching {
+            conversations.append(id, "user", text)
+        }.getOrElse {
+            statusMessage = it.message ?: "Skill description could not be saved."
+            render()
+            return true
+        }
+        createSkillStarted = true
+        composer.text.clear()
+        localDrafts.remove(id)
+        workTrace.clear()
+        workTraceExpanded = true
+        workTraceMessageId = stored.id
+        statusMessage = ""
+        render()
+        composer.requestFocus()
+        requestSkillCreatorDraft(id, stored.id)
+        return true
+    }
+
     private fun handleConversationalSkillAdd(text: String): Boolean {
         val attachment = skillAttachment
         val prepared = pendingSkillAdd
@@ -2366,6 +2658,7 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
+        if (handleConversationalSkillCreate(text)) return
         if (handleConversationalSkillAdd(text)) return
         val skillCommand = runCatching {
             WorkspaceSkillUserCommand.parse(text)
