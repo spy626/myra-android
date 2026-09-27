@@ -3,8 +3,8 @@ main = "src/index.js"
 compatibility_date = "2026-09-27"
 workers_dev = true
 
-# Public identifiers can be set after the GitHub App is registered.
+# Public GitHub App identifiers. Secrets stay in Cloudflare runtime secrets.
 # Keep GITHUB_CLIENT_SECRET and OAUTH_SESSION_SECRET out of this file.
 [vars]
-GITHUB_CLIENT_ID = "SET_AFTER_GITHUB_APP_REGISTRATION"
-GITHUB_APP_SLUG = "SET_AFTER_GITHUB_APP_REGISTRATION"
+GITHUB_CLIENT_ID = "Iv23IiAZi3QMIZbAN5n7"
+GITHUB_APP_SLUG = "lyra-github-connector-626"
