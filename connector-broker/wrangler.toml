@@ -1,0 +1,10 @@
+name = "lyra-github-connector"
+main = "src/index.js"
+compatibility_date = "2026-09-27"
+workers_dev = true
+
+# Public identifiers can be set after the GitHub App is registered.
+# Keep GITHUB_CLIENT_SECRET and OAUTH_SESSION_SECRET out of this file.
+[vars]
+GITHUB_CLIENT_ID = "SET_AFTER_GITHUB_APP_REGISTRATION"
+GITHUB_APP_SLUG = "SET_AFTER_GITHUB_APP_REGISTRATION"
