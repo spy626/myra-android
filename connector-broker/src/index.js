@@ -1,4 +1,7 @@
 const textEncoder = new TextEncoder();
+const EXPECTED_TOKEN_SECONDS_MAX = 3700;
+let cachedPrivateKeyPem = null;
+let cachedPrivateKey = null;
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -12,39 +15,24 @@ function json(data, status = 200, headers = {}) {
   });
 }
 
-function redirect(location, headers = {}) {
-  return new Response(null, {
-    status: 302,
-    headers: {
-      location,
-      "cache-control": "no-store",
-      ...headers,
-    },
-  });
-}
-
 function requireEnv(env, name) {
   const value = String(env[name] || "").trim();
   if (!value) throw new Error("Connector broker is not configured: " + name);
   return value;
 }
 
-function requireUrlSafe(value, label, min = 20, max = 256) {
-  const clean = String(value || "").trim();
-  if (
-    clean.length < min ||
-    clean.length > max ||
-    !/^[A-Za-z0-9._~-]+$/.test(clean)
-  ) {
-    throw new Error(label + " is invalid");
+function requireIntegerEnv(env, name) {
+  const raw = requireEnv(env, name);
+  if (!/^[1-9][0-9]{0,19}$/.test(raw)) {
+    throw new Error("Connector broker has invalid " + name);
   }
-  return clean;
+  return raw;
 }
 
-function requireCode(value) {
-  const clean = String(value || "").trim();
-  if (clean.length < 10 || clean.length > 512 || /\s/.test(clean)) {
-    throw new Error("OAuth code is invalid");
+function requirePairingSecret(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(clean)) {
+    throw new Error("LYRA pairing key is invalid");
   }
   return clean;
 }
@@ -52,279 +40,303 @@ function requireCode(value) {
 function base64Url(bytes) {
   let binary = "";
   for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
-async function hmac(secret, payload) {
-  const key = await crypto.subtle.importKey(
+function base64UrlText(value) {
+  return base64Url(textEncoder.encode(value));
+}
+
+async function pairingMatches(env, supplied) {
+  const expected = requirePairingSecret(requireEnv(env, "LYRA_PAIRING_SECRET"));
+  const candidate = requirePairingSecret(supplied);
+  const payload = textEncoder.encode("lyra-github-pairing-v1");
+
+  const expectedKey = await crypto.subtle.importKey(
     "raw",
-    textEncoder.encode(secret),
+    textEncoder.encode(expected),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  const candidateKey = await crypto.subtle.importKey(
+    "raw",
+    textEncoder.encode(candidate),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
-  return base64Url(
-    new Uint8Array(
-      await crypto.subtle.sign("HMAC", key, textEncoder.encode(payload)),
-    ),
+  const signature = await crypto.subtle.sign("HMAC", candidateKey, payload);
+  return crypto.subtle.verify("HMAC", expectedKey, signature, payload);
+}
+
+function pemBody(pem) {
+  return String(pem || "")
+    .replace(/-----BEGIN [^-]+-----/g, "")
+    .replace(/-----END [^-]+-----/g, "")
+    .replace(/\s+/g, "");
+}
+
+function decodeBase64(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, c => c.charCodeAt(0));
+}
+
+function derLength(length) {
+  if (length < 0x80) return Uint8Array.of(length);
+  const bytes = [];
+  let value = length;
+  while (value > 0) {
+    bytes.unshift(value & 0xff);
+    value >>>= 8;
+  }
+  return Uint8Array.of(0x80 | bytes.length, ...bytes);
+}
+
+function concatBytes(...parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function wrapPkcs1AsPkcs8(pkcs1) {
+  const version = Uint8Array.of(0x02, 0x01, 0x00);
+  const rsaAlgorithm = Uint8Array.of(
+    0x30, 0x0d,
+    0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+    0x05, 0x00,
   );
+  const octet = concatBytes(Uint8Array.of(0x04), derLength(pkcs1.length), pkcs1);
+  const body = concatBytes(version, rsaAlgorithm, octet);
+  return concatBytes(Uint8Array.of(0x30), derLength(body.length), body);
 }
 
-async function signedSession(env, state, challenge) {
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const payload = [state, challenge, issuedAt].join(".");
-  const sig = await hmac(requireEnv(env, "OAUTH_SESSION_SECRET"), payload);
-  return base64Url(textEncoder.encode(payload)) + "." + sig;
-}
+async function githubPrivateKey(env) {
+  const pem = requireEnv(env, "GITHUB_APP_PRIVATE_KEY");
+  if (cachedPrivateKey && cachedPrivateKeyPem === pem) return cachedPrivateKey;
 
-async function verifySession(env, token) {
-  const parts = String(token || "").split(".");
-  if (parts.length !== 2) throw new Error("OAuth session is missing");
-  let payload;
-  try {
-    const padded = parts[0].replace(/-/g, "+").replace(/_/g, "/")
-      + "=".repeat((4 - (parts[0].length % 4 || 4)) % 4);
-    const bytes = Uint8Array.from(atob(padded), c => c.charCodeAt(0));
-    payload = new TextDecoder().decode(bytes);
-  } catch {
-    throw new Error("OAuth session is invalid");
+  const isPkcs1 = pem.includes("BEGIN RSA PRIVATE KEY");
+  const isPkcs8 = pem.includes("BEGIN PRIVATE KEY");
+  if (!isPkcs1 && !isPkcs8) {
+    throw new Error("GITHUB_APP_PRIVATE_KEY must be a GitHub App PEM private key");
   }
-  const expected = await hmac(requireEnv(env, "OAUTH_SESSION_SECRET"), payload);
-  if (expected !== parts[1]) throw new Error("OAuth session signature is invalid");
-  const fields = payload.split(".");
-  if (fields.length < 3) throw new Error("OAuth session payload is invalid");
-  const issuedAt = Number(fields[fields.length - 1]);
-  const challenge = fields[fields.length - 2];
-  const state = fields.slice(0, fields.length - 2).join(".");
-  requireUrlSafe(state, "OAuth state", 20, 160);
-  requireUrlSafe(challenge, "PKCE challenge", 43, 128);
-  if (!Number.isFinite(issuedAt) || Math.abs(Date.now() / 1000 - issuedAt) > 15 * 60) {
-    throw new Error("OAuth session expired");
-  }
-  return { state, challenge };
+  const decoded = decodeBase64(pemBody(pem));
+  const pkcs8 = isPkcs1 ? wrapPkcs1AsPkcs8(decoded) : decoded;
+  cachedPrivateKey = await crypto.subtle.importKey(
+    "pkcs8",
+    pkcs8,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  cachedPrivateKeyPem = pem;
+  return cachedPrivateKey;
 }
 
-function cookieValue(request, name) {
-  const header = request.headers.get("cookie") || "";
-  for (const raw of header.split(";")) {
-    const [key, ...rest] = raw.trim().split("=");
-    if (key === name) return rest.join("=");
-  }
-  return null;
+async function githubAppJwt(env) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64UrlText(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const payload = base64UrlText(JSON.stringify({
+    iat: now - 60,
+    exp: now + 540,
+    iss: requireIntegerEnv(env, "GITHUB_APP_ID"),
+  }));
+  const signingInput = header + "." + payload;
+  const signature = await crypto.subtle.sign(
+    { name: "RSASSA-PKCS1-v1_5" },
+    await githubPrivateKey(env),
+    textEncoder.encode(signingInput),
+  );
+  return signingInput + "." + base64Url(new Uint8Array(signature));
 }
 
-function sessionCookie(value, maxAge = 900) {
-  return [
-    "lyra_gh_session=" + value,
-    "Path=/github",
-    "HttpOnly",
-    "Secure",
-    "SameSite=Lax",
-    "Max-Age=" + maxAge,
-  ].join("; ");
-}
-
-function workerOrigin(request) {
-  const url = new URL(request.url);
-  return url.origin;
-}
-
-function callbackUrl(request) {
-  return workerOrigin(request) + "/github/callback";
-}
-
-function authorizationUrl(request, env, verified) {
-  const authorize = new URL("https://github.com/login/oauth/authorize");
-  authorize.searchParams.set("client_id", requireEnv(env, "GITHUB_CLIENT_ID"));
-  authorize.searchParams.set("redirect_uri", callbackUrl(request));
-  authorize.searchParams.set("state", verified.state);
-  authorize.searchParams.set("code_challenge", verified.challenge);
-  authorize.searchParams.set("code_challenge_method", "S256");
-  authorize.searchParams.set("prompt", "select_account");
-  return authorize.toString();
-}
-
-function authorizationInput(request) {
-  const url = new URL(request.url);
+function githubHeaders(token) {
   return {
-    state: requireUrlSafe(url.searchParams.get("state"), "OAuth state", 20, 160),
-    challenge: requireUrlSafe(
-      url.searchParams.get("code_challenge"),
-      "PKCE challenge",
-      43,
-      128,
-    ),
+    "accept": "application/vnd.github+json",
+    "authorization": "Bearer " + token,
+    "x-github-api-version": "2022-11-28",
+    "user-agent": "LYRA-GitHub-Connector/2",
   };
 }
 
-async function connect(request, env) {
-  const verified = authorizationInput(request);
-  const appSlug = requireEnv(env, "GITHUB_APP_SLUG");
-  if (!/^[A-Za-z0-9-]{1,100}$/.test(appSlug)) {
-    throw new Error("GitHub App slug is invalid");
-  }
-  const session = await signedSession(env, verified.state, verified.challenge);
-  const install = new URL(
-    "https://github.com/apps/" + encodeURIComponent(appSlug) + "/installations/new",
-  );
-  install.searchParams.set("state", verified.state);
-  return redirect(install.toString(), { "set-cookie": sessionCookie(session) });
-}
-
-async function authorize(request, env) {
-  const verified = authorizationInput(request);
-  const session = await signedSession(env, verified.state, verified.challenge);
-  return redirect(
-    authorizationUrl(request, env, verified),
-    { "set-cookie": sessionCookie(session) },
-  );
-}
-
-async function installed(request, env) {
-  const session = cookieValue(request, "lyra_gh_session");
-  const verified = await verifySession(env, session);
-  return redirect(authorizationUrl(request, env, verified));
-}
-
-async function callback(request, env) {
-  const url = new URL(request.url);
-  const session = cookieValue(request, "lyra_gh_session");
-  const verified = await verifySession(env, session);
-  const state = requireUrlSafe(url.searchParams.get("state"), "OAuth state", 20, 160);
-  if (state !== verified.state) throw new Error("OAuth state mismatch");
-  const error = url.searchParams.get("error");
-  if (error) {
-    const target = new URL("lyra://github/callback");
-    target.searchParams.set("error", error);
-    target.searchParams.set("state", state);
-    return redirect(target.toString(), { "set-cookie": sessionCookie("", 0) });
-  }
-  const code = requireCode(url.searchParams.get("code"));
-  const target = new URL("lyra://github/callback");
-  target.searchParams.set("code", code);
-  target.searchParams.set("state", state);
-  return redirect(target.toString(), { "set-cookie": sessionCookie("", 0) });
-}
-
-async function exchange(request, env) {
-  if (request.method !== "POST") {
-    return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
-  }
-  const body = await request.json();
-  const code = requireCode(body.code);
-  requireUrlSafe(body.state, "OAuth state", 20, 160);
-  const verifier = requireUrlSafe(body.code_verifier, "PKCE verifier", 43, 128);
-
-  const tokenUrl = new URL("https://github.com/login/oauth/access_token");
-  tokenUrl.searchParams.set("client_id", requireEnv(env, "GITHUB_CLIENT_ID"));
-  tokenUrl.searchParams.set("client_secret", requireEnv(env, "GITHUB_CLIENT_SECRET"));
-  tokenUrl.searchParams.set("code", code);
-  tokenUrl.searchParams.set("redirect_uri", callbackUrl(request));
-  tokenUrl.searchParams.set("code_verifier", verifier);
-
-  const tokenResponse = await fetch(tokenUrl.toString(), {
-    method: "POST",
+async function githubJson(url, token, label, options = {}) {
+  const response = await fetch(url, {
+    ...options,
     headers: {
-      "accept": "application/json",
-      "user-agent": "LYRA-GitHub-Connector/1",
+      ...githubHeaders(token),
+      ...(options.headers || {}),
     },
     redirect: "manual",
   });
-
-  if (tokenResponse.status >= 300 && tokenResponse.status < 400) {
-    return json({ error: "github_redirect_refused" }, 502);
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error(label + " redirect was refused");
   }
-  const data = await tokenResponse.json();
-  if (!tokenResponse.ok || !data.access_token) {
-    return json(
-      {
-        error: "github_exchange_failed",
-        description: String(data.error_description || data.error || "GitHub refused the token exchange"),
-      },
-      400,
-    );
+  const responseText = await response.text();
+  let data = {};
+  if (responseText) {
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      throw new Error(label + " returned invalid JSON");
+    }
   }
-
-  return json({
-    access_token: data.access_token,
-    expires_in: data.expires_in || null,
-    refresh_token: data.refresh_token || null,
-    refresh_token_expires_in: data.refresh_token_expires_in || null,
-    token_type: data.token_type || "bearer",
-  });
+  if (!response.ok) {
+    throw new Error(label + " failed (HTTP " + response.status + ")");
+  }
+  return data;
 }
 
-async function refresh(request, env) {
-  if (request.method !== "POST") {
-    return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
-  }
-  const body = await request.json();
-  const refreshToken = String(body.refresh_token || "").trim();
+function expectedBinding(env) {
+  const repository = requireEnv(env, "GITHUB_REPOSITORY");
+  const parts = repository.split("/");
   if (
-    refreshToken.length < 20 ||
-    refreshToken.length > 512 ||
-    /\s/.test(refreshToken)
+    parts.length !== 2 ||
+    !/^[A-Za-z0-9_.-]{1,100}$/.test(parts[0]) ||
+    !/^[A-Za-z0-9_.-]{1,100}$/.test(parts[1])
   ) {
-    throw new Error("Refresh token is invalid");
+    throw new Error("GITHUB_REPOSITORY is invalid");
+  }
+  const branch = requireEnv(env, "GITHUB_BRANCH");
+  if (
+    branch.length < 1 ||
+    branch.length > 200 ||
+    branch.startsWith("/") ||
+    branch.endsWith("/") ||
+    !/^[A-Za-z0-9._/-]+$/.test(branch) ||
+    branch.split("/").some(part => !part || part === "." || part === "..")
+  ) {
+    throw new Error("GITHUB_BRANCH is invalid");
+  }
+  const account = requireEnv(env, "GITHUB_ACCOUNT_LOGIN");
+  if (!/^[A-Za-z0-9-]{1,100}$/.test(account)) {
+    throw new Error("GITHUB_ACCOUNT_LOGIN is invalid");
+  }
+  return { repository, owner: parts[0], name: parts[1], branch, account };
+}
+
+async function issueInstallationGrant(env) {
+  const binding = expectedBinding(env);
+  const installationId = requireIntegerEnv(env, "GITHUB_INSTALLATION_ID");
+  const appJwt = await githubAppJwt(env);
+
+  const installation = await githubJson(
+    "https://api.github.com/app/installations/" + installationId,
+    appJwt,
+    "GitHub App installation verification",
+  );
+  const installationLogin = String(installation.account?.login || "").trim();
+  if (installationLogin.toLowerCase() !== binding.account.toLowerCase()) {
+    throw new Error("GitHub App installation account did not match");
   }
 
-  const tokenUrl = new URL("https://github.com/login/oauth/access_token");
-  tokenUrl.searchParams.set("client_id", requireEnv(env, "GITHUB_CLIENT_ID"));
-  tokenUrl.searchParams.set("client_secret", requireEnv(env, "GITHUB_CLIENT_SECRET"));
-  tokenUrl.searchParams.set("grant_type", "refresh_token");
-  tokenUrl.searchParams.set("refresh_token", refreshToken);
-
-  const tokenResponse = await fetch(tokenUrl.toString(), {
-    method: "POST",
-    headers: {
-      "accept": "application/json",
-      "user-agent": "LYRA-GitHub-Connector/1",
+  const grant = await githubJson(
+    "https://api.github.com/app/installations/" + installationId + "/access_tokens",
+    appJwt,
+    "GitHub installation token",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        repositories: [binding.name],
+        permissions: {
+          actions: "read",
+          contents: "read",
+        },
+      }),
     },
-    redirect: "manual",
-  });
-  const data = await tokenResponse.json();
-  if (!tokenResponse.ok || !data.access_token) {
-    return json(
-      {
-        error: "github_refresh_failed",
-        description: String(data.error_description || data.error || "GitHub refused the refresh"),
-      },
-      400,
-    );
+  );
+
+  const token = String(grant.token || "").trim();
+  if (token.length < 20 || token.length > 1024 || /\s/.test(token)) {
+    throw new Error("GitHub installation token response was invalid");
   }
-  return json({
-    access_token: data.access_token,
-    expires_in: data.expires_in || null,
-    refresh_token: data.refresh_token || null,
-    refresh_token_expires_in: data.refresh_token_expires_in || null,
-    token_type: data.token_type || "bearer",
-  });
+  const expiresAtMs = Date.parse(String(grant.expires_at || ""));
+  const expiresIn = Math.floor((expiresAtMs - Date.now()) / 1000);
+  if (!Number.isFinite(expiresIn) || expiresIn < 60 || expiresIn > EXPECTED_TOKEN_SECONDS_MAX) {
+    throw new Error("GitHub installation token expiry was invalid");
+  }
+
+  const repo = await githubJson(
+    "https://api.github.com/repos/" +
+      encodeURIComponent(binding.owner) + "/" + encodeURIComponent(binding.name),
+    token,
+    "GitHub repository verification",
+  );
+  if (String(repo.full_name || "").toLowerCase() !== binding.repository.toLowerCase()) {
+    throw new Error("GitHub repository identity did not match");
+  }
+
+  const branchData = await githubJson(
+    "https://api.github.com/repos/" +
+      encodeURIComponent(binding.owner) + "/" + encodeURIComponent(binding.name) +
+      "/branches/" + encodeURIComponent(binding.branch),
+    token,
+    "GitHub branch verification",
+  );
+  if (String(branchData.name || "") !== binding.branch) {
+    throw new Error("GitHub branch identity did not match");
+  }
+
+  return {
+    access_token: token,
+    expires_in: expiresIn,
+    token_type: "bearer",
+    login: installationLogin,
+    repository: binding.repository,
+    branch: binding.branch,
+  };
+}
+
+async function tokenEndpoint(request, env) {
+  if (request.method !== "POST") {
+    return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
+  }
+  const type = String(request.headers.get("content-type") || "").toLowerCase();
+  if (!type.includes("application/json")) {
+    return json({ error: "content_type_required" }, 415);
+  }
+  const length = Number(request.headers.get("content-length") || "0");
+  if (Number.isFinite(length) && length > 4096) {
+    return json({ error: "request_too_large" }, 413);
+  }
+  const body = await request.json();
+  const pairing = requirePairingSecret(body.pairing_secret);
+  if (!await pairingMatches(env, pairing)) {
+    return json({
+      error: "pairing_rejected",
+      description: "LYRA pairing key does not match the Cloudflare secret",
+    }, 401);
+  }
+  return json(await issueInstallationGrant(env));
 }
 
 export default {
   async fetch(request, env) {
     try {
       const url = new URL(request.url);
-      if (url.pathname === "/health") {
-        return json({ ok: true, service: "lyra-github-connector" });
+      if (url.pathname === "/health" && request.method === "GET") {
+        return json({
+          ok: true,
+          service: "lyra-github-connector",
+          auth: "github-app-installation",
+          configured: Boolean(
+            String(env.GITHUB_APP_PRIVATE_KEY || "").trim() &&
+            String(env.LYRA_PAIRING_SECRET || "").trim() &&
+            String(env.GITHUB_APP_ID || "").trim() &&
+            String(env.GITHUB_INSTALLATION_ID || "").trim()
+          ),
+        });
       }
-      if (url.pathname === "/github/connect" && request.method === "GET") {
-        return await connect(request, env);
-      }
-      if (url.pathname === "/github/authorize" && request.method === "GET") {
-        return await authorize(request, env);
-      }
-      if (url.pathname === "/github/installed" && request.method === "GET") {
-        return await installed(request, env);
-      }
-      if (url.pathname === "/github/callback" && request.method === "GET") {
-        return await callback(request, env);
-      }
-      if (url.pathname === "/github/exchange") {
-        return await exchange(request, env);
-      }
-      if (url.pathname === "/github/refresh") {
-        return await refresh(request, env);
+      if (url.pathname === "/github/token") {
+        return await tokenEndpoint(request, env);
       }
       return json({ error: "not_found" }, 404);
     } catch (error) {

@@ -6,8 +6,10 @@ import androidx.security.crypto.MasterKey
 
 /**
  * Secret connector credentials are isolated from model-provider API keys.
- * GitHub OAuth tokens and temporary PKCE verifier state are encrypted at rest and never exposed
- * through public preferences.
+ *
+ * GitHub installation tokens and the device pairing key are encrypted at rest and never exposed
+ * through public preferences or model prompts. The pairing key can mint replacement one-hour
+ * installation tokens through the Cloudflare broker without repeated GitHub sign-in.
  */
 internal class WorkspaceConnectorCredentialStore(context: Context) {
     data class GitHubConnection(
@@ -15,9 +17,8 @@ internal class WorkspaceConnectorCredentialStore(context: Context) {
         val repository: String,
         val branch: String,
         val token: String,
-        val refreshToken: String? = null,
-        val tokenExpiresAtMs: Long? = null,
-        val refreshTokenExpiresAtMs: Long? = null,
+        val pairingSecret: String?,
+        val tokenExpiresAtMs: Long?,
     )
 
     private val appContext = context.applicationContext
@@ -47,115 +48,81 @@ internal class WorkspaceConnectorCredentialStore(context: Context) {
             require(login.length in 1..100 && login.none(Char::isISOControl)) {
                 "Saved GitHub login is invalid"
             }
-            val refreshToken = secure.getString(KEY_GITHUB_REFRESH_TOKEN, null)
+            val pairing = secure.getString(KEY_GITHUB_PAIRING_SECRET, null)
                 ?.trim()
                 ?.takeIf(String::isNotBlank)
-                ?.let(WorkspaceGitHubConnector::requireToken)
+                ?.let(WorkspaceGitHubConnector::requirePairingSecret)
             GitHubConnection(
                 login = login,
                 repository = binding.repository,
                 branch = binding.branch,
                 token = WorkspaceGitHubConnector.requireToken(token),
-                refreshToken = refreshToken,
+                pairingSecret = pairing,
                 tokenExpiresAtMs = secure.getLong(KEY_GITHUB_TOKEN_EXPIRES_AT, 0L)
-                    .takeIf { it > 0L },
-                refreshTokenExpiresAtMs = secure.getLong(KEY_GITHUB_REFRESH_EXPIRES_AT, 0L)
                     .takeIf { it > 0L },
             )
         }.getOrNull()
     }
 
+    fun getOrCreateGitHubPairingSecret(): String {
+        secure.getString(KEY_GITHUB_PAIRING_SECRET, null)
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?.let { existing ->
+                return WorkspaceGitHubConnector.requirePairingSecret(existing)
+            }
+
+        val generated = WorkspaceGitHubConnector.newPairingSecret()
+        check(
+            secure.edit()
+                .putString(KEY_GITHUB_PAIRING_SECRET, generated)
+                .commit()
+        ) { "LYRA pairing key could not be saved securely" }
+        return generated
+    }
+
     fun saveGitHub(
         token: String,
+        pairingSecret: String,
         login: String,
         repository: String,
         branch: String,
-        refreshToken: String? = null,
-        tokenExpiresAtMs: Long? = null,
-        refreshTokenExpiresAtMs: Long? = null,
+        tokenExpiresAtMs: Long,
     ) {
         val cleanToken = WorkspaceGitHubConnector.requireToken(token)
-        val cleanRefresh = refreshToken
-            ?.trim()
-            ?.takeIf(String::isNotBlank)
-            ?.let(WorkspaceGitHubConnector::requireToken)
+        val cleanPairing = WorkspaceGitHubConnector.requirePairingSecret(pairingSecret)
         val binding = WorkspaceConnectorPolicy.binding(repository, branch)
         val cleanLogin = login.trim()
         require(cleanLogin.length in 1..100 && cleanLogin.none(Char::isISOControl)) {
             "GitHub login is invalid"
         }
-        require(tokenExpiresAtMs == null || tokenExpiresAtMs > 0L) {
-            "GitHub token expiry is invalid"
-        }
-        require(refreshTokenExpiresAtMs == null || refreshTokenExpiresAtMs > 0L) {
-            "GitHub refresh token expiry is invalid"
-        }
+        require(tokenExpiresAtMs > 0L) { "GitHub token expiry is invalid" }
 
-        val edit = secure.edit()
-            .putString(KEY_GITHUB_TOKEN, cleanToken)
-            .putString(KEY_GITHUB_LOGIN, cleanLogin)
-            .putString(KEY_GITHUB_REPOSITORY, binding.repository)
-            .putString(KEY_GITHUB_BRANCH, binding.branch)
-
-        if (cleanRefresh == null) edit.remove(KEY_GITHUB_REFRESH_TOKEN)
-        else edit.putString(KEY_GITHUB_REFRESH_TOKEN, cleanRefresh)
-
-        if (tokenExpiresAtMs == null) edit.remove(KEY_GITHUB_TOKEN_EXPIRES_AT)
-        else edit.putLong(KEY_GITHUB_TOKEN_EXPIRES_AT, tokenExpiresAtMs)
-
-        if (refreshTokenExpiresAtMs == null) edit.remove(KEY_GITHUB_REFRESH_EXPIRES_AT)
-        else edit.putLong(KEY_GITHUB_REFRESH_EXPIRES_AT, refreshTokenExpiresAtMs)
-
-        check(edit.commit()) { "GitHub connector could not be saved securely" }
-    }
-
-    fun saveGitHubOAuthPending(pending: WorkspaceGitHubOAuthSession.Pending) {
-        val checked = WorkspaceGitHubOAuthSession.restore(
-            pending.state,
-            pending.verifier,
-            pending.challenge,
-            pending.createdAtMs,
-        )
         check(
             secure.edit()
-                .putString(KEY_GITHUB_OAUTH_STATE, checked.state)
-                .putString(KEY_GITHUB_OAUTH_VERIFIER, checked.verifier)
-                .putString(KEY_GITHUB_OAUTH_CHALLENGE, checked.challenge)
-                .putLong(KEY_GITHUB_OAUTH_CREATED_AT, checked.createdAtMs)
-                .commit()
-        ) { "GitHub authorization state could not be saved securely" }
-    }
-
-    fun loadGitHubOAuthPending(): WorkspaceGitHubOAuthSession.Pending? {
-        val state = secure.getString(KEY_GITHUB_OAUTH_STATE, null)?.trim().orEmpty()
-        val verifier = secure.getString(KEY_GITHUB_OAUTH_VERIFIER, null)?.trim().orEmpty()
-        val challenge = secure.getString(KEY_GITHUB_OAUTH_CHALLENGE, null)?.trim().orEmpty()
-        val createdAt = secure.getLong(KEY_GITHUB_OAUTH_CREATED_AT, -1L)
-        if (state.isBlank() || verifier.isBlank() || challenge.isBlank() || createdAt < 0L) {
-            return null
-        }
-        return runCatching {
-            WorkspaceGitHubOAuthSession.restore(state, verifier, challenge, createdAt)
-        }.getOrNull()
-    }
-
-    fun clearGitHubOAuthPending() {
-        check(
-            secure.edit()
+                .putString(KEY_GITHUB_TOKEN, cleanToken)
+                .putString(KEY_GITHUB_PAIRING_SECRET, cleanPairing)
+                .putString(KEY_GITHUB_LOGIN, cleanLogin)
+                .putString(KEY_GITHUB_REPOSITORY, binding.repository)
+                .putString(KEY_GITHUB_BRANCH, binding.branch)
+                .putLong(KEY_GITHUB_TOKEN_EXPIRES_AT, tokenExpiresAtMs)
+                .remove(KEY_GITHUB_REFRESH_TOKEN)
+                .remove(KEY_GITHUB_REFRESH_EXPIRES_AT)
                 .remove(KEY_GITHUB_OAUTH_STATE)
                 .remove(KEY_GITHUB_OAUTH_VERIFIER)
                 .remove(KEY_GITHUB_OAUTH_CHALLENGE)
                 .remove(KEY_GITHUB_OAUTH_CREATED_AT)
                 .commit()
-        ) { "GitHub authorization state could not be cleared securely" }
+        ) { "GitHub connector could not be saved securely" }
     }
 
     fun disconnectGitHub() {
         check(
             secure.edit()
                 .remove(KEY_GITHUB_TOKEN)
-                .remove(KEY_GITHUB_REFRESH_TOKEN)
+                .remove(KEY_GITHUB_PAIRING_SECRET)
                 .remove(KEY_GITHUB_TOKEN_EXPIRES_AT)
+                .remove(KEY_GITHUB_REFRESH_TOKEN)
                 .remove(KEY_GITHUB_REFRESH_EXPIRES_AT)
                 .remove(KEY_GITHUB_LOGIN)
                 .remove(KEY_GITHUB_REPOSITORY)
@@ -170,8 +137,11 @@ internal class WorkspaceConnectorCredentialStore(context: Context) {
 
     private companion object {
         const val KEY_GITHUB_TOKEN = "github_token"
-        const val KEY_GITHUB_REFRESH_TOKEN = "github_refresh_token"
+        const val KEY_GITHUB_PAIRING_SECRET = "github_pairing_secret"
         const val KEY_GITHUB_TOKEN_EXPIRES_AT = "github_token_expires_at"
+
+        // Legacy OAuth keys are removed when installation authentication succeeds or disconnects.
+        const val KEY_GITHUB_REFRESH_TOKEN = "github_refresh_token"
         const val KEY_GITHUB_REFRESH_EXPIRES_AT = "github_refresh_expires_at"
         const val KEY_GITHUB_LOGIN = "github_login"
         const val KEY_GITHUB_REPOSITORY = "github_repository"
