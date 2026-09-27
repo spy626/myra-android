@@ -1,16 +1,22 @@
 package com.myra.assistant.ui.workspace
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import okhttp3.Call
@@ -19,15 +25,23 @@ import okhttp3.Response
 import java.io.IOException
 
 /**
- * GitHub Connector C1.1: browser OAuth + exact repository + safe feature branch verification.
+ * GitHub Connector C1.2: GitHub Device Flow + exact repository + safe feature branch verification.
  *
- * Model output never receives OAuth codes/tokens. The broker holds the GitHub client secret;
- * Android keeps PKCE state and returned user tokens in encrypted connector-only preferences.
- * GitHub writes remain blocked in this slice.
+ * LYRA never asks for a PAT, GitHub password, or client secret. GitHub issues a short-lived
+ * one-time user code, Android polls at GitHub's required interval, and returned user tokens are
+ * encrypted in connector-only preferences. GitHub writes remain blocked in this slice.
  */
 class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
+    private data class DeviceFlowState(
+        val deviceCode: String,
+        val expiresAtMs: Long,
+        var intervalSeconds: Long,
+    )
+
     private val store by lazy { WorkspaceConnectorCredentialStore(this) }
+    private val pollHandler = Handler(Looper.getMainLooper())
     private var activeCall: Call? = null
+    private var deviceFlow: DeviceFlowState? = null
     private var status: TextView? = null
     private var connectButton: TextView? = null
 
@@ -78,24 +92,18 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         render()
-        handleOAuthCallback(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        render()
-        handleOAuthCallback(intent)
     }
 
     override fun onResume() {
         super.onResume()
-        if (activeCall == null) setBusy(false)
+        if (activeCall == null) setBusy(deviceFlow != null)
     }
 
     override fun onDestroy() {
+        pollHandler.removeCallbacksAndMessages(null)
         activeCall?.cancel()
         activeCall = null
+        deviceFlow = null
         super.onDestroy()
     }
 
@@ -143,8 +151,8 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         column.addView(sectionTitle("Connect GitHub"))
 
         column.addView(text(
-            "Sign in with the official GitHub browser flow. No PAT, GitHub password, client secret, " +
-                "or repository token is typed into LYRA.",
+            "Use GitHub Device Flow. LYRA gets a one-time code and opens GitHub in your browser. " +
+                "No PAT, GitHub password, or client secret is typed into LYRA.",
             14f,
             Color.rgb(188, 202, 193),
         ).apply { setPadding(0, dp(4), 0, dp(14)) })
@@ -181,15 +189,14 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        connectButton = button("CONNECT GITHUB") { beginOAuth() }
+        connectButton = button("CONNECT GITHUB") { beginDeviceFlow() }
         column.addView(connectButton, LinearLayout.LayoutParams(-1, dp(52)))
 
         column.addView(sectionTitle("C1 permissions"))
         permissionRows(column)
         column.addView(text(
-            "GitHub opens outside LYRA. OAuth state + PKCE are generated on this phone, the client " +
-                "secret stays in the Cloudflare broker, and the returned token is encrypted locally. " +
-                "C1 still performs read verification only.",
+            "The GitHub verification code is copied to your clipboard and expires quickly. " +
+                "The returned user token is encrypted locally. C1 still performs read verification only.",
             12.5f,
             Color.rgb(125, 136, 130),
         ).apply { setPadding(0, dp(14), 0, 0) })
@@ -218,7 +225,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         card.addView(text(connection.branch, 13f, Color.rgb(120, 203, 148)).apply {
             setPadding(0, dp(5), 0, 0)
         })
-        card.addView(text("OAuth verified connection", 12f, Color.rgb(120, 203, 148)).apply {
+        card.addView(text("Device Flow verified connection", 12f, Color.rgb(120, 203, 148)).apply {
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, dp(8), 0, 0)
         })
@@ -283,119 +290,132 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         connectButton?.alpha = if (busy) .55f else 1f
     }
 
-    private fun beginOAuth() {
-        if (activeCall != null) return
-        val pending = runCatching { WorkspaceGitHubOAuthSession.create() }
-            .getOrElse {
-                showStatus("Could not create a secure GitHub authorization session.", true)
-                return
-            }
-        val stored = runCatching { store.saveGitHubOAuthPending(pending) }
-        if (stored.isFailure) {
-            showStatus("Could not save the secure GitHub authorization state.", true)
-            return
-        }
-        val url = runCatching {
-            WorkspaceGitHubOAuthSession.connectUrl(
-                WorkspaceGitHubConnector.OAUTH_BROKER,
-                pending,
-            )
-        }.getOrElse {
-            runCatching { store.clearGitHubOAuthPending() }
-            showStatus(it.message ?: "GitHub authorization URL is invalid", true)
-            return
-        }
-
-        showStatus("Opening official GitHub sign-in…")
-        val browser = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-            addCategory(Intent.CATEGORY_BROWSABLE)
-        }
-        runCatching { startActivity(browser) }
-            .onSuccess {
-                setBusy(false)
-                showStatus("Finish GitHub authorization in the browser.")
-            }
-            .onFailure {
-                runCatching { store.clearGitHubOAuthPending() }
-                showStatus("No browser could open the GitHub authorization page.", true)
-            }
-    }
-
-    private fun handleOAuthCallback(incoming: Intent?) {
-        val callbackUri = incoming?.data ?: return
-        if (callbackUri.scheme != "lyra" ||
-            callbackUri.host != "github" ||
-            callbackUri.path != "/callback") return
-
-        setIntent(Intent(incoming).setData(null))
-        if (runCatching { store.loadGitHub() }.getOrNull() != null) {
-            runCatching { store.clearGitHubOAuthPending() }
-            return
-        }
-
-        val pending = store.loadGitHubOAuthPending()
-        if (pending == null) {
-            showStatus("GitHub authorization session is missing. Tap Connect GitHub again.", true)
-            return
-        }
-        val parsed = runCatching {
-            WorkspaceGitHubOAuthSession.parseCallback(callbackUri.toString(), pending)
-        }.getOrElse {
-            runCatching { store.clearGitHubOAuthPending() }
-            showStatus(it.message ?: "GitHub callback was rejected", true)
-            return
-        }
-
-        when (parsed) {
-            is WorkspaceGitHubOAuthSession.Callback.Denied -> {
-                runCatching { store.clearGitHubOAuthPending() }
-                showStatus("GitHub authorization was cancelled.", true)
-            }
-            is WorkspaceGitHubOAuthSession.Callback.Success ->
-                exchangeOAuthCode(parsed.code, pending)
-        }
-    }
-
-    private fun exchangeOAuthCode(
-        code: String,
-        pending: WorkspaceGitHubOAuthSession.Pending,
-    ) {
-        if (activeCall != null) return
+    private fun beginDeviceFlow() {
+        if (activeCall != null || deviceFlow != null) return
         setBusy(true)
-        showStatus("Finishing secure GitHub sign-in…")
-        val request = runCatching {
-            WorkspaceGitHubConnector.oauthExchangeRequest(
-                code = code,
-                state = pending.state,
-                verifier = pending.verifier,
-            )
-        }.getOrElse {
-            runCatching { store.clearGitHubOAuthPending() }
-            setBusy(false)
-            showStatus(it.message ?: "GitHub token exchange request is invalid", true)
-            return
-        }
-
-        val call = WorkspaceGitHubConnector.client.newCall(request)
+        showStatus("Requesting one-time GitHub code…")
+        val call = WorkspaceGitHubConnector.client.newCall(
+            WorkspaceGitHubConnector.deviceCodeRequest()
+        )
         activeCall = call
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                fail(call, "GitHub sign-in could not finish. Check network and connect again.")
+                fail(call, "Could not start GitHub Device Flow. Check network and try again.")
             }
 
             override fun onResponse(call: Call, response: Response) {
-                val tokens = runCatching { WorkspaceGitHubConnector.readOAuthTokens(response) }
+                val code = runCatching { WorkspaceGitHubConnector.readDeviceCode(response) }
                     .getOrElse {
-                        runCatching { store.clearGitHubOAuthPending() }
-                        fail(call, it.message ?: "GitHub token exchange failed")
+                        fail(call, it.message ?: "GitHub Device Flow could not start")
                         return
                     }
-                val cleared = runCatching { store.clearGitHubOAuthPending() }
-                if (cleared.isFailure) {
-                    fail(call, "GitHub authorization state could not be cleared securely.")
-                    return
+                runOnUiThread {
+                    if (activeCall !== call || isFinishing || isDestroyed) return@runOnUiThread
+                    val now = System.currentTimeMillis()
+                    val expiresAt = expiryAt(now, code.expiresInSeconds)
+                    if (expiresAt == null) {
+                        activeCall = null
+                        setBusy(false)
+                        showStatus("GitHub Device Flow expiry was invalid.", true)
+                        return@runOnUiThread
+                    }
+                    activeCall = null
+                    deviceFlow = DeviceFlowState(
+                        deviceCode = code.deviceCode,
+                        expiresAtMs = expiresAt,
+                        intervalSeconds = code.intervalSeconds,
+                    )
+                    copyUserCode(code.userCode)
+                    showStatus(
+                        "GitHub code " + code.userCode + " copied. Paste it in the browser and approve LYRA."
+                    )
+                    val browser = Intent(Intent.ACTION_VIEW, Uri.parse(code.verificationUri)).apply {
+                        addCategory(Intent.CATEGORY_BROWSABLE)
+                    }
+                    runCatching { startActivity(browser) }
+                        .onSuccess { scheduleDevicePoll() }
+                        .onFailure {
+                            clearDeviceFlowState()
+                            setBusy(false)
+                            showStatus("No browser could open GitHub Device Flow.", true)
+                        }
                 }
-                verifyAccount(call, tokens)
+            }
+        })
+    }
+
+    private fun copyUserCode(userCode: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("GitHub device code", userCode))
+        Toast.makeText(
+            this,
+            "GitHub code copied: $userCode",
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    private fun scheduleDevicePoll() {
+        val flow = deviceFlow ?: return
+        if (System.currentTimeMillis() >= flow.expiresAtMs) {
+            clearDeviceFlowState()
+            setBusy(false)
+            showStatus("GitHub code expired. Tap Connect GitHub again.", true)
+            return
+        }
+        pollHandler.postDelayed(
+            { pollDeviceFlow() },
+            flow.intervalSeconds.coerceIn(1L, 60L) * 1_000L,
+        )
+    }
+
+    private fun pollDeviceFlow() {
+        val flow = deviceFlow ?: return
+        if (activeCall != null) return
+        if (System.currentTimeMillis() >= flow.expiresAtMs) {
+            clearDeviceFlowState()
+            setBusy(false)
+            showStatus("GitHub code expired. Tap Connect GitHub again.", true)
+            return
+        }
+        val call = WorkspaceGitHubConnector.client.newCall(
+            WorkspaceGitHubConnector.deviceTokenRequest(flow.deviceCode)
+        )
+        activeCall = call
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread {
+                    if (activeCall !== call || isFinishing || isDestroyed) return@runOnUiThread
+                    activeCall = null
+                    showStatus("Waiting for GitHub approval… network retry scheduled.")
+                    scheduleDevicePoll()
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val result = runCatching { WorkspaceGitHubConnector.readDevicePoll(response) }
+                    .getOrElse {
+                        fail(call, it.message ?: "GitHub Device Flow failed")
+                        return
+                    }
+                when (result) {
+                    WorkspaceGitHubConnector.DevicePoll.Pending -> runOnUiThread {
+                        if (activeCall !== call || isFinishing || isDestroyed) return@runOnUiThread
+                        activeCall = null
+                        showStatus("Waiting for GitHub approval…")
+                        scheduleDevicePoll()
+                    }
+                    WorkspaceGitHubConnector.DevicePoll.SlowDown -> runOnUiThread {
+                        if (activeCall !== call || isFinishing || isDestroyed) return@runOnUiThread
+                        activeCall = null
+                        deviceFlow?.let {
+                            it.intervalSeconds = (it.intervalSeconds + 5L).coerceAtMost(60L)
+                        }
+                        showStatus("Waiting for GitHub approval…")
+                        scheduleDevicePoll()
+                    }
+                    is WorkspaceGitHubConnector.DevicePoll.Authorized ->
+                        verifyAccount(call, result.tokens)
+                }
             }
         })
     }
@@ -503,6 +523,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
                             branch = verifiedBranch.name,
                         )
                     }
+                    clearDeviceFlowState()
                     activeCall = null
                     saved.onSuccess { render() }
                         .onFailure {
@@ -524,10 +545,16 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         }.getOrNull()
     }
 
+    private fun clearDeviceFlowState() {
+        pollHandler.removeCallbacksAndMessages(null)
+        deviceFlow = null
+    }
+
     private fun fail(call: Call, message: String) {
         runOnUiThread {
             if (activeCall !== call || isFinishing || isDestroyed) return@runOnUiThread
             activeCall = null
+            clearDeviceFlowState()
             setBusy(false)
             showStatus(message, true)
         }
