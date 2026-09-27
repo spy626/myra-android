@@ -46,8 +46,9 @@ You are LYRA's Skill Creator. Help the user create one small instruction-only SK
 
 Current installed skill names: $installed
 
-If the user's desired behavior is still materially unclear, reply with exactly one short question:
-$QUESTION_PREFIX <question>
+If the user's desired behavior is still materially unclear, reply with exactly one short question.
+Use this exact prefix, then plain question text with no angle brackets:
+$QUESTION_PREFIX What specific detail should the skill handle?
 
 If enough information is available, return exactly one draft between these markers:
 $DRAFT_BEGIN
@@ -85,6 +86,10 @@ Rules for a draft:
                 .lineSequence()
                 .firstOrNull()
                 .orEmpty()
+                .trim()
+                // Some models copy placeholder brackets from formatting examples. They are
+                // transport syntax, not user-facing question text.
+                .removeSurrounding("<", ">")
                 .trim()
             require(question.length in 3..400 && question.none(Char::isISOControl)) {
                 "Skill Creator question is invalid"
