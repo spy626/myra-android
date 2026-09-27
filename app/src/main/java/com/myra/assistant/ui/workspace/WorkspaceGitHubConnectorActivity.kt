@@ -68,7 +68,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         setHintTextColor(Color.rgb(121, 134, 126))
         textSize = 14f
         maxLines = 1
-        singleLine = true
+        isSingleLine = true
         inputType = if (password) {
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         } else {
@@ -120,7 +120,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
             setPadding(dp(24), dp(26), dp(24), dp(32))
         }
         root = column
-        scroll.addView(column, ScrollView.LayoutParams(-1, -2))
+        scroll.addView(column, android.widget.FrameLayout.LayoutParams(-1, -2))
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
