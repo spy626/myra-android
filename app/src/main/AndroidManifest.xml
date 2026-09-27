@@ -57,10 +57,20 @@
         <activity android:name=".ui.workspace.WorkspacePhotoMarkupActivity" android:exported="false" android:screenOrientation="portrait" android:theme="@style/Theme.Myra.Workspace" />
         <activity
             android:name=".ui.workspace.WorkspaceGitHubConnectorActivity"
-            android:exported="false"
+            android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.Myra.Workspace" />
+            android:theme="@style/Theme.Myra.Workspace">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="lyra"
+                    android:host="github"
+                    android:path="/callback" />
+            </intent-filter>
+        </activity>
         <activity android:name=".ui.workspace.WorkspaceActivity" android:exported="false" android:screenOrientation="portrait" android:theme="@style/Theme.Myra.Workspace" />
         <activity
             android:name=".ui.main.MainActivity"

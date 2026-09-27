@@ -215,20 +215,19 @@ async function exchange(request, env) {
   requireUrlSafe(body.state, "OAuth state", 20, 160);
   const verifier = requireUrlSafe(body.code_verifier, "PKCE verifier", 43, 128);
 
-  const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
+  const tokenUrl = new URL("https://github.com/login/oauth/access_token");
+  tokenUrl.searchParams.set("client_id", requireEnv(env, "GITHUB_CLIENT_ID"));
+  tokenUrl.searchParams.set("client_secret", requireEnv(env, "GITHUB_CLIENT_SECRET"));
+  tokenUrl.searchParams.set("code", code);
+  tokenUrl.searchParams.set("redirect_uri", callbackUrl(request));
+  tokenUrl.searchParams.set("code_verifier", verifier);
+
+  const tokenResponse = await fetch(tokenUrl.toString(), {
     method: "POST",
     headers: {
       "accept": "application/json",
-      "content-type": "application/json",
       "user-agent": "LYRA-GitHub-Connector/1",
     },
-    body: JSON.stringify({
-      client_id: requireEnv(env, "GITHUB_CLIENT_ID"),
-      client_secret: requireEnv(env, "GITHUB_CLIENT_SECRET"),
-      code,
-      redirect_uri: callbackUrl(request),
-      code_verifier: verifier,
-    }),
     redirect: "manual",
   });
 
@@ -269,19 +268,18 @@ async function refresh(request, env) {
     throw new Error("Refresh token is invalid");
   }
 
-  const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
+  const tokenUrl = new URL("https://github.com/login/oauth/access_token");
+  tokenUrl.searchParams.set("client_id", requireEnv(env, "GITHUB_CLIENT_ID"));
+  tokenUrl.searchParams.set("client_secret", requireEnv(env, "GITHUB_CLIENT_SECRET"));
+  tokenUrl.searchParams.set("grant_type", "refresh_token");
+  tokenUrl.searchParams.set("refresh_token", refreshToken);
+
+  const tokenResponse = await fetch(tokenUrl.toString(), {
     method: "POST",
     headers: {
       "accept": "application/json",
-      "content-type": "application/json",
       "user-agent": "LYRA-GitHub-Connector/1",
     },
-    body: JSON.stringify({
-      client_id: requireEnv(env, "GITHUB_CLIENT_ID"),
-      client_secret: requireEnv(env, "GITHUB_CLIENT_SECRET"),
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
     redirect: "manual",
   });
   const data = await tokenResponse.json();

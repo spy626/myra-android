@@ -1,7 +1,6 @@
 package com.myra.assistant.ui.workspace
 
 import okhttp3.Dns
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -9,17 +8,14 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONObject
 import java.net.InetAddress
-import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 
-/** Authenticated GitHub connector transport for verified read access and GitHub Device Flow. */
+/** Authenticated GitHub connector transport for verified read access and OAuth token exchange. */
 internal object WorkspaceGitHubConnector {
     private const val API = "https://api.github.com"
-    private const val GITHUB_WEB = "https://github.com"
     const val OAUTH_BROKER = "https://lyra-github-connector.everspy626.workers.dev"
-    const val GITHUB_APP_CLIENT_ID = "Iv23IiAZi3QMIZbAN5n7"
     private const val MAX_JSON_BYTES = 128_000L
     private val JSON = "application/json; charset=utf-8".toMediaType()
     private val urlSafe = Regex("[A-Za-z0-9._~-]{20,256}")
@@ -27,25 +23,12 @@ internal object WorkspaceGitHubConnector {
     data class Account(val login: String)
     data class Repository(val fullName: String, val privateRepo: Boolean, val defaultBranch: String)
     data class Branch(val name: String, val headSha: String)
-    data class DeviceCode(
-        val deviceCode: String,
-        val userCode: String,
-        val verificationUri: String,
-        val expiresInSeconds: Long,
-        val intervalSeconds: Long,
-    )
     data class OAuthTokens(
         val accessToken: String,
         val expiresInSeconds: Long?,
         val refreshToken: String?,
         val refreshTokenExpiresInSeconds: Long?,
     )
-
-    sealed interface DevicePoll {
-        data object Pending : DevicePoll
-        data object SlowDown : DevicePoll
-        data class Authorized(val tokens: OAuthTokens) : DevicePoll
-    }
 
     fun requireToken(value: String): String {
         val clean = value.trim()
@@ -107,43 +90,6 @@ internal object WorkspaceGitHubConnector {
                 "/branches/" + encode(clean.branch),
             token,
         )
-    }
-
-    fun deviceCodeRequest(clientId: String = GITHUB_APP_CLIENT_ID): Request {
-        val cleanClientId = requireUrlSafe(clientId, "GitHub client ID", 10, 100)
-        val url = (GITHUB_WEB + "/login/device/code").toHttpUrl()
-            .newBuilder()
-            .addQueryParameter("client_id", cleanClientId)
-            .build()
-        return Request.Builder()
-            .url(url)
-            .header("Accept", "application/json")
-            .header("User-Agent", "LYRA-Connector/1")
-            .post(ByteArray(0).toRequestBody(null))
-            .build()
-    }
-
-    fun deviceTokenRequest(
-        deviceCode: String,
-        clientId: String = GITHUB_APP_CLIENT_ID,
-    ): Request {
-        val cleanClientId = requireUrlSafe(clientId, "GitHub client ID", 10, 100)
-        val cleanDeviceCode = requireUrlSafe(deviceCode, "GitHub device code", 20, 160)
-        val url = (GITHUB_WEB + "/login/oauth/access_token").toHttpUrl()
-            .newBuilder()
-            .addQueryParameter("client_id", cleanClientId)
-            .addQueryParameter("device_code", cleanDeviceCode)
-            .addQueryParameter(
-                "grant_type",
-                "urn:ietf:params:oauth:grant-type:device_code",
-            )
-            .build()
-        return Request.Builder()
-            .url(url)
-            .header("Accept", "application/json")
-            .header("User-Agent", "LYRA-Connector/1")
-            .post(ByteArray(0).toRequestBody(null))
-            .build()
     }
 
     fun oauthExchangeRequest(
@@ -208,74 +154,6 @@ internal object WorkspaceGitHubConnector {
         }
     }
 
-    fun readDeviceCode(response: Response): DeviceCode {
-        response.use {
-            val (_, root) = parseJson(it, "GitHub Device Flow")
-            require(it.isSuccessful) {
-                root.optString("error_description").trim().take(180)
-                    .ifBlank { "GitHub Device Flow failed (HTTP " + it.code + ")" }
-            }
-            val deviceCode = requireUrlSafe(
-                root.optString("device_code"),
-                "GitHub device code",
-                20,
-                160,
-            )
-            val userCode = root.optString("user_code").trim()
-            require(Regex("[A-Z0-9]{4}-[A-Z0-9]{4}").matches(userCode)) {
-                "GitHub user code is invalid"
-            }
-            val verification = URI(root.optString("verification_uri").trim())
-            require(
-                verification.scheme == "https" &&
-                    verification.host == "github.com" &&
-                    verification.path == "/login/device"
-            ) { "GitHub verification URL is invalid" }
-            val expiresIn = root.optLong("expires_in", -1L)
-            val interval = root.optLong("interval", -1L)
-            require(expiresIn in 60L..1_800L) { "GitHub Device Flow expiry is invalid" }
-            require(interval in 1L..60L) { "GitHub Device Flow interval is invalid" }
-            return DeviceCode(
-                deviceCode = deviceCode,
-                userCode = userCode,
-                verificationUri = verification.toASCIIString(),
-                expiresInSeconds = expiresIn,
-                intervalSeconds = interval,
-            )
-        }
-    }
-
-    fun readDevicePoll(response: Response): DevicePoll {
-        response.use {
-            val (_, root) = parseJson(it, "GitHub Device Flow token")
-            require(it.isSuccessful) {
-                root.optString("error_description").trim().take(180)
-                    .ifBlank { "GitHub Device Flow token request failed (HTTP " + it.code + ")" }
-            }
-            return when (val error = root.optString("error").trim()) {
-                "" -> DevicePoll.Authorized(parseOAuthTokens(root))
-                "authorization_pending" -> DevicePoll.Pending
-                "slow_down" -> DevicePoll.SlowDown
-                "expired_token", "token_expired" ->
-                    throw IllegalArgumentException("GitHub code expired. Tap Connect GitHub again.")
-                "access_denied" ->
-                    throw IllegalArgumentException("GitHub authorization was cancelled.")
-                "device_flow_disabled" ->
-                    throw IllegalArgumentException("GitHub Device Flow is disabled for this app.")
-                "incorrect_client_credentials" ->
-                    throw IllegalArgumentException("GitHub client ID was rejected.")
-                "incorrect_device_code" ->
-                    throw IllegalArgumentException("GitHub device code was rejected.")
-                "unsupported_grant_type" ->
-                    throw IllegalArgumentException("GitHub Device Flow grant type was rejected.")
-                else -> throw IllegalArgumentException(
-                    root.optString("error_description").trim().take(180)
-                        .ifBlank { "GitHub Device Flow failed: " + error.take(80) }
-                )
-            }
-        }
-    }
-
     fun readOAuthTokens(response: Response): OAuthTokens {
         response.use {
             val (_, root) = parseJson(it, "GitHub OAuth exchange")
@@ -283,33 +161,29 @@ internal object WorkspaceGitHubConnector {
                 root.optString("description").trim().take(180)
                     .ifBlank { "GitHub OAuth exchange failed (HTTP " + it.code + ")" }
             }
-            return parseOAuthTokens(root)
-        }
-    }
+            val tokenType = root.optString("token_type", "bearer").trim()
+            require(tokenType.equals("bearer", ignoreCase = true)) {
+                "GitHub OAuth token type is invalid"
+            }
+            val accessToken = requireToken(root.optString("access_token"))
+            val refreshToken = root.optString("refresh_token").trim()
+                .takeIf(String::isNotBlank)
+                ?.let(::requireToken)
 
-    private fun parseOAuthTokens(root: JSONObject): OAuthTokens {
-        val tokenType = root.optString("token_type", "bearer").trim()
-        require(tokenType.equals("bearer", ignoreCase = true)) {
-            "GitHub OAuth token type is invalid"
-        }
-        val accessToken = requireToken(root.optString("access_token"))
-        val refreshToken = root.optString("refresh_token").trim()
-            .takeIf(String::isNotBlank)
-            ?.let(::requireToken)
+            fun duration(name: String): Long? {
+                if (!root.has(name) || root.isNull(name)) return null
+                val value = root.optLong(name, -1L)
+                require(value in 1L..31_536_000L) { "GitHub OAuth expiry is invalid" }
+                return value
+            }
 
-        fun duration(name: String): Long? {
-            if (!root.has(name) || root.isNull(name)) return null
-            val value = root.optLong(name, -1L)
-            require(value in 1L..31_536_000L) { "GitHub OAuth expiry is invalid" }
-            return value
+            return OAuthTokens(
+                accessToken = accessToken,
+                expiresInSeconds = duration("expires_in"),
+                refreshToken = refreshToken,
+                refreshTokenExpiresInSeconds = duration("refresh_token_expires_in"),
+            )
         }
-
-        return OAuthTokens(
-            accessToken = accessToken,
-            expiresInSeconds = duration("expires_in"),
-            refreshToken = refreshToken,
-            refreshTokenExpiresInSeconds = duration("refresh_token_expires_in"),
-        )
     }
 
     fun readAccount(response: Response): Account {
