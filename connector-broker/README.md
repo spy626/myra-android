@@ -57,3 +57,7 @@ Never commit either secret.
 - `POST /github/refresh`
 
 All token responses use `Cache-Control: no-store`. Browser session cookies are Secure, HttpOnly, SameSite=Lax, and expire after 15 minutes.
+
+## Deployment
+
+Cloudflare Workers Builds deploys this broker from `agent/myra-phase-1` with `/connector-broker/` as the root directory.
