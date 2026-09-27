@@ -34,6 +34,17 @@ LYRA_SKILL_DRAFT_END
         assertEquals("Should this skill answer briefly or in detail?", question.text)
     }
 
+    @Test fun placeholderAngleBracketsAreNotShownToUser() {
+        val parsed = WorkspaceSkillConversationalCreate.parseProviderReply(
+            "LYRA_SKILL_QUESTION: <What specific types of difficult code should the skill explain?>"
+        )
+        val question = parsed as WorkspaceSkillConversationalCreate.ProviderResult.Question
+        assertEquals(
+            "What specific types of difficult code should the skill explain?",
+            question.text,
+        )
+    }
+
     @Test fun boundedDraftIsParsedAndUsesMinimalPermissions() {
         val parsed = WorkspaceSkillConversationalCreate.parseProviderReply(providerDraft())
         val draft = parsed as WorkspaceSkillConversationalCreate.ProviderResult.Draft
