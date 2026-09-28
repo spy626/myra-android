@@ -54,7 +54,9 @@ internal class WorkspaceGitHubSelfEditFlow(
         const val CP_INSTRUCTION = "workspace_github_self_edit_checkpoint_instruction"
         const val CP_REPAIR_ATTEMPT = "workspace_github_self_edit_checkpoint_repair_attempt"
         val CHECKPOINT_SHA = Regex("[0-9a-f]{40,64}")
-        val CHECKPOINT_PHASES = setOf("waiting_ci", "repair_waiting_ci", "ci_failed", "ci_green")
+        val CHECKPOINT_PHASES = setOf(
+            "pre_commit", "waiting_ci", "repair_waiting_ci", "ci_failed", "ci_green"
+        )
     }
 
     private val pollHandler = Handler(Looper.getMainLooper())
@@ -95,7 +97,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         pollHandler.removeCallbacksAndMessages(null)
         ciWatching = false
         if (!preserveCheckpoint) clearCheckpoint()
-        // Lifecycle interruption preserves a post-commit checkpoint; explicit Stop may discard it.
+        // Lifecycle interruption preserves the current coding checkpoint; explicit Stop may discard it.
         clearState()
     }
 
@@ -175,10 +177,67 @@ internal class WorkspaceGitHubSelfEditFlow(
                     "Feature branch advanced beyond the saved checkpoint; refusing a blind resume."
                 }
                 access = checked
-                awaitExactCi(run, checkpoint.receipt)
+                if (checkpoint.phase == "pre_commit") {
+                    resumePreCommit(run, checkpoint, fresh.accessToken)
+                } else {
+                    awaitExactCi(run, checkpoint.receipt)
+                }
             }
         }
         return true
+    }
+
+    private fun resumePreCommit(
+        run: Long,
+        checkpoint: Checkpoint,
+        token: String,
+    ) {
+        val saved = requireNotNull(connection)
+        val path = checkpoint.receipt.files.single()
+        val storedRoute = checkpoint.provider
+        val storedAvailable = when (storedRoute) {
+            WorkspaceCodingRoleRouter.Provider.XKIRO ->
+                xKiroPermitted &&
+                    WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.XKIRO_FREE)
+            WorkspaceCodingRoleRouter.Provider.GROQ ->
+                groqPermitted &&
+                    WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.GROQ_FREE)
+        }
+        val route = if (storedAvailable) storedRoute else
+            alternateProvider(storedRoute)
+                ?: throw IllegalStateException(
+                    "Saved coding provider is unavailable and no permitted fallback is ready."
+                )
+        selectedProvider = route
+        listener.onEvent(
+            WorkspaceWorkPhase.RECOVERING,
+            "Re-reading pinned source before provider resume",
+            path + " · " + checkpoint.receipt.commitSha.take(12),
+        )
+        dispatch(
+            run,
+            WorkspaceGitHubConnector.client,
+            WorkspaceGitHubConnector.fileContentRequest(
+                token = token,
+                repository = saved.repository,
+                headSha = checkpoint.receipt.commitSha,
+                path = path,
+            ),
+            "Pinned source could not be re-read; pre-commit checkpoint was preserved.",
+        ) { response ->
+            val source = WorkspaceGitHubConnector.readTextFile(response, path)
+            originalSource = source
+            val prompt = WorkspaceGitHubSelfEdit.prompt(instruction, path, source)
+            sendProvider(
+                run = run,
+                route = route,
+                prompt = prompt,
+                sourceForPatch = source,
+                expectedHead = checkpoint.receipt.commitSha,
+                repair = false,
+                fallbackUsed = route != storedRoute,
+            )
+        }
     }
 
     @Synchronized fun start(message: String) {
@@ -363,6 +422,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         val selected = requireNotNull(candidate)
         val label = providerName(route)
         selectedProvider = route
+        if (!repair) savePreCommitCheckpoint(expectedHead, selected.path)
         listener.onEvent(
             if (repair) WorkspaceWorkPhase.RECOVERING else WorkspaceWorkPhase.CODING,
             if (repair) "Repairing failed exact CI" else "Preparing bounded GitHub edit",
@@ -841,6 +901,27 @@ internal class WorkspaceGitHubSelfEditFlow(
             clearState()
         }
         listener.onError(message)
+    }
+
+    private fun savePreCommitCheckpoint(
+        expectedHead: String,
+        path: String,
+    ) {
+        val saved = requireNotNull(connection)
+        val checkedPath = WorkspaceGitHubWritePolicy.requirePath(path)
+        val provider = requireNotNull(selectedProvider).name
+        require(CHECKPOINT_SHA.matches(expectedHead)) { "Pre-commit checkpoint SHA is invalid" }
+        preferences.edit()
+            .putString(CP_SHA, expectedHead)
+            .putString(CP_PREVIOUS_HEAD, expectedHead)
+            .putString(CP_REPO, saved.repository)
+            .putString(CP_BRANCH, saved.branch)
+            .putString(CP_PATH, checkedPath)
+            .putString(CP_PROVIDER, provider)
+            .putString(CP_PHASE, "pre_commit")
+            .putString(CP_INSTRUCTION, instruction)
+            .putInt(CP_REPAIR_ATTEMPT, 0)
+            .apply()
     }
 
     private fun saveCheckpoint(
