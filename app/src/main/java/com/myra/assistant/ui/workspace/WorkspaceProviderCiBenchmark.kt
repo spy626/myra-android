@@ -139,7 +139,8 @@ internal object WorkspaceProviderCiTarget {
         "raw", "limit", "WorkspaceProviderCiRules", "normalize", "asSequence", "map", "it",
         "trim", "lowercase", "filter", "filterNot", "isEmpty", "isNotEmpty", "isBlank",
         "isNotBlank", "distinct", "toSet", "sorted", "toList", "take", "coerceAtLeast",
-        "joinToString", "size",
+        "coerceAtMost", "coerceIn", "maxOf", "minOf", "joinToString", "size", "count",
+        "if", "else", "when",
     )
 
     private val forbidden = Regex(
@@ -182,8 +183,10 @@ internal object WorkspaceProviderCiTarget {
         }
         val identifiers = Regex("[A-Za-z_][A-Za-z0-9_]*")
             .findAll(clean).map { it.value }.toSet()
-        require(identifiers.all { it in allowedIdentifiers }) {
-            "$label used a non-whitelisted identifier"
+        val unknown = identifiers - allowedIdentifiers
+        require(unknown.isEmpty()) {
+            "$label used non-whitelisted identifier(s): " +
+                unknown.sorted().joinToString(",").take(120)
         }
         require(clean.count { it == '\n' } <= 24) { "$label is too complex" }
         return clean
@@ -213,7 +216,8 @@ internal object WorkspaceProviderCiTarget {
             "Provider preview expression did not use the cross-file normalize contract"
         }
         require(count.contains("WorkspaceProviderCiRules") &&
-            count.contains("normalize") && count.contains("size")) {
+            count.contains("normalize") &&
+            (count.contains("size") || count.contains("count"))) {
             "Provider count expression did not use the cross-file normalize contract"
         }
 

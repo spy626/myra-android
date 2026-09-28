@@ -42,6 +42,23 @@ class WorkspaceProviderCiBenchmarkTest {
         assertTrue(prepared.targetSource.contains("fun count"))
     }
 
+    @Test fun equivalentPureKotlinPreviewAndCountFormsAreAccepted() {
+        val prepared = WorkspaceProviderCiBenchmark.prepare(
+            """{"normalizeExpression":"raw.map { it.trim().lowercase() }.filter { it.isNotBlank() }.distinct().sorted()","previewExpression":"if (limit <= 0) \"\" else WorkspaceProviderCiRules.normalize(raw).take(limit).joinToString(\"|\")","countExpression":"WorkspaceProviderCiRules.normalize(raw).count()"}"""
+        )
+        assertTrue(prepared.targetSource.contains("if (limit <= 0)"))
+        assertTrue(prepared.targetSource.contains(".count()"))
+    }
+
+    @Test fun rejectionReportsOnlyUnknownIdentifierNames() {
+        val error = runCatching {
+            WorkspaceProviderCiBenchmark.prepare(
+                """{"normalizeExpression":"raw.sorted()","previewExpression":"mystery(WorkspaceProviderCiRules.normalize(raw), limit)","countExpression":"WorkspaceProviderCiRules.normalize(raw).size"}"""
+            )
+        }.exceptionOrNull()
+        assertTrue(error?.message.orEmpty().contains("mystery"))
+    }
+
     @Test fun crossFileCoordinationIsMandatory() {
         val badPreview = runCatching {
             WorkspaceProviderCiBenchmark.prepare(
