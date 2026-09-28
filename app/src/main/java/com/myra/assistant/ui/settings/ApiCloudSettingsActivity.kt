@@ -23,10 +23,12 @@ import com.myra.assistant.ui.workspace.WorkspaceCustomProviderStore
 import com.myra.assistant.ui.workspace.WorkspaceCustomProviderConnection
 import com.myra.assistant.ui.workspace.WorkspaceWebsiteGroqFallback
 import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
+import com.myra.assistant.ui.workspace.WorkspaceProviderBakeOffRunner
 
 /** Non-voice provider credentials only. Gemini Live is configured in Voice & AI Models. */
 class ApiCloudSettingsActivity : AppCompatActivity() {
     private var customProviderTestCall: Call? = null
+    private var providerBakeOffRunner: WorkspaceProviderBakeOffRunner? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -174,6 +176,33 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         b.websiteGroqFallbackSwitch.setOnCheckedChangeListener { _, enabled ->
             workspacePrefs.edit().putBoolean(WorkspaceWebsiteGroqFallback.PREFERENCE_KEY, enabled).apply()
         }
+        b.providerBakeOffButton.setOnClickListener {
+            if (providerBakeOffRunner?.isRunning == true) {
+                Toast.makeText(this, "Provider bake-off is already running", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val runner = WorkspaceProviderBakeOffRunner(
+                context = this,
+                keys = keys,
+                listener = object : WorkspaceProviderBakeOffRunner.Listener {
+                    override fun onUpdate(text: String, done: Boolean) {
+                        runOnUiThread {
+                            b.providerBakeOffStatus.text = text
+                            b.providerBakeOffButton.isEnabled = done
+                            b.providerBakeOffButton.text = if (done)
+                                "RUN QUICK CODING BAKE-OFF" else "RUNNING…"
+                            if (done) providerBakeOffRunner = null
+                        }
+                    }
+                },
+            )
+            providerBakeOffRunner = runner
+            b.providerBakeOffButton.isEnabled = false
+            b.providerBakeOffButton.text = "RUNNING…"
+            b.providerBakeOffStatus.text =
+                "Starting synthetic provider test… no project/GitHub source will be sent."
+            runner.start()
+        }
         b.backButton.setOnClickListener { finish() }
         b.deepResearchButton.setOnClickListener {
             startActivity(Intent(this, DeepResearchSettingsActivity::class.java))
@@ -228,6 +257,8 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
     override fun onDestroy() {
         customProviderTestCall?.cancel()
         customProviderTestCall = null
+        providerBakeOffRunner?.cancel()
+        providerBakeOffRunner = null
         super.onDestroy()
     }
 }
