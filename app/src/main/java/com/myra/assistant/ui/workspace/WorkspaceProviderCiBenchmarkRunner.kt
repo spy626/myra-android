@@ -89,11 +89,9 @@ internal class WorkspaceProviderCiBenchmarkRunner(
             "llm7",
             {
                 val key = firstKey(ApiKeyStore.LLM7)
-                Pair(
-                    prefs.getBoolean(WorkspaceLlm7Free.PREFERENCE_KEY, false) &&
-                        WorkspaceLlm7Free.validKey(key),
-                    key,
-                )
+                // Running REAL CI is separate one-time consent for this fixed synthetic fixture.
+                // It never enables LLM7 for normal chat, project source, memory, voice or photos.
+                Pair(WorkspaceLlm7Free.validKey(key), key)
             },
             { key -> WorkspaceLlm7Free.request(key, listOf(message)) },
             WorkspaceLlm7Free.client,
