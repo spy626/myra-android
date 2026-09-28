@@ -54,4 +54,21 @@ class WorkspaceGitHubSelfEditBatchTest {
         assertTrue(prompt.contains("src/A.kt"))
         assertTrue(prompt.contains("src/B.kt"))
     }
+    @Test fun reviewerRevisionPromptCarriesFeedbackWithoutClaimingVerification() {
+        val prompt = WorkspaceGitHubSelfEditBatch.reviewRevisionPrompt(
+            message = "GitHub checkout code fix karo",
+            sources = linkedMapOf(
+                "src/A.kt" to "fun a() = 1\n",
+                "src/B.kt" to "fun b() = 2\n",
+            ),
+            reviewSummary = "Handle negative input before committing.",
+            reviewRisks = listOf("negative limit can crash"),
+        )
+        assertTrue(prompt.contains("SAME LYRA GitHub task"))
+        assertTrue(prompt.contains("Handle negative input"))
+        assertTrue(prompt.contains("negative limit can crash"))
+        assertTrue(prompt.contains("src/A.kt"))
+        assertTrue(prompt.contains("Do not claim build"))
+    }
+
 }

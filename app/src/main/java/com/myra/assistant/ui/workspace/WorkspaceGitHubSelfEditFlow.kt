@@ -56,6 +56,8 @@ internal class WorkspaceGitHubSelfEditFlow(
         const val CP_PHASE = "workspace_github_self_edit_checkpoint_phase"
         const val CP_INSTRUCTION = "workspace_github_self_edit_checkpoint_instruction"
         const val CP_REPAIR_ATTEMPT = "workspace_github_self_edit_checkpoint_repair_attempt"
+        const val CP_REVIEW_REVISION_ATTEMPT =
+            "workspace_github_self_edit_checkpoint_review_revision_attempt"
         val CHECKPOINT_SHA = Regex("[0-9a-f]{40,64}")
         val CHECKPOINT_PHASES = setOf(
             "pre_commit", "waiting_ci", "repair_waiting_ci", "ci_failed", "ci_green"
@@ -75,6 +77,7 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var groqPermitted = false
     private var selectedProvider: WorkspaceCodingRoleRouter.Provider? = null
     private var repairAttempt = 0
+    private var reviewRevisionAttempt = 0
     private var grant: WorkspaceGitHubConnector.InstallationGrant? = null
     private var access: WorkspaceGitHubConnector.WriteAccess? = null
     private var candidates: List<WorkspaceAgentReachGitHubRelevance.Candidate> = emptyList()
@@ -87,6 +90,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         val phase: String,
         val instruction: String,
         val repairAttempt: Int,
+        val reviewRevisionAttempt: Int,
     )
 
     val isRunning: Boolean get() = synchronized(this) { active != null || ciWatching }
@@ -141,6 +145,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             WorkspaceCodingAutoFallback.groqPermitted(fallbackEnabled, groqFreeZdr, savedGroqKey)
         selectedProvider = checkpoint.provider
         repairAttempt = checkpoint.repairAttempt
+        reviewRevisionAttempt = checkpoint.reviewRevisionAttempt
         codingPlan = WorkspaceGitHubCodingPlan.create(
             goal = checkpoint.instruction,
             repository = checkpoint.receipt.repository,
@@ -610,6 +615,14 @@ internal class WorkspaceGitHubSelfEditFlow(
     ) {
         val reviewerRoute = alternateProvider(primaryRoute)
         if (reviewerRoute == null) {
+            if (reviewRevisionAttempt > 0) {
+                fail(
+                    run,
+                    null,
+                    "Mandatory second review is unavailable after revision; no GitHub write was attempted.",
+                )
+                return
+            }
             listener.onEvent(
                 WorkspaceWorkPhase.VERIFYING,
                 "Second-provider review unavailable",
@@ -651,6 +664,14 @@ internal class WorkspaceGitHubSelfEditFlow(
                     )
             }
         }.getOrElse {
+            if (reviewRevisionAttempt > 0) {
+                fail(
+                    run,
+                    null,
+                    "Mandatory second review could not be prepared after revision; no GitHub write was attempted.",
+                )
+                return
+            }
             listener.onEvent(
                 WorkspaceWorkPhase.VERIFYING,
                 "Reviewer unavailable before send",
@@ -675,6 +696,15 @@ internal class WorkspaceGitHubSelfEditFlow(
                     if (run != generation || active !== call) return
                     active = null
                 }
+                if (reviewRevisionAttempt > 0) {
+                    fail(
+                        run,
+                        null,
+                        "Mandatory second review had an uncertain network outcome after revision; " +
+                            "no GitHub write was attempted.",
+                    )
+                    return
+                }
                 listener.onEvent(
                     WorkspaceWorkPhase.VERIFYING,
                     "Reviewer network unavailable",
@@ -695,6 +725,15 @@ internal class WorkspaceGitHubSelfEditFlow(
                 if (!response.isSuccessful) {
                     val status = response.code
                     response.close()
+                    if (reviewRevisionAttempt > 0) {
+                        fail(
+                            run,
+                            null,
+                            "Mandatory second review HTTP $status was unavailable after revision; " +
+                                "no GitHub write was attempted.",
+                        )
+                        return
+                    }
                     listener.onEvent(
                         WorkspaceWorkPhase.VERIFYING,
                         "Reviewer HTTP $status unavailable",
@@ -732,11 +771,22 @@ internal class WorkspaceGitHubSelfEditFlow(
                         commit(run, prepared, expectedHead, repair)
                     }
                     WorkspaceGitHubPatchReviewer.Decision.REVISE -> {
-                        fail(
-                            run,
-                            null,
-                            "Reviewer requested revision before commit: " + review.summary +
-                                ". No GitHub write was attempted.",
+                        if (reviewRevisionAttempt >= 1) {
+                            fail(
+                                run,
+                                null,
+                                "Reviewer requested another revision after the single bounded revision: " +
+                                    review.summary + ". No GitHub write was attempted.",
+                            )
+                            return
+                        }
+                        reviseAfterReview(
+                            run = run,
+                            primaryRoute = primaryRoute,
+                            originals = originals,
+                            expectedHead = expectedHead,
+                            repair = repair,
+                            review = review,
                         )
                     }
                     WorkspaceGitHubPatchReviewer.Decision.REJECT -> {
@@ -748,6 +798,137 @@ internal class WorkspaceGitHubSelfEditFlow(
                         )
                     }
                 }
+            }
+        })
+    }
+
+    private fun reviseAfterReview(
+        run: Long,
+        primaryRoute: WorkspaceCodingRoleRouter.Provider,
+        originals: Map<String, String>,
+        expectedHead: String,
+        repair: Boolean,
+        review: WorkspaceGitHubPatchReviewer.Review,
+    ) {
+        val label = providerName(primaryRoute)
+        val revisionPrompt = runCatching {
+            WorkspaceGitHubSelfEditBatch.reviewRevisionPrompt(
+                message = instruction,
+                sources = originals,
+                reviewSummary = review.summary,
+                reviewRisks = review.risks,
+            )
+        }.getOrElse { error ->
+            fail(run, null, error.message ?: "Reviewer revision context was rejected locally.")
+            return
+        }
+        listener.onEvent(
+            WorkspaceWorkPhase.RECOVERING,
+            "Applying one reviewer-requested revision",
+            "$label · pre-commit",
+        )
+        val request = runCatching {
+            when (primaryRoute) {
+                WorkspaceCodingRoleRouter.Provider.XKIRO ->
+                    WorkspaceXKiroFree.deliberationRequest(xKiroKey, revisionPrompt)
+                WorkspaceCodingRoleRouter.Provider.GROQ ->
+                    WorkspaceGroqFree.request(
+                        groqKey,
+                        listOf(
+                            WorkspaceConversationStore.Message(
+                                "github-review-revision",
+                                "user",
+                                revisionPrompt,
+                                nowMs(),
+                            )
+                        ),
+                    )
+            }
+        }.getOrElse { error ->
+            fail(
+                run,
+                null,
+                "Primary coder could not prepare the reviewer-requested revision; " +
+                    "no GitHub write was attempted. " +
+                    (error.message ?: ""),
+            )
+            return
+        }
+
+        val client = when (primaryRoute) {
+            WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.deliberationClient
+            WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceFreeAiSuggestion.client
+        }
+        val call = client.newCall(request)
+        synchronized(this) {
+            if (run != generation) return
+            active = call
+        }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) return
+                    active = null
+                }
+                fail(
+                    run,
+                    null,
+                    "Primary coder revision had an uncertain network outcome; " +
+                        "no automatic resend and no GitHub write was attempted.",
+                )
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) {
+                        response.close()
+                        return
+                    }
+                    active = null
+                }
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                if (!response.isSuccessful) {
+                    val status = response.code
+                    response.close()
+                    fail(
+                        run,
+                        null,
+                        "Primary coder revision HTTP $status failed; no GitHub write was attempted.",
+                    )
+                    return
+                }
+                val revised = runCatching {
+                    val raw = when (primaryRoute) {
+                        WorkspaceCodingRoleRouter.Provider.XKIRO ->
+                            WorkspaceXKiroFree.readDeliberation(response)
+                        WorkspaceCodingRoleRouter.Provider.GROQ ->
+                            WorkspaceGroqFree.read(response)
+                    }
+                    WorkspaceGitHubSelfEditBatch.prepare(raw, originals)
+                }.getOrElse { error ->
+                    fail(
+                        run,
+                        null,
+                        "Reviewer-requested revision was rejected locally; no GitHub write was attempted. " +
+                            (error.message ?: ""),
+                    )
+                    return
+                }
+                reviewRevisionAttempt = 1
+                savePreCommitCheckpoint(expectedHead, originals.keys.toList())
+                listener.onEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "Revised patch accepted locally",
+                    "$label · mandatory second review",
+                )
+                reviewOrCommit(
+                    run = run,
+                    primaryRoute = primaryRoute,
+                    prepared = revised,
+                    originals = originals,
+                    expectedHead = expectedHead,
+                    repair = repair,
+                )
             }
         })
     }
@@ -1151,6 +1332,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             .putString(CP_PHASE, "pre_commit")
             .putString(CP_INSTRUCTION, instruction)
             .putInt(CP_REPAIR_ATTEMPT, 0)
+            .putInt(CP_REVIEW_REVISION_ATTEMPT, reviewRevisionAttempt)
             .apply()
     }
 
@@ -1174,6 +1356,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             .putString(CP_PHASE, phase)
             .putString(CP_INSTRUCTION, instruction)
             .putInt(CP_REPAIR_ATTEMPT, repairAttempt)
+            .putInt(CP_REVIEW_REVISION_ATTEMPT, reviewRevisionAttempt)
             .apply()
     }
 
@@ -1211,6 +1394,8 @@ internal class WorkspaceGitHubSelfEditFlow(
         }
         val attempts = preferences.getInt(CP_REPAIR_ATTEMPT, 0)
         require(attempts in 0..1) { "Checkpoint repair count is invalid" }
+        val reviewAttempts = preferences.getInt(CP_REVIEW_REVISION_ATTEMPT, 0)
+        require(reviewAttempts in 0..1) { "Checkpoint review revision count is invalid" }
         return Checkpoint(
             receipt = WorkspaceGitHubConnector.CommitReceipt(
                 repository = repository,
@@ -1223,6 +1408,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             phase = phase,
             instruction = savedInstruction,
             repairAttempt = attempts,
+            reviewRevisionAttempt = reviewAttempts,
         )
     }
 
@@ -1238,6 +1424,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             .remove(CP_PHASE)
             .remove(CP_INSTRUCTION)
             .remove(CP_REPAIR_ATTEMPT)
+            .remove(CP_REVIEW_REVISION_ATTEMPT)
             .apply()
     }
 
@@ -1251,6 +1438,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         groqPermitted = false
         selectedProvider = null
         repairAttempt = 0
+        reviewRevisionAttempt = 0
         grant = null
         access = null
         candidates = emptyList()

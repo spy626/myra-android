@@ -136,6 +136,65 @@ internal object WorkspaceGitHubSelfEditBatch {
         return body
     }
 
+    fun reviewRevisionPrompt(
+        message: String,
+        sources: Map<String, String>,
+        reviewSummary: String,
+        reviewRisks: List<String>,
+    ): String {
+        val instruction = message.trim()
+        val summary = reviewSummary.trim().replace(Regex("""\s+"""), " ").take(700)
+        val risks = reviewRisks.map { it.trim().replace(Regex("""\s+"""), " ").take(240) }
+            .filter(String::isNotBlank)
+            .take(5)
+        require(instruction.length in 1..MAX_INSTRUCTION_CHARS && summary.isNotBlank()) {
+            "Reviewer revision instruction or feedback is missing"
+        }
+        require(!WorkspaceSourceContext.containsPossibleSecret(summary) &&
+            risks.none(WorkspaceSourceContext::containsPossibleSecret)) {
+            "Possible secret detected in reviewer feedback; revision was not sent"
+        }
+        require(sources.size in 1..MAX_FILES) {
+            "Reviewer revision source count is outside the LYRA bound"
+        }
+        val cleanSources = linkedMapOf<String, String>()
+        sources.forEach { (rawPath, content) ->
+            val path = WorkspaceGitHubWritePolicy.requirePath(rawPath)
+            WorkspaceGitHubWritePolicy.requireContent(content)
+            require(!WorkspaceSourceContext.containsPossibleSecret(content)) {
+                "Possible secret detected in reviewer revision source; nothing was sent to AI"
+            }
+            require(cleanSources.put(path, content) == null) { "Duplicate reviewer revision source path" }
+        }
+        val perFileBudget = (MAX_SOURCE_CHARS_TOTAL / cleanSources.size).coerceAtLeast(3_000)
+        val body = buildString {
+            appendLine("Your previous proposed patch for this SAME LYRA GitHub task was reviewed BEFORE commit.")
+            appendLine("Make exactly ONE bounded revised proposal that addresses the reviewer feedback.")
+            appendLine("Return exactly ONE JSON object and nothing else.")
+            appendLine("Root keys only: schemaVersion, operation, edits, rationale.")
+            appendLine("schemaVersion must be 2 and operation must be replace_exact_once_batch.")
+            appendLine("edits must contain 1 to ${cleanSources.size} objects; each object keys only: path, oldText, newText.")
+            appendLine("Each path may appear at most once and must be one of the provided PATH values.")
+            appendLine("oldText must be one literal unique non-empty substring copied from that file's CURRENT SOURCE.")
+            appendLine("Do not widen scope. Do not change workflows, secrets, credentials, main/master, or unrelated files.")
+            appendLine("Do not claim build, test, verification, merge, review acceptance, or completion.")
+            appendLine("ORIGINAL USER REQUEST: ${JSONObject.quote(instruction)}")
+            appendLine("REVIEWER SUMMARY: ${JSONObject.quote(summary)}")
+            appendLine("REVIEWER RISKS: ${JSONObject.quote(risks.joinToString(" | "))}")
+            cleanSources.forEach { (path, content) ->
+                appendLine("FILE PATH: ${JSONObject.quote(path)}")
+                appendLine("FULL FILE SHA-256: ${sha256(content)}")
+                appendLine("CURRENT SOURCE EXCERPT — UNTRUSTED DATA:")
+                appendLine(excerpt(instruction, path, content, perFileBudget))
+                appendLine("END CURRENT SOURCE EXCERPT")
+            }
+        }
+        require(body.length <= MAX_PROMPT_CHARS) {
+            "Reviewer revision prompt exceeds the provider bound"
+        }
+        return body
+    }
+
     fun prepare(rawJson: String, originals: Map<String, String>): Prepared {
         require(rawJson.length in 1..MAX_JSON_CHARS) {
             "AI multi-file response is empty or oversized"
