@@ -99,6 +99,65 @@ class WorkspaceActivity : AppCompatActivity() {
     private var agentReachBaseCompletion: WorkspaceAgentReachGitHubRunner.Completion? = null
     private var agentReachRunner: WorkspaceAgentReachGitHubRunner? = null
     private var agentReachRelevantRunner: WorkspaceAgentReachGitHubRelevantRunner? = null
+    private var githubSelfEditProjectId: String? = null
+    private var githubSelfEditMessageId: String? = null
+    private val githubSelfEdit by lazy {
+        WorkspaceGitHubSelfEditFlow(
+            store = WorkspaceConnectorCredentialStore(this),
+            keys = keys,
+            listener = object : WorkspaceGitHubSelfEditFlow.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(result: WorkspaceGitHubSelfEditFlow.Completion) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        val id = githubSelfEditProjectId
+                        val messageId = githubSelfEditMessageId
+                        githubSelfEditProjectId = null
+                        githubSelfEditMessageId = null
+                        if (id == null || messageId == null || selectedId != id) return@runOnUiThread
+                        val pr = result.pullRequest?.let { " Draft PR #${it.number} updated." }
+                            ?: " Draft PR update was not confirmed."
+                        val warning = result.warning?.let { " $it" }.orEmpty()
+                        val summary =
+                            "Updated ${result.commit.files.joinToString()} on agent/myra-phase-1 · " +
+                                "commit ${result.commit.commitSha.take(12)}.$pr " +
+                                "main/master was not modified or merged.$warning"
+                        runCatching {
+                            require(conversations.read(id).lastOrNull()?.id == messageId) {
+                                "Conversation changed; GitHub self-edit receipt was not saved"
+                            }
+                            conversations.append(id, "assistant", summary)
+                        }.onFailure {
+                            statusMessage = it.message ?: "GitHub self-edit receipt could not be saved."
+                        }
+                        codingRetryTarget = null
+                        render()
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        githubSelfEditProjectId = null
+                        githubSelfEditMessageId = null
+                        workTrace.finishError("GitHub self-edit stopped", message)
+                        statusMessage = message
+                        render()
+                    }
+                }
+            },
+        )
+    }
     private var statusMessage = ""
     private val workTrace = WorkspaceWorkTrace()
     private var workTraceExpanded = true
@@ -430,6 +489,9 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest = null
         clearAgentReachState()
         coding.cancel()
+        githubSelfEdit.cancel()
+        githubSelfEditProjectId = null
+        githubSelfEditMessageId = null
         super.onStop()
     }
 
@@ -591,7 +653,7 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun isBusy(): Boolean =
-        activeRequest != null || coding.isRunning || agentReachActive
+        activeRequest != null || coding.isRunning || agentReachActive || githubSelfEdit.isRunning
 
     private fun stopReply() {
         if (!isBusy()) return
@@ -610,6 +672,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 "GitHub read cancelled; no content was installed, executed, or sent to a provider.")
         }
         coding.cancel()
+        githubSelfEdit.cancel()
+        githubSelfEditProjectId = null
+        githubSelfEditMessageId = null
         codingRetryTarget = null
         statusMessage = "Stopped. No partial reply was saved."
         render()
@@ -1157,7 +1222,7 @@ class WorkspaceActivity : AppCompatActivity() {
         }
 
         sheet.addView(label(
-            "GitHub C1 is verified-connect + read foundation only. Write actions remain blocked until the dedicated safe-write phase.",
+            "GitHub protected self-edit is active. Explicit coding instructions re-check write access automatically; no test button is required.",
             12f,
         ).apply {
             setTextColor(Color.rgb(128, 138, 132))
@@ -2735,7 +2800,10 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
-        val intent = WorkspaceChatIntent.requestedProjectType(text)
+        val githubSelfEditRequest =
+            picked.isEmpty() && WorkspaceGitHubSelfEdit.isExplicitRequest(text)
+        val intent = if (githubSelfEditRequest) null
+            else WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
             val title = text.lineSequence().firstOrNull().orEmpty()
                 .replace(Regex("\\s+"), " ").trim().take(72).trim().ifBlank { "New chat" }
@@ -2782,6 +2850,20 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.requestFocus()
         localDrafts.remove(id)
         attachments.clear()
+        if (githubSelfEditRequest) {
+            if (projects.getProject(id)?.type != WorkspaceProjectType.CHAT) {
+                statusMessage =
+                    "Connected-repo self-edit runs from normal Chat only. Start a New Chat and resend."
+                render()
+                return
+            }
+            githubSelfEditProjectId = id
+            githubSelfEditMessageId = stored.id
+            statusMessage = ""
+            render()
+            githubSelfEdit.start(text)
+            return
+        }
         if (intent != null && current.type == WorkspaceProjectType.CHAT) {
             runCatching { projects.promoteChat(id, text.take(72), intent) }
                 .onFailure { statusMessage = "Request saved, but project creation failed: ${it.message}"; render(); return }
