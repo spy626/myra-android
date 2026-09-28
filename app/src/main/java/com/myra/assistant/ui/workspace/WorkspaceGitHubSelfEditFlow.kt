@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
+import java.util.Locale
 
 /**
  * One current-turn GitHub self-edit transaction:
@@ -49,6 +50,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         const val CP_REPO = "workspace_github_self_edit_checkpoint_repo"
         const val CP_BRANCH = "workspace_github_self_edit_checkpoint_branch"
         const val CP_PATH = "workspace_github_self_edit_checkpoint_path"
+        const val CP_PATHS = "workspace_github_self_edit_checkpoint_paths"
         const val CP_PROVIDER = "workspace_github_self_edit_checkpoint_provider"
         const val CP_PHASE = "workspace_github_self_edit_checkpoint_phase"
         const val CP_INSTRUCTION = "workspace_github_self_edit_checkpoint_instruction"
@@ -74,8 +76,8 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var repairAttempt = 0
     private var grant: WorkspaceGitHubConnector.InstallationGrant? = null
     private var access: WorkspaceGitHubConnector.WriteAccess? = null
-    private var candidate: WorkspaceAgentReachGitHubRelevance.Candidate? = null
-    private var originalSource = ""
+    private var candidates: List<WorkspaceAgentReachGitHubRelevance.Candidate> = emptyList()
+    private val originalSources = linkedMapOf<String, String>()
 
     private data class Checkpoint(
         val receipt: WorkspaceGitHubConnector.CommitReceipt,
@@ -137,13 +139,6 @@ internal class WorkspaceGitHubSelfEditFlow(
             WorkspaceCodingAutoFallback.groqPermitted(fallbackEnabled, groqFreeZdr, savedGroqKey)
         selectedProvider = checkpoint.provider
         repairAttempt = checkpoint.repairAttempt
-        candidate = WorkspaceAgentReachGitHubRelevance.Candidate(
-            path = checkpoint.receipt.files.single(),
-            score = 0,
-            reason = "saved self-edit checkpoint",
-            size = null,
-        )
-
         listener.onEvent(
             WorkspaceWorkPhase.RECOVERING,
             "Resuming saved GitHub coding checkpoint",
@@ -192,8 +187,6 @@ internal class WorkspaceGitHubSelfEditFlow(
         checkpoint: Checkpoint,
         token: String,
     ) {
-        val saved = requireNotNull(connection)
-        val path = checkpoint.receipt.files.single()
         val storedRoute = checkpoint.provider
         val storedAvailable = when (storedRoute) {
             WorkspaceCodingRoleRouter.Provider.XKIRO ->
@@ -211,28 +204,24 @@ internal class WorkspaceGitHubSelfEditFlow(
         selectedProvider = route
         listener.onEvent(
             WorkspaceWorkPhase.RECOVERING,
-            "Re-reading pinned source before provider resume",
-            path + " · " + checkpoint.receipt.commitSha.take(12),
+            "Re-reading pinned sources before provider resume",
+            checkpoint.receipt.files.size.toString() + " file(s) · " +
+                checkpoint.receipt.commitSha.take(12),
         )
-        dispatch(
-            run,
-            WorkspaceGitHubConnector.client,
-            WorkspaceGitHubConnector.fileContentRequest(
-                token = token,
-                repository = saved.repository,
-                headSha = checkpoint.receipt.commitSha,
-                path = path,
-            ),
-            "Pinned source could not be re-read; pre-commit checkpoint was preserved.",
-        ) { response ->
-            val source = WorkspaceGitHubConnector.readTextFile(response, path)
-            originalSource = source
-            val prompt = WorkspaceGitHubSelfEdit.prompt(instruction, path, source)
+        readFilesAtSha(
+            run = run,
+            token = token,
+            headSha = checkpoint.receipt.commitSha,
+            paths = checkpoint.receipt.files,
+        ) { sources ->
+            originalSources.clear()
+            originalSources.putAll(sources)
+            val prompt = WorkspaceGitHubSelfEditBatch.prompt(instruction, sources)
             sendProvider(
                 run = run,
                 route = route,
                 prompt = prompt,
-                sourceForPatch = source,
+                sourcesForPatch = sources,
                 expectedHead = checkpoint.receipt.commitSha,
                 repair = false,
                 fallbackUsed = route != storedRoute,
@@ -339,36 +328,71 @@ internal class WorkspaceGitHubSelfEditFlow(
             "GitHub repository map could not be read; no write was attempted.",
         ) { response ->
             val map = WorkspaceGitHubConnector.readPathMap(response, checked.headSha)
-            candidate = WorkspaceGitHubSelfEdit.selectCandidate(instruction, map)
-            readCandidate(run)
+            candidates = WorkspaceGitHubSelfEditBatch.selectCandidates(instruction, map)
+            readSelectedFiles(run)
         }
     }
 
-    private fun readCandidate(run: Long) {
-        val saved = requireNotNull(connection)
+    private fun readSelectedFiles(run: Long) {
         val fresh = requireNotNull(grant)
         val checked = requireNotNull(access)
-        val selected = requireNotNull(candidate)
-        listener.onEvent(WorkspaceWorkPhase.READING, "Reading one target file", selected.path)
+        val paths = candidates.map { it.path }
+        listener.onEvent(
+            WorkspaceWorkPhase.READING,
+            "Reading bounded related source set",
+            paths.size.toString() + " file(s)",
+        )
+        readFilesAtSha(run, fresh.accessToken, checked.headSha, paths) { sources ->
+            originalSources.clear()
+            originalSources.putAll(sources)
+            val totalChars = sources.values.sumOf(String::length)
+            selectedProvider = requireNotNull(
+                WorkspaceCodingRoleRouter.select(
+                    instruction,
+                    totalChars,
+                    xKiroPermitted &&
+                        WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.XKIRO_FREE),
+                    groqPermitted &&
+                        WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.GROQ_FREE),
+                )
+            ) { "All permitted coding providers are cooling down or unavailable; no source was sent" }
+            val prompt = WorkspaceGitHubSelfEditBatch.prompt(instruction, sources)
+            propose(run, prompt)
+        }
+    }
+
+    private fun readFilesAtSha(
+        run: Long,
+        token: String,
+        headSha: String,
+        paths: List<String>,
+        index: Int = 0,
+        collected: LinkedHashMap<String, String> = linkedMapOf(),
+        onReady: (LinkedHashMap<String, String>) -> Unit,
+    ) {
+        require(paths.size in 1..WorkspaceGitHubSelfEditBatch.MAX_FILES) {
+            "Selected source file count is outside the LYRA multi-file bound"
+        }
+        if (index >= paths.size) {
+            onReady(collected)
+            return
+        }
+        val saved = requireNotNull(connection)
+        val path = WorkspaceGitHubWritePolicy.requirePath(paths[index])
         dispatch(
             run,
             WorkspaceGitHubConnector.client,
             WorkspaceGitHubConnector.fileContentRequest(
-                fresh.accessToken, saved.repository, checked.headSha, selected.path),
-            "GitHub target file could not be read; no write was attempted.",
+                token = token,
+                repository = saved.repository,
+                headSha = headSha,
+                path = path,
+            ),
+            "GitHub source file could not be read; no write was attempted.",
         ) { response ->
-            val source = WorkspaceGitHubConnector.readTextFile(response, selected.path)
-            originalSource = source
-            selectedProvider = requireNotNull(
-                WorkspaceCodingRoleRouter.select(
-                    instruction,
-                    source.length,
-                    xKiroPermitted && WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.XKIRO_FREE),
-                    groqPermitted && WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.GROQ_FREE),
-                )
-            ) { "All permitted coding providers are cooling down or unavailable; no source was sent" }
-            val prompt = WorkspaceGitHubSelfEdit.prompt(instruction, selected.path, source)
-            propose(run, prompt)
+            val source = WorkspaceGitHubConnector.readTextFile(response, path)
+            require(collected.put(path, source) == null) { "Duplicate selected source path" }
+            readFilesAtSha(run, token, headSha, paths, index + 1, collected, onReady)
         }
     }
 
@@ -378,7 +402,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             run = run,
             route = route,
             prompt = prompt,
-            sourceForPatch = originalSource,
+            sourcesForPatch = LinkedHashMap(originalSources),
             expectedHead = requireNotNull(access).headSha,
             repair = false,
             fallbackUsed = false,
@@ -414,19 +438,21 @@ internal class WorkspaceGitHubSelfEditFlow(
         run: Long,
         route: WorkspaceCodingRoleRouter.Provider,
         prompt: String,
-        sourceForPatch: String,
+        sourcesForPatch: Map<String, String>,
         expectedHead: String,
         repair: Boolean,
         fallbackUsed: Boolean,
     ) {
-        val selected = requireNotNull(candidate)
+        require(sourcesForPatch.size in 1..WorkspaceGitHubSelfEditBatch.MAX_FILES) {
+            "Provider source set is outside the LYRA multi-file bound"
+        }
         val label = providerName(route)
         selectedProvider = route
-        if (!repair) savePreCommitCheckpoint(expectedHead, selected.path)
+        if (!repair) savePreCommitCheckpoint(expectedHead, sourcesForPatch.keys.toList())
         listener.onEvent(
             if (repair) WorkspaceWorkPhase.RECOVERING else WorkspaceWorkPhase.CODING,
             if (repair) "Repairing failed exact CI" else "Preparing bounded GitHub edit",
-            "$label · ${selected.path}",
+            "$label · ${sourcesForPatch.size} file(s)",
         )
 
         val providerRequest = runCatching {
@@ -455,7 +481,7 @@ internal class WorkspaceGitHubSelfEditFlow(
                         "Switching coding provider before source send",
                         "${providerName(route)} → ${providerName(alternate)}",
                     )
-                    sendProvider(run, alternate, prompt, sourceForPatch, expectedHead, repair, true)
+                    sendProvider(run, alternate, prompt, sourcesForPatch, expectedHead, repair, true)
                     return
                 }
             }
@@ -486,7 +512,7 @@ internal class WorkspaceGitHubSelfEditFlow(
                             "Switching coding provider before source send",
                             "${providerName(route)} → ${providerName(alternate)}",
                         )
-                        sendProvider(run, alternate, prompt, sourceForPatch, expectedHead, repair, true)
+                        sendProvider(run, alternate, prompt, sourcesForPatch, expectedHead, repair, true)
                         return
                     }
                 }
@@ -520,7 +546,7 @@ internal class WorkspaceGitHubSelfEditFlow(
                             "Switching after definitive provider HTTP $status",
                             "${providerName(route)} → ${providerName(alternate)}",
                         )
-                        sendProvider(run, alternate, prompt, sourceForPatch, expectedHead, repair, true)
+                        sendProvider(run, alternate, prompt, sourcesForPatch, expectedHead, repair, true)
                         return
                     }
                     fail(run, null, "$label HTTP $status; no permitted coding fallback available.")
@@ -533,7 +559,7 @@ internal class WorkspaceGitHubSelfEditFlow(
                         WorkspaceCodingRoleRouter.Provider.GROQ ->
                             WorkspaceGroqFree.read(response)
                     }
-                    WorkspaceGitHubSelfEdit.prepare(raw, selected.path, sourceForPatch)
+                    WorkspaceGitHubSelfEditBatch.prepare(raw, sourcesForPatch)
                 }.getOrElse { error ->
                     fail(run, null, error.message ?: "$label coding response was rejected.")
                     return
@@ -550,18 +576,21 @@ internal class WorkspaceGitHubSelfEditFlow(
 
     private fun commit(
         run: Long,
-        prepared: WorkspaceGitHubSelfEdit.Prepared,
+        prepared: WorkspaceGitHubSelfEditBatch.Prepared,
         expectedHead: String,
         repair: Boolean,
     ) {
         val checked = requireNotNull(access)
         val plan = WorkspaceGitHubWritePolicy.commitPlan(
             expectedHead = expectedHead,
-            message = if (repair) WorkspaceGitHubSelfEdit.repairCommitMessage(prepared.path)
-                else WorkspaceGitHubSelfEdit.commitMessage(prepared.path),
-            files = listOf(WorkspaceGitHubWritePolicy.FileChange(prepared.path, prepared.content)),
+            message = WorkspaceGitHubSelfEditBatch.commitMessage(prepared.files, repair),
+            files = prepared.files,
         )
-        listener.onEvent(WorkspaceWorkPhase.CODING, "Committing protected feature-branch edit", prepared.path)
+        listener.onEvent(
+            WorkspaceWorkPhase.CODING,
+            "Committing protected feature-branch edit",
+            prepared.files.size.toString() + " file(s)",
+        )
         dispatch(
             run,
             WorkspaceGitHubConnector.client,
@@ -569,9 +598,12 @@ internal class WorkspaceGitHubSelfEditFlow(
             "GitHub commit was not confirmed. Do not retry automatically.",
         ) { response ->
             val receipt = WorkspaceGitHubConnector.readCommitReceipt(response)
+            val expectedPaths = prepared.files.map { it.path.lowercase(Locale.US) }.toSet()
+            val receivedPaths = receipt.files.map { it.lowercase(Locale.US) }.toSet()
             require(receipt.previousHead == expectedHead &&
                 receipt.branch == checked.branch &&
-                receipt.files == listOf(prepared.path)) {
+                receipt.files.size == prepared.files.size &&
+                receivedPaths == expectedPaths) {
                 "GitHub commit receipt did not match the authorized self-edit"
             }
             access = checked.copy(headSha = receipt.commitSha)
@@ -742,34 +774,25 @@ internal class WorkspaceGitHubSelfEditFlow(
             listener.onEvent(
                 WorkspaceWorkPhase.RECOVERING,
                 "Reading failed commit for one bounded repair",
-                "CI #${workflow.runNumber} · ${receipt.commitSha.take(12)}",
+                "CI #${workflow.runNumber} · ${receipt.files.size} file(s) · " +
+                    receipt.commitSha.take(12),
             )
-            dispatch(
-                run,
-                WorkspaceGitHubConnector.client,
-                WorkspaceGitHubConnector.fileContentRequest(
-                    token = token,
-                    repository = saved.repository,
-                    headSha = receipt.commitSha,
-                    path = receipt.files.single(),
-                ),
-                "Failed commit source could not be read; checkpoint preserved.",
-            ) { fileResponse ->
-                val currentSource = WorkspaceGitHubConnector.readTextFile(
-                    fileResponse,
-                    receipt.files.single(),
-                )
-                val prompt = WorkspaceGitHubSelfEdit.repairPrompt(
+            readFilesAtSha(
+                run = run,
+                token = token,
+                headSha = receipt.commitSha,
+                paths = receipt.files,
+            ) { currentSources ->
+                val prompt = WorkspaceGitHubSelfEditBatch.prompt(
                     message = instruction,
-                    path = receipt.files.single(),
-                    content = currentSource,
+                    sources = currentSources,
                     ciFailureSummary = summary,
                 )
                 sendProvider(
                     run = run,
                     route = requireNotNull(selectedProvider),
                     prompt = prompt,
-                    sourceForPatch = currentSource,
+                    sourcesForPatch = currentSources,
                     expectedHead = receipt.commitSha,
                     repair = true,
                     fallbackUsed = false,
@@ -905,10 +928,16 @@ internal class WorkspaceGitHubSelfEditFlow(
 
     private fun savePreCommitCheckpoint(
         expectedHead: String,
-        path: String,
+        paths: List<String>,
     ) {
         val saved = requireNotNull(connection)
-        val checkedPath = WorkspaceGitHubWritePolicy.requirePath(path)
+        require(paths.size in 1..WorkspaceGitHubSelfEditBatch.MAX_FILES) {
+            "Pre-commit file count is outside the LYRA multi-file bound"
+        }
+        val checkedPaths = paths.map(WorkspaceGitHubWritePolicy::requirePath)
+        require(checkedPaths.map { it.lowercase(Locale.US) }.toSet().size == checkedPaths.size) {
+            "Pre-commit checkpoint contains duplicate paths"
+        }
         val provider = requireNotNull(selectedProvider).name
         require(CHECKPOINT_SHA.matches(expectedHead)) { "Pre-commit checkpoint SHA is invalid" }
         preferences.edit()
@@ -916,7 +945,8 @@ internal class WorkspaceGitHubSelfEditFlow(
             .putString(CP_PREVIOUS_HEAD, expectedHead)
             .putString(CP_REPO, saved.repository)
             .putString(CP_BRANCH, saved.branch)
-            .putString(CP_PATH, checkedPath)
+            .putString(CP_PATH, checkedPaths.first())
+            .putString(CP_PATHS, checkedPaths.joinToString("\n"))
             .putString(CP_PROVIDER, provider)
             .putString(CP_PHASE, "pre_commit")
             .putString(CP_INSTRUCTION, instruction)
@@ -930,13 +960,16 @@ internal class WorkspaceGitHubSelfEditFlow(
     ) {
         require(phase in CHECKPOINT_PHASES) { "Unsupported coding checkpoint phase" }
         val provider = requireNotNull(selectedProvider).name
-        require(receipt.files.size == 1) { "Coding checkpoint requires exactly one file" }
+        require(receipt.files.size in 1..WorkspaceGitHubSelfEditBatch.MAX_FILES) {
+            "Coding checkpoint file count is outside the LYRA multi-file bound"
+        }
         preferences.edit()
             .putString(CP_SHA, receipt.commitSha)
             .putString(CP_PREVIOUS_HEAD, receipt.previousHead)
             .putString(CP_REPO, receipt.repository)
             .putString(CP_BRANCH, receipt.branch)
-            .putString(CP_PATH, receipt.files.single())
+            .putString(CP_PATH, receipt.files.first())
+            .putString(CP_PATHS, receipt.files.joinToString("\n"))
             .putString(CP_PROVIDER, provider)
             .putString(CP_PHASE, phase)
             .putString(CP_INSTRUCTION, instruction)
@@ -953,9 +986,17 @@ internal class WorkspaceGitHubSelfEditFlow(
         }
         val repository = preferences.getString(CP_REPO, null)?.trim().orEmpty()
         val branch = preferences.getString(CP_BRANCH, null)?.trim().orEmpty()
-        val path = WorkspaceGitHubWritePolicy.requirePath(
-            preferences.getString(CP_PATH, null)?.trim().orEmpty()
-        )
+        val rawPaths = preferences.getString(CP_PATHS, null)
+            ?.split('\n')
+            ?.filter(String::isNotBlank)
+            ?: listOf(preferences.getString(CP_PATH, null)?.trim().orEmpty())
+        require(rawPaths.size in 1..WorkspaceGitHubSelfEditBatch.MAX_FILES) {
+            "Checkpoint file count is invalid"
+        }
+        val paths = rawPaths.map(WorkspaceGitHubWritePolicy::requirePath)
+        require(paths.map { it.lowercase(Locale.US) }.toSet().size == paths.size) {
+            "Checkpoint contains duplicate paths"
+        }
         require(repository.isNotBlank() && branch == "agent/myra-phase-1") {
             "Checkpoint GitHub binding is invalid"
         }
@@ -976,7 +1017,7 @@ internal class WorkspaceGitHubSelfEditFlow(
                 branch = branch,
                 previousHead = previousHead,
                 commitSha = sha,
-                files = listOf(path),
+                files = paths,
             ),
             provider = provider,
             phase = phase,
@@ -992,6 +1033,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             .remove(CP_REPO)
             .remove(CP_BRANCH)
             .remove(CP_PATH)
+            .remove(CP_PATHS)
             .remove(CP_PROVIDER)
             .remove(CP_PHASE)
             .remove(CP_INSTRUCTION)
@@ -1011,7 +1053,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         repairAttempt = 0
         grant = null
         access = null
-        candidate = null
-        originalSource = ""
+        candidates = emptyList()
+        originalSources.clear()
     }
 }
