@@ -32,6 +32,33 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
     private var status: TextView? = null
     private var connectButton: TextView? = null
     private var writeVerified = false
+    private var writeAccess: WorkspaceGitHubConnector.WriteAccess? = null
+    private var writeTestPassed = false
+
+    private val writeRunner by lazy {
+        WorkspaceGitHubWriteRunner(object : WorkspaceGitHubWriteRunner.Listener {
+            override fun onCommit(receipt: WorkspaceGitHubConnector.CommitReceipt) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    writeAccess = writeAccess?.copy(headSha = receipt.commitSha)
+                    writeTestPassed = true
+                    Toast.makeText(
+                        this@WorkspaceGitHubConnectorActivity,
+                        "Safe GitHub write smoke test passed.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    render()
+                }
+            }
+
+            override fun onError(message: String) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    showStatus(message, true)
+                }
+            }
+        })
+    }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
 
@@ -90,6 +117,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
     override fun onDestroy() {
         activeCall?.cancel()
         activeCall = null
+        writeRunner.cancel()
         super.onDestroy()
     }
 
@@ -97,7 +125,11 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         status = null
         connectButton = null
         val connection = runCatching { store.loadGitHub() }.getOrNull()
-        if (connection == null) writeVerified = false
+        if (connection == null) {
+            writeVerified = false
+            writeAccess = null
+            writeTestPassed = false
+        }
 
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.rgb(3, 7, 6))
@@ -223,6 +255,16 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
             topMargin = dp(10)
         })
 
+        if (writeVerified) {
+            column.addView(button(
+                if (writeTestPassed) "WRITE SMOKE TEST PASSED" else "RUN SAFE WRITE TEST"
+            ) {
+                if (!writeTestPassed) confirmWriteSmokeTest(connection)
+            }, LinearLayout.LayoutParams(-1, dp(50)).apply {
+                topMargin = dp(10)
+            })
+        }
+
         column.addView(text(
             "Write tokens stay inside Cloudflare. Writes are limited to bounded text commits on " +
                 "agent/myra-phase-1 and draft PR create/update. main/master, force-push, Secrets, " +
@@ -243,6 +285,8 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
                     runCatching { store.disconnectGitHub() }
                         .onSuccess {
                             writeVerified = false
+                            writeAccess = null
+                            writeTestPassed = false
                             render()
                         }
                 }
@@ -322,6 +366,8 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
                         return@runOnUiThread
                     }
                     writeVerified = true
+                    writeAccess = access
+                    writeTestPassed = false
                     Toast.makeText(
                         this@WorkspaceGitHubConnectorActivity,
                         "C2 write access verified. main remains blocked.",
@@ -331,6 +377,54 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    private fun confirmWriteSmokeTest(
+        connection: WorkspaceConnectorCredentialStore.GitHubConnection,
+    ) {
+        val access = writeAccess
+        if (access == null) {
+            showStatus("Verify C2 write access again before the smoke test.", true)
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Run safe GitHub write test?")
+            .setMessage(
+                "LYRA will create/update only $SMOKE_TEST_PATH on agent/myra-phase-1. " +
+                    "main/master will not be modified."
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Run test") { _, _ ->
+                runWriteSmokeTest(connection, access)
+            }
+            .show()
+    }
+
+    private fun runWriteSmokeTest(
+        connection: WorkspaceConnectorCredentialStore.GitHubConnection,
+        access: WorkspaceGitHubConnector.WriteAccess,
+    ) {
+        val pairing = connection.pairingSecret ?: run {
+            showStatus("Reconnect GitHub once to restore the encrypted pairing key.", true)
+            return
+        }
+        val plan = runCatching {
+            WorkspaceGitHubWritePolicy.commitPlan(
+                expectedHead = access.headSha,
+                message = "test: verify LYRA GitHub C2 write lane",
+                files = listOf(
+                    WorkspaceGitHubWritePolicy.FileChange(
+                        path = SMOKE_TEST_PATH,
+                        content = SMOKE_TEST_CONTENT,
+                    )
+                ),
+            )
+        }.getOrElse {
+            showStatus(it.message ?: "Safe GitHub write test could not be prepared.", true)
+            return
+        }
+        showStatus("Running one bounded feature-branch write test…")
+        writeRunner.commit(pairing, plan)
     }
 
     private fun copyPairingKey() {
@@ -534,6 +628,11 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         const val EXPECTED_REPOSITORY = "spy626/myra-android"
         const val EXPECTED_BRANCH = "agent/myra-phase-1"
         const val EXPECTED_PR_BASE = "main"
+        const val SMOKE_TEST_PATH = "docs/LYRA_GITHUB_WRITE_SMOKE_TEST.md"
+        const val SMOKE_TEST_CONTENT =
+            "# LYRA GitHub C2 smoke test\n\n" +
+                "This harmless file proves that LYRA can make one broker-gated, non-force " +
+                "commit on agent/myra-phase-1 while main/master stays blocked.\n"
         const val RENEW_BEFORE_MS = 10 * 60 * 1_000L
     }
 }
