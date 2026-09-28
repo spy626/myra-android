@@ -190,7 +190,7 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
                             b.providerBakeOffStatus.text = text
                             b.providerBakeOffButton.isEnabled = done
                             b.providerBakeOffButton.text = if (done)
-                                "RUN QUICK CODING BAKE-OFF" else "RUNNING…"
+                                "RUN 3-ROUND CODING BAKE-OFF" else "RUNNING…"
                             if (done) providerBakeOffRunner = null
                         }
                     }
@@ -200,7 +200,7 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             b.providerBakeOffButton.isEnabled = false
             b.providerBakeOffButton.text = "RUNNING…"
             b.providerBakeOffStatus.text =
-                "Starting synthetic provider test… no project/GitHub source will be sent."
+                "Starting 3-round synthetic provider test… no project/GitHub source will be sent."
             runner.start()
         }
         b.backButton.setOnClickListener { finish() }

@@ -9,10 +9,11 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
+import kotlin.math.roundToLong
 
 /**
- * Sequential synthetic bake-off. It never reads GitHub/project files, never writes code and never
- * changes provider routing. One click is consent to send only the fixed synthetic prompt.
+ * Three-round sequential synthetic bake-off. It never reads GitHub/project files, never writes
+ * code and never changes provider routing. One click sends only the fixed synthetic prompt.
  */
 internal class WorkspaceProviderBakeOffRunner(
     context: Context,
@@ -31,10 +32,29 @@ internal class WorkspaceProviderBakeOffRunner(
         val read: (Response) -> String,
     )
 
+    private data class Stats(
+        var attempts: Int = 0,
+        var perfect: Int = 0,
+        var strictJson: Int = 0,
+        var t1: Int = 0,
+        var t2: Int = 0,
+        var t3: Int = 0,
+        var errors: Int = 0,
+        val latencyMs: MutableList<Long> = mutableListOf(),
+    )
+
+    companion object {
+        private const val ROUNDS = 3
+    }
+
     private val prefs = context.getSharedPreferences("workspace_ui", Context.MODE_PRIVATE)
     private var generation = 0L
     private var active: Call? = null
-    private val lines = mutableListOf<String>()
+    private val stats = linkedMapOf<String, Stats>()
+    private val skipped = linkedSetOf<String>()
+    private val blocked = linkedSetOf<String>()
+    private var currentLabel = "Starting…"
+
     val isRunning: Boolean get() = synchronized(this) { active != null }
 
     private val message = WorkspaceConversationStore.Message(
@@ -123,12 +143,14 @@ internal class WorkspaceProviderBakeOffRunner(
     @Synchronized fun start() {
         if (active != null) return
         generation += 1
-        lines.clear()
-        listener.onUpdate(
-            "Synthetic only · no GitHub/project source · no file writes.\nStarting…",
-            false,
-        )
-        runSeat(generation, seats(), 0)
+        stats.clear()
+        skipped.clear()
+        blocked.clear()
+        currentLabel = "Starting round 1/" + ROUNDS + "…"
+        val seats = seats()
+        seats.forEach { stats[it.name] = Stats() }
+        render(done = false)
+        runSeat(generation, seats, round = 1, index = 0)
     }
 
     @Synchronized fun cancel() {
@@ -137,35 +159,71 @@ internal class WorkspaceProviderBakeOffRunner(
         active = null
     }
 
-    private fun render(done: Boolean) {
-        val header = "Synthetic only · no GitHub/project source · no file writes."
-        listener.onUpdate((listOf(header) + lines).joinToString("\n"), done)
+    private fun summaryLine(name: String): String {
+        if (name in skipped) return name + " — SKIPPED (key/required Free opt-in unavailable)"
+        if (name in blocked) return name + " — BLOCKED by local/provider validation"
+        val s = stats.getValue(name)
+        if (s.attempts == 0) return name + " — waiting"
+        val avg = if (s.latencyMs.isEmpty()) 0L else s.latencyMs.average().roundToLong()
+        return name + " — perfect " + s.perfect + "/" + s.attempts + " · " +
+            "T1 " + s.t1 + "/" + s.attempts + " T2 " + s.t2 + "/" + s.attempts +
+            " T3 " + s.t3 + "/" + s.attempts + " · JSON " + s.strictJson + "/" +
+            s.attempts + " · avg " + avg + "ms" +
+            if (s.errors > 0) " · errors " + s.errors else ""
     }
 
-    private fun runSeat(run: Long, seats: List<Seat>, index: Int) {
-        if (index >= seats.size) {
+    private fun render(done: Boolean) {
+        val header = "3 rounds · synthetic only · no GitHub/project source · no file writes."
+        val names = stats.keys.toList()
+        val body = if (done) {
+            listOf(header, "FINAL RESULTS") + names.map(::summaryLine)
+        } else {
+            listOf(header, currentLabel) + names.map(::summaryLine)
+        }
+        listener.onUpdate(body.joinToString("\n"), done)
+    }
+
+    private fun next(run: Long, seats: List<Seat>, round: Int, index: Int) {
+        if (index + 1 < seats.size) {
+            runSeat(run, seats, round, index + 1)
+        } else if (round < ROUNDS) {
+            runSeat(run, seats, round + 1, 0)
+        } else {
             synchronized(this) {
                 if (run == generation) active = null
             }
+            currentLabel = "Completed " + ROUNDS + " rounds."
             render(done = true)
-            return
         }
+    }
+
+    private fun runSeat(run: Long, seats: List<Seat>, round: Int, index: Int) {
         val seat = seats[index]
-        val availability = runCatching { seat.available() }.getOrDefault(Pair(false, ""))
-        if (!availability.first) {
-            lines += seat.name + " — SKIPPED (key/required Free opt-in unavailable)"
-            render(done = false)
-            runSeat(run, seats, index + 1)
+        if (seat.name in skipped || seat.name in blocked) {
+            next(run, seats, round, index)
             return
         }
 
-        val request = runCatching { seat.request(availability.second) }.getOrElse { error ->
-            lines += seat.name + " — REQUEST BLOCKED (" +
-                (error.message ?: "local validation").take(120) + ")"
+        currentLabel = "Round " + round + "/" + ROUNDS + " · testing " + seat.name
+        render(done = false)
+
+        val availability = runCatching { seat.available() }.getOrDefault(Pair(false, ""))
+        if (!availability.first) {
+            skipped += seat.name
             render(done = false)
-            runSeat(run, seats, index + 1)
+            next(run, seats, round, index)
             return
         }
+
+        val request = runCatching { seat.request(availability.second) }.getOrElse {
+            blocked += seat.name
+            render(done = false)
+            next(run, seats, round, index)
+            return
+        }
+
+        val s = stats.getValue(seat.name)
+        s.attempts += 1
         val started = SystemClock.elapsedRealtime()
         val call = seat.client.newCall(request)
         synchronized(this) {
@@ -178,10 +236,10 @@ internal class WorkspaceProviderBakeOffRunner(
                     if (run != generation || active !== call) return
                     active = null
                 }
-                val ms = SystemClock.elapsedRealtime() - started
-                lines += seat.name + " — ERROR · " + ms + "ms · network/preflight"
+                s.errors += 1
+                s.latencyMs += SystemClock.elapsedRealtime() - started
                 render(done = false)
-                runSeat(run, seats, index + 1)
+                next(run, seats, round, index)
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -192,25 +250,22 @@ internal class WorkspaceProviderBakeOffRunner(
                     }
                     active = null
                 }
-                val ms = SystemClock.elapsedRealtime() - started
+                val elapsed = SystemClock.elapsedRealtime() - started
+                s.latencyMs += elapsed
                 val outcome = runCatching {
-                    val text = seat.read(response)
-                    WorkspaceProviderBakeOff.evaluate(text)
+                    WorkspaceProviderBakeOff.evaluate(seat.read(response))
                 }
                 outcome.onSuccess { evaluation ->
-                    val state = if (evaluation.passed) {
-                        "PASS"
-                    } else {
-                        "PARTIAL " + evaluation.correct + "/" + evaluation.total +
-                            if (!evaluation.strictJson) " · format" else ""
-                    }
-                    lines += seat.name + " — " + state + " · " + ms + "ms"
-                }.onFailure { error ->
-                    lines += seat.name + " — ERROR · " + ms + "ms · " +
-                        (error.message ?: "provider response rejected").take(120)
+                    if (evaluation.passed) s.perfect += 1
+                    if (evaluation.strictJson) s.strictJson += 1
+                    if (evaluation.t1) s.t1 += 1
+                    if (evaluation.t2) s.t2 += 1
+                    if (evaluation.t3) s.t3 += 1
+                }.onFailure {
+                    s.errors += 1
                 }
                 render(done = false)
-                runSeat(run, seats, index + 1)
+                next(run, seats, round, index)
             }
         })
     }
