@@ -15,7 +15,8 @@ import java.util.Locale
 /**
  * One current-turn GitHub self-edit transaction:
  * fresh read token -> automatic write preflight -> pinned feature-branch read -> one provider patch
- * -> one broker-gated non-force commit -> exact-SHA GitHub Actions verification -> draft PR.
+ * -> optional read-only second-provider QA -> one broker-gated non-force commit
+ * -> exact-SHA GitHub Actions verification -> draft PR.
  *
  * A successful commit is not completion. DONE is emitted only after that exact push CI is GREEN.
  * main/master, merge, workflow writes,
@@ -587,7 +588,166 @@ internal class WorkspaceGitHubSelfEditFlow(
                     if (repair) "Repair patch accepted locally" else "Provider patch accepted locally",
                     label,
                 )
+                reviewOrCommit(
+                    run = run,
+                    primaryRoute = route,
+                    prepared = prepared,
+                    originals = sourcesForPatch,
+                    expectedHead = expectedHead,
+                    repair = repair,
+                )
+            }
+        })
+    }
+
+    private fun reviewOrCommit(
+        run: Long,
+        primaryRoute: WorkspaceCodingRoleRouter.Provider,
+        prepared: WorkspaceGitHubSelfEditBatch.Prepared,
+        originals: Map<String, String>,
+        expectedHead: String,
+        repair: Boolean,
+    ) {
+        val reviewerRoute = alternateProvider(primaryRoute)
+        if (reviewerRoute == null) {
+            listener.onEvent(
+                WorkspaceWorkPhase.VERIFYING,
+                "Second-provider review unavailable",
+                "Local validation + exact CI remain mandatory",
+            )
+            commit(run, prepared, expectedHead, repair)
+            return
+        }
+
+        val plan = requireNotNull(codingPlan) { "Locked coding plan is missing before review" }
+        val reviewPrompt = runCatching {
+            WorkspaceGitHubPatchReviewer.prompt(instruction, plan, originals, prepared)
+        }.getOrElse { error ->
+            fail(run, null, error.message ?: "Reviewer context was rejected locally.")
+            return
+        }
+        val reviewerLabel = providerName(reviewerRoute)
+        listener.onEvent(
+            WorkspaceWorkPhase.VERIFYING,
+            "Second-provider QA review",
+            "$reviewerLabel · read-only",
+        )
+
+        val request = runCatching {
+            when (reviewerRoute) {
+                WorkspaceCodingRoleRouter.Provider.XKIRO ->
+                    WorkspaceXKiroFree.deliberationRequest(xKiroKey, reviewPrompt)
+                WorkspaceCodingRoleRouter.Provider.GROQ ->
+                    WorkspaceGroqFree.request(
+                        groqKey,
+                        listOf(
+                            WorkspaceConversationStore.Message(
+                                if (repair) "github-repair-review" else "github-patch-review",
+                                "user",
+                                reviewPrompt,
+                                nowMs(),
+                            )
+                        ),
+                    )
+            }
+        }.getOrElse {
+            listener.onEvent(
+                WorkspaceWorkPhase.VERIFYING,
+                "Reviewer unavailable before send",
+                "Continuing with local validation + exact CI",
+            )
+            commit(run, prepared, expectedHead, repair)
+            return
+        }
+
+        val client = when (reviewerRoute) {
+            WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.deliberationClient
+            WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceFreeAiSuggestion.client
+        }
+        val call = client.newCall(request)
+        synchronized(this) {
+            if (run != generation) return
+            active = call
+        }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) return
+                    active = null
+                }
+                listener.onEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "Reviewer network unavailable",
+                    "Continuing with local validation + exact CI",
+                )
                 commit(run, prepared, expectedHead, repair)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) {
+                        response.close()
+                        return
+                    }
+                    active = null
+                }
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                if (!response.isSuccessful) {
+                    val status = response.code
+                    response.close()
+                    listener.onEvent(
+                        WorkspaceWorkPhase.VERIFYING,
+                        "Reviewer HTTP $status unavailable",
+                        "Continuing with local validation + exact CI",
+                    )
+                    commit(run, prepared, expectedHead, repair)
+                    return
+                }
+
+                val review = runCatching {
+                    val raw = when (reviewerRoute) {
+                        WorkspaceCodingRoleRouter.Provider.XKIRO ->
+                            WorkspaceXKiroFree.readDeliberation(response)
+                        WorkspaceCodingRoleRouter.Provider.GROQ ->
+                            WorkspaceGroqFree.read(response)
+                    }
+                    WorkspaceGitHubPatchReviewer.read(raw)
+                }.getOrElse { error ->
+                    fail(
+                        run,
+                        null,
+                        "Reviewer returned an invalid QA contract; no GitHub write was attempted. " +
+                            (error.message ?: "Unknown review parse error"),
+                    )
+                    return
+                }
+
+                when (review.decision) {
+                    WorkspaceGitHubPatchReviewer.Decision.ACCEPT -> {
+                        listener.onEvent(
+                            WorkspaceWorkPhase.VERIFYING,
+                            "Reviewer ACCEPT",
+                            reviewerLabel,
+                        )
+                        commit(run, prepared, expectedHead, repair)
+                    }
+                    WorkspaceGitHubPatchReviewer.Decision.REVISE -> {
+                        fail(
+                            run,
+                            null,
+                            "Reviewer requested revision before commit: " + review.summary +
+                                ". No GitHub write was attempted.",
+                        )
+                    }
+                    WorkspaceGitHubPatchReviewer.Decision.REJECT -> {
+                        fail(
+                            run,
+                            null,
+                            "Reviewer rejected the proposed patch before commit: " + review.summary +
+                                ". No GitHub write was attempted.",
+                        )
+                    }
+                }
             }
         })
     }
