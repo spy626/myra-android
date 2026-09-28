@@ -25,30 +25,32 @@ class WorkspaceConnectorPolicyTest {
     }
 
     @Test fun c1AllowsReadsButNoWritesOrDangerousActions() {
-        assertTrue(
-            WorkspaceConnectorPolicy.allowedInC1(
-                WorkspaceConnectorPolicy.GitHubAction.READ_REPOSITORY
-            )
-        )
-        assertTrue(
-            WorkspaceConnectorPolicy.allowedInC1(
-                WorkspaceConnectorPolicy.GitHubAction.READ_ACTIONS
-            )
-        )
-        assertFalse(
-            WorkspaceConnectorPolicy.allowedInC1(
-                WorkspaceConnectorPolicy.GitHubAction.CREATE_OR_UPDATE_FILES
-            )
-        )
-        assertFalse(
-            WorkspaceConnectorPolicy.allowedInC1(
-                WorkspaceConnectorPolicy.GitHubAction.MODIFY_MAIN_OR_MASTER
-            )
-        )
-        assertFalse(
-            WorkspaceConnectorPolicy.allowedInC1(
-                WorkspaceConnectorPolicy.GitHubAction.FORCE_PUSH
-            )
-        )
+        assertTrue(WorkspaceConnectorPolicy.allowedInC1(
+            WorkspaceConnectorPolicy.GitHubAction.READ_REPOSITORY))
+        assertTrue(WorkspaceConnectorPolicy.allowedInC1(
+            WorkspaceConnectorPolicy.GitHubAction.READ_ACTIONS))
+        assertFalse(WorkspaceConnectorPolicy.allowedInC1(
+            WorkspaceConnectorPolicy.GitHubAction.CREATE_OR_UPDATE_FILES))
+        assertFalse(WorkspaceConnectorPolicy.allowedInC1(
+            WorkspaceConnectorPolicy.GitHubAction.MODIFY_MAIN_OR_MASTER))
+    }
+
+    @Test fun c2AllowsOnlyBoundedFeatureBranchWritesAndDraftPrLane() {
+        assertTrue(WorkspaceConnectorPolicy.allowedInC2(
+            WorkspaceConnectorPolicy.GitHubAction.READ_REPOSITORY))
+        assertTrue(WorkspaceConnectorPolicy.allowedInC2(
+            WorkspaceConnectorPolicy.GitHubAction.CREATE_OR_UPDATE_FILES))
+        assertTrue(WorkspaceConnectorPolicy.allowedInC2(
+            WorkspaceConnectorPolicy.GitHubAction.CREATE_OR_UPDATE_PULL_REQUEST))
+        assertFalse(WorkspaceConnectorPolicy.allowedInC2(
+            WorkspaceConnectorPolicy.GitHubAction.CREATE_FEATURE_BRANCH))
+        assertFalse(WorkspaceConnectorPolicy.allowedInC2(
+            WorkspaceConnectorPolicy.GitHubAction.MODIFY_MAIN_OR_MASTER))
+        assertFalse(WorkspaceConnectorPolicy.allowedInC2(
+            WorkspaceConnectorPolicy.GitHubAction.FORCE_PUSH))
+        assertFalse(WorkspaceConnectorPolicy.allowedInC2(
+            WorkspaceConnectorPolicy.GitHubAction.CHANGE_SECRETS))
+        assertFalse(WorkspaceConnectorPolicy.allowedInC2(
+            WorkspaceConnectorPolicy.GitHubAction.DELETE_REPOSITORY_OR_BRANCH))
     }
 }

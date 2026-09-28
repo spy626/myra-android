@@ -8,15 +8,15 @@ import org.junit.Test
 class WorkspaceGitHubConnectorTest {
     private val token = "ghs_1234567890123456789012345678901234567890"
     private val pairing = "a".repeat(64)
+    private val head = "1234567890abcdef1234567890abcdef12345678"
 
-    @Test fun authenticatedRequestsStayOnApiGithubAndKeepTokenOutOfUrl() {
+    @Test fun authenticatedReadRequestsStayOnApiGithubAndKeepTokenOutOfUrl() {
         val repo = WorkspaceGitHubConnector.repositoryRequest(token, "spy626/myra-android")
         val branch = WorkspaceGitHubConnector.branchRequest(
             token,
             "spy626/myra-android",
             "agent/myra-phase-1",
         )
-
         listOf(repo, branch).forEach { request ->
             assertEquals("https", request.url.scheme)
             assertEquals("api.github.com", request.url.host)
@@ -26,19 +26,39 @@ class WorkspaceGitHubConnectorTest {
         assertTrue(branch.url.encodedPath.contains("agent%2Fmyra-phase-1"))
     }
 
+    @Test fun brokerRequestsKeepPairingSecretOutOfUrls() {
+        val write = WorkspaceGitHubConnector.writeAccessRequest(pairing)
+        val commit = WorkspaceGitHubConnector.commitRequest(
+            pairing,
+            WorkspaceGitHubWritePolicy.commitPlan(
+                head,
+                "feat: test",
+                listOf(WorkspaceGitHubWritePolicy.FileChange("docs/test.txt", "hello")),
+            ),
+        )
+        val pr = WorkspaceGitHubConnector.pullRequestRequest(
+            pairing,
+            WorkspaceGitHubWritePolicy.pullRequestPlan("Test PR", "body"),
+        )
+
+        listOf(write, commit, pr).forEach { request ->
+            assertEquals("POST", request.method)
+            assertEquals("lyra-github-connector.everspy626.workers.dev", request.url.host)
+            assertTrue(!request.url.toString().contains(pairing))
+            val buffer = Buffer()
+            request.body!!.writeTo(buffer)
+            assertTrue(buffer.readUtf8().contains(pairing))
+        }
+        assertEquals("/github/write/check", write.url.encodedPath)
+        assertEquals("/github/write/commit", commit.url.encodedPath)
+        assertEquals("/github/write/pull-request", pr.url.encodedPath)
+    }
+
     @Test fun installationTokenRequestUsesBrokerAndKeepsPairingSecretOutOfUrl() {
         val request = WorkspaceGitHubConnector.installationTokenRequest(pairing)
-
         assertEquals("POST", request.method)
-        assertEquals("https", request.url.scheme)
-        assertEquals("lyra-github-connector.everspy626.workers.dev", request.url.host)
         assertEquals("/github/token", request.url.encodedPath)
         assertTrue(!request.url.toString().contains(pairing))
-
-        val buffer = Buffer()
-        request.body!!.writeTo(buffer)
-        val body = buffer.readUtf8()
-        assertTrue(body.contains(pairing))
     }
 
     @Test fun generatedPairingKeyIsHighEntropyShapeAndValidated() {

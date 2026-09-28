@@ -3,10 +3,11 @@ main = "src/index.js"
 compatibility_date = "2026-09-27"
 workers_dev = true
 
-# Public identifiers and the exact single-repository binding.
+# Public identifiers and the exact single-repository / single-write-branch binding.
 # Secrets GITHUB_APP_PRIVATE_KEY and LYRA_PAIRING_SECRET stay in Cloudflare.
 [vars]
 GITHUB_APP_ID = "5096417"
 GITHUB_ACCOUNT_LOGIN = "spy626"
 GITHUB_REPOSITORY = "spy626/myra-android"
 GITHUB_BRANCH = "agent/myra-phase-1"
+GITHUB_PR_BASE = "main"

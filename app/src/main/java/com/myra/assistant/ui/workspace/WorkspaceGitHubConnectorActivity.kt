@@ -21,18 +21,17 @@ import okhttp3.Response
 import java.io.IOException
 
 /**
- * GitHub Connector C1.3: already-installed GitHub App + automatic installation-token renewal.
+ * GitHub Connector C1/C2: renewable read auth plus broker-gated feature-branch writes.
  *
- * No GitHub OAuth page, Device Flow, PAT, password, client secret, or App private key enters LYRA.
- * A random 256-bit pairing key is generated on this phone, copied once into Cloudflare, and kept in
- * Android encrypted storage. The broker can then mint replacement one-hour installation tokens
- * whenever needed without asking the user to sign in again.
+ * Write-capable GitHub tokens never enter Android. C2 verification and future write execution go
+ * through Cloudflare, which is hard-bound to one repository and one feature branch.
  */
 class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
     private val store by lazy { WorkspaceConnectorCredentialStore(this) }
     private var activeCall: Call? = null
     private var status: TextView? = null
     private var connectButton: TextView? = null
+    private var writeVerified = false
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
 
@@ -98,6 +97,8 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         status = null
         connectButton = null
         val connection = runCatching { store.loadGitHub() }.getOrNull()
+        if (connection == null) writeVerified = false
+
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.rgb(3, 7, 6))
             isFillViewport = true
@@ -136,11 +137,9 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
 
     private fun renderDisconnected(column: LinearLayout) {
         column.addView(sectionTitle("One-time secure pairing"))
-
         column.addView(text(
-            "LYRA now uses the GitHub App installation directly. There is no GitHub OAuth page. " +
-                "Copy the hidden pairing key once into the Cloudflare secret LYRA_PAIRING_SECRET, " +
-                "then connect. After that, one-hour GitHub tokens can renew automatically.",
+            "LYRA uses the installed GitHub App directly. The pairing key is copied once into " +
+                "Cloudflare, then one-hour read tokens can renew automatically.",
             14f,
             Color.rgb(188, 202, 193),
         ).apply { setPadding(0, dp(4), 0, dp(14)) })
@@ -149,11 +148,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = rounded(
-                Color.rgb(16, 24, 20),
-                16,
-                Color.rgb(52, 66, 58),
-            )
+            background = rounded(Color.rgb(16, 24, 20), 16, Color.rgb(52, 66, 58))
         }
         card.addView(text("Repository", 11.5f, Color.rgb(128, 139, 132)))
         card.addView(text(binding.repository, 14f, Color.WHITE).apply {
@@ -172,15 +167,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         column.addView(button("COPY PAIRING KEY") { copyPairingKey() },
             LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(14) })
 
-        status = text("", 13f, Color.rgb(175, 205, 183)).apply {
-            visibility = View.GONE
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            background = rounded(Color.rgb(17, 31, 23), 12)
-        }
-        column.addView(status, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(12)
-            bottomMargin = dp(12)
-        })
+        mountStatus(column)
 
         connectButton = button("CONNECT INSTALLED GITHUB APP") {
             val pairing = runCatching { store.getOrCreateGitHubPairingSecret() }
@@ -193,13 +180,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         column.addView(connectButton, LinearLayout.LayoutParams(-1, dp(52)))
 
         column.addView(sectionTitle("C1 permissions"))
-        permissionRows(column)
-        column.addView(text(
-            "The GitHub App private key stays only in Cloudflare. LYRA keeps the device pairing key " +
-                "and current installation token encrypted locally. No repeated GitHub login is needed.",
-            12.5f,
-            Color.rgb(125, 136, 130),
-        ).apply { setPadding(0, dp(14), 0, 0) })
+        permissionRows(column, writeEnabled = false)
     }
 
     private fun renderConnected(
@@ -210,11 +191,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(15), dp(16), dp(15))
-            background = rounded(
-                Color.rgb(15, 29, 21),
-                18,
-                Color.rgb(93, 158, 111),
-            )
+            background = rounded(Color.rgb(15, 29, 21), 18, Color.rgb(93, 158, 111))
         }
         card.addView(text("GitHub App · @" + connection.login, 17f, Color.WHITE).apply {
             typeface = Typeface.DEFAULT_BOLD
@@ -225,13 +202,55 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         card.addView(text(connection.branch, 13f, Color.rgb(120, 203, 148)).apply {
             setPadding(0, dp(5), 0, 0)
         })
-        card.addView(text("Installation verified · automatic token renewal", 12f,
+        card.addView(text("Installation verified · automatic read-token renewal", 12f,
             Color.rgb(120, 203, 148)).apply {
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, dp(8), 0, 0)
         })
         column.addView(card, LinearLayout.LayoutParams(-1, -2))
 
+        mountStatus(column)
+
+        column.addView(sectionTitle("C2 write access"))
+        permissionRows(column, writeVerified)
+
+        connectButton = button(
+            if (writeVerified) "WRITE ACCESS VERIFIED" else "VERIFY WRITE ACCESS"
+        ) {
+            if (!writeVerified) verifyWriteAccess(connection)
+        }
+        column.addView(connectButton, LinearLayout.LayoutParams(-1, dp(50)).apply {
+            topMargin = dp(10)
+        })
+
+        column.addView(text(
+            "Write tokens stay inside Cloudflare. Writes are limited to bounded text commits on " +
+                "agent/myra-phase-1 and draft PR create/update. main/master, force-push, Secrets, " +
+                "workflow writes, merge and destructive deletes remain blocked.",
+            12.5f,
+            Color.rgb(159, 168, 163),
+        ).apply { setPadding(0, dp(14), 0, dp(18)) })
+
+        column.addView(button("DISCONNECT GITHUB", destructive = true) {
+            AlertDialog.Builder(this)
+                .setTitle("Disconnect GitHub?")
+                .setMessage(
+                    "Remove the encrypted GitHub read token, pairing key, and repository binding " +
+                        "from LYRA? Installed Skills and chats are not changed."
+                )
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Disconnect") { _, _ ->
+                    runCatching { store.disconnectGitHub() }
+                        .onSuccess {
+                            writeVerified = false
+                            render()
+                        }
+                }
+                .show()
+        }, LinearLayout.LayoutParams(-1, dp(52)))
+    }
+
+    private fun mountStatus(column: LinearLayout) {
         status = text("", 13f, Color.rgb(175, 205, 183)).apply {
             visibility = View.GONE
             setPadding(dp(12), dp(10), dp(12), dp(10))
@@ -239,43 +258,23 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         }
         column.addView(status, LinearLayout.LayoutParams(-1, -2).apply {
             topMargin = dp(12)
+            bottomMargin = dp(12)
         })
-
-        column.addView(sectionTitle("Permissions"))
-        permissionRows(column)
-
-        column.addView(text(
-            "LYRA cannot modify main/master, force-push, change GitHub secrets, delete repositories, " +
-                "or delete branches through this connector policy.",
-            12.5f,
-            Color.rgb(159, 168, 163),
-        ).apply { setPadding(0, dp(12), 0, dp(18)) })
-
-        column.addView(button("DISCONNECT GITHUB", destructive = true) {
-            AlertDialog.Builder(this)
-                .setTitle("Disconnect GitHub?")
-                .setMessage(
-                    "Remove the encrypted GitHub installation token, pairing key, and repository " +
-                        "binding from LYRA? Installed Skills and chats are not changed."
-                )
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Disconnect") { _, _ ->
-                    runCatching { store.disconnectGitHub() }
-                        .onSuccess { render() }
-                }
-                .show()
-        }, LinearLayout.LayoutParams(-1, dp(52)))
     }
 
-    private fun permissionRows(column: LinearLayout) {
+    private fun permissionRows(column: LinearLayout, writeEnabled: Boolean) {
         val rows = listOf(
             "✓ Read repository" to true,
             "✓ Read commits / Actions" to true,
-            "○ Create feature branch · next write phase" to false,
-            "○ Create/update files · next write phase" to false,
-            "○ Open/update PR · next write phase" to false,
+            "✓ Fixed self-edit branch · agent/myra-phase-1" to true,
+            (if (writeEnabled) "✓ Create/update bounded text files" else
+                "○ Create/update files · verify C2 permission") to writeEnabled,
+            (if (writeEnabled) "✓ Create non-force commits on feature branch" else
+                "○ Feature-branch commits · verify C2 permission") to writeEnabled,
+            (if (writeEnabled) "✓ Open/update draft PR" else
+                "○ Open/update draft PR · verify C2 permission") to writeEnabled,
             "✕ Modify main/master" to false,
-            "✕ Force push / secrets / destructive deletes" to false,
+            "✕ Force push / Secrets / workflow writes / destructive deletes" to false,
         )
         rows.forEach { (label, allowed) ->
             column.addView(text(
@@ -284,6 +283,54 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
                 if (allowed) Color.rgb(128, 205, 151) else Color.rgb(158, 164, 160),
             ).apply { setPadding(dp(4), dp(7), dp(4), dp(7)) })
         }
+    }
+
+    private fun verifyWriteAccess(
+        connection: WorkspaceConnectorCredentialStore.GitHubConnection,
+    ) {
+        if (activeCall != null) return
+        val pairing = connection.pairingSecret ?: run {
+            showStatus("Reconnect GitHub once to restore the encrypted pairing key.", true)
+            return
+        }
+        setBusy(true)
+        showStatus("Checking broker-gated GitHub write permissions…")
+        val call = WorkspaceGitHubConnector.client.newCall(
+            WorkspaceGitHubConnector.writeAccessRequest(pairing)
+        )
+        activeCall = call
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                fail(call, "GitHub write broker could not be reached. No retry was sent.")
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val access = runCatching {
+                    WorkspaceGitHubConnector.readWriteAccess(response)
+                }.getOrElse {
+                    fail(call, it.message ?: "GitHub write permission verification failed")
+                    return
+                }
+                runOnUiThread {
+                    if (activeCall !== call || isFinishing || isDestroyed) return@runOnUiThread
+                    activeCall = null
+                    setBusy(false)
+                    if (!access.repository.equals(EXPECTED_REPOSITORY, ignoreCase = true) ||
+                        access.branch != EXPECTED_BRANCH ||
+                        access.prBase != EXPECTED_PR_BASE) {
+                        showStatus("GitHub write binding did not match LYRA policy.", true)
+                        return@runOnUiThread
+                    }
+                    writeVerified = true
+                    Toast.makeText(
+                        this@WorkspaceGitHubConnectorActivity,
+                        "C2 write access verified. main remains blocked.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    render()
+                }
+            }
+        })
     }
 
     private fun copyPairingKey() {
@@ -322,14 +369,14 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         val pairing = connection.pairingSecret ?: return
         val expiry = connection.tokenExpiresAtMs ?: 0L
         if (expiry > System.currentTimeMillis() + RENEW_BEFORE_MS) return
-        showStatus("Renewing GitHub installation token…")
+        showStatus("Renewing GitHub read token…")
         requestInstallationGrant(pairing)
     }
 
     private fun requestInstallationGrant(pairingSecret: String) {
         if (activeCall != null) return
         setBusy(true)
-        showStatus("Requesting fresh GitHub installation token…")
+        showStatus("Requesting fresh GitHub read token…")
         val request = runCatching {
             WorkspaceGitHubConnector.installationTokenRequest(pairingSecret)
         }.getOrElse {
@@ -486,6 +533,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         const val EXPECTED_ACCOUNT = "spy626"
         const val EXPECTED_REPOSITORY = "spy626/myra-android"
         const val EXPECTED_BRANCH = "agent/myra-phase-1"
+        const val EXPECTED_PR_BASE = "main"
         const val RENEW_BEFORE_MS = 10 * 60 * 1_000L
     }
 }

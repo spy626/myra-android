@@ -5,8 +5,8 @@ import java.util.Locale
 /**
  * Connector policy is intentionally separate from AI-provider settings.
  *
- * C1 only establishes a verified GitHub identity/repository binding. GitHub write execution is
- * not enabled here. Later write phases must pass these branch/action guards before networking.
+ * C1 establishes verified identity/repository read access. C2 adds only broker-gated writes to the
+ * already-fixed self-edit branch. Dangerous/destructive operations remain unavailable.
  */
 internal object WorkspaceConnectorPolicy {
     enum class ConnectorId { GITHUB }
@@ -62,17 +62,24 @@ internal object WorkspaceConnectorPolicy {
     fun binding(repository: String, branch: String): GitHubBinding =
         GitHubBinding(requireRepository(repository), requireFeatureBranch(branch))
 
-    /**
-     * C1 is verified-connect + read foundation. A future write slice may explicitly enable the
-     * three safe feature-branch actions below, but protected/dangerous actions remain blocked.
-     */
     fun allowedInC1(action: GitHubAction): Boolean = when (action) {
         GitHubAction.READ_REPOSITORY,
         GitHubAction.READ_COMMITS,
         GitHubAction.READ_ACTIONS -> true
-        GitHubAction.CREATE_FEATURE_BRANCH,
+        else -> false
+    }
+
+    /**
+     * C2 deliberately does not create arbitrary branches. The app is already locked to one
+     * pre-existing feature branch, and writes may only advance that branch non-force.
+     */
+    fun allowedInC2(action: GitHubAction): Boolean = when (action) {
+        GitHubAction.READ_REPOSITORY,
+        GitHubAction.READ_COMMITS,
+        GitHubAction.READ_ACTIONS,
         GitHubAction.CREATE_OR_UPDATE_FILES,
-        GitHubAction.CREATE_OR_UPDATE_PULL_REQUEST,
+        GitHubAction.CREATE_OR_UPDATE_PULL_REQUEST -> true
+        GitHubAction.CREATE_FEATURE_BRANCH,
         GitHubAction.MODIFY_MAIN_OR_MASTER,
         GitHubAction.FORCE_PUSH,
         GitHubAction.CHANGE_SECRETS,

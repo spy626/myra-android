@@ -6,6 +6,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
 import java.net.URLEncoder
@@ -13,13 +14,14 @@ import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
-/** GitHub App installation-token transport with one-time local/Cloudflare pairing. */
+/** GitHub App installation transport with read tokens plus broker-gated C2 writes. */
 internal object WorkspaceGitHubConnector {
     private const val API = "https://api.github.com"
     const val BROKER = "https://lyra-github-connector.everspy626.workers.dev"
-    private const val MAX_JSON_BYTES = 128_000L
+    private const val MAX_JSON_BYTES = 256_000L
     private val JSON = "application/json; charset=utf-8".toMediaType()
     private val pairingPattern = Regex("[0-9a-f]{64}")
+    private val shaPattern = Regex("[0-9a-fA-F]{40,64}")
 
     data class Repository(val fullName: String, val privateRepo: Boolean, val defaultBranch: String)
     data class Branch(val name: String, val headSha: String)
@@ -29,6 +31,27 @@ internal object WorkspaceGitHubConnector {
         val login: String,
         val repository: String,
         val branch: String,
+    )
+    data class WriteAccess(
+        val repository: String,
+        val branch: String,
+        val headSha: String,
+        val prBase: String,
+    )
+    data class CommitReceipt(
+        val repository: String,
+        val branch: String,
+        val previousHead: String,
+        val commitSha: String,
+        val files: List<String>,
+    )
+    data class PullRequestReceipt(
+        val action: String,
+        val number: Int,
+        val url: String,
+        val draft: Boolean,
+        val head: String,
+        val base: String,
     )
 
     fun requireToken(value: String): String {
@@ -58,6 +81,12 @@ internal object WorkspaceGitHubConnector {
         }
     }
 
+    private fun requireSha(value: String, label: String): String {
+        val clean = value.trim().lowercase()
+        require(shaPattern.matches(clean)) { "$label SHA is invalid" }
+        return clean
+    }
+
     private fun encode(value: String): String =
         URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 
@@ -70,7 +99,7 @@ internal object WorkspaceGitHubConnector {
             .url(API + path)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
-            .header("User-Agent", "LYRA-Connector/2")
+            .header("User-Agent", "LYRA-Connector/3")
             .header("Authorization", "Bearer " + cleanToken)
             .get()
             .build()
@@ -92,15 +121,65 @@ internal object WorkspaceGitHubConnector {
         )
     }
 
-    fun installationTokenRequest(pairingSecret: String): Request {
-        val payload = JSONObject()
-            .put("pairing_secret", requirePairingSecret(pairingSecret))
+    private fun brokerPost(path: String, payload: JSONObject): Request {
+        require(path.startsWith("/github/") && !path.contains("://")) {
+            "GitHub broker path is invalid"
+        }
         return Request.Builder()
-            .url(BROKER + "/github/token")
+            .url(BROKER + path)
             .header("Accept", "application/json")
-            .header("User-Agent", "LYRA-Connector/2")
+            .header("User-Agent", "LYRA-Connector/3")
             .post(payload.toString().toRequestBody(JSON))
             .build()
+    }
+
+    fun installationTokenRequest(pairingSecret: String): Request =
+        brokerPost(
+            "/github/token",
+            JSONObject().put("pairing_secret", requirePairingSecret(pairingSecret)),
+        )
+
+    fun writeAccessRequest(pairingSecret: String): Request =
+        brokerPost(
+            "/github/write/check",
+            JSONObject().put("pairing_secret", requirePairingSecret(pairingSecret)),
+        )
+
+    fun commitRequest(
+        pairingSecret: String,
+        plan: WorkspaceGitHubWritePolicy.CommitPlan,
+    ): Request {
+        val checked = WorkspaceGitHubWritePolicy.commitPlan(
+            plan.expectedHead,
+            plan.message,
+            plan.files,
+        )
+        val files = JSONArray()
+        checked.files.forEach { change ->
+            files.put(JSONObject().put("path", change.path).put("content", change.content))
+        }
+        return brokerPost(
+            "/github/write/commit",
+            JSONObject()
+                .put("pairing_secret", requirePairingSecret(pairingSecret))
+                .put("expected_head", checked.expectedHead)
+                .put("message", checked.message)
+                .put("files", files),
+        )
+    }
+
+    fun pullRequestRequest(
+        pairingSecret: String,
+        plan: WorkspaceGitHubWritePolicy.PullRequestPlan,
+    ): Request {
+        val checked = WorkspaceGitHubWritePolicy.pullRequestPlan(plan.title, plan.body)
+        return brokerPost(
+            "/github/write/pull-request",
+            JSONObject()
+                .put("pairing_secret", requirePairingSecret(pairingSecret))
+                .put("title", checked.title)
+                .put("body", checked.body),
+        )
     }
 
     private val guardedDns = object : Dns {
@@ -121,27 +200,26 @@ internal object WorkspaceGitHubConnector {
         .dns(guardedDns)
         .build()
 
-    private fun parseJson(response: Response, label: String): Pair<Response, JSONObject> {
-        require(response.code !in 300..399) { "$label redirect was refused" }
-        val bytes = response.peekBody(MAX_JSON_BYTES + 1).bytes()
-        require(bytes.isNotEmpty() && bytes.size.toLong() <= MAX_JSON_BYTES) {
-            "$label returned an empty or oversized response"
-        }
-        val root = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }
-            .getOrElse { throw IllegalArgumentException("$label returned invalid JSON") }
-        return response to root
-    }
-
-    private fun readJson(response: Response, label: String): JSONObject {
+    private fun parseJson(response: Response, label: String): JSONObject {
         response.use {
-            val (_, root) = parseJson(it, label)
+            require(it.code !in 300..399) { "$label redirect was refused" }
+            val bytes = it.peekBody(MAX_JSON_BYTES + 1).bytes()
+            require(bytes.isNotEmpty() && bytes.size.toLong() <= MAX_JSON_BYTES) {
+                "$label returned an empty or oversized response"
+            }
+            val root = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }
+                .getOrElse { throw IllegalArgumentException("$label returned invalid JSON") }
             require(it.isSuccessful) {
-                val description = root.optString("description").trim().take(180)
+                val description = root.optString("description").trim().take(220)
                 when (it.code) {
                     400 -> description.ifBlank { "$label request was rejected" }
                     401 -> description.ifBlank { "LYRA pairing key was rejected" }
                     403 -> "GitHub access was refused for this installation"
                     404 -> "GitHub repository or branch was not found for this installation"
+                    409 -> description.ifBlank { "GitHub feature branch changed; refresh and retry" }
+                    422 -> description.ifBlank {
+                        "GitHub App write permissions are not granted to this installation"
+                    }
                     429 -> "GitHub rate limit reached; no automatic retry was sent"
                     else -> description.ifBlank { "$label failed (HTTP " + it.code + ")" }
                 }
@@ -151,7 +229,7 @@ internal object WorkspaceGitHubConnector {
     }
 
     fun readInstallationGrant(response: Response): InstallationGrant {
-        val root = readJson(response, "GitHub installation connection")
+        val root = parseJson(response, "GitHub installation connection")
         val tokenType = root.optString("token_type", "bearer").trim()
         require(tokenType.equals("bearer", ignoreCase = true)) {
             "GitHub installation token type is invalid"
@@ -164,12 +242,8 @@ internal object WorkspaceGitHubConnector {
         require(login.length in 1..100 && login.none(Char::isISOControl)) {
             "GitHub installation account is invalid"
         }
-        val repository = WorkspaceConnectorPolicy.requireRepository(
-            root.optString("repository"),
-        )
-        val branch = WorkspaceConnectorPolicy.requireFeatureBranch(
-            root.optString("branch"),
-        )
+        val repository = WorkspaceConnectorPolicy.requireRepository(root.optString("repository"))
+        val branch = WorkspaceConnectorPolicy.requireFeatureBranch(root.optString("branch"))
         return InstallationGrant(
             accessToken = requireToken(root.optString("access_token")),
             expiresInSeconds = expiresIn,
@@ -179,9 +253,62 @@ internal object WorkspaceGitHubConnector {
         )
     }
 
+    fun readWriteAccess(response: Response): WriteAccess {
+        val root = parseJson(response, "GitHub write permission verification")
+        require(root.optBoolean("enabled", false)) { "GitHub write access is not enabled" }
+        val repository = WorkspaceConnectorPolicy.requireRepository(root.optString("repository"))
+        val branch = WorkspaceConnectorPolicy.requireFeatureBranch(root.optString("branch"))
+        val prBase = root.optString("pr_base").trim()
+        require(prBase in setOf("main", "master")) { "GitHub PR base is invalid" }
+        return WriteAccess(
+            repository = repository,
+            branch = branch,
+            headSha = requireSha(root.optString("head"), "GitHub feature-branch head"),
+            prBase = prBase,
+        )
+    }
+
+    fun readCommitReceipt(response: Response): CommitReceipt {
+        val root = parseJson(response, "GitHub feature-branch commit")
+        require(root.optBoolean("committed", false)) { "GitHub commit was not confirmed" }
+        val array = root.optJSONArray("files") ?: JSONArray()
+        val files = buildList {
+            for (i in 0 until array.length()) {
+                add(WorkspaceGitHubWritePolicy.requirePath(array.getString(i)))
+            }
+        }
+        return CommitReceipt(
+            repository = WorkspaceConnectorPolicy.requireRepository(root.optString("repository")),
+            branch = WorkspaceConnectorPolicy.requireFeatureBranch(root.optString("branch")),
+            previousHead = requireSha(root.optString("previous_head"), "GitHub previous head"),
+            commitSha = requireSha(root.optString("commit_sha"), "GitHub commit"),
+            files = files,
+        )
+    }
+
+    fun readPullRequestReceipt(response: Response): PullRequestReceipt {
+        val root = parseJson(response, "GitHub draft pull request")
+        val action = root.optString("action").trim()
+        require(action in setOf("created", "updated")) { "GitHub PR action is invalid" }
+        val number = root.optInt("number", -1)
+        require(number > 0) { "GitHub PR number is invalid" }
+        val url = root.optString("url").trim()
+        require(url.startsWith("https://github.com/")) { "GitHub PR URL is invalid" }
+        return PullRequestReceipt(
+            action = action,
+            number = number,
+            url = url,
+            draft = root.optBoolean("draft", false),
+            head = WorkspaceConnectorPolicy.requireFeatureBranch(root.optString("head")),
+            base = root.optString("base").trim().also {
+                require(it in setOf("main", "master")) { "GitHub PR base is invalid" }
+            },
+        )
+    }
+
     fun readRepository(response: Response, expectedRepository: String): Repository {
         val expected = WorkspaceConnectorPolicy.requireRepository(expectedRepository)
-        val root = readJson(response, "GitHub repository verification")
+        val root = parseJson(response, "GitHub repository verification")
         val fullName = root.optString("full_name").trim()
         require(fullName.equals(expected, ignoreCase = true)) {
             "GitHub repository identity did not match"
@@ -199,13 +326,10 @@ internal object WorkspaceGitHubConnector {
 
     fun readBranch(response: Response, expectedBranch: String): Branch {
         val expected = WorkspaceConnectorPolicy.requireFeatureBranch(expectedBranch)
-        val root = readJson(response, "GitHub branch verification")
+        val root = parseJson(response, "GitHub branch verification")
         val name = root.optString("name").trim()
         require(name == expected) { "GitHub branch identity did not match" }
         val sha = root.optJSONObject("commit")?.optString("sha").orEmpty().trim()
-        require(Regex("[0-9a-fA-F]{40,64}").matches(sha)) {
-            "GitHub branch head SHA is invalid"
-        }
-        return Branch(name, sha.lowercase())
+        return Branch(name, requireSha(sha, "GitHub branch head"))
     }
 }

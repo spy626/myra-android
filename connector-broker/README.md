@@ -13,21 +13,45 @@ GitHub user OAuth, Device Flow, a PAT, a GitHub password, or the GitHub App clie
    GitHub App's installation for `spy626`, and asks GitHub for an installation access token
    restricted to `spy626/myra-android`.
 6. The broker re-verifies the exact account, repository, and `agent/myra-phase-1` branch before
-   returning the one-hour installation token to LYRA.
-7. LYRA stores the token and pairing key only in Android encrypted storage. When the GitHub token
-   expires, the same pairing key can mint a fresh installation token automatically. No repeated
-   GitHub sign-in is required.
+   returning the one-hour **read-only** installation token to LYRA.
+7. LYRA stores the read token and pairing key only in Android encrypted storage. When the token
+   expires, the same pairing key can mint a fresh read token automatically.
 
-The GitHub App private key never enters the APK, repository, model prompt, or Android clipboard.
+The GitHub App private key and write-capable installation tokens never enter the APK, repository,
+model prompt, or Android clipboard.
+
+## C2 broker-gated write model
+
+Write-capable tokens exist only inside Cloudflare for the duration of a broker request. The Android
+app receives receipts, never a write token.
+
+Allowed write operations:
+- Verify write permission without mutating the repository.
+- Create one non-force commit containing 1..12 bounded UTF-8 text file creates/updates.
+- Advance only `agent/myra-phase-1`, and only when the caller supplies its exact current head SHA.
+- Create or update one **draft** pull request from `agent/myra-phase-1` to `main`.
+
+Blocked by policy:
+- Direct writes to `main` / `master`.
+- Force-push.
+- Branch or repository deletion.
+- GitHub Secrets APIs.
+- Workflow file writes under `.github/workflows/`.
+- Obvious credential/private-key file paths and private-key/token material.
+- Merge / auto-merge endpoints.
 
 ## GitHub App permissions
 
-Current C1 permissions remain read-only:
+C1 read:
 - Repository contents: Read-only
 - Actions: Read-only
-- Metadata: Read-only (implicit GitHub App metadata permission)
+- Metadata: Read-only (implicit)
 
-Write permissions are intentionally not added in this authentication patch.
+C2 write requires the GitHub App installation to grant:
+- Repository contents: **Read and write**
+- Pull requests: **Read and write**
+- Actions: Read-only
+- Metadata: Read-only (implicit)
 
 ## Worker configuration
 
@@ -36,6 +60,7 @@ Public vars in `wrangler.toml`:
 - `GITHUB_ACCOUNT_LOGIN`
 - `GITHUB_REPOSITORY`
 - `GITHUB_BRANCH`
+- `GITHUB_PR_BASE`
 
 Cloudflare secrets:
 - `GITHUB_APP_PRIVATE_KEY` — PEM private key generated in GitHub App settings.
@@ -46,7 +71,10 @@ Legacy `GITHUB_CLIENT_SECRET` and `OAUTH_SESSION_SECRET` are no longer used by t
 ## Endpoints
 
 - `GET /health`
-- `POST /github/token`
+- `POST /github/token` — read-only phone token
+- `POST /github/write/check` — non-mutating write-permission verification
+- `POST /github/write/commit` — bounded non-force commit on the protected feature branch
+- `POST /github/write/pull-request` — create/update draft PR only
 
 All responses use `Cache-Control: no-store`.
 
