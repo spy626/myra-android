@@ -1,9 +1,11 @@
 package com.myra.assistant.ui.workspace
 
-/** Temporary provider-generated target file for the finalist CI benchmark. */
+/** Known-good target baseline for the finalist benchmark. */
 internal object WorkspaceProviderCiTarget {
     fun preview(raw: List<String>, limit: Int): String =
-        if (limit <= 0) "" else WorkspaceProviderCiRules.normalize(raw).take(limit).joinToString("|")
+        WorkspaceProviderCiRules.normalize(raw)
+            .take(limit.coerceAtLeast(0))
+            .joinToString("|")
 
     fun count(raw: List<String>): Int =
         WorkspaceProviderCiRules.normalize(raw).size
