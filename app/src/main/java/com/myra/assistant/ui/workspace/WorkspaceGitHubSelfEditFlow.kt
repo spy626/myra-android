@@ -78,6 +78,7 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var access: WorkspaceGitHubConnector.WriteAccess? = null
     private var candidates: List<WorkspaceAgentReachGitHubRelevance.Candidate> = emptyList()
     private val originalSources = linkedMapOf<String, String>()
+    private var codingPlan: WorkspaceGitHubCodingPlan.Plan? = null
 
     private data class Checkpoint(
         val receipt: WorkspaceGitHubConnector.CommitReceipt,
@@ -139,6 +140,12 @@ internal class WorkspaceGitHubSelfEditFlow(
             WorkspaceCodingAutoFallback.groqPermitted(fallbackEnabled, groqFreeZdr, savedGroqKey)
         selectedProvider = checkpoint.provider
         repairAttempt = checkpoint.repairAttempt
+        codingPlan = WorkspaceGitHubCodingPlan.create(
+            goal = checkpoint.instruction,
+            repository = checkpoint.receipt.repository,
+            branch = checkpoint.receipt.branch,
+            selectedPaths = checkpoint.receipt.files,
+        )
         listener.onEvent(
             WorkspaceWorkPhase.RECOVERING,
             "Resuming saved GitHub coding checkpoint",
@@ -329,6 +336,17 @@ internal class WorkspaceGitHubSelfEditFlow(
         ) { response ->
             val map = WorkspaceGitHubConnector.readPathMap(response, checked.headSha)
             candidates = WorkspaceGitHubSelfEditBatch.selectCandidates(instruction, map)
+            codingPlan = WorkspaceGitHubCodingPlan.create(
+                goal = instruction,
+                repository = saved.repository,
+                branch = saved.branch,
+                selectedPaths = candidates.map { it.path },
+            )
+            listener.onEvent(
+                WorkspaceWorkPhase.THINKING,
+                "Execution plan locked",
+                requireNotNull(codingPlan).traceSummary(),
+            )
             readSelectedFiles(run)
         }
     }
@@ -899,6 +917,28 @@ internal class WorkspaceGitHubSelfEditFlow(
     }
 
     private fun complete(run: Long, result: Completion) {
+        val plan = codingPlan
+        if (plan == null) {
+            fail(run, null, "Coding completion plan was missing; task is not done.")
+            return
+        }
+        val verified = runCatching {
+            WorkspaceGitHubCodingPlan.verifyCompletion(plan, result.commit, result.workflow)
+        }
+        if (verified.isFailure) {
+            fail(
+                run,
+                null,
+                verified.exceptionOrNull()?.message
+                    ?: "Coding completion criteria were not satisfied; task is not done.",
+            )
+            return
+        }
+        listener.onEvent(
+            WorkspaceWorkPhase.VERIFYING,
+            "Completion criteria satisfied",
+            "Selected scope + exact CI GREEN verified",
+        )
         synchronized(this) {
             if (run != generation) return
             active = null
@@ -1055,5 +1095,6 @@ internal class WorkspaceGitHubSelfEditFlow(
         access = null
         candidates = emptyList()
         originalSources.clear()
+        codingPlan = null
     }
 }
