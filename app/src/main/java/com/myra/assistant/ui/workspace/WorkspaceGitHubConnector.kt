@@ -10,8 +10,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
 import java.net.URLEncoder
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 /** GitHub App installation transport with read tokens plus broker-gated C2 writes. */
@@ -121,6 +124,35 @@ internal object WorkspaceGitHubConnector {
         )
     }
 
+    fun pathMapRequest(token: String, repository: String, headSha: String): Request {
+        val clean = WorkspaceConnectorPolicy.requireRepository(repository)
+        val sha = requireSha(headSha, "GitHub feature-branch head")
+        val parts = clean.split('/')
+        return request(
+            "/repos/" + encode(parts[0]) + "/" + encode(parts[1]) +
+                "/git/trees/" + encode(sha) + "?recursive=1",
+            token,
+        )
+    }
+
+    fun fileContentRequest(
+        token: String,
+        repository: String,
+        headSha: String,
+        path: String,
+    ): Request {
+        val clean = WorkspaceConnectorPolicy.requireRepository(repository)
+        val sha = requireSha(headSha, "GitHub feature-branch head")
+        val safePath = WorkspaceGitHubWritePolicy.requirePath(path)
+        val parts = clean.split('/')
+        val encodedPath = safePath.split('/').joinToString("/") { encode(it) }
+        return request(
+            "/repos/" + encode(parts[0]) + "/" + encode(parts[1]) +
+                "/contents/" + encodedPath + "?ref=" + encode(sha),
+            token,
+        )
+    }
+
     private fun brokerPost(path: String, payload: JSONObject): Request {
         require(path.startsWith("/github/") && !path.contains("://")) {
             "GitHub broker path is invalid"
@@ -188,6 +220,14 @@ internal object WorkspaceGitHubConnector {
             JSONObject()
                 .put("pairing_secret", requirePairingSecret(pairingSecret))
                 .put("smoke_test", true),
+        )
+
+    fun ensureDraftPullRequestRequest(pairingSecret: String): Request =
+        brokerPost(
+            "/github/write/pull-request",
+            JSONObject()
+                .put("pairing_secret", requirePairingSecret(pairingSecret))
+                .put("preserve_existing", true),
         )
 
     private val guardedDns = object : Dns {
@@ -312,6 +352,44 @@ internal object WorkspaceGitHubConnector {
                 require(it in setOf("main", "master")) { "GitHub PR base is invalid" }
             },
         )
+    }
+
+    fun readPathMap(
+        response: Response,
+        expectedHeadSha: String,
+    ): WorkspaceAgentReachGitHub.RepositoryPathMap =
+        WorkspaceAgentReachGitHub.readPathMap(
+            response,
+            requireSha(expectedHeadSha, "GitHub feature-branch head"),
+        )
+
+    fun readTextFile(response: Response, expectedPath: String): String {
+        val safePath = WorkspaceGitHubWritePolicy.requirePath(expectedPath)
+        val root = parseJson(response, "GitHub source file read")
+        require(root.optString("type") == "file" && root.optString("path") == safePath) {
+            "GitHub source file identity did not match"
+        }
+        require(root.optString("encoding") == "base64") {
+            "GitHub source file encoding is unsupported"
+        }
+        val declared = root.optInt("size", -1)
+        require(declared in 0..WorkspaceGitHubWritePolicy.MAX_FILE_BYTES) {
+            "GitHub source file exceeds LYRA's bounded write size"
+        }
+        val encoded = root.optString("content").replace("\n", "")
+        require(encoded.isNotBlank() && encoded.length <=
+            ((WorkspaceGitHubWritePolicy.MAX_FILE_BYTES * 4 / 3) + 16_384)) {
+            "GitHub source file content is missing or oversized"
+        }
+        val bytes = runCatching { Base64.getDecoder().decode(encoded) }
+            .getOrElse { throw IllegalArgumentException("GitHub source file base64 is invalid") }
+        require(bytes.size <= WorkspaceGitHubWritePolicy.MAX_FILE_BYTES) {
+            "GitHub source file exceeds LYRA's bounded write size"
+        }
+        return StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes)).toString()
     }
 
     fun readRepository(response: Response, expectedRepository: String): Repository {

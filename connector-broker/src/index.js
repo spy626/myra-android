@@ -624,8 +624,10 @@ async function pullRequestEndpoint(request, env) {
   const body = await readJsonBody(request, 32_000);
   await requirePairing(env, body.pairing_secret);
   const smokeTest = body.smoke_test === true;
-  const title = smokeTest ? null : requirePullTitle(body.title);
-  const pullBody = smokeTest ? null : requirePullBody(body.body);
+  const preserveExisting = body.preserve_existing === true;
+  const preserveMetadata = smokeTest || preserveExisting;
+  const title = preserveMetadata ? null : requirePullTitle(body.title);
+  const pullBody = preserveMetadata ? null : requirePullBody(body.body);
 
   const scoped = await writeScoped(env);
   await branchHead(scoped.binding, scoped.token);
@@ -657,7 +659,7 @@ async function pullRequestEndpoint(request, env) {
 
     let updateTitle = title;
     let updateBody = pullBody;
-    if (smokeTest) {
+    if (preserveMetadata) {
       const current = await githubJson(
         repoApi(scoped.binding, "/pulls/" + number),
         scoped.token,
@@ -691,13 +693,20 @@ async function pullRequestEndpoint(request, env) {
       head: scoped.binding.branch,
       base: scoped.binding.prBase,
       smoke_test: smokeTest,
+      preserve_existing: preserveExisting,
     });
   }
 
-  const createTitle = smokeTest ? "LYRA GitHub C2 draft PR smoke test" : title;
+  const createTitle = smokeTest
+    ? "LYRA GitHub C2 draft PR smoke test"
+    : preserveExisting
+      ? "LYRA protected self-edit"
+      : title;
   const createBody = smokeTest
     ? "Harmless draft PR created only to verify LYRA's broker-gated pull-request write lane. Nothing is merged automatically."
-    : pullBody;
+    : preserveExisting
+      ? "Draft PR created by LYRA's broker-gated self-edit lane. main/master is never written or merged automatically."
+      : pullBody;
   const created = await githubJson(
     repoApi(scoped.binding, "/pulls"),
     scoped.token,
@@ -727,6 +736,7 @@ async function pullRequestEndpoint(request, env) {
     head: scoped.binding.branch,
     base: scoped.binding.prBase,
     smoke_test: smokeTest,
+    preserve_existing: preserveExisting,
   });
 }
 

@@ -41,8 +41,9 @@ class WorkspaceGitHubConnectorTest {
             WorkspaceGitHubWritePolicy.pullRequestPlan("Test PR", "body"),
         )
         val prSmoke = WorkspaceGitHubConnector.pullRequestSmokeTestRequest(pairing)
+        val prEnsure = WorkspaceGitHubConnector.ensureDraftPullRequestRequest(pairing)
 
-        listOf(write, commit, pr, prSmoke).forEach { request ->
+        listOf(write, commit, pr, prSmoke, prEnsure).forEach { request ->
             assertEquals("POST", request.method)
             assertEquals("lyra-github-connector.everspy626.workers.dev", request.url.host)
             assertTrue(!request.url.toString().contains(pairing))
@@ -54,6 +55,11 @@ class WorkspaceGitHubConnectorTest {
         assertEquals("/github/write/commit", commit.url.encodedPath)
         assertEquals("/github/write/pull-request", pr.url.encodedPath)
         assertEquals("/github/write/pull-request", prSmoke.url.encodedPath)
+        assertEquals("/github/write/pull-request", prEnsure.url.encodedPath)
+        val ensureBody = Buffer().also { prEnsure.body!!.writeTo(it) }.readUtf8()
+        assertTrue(ensureBody.contains("\"preserve_existing\":true"))
+        assertTrue(!ensureBody.contains("\"title\""))
+        assertTrue(!ensureBody.contains("\"body\""))
         val smokeBody = Buffer().also { prSmoke.body!!.writeTo(it) }.readUtf8()
         assertTrue(smokeBody.contains("\"smoke_test\":true"))
         assertTrue(!smokeBody.contains("\"title\""))
