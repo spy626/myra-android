@@ -181,12 +181,15 @@ internal object WorkspaceGitHubConnector {
         token: String,
         repository: String,
         branch: String,
+        headSha: String,
     ): Request {
         val clean = WorkspaceConnectorPolicy.binding(repository, branch)
+        val sha = requireSha(headSha, "GitHub workflow commit")
         val parts = clean.repository.split('/')
         return request(
             "/repos/" + encode(parts[0]) + "/" + encode(parts[1]) +
-                "/actions/runs?branch=" + encode(clean.branch) + "&event=push&per_page=30",
+                "/actions/runs?branch=" + encode(clean.branch) +
+                "&head_sha=" + encode(sha) + "&event=push&per_page=5",
             token,
         )
     }
