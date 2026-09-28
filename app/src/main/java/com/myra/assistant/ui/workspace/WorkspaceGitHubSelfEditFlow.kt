@@ -1,5 +1,6 @@
 package com.myra.assistant.ui.workspace
 
+import android.content.SharedPreferences
 import com.myra.assistant.ai.ApiKeyStore
 import okhttp3.Call
 import okhttp3.Callback
@@ -19,6 +20,7 @@ import java.io.IOException
 internal class WorkspaceGitHubSelfEditFlow(
     private val store: WorkspaceConnectorCredentialStore,
     private val keys: ApiKeyStore,
+    private val preferences: SharedPreferences,
     private val listener: Listener,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
@@ -39,7 +41,11 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var instruction = ""
     private var connection: WorkspaceConnectorCredentialStore.GitHubConnection? = null
     private var pairing = ""
-    private var openRouterKey = ""
+    private var xKiroKey = ""
+    private var groqKey = ""
+    private var xKiroPermitted = false
+    private var groqPermitted = false
+    private var selectedProvider: WorkspaceCodingRoleRouter.Provider? = null
     private var grant: WorkspaceGitHubConnector.InstallationGrant? = null
     private var access: WorkspaceGitHubConnector.WriteAccess? = null
     private var candidate: WorkspaceAgentReachGitHubRelevance.Candidate? = null
@@ -73,15 +79,16 @@ internal class WorkspaceGitHubSelfEditFlow(
             listener.onError("Reconnect GitHub once to restore the encrypted pairing key.")
             return
         }
-        val key = runCatching { keys.get(ApiKeyStore.OPENROUTER) }.getOrDefault("")
-        if (key.isBlank()) {
-            listener.onError("Add one OpenRouter Free API key in API & Cloud Settings before GitHub self-edit. No source was sent.")
-            return
-        }
-        WorkspaceProviderSessionHealth.cooldownMessage(
-            WorkspaceProviderRegistry.Id.OPENROUTER_FREE
-        ).takeIf { it.isNotBlank() }?.let {
-            listener.onError(it + " No GitHub source was sent.")
+        val xKiroEnabled = preferences.getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
+        val fallbackEnabled = preferences.getBoolean(WorkspaceCodingAutoFallback.PREFERENCE_KEY, false)
+        val groqFreeZdr = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
+        val savedXKiroKey = runCatching { keys.get(ApiKeyStore.XKIRO) }.getOrDefault("")
+        val savedGroqKey = runCatching { keys.get(ApiKeyStore.GROQ) }.getOrDefault("")
+        val canUseXKiro = xKiroEnabled && WorkspaceXKiroFree.validKey(savedXKiroKey)
+        val canShareWithGroq = WorkspaceCodingAutoFallback.permitted(fallbackEnabled, xKiroEnabled) &&
+            WorkspaceCodingAutoFallback.groqPermitted(fallbackEnabled, groqFreeZdr, savedGroqKey)
+        if (!canUseXKiro && !canShareWithGroq) {
+            listener.onError("Enable xKiro Work coding with a valid Free key. Groq small-edit routing additionally requires the existing automatic Free-provider sharing permission and Groq Free/ZDR.")
             return
         }
 
@@ -89,7 +96,10 @@ internal class WorkspaceGitHubSelfEditFlow(
         instruction = message
         connection = saved
         pairing = secret
-        openRouterKey = key
+        xKiroKey = savedXKiroKey
+        groqKey = savedGroqKey
+        xKiroPermitted = canUseXKiro
+        groqPermitted = canShareWithGroq
         listener.onEvent(WorkspaceWorkPhase.READING, "Refreshing GitHub read access", saved.branch)
         dispatch(
             run,
@@ -169,6 +179,14 @@ internal class WorkspaceGitHubSelfEditFlow(
         ) { response ->
             val source = WorkspaceGitHubConnector.readTextFile(response, selected.path)
             originalSource = source
+            selectedProvider = requireNotNull(
+                WorkspaceCodingRoleRouter.select(
+                    instruction,
+                    source.length,
+                    xKiroPermitted && WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.XKIRO_FREE),
+                    groqPermitted && WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.GROQ_FREE),
+                )
+            ) { "All permitted coding providers are cooling down or unavailable; no source was sent" }
             val prompt = WorkspaceGitHubSelfEdit.prompt(instruction, selected.path, source)
             propose(run, prompt)
         }
@@ -176,20 +194,34 @@ internal class WorkspaceGitHubSelfEditFlow(
 
     private fun propose(run: Long, prompt: String) {
         val selected = requireNotNull(candidate)
-        listener.onEvent(WorkspaceWorkPhase.CODING, "Preparing bounded GitHub edit", selected.path)
-        dispatch(
-            run,
-            WorkspaceFreeAiSuggestion.client,
-            WorkspaceFreeAiSuggestion.request(openRouterKey, prompt),
-            "OpenRouter Free self-edit request failed; no GitHub write was attempted.",
-        ) { response ->
+        val route = requireNotNull(selectedProvider)
+        val providerName = when (route) {
+            WorkspaceCodingRoleRouter.Provider.XKIRO -> "xKiro · ${WorkspaceXKiroFree.MODEL}"
+            WorkspaceCodingRoleRouter.Provider.GROQ -> "Groq · ${WorkspaceGroqFree.MODEL}"
+        }
+        listener.onEvent(WorkspaceWorkPhase.CODING, "Preparing bounded GitHub edit", "$providerName · ${selected.path}")
+        val providerRequest = when (route) {
+            WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.deliberationRequest(xKiroKey, prompt)
+            WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceGroqFree.request(
+                groqKey,
+                listOf(WorkspaceConversationStore.Message("github-self-edit", "user", prompt, nowMs())),
+            )
+        }
+        val client = when (route) {
+            WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.deliberationClient
+            WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceFreeAiSuggestion.client
+        }
+        dispatch(run, client, providerRequest, "$providerName self-edit request failed; no GitHub write was attempted.") { response ->
             WorkspaceProviderSessionHealth.recordResponse(response)
-            val raw = WorkspaceFreeAiSuggestion.readResponse(response)
+            val raw = when (route) {
+                WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.readDeliberation(response)
+                WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceGroqFree.read(response)
+            }
             val prepared = WorkspaceGitHubSelfEdit.prepare(raw, selected.path, originalSource)
+            listener.onEvent(WorkspaceWorkPhase.VERIFYING, "Provider patch accepted locally", providerName)
             commit(run, prepared)
         }
     }
-
     private fun commit(run: Long, prepared: WorkspaceGitHubSelfEdit.Prepared) {
         val checked = requireNotNull(access)
         val plan = WorkspaceGitHubWritePolicy.commitPlan(
@@ -332,7 +364,11 @@ internal class WorkspaceGitHubSelfEditFlow(
         instruction = ""
         connection = null
         pairing = ""
-        openRouterKey = ""
+        xKiroKey = ""
+        groqKey = ""
+        xKiroPermitted = false
+        groqPermitted = false
+        selectedProvider = null
         grant = null
         access = null
         candidate = null

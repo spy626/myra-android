@@ -105,6 +105,7 @@ class WorkspaceActivity : AppCompatActivity() {
         WorkspaceGitHubSelfEditFlow(
             store = WorkspaceConnectorCredentialStore(this),
             keys = keys,
+            preferences = preferences,
             listener = object : WorkspaceGitHubSelfEditFlow.Listener {
                 override fun onEvent(
                     phase: WorkspaceWorkPhase,
