@@ -297,8 +297,19 @@ async function githubJson(url, token, label, options = {}) {
   }
   if (!response.ok) {
     const detail = String(data?.message || "").trim();
+    const validation = Array.isArray(data?.errors)
+      ? data.errors.slice(0, 3).map(item => {
+          if (typeof item === "string") return item;
+          const field = String(item?.field || "").trim();
+          const code = String(item?.code || "").trim();
+          const message = String(item?.message || "").trim();
+          return [field, code, message].filter(Boolean).join(": ");
+        }).filter(Boolean).join("; ")
+      : "";
     const error = new Error(
-      label + " failed (HTTP " + response.status + ")" + (detail ? ": " + detail : "")
+      label + " failed (HTTP " + response.status + ")" +
+      (detail ? ": " + detail : "") +
+      (validation ? " [" + validation + "]" : "")
     );
     error.status = response.status;
     throw error;
@@ -646,7 +657,6 @@ async function pullRequestEndpoint(request, env) {
 
     let updateTitle = title;
     let updateBody = pullBody;
-    let maintainerCanModify = false;
     if (smokeTest) {
       const current = await githubJson(
         repoApi(scoped.binding, "/pulls/" + number),
@@ -655,7 +665,6 @@ async function pullRequestEndpoint(request, env) {
       );
       updateTitle = requirePullTitle(current.title);
       updateBody = requirePullBody(current.body || "");
-      maintainerCanModify = Boolean(current.maintainer_can_modify);
       if (!Boolean(current.draft)) {
         throw new Error("Existing protected-branch pull request is not a draft");
       }
@@ -671,7 +680,6 @@ async function pullRequestEndpoint(request, env) {
         body: JSON.stringify({
           title: updateTitle,
           body: updateBody,
-          maintainer_can_modify: maintainerCanModify,
         }),
       },
     );
@@ -738,6 +746,7 @@ export default {
             String(env.GITHUB_PR_BASE || "").trim()
           ),
           write_model: "broker-gated",
+          broker_version: "c2-pr-smoke-v2",
         });
       }
       if (url.pathname === "/github/token") {
