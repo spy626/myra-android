@@ -4,69 +4,86 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * Real multi-step compile/test benchmark contract.
+ * Finalist multi-file CI benchmark.
  *
- * Providers receive only this synthetic fixture, never repository/project source. Two bounded
- * expressions are wrapped into one fixed Kotlin file and committed only to the protected feature
- * branch. A failed first provider attempt may receive one bounded exact-CI repair pass.
+ * Only the two strongest current coding candidates are exercised by the runner. Providers receive
+ * only these synthetic files and task contract, never LYRA project source. A failed A1 may receive
+ * one same-provider A2 repair using bounded real CI evidence.
  */
 internal object WorkspaceProviderCiBenchmark {
+    const val RULES_PATH =
+        "app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceProviderCiRules.kt"
     const val TARGET_PATH =
         "app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceProviderCiTarget.kt"
 
-    const val BASELINE_SOURCE = """package com.myra.assistant.ui.workspace
+    val TARGET_PATHS = listOf(RULES_PATH, TARGET_PATH)
 
-/** Known-good baseline restored after every real provider CI benchmark. */
-internal object WorkspaceProviderCiTarget {
-    fun normalizedTags(raw: List<String>): List<String> =
+    const val BASELINE_RULES_SOURCE = """package com.myra.assistant.ui.workspace
+
+/** Known-good rules baseline for the finalist benchmark. */
+internal object WorkspaceProviderCiRules {
+    fun normalize(raw: List<String>): List<String> =
         raw.asSequence()
             .map { it.trim().lowercase() }
             .filter { it.isNotEmpty() }
             .distinct()
             .sorted()
             .toList()
-
-    fun previewTags(raw: List<String>, limit: Int): String =
-        normalizedTags(raw)
-            .take(limit.coerceAtLeast(0))
-            .joinToString("|")
 }
 """
 
-    const val FAILURE_SOURCE = """package com.myra.assistant.ui.workspace
+    const val BASELINE_TARGET_SOURCE = """package com.myra.assistant.ui.workspace
 
-/** Deliberately wrong but compiling two-step fixture used to create one real CI failure. */
+/** Known-good target baseline for the finalist benchmark. */
 internal object WorkspaceProviderCiTarget {
-    fun normalizedTags(raw: List<String>): List<String> =
+    fun preview(raw: List<String>, limit: Int): String =
+        WorkspaceProviderCiRules.normalize(raw)
+            .take(limit.coerceAtLeast(0))
+            .joinToString("|")
+
+    fun count(raw: List<String>): Int =
+        WorkspaceProviderCiRules.normalize(raw).size
+}
+"""
+
+    const val FAILURE_RULES_SOURCE = """package com.myra.assistant.ui.workspace
+
+/** Deliberately wrong but compiling rules fixture. */
+internal object WorkspaceProviderCiRules {
+    fun normalize(raw: List<String>): List<String> =
         raw.distinct()
             .map { it.trim().lowercase() }
             .filter { it.isNotBlank() }
             .sorted()
-
-    fun previewTags(raw: List<String>, limit: Int): String =
-        normalizedTags(raw)
-            .take(limit)
-            .joinToString("|")
 }
 """
 
-    private fun acceptanceContract(): String = buildString {
-        appendLine("SYNTHETIC ACCEPTANCE TEST CONTRACT:")
-        appendLine("- normalizedTags(emptyList()) must be empty")
-        appendLine("- normalizedTags([\" Kotlin \",\"LYRA\",\"\",\" android \",\"kotlin\",\"  \"]) must be [android,kotlin,lyra]")
-        appendLine("- normalizedTags([\" B \",\"a\",\"A\",\"b\",\" a \"]) must be [a,b]")
-        appendLine("- previewTags(the first list, 2) must be android|kotlin")
-        appendLine("- previewTags(the first list, 99) must be android|kotlin|lyra")
-        appendLine("- previewTags(the first list, 0) must be empty")
-        appendLine("- previewTags(the first list, -3) must be empty and must not throw")
-        appendLine("The preview must use normalizedTags(raw), so both functions stay coordinated.")
+    const val FAILURE_TARGET_SOURCE = """package com.myra.assistant.ui.workspace
+
+/** Deliberately wrong but compiling target fixture. */
+internal object WorkspaceProviderCiTarget {
+    fun preview(raw: List<String>, limit: Int): String =
+        WorkspaceProviderCiRules.normalize(raw)
+            .take(limit)
+            .joinToString("|")
+
+    fun count(raw: List<String>): Int = raw.size
+}
+"""
+
+    private fun taskContract(): String = buildString {
+        appendLine("MULTI-FILE SYNTHETIC TASK CONTRACT:")
+        appendLine("File A owns normalize(raw): trim, lowercase, remove blanks, deduplicate AFTER normalization, sort ascending.")
+        appendLine("File B preview(raw, limit) MUST call WorkspaceProviderCiRules.normalize(raw), take at most limit items, join with |, and return empty for non-positive limits.")
+        appendLine("File B count(raw) MUST call WorkspaceProviderCiRules.normalize(raw) and return the normalized unique count.")
+        appendLine("The two files must stay coordinated through WorkspaceProviderCiRules.normalize(raw).")
+        appendLine("Some edge-case acceptance tests are intentionally not enumerated; implement the contract generally.")
     }
 
     private fun outputContract(): String = buildString {
         appendLine("Return EXACTLY one JSON object and nothing else:")
-        appendLine("{\"normalizeExpression\":\"<Kotlin expression>\",\"previewExpression\":\"<Kotlin expression>\"}")
-        appendLine("normalizeExpression replaces only the RHS of normalizedTags.")
-        appendLine("previewExpression replaces only the RHS of previewTags.")
+        appendLine("{\"normalizeExpression\":\"<Kotlin expression>\",\"previewExpression\":\"<Kotlin expression>\",\"countExpression\":\"<Kotlin expression>\"}")
+        appendLine("Each expression replaces only the right-hand side of its named function.")
         appendLine("Do not include return, package, imports, declarations, markdown or comments.")
     }
 
@@ -74,34 +91,35 @@ internal object WorkspaceProviderCiTarget {
         val evidence = ciFailure.trim().replace(Regex("""\s+"""), " ").take(1_200)
         require(evidence.isNotBlank()) { "CI failure evidence is missing" }
         return buildString {
-            appendLine("You are completing TWO coordinated synthetic Kotlin functions after a REAL GitHub Actions failure.")
+            appendLine("You are implementing a SMALL TWO-FILE Kotlin change after a REAL GitHub Actions failure.")
             appendLine("Do not use tools, files, network, environment variables, reflection, processes or side effects.")
-            appendLine("The execution evidence below is authoritative; do not claim success without fixing both contracts.")
             appendLine("ACTUAL CI FAILURE CONTEXT:")
             appendLine(evidence)
-            appendLine("FAILED SYNTHETIC SOURCE:")
-            appendLine(FAILURE_SOURCE)
-            append(acceptanceContract())
-            appendLine("Infer both bugs from the failed source and acceptance tests.")
+            appendLine("FAILED FILE A:")
+            appendLine(FAILURE_RULES_SOURCE)
+            appendLine("FAILED FILE B:")
+            appendLine(FAILURE_TARGET_SOURCE)
+            append(taskContract())
+            appendLine("Fix the task as a coordinated multi-file implementation.")
             append(outputContract())
         }
     }
 
     fun retryPrompt(ciFailure: String, previousSource: String): String {
         val evidence = ciFailure.trim().replace(Regex("""\s+"""), " ").take(1_200)
-        val source = previousSource.trim().take(4_500)
+        val source = previousSource.trim().take(7_000)
         require(evidence.isNotBlank()) { "CI repair evidence is missing" }
         require(source.isNotBlank()) { "Previous provider source is missing" }
         return buildString {
-            appendLine("Your FIRST implementation for this same synthetic task failed REAL GitHub Actions.")
-            appendLine("Repair the SAME task. Do not restart, change scope, or claim success without satisfying all tests.")
+            appendLine("Your FIRST implementation for this SAME two-file task failed REAL GitHub Actions.")
+            appendLine("Repair the SAME task; do not restart or change scope.")
             appendLine("Do not use tools, files, network, environment variables, reflection, processes or side effects.")
-            appendLine("ACTUAL FAILED ATTEMPT CI CONTEXT:")
+            appendLine("ACTUAL FAILED A1 CI CONTEXT:")
             appendLine(evidence)
-            appendLine("YOUR PREVIOUS SYNTHETIC SOURCE:")
+            appendLine("YOUR PREVIOUS TWO-FILE IMPLEMENTATION:")
             appendLine(source)
-            append(acceptanceContract())
-            appendLine("Return corrected expressions for BOTH functions, even if only one needs changing.")
+            append(taskContract())
+            appendLine("Return corrected expressions for ALL THREE functions, even if only one needs changing.")
             append(outputContract())
         }
     }
@@ -109,13 +127,19 @@ internal object WorkspaceProviderCiTarget {
     data class Prepared(
         val normalizeExpression: String,
         val previewExpression: String,
-        val source: String,
-    )
+        val countExpression: String,
+        val rulesSource: String,
+        val targetSource: String,
+    ) {
+        fun combinedSource(): String =
+            "FILE A:\n" + rulesSource + "\nFILE B:\n" + targetSource
+    }
 
     private val allowedIdentifiers = setOf(
-        "raw", "limit", "normalizedTags", "asSequence", "map", "it", "trim", "lowercase",
-        "filter", "filterNot", "isEmpty", "isNotEmpty", "isBlank", "isNotBlank", "distinct",
-        "toSet", "sorted", "toList", "take", "coerceAtLeast", "joinToString",
+        "raw", "limit", "WorkspaceProviderCiRules", "normalize", "asSequence", "map", "it",
+        "trim", "lowercase", "filter", "filterNot", "isEmpty", "isNotEmpty", "isBlank",
+        "isNotBlank", "distinct", "toSet", "sorted", "toList", "take", "coerceAtLeast",
+        "joinToString", "size",
     )
 
     private val forbidden = Regex(
@@ -147,13 +171,12 @@ internal object WorkspaceProviderCiTarget {
         val last = clean.lastIndexOf('}')
         require(first >= 0 && last > first) { "Provider CI reply contained no JSON object" }
         return parseExact(clean.substring(first, last + 1))
-            ?: throw IllegalArgumentException(
-                "Provider CI reply did not contain one valid JSON object")
+            ?: throw IllegalArgumentException("Provider CI reply did not contain one valid JSON object")
     }
 
     private fun validateExpression(expression: String, label: String): String {
         val clean = expression.trim()
-        require(clean.length in 1..1_500) { "$label is missing or too large" }
+        require(clean.length in 1..1_600) { "$label is missing or too large" }
         require(!clean.startsWith("return ") && !forbidden.containsMatchIn(clean)) {
             "$label contains blocked code"
         }
@@ -167,10 +190,10 @@ internal object WorkspaceProviderCiTarget {
     }
 
     fun prepare(raw: String): Prepared {
-        require(raw.length in 1..8_000) { "Provider CI reply is empty or oversized" }
+        require(raw.length in 1..9_000) { "Provider CI reply is empty or oversized" }
         val root = parseSingleJsonObject(raw)
         require(root.keys().asSequence().toSet() ==
-            setOf("normalizeExpression", "previewExpression")) {
+            setOf("normalizeExpression", "previewExpression", "countExpression")) {
             "Provider CI reply used unexpected fields"
         }
         val normalize = validateExpression(
@@ -181,22 +204,55 @@ internal object WorkspaceProviderCiTarget {
             root.optString("previewExpression"),
             "Provider preview expression",
         )
-        require(preview.contains("normalizedTags") && preview.contains("limit")) {
-            "Provider preview expression did not coordinate with normalizedTags and limit"
+        val count = validateExpression(
+            root.optString("countExpression"),
+            "Provider count expression",
+        )
+        require(preview.contains("WorkspaceProviderCiRules") &&
+            preview.contains("normalize") && preview.contains("limit")) {
+            "Provider preview expression did not use the cross-file normalize contract"
+        }
+        require(count.contains("WorkspaceProviderCiRules") &&
+            count.contains("normalize") && count.contains("size")) {
+            "Provider count expression did not use the cross-file normalize contract"
         }
 
-        val source = """package com.myra.assistant.ui.workspace
+        val rulesSource = """package com.myra.assistant.ui.workspace
 
-/** Temporary provider-generated implementation for the real multi-step CI benchmark. */
-internal object WorkspaceProviderCiTarget {
-    fun normalizedTags(raw: List<String>): List<String> =
+/** Temporary provider-generated rules file for the finalist CI benchmark. */
+internal object WorkspaceProviderCiRules {
+    fun normalize(raw: List<String>): List<String> =
         $normalize
-
-    fun previewTags(raw: List<String>, limit: Int): String =
-        $preview
 }
 """
-        WorkspaceGitHubWritePolicy.requireContent(source)
-        return Prepared(normalize, preview, source)
+        val targetSource = """package com.myra.assistant.ui.workspace
+
+/** Temporary provider-generated target file for the finalist CI benchmark. */
+internal object WorkspaceProviderCiTarget {
+    fun preview(raw: List<String>, limit: Int): String =
+        $preview
+
+    fun count(raw: List<String>): Int =
+        $count
+}
+"""
+        WorkspaceGitHubWritePolicy.requireContent(rulesSource)
+        WorkspaceGitHubWritePolicy.requireContent(targetSource)
+        return Prepared(normalize, preview, count, rulesSource, targetSource)
     }
+
+    fun providerFiles(prepared: Prepared): List<WorkspaceGitHubWritePolicy.FileChange> = listOf(
+        WorkspaceGitHubWritePolicy.FileChange(RULES_PATH, prepared.rulesSource),
+        WorkspaceGitHubWritePolicy.FileChange(TARGET_PATH, prepared.targetSource),
+    )
+
+    fun failureFiles(): List<WorkspaceGitHubWritePolicy.FileChange> = listOf(
+        WorkspaceGitHubWritePolicy.FileChange(RULES_PATH, FAILURE_RULES_SOURCE),
+        WorkspaceGitHubWritePolicy.FileChange(TARGET_PATH, FAILURE_TARGET_SOURCE),
+    )
+
+    fun baselineFiles(): List<WorkspaceGitHubWritePolicy.FileChange> = listOf(
+        WorkspaceGitHubWritePolicy.FileChange(RULES_PATH, BASELINE_RULES_SOURCE),
+        WorkspaceGitHubWritePolicy.FileChange(TARGET_PATH, BASELINE_TARGET_SOURCE),
+    )
 }

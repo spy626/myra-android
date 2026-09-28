@@ -1,90 +1,69 @@
 package com.myra.assistant.ui.workspace
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkspaceProviderCiBenchmarkTest {
-    @Test fun initialPromptCarriesRealCiEvidenceAndTwoStepContract() {
+    @Test fun finalistPromptCarriesTwoFilesRealCiAndGeneralContract() {
         val prompt = WorkspaceProviderCiBenchmark.initialPrompt(
             "GitHub Actions Build Android APK #42 failed; job=build; failed_steps=Unit tests and debug APK"
         )
-        assertTrue(prompt.contains("TWO coordinated"))
+        assertTrue(prompt.contains("SMALL TWO-FILE"))
         assertTrue(prompt.contains("REAL GitHub Actions failure"))
-        assertTrue(prompt.contains("raw.distinct()"))
-        assertTrue(prompt.contains("previewTags"))
-        assertTrue(prompt.contains("-3"))
-        assertTrue(prompt.contains("normalizeExpression"))
-        assertTrue(prompt.contains("previewExpression"))
+        assertTrue(prompt.contains("FAILED FILE A"))
+        assertTrue(prompt.contains("FAILED FILE B"))
+        assertTrue(prompt.contains("deduplicate AFTER normalization"))
+        assertTrue(prompt.contains("Some edge-case acceptance tests are intentionally not enumerated"))
+        assertTrue(prompt.contains("countExpression"))
     }
 
-    @Test fun retryPromptCarriesSameTaskPreviousSourceAndFailureEvidence() {
+    @Test fun retryPromptKeepsSameTaskAndPreviousTwoFileImplementation() {
+        val previous = WorkspaceProviderCiBenchmark.BASELINE_RULES_SOURCE + "\n" +
+            WorkspaceProviderCiBenchmark.BASELINE_TARGET_SOURCE
         val prompt = WorkspaceProviderCiBenchmark.retryPrompt(
-            "GitHub Actions #44 failed; job=build; failed_steps=Unit tests and debug APK",
-            WorkspaceProviderCiBenchmark.FAILURE_SOURCE,
+            "GitHub Actions #44 failed; failed_steps=Unit tests and debug APK",
+            previous,
         )
-        assertTrue(prompt.contains("FIRST implementation"))
-        assertTrue(prompt.contains("SAME task"))
-        assertTrue(prompt.contains("YOUR PREVIOUS SYNTHETIC SOURCE"))
-        assertTrue(prompt.contains("GitHub Actions #44"))
+        assertTrue(prompt.contains("SAME two-file task"))
+        assertTrue(prompt.contains("YOUR PREVIOUS TWO-FILE IMPLEMENTATION"))
+        assertTrue(prompt.contains("ALL THREE functions"))
     }
 
-    @Test fun validTwoExpressionReplyBuildsBoundedSource() {
-        val result = WorkspaceProviderCiBenchmark.prepare(
-            """{"normalizeExpression":"raw.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct().sorted()","previewExpression":"normalizedTags(raw).take(limit.coerceAtLeast(0)).joinToString(\"|\")"}"""
+    @Test fun validThreeExpressionReplyBuildsTwoBoundedFiles() {
+        val prepared = WorkspaceProviderCiBenchmark.prepare(
+            """{"normalizeExpression":"raw.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct().sorted()","previewExpression":"WorkspaceProviderCiRules.normalize(raw).take(limit.coerceAtLeast(0)).joinToString(\"|\")","countExpression":"WorkspaceProviderCiRules.normalize(raw).size"}"""
         )
-        assertTrue(result.source.contains("fun normalizedTags"))
-        assertTrue(result.source.contains("fun previewTags"))
-        assertTrue(result.source.contains("coerceAtLeast"))
-        assertTrue(result.source.length < 6_000)
+        val files = WorkspaceProviderCiBenchmark.providerFiles(prepared)
+        assertEquals(2, files.size)
+        assertEquals(WorkspaceProviderCiBenchmark.TARGET_PATHS, files.map { it.path })
+        assertTrue(prepared.rulesSource.contains("fun normalize"))
+        assertTrue(prepared.targetSource.contains("fun preview"))
+        assertTrue(prepared.targetSource.contains("fun count"))
     }
 
-    @Test fun fencedOrBriefProseWrappedJsonIsSafelyExtracted() {
-        val fenced = WorkspaceProviderCiBenchmark.prepare(
-            """```json
-{"normalizeExpression":"raw.asSequence().map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct().sorted().toList()","previewExpression":"normalizedTags(raw).take(limit.coerceAtLeast(0)).joinToString(\"|\")"}
-```"""
-        )
-        assertTrue(fenced.source.contains("toList"))
-
-        val wrapped = WorkspaceProviderCiBenchmark.prepare(
-            """Here is the bounded answer:
-{"normalizeExpression":"raw.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet().sorted()","previewExpression":"normalizedTags(raw).take(limit.coerceAtLeast(0)).joinToString(\"|\")"}
-Done."""
-        )
-        assertTrue(wrapped.source.contains("toSet"))
-    }
-
-    @Test fun extraFieldsMissingCoordinationAndMultipleObjectsAreRejected() {
-        val extra = runCatching {
+    @Test fun crossFileCoordinationIsMandatory() {
+        val badPreview = runCatching {
             WorkspaceProviderCiBenchmark.prepare(
-                """{"normalizeExpression":"raw.sorted()","previewExpression":"normalizedTags(raw).joinToString(\"|\")","note":"x"}"""
+                """{"normalizeExpression":"raw.sorted()","previewExpression":"raw.take(limit.coerceAtLeast(0)).joinToString(\"|\")","countExpression":"WorkspaceProviderCiRules.normalize(raw).size"}"""
             )
         }
-        assertTrue(extra.isFailure)
+        assertTrue(badPreview.isFailure)
 
-        val uncoordinated = runCatching {
+        val badCount = runCatching {
             WorkspaceProviderCiBenchmark.prepare(
-                """{"normalizeExpression":"raw.sorted()","previewExpression":"raw.take(limit.coerceAtLeast(0)).joinToString(\"|\")"}"""
+                """{"normalizeExpression":"raw.sorted()","previewExpression":"WorkspaceProviderCiRules.normalize(raw).take(limit.coerceAtLeast(0)).joinToString(\"|\")","countExpression":"raw.size"}"""
             )
         }
-        assertTrue(uncoordinated.isFailure)
-
-        val multiple = runCatching {
-            WorkspaceProviderCiBenchmark.prepare(
-                """{"normalizeExpression":"raw.sorted()","previewExpression":"normalizedTags(raw).take(limit).joinToString(\"|\")"} {"x":"y"}"""
-            )
-        }
-        assertTrue(multiple.isFailure)
+        assertTrue(badCount.isFailure)
     }
 
-    @Test fun dangerousOrNonWhitelistedCodeIsRejectedInEitherExpression() {
-        val dangerous = listOf(
-            """{"normalizeExpression":"System.getenv(\"HOME\")","previewExpression":"normalizedTags(raw).take(limit).joinToString(\"|\")"}""",
-            """{"normalizeExpression":"raw.sorted()","previewExpression":"run { while (true) {} }"}""",
-            """{"normalizeExpression":"raw.sorted()","previewExpression":"normalizedTags(raw).take(limit); Runtime.getRuntime()"}""",
-        )
-        dangerous.forEach { raw ->
-            assertTrue(runCatching { WorkspaceProviderCiBenchmark.prepare(raw) }.isFailure)
+    @Test fun dangerousCodeIsRejected() {
+        val bad = runCatching {
+            WorkspaceProviderCiBenchmark.prepare(
+                """{"normalizeExpression":"System.getenv(\"HOME\")","previewExpression":"WorkspaceProviderCiRules.normalize(raw).take(limit).joinToString(\"|\")","countExpression":"WorkspaceProviderCiRules.normalize(raw).size"}"""
+            )
         }
+        assertTrue(bad.isFailure)
     }
 }

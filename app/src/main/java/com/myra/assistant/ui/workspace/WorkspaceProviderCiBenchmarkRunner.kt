@@ -72,17 +72,6 @@ internal class WorkspaceProviderCiBenchmarkRunner(
 
     private fun seats(): List<Seat> = listOf(
         Seat(
-            "OpenRouter · openrouter/free",
-            "openrouter",
-            {
-                val key = firstKey(ApiKeyStore.OPENROUTER)
-                Pair(WorkspaceCodingAutoFallback.validKey(key), key)
-            },
-            { key, prompt -> WorkspaceFreeAiSuggestion.request(key, prompt) },
-            WorkspaceFreeAiSuggestion.client,
-            WorkspaceFreeAiSuggestion::readResponse,
-        ),
-        Seat(
             "Groq · " + WorkspaceGroqFree.MODEL,
             "groq",
             {
@@ -98,19 +87,6 @@ internal class WorkspaceProviderCiBenchmarkRunner(
             WorkspaceGroqFree::read,
         ),
         Seat(
-            "LLM7 · " + WorkspaceLlm7Free.MODEL,
-            "llm7",
-            {
-                val key = firstKey(ApiKeyStore.LLM7)
-                // Running REAL CI is separate one-time consent for this fixed synthetic fixture.
-                // It never enables LLM7 for normal chat, project source, memory, voice or photos.
-                Pair(WorkspaceLlm7Free.validKey(key), key)
-            },
-            { key, prompt -> WorkspaceLlm7Free.request(key, listOf(message(prompt))) },
-            WorkspaceLlm7Free.client,
-            WorkspaceLlm7Free::read,
-        ),
-        Seat(
             "xKiro · " + WorkspaceXKiroFree.MODEL,
             "xkiro",
             {
@@ -120,29 +96,6 @@ internal class WorkspaceProviderCiBenchmarkRunner(
             { key, prompt -> WorkspaceXKiroFree.deliberationRequest(key, prompt) },
             WorkspaceXKiroFree.deliberationClient,
             WorkspaceXKiroFree::readDeliberation,
-        ),
-        Seat(
-            "Z.ai · " + WorkspaceZaiFree.DEFAULT_TEXT_MODEL,
-            "zai",
-            {
-                val key = firstKey(ApiKeyStore.ZAI)
-                Pair(
-                    prefs.getBoolean(WorkspaceZaiFree.CODING_PREFERENCE_KEY, false) &&
-                        WorkspaceZaiFree.validKey(key),
-                    key,
-                )
-            },
-            { key, prompt ->
-                WorkspaceZaiFree.deliberationRequest(
-                    key = key,
-                    prompt = prompt,
-                    textModel = WorkspaceZaiFree.DEFAULT_TEXT_MODEL,
-                    sourceIncluded = false,
-                    sourceApproved = false,
-                )
-            },
-            WorkspaceZaiFree.client,
-            WorkspaceZaiFree::read,
         ),
     )
 
@@ -169,7 +122,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
         seedFailureSummary = ""
         lines.clear()
         seats().forEach { lines[it.name] = "waiting" }
-        render("Creating one deliberate multi-step synthetic CI failure…", done = false)
+        render("Creating one deliberate two-file finalist CI failure…", done = false)
         seedFailure(generation)
     }
 
@@ -183,7 +136,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
 
     private fun render(label: String, done: Boolean) {
         val body = buildList {
-            add("REAL CI MULTI-STEP AGENT LOOP · synthetic source only · exact-SHA Actions watch · main untouched")
+            add("REAL CI FINALIST MULTI-FILE LOOP · Groq vs xKiro · synthetic source only · exact-SHA CI · main untouched")
             add(label)
             add("CI seed — " + seedLine)
             lines.forEach { (name, value) -> add(name + " — " + value) }
@@ -205,8 +158,8 @@ internal class WorkspaceProviderCiBenchmarkRunner(
             return
         }
 
-        lines[seat.name] = "A1 solving two coordinated functions…"
-        render("Multi-step provider " + (index + 1) + "/" + seats.size + " · attempt 1", false)
+        lines[seat.name] = "A1 solving three coordinated functions across two files…"
+        render("Finalist provider " + (index + 1) + "/" + seats.size + " · attempt 1", false)
         val prompt = WorkspaceProviderCiBenchmark.initialPrompt(seedFailureSummary)
         val modelStarted = SystemClock.elapsedRealtime()
         val request = runCatching { seat.request(available.second, prompt) }.getOrElse {
@@ -238,7 +191,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                     index = index,
                     seat = seat,
                     key = available.second,
-                    source = prepared.source,
+                    prepared = prepared,
                     modelMs = modelMs,
                     attempt = 1,
                     firstFailureRun = null,
@@ -253,7 +206,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
         index: Int,
         seat: Seat,
         key: String,
-        source: String,
+        prepared: WorkspaceProviderCiBenchmark.Prepared,
         modelMs: Long,
         attempt: Int,
         firstFailureRun: Long?,
@@ -283,19 +236,14 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                     "GitHub benchmark binding changed"
                 }
                 val message = if (attempt == 1) {
-                    "test: multi-step provider benchmark " + seat.slug
+                    "test: finalist multi-file benchmark " + seat.slug
                 } else {
-                    "test: multi-step provider repair " + seat.slug
+                    "test: finalist multi-file repair " + seat.slug
                 }
                 val plan = WorkspaceGitHubWritePolicy.commitPlan(
                     expectedHead = access.headSha,
                     message = message,
-                    files = listOf(
-                        WorkspaceGitHubWritePolicy.FileChange(
-                            WorkspaceProviderCiBenchmark.TARGET_PATH,
-                            source,
-                        )
-                    ),
+                    files = WorkspaceProviderCiBenchmark.providerFiles(prepared),
                 )
                 dispatch(
                     run,
@@ -309,7 +257,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                         val receipt = WorkspaceGitHubConnector.readCommitReceipt(commitResponse)
                         require(receipt.previousHead == access.headSha &&
                             receipt.branch == access.branch &&
-                            receipt.files == listOf(WorkspaceProviderCiBenchmark.TARGET_PATH)) {
+                            receipt.files == WorkspaceProviderCiBenchmark.TARGET_PATHS) {
                             "Provider benchmark commit receipt mismatch"
                         }
                         wroteProviderCommit = true
@@ -349,7 +297,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                                                 index = index,
                                                 seat = seat,
                                                 key = key,
-                                                previousSource = source,
+                                                previousSource = prepared.combinedSource(),
                                                 failureSummary = failureSummary,
                                                 firstFailureRun = workflow.runNumber,
                                             )
@@ -427,7 +375,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                     index = index,
                     seat = seat,
                     key = key,
-                    source = prepared.source,
+                    prepared = prepared,
                     modelMs = modelMs,
                     attempt = 2,
                     firstFailureRun = firstFailureRun,
@@ -438,7 +386,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
 
     private fun seedFailure(run: Long) {
         seedLine = "GitHub preflight…"
-        render("Creating deliberate two-function failing fixture on protected feature branch.", false)
+        render("Creating deliberate two-file failing fixture on protected feature branch.", false)
         dispatch(
             run,
             WorkspaceGitHubConnector.client,
@@ -453,13 +401,8 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                 }
                 val plan = WorkspaceGitHubWritePolicy.commitPlan(
                     expectedHead = access.headSha,
-                    message = "test: seed multi-step provider benchmark failure",
-                    files = listOf(
-                        WorkspaceGitHubWritePolicy.FileChange(
-                            WorkspaceProviderCiBenchmark.TARGET_PATH,
-                            WorkspaceProviderCiBenchmark.FAILURE_SOURCE,
-                        )
-                    ),
+                    message = "test: seed finalist multi-file benchmark failure",
+                    files = WorkspaceProviderCiBenchmark.failureFiles(),
                 )
                 dispatch(
                     run,
@@ -470,8 +413,8 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                         val receipt = WorkspaceGitHubConnector.readCommitReceipt(commitResponse)
                         require(receipt.previousHead == access.headSha &&
                             receipt.branch == access.branch &&
-                            receipt.files == listOf(WorkspaceProviderCiBenchmark.TARGET_PATH)) {
-                            "Multi-step benchmark seed receipt mismatch"
+                            receipt.files == WorkspaceProviderCiBenchmark.TARGET_PATHS) {
+                            "Finalist multi-file benchmark seed receipt mismatch"
                         }
                         wroteProviderCommit = true
                         seedLine = "COMMITTED " + receipt.commitSha.take(12) + " · waiting expected failure"
@@ -496,7 +439,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                                         seedFailureSummary = summary
                                         seedLine = "EXPECTED FAIL · CI #" + workflow.runNumber +
                                             " · bounded failure captured"
-                                        render("Real failure captured. Starting multi-step provider attempts.", false)
+                                        render("Real failure captured. Starting Groq vs xKiro finalist attempts.", false)
                                         runSeat(run, seats(), 0)
                                     },
                                     onFailure = {
@@ -666,12 +609,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                 val plan = WorkspaceGitHubWritePolicy.commitPlan(
                     expectedHead = access.headSha,
                     message = "test: restore real CI provider benchmark baseline",
-                    files = listOf(
-                        WorkspaceGitHubWritePolicy.FileChange(
-                            WorkspaceProviderCiBenchmark.TARGET_PATH,
-                            WorkspaceProviderCiBenchmark.BASELINE_SOURCE,
-                        )
-                    ),
+                    files = WorkspaceProviderCiBenchmark.baselineFiles(),
                 )
                 dispatch(
                     run,
@@ -693,7 +631,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                                 val conclusion = workflow.conclusion ?: "unknown"
                                 finish(
                                     run,
-                                    "Multi-step benchmark complete. Baseline " +
+                                    "Finalist multi-file benchmark complete. Baseline " +
                                         receipt.commitSha.take(12) + " · CI #" +
                                         workflow.runNumber + " " + conclusion.uppercase(),
                                 )

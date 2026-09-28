@@ -6,28 +6,33 @@ import org.junit.Test
 class WorkspaceProviderCiTargetTest {
     private val mixed = listOf(" Kotlin ", "LYRA", "", " android ", "kotlin", "  ")
 
-    @Test fun emptyInputNormalizesToEmptyList() {
-        assertEquals(emptyList<String>(), WorkspaceProviderCiTarget.normalizedTags(emptyList()))
-    }
-
-    @Test fun normalizesDeduplicatesAfterNormalizationAndSorts() {
+    @Test fun normalizeHonorsCrossFileContract() {
         assertEquals(
             listOf("android", "kotlin", "lyra"),
-            WorkspaceProviderCiTarget.normalizedTags(mixed),
+            WorkspaceProviderCiRules.normalize(mixed),
         )
         assertEquals(
             listOf("a", "b"),
-            WorkspaceProviderCiTarget.normalizedTags(listOf(" B ", "a", "A", "b", " a ")),
+            WorkspaceProviderCiRules.normalize(listOf(" B ", "a", "A", "b", " a ")),
         )
     }
 
-    @Test fun previewUsesNormalizedOrderAndLimit() {
-        assertEquals("android|kotlin", WorkspaceProviderCiTarget.previewTags(mixed, 2))
-        assertEquals("android|kotlin|lyra", WorkspaceProviderCiTarget.previewTags(mixed, 99))
-        assertEquals("", WorkspaceProviderCiTarget.previewTags(mixed, 0))
+    @Test fun previewUsesNormalizedValuesAndLimit() {
+        assertEquals("android|kotlin", WorkspaceProviderCiTarget.preview(mixed, 2))
+        assertEquals("android|kotlin|lyra", WorkspaceProviderCiTarget.preview(mixed, 99))
+        assertEquals("", WorkspaceProviderCiTarget.preview(mixed, 0))
+        assertEquals("", WorkspaceProviderCiTarget.preview(mixed, -4))
     }
 
-    @Test fun negativePreviewLimitIsSafelyEmpty() {
-        assertEquals("", WorkspaceProviderCiTarget.previewTags(mixed, -3))
+    @Test fun countUsesNormalizedUniqueValues() {
+        assertEquals(3, WorkspaceProviderCiTarget.count(mixed))
+        assertEquals(2, WorkspaceProviderCiTarget.count(listOf(" A ", "a", " B ", "b")))
+    }
+
+    @Test fun hiddenBlankOnlyEdgeCaseIsConsistentAcrossFiles() {
+        val blanks = listOf("", " ", "   ")
+        assertEquals(emptyList<String>(), WorkspaceProviderCiRules.normalize(blanks))
+        assertEquals("", WorkspaceProviderCiTarget.preview(blanks, 4))
+        assertEquals(0, WorkspaceProviderCiTarget.count(blanks))
     }
 }
