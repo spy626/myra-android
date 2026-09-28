@@ -458,6 +458,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                 token = token,
                 repository = saved.repository,
                 branch = saved.branch,
+                headSha = commitSha,
             ),
             onFailure = {
                 if (errors < MAX_CI_POLL_ERRORS) {
