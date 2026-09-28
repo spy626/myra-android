@@ -1,6 +1,8 @@
 package com.myra.assistant.ui.workspace
 
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import com.myra.assistant.ai.ApiKeyStore
 import okhttp3.Call
 import okhttp3.Callback
@@ -12,9 +14,10 @@ import java.io.IOException
 /**
  * One current-turn GitHub self-edit transaction:
  * fresh read token -> automatic write preflight -> pinned feature-branch read -> one provider patch
- * -> one broker-gated non-force commit -> ensure draft PR.
+ * -> one broker-gated non-force commit -> exact-SHA GitHub Actions verification -> draft PR.
  *
- * There is no manual verification button and no retry. main/master, merge, workflow writes,
+ * A successful commit is not completion. DONE is emitted only after that exact push CI is GREEN.
+ * main/master, merge, workflow writes,
  * destructive deletes and secrets remain outside this capability.
  */
 internal class WorkspaceGitHubSelfEditFlow(
@@ -26,6 +29,7 @@ internal class WorkspaceGitHubSelfEditFlow(
 ) {
     data class Completion(
         val commit: WorkspaceGitHubConnector.CommitReceipt,
+        val workflow: WorkspaceGitHubConnector.WorkflowRun,
         val pullRequest: WorkspaceGitHubConnector.PullRequestReceipt?,
         val warning: String? = null,
     )
@@ -36,8 +40,22 @@ internal class WorkspaceGitHubSelfEditFlow(
         fun onError(message: String)
     }
 
+    private companion object {
+        const val CI_POLL_MS = 8_000L
+        const val MAX_CI_POLLS = 120
+        const val MAX_CI_POLL_ERRORS = 3
+        const val CP_SHA = "workspace_github_self_edit_checkpoint_sha"
+        const val CP_REPO = "workspace_github_self_edit_checkpoint_repo"
+        const val CP_BRANCH = "workspace_github_self_edit_checkpoint_branch"
+        const val CP_PATH = "workspace_github_self_edit_checkpoint_path"
+        const val CP_PROVIDER = "workspace_github_self_edit_checkpoint_provider"
+        const val CP_PHASE = "workspace_github_self_edit_checkpoint_phase"
+    }
+
+    private val pollHandler = Handler(Looper.getMainLooper())
     private var generation = 0L
     private var active: Call? = null
+    private var ciWatching = false
     private var instruction = ""
     private var connection: WorkspaceConnectorCredentialStore.GitHubConnection? = null
     private var pairing = ""
@@ -51,17 +69,20 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var candidate: WorkspaceAgentReachGitHubRelevance.Candidate? = null
     private var originalSource = ""
 
-    val isRunning: Boolean get() = synchronized(this) { active != null }
+    val isRunning: Boolean get() = synchronized(this) { active != null || ciWatching }
 
     @Synchronized fun cancel() {
         generation += 1
         active?.cancel()
         active = null
+        pollHandler.removeCallbacksAndMessages(null)
+        ciWatching = false
+        // A post-commit checkpoint intentionally survives cancellation/app interruption.
         clearState()
     }
 
     @Synchronized fun start(message: String) {
-        if (active != null) {
+        if (active != null || ciWatching) {
             listener.onError("A GitHub self-edit is already running.")
             return
         }
@@ -242,11 +263,172 @@ internal class WorkspaceGitHubSelfEditFlow(
                 receipt.files == listOf(prepared.path)) {
                 "GitHub commit receipt did not match the authorized self-edit"
             }
-            ensureDraftPr(run, receipt)
+            saveCheckpoint(receipt, "waiting_ci")
+            awaitExactCi(run, receipt)
         }
     }
 
-    private fun ensureDraftPr(run: Long, receipt: WorkspaceGitHubConnector.CommitReceipt) {
+    private fun awaitExactCi(
+        run: Long,
+        receipt: WorkspaceGitHubConnector.CommitReceipt,
+    ) {
+        synchronized(this) {
+            if (run != generation) return
+            ciWatching = true
+        }
+        listener.onEvent(
+            WorkspaceWorkPhase.VERIFYING,
+            "Waiting for exact GitHub Actions result",
+            receipt.commitSha.take(12),
+        )
+        dispatch(
+            run,
+            WorkspaceGitHubConnector.client,
+            WorkspaceGitHubConnector.installationTokenRequest(pairing),
+            "GitHub CI read-token refresh failed; commit checkpoint was preserved.",
+        ) { response ->
+            val fresh = WorkspaceGitHubConnector.readInstallationGrant(response)
+            val saved = requireNotNull(connection)
+            require(fresh.repository.equals(saved.repository, ignoreCase = true) &&
+                fresh.branch == saved.branch) {
+                "GitHub CI read binding changed; checkpoint preserved"
+            }
+            pollExactCi(run, receipt, fresh.accessToken, attempt = 0, errors = 0)
+        }
+    }
+
+    private fun pollExactCi(
+        run: Long,
+        receipt: WorkspaceGitHubConnector.CommitReceipt,
+        token: String,
+        attempt: Int,
+        errors: Int,
+    ) {
+        if (attempt >= MAX_CI_POLLS) {
+            fail(run, null, "Timed out waiting for exact GitHub Actions SHA; checkpoint preserved.")
+            return
+        }
+        val saved = requireNotNull(connection)
+        val request = WorkspaceGitHubConnector.workflowRunsRequest(
+            token = token,
+            repository = saved.repository,
+            branch = saved.branch,
+            headSha = receipt.commitSha,
+        )
+        val call = WorkspaceGitHubConnector.client.newCall(request)
+        synchronized(this) {
+            if (run != generation || !ciWatching) return
+            active = call
+        }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) return
+                    active = null
+                }
+                if (errors < MAX_CI_POLL_ERRORS) {
+                    scheduleExactCi(run, receipt, token, attempt + 1, errors + 1)
+                } else {
+                    fail(run, null,
+                        "GitHub Actions polling failed repeatedly; commit checkpoint preserved.")
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) {
+                        response.close()
+                        return
+                    }
+                    active = null
+                }
+                val parsed = runCatching {
+                    WorkspaceGitHubConnector.readWorkflowRunForHead(response, receipt.commitSha)
+                }
+                val workflow = parsed.getOrElse {
+                    fail(run, null, it.message ?: "Exact GitHub Actions response was rejected.")
+                    return
+                }
+                if (workflow == null) {
+                    listener.onEvent(
+                        WorkspaceWorkPhase.VERIFYING,
+                        "Waiting for exact Actions run",
+                        receipt.commitSha.take(12),
+                    )
+                    scheduleExactCi(run, receipt, token, attempt + 1, 0)
+                    return
+                }
+                if (workflow.status != "completed") {
+                    listener.onEvent(
+                        WorkspaceWorkPhase.VERIFYING,
+                        "CI #${workflow.runNumber} ${workflow.status}",
+                        receipt.commitSha.take(12),
+                    )
+                    scheduleExactCi(run, receipt, token, attempt + 1, 0)
+                    return
+                }
+                if (workflow.conclusion == "success") {
+                    saveCheckpoint(receipt, "ci_green")
+                    listener.onEvent(
+                        WorkspaceWorkPhase.VERIFYING,
+                        "CI #${workflow.runNumber} GREEN",
+                        receipt.commitSha.take(12),
+                    )
+                    ensureDraftPr(run, receipt, workflow)
+                    return
+                }
+                readCiFailure(run, receipt, workflow, token)
+            }
+        })
+    }
+
+    private fun scheduleExactCi(
+        run: Long,
+        receipt: WorkspaceGitHubConnector.CommitReceipt,
+        token: String,
+        attempt: Int,
+        errors: Int,
+    ) {
+        pollHandler.postDelayed({
+            val alive = synchronized(this) { run == generation && ciWatching }
+            if (alive) pollExactCi(run, receipt, token, attempt, errors)
+        }, CI_POLL_MS)
+    }
+
+    private fun readCiFailure(
+        run: Long,
+        receipt: WorkspaceGitHubConnector.CommitReceipt,
+        workflow: WorkspaceGitHubConnector.WorkflowRun,
+        token: String,
+    ) {
+        val saved = requireNotNull(connection)
+        dispatch(
+            run,
+            WorkspaceGitHubConnector.client,
+            WorkspaceGitHubConnector.workflowRunJobsRequest(
+                token = token,
+                repository = saved.repository,
+                runId = workflow.id,
+            ),
+            "CI failed and bounded failure details could not be read; checkpoint preserved.",
+        ) { response ->
+            val failure = WorkspaceGitHubConnector.readWorkflowFailure(response, workflow)
+            saveCheckpoint(receipt, "ci_failed")
+            fail(
+                run,
+                null,
+                "CI #${workflow.runNumber} failed for ${receipt.commitSha.take(12)}. " +
+                    failure.boundedSummary() +
+                    ". Task is not done; repair must continue from this checkpoint.",
+            )
+        }
+    }
+
+    private fun ensureDraftPr(
+        run: Long,
+        receipt: WorkspaceGitHubConnector.CommitReceipt,
+        workflow: WorkspaceGitHubConnector.WorkflowRun,
+    ) {
         listener.onEvent(WorkspaceWorkPhase.VERIFYING, "Updating draft PR", "No merge")
         val call = WorkspaceGitHubConnector.client.newCall(
             WorkspaceGitHubConnector.ensureDraftPullRequestRequest(pairing)
@@ -265,8 +447,9 @@ internal class WorkspaceGitHubSelfEditFlow(
                     run,
                     Completion(
                         commit = receipt,
+                        workflow = workflow,
                         pullRequest = null,
-                        warning = "The feature-branch commit succeeded, but the draft PR update was not confirmed.",
+                        warning = "CI passed, but the draft PR update was not confirmed.",
                     ),
                 )
             }
@@ -291,14 +474,15 @@ internal class WorkspaceGitHubSelfEditFlow(
                         run,
                         Completion(
                             commit = receipt,
+                            workflow = workflow,
                             pullRequest = null,
-                            warning = "The feature-branch commit succeeded, but the draft PR update was refused: " +
+                            warning = "CI passed, but the draft PR update was refused: " +
                                 (it.message ?: "unknown GitHub response"),
                         ),
                     )
                     return
                 }
-                complete(run, Completion(receipt, pr))
+                complete(run, Completion(receipt, workflow, pr))
             }
         })
     }
@@ -341,12 +525,15 @@ internal class WorkspaceGitHubSelfEditFlow(
         synchronized(this) {
             if (run != generation) return
             active = null
+            ciWatching = false
+            pollHandler.removeCallbacksAndMessages(null)
+            clearCheckpoint()
             clearState()
         }
         listener.onEvent(
             WorkspaceWorkPhase.DONE,
-            "GitHub self-edit committed",
-            result.commit.commitSha.take(12),
+            "GitHub self-edit CI verified",
+            "CI #${result.workflow.runNumber} · ${result.commit.commitSha.take(12)}",
         )
         listener.onComplete(result)
     }
@@ -355,9 +542,37 @@ internal class WorkspaceGitHubSelfEditFlow(
         synchronized(this) {
             if (run != generation || (call != null && active !== call)) return
             active = null
+            ciWatching = false
+            pollHandler.removeCallbacksAndMessages(null)
             clearState()
         }
         listener.onError(message)
+    }
+
+    private fun saveCheckpoint(
+        receipt: WorkspaceGitHubConnector.CommitReceipt,
+        phase: String,
+    ) {
+        val provider = selectedProvider?.name ?: "UNKNOWN"
+        preferences.edit()
+            .putString(CP_SHA, receipt.commitSha)
+            .putString(CP_REPO, receipt.repository)
+            .putString(CP_BRANCH, receipt.branch)
+            .putString(CP_PATH, receipt.files.singleOrNull().orEmpty())
+            .putString(CP_PROVIDER, provider)
+            .putString(CP_PHASE, phase)
+            .apply()
+    }
+
+    private fun clearCheckpoint() {
+        preferences.edit()
+            .remove(CP_SHA)
+            .remove(CP_REPO)
+            .remove(CP_BRANCH)
+            .remove(CP_PATH)
+            .remove(CP_PROVIDER)
+            .remove(CP_PHASE)
+            .apply()
     }
 
     private fun clearState() {
