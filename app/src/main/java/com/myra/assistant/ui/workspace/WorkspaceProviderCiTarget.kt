@@ -1,10 +1,17 @@
 package com.myra.assistant.ui.workspace
 
-/** Temporary provider-generated implementation for the real multi-step CI benchmark. */
+/** Known-good baseline restored after every real provider CI benchmark. */
 internal object WorkspaceProviderCiTarget {
     fun normalizedTags(raw: List<String>): List<String> =
-        raw.map { it.trim().lowercase() }.filter { it.isNotBlank() }.distinct().sorted()
+        raw.asSequence()
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .sorted()
+            .toList()
 
     fun previewTags(raw: List<String>, limit: Int): String =
-        normalizedTags(raw).take(limit.coerceAtLeast(0)).joinToString("|")
+        normalizedTags(raw)
+            .take(limit.coerceAtLeast(0))
+            .joinToString("|")
 }
