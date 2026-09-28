@@ -24,11 +24,13 @@ import com.myra.assistant.ui.workspace.WorkspaceCustomProviderConnection
 import com.myra.assistant.ui.workspace.WorkspaceWebsiteGroqFallback
 import com.myra.assistant.ui.workspace.WorkspaceMemoryInterceptor
 import com.myra.assistant.ui.workspace.WorkspaceProviderBakeOffRunner
+import com.myra.assistant.ui.workspace.WorkspaceProviderCiBenchmarkRunner
 
 /** Non-voice provider credentials only. Gemini Live is configured in Voice & AI Models. */
 class ApiCloudSettingsActivity : AppCompatActivity() {
     private var customProviderTestCall: Call? = null
     private var providerBakeOffRunner: WorkspaceProviderBakeOffRunner? = null
+    private var providerCiBenchmarkRunner: WorkspaceProviderCiBenchmarkRunner? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -203,6 +205,35 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
                 "Starting 3-round synthetic provider test… no project/GitHub source will be sent."
             runner.start()
         }
+        b.providerCiBenchmarkButton.setOnClickListener {
+            if (providerCiBenchmarkRunner?.isRunning == true ||
+                providerBakeOffRunner?.isRunning == true) {
+                Toast.makeText(this, "A provider benchmark is already running",
+                    Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val runner = WorkspaceProviderCiBenchmarkRunner(
+                context = this,
+                keys = keys,
+                listener = object : WorkspaceProviderCiBenchmarkRunner.Listener {
+                    override fun onUpdate(text: String, done: Boolean) {
+                        runOnUiThread {
+                            b.providerCiBenchmarkStatus.text = text
+                            b.providerCiBenchmarkButton.isEnabled = done
+                            b.providerCiBenchmarkButton.text =
+                                if (done) "RUN REAL CI CODING TEST" else "RUNNING REAL CI TEST…"
+                            if (done) providerCiBenchmarkRunner = null
+                        }
+                    }
+                },
+            )
+            providerCiBenchmarkRunner = runner
+            b.providerCiBenchmarkButton.isEnabled = false
+            b.providerCiBenchmarkButton.text = "RUNNING REAL CI TEST…"
+            b.providerCiBenchmarkStatus.text =
+                "Starting real provider compile/test benchmark… keep this screen open."
+            runner.start()
+        }
         b.backButton.setOnClickListener { finish() }
         b.deepResearchButton.setOnClickListener {
             startActivity(Intent(this, DeepResearchSettingsActivity::class.java))
@@ -259,6 +290,8 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
         customProviderTestCall = null
         providerBakeOffRunner?.cancel()
         providerBakeOffRunner = null
+        providerCiBenchmarkRunner?.cancel()
+        providerCiBenchmarkRunner = null
         super.onDestroy()
     }
 }
