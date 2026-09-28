@@ -221,7 +221,7 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
                             b.providerCiBenchmarkStatus.text = text
                             b.providerCiBenchmarkButton.isEnabled = done
                             b.providerCiBenchmarkButton.text =
-                                if (done) "RUN REAL CI CODING TEST" else "RUNNING REAL CI TEST…"
+                                if (done) "RUN CI REPAIR AGENT TEST" else "RUNNING CI REPAIR TEST…"
                             if (done) providerCiBenchmarkRunner = null
                         }
                     }
@@ -229,9 +229,9 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             )
             providerCiBenchmarkRunner = runner
             b.providerCiBenchmarkButton.isEnabled = false
-            b.providerCiBenchmarkButton.text = "RUNNING REAL CI TEST…"
+            b.providerCiBenchmarkButton.text = "RUNNING CI REPAIR TEST…"
             b.providerCiBenchmarkStatus.text =
-                "Starting real provider compile/test benchmark… keep this screen open."
+                "Seeding one real CI failure, then testing provider repairs… keep this screen open."
             runner.start()
         }
         b.backButton.setOnClickListener { finish() }

@@ -28,6 +28,30 @@ internal object WorkspaceGitHubConnector {
 
     data class Repository(val fullName: String, val privateRepo: Boolean, val defaultBranch: String)
     data class Branch(val name: String, val headSha: String)
+    data class WorkflowRun(
+        val id: Long,
+        val runNumber: Long,
+        val name: String,
+        val headSha: String,
+        val status: String,
+        val conclusion: String?,
+        val url: String,
+    )
+    data class WorkflowFailure(
+        val runId: Long,
+        val runNumber: Long,
+        val workflowName: String,
+        val jobName: String,
+        val failedSteps: List<String>,
+    ) {
+        fun boundedSummary(): String {
+            val steps = if (failedSteps.isEmpty()) "unknown failing step"
+                else failedSteps.joinToString(", ")
+            return "GitHub Actions " + workflowName + " #" + runNumber +
+                " failed; job=" + jobName + "; failed_steps=" + steps +
+                "; run_id=" + runId
+        }
+    }
     data class InstallationGrant(
         val accessToken: String,
         val expiresInSeconds: Long,
@@ -149,6 +173,35 @@ internal object WorkspaceGitHubConnector {
         return request(
             "/repos/" + encode(parts[0]) + "/" + encode(parts[1]) +
                 "/contents/" + encodedPath + "?ref=" + encode(sha),
+            token,
+        )
+    }
+
+    fun workflowRunsRequest(
+        token: String,
+        repository: String,
+        branch: String,
+    ): Request {
+        val clean = WorkspaceConnectorPolicy.binding(repository, branch)
+        val parts = clean.repository.split('/')
+        return request(
+            "/repos/" + encode(parts[0]) + "/" + encode(parts[1]) +
+                "/actions/runs?branch=" + encode(clean.branch) + "&event=push&per_page=30",
+            token,
+        )
+    }
+
+    fun workflowRunJobsRequest(
+        token: String,
+        repository: String,
+        runId: Long,
+    ): Request {
+        val clean = WorkspaceConnectorPolicy.requireRepository(repository)
+        require(runId > 0L) { "GitHub workflow run id is invalid" }
+        val parts = clean.split('/')
+        return request(
+            "/repos/" + encode(parts[0]) + "/" + encode(parts[1]) +
+                "/actions/runs/" + runId + "/jobs?filter=latest&per_page=100",
             token,
         )
     }
@@ -351,6 +404,78 @@ internal object WorkspaceGitHubConnector {
             base = root.optString("base").trim().also {
                 require(it in setOf("main", "master")) { "GitHub PR base is invalid" }
             },
+        )
+    }
+
+    fun readWorkflowRunForHead(
+        response: Response,
+        expectedHeadSha: String,
+    ): WorkflowRun? {
+        val expected = requireSha(expectedHeadSha, "GitHub workflow commit")
+        val root = parseJson(response, "GitHub Actions workflow runs")
+        val array = root.optJSONArray("workflow_runs") ?: JSONArray()
+        val matches = mutableListOf<WorkflowRun>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val head = item.optString("head_sha").trim().lowercase()
+            if (head != expected) continue
+            val name = item.optString("name").trim()
+            if (name != "Build Android APK") continue
+            val id = item.optLong("id", -1L)
+            val runNumber = item.optLong("run_number", -1L)
+            val status = item.optString("status").trim()
+            val url = item.optString("html_url").trim()
+            require(id > 0L && runNumber > 0L && status.isNotBlank()) {
+                "GitHub Actions workflow run metadata is invalid"
+            }
+            require(url.startsWith("https://github.com/")) {
+                "GitHub Actions workflow URL is invalid"
+            }
+            val conclusion = item.optString("conclusion").trim()
+                .takeIf { it.isNotBlank() && it != "null" }
+            matches += WorkflowRun(
+                id = id,
+                runNumber = runNumber,
+                name = name,
+                headSha = head,
+                status = status,
+                conclusion = conclusion,
+                url = url,
+            )
+        }
+        return matches.maxByOrNull { it.id }
+    }
+
+    fun readWorkflowFailure(
+        response: Response,
+        run: WorkflowRun,
+    ): WorkflowFailure {
+        val root = parseJson(response, "GitHub Actions workflow jobs")
+        val array = root.optJSONArray("jobs") ?: JSONArray()
+        var failedJob = "unknown job"
+        val steps = mutableListOf<String>()
+        for (i in 0 until array.length()) {
+            val job = array.optJSONObject(i) ?: continue
+            val conclusion = job.optString("conclusion").trim()
+            if (conclusion !in setOf("failure", "timed_out", "cancelled", "action_required", "stale")) {
+                continue
+            }
+            val name = job.optString("name").trim().takeIf { it.isNotBlank() } ?: "unknown job"
+            if (failedJob == "unknown job") failedJob = name
+            val jobSteps = job.optJSONArray("steps") ?: JSONArray()
+            for (j in 0 until jobSteps.length()) {
+                val step = jobSteps.optJSONObject(j) ?: continue
+                val stepConclusion = step.optString("conclusion").trim()
+                if (stepConclusion !in setOf("failure", "timed_out", "cancelled")) continue
+                step.optString("name").trim().takeIf { it.isNotBlank() }?.let(steps::add)
+            }
+        }
+        return WorkflowFailure(
+            runId = run.id,
+            runNumber = run.runNumber,
+            workflowName = run.name,
+            jobName = failedJob,
+            failedSteps = steps.distinct().take(8),
         )
     }
 

@@ -17,13 +17,27 @@ class WorkspaceGitHubConnectorTest {
             "spy626/myra-android",
             "agent/myra-phase-1",
         )
-        listOf(repo, branch).forEach { request ->
+        val runs = WorkspaceGitHubConnector.workflowRunsRequest(
+            token,
+            "spy626/myra-android",
+            "agent/myra-phase-1",
+        )
+        val jobs = WorkspaceGitHubConnector.workflowRunJobsRequest(
+            token,
+            "spy626/myra-android",
+            123L,
+        )
+        listOf(repo, branch, runs, jobs).forEach { request ->
             assertEquals("https", request.url.scheme)
             assertEquals("api.github.com", request.url.host)
             assertTrue(request.url.toString().contains(token).not())
             assertEquals("Bearer $token", request.header("Authorization"))
         }
         assertTrue(branch.url.encodedPath.contains("agent%2Fmyra-phase-1"))
+        assertTrue(runs.url.encodedPath.endsWith("/actions/runs"))
+        assertEquals("push", runs.url.queryParameter("event"))
+        assertEquals("agent/myra-phase-1", runs.url.queryParameter("branch"))
+        assertTrue(jobs.url.encodedPath.endsWith("/actions/runs/123/jobs"))
     }
 
     @Test fun brokerRequestsKeepPairingSecretOutOfUrls() {

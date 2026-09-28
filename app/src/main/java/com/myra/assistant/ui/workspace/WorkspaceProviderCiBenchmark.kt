@@ -27,30 +27,40 @@ internal object WorkspaceProviderCiTarget {
 }
 """
 
-    private const val BUGGY_SOURCE = """package com.myra.assistant.ui.workspace
+    const val FAILURE_SOURCE = """package com.myra.assistant.ui.workspace
 
+/** Deliberately wrong but compiling fixture used to create one real CI failure. */
 internal object WorkspaceProviderCiTarget {
     fun canonicalTags(raw: List<String>): String =
-        raw.joinToString("|")
+        raw.distinct()
+            .map { it.trim().lowercase() }
+            .filter { it.isNotBlank() }
+            .sorted()
+            .joinToString("|")
 }
 """
 
-    val PROMPT: String = buildString {
-        appendLine("You are solving ONE synthetic Kotlin coding benchmark.")
-        appendLine("Do not use tools, files, network, environment variables, reflection, processes or side effects.")
-        appendLine("Goal for canonicalTags(raw):")
-        appendLine("- trim every item")
-        appendLine("- lowercase it")
-        appendLine("- remove blank values")
-        appendLine("- deduplicate AFTER normalization")
-        appendLine("- sort ascending")
-        appendLine("- join with the literal separator |")
-        appendLine("Return EXACTLY one JSON object and nothing else:")
-        appendLine("{\"expression\":\"<one Kotlin expression>\"}")
-        appendLine("The expression replaces only the right-hand side after '='.")
-        appendLine("Do not include return, package, imports, declarations, markdown or comments.")
-        appendLine("SYNTHETIC SOURCE:")
-        append(BUGGY_SOURCE)
+    fun repairPrompt(ciFailure: String): String {
+        val evidence = ciFailure.trim().replace(Regex("""\s+"""), " ").take(1_200)
+        require(evidence.isNotBlank()) { "CI failure evidence is missing" }
+        return buildString {
+            appendLine("You are repairing ONE synthetic Kotlin function after a REAL GitHub Actions failure.")
+            appendLine("Do not use tools, files, network, environment variables, reflection, processes or side effects.")
+            appendLine("The execution evidence below is authoritative; do not claim success without fixing the source.")
+            appendLine("ACTUAL CI FAILURE CONTEXT:")
+            appendLine(evidence)
+            appendLine("FAILED SYNTHETIC SOURCE:")
+            appendLine(FAILURE_SOURCE)
+            appendLine("SYNTHETIC ACCEPTANCE TEST CONTRACT:")
+            appendLine("- emptyList() must become an empty string")
+            appendLine("- [\" Kotlin \",\"LYRA\",\"\",\" android \",\"kotlin\",\"  \"] must become android|kotlin|lyra")
+            appendLine("- [\" B \",\"a\",\"A\",\"b\",\" a \"] must become a|b")
+            appendLine("Infer the bug from the failed source and tests.")
+            appendLine("Return EXACTLY one JSON object and nothing else:")
+            appendLine("{\"expression\":\"<one Kotlin expression>\"}")
+            appendLine("The expression replaces only the right-hand side after '='.")
+            appendLine("Do not include return, package, imports, declarations, markdown or comments.")
+        }
     }
 
     data class Prepared(val expression: String, val source: String)

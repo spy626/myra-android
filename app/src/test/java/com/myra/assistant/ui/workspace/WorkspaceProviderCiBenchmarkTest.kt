@@ -4,6 +4,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkspaceProviderCiBenchmarkTest {
+    @Test fun repairPromptCarriesRealCiEvidenceAndDeliberateFailureFixture() {
+        val prompt = WorkspaceProviderCiBenchmark.repairPrompt(
+            "GitHub Actions Build Android APK #42 failed; job=build; failed_steps=Unit tests and debug APK"
+        )
+        assertTrue(prompt.contains("REAL GitHub Actions failure"))
+        assertTrue(prompt.contains("CI FAILURE CONTEXT"))
+        assertTrue(prompt.contains("Unit tests and debug APK"))
+        assertTrue(prompt.contains("raw.distinct()"))
+        assertTrue(prompt.contains("must become a|b"))
+    }
+
     @Test fun validExpressionBuildsBoundedSource() {
         val result = WorkspaceProviderCiBenchmark.prepare(
             """{"expression":"raw.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct().sorted().joinToString(\"|\")"}"""
