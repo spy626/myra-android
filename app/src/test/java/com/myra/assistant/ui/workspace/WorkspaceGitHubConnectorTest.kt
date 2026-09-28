@@ -21,6 +21,7 @@ class WorkspaceGitHubConnectorTest {
             token,
             "spy626/myra-android",
             "agent/myra-phase-1",
+            head,
         )
         val jobs = WorkspaceGitHubConnector.workflowRunJobsRequest(
             token,
@@ -37,6 +38,8 @@ class WorkspaceGitHubConnectorTest {
         assertTrue(runs.url.encodedPath.endsWith("/actions/runs"))
         assertEquals("push", runs.url.queryParameter("event"))
         assertEquals("agent/myra-phase-1", runs.url.queryParameter("branch"))
+        assertEquals(head, runs.url.queryParameter("head_sha"))
+        assertEquals("5", runs.url.queryParameter("per_page"))
         assertTrue(jobs.url.encodedPath.endsWith("/actions/runs/123/jobs"))
     }
 
