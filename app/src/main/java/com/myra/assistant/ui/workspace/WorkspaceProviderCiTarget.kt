@@ -6,5 +6,5 @@ internal object WorkspaceProviderCiTarget {
         raw.distinct().map { it.trim().lowercase() }.filter { it.isNotBlank() }.sorted()
 
     fun previewTags(raw: List<String>, limit: Int): String =
-        normalizedTags(raw).take(limit).joinToString("|")
+        normalizedTags(raw).take(limit.coerceAtLeast(0)).joinToString("|")
 }
