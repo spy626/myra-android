@@ -1,12 +1,11 @@
 package com.myra.assistant.ui.workspace
 
-/** Known-good baseline restored after every real provider CI benchmark. */
+/** Deliberately wrong but compiling fixture used to create one real CI failure. */
 internal object WorkspaceProviderCiTarget {
     fun canonicalTags(raw: List<String>): String =
-        raw.asSequence()
+        raw.distinct()
             .map { it.trim().lowercase() }
-            .filter { it.isNotEmpty() }
-            .distinct()
+            .filter { it.isNotBlank() }
             .sorted()
             .joinToString("|")
 }
