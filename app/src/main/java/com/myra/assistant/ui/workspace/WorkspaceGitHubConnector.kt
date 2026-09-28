@@ -182,6 +182,14 @@ internal object WorkspaceGitHubConnector {
         )
     }
 
+    fun pullRequestSmokeTestRequest(pairingSecret: String): Request =
+        brokerPost(
+            "/github/write/pull-request",
+            JSONObject()
+                .put("pairing_secret", requirePairingSecret(pairingSecret))
+                .put("smoke_test", true),
+        )
+
     private val guardedDns = object : Dns {
         override fun lookup(hostname: String): List<InetAddress> {
             val addresses = Dns.SYSTEM.lookup(hostname)

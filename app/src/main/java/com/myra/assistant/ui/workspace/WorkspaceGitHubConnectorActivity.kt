@@ -34,6 +34,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
     private var writeVerified = false
     private var writeAccess: WorkspaceGitHubConnector.WriteAccess? = null
     private var writeTestPassed = false
+    private var prTestPassed = false
 
     private val writeRunner by lazy {
         WorkspaceGitHubWriteRunner(object : WorkspaceGitHubWriteRunner.Listener {
@@ -42,9 +43,28 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     writeAccess = writeAccess?.copy(headSha = receipt.commitSha)
                     writeTestPassed = true
+                    prTestPassed = false
                     Toast.makeText(
                         this@WorkspaceGitHubConnectorActivity,
                         "Safe GitHub write smoke test passed.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    render()
+                }
+            }
+
+            override fun onPullRequest(receipt: WorkspaceGitHubConnector.PullRequestReceipt) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (!receipt.draft || receipt.head != EXPECTED_BRANCH ||
+                        receipt.base != EXPECTED_PR_BASE) {
+                        showStatus("Draft PR smoke test returned an unsafe binding.", true)
+                        return@runOnUiThread
+                    }
+                    prTestPassed = true
+                    Toast.makeText(
+                        this@WorkspaceGitHubConnectorActivity,
+                        "Safe draft PR test passed (#" + receipt.number + ").",
                         Toast.LENGTH_LONG,
                     ).show()
                     render()
@@ -129,6 +149,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
             writeVerified = false
             writeAccess = null
             writeTestPassed = false
+            prTestPassed = false
         }
 
         val scroll = ScrollView(this).apply {
@@ -265,6 +286,16 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
             })
         }
 
+        if (writeVerified && writeTestPassed) {
+            column.addView(button(
+                if (prTestPassed) "DRAFT PR TEST PASSED" else "RUN SAFE DRAFT PR TEST"
+            ) {
+                if (!prTestPassed) confirmDraftPullRequestSmokeTest(connection)
+            }, LinearLayout.LayoutParams(-1, dp(50)).apply {
+                topMargin = dp(10)
+            })
+        }
+
         column.addView(text(
             "Write tokens stay inside Cloudflare. Writes are limited to bounded text commits on " +
                 "agent/myra-phase-1 and draft PR create/update. main/master, force-push, Secrets, " +
@@ -287,6 +318,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
                             writeVerified = false
                             writeAccess = null
                             writeTestPassed = false
+                            prTestPassed = false
                             render()
                         }
                 }
@@ -368,6 +400,7 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
                     writeVerified = true
                     writeAccess = access
                     writeTestPassed = false
+                    prTestPassed = false
                     Toast.makeText(
                         this@WorkspaceGitHubConnectorActivity,
                         "C2 write access verified. main remains blocked.",
@@ -425,6 +458,34 @@ class WorkspaceGitHubConnectorActivity : AppCompatActivity() {
         }
         showStatus("Running one bounded feature-branch write test…")
         writeRunner.commit(pairing, plan)
+    }
+
+    private fun confirmDraftPullRequestSmokeTest(
+        connection: WorkspaceConnectorCredentialStore.GitHubConnection,
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle("Run safe draft PR test?")
+            .setMessage(
+                "If a draft PR already exists for agent/myra-phase-1 → main, LYRA will send " +
+                    "a no-content-change metadata update using its current title/body. If none " +
+                    "exists, LYRA will create one harmless draft PR. Nothing will be merged."
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Run test") { _, _ ->
+                runDraftPullRequestSmokeTest(connection)
+            }
+            .show()
+    }
+
+    private fun runDraftPullRequestSmokeTest(
+        connection: WorkspaceConnectorCredentialStore.GitHubConnection,
+    ) {
+        val pairing = connection.pairingSecret ?: run {
+            showStatus("Reconnect GitHub once to restore the encrypted pairing key.", true)
+            return
+        }
+        showStatus("Running one safe draft PR write test…")
+        writeRunner.smokeTestDraftPullRequest(pairing)
     }
 
     private fun copyPairingKey() {

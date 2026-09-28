@@ -40,8 +40,9 @@ class WorkspaceGitHubConnectorTest {
             pairing,
             WorkspaceGitHubWritePolicy.pullRequestPlan("Test PR", "body"),
         )
+        val prSmoke = WorkspaceGitHubConnector.pullRequestSmokeTestRequest(pairing)
 
-        listOf(write, commit, pr).forEach { request ->
+        listOf(write, commit, pr, prSmoke).forEach { request ->
             assertEquals("POST", request.method)
             assertEquals("lyra-github-connector.everspy626.workers.dev", request.url.host)
             assertTrue(!request.url.toString().contains(pairing))
@@ -52,6 +53,11 @@ class WorkspaceGitHubConnectorTest {
         assertEquals("/github/write/check", write.url.encodedPath)
         assertEquals("/github/write/commit", commit.url.encodedPath)
         assertEquals("/github/write/pull-request", pr.url.encodedPath)
+        assertEquals("/github/write/pull-request", prSmoke.url.encodedPath)
+        val smokeBody = Buffer().also { prSmoke.body!!.writeTo(it) }.readUtf8()
+        assertTrue(smokeBody.contains("\"smoke_test\":true"))
+        assertTrue(!smokeBody.contains("\"title\""))
+        assertTrue(!smokeBody.contains("\"body\""))
     }
 
     @Test fun installationTokenRequestUsesBrokerAndKeepsPairingSecretOutOfUrl() {

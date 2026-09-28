@@ -77,6 +77,14 @@ internal class WorkspaceGitHubWriteRunner(
         }
     }
 
+    @Synchronized fun smokeTestDraftPullRequest(pairingSecret: String) {
+        dispatch(
+            WorkspaceGitHubConnector.pullRequestSmokeTestRequest(pairingSecret)
+        ) { response ->
+            listener.onPullRequest(WorkspaceGitHubConnector.readPullRequestReceipt(response))
+        }
+    }
+
     @Synchronized fun cancel() {
         generation += 1
         active?.cancel()

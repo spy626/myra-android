@@ -612,8 +612,9 @@ async function commitEndpoint(request, env) {
 async function pullRequestEndpoint(request, env) {
   const body = await readJsonBody(request, 32_000);
   await requirePairing(env, body.pairing_secret);
-  const title = requirePullTitle(body.title);
-  const pullBody = requirePullBody(body.body);
+  const smokeTest = body.smoke_test === true;
+  const title = smokeTest ? null : requirePullTitle(body.title);
+  const pullBody = smokeTest ? null : requirePullBody(body.body);
 
   const scoped = await writeScoped(env);
   await branchHead(scoped.binding, scoped.token);
@@ -642,6 +643,24 @@ async function pullRequestEndpoint(request, env) {
     if (!Number.isInteger(number) || number < 1) {
       throw new Error("GitHub pull request number is invalid");
     }
+
+    let updateTitle = title;
+    let updateBody = pullBody;
+    let maintainerCanModify = false;
+    if (smokeTest) {
+      const current = await githubJson(
+        repoApi(scoped.binding, "/pulls/" + number),
+        scoped.token,
+        "GitHub pull request smoke-test snapshot",
+      );
+      updateTitle = requirePullTitle(current.title);
+      updateBody = requirePullBody(current.body || "");
+      maintainerCanModify = Boolean(current.maintainer_can_modify);
+      if (!Boolean(current.draft)) {
+        throw new Error("Existing protected-branch pull request is not a draft");
+      }
+    }
+
     const updated = await githubJson(
       repoApi(scoped.binding, "/pulls/" + number),
       scoped.token,
@@ -650,9 +669,9 @@ async function pullRequestEndpoint(request, env) {
         method: "PATCH",
         headers: { "content-type": "application/json; charset=utf-8" },
         body: JSON.stringify({
-          title,
-          body: pullBody,
-          maintainer_can_modify: false,
+          title: updateTitle,
+          body: updateBody,
+          maintainer_can_modify: maintainerCanModify,
         }),
       },
     );
@@ -663,9 +682,14 @@ async function pullRequestEndpoint(request, env) {
       draft: Boolean(updated.draft),
       head: scoped.binding.branch,
       base: scoped.binding.prBase,
+      smoke_test: smokeTest,
     });
   }
 
+  const createTitle = smokeTest ? "LYRA GitHub C2 draft PR smoke test" : title;
+  const createBody = smokeTest
+    ? "Harmless draft PR created only to verify LYRA's broker-gated pull-request write lane. Nothing is merged automatically."
+    : pullBody;
   const created = await githubJson(
     repoApi(scoped.binding, "/pulls"),
     scoped.token,
@@ -674,8 +698,8 @@ async function pullRequestEndpoint(request, env) {
       method: "POST",
       headers: { "content-type": "application/json; charset=utf-8" },
       body: JSON.stringify({
-        title,
-        body: pullBody,
+        title: createTitle,
+        body: createBody,
         head: scoped.binding.branch,
         base: scoped.binding.prBase,
         draft: true,
@@ -694,6 +718,7 @@ async function pullRequestEndpoint(request, env) {
     draft: true,
     head: scoped.binding.branch,
     base: scoped.binding.prBase,
+    smoke_test: smokeTest,
   });
 }
 
