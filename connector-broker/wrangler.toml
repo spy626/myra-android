@@ -7,7 +7,6 @@ workers_dev = true
 # Secrets GITHUB_APP_PRIVATE_KEY and LYRA_PAIRING_SECRET stay in Cloudflare.
 [vars]
 GITHUB_APP_ID = "5096417"
-GITHUB_INSTALLATION_ID = "153324739"
 GITHUB_ACCOUNT_LOGIN = "spy626"
 GITHUB_REPOSITORY = "spy626/myra-android"
 GITHUB_BRANCH = "agent/myra-phase-1"

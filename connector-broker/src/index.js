@@ -224,18 +224,34 @@ function expectedBinding(env) {
 
 async function issueInstallationGrant(env) {
   const binding = expectedBinding(env);
-  const installationId = requireIntegerEnv(env, "GITHUB_INSTALLATION_ID");
   const appJwt = await githubAppJwt(env);
 
-  const installation = await githubJson(
-    "https://api.github.com/app/installations/" + installationId,
+  const installations = await githubJson(
+    "https://api.github.com/app/installations?per_page=100",
     appJwt,
-    "GitHub App installation verification",
+    "GitHub App installation discovery",
   );
-  const installationLogin = String(installation.account?.login || "").trim();
-  if (installationLogin.toLowerCase() !== binding.account.toLowerCase()) {
-    throw new Error("GitHub App installation account did not match");
+  if (!Array.isArray(installations)) {
+    throw new Error("GitHub App installation discovery returned invalid data");
   }
+
+  const matching = installations.filter(installation => {
+    const login = String(installation?.account?.login || "").trim();
+    return login.toLowerCase() === binding.account.toLowerCase();
+  });
+  if (matching.length === 0) {
+    throw new Error("LYRA GitHub App is not installed on the configured account");
+  }
+  if (matching.length > 1) {
+    throw new Error("Multiple LYRA GitHub App installations matched the configured account");
+  }
+
+  const installation = matching[0];
+  const installationId = String(installation.id || "").trim();
+  if (!/^[1-9][0-9]{0,19}$/.test(installationId)) {
+    throw new Error("GitHub App installation id was invalid");
+  }
+  const installationLogin = String(installation.account?.login || "").trim();
 
   const grant = await githubJson(
     "https://api.github.com/app/installations/" + installationId + "/access_tokens",
@@ -330,8 +346,7 @@ export default {
           configured: Boolean(
             String(env.GITHUB_APP_PRIVATE_KEY || "").trim() &&
             String(env.LYRA_PAIRING_SECRET || "").trim() &&
-            String(env.GITHUB_APP_ID || "").trim() &&
-            String(env.GITHUB_INSTALLATION_ID || "").trim()
+            String(env.GITHUB_APP_ID || "").trim()
           ),
         });
       }

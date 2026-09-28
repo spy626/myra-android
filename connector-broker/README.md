@@ -9,8 +9,9 @@ GitHub user OAuth, Device Flow, a PAT, a GitHub password, or the GitHub App clie
 2. The user copies that key once into the Cloudflare secret `LYRA_PAIRING_SECRET`.
 3. The GitHub App private key is stored once in Cloudflare as `GITHUB_APP_PRIVATE_KEY`.
 4. LYRA sends the pairing key over HTTPS to `POST /github/token`.
-5. The broker validates the pairing key, creates a short-lived GitHub App JWT, and asks GitHub for
-   an installation access token restricted to `spy626/myra-android`.
+5. The broker validates the pairing key, creates a short-lived GitHub App JWT, discovers this
+   GitHub App's installation for `spy626`, and asks GitHub for an installation access token
+   restricted to `spy626/myra-android`.
 6. The broker re-verifies the exact account, repository, and `agent/myra-phase-1` branch before
    returning the one-hour installation token to LYRA.
 7. LYRA stores the token and pairing key only in Android encrypted storage. When the GitHub token
@@ -32,7 +33,6 @@ Write permissions are intentionally not added in this authentication patch.
 
 Public vars in `wrangler.toml`:
 - `GITHUB_APP_ID`
-- `GITHUB_INSTALLATION_ID`
 - `GITHUB_ACCOUNT_LOGIN`
 - `GITHUB_REPOSITORY`
 - `GITHUB_BRANCH`
