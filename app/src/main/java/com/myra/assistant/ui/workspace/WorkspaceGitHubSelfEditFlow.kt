@@ -58,6 +58,12 @@ internal class WorkspaceGitHubSelfEditFlow(
         const val CP_REPAIR_ATTEMPT = "workspace_github_self_edit_checkpoint_repair_attempt"
         const val CP_REVIEW_REVISION_ATTEMPT =
             "workspace_github_self_edit_checkpoint_review_revision_attempt"
+        const val CP_BUDGET_PROVIDER_CALLS = "workspace_github_self_edit_budget_provider_calls"
+        const val CP_BUDGET_REVIEW_CALLS = "workspace_github_self_edit_budget_review_calls"
+        const val CP_BUDGET_FALLBACKS = "workspace_github_self_edit_budget_fallbacks"
+        const val CP_BUDGET_CI_REPAIRS = "workspace_github_self_edit_budget_ci_repairs"
+        const val CP_BUDGET_COMMITS = "workspace_github_self_edit_budget_commits"
+        const val CP_LAST_FAILURE = "workspace_github_self_edit_last_failure"
         val CHECKPOINT_SHA = Regex("[0-9a-f]{40,64}")
         val CHECKPOINT_PHASES = setOf(
             "pre_commit", "waiting_ci", "repair_waiting_ci", "ci_failed", "ci_green"
@@ -78,6 +84,7 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var selectedProvider: WorkspaceCodingRoleRouter.Provider? = null
     private var repairAttempt = 0
     private var reviewRevisionAttempt = 0
+    private var taskBudget = WorkspaceGitHubTaskBudget.State()
     private var grant: WorkspaceGitHubConnector.InstallationGrant? = null
     private var access: WorkspaceGitHubConnector.WriteAccess? = null
     private var candidates: List<WorkspaceAgentReachGitHubRelevance.Candidate> = emptyList()
@@ -91,6 +98,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         val instruction: String,
         val repairAttempt: Int,
         val reviewRevisionAttempt: Int,
+        val taskBudget: WorkspaceGitHubTaskBudget.State,
     )
 
     val isRunning: Boolean get() = synchronized(this) { active != null || ciWatching }
@@ -146,6 +154,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         selectedProvider = checkpoint.provider
         repairAttempt = checkpoint.repairAttempt
         reviewRevisionAttempt = checkpoint.reviewRevisionAttempt
+        taskBudget = checkpoint.taskBudget
         codingPlan = WorkspaceGitHubCodingPlan.create(
             goal = checkpoint.instruction,
             repository = checkpoint.receipt.repository,
@@ -275,6 +284,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         }
 
         val run = ++generation
+        taskBudget = WorkspaceGitHubTaskBudget.State()
         instruction = message
         connection = saved
         pairing = secret
@@ -458,6 +468,40 @@ internal class WorkspaceGitHubSelfEditFlow(
         WorkspaceCodingRoleRouter.Provider.GROQ -> "Groq · ${WorkspaceGroqFree.MODEL}"
     }
 
+    private fun consumeTaskBudget(
+        run: Long,
+        transform: (WorkspaceGitHubTaskBudget.State) -> WorkspaceGitHubTaskBudget.State,
+    ): Boolean {
+        val next = runCatching { transform(taskBudget) }.getOrElse { error ->
+            val message = error.message ?: "GitHub coding task budget was exhausted."
+            taskBudget = WorkspaceGitHubTaskBudget.withFailure(taskBudget, message)
+            persistBudgetOnly()
+            fail(run, null, message)
+            return false
+        }
+        taskBudget = next
+        persistBudgetOnly()
+        listener.onEvent(
+            WorkspaceWorkPhase.VERIFYING,
+            "Task budget",
+            WorkspaceGitHubTaskBudget.summary(taskBudget),
+        )
+        return true
+    }
+
+    private fun persistBudgetOnly() {
+        val sha = preferences.getString(CP_SHA, null)?.trim()?.lowercase()
+        if (sha == null || !CHECKPOINT_SHA.matches(sha)) return
+        preferences.edit()
+            .putInt(CP_BUDGET_PROVIDER_CALLS, taskBudget.providerCalls)
+            .putInt(CP_BUDGET_REVIEW_CALLS, taskBudget.reviewCalls)
+            .putInt(CP_BUDGET_FALLBACKS, taskBudget.fallbackSwitches)
+            .putInt(CP_BUDGET_CI_REPAIRS, taskBudget.ciRepairs)
+            .putInt(CP_BUDGET_COMMITS, taskBudget.commitAttempts)
+            .putString(CP_LAST_FAILURE, taskBudget.lastFailure)
+            .apply()
+    }
+
     private fun sendProvider(
         run: Long,
         route: WorkspaceCodingRoleRouter.Provider,
@@ -473,6 +517,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         val label = providerName(route)
         selectedProvider = route
         if (!repair) savePreCommitCheckpoint(expectedHead, sourcesForPatch.keys.toList())
+        if (!consumeTaskBudget(run, WorkspaceGitHubTaskBudget::consumeProvider)) return
         listener.onEvent(
             if (repair) WorkspaceWorkPhase.RECOVERING else WorkspaceWorkPhase.CODING,
             if (repair) "Repairing failed exact CI" else "Preparing bounded GitHub edit",
@@ -505,6 +550,7 @@ internal class WorkspaceGitHubSelfEditFlow(
                         "Switching coding provider before source send",
                         "${providerName(route)} → ${providerName(alternate)}",
                     )
+                    if (!consumeTaskBudget(run, WorkspaceGitHubTaskBudget::consumeFallback)) return
                     sendProvider(run, alternate, prompt, sourcesForPatch, expectedHead, repair, true)
                     return
                 }
@@ -681,6 +727,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             return
         }
 
+        if (!consumeTaskBudget(run, WorkspaceGitHubTaskBudget::consumeReview)) return
         val client = when (reviewerRoute) {
             WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.deliberationClient
             WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceFreeAiSuggestion.client
@@ -855,6 +902,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             return
         }
 
+        if (!consumeTaskBudget(run, WorkspaceGitHubTaskBudget::consumeProvider)) return
         val client = when (primaryRoute) {
             WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.deliberationClient
             WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceFreeAiSuggestion.client
@@ -939,6 +987,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         expectedHead: String,
         repair: Boolean,
     ) {
+        if (!consumeTaskBudget(run, WorkspaceGitHubTaskBudget::consumeCommit)) return
         val checked = requireNotNull(access)
         val plan = WorkspaceGitHubWritePolicy.commitPlan(
             expectedHead = expectedHead,
@@ -1129,6 +1178,9 @@ internal class WorkspaceGitHubSelfEditFlow(
                 )
                 return@dispatch
             }
+            if (!consumeTaskBudget(run, WorkspaceGitHubTaskBudget::consumeCiRepair)) {
+                return@dispatch
+            }
             ciWatching = false
             listener.onEvent(
                 WorkspaceWorkPhase.RECOVERING,
@@ -1299,6 +1351,10 @@ internal class WorkspaceGitHubSelfEditFlow(
     private fun fail(run: Long, call: Call?, message: String) {
         synchronized(this) {
             if (run != generation || (call != null && active !== call)) return
+            taskBudget = runCatching {
+                WorkspaceGitHubTaskBudget.withFailure(taskBudget, message)
+            }.getOrDefault(taskBudget)
+            persistBudgetOnly()
             active = null
             ciWatching = false
             pollHandler.removeCallbacksAndMessages(null)
@@ -1333,6 +1389,12 @@ internal class WorkspaceGitHubSelfEditFlow(
             .putString(CP_INSTRUCTION, instruction)
             .putInt(CP_REPAIR_ATTEMPT, 0)
             .putInt(CP_REVIEW_REVISION_ATTEMPT, reviewRevisionAttempt)
+            .putInt(CP_BUDGET_PROVIDER_CALLS, taskBudget.providerCalls)
+            .putInt(CP_BUDGET_REVIEW_CALLS, taskBudget.reviewCalls)
+            .putInt(CP_BUDGET_FALLBACKS, taskBudget.fallbackSwitches)
+            .putInt(CP_BUDGET_CI_REPAIRS, taskBudget.ciRepairs)
+            .putInt(CP_BUDGET_COMMITS, taskBudget.commitAttempts)
+            .putString(CP_LAST_FAILURE, taskBudget.lastFailure)
             .apply()
     }
 
@@ -1357,6 +1419,12 @@ internal class WorkspaceGitHubSelfEditFlow(
             .putString(CP_INSTRUCTION, instruction)
             .putInt(CP_REPAIR_ATTEMPT, repairAttempt)
             .putInt(CP_REVIEW_REVISION_ATTEMPT, reviewRevisionAttempt)
+            .putInt(CP_BUDGET_PROVIDER_CALLS, taskBudget.providerCalls)
+            .putInt(CP_BUDGET_REVIEW_CALLS, taskBudget.reviewCalls)
+            .putInt(CP_BUDGET_FALLBACKS, taskBudget.fallbackSwitches)
+            .putInt(CP_BUDGET_CI_REPAIRS, taskBudget.ciRepairs)
+            .putInt(CP_BUDGET_COMMITS, taskBudget.commitAttempts)
+            .putString(CP_LAST_FAILURE, taskBudget.lastFailure)
             .apply()
     }
 
@@ -1396,6 +1464,16 @@ internal class WorkspaceGitHubSelfEditFlow(
         require(attempts in 0..1) { "Checkpoint repair count is invalid" }
         val reviewAttempts = preferences.getInt(CP_REVIEW_REVISION_ATTEMPT, 0)
         require(reviewAttempts in 0..1) { "Checkpoint review revision count is invalid" }
+        val budget = WorkspaceGitHubTaskBudget.validate(
+            WorkspaceGitHubTaskBudget.State(
+                providerCalls = preferences.getInt(CP_BUDGET_PROVIDER_CALLS, 0),
+                reviewCalls = preferences.getInt(CP_BUDGET_REVIEW_CALLS, 0),
+                fallbackSwitches = preferences.getInt(CP_BUDGET_FALLBACKS, 0),
+                ciRepairs = preferences.getInt(CP_BUDGET_CI_REPAIRS, 0),
+                commitAttempts = preferences.getInt(CP_BUDGET_COMMITS, 0),
+                lastFailure = preferences.getString(CP_LAST_FAILURE, "").orEmpty(),
+            )
+        )
         return Checkpoint(
             receipt = WorkspaceGitHubConnector.CommitReceipt(
                 repository = repository,
@@ -1409,6 +1487,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             instruction = savedInstruction,
             repairAttempt = attempts,
             reviewRevisionAttempt = reviewAttempts,
+            taskBudget = budget,
         )
     }
 
@@ -1425,6 +1504,12 @@ internal class WorkspaceGitHubSelfEditFlow(
             .remove(CP_INSTRUCTION)
             .remove(CP_REPAIR_ATTEMPT)
             .remove(CP_REVIEW_REVISION_ATTEMPT)
+            .remove(CP_BUDGET_PROVIDER_CALLS)
+            .remove(CP_BUDGET_REVIEW_CALLS)
+            .remove(CP_BUDGET_FALLBACKS)
+            .remove(CP_BUDGET_CI_REPAIRS)
+            .remove(CP_BUDGET_COMMITS)
+            .remove(CP_LAST_FAILURE)
             .apply()
     }
 
@@ -1439,6 +1524,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         selectedProvider = null
         repairAttempt = 0
         reviewRevisionAttempt = 0
+        taskBudget = WorkspaceGitHubTaskBudget.State()
         grant = null
         access = null
         candidates = emptyList()
