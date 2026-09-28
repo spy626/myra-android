@@ -15,9 +15,10 @@ import java.io.IOException
 /**
  * One real CI benchmark pass across configured providers.
  *
- * Each provider receives the same synthetic source only. A valid bounded expression is committed as
- * one temporary target-file revision on agent/myra-phase-1. GitHub Actions then compiles/tests that
- * exact provider commit. After all providers, the known-good baseline is restored in a final commit.
+ * Each provider receives the same synthetic source only. It must solve two coordinated function
+ * contracts. Every accepted first attempt is committed and exact-SHA CI tested; one failed CI attempt
+ * may be repaired once by the same provider using bounded failure evidence. After all providers, the
+ * known-good baseline is restored in a final exact-CI-verified commit.
  */
 internal class WorkspaceProviderCiBenchmarkRunner(
     context: Context,
@@ -168,7 +169,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
         seedFailureSummary = ""
         lines.clear()
         seats().forEach { lines[it.name] = "waiting" }
-        render("Creating one deliberate synthetic CI failure…", done = false)
+        render("Creating one deliberate multi-step synthetic CI failure…", done = false)
         seedFailure(generation)
     }
 
@@ -182,7 +183,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
 
     private fun render(label: String, done: Boolean) {
         val body = buildList {
-            add("REAL CI REPAIR LOOP · synthetic source only · exact-SHA Actions watch · main untouched")
+            add("REAL CI MULTI-STEP AGENT LOOP · synthetic source only · exact-SHA Actions watch · main untouched")
             add(label)
             add("CI seed — " + seedLine)
             lines.forEach { (name, value) -> add(name + " — " + value) }
@@ -204,12 +205,12 @@ internal class WorkspaceProviderCiBenchmarkRunner(
             return
         }
 
-        lines[seat.name] = "repairing from real CI failure…"
-        render("Repair provider " + (index + 1) + "/" + seats.size, false)
-        val prompt = WorkspaceProviderCiBenchmark.repairPrompt(seedFailureSummary)
+        lines[seat.name] = "A1 solving two coordinated functions…"
+        render("Multi-step provider " + (index + 1) + "/" + seats.size + " · attempt 1", false)
+        val prompt = WorkspaceProviderCiBenchmark.initialPrompt(seedFailureSummary)
         val modelStarted = SystemClock.elapsedRealtime()
         val request = runCatching { seat.request(available.second, prompt) }.getOrElse {
-            lines[seat.name] = "REQUEST BLOCKED · " + (it.message ?: "local validation").take(100)
+            lines[seat.name] = "A1 REQUEST BLOCKED · " + (it.message ?: "local validation").take(100)
             runSeat(run, seats, index + 1)
             return
         }
@@ -218,20 +219,30 @@ internal class WorkspaceProviderCiBenchmarkRunner(
             seat.client,
             request,
             onFailure = {
-                lines[seat.name] = "MODEL ERROR · " + it.take(100)
+                lines[seat.name] = "A1 MODEL ERROR · " + it.take(100)
                 runSeat(run, seats, index + 1)
             },
             onResponse = { response ->
                 val prepared = runCatching {
                     WorkspaceProviderCiBenchmark.prepare(seat.read(response))
                 }.getOrElse {
-                    lines[seat.name] = "OUTPUT REJECTED · " +
+                    lines[seat.name] = "A1 OUTPUT REJECTED · " +
                         (it.message ?: "invalid coding reply").take(100)
                     runSeat(run, seats, index + 1)
                     return@dispatch
                 }
                 val modelMs = SystemClock.elapsedRealtime() - modelStarted
-                commitProvider(run, seats, index, seat, prepared.source, modelMs)
+                commitProvider(
+                    run = run,
+                    seats = seats,
+                    index = index,
+                    seat = seat,
+                    key = available.second,
+                    source = prepared.source,
+                    modelMs = modelMs,
+                    attempt = 1,
+                    firstFailureRun = null,
+                )
             },
         )
     }
@@ -241,24 +252,27 @@ internal class WorkspaceProviderCiBenchmarkRunner(
         seats: List<Seat>,
         index: Int,
         seat: Seat,
+        key: String,
         source: String,
         modelMs: Long,
+        attempt: Int,
+        firstFailureRun: Long?,
     ) {
-        lines[seat.name] = "code accepted · GitHub preflight…"
-        render("Provider " + (index + 1) + "/" + seats.size, false)
+        lines[seat.name] = "A" + attempt + " code accepted · GitHub preflight…"
+        render("Provider " + (index + 1) + "/" + seats.size + " · attempt " + attempt, false)
         dispatch(
             run,
             WorkspaceGitHubConnector.client,
             WorkspaceGitHubConnector.writeAccessRequest(pairing),
             onFailure = {
-                lines[seat.name] = "GITHUB PREFLIGHT ERROR · " + it.take(100)
+                lines[seat.name] = "A" + attempt + " GITHUB PREFLIGHT ERROR · " + it.take(100)
                 runSeat(run, seats, index + 1)
             },
             onResponse = { response ->
                 val access = runCatching {
                     WorkspaceGitHubConnector.readWriteAccess(response)
                 }.getOrElse {
-                    lines[seat.name] = "GITHUB PREFLIGHT ERROR · " +
+                    lines[seat.name] = "A" + attempt + " GITHUB PREFLIGHT ERROR · " +
                         (it.message ?: "invalid response").take(100)
                     runSeat(run, seats, index + 1)
                     return@dispatch
@@ -268,9 +282,14 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                     access.branch == saved.branch && access.prBase == "main") {
                     "GitHub benchmark binding changed"
                 }
+                val message = if (attempt == 1) {
+                    "test: multi-step provider benchmark " + seat.slug
+                } else {
+                    "test: multi-step provider repair " + seat.slug
+                }
                 val plan = WorkspaceGitHubWritePolicy.commitPlan(
                     expectedHead = access.headSha,
-                    message = "test: real CI provider benchmark " + seat.slug,
+                    message = message,
                     files = listOf(
                         WorkspaceGitHubWritePolicy.FileChange(
                             WorkspaceProviderCiBenchmark.TARGET_PATH,
@@ -283,7 +302,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                     WorkspaceGitHubConnector.client,
                     WorkspaceGitHubConnector.commitRequest(pairing, plan),
                     onFailure = {
-                        lines[seat.name] = "COMMIT ERROR · " + it.take(100)
+                        lines[seat.name] = "A" + attempt + " COMMIT ERROR · " + it.take(100)
                         runSeat(run, seats, index + 1)
                     },
                     onResponse = { commitResponse ->
@@ -295,25 +314,63 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                         }
                         wroteProviderCommit = true
                         lines[seat.name] =
-                            "COMMITTED " + receipt.commitSha.take(12) + " · waiting exact CI"
-                        render("Repair commit created; watching exact GitHub Actions SHA.", false)
+                            "A" + attempt + " COMMITTED " + receipt.commitSha.take(12) +
+                                " · waiting exact CI"
+                        render("Provider attempt committed; watching exact GitHub Actions SHA.", false)
                         awaitCi(
                             run = run,
                             commitSha = receipt.commitSha,
-                            label = seat.name,
-                            onCompleted = { workflow, _ ->
+                            label = seat.name + " A" + attempt,
+                            onCompleted = { workflow, token ->
                                 if (workflow.conclusion == "success") {
-                                    lines[seat.name] = "PASS · model " + modelMs + "ms · CI #" +
-                                        workflow.runNumber + " GREEN"
+                                    lines[seat.name] = if (attempt == 1) {
+                                        "PASS A1 · model " + modelMs + "ms · CI #" +
+                                            workflow.runNumber + " GREEN"
+                                    } else {
+                                        "RECOVERED A2 · A1 CI #" + firstFailureRun +
+                                            " FAILURE · A2 model " + modelMs + "ms · CI #" +
+                                            workflow.runNumber + " GREEN"
+                                    }
+                                    runSeat(run, seats, index + 1)
+                                } else if (attempt == 1) {
+                                    lines[seat.name] = "A1 FAIL · model " + modelMs +
+                                        "ms · CI #" + workflow.runNumber +
+                                        " " + (workflow.conclusion ?: "unknown").uppercase() +
+                                        " · capturing A2 evidence"
+                                    render("First attempt failed; capturing bounded evidence for same-provider repair.", false)
+                                    readFailureContext(
+                                        run = run,
+                                        token = token,
+                                        workflow = workflow,
+                                        onReady = { failureSummary ->
+                                            retrySeat(
+                                                run = run,
+                                                seats = seats,
+                                                index = index,
+                                                seat = seat,
+                                                key = key,
+                                                previousSource = source,
+                                                failureSummary = failureSummary,
+                                                firstFailureRun = workflow.runNumber,
+                                            )
+                                        },
+                                        onFailure = {
+                                            lines[seat.name] = "A1 FAIL · CI #" +
+                                                workflow.runNumber + " · A2 CONTEXT ERROR · " +
+                                                it.take(80)
+                                            runSeat(run, seats, index + 1)
+                                        },
+                                    )
                                 } else {
-                                    lines[seat.name] = "FAIL · model " + modelMs + "ms · CI #" +
+                                    lines[seat.name] = "FAIL A2 · A1 CI #" + firstFailureRun +
+                                        " FAILURE · A2 model " + modelMs + "ms · CI #" +
                                         workflow.runNumber + " " +
                                         (workflow.conclusion ?: "unknown").uppercase()
+                                    runSeat(run, seats, index + 1)
                                 }
-                                runSeat(run, seats, index + 1)
                             },
                             onFailure = {
-                                lines[seat.name] = "CI WATCH ERROR · " + it.take(100)
+                                lines[seat.name] = "A" + attempt + " CI WATCH ERROR · " + it.take(100)
                                 runSeat(run, seats, index + 1)
                             },
                         )
@@ -323,9 +380,65 @@ internal class WorkspaceProviderCiBenchmarkRunner(
         )
     }
 
+    private fun retrySeat(
+        run: Long,
+        seats: List<Seat>,
+        index: Int,
+        seat: Seat,
+        key: String,
+        previousSource: String,
+        failureSummary: String,
+        firstFailureRun: Long,
+    ) {
+        lines[seat.name] = "A1 CI #" + firstFailureRun + " FAILURE · A2 repairing same task…"
+        render("Same provider repair · " + (index + 1) + "/" + seats.size + " · attempt 2", false)
+        val prompt = WorkspaceProviderCiBenchmark.retryPrompt(failureSummary, previousSource)
+        val modelStarted = SystemClock.elapsedRealtime()
+        val request = runCatching { seat.request(key, prompt) }.getOrElse {
+            lines[seat.name] = "A1 CI #" + firstFailureRun +
+                " FAILURE · A2 REQUEST BLOCKED · " +
+                (it.message ?: "local validation").take(80)
+            runSeat(run, seats, index + 1)
+            return
+        }
+        dispatch(
+            run,
+            seat.client,
+            request,
+            onFailure = {
+                lines[seat.name] = "A1 CI #" + firstFailureRun +
+                    " FAILURE · A2 MODEL ERROR · " + it.take(80)
+                runSeat(run, seats, index + 1)
+            },
+            onResponse = { response ->
+                val prepared = runCatching {
+                    WorkspaceProviderCiBenchmark.prepare(seat.read(response))
+                }.getOrElse {
+                    lines[seat.name] = "A1 CI #" + firstFailureRun +
+                        " FAILURE · A2 OUTPUT REJECTED · " +
+                        (it.message ?: "invalid coding reply").take(80)
+                    runSeat(run, seats, index + 1)
+                    return@dispatch
+                }
+                val modelMs = SystemClock.elapsedRealtime() - modelStarted
+                commitProvider(
+                    run = run,
+                    seats = seats,
+                    index = index,
+                    seat = seat,
+                    key = key,
+                    source = prepared.source,
+                    modelMs = modelMs,
+                    attempt = 2,
+                    firstFailureRun = firstFailureRun,
+                )
+            },
+        )
+    }
+
     private fun seedFailure(run: Long) {
         seedLine = "GitHub preflight…"
-        render("Creating deliberate failing fixture on protected feature branch.", false)
+        render("Creating deliberate two-function failing fixture on protected feature branch.", false)
         dispatch(
             run,
             WorkspaceGitHubConnector.client,
@@ -340,7 +453,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                 }
                 val plan = WorkspaceGitHubWritePolicy.commitPlan(
                     expectedHead = access.headSha,
-                    message = "test: seed real CI repair benchmark failure",
+                    message = "test: seed multi-step provider benchmark failure",
                     files = listOf(
                         WorkspaceGitHubWritePolicy.FileChange(
                             WorkspaceProviderCiBenchmark.TARGET_PATH,
@@ -358,7 +471,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                         require(receipt.previousHead == access.headSha &&
                             receipt.branch == access.branch &&
                             receipt.files == listOf(WorkspaceProviderCiBenchmark.TARGET_PATH)) {
-                            "Repair benchmark seed receipt mismatch"
+                            "Multi-step benchmark seed receipt mismatch"
                         }
                         wroteProviderCommit = true
                         seedLine = "COMMITTED " + receipt.commitSha.take(12) + " · waiting expected failure"
@@ -383,7 +496,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                                         seedFailureSummary = summary
                                         seedLine = "EXPECTED FAIL · CI #" + workflow.runNumber +
                                             " · bounded failure captured"
-                                        render("Real failure captured. Starting provider repair passes.", false)
+                                        render("Real failure captured. Starting multi-step provider attempts.", false)
                                         runSeat(run, seats(), 0)
                                     },
                                     onFailure = {
@@ -580,7 +693,7 @@ internal class WorkspaceProviderCiBenchmarkRunner(
                                 val conclusion = workflow.conclusion ?: "unknown"
                                 finish(
                                     run,
-                                    "Repair benchmark complete. Baseline " +
+                                    "Multi-step benchmark complete. Baseline " +
                                         receipt.commitSha.take(12) + " · CI #" +
                                         workflow.runNumber + " " + conclusion.uppercase(),
                                 )

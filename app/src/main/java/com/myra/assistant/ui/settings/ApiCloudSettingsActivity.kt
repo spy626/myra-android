@@ -221,7 +221,7 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
                             b.providerCiBenchmarkStatus.text = text
                             b.providerCiBenchmarkButton.isEnabled = done
                             b.providerCiBenchmarkButton.text =
-                                if (done) "RUN CI REPAIR AGENT TEST" else "RUNNING CI REPAIR TEST…"
+                                if (done) "RUN MULTI-STEP CI AGENT TEST" else "RUNNING MULTI-STEP CI TEST…"
                             if (done) providerCiBenchmarkRunner = null
                         }
                     }
@@ -229,9 +229,9 @@ class ApiCloudSettingsActivity : AppCompatActivity() {
             )
             providerCiBenchmarkRunner = runner
             b.providerCiBenchmarkButton.isEnabled = false
-            b.providerCiBenchmarkButton.text = "RUNNING CI REPAIR TEST…"
+            b.providerCiBenchmarkButton.text = "RUNNING MULTI-STEP CI TEST…"
             b.providerCiBenchmarkStatus.text =
-                "Seeding one real CI failure, then testing provider repairs… keep this screen open."
+                "Seeding a two-function CI failure, then testing A1 + same-provider A2 repair… keep this screen open."
             runner.start()
         }
         b.backButton.setOnClickListener { finish() }
