@@ -1,10 +1,12 @@
 package com.myra.assistant.ui.workspace
 
-/** Deliberately wrong but compiling rules fixture. */
+/** Known-good rules baseline for the finalist benchmark. */
 internal object WorkspaceProviderCiRules {
     fun normalize(raw: List<String>): List<String> =
-        raw.distinct()
+        raw.asSequence()
             .map { it.trim().lowercase() }
-            .filter { it.isNotBlank() }
+            .filter { it.isNotEmpty() }
+            .distinct()
             .sorted()
+            .toList()
 }
