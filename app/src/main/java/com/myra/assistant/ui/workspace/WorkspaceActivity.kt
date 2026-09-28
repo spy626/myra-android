@@ -154,7 +154,7 @@ class WorkspaceActivity : AppCompatActivity() {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         githubSelfEditProjectId = null
                         githubSelfEditMessageId = null
-                        if (!githubSelfEdit.hasCheckpoint()) clearGitHubSelfEditTurnCheckpoint()
+                        if (!hasSavedGitHubSelfEditCheckpoint()) clearGitHubSelfEditTurnCheckpoint()
                         workTrace.finishError("GitHub self-edit stopped", message)
                         statusMessage = message
                         render()
@@ -308,6 +308,14 @@ class WorkspaceActivity : AppCompatActivity() {
             .remove(githubSelfEditProjectKey)
             .remove(githubSelfEditMessageKey)
             .apply()
+    }
+
+    private fun hasSavedGitHubSelfEditCheckpoint(): Boolean {
+        val sha = preferences.getString("workspace_github_self_edit_checkpoint_sha", null)
+            ?.trim()
+            ?.lowercase()
+            ?: return false
+        return Regex("[0-9a-f]{40,64}").matches(sha)
     }
 
     private fun resumeGitHubSelfEditIfNeeded() {
