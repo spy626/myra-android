@@ -1,15 +1,10 @@
 package com.myra.assistant.ui.workspace
 
-/** Deliberately wrong but compiling two-step fixture used to create one real CI failure. */
+/** Temporary provider-generated implementation for the real multi-step CI benchmark. */
 internal object WorkspaceProviderCiTarget {
     fun normalizedTags(raw: List<String>): List<String> =
-        raw.distinct()
-            .map { it.trim().lowercase() }
-            .filter { it.isNotBlank() }
-            .sorted()
+        raw.map { it.trim().lowercase() }.filter { it.isNotBlank() }.distinct().sorted()
 
     fun previewTags(raw: List<String>, limit: Int): String =
-        normalizedTags(raw)
-            .take(limit)
-            .joinToString("|")
+        normalizedTags(raw).take(limit).joinToString("|")
 }
