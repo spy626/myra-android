@@ -6,10 +6,10 @@ internal object WorkspaceCodingRoleRouter {
     enum class TaskSize { QUICK, HEAVY }
 
     private val heavyIntent = Regex(
-        """(?i)\\b(?:architecture|architect|refactor|migration|database|room|oauth|auth|""" +
+        """(?i)\b(?:architecture|architect|refactor|migration|database|room|oauth|auth|""" +
             """concurren|thread|async|memory|pipeline|multi[- ]?step|multi[- ]?file|""" +
             """repository|codebase|ci|github actions|build system|gradle|security|""" +
-            """coordinator|orchestrator|state machine|fallback|checkpoint|resume)\\b"""
+            """coordinator|orchestrator|state machine|fallback|checkpoint|resume)\b"""
     )
 
     fun classify(instruction: String, sourceChars: Int): TaskSize {
