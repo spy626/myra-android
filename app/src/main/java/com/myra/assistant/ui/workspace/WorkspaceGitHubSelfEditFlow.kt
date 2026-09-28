@@ -45,11 +45,16 @@ internal class WorkspaceGitHubSelfEditFlow(
         const val MAX_CI_POLLS = 120
         const val MAX_CI_POLL_ERRORS = 3
         const val CP_SHA = "workspace_github_self_edit_checkpoint_sha"
+        const val CP_PREVIOUS_HEAD = "workspace_github_self_edit_checkpoint_previous_head"
         const val CP_REPO = "workspace_github_self_edit_checkpoint_repo"
         const val CP_BRANCH = "workspace_github_self_edit_checkpoint_branch"
         const val CP_PATH = "workspace_github_self_edit_checkpoint_path"
         const val CP_PROVIDER = "workspace_github_self_edit_checkpoint_provider"
         const val CP_PHASE = "workspace_github_self_edit_checkpoint_phase"
+        const val CP_INSTRUCTION = "workspace_github_self_edit_checkpoint_instruction"
+        const val CP_REPAIR_ATTEMPT = "workspace_github_self_edit_checkpoint_repair_attempt"
+        val CHECKPOINT_SHA = Regex("[0-9a-f]{40,64}")
+        val CHECKPOINT_PHASES = setOf("waiting_ci", "repair_waiting_ci", "ci_failed", "ci_green")
     }
 
     private val pollHandler = Handler(Looper.getMainLooper())
@@ -70,16 +75,110 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var candidate: WorkspaceAgentReachGitHubRelevance.Candidate? = null
     private var originalSource = ""
 
+    private data class Checkpoint(
+        val receipt: WorkspaceGitHubConnector.CommitReceipt,
+        val provider: WorkspaceCodingRoleRouter.Provider,
+        val phase: String,
+        val instruction: String,
+        val repairAttempt: Int,
+    )
+
     val isRunning: Boolean get() = synchronized(this) { active != null || ciWatching }
 
-    @Synchronized fun cancel() {
+    fun hasCheckpoint(): Boolean =
+        preferences.getString(CP_SHA, null)?.let(CHECKPOINT_SHA::matches) == true
+
+    @Synchronized fun cancel(preserveCheckpoint: Boolean = true) {
         generation += 1
         active?.cancel()
         active = null
         pollHandler.removeCallbacksAndMessages(null)
         ciWatching = false
-        // A post-commit checkpoint intentionally survives cancellation/app interruption.
+        if (!preserveCheckpoint) clearCheckpoint()
+        // Lifecycle interruption preserves a post-commit checkpoint; explicit Stop may discard it.
         clearState()
+    }
+
+    @Synchronized fun resumeCheckpoint(): Boolean {
+        if (active != null || ciWatching) return false
+        val checkpoint = runCatching { loadCheckpoint() }.getOrElse {
+            clearCheckpoint()
+            listener.onError("Saved GitHub coding checkpoint was invalid and was cleared safely.")
+            return false
+        } ?: return false
+        val saved = store.loadGitHub()
+        val secret = saved?.pairingSecret
+        if (saved == null || secret == null) {
+            listener.onError("Reconnect the LYRA GitHub App to resume the saved coding checkpoint.")
+            return false
+        }
+        if (!saved.repository.equals(checkpoint.receipt.repository, ignoreCase = true) ||
+            saved.branch != checkpoint.receipt.branch) {
+            listener.onError("Saved coding checkpoint belongs to a different GitHub binding; no write was attempted.")
+            return false
+        }
+
+        val xKiroEnabled = preferences.getBoolean(WorkspaceXKiroFree.PREFERENCE_KEY, false)
+        val fallbackEnabled = preferences.getBoolean(WorkspaceCodingAutoFallback.PREFERENCE_KEY, false)
+        val groqFreeZdr = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false)
+        val savedXKiroKey = runCatching { keys.get(ApiKeyStore.XKIRO) }.getOrDefault("")
+        val savedGroqKey = runCatching { keys.get(ApiKeyStore.GROQ) }.getOrDefault("")
+
+        val run = ++generation
+        instruction = checkpoint.instruction
+        connection = saved
+        pairing = secret
+        xKiroKey = savedXKiroKey
+        groqKey = savedGroqKey
+        xKiroPermitted = xKiroEnabled && WorkspaceXKiroFree.validKey(savedXKiroKey)
+        groqPermitted = WorkspaceCodingAutoFallback.permitted(fallbackEnabled, xKiroEnabled) &&
+            WorkspaceCodingAutoFallback.groqPermitted(fallbackEnabled, groqFreeZdr, savedGroqKey)
+        selectedProvider = checkpoint.provider
+        repairAttempt = checkpoint.repairAttempt
+        candidate = WorkspaceAgentReachGitHubRelevance.Candidate(
+            path = checkpoint.receipt.files.single(),
+            score = 0,
+            reason = "saved self-edit checkpoint",
+            size = null,
+        )
+
+        listener.onEvent(
+            WorkspaceWorkPhase.RECOVERING,
+            "Resuming saved GitHub coding checkpoint",
+            checkpoint.phase + " · " + checkpoint.receipt.commitSha.take(12),
+        )
+        dispatch(
+            run,
+            WorkspaceGitHubConnector.client,
+            WorkspaceGitHubConnector.installationTokenRequest(secret),
+            "GitHub read-token refresh failed; saved checkpoint was preserved.",
+        ) { response ->
+            val fresh = WorkspaceGitHubConnector.readInstallationGrant(response)
+            require(fresh.repository.equals(saved.repository, ignoreCase = true) &&
+                fresh.branch == saved.branch &&
+                fresh.login.equals(saved.login, ignoreCase = true)) {
+                "Fresh GitHub binding changed; saved checkpoint preserved"
+            }
+            grant = fresh
+            dispatch(
+                run,
+                WorkspaceGitHubConnector.client,
+                WorkspaceGitHubConnector.writeAccessRequest(pairing),
+                "GitHub write preflight failed; saved checkpoint was preserved.",
+            ) { writeResponse ->
+                val checked = WorkspaceGitHubConnector.readWriteAccess(writeResponse)
+                require(checked.repository.equals(saved.repository, ignoreCase = true) &&
+                    checked.branch == saved.branch && checked.prBase == "main") {
+                    "GitHub write binding changed; saved checkpoint preserved"
+                }
+                require(checked.headSha == checkpoint.receipt.commitSha) {
+                    "Feature branch advanced beyond the saved checkpoint; refusing a blind resume."
+                }
+                access = checked
+                awaitExactCi(run, checkpoint.receipt)
+            }
+        }
+        return true
     }
 
     @Synchronized fun start(message: String) {
@@ -416,6 +515,7 @@ internal class WorkspaceGitHubSelfEditFlow(
                 "GitHub commit receipt did not match the authorized self-edit"
             }
             access = checked.copy(headSha = receipt.commitSha)
+            if (repair) repairAttempt = 1
             saveCheckpoint(receipt, if (repair) "repair_waiting_ci" else "waiting_ci")
             awaitExactCi(run, receipt)
         }
@@ -578,7 +678,6 @@ internal class WorkspaceGitHubSelfEditFlow(
                 )
                 return@dispatch
             }
-            repairAttempt = 1
             ciWatching = false
             listener.onEvent(
                 WorkspaceWorkPhase.RECOVERING,
@@ -748,25 +847,74 @@ internal class WorkspaceGitHubSelfEditFlow(
         receipt: WorkspaceGitHubConnector.CommitReceipt,
         phase: String,
     ) {
-        val provider = selectedProvider?.name ?: "UNKNOWN"
+        require(phase in CHECKPOINT_PHASES) { "Unsupported coding checkpoint phase" }
+        val provider = requireNotNull(selectedProvider).name
+        require(receipt.files.size == 1) { "Coding checkpoint requires exactly one file" }
         preferences.edit()
             .putString(CP_SHA, receipt.commitSha)
+            .putString(CP_PREVIOUS_HEAD, receipt.previousHead)
             .putString(CP_REPO, receipt.repository)
             .putString(CP_BRANCH, receipt.branch)
-            .putString(CP_PATH, receipt.files.singleOrNull().orEmpty())
+            .putString(CP_PATH, receipt.files.single())
             .putString(CP_PROVIDER, provider)
             .putString(CP_PHASE, phase)
+            .putString(CP_INSTRUCTION, instruction)
+            .putInt(CP_REPAIR_ATTEMPT, repairAttempt)
             .apply()
+    }
+
+    private fun loadCheckpoint(): Checkpoint? {
+        val sha = preferences.getString(CP_SHA, null)?.trim()?.lowercase() ?: return null
+        val previousHead = preferences.getString(CP_PREVIOUS_HEAD, null)?.trim()?.lowercase()
+            ?: throw IllegalArgumentException("Checkpoint previous head is missing")
+        require(CHECKPOINT_SHA.matches(sha) && CHECKPOINT_SHA.matches(previousHead)) {
+            "Checkpoint SHA is invalid"
+        }
+        val repository = preferences.getString(CP_REPO, null)?.trim().orEmpty()
+        val branch = preferences.getString(CP_BRANCH, null)?.trim().orEmpty()
+        val path = WorkspaceGitHubWritePolicy.requirePath(
+            preferences.getString(CP_PATH, null)?.trim().orEmpty()
+        )
+        require(repository.isNotBlank() && branch == "agent/myra-phase-1") {
+            "Checkpoint GitHub binding is invalid"
+        }
+        val provider = WorkspaceCodingRoleRouter.Provider.valueOf(
+            preferences.getString(CP_PROVIDER, null)?.trim().orEmpty()
+        )
+        val phase = preferences.getString(CP_PHASE, null)?.trim().orEmpty()
+        require(phase in CHECKPOINT_PHASES) { "Checkpoint phase is invalid" }
+        val savedInstruction = preferences.getString(CP_INSTRUCTION, null)?.trim().orEmpty()
+        require(WorkspaceGitHubSelfEdit.isExplicitRequest(savedInstruction)) {
+            "Checkpoint instruction is invalid"
+        }
+        val attempts = preferences.getInt(CP_REPAIR_ATTEMPT, 0)
+        require(attempts in 0..1) { "Checkpoint repair count is invalid" }
+        return Checkpoint(
+            receipt = WorkspaceGitHubConnector.CommitReceipt(
+                repository = repository,
+                branch = branch,
+                previousHead = previousHead,
+                commitSha = sha,
+                files = listOf(path),
+            ),
+            provider = provider,
+            phase = phase,
+            instruction = savedInstruction,
+            repairAttempt = attempts,
+        )
     }
 
     private fun clearCheckpoint() {
         preferences.edit()
             .remove(CP_SHA)
+            .remove(CP_PREVIOUS_HEAD)
             .remove(CP_REPO)
             .remove(CP_BRANCH)
             .remove(CP_PATH)
             .remove(CP_PROVIDER)
             .remove(CP_PHASE)
+            .remove(CP_INSTRUCTION)
+            .remove(CP_REPAIR_ATTEMPT)
             .apply()
     }
 

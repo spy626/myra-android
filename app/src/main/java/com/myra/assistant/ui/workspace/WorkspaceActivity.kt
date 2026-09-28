@@ -101,6 +101,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private var agentReachRelevantRunner: WorkspaceAgentReachGitHubRelevantRunner? = null
     private var githubSelfEditProjectId: String? = null
     private var githubSelfEditMessageId: String? = null
+    private val githubSelfEditProjectKey = "workspace_github_self_edit_project_id"
+    private val githubSelfEditMessageKey = "workspace_github_self_edit_message_id"
     private val githubSelfEdit by lazy {
         WorkspaceGitHubSelfEditFlow(
             store = WorkspaceConnectorCredentialStore(this),
@@ -125,13 +127,14 @@ class WorkspaceActivity : AppCompatActivity() {
                         val messageId = githubSelfEditMessageId
                         githubSelfEditProjectId = null
                         githubSelfEditMessageId = null
+                        clearGitHubSelfEditTurnCheckpoint()
                         if (id == null || messageId == null || selectedId != id) return@runOnUiThread
                         val pr = result.pullRequest?.let { " Draft PR #${it.number} updated." }
                             ?: " Draft PR update was not confirmed."
                         val warning = result.warning?.let { " $it" }.orEmpty()
                         val summary =
                             "Updated ${result.commit.files.joinToString()} on agent/myra-phase-1 · " +
-                                "commit ${result.commit.commitSha.take(12)}.$pr " +
+                                "commit ${result.commit.commitSha.take(12)} · CI #${result.workflow.runNumber} GREEN.$pr " +
                                 "main/master was not modified or merged.$warning"
                         runCatching {
                             require(conversations.read(id).lastOrNull()?.id == messageId) {
@@ -151,6 +154,7 @@ class WorkspaceActivity : AppCompatActivity() {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         githubSelfEditProjectId = null
                         githubSelfEditMessageId = null
+                        if (!githubSelfEdit.hasCheckpoint()) clearGitHubSelfEditTurnCheckpoint()
                         workTrace.finishError("GitHub self-edit stopped", message)
                         statusMessage = message
                         render()
@@ -291,6 +295,34 @@ class WorkspaceActivity : AppCompatActivity() {
         })
     }
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_LONG).show()
+
+    private fun saveGitHubSelfEditTurnCheckpoint(projectId: String, messageId: String) {
+        preferences.edit()
+            .putString(githubSelfEditProjectKey, projectId)
+            .putString(githubSelfEditMessageKey, messageId)
+            .apply()
+    }
+
+    private fun clearGitHubSelfEditTurnCheckpoint() {
+        preferences.edit()
+            .remove(githubSelfEditProjectKey)
+            .remove(githubSelfEditMessageKey)
+            .apply()
+    }
+
+    private fun resumeGitHubSelfEditIfNeeded() {
+        if (!githubSelfEdit.hasCheckpoint() || githubSelfEdit.isRunning) return
+        val projectId = preferences.getString(githubSelfEditProjectKey, null)
+            ?.takeIf { projects.getProject(it) != null }
+        val messageId = preferences.getString(githubSelfEditMessageKey, null)
+        if (projectId != null && !messageId.isNullOrBlank()) {
+            selectedId = projectId
+            githubSelfEditProjectId = projectId
+            githubSelfEditMessageId = messageId
+            workTraceMessageId = messageId
+        }
+        githubSelfEdit.resumeCheckpoint()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -481,6 +513,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 statusMessage = "Selected conversation is unavailable. Choose another chat."
             }
             render()
+            resumeGitHubSelfEditIfNeeded()
         }
     }
 
@@ -673,9 +706,10 @@ class WorkspaceActivity : AppCompatActivity() {
                 "GitHub read cancelled; no content was installed, executed, or sent to a provider.")
         }
         coding.cancel()
-        githubSelfEdit.cancel()
+        githubSelfEdit.cancel(preserveCheckpoint = false)
         githubSelfEditProjectId = null
         githubSelfEditMessageId = null
+        clearGitHubSelfEditTurnCheckpoint()
         codingRetryTarget = null
         statusMessage = "Stopped. No partial reply was saved."
         render()
@@ -2860,6 +2894,7 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             githubSelfEditProjectId = id
             githubSelfEditMessageId = stored.id
+            saveGitHubSelfEditTurnCheckpoint(id, stored.id)
             statusMessage = ""
             render()
             githubSelfEdit.start(text)
