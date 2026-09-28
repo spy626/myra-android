@@ -57,4 +57,17 @@ class WorkspaceGitHubSelfEditTest {
         )
         assertTrue(selected.path.contains("WorkspaceGitHubConnectorActivity.kt"))
     }
+    @Test fun repairPromptKeepsSameTaskAndBoundedCiEvidence() {
+        val prompt = WorkspaceGitHubSelfEdit.repairPrompt(
+            "GitHub source me button state fix karo",
+            "src/Test.kt",
+            "fun state() = \"wrong\"",
+            "GitHub Actions Build Android APK #99 failed; job=build; failed_steps=Unit tests",
+        )
+        assertTrue(prompt.contains("SAME LYRA GitHub task"))
+        assertTrue(prompt.contains("Build Android APK #99"))
+        assertTrue(prompt.contains("CURRENT SOURCE EXCERPT"))
+        assertTrue(prompt.contains("src/Test.kt"))
+    }
+
 }

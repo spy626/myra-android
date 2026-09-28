@@ -64,6 +64,7 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var xKiroPermitted = false
     private var groqPermitted = false
     private var selectedProvider: WorkspaceCodingRoleRouter.Provider? = null
+    private var repairAttempt = 0
     private var grant: WorkspaceGitHubConnector.InstallationGrant? = null
     private var access: WorkspaceGitHubConnector.WriteAccess? = null
     private var candidate: WorkspaceAgentReachGitHubRelevance.Candidate? = null
@@ -214,40 +215,191 @@ internal class WorkspaceGitHubSelfEditFlow(
     }
 
     private fun propose(run: Long, prompt: String) {
-        val selected = requireNotNull(candidate)
         val route = requireNotNull(selectedProvider)
-        val providerName = when (route) {
-            WorkspaceCodingRoleRouter.Provider.XKIRO -> "xKiro · ${WorkspaceXKiroFree.MODEL}"
-            WorkspaceCodingRoleRouter.Provider.GROQ -> "Groq · ${WorkspaceGroqFree.MODEL}"
+        sendProvider(
+            run = run,
+            route = route,
+            prompt = prompt,
+            sourceForPatch = originalSource,
+            expectedHead = requireNotNull(access).headSha,
+            repair = false,
+            fallbackUsed = false,
+        )
+    }
+
+    private fun alternateProvider(
+        current: WorkspaceCodingRoleRouter.Provider,
+    ): WorkspaceCodingRoleRouter.Provider? = when (current) {
+        WorkspaceCodingRoleRouter.Provider.XKIRO ->
+            WorkspaceCodingRoleRouter.Provider.GROQ.takeIf {
+                groqPermitted &&
+                    WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.GROQ_FREE)
+            }
+        WorkspaceCodingRoleRouter.Provider.GROQ ->
+            WorkspaceCodingRoleRouter.Provider.XKIRO.takeIf {
+                xKiroPermitted &&
+                    WorkspaceProviderSessionHealth.canSend(WorkspaceProviderRegistry.Id.XKIRO_FREE)
+            }
+    }
+
+    private fun providerId(route: WorkspaceCodingRoleRouter.Provider) = when (route) {
+        WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceProviderRegistry.Id.XKIRO_FREE
+        WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceProviderRegistry.Id.GROQ_FREE
+    }
+
+    private fun providerName(route: WorkspaceCodingRoleRouter.Provider) = when (route) {
+        WorkspaceCodingRoleRouter.Provider.XKIRO -> "xKiro · ${WorkspaceXKiroFree.MODEL}"
+        WorkspaceCodingRoleRouter.Provider.GROQ -> "Groq · ${WorkspaceGroqFree.MODEL}"
+    }
+
+    private fun sendProvider(
+        run: Long,
+        route: WorkspaceCodingRoleRouter.Provider,
+        prompt: String,
+        sourceForPatch: String,
+        expectedHead: String,
+        repair: Boolean,
+        fallbackUsed: Boolean,
+    ) {
+        val selected = requireNotNull(candidate)
+        val label = providerName(route)
+        selectedProvider = route
+        listener.onEvent(
+            if (repair) WorkspaceWorkPhase.RECOVERING else WorkspaceWorkPhase.CODING,
+            if (repair) "Repairing failed exact CI" else "Preparing bounded GitHub edit",
+            "$label · ${selected.path}",
+        )
+
+        val providerRequest = runCatching {
+            when (route) {
+                WorkspaceCodingRoleRouter.Provider.XKIRO ->
+                    WorkspaceXKiroFree.deliberationRequest(xKiroKey, prompt)
+                WorkspaceCodingRoleRouter.Provider.GROQ ->
+                    WorkspaceGroqFree.request(
+                        groqKey,
+                        listOf(
+                            WorkspaceConversationStore.Message(
+                                if (repair) "github-self-edit-repair" else "github-self-edit",
+                                "user",
+                                prompt,
+                                nowMs(),
+                            )
+                        ),
+                    )
+            }
+        }.getOrElse { error ->
+            if (!fallbackUsed && error is WorkspaceXKiroFree.NoSourcePreflight) {
+                val alternate = alternateProvider(route)
+                if (alternate != null) {
+                    listener.onEvent(
+                        WorkspaceWorkPhase.RECOVERING,
+                        "Switching coding provider before source send",
+                        "${providerName(route)} → ${providerName(alternate)}",
+                    )
+                    sendProvider(run, alternate, prompt, sourceForPatch, expectedHead, repair, true)
+                    return
+                }
+            }
+            fail(run, null, error.message ?: "$label request could not be prepared.")
+            return
         }
-        listener.onEvent(WorkspaceWorkPhase.CODING, "Preparing bounded GitHub edit", "$providerName · ${selected.path}")
-        val providerRequest = when (route) {
-            WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.deliberationRequest(xKiroKey, prompt)
-            WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceGroqFree.request(
-                groqKey,
-                listOf(WorkspaceConversationStore.Message("github-self-edit", "user", prompt, nowMs())),
-            )
-        }
+
         val client = when (route) {
             WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.deliberationClient
             WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceFreeAiSuggestion.client
         }
-        dispatch(run, client, providerRequest, "$providerName self-edit request failed; no GitHub write was attempted.") { response ->
-            WorkspaceProviderSessionHealth.recordResponse(response)
-            val raw = when (route) {
-                WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.readDeliberation(response)
-                WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceGroqFree.read(response)
-            }
-            val prepared = WorkspaceGitHubSelfEdit.prepare(raw, selected.path, originalSource)
-            listener.onEvent(WorkspaceWorkPhase.VERIFYING, "Provider patch accepted locally", providerName)
-            commit(run, prepared)
+        val call = client.newCall(providerRequest)
+        synchronized(this) {
+            if (run != generation) return
+            active = call
         }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) return
+                    active = null
+                }
+                if (!fallbackUsed && e is WorkspaceXKiroFree.NoSourcePreflight) {
+                    val alternate = alternateProvider(route)
+                    if (alternate != null) {
+                        listener.onEvent(
+                            WorkspaceWorkPhase.RECOVERING,
+                            "Switching coding provider before source send",
+                            "${providerName(route)} → ${providerName(alternate)}",
+                        )
+                        sendProvider(run, alternate, prompt, sourceForPatch, expectedHead, repair, true)
+                        return
+                    }
+                }
+                fail(
+                    run,
+                    null,
+                    "$label request had an uncertain network outcome; no automatic cross-provider resend.",
+                )
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) {
+                        response.close()
+                        return
+                    }
+                    active = null
+                }
+                val id = providerId(route)
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                if (!response.isSuccessful &&
+                    !fallbackUsed &&
+                    WorkspaceProviderRegistry.definitiveFallbackAllowed(id, response.code)
+                ) {
+                    val status = response.code
+                    response.close()
+                    val alternate = alternateProvider(route)
+                    if (alternate != null) {
+                        listener.onEvent(
+                            WorkspaceWorkPhase.RECOVERING,
+                            "Switching after definitive provider HTTP $status",
+                            "${providerName(route)} → ${providerName(alternate)}",
+                        )
+                        sendProvider(run, alternate, prompt, sourceForPatch, expectedHead, repair, true)
+                        return
+                    }
+                    fail(run, null, "$label HTTP $status; no permitted coding fallback available.")
+                    return
+                }
+                val prepared = runCatching {
+                    val raw = when (route) {
+                        WorkspaceCodingRoleRouter.Provider.XKIRO ->
+                            WorkspaceXKiroFree.readDeliberation(response)
+                        WorkspaceCodingRoleRouter.Provider.GROQ ->
+                            WorkspaceGroqFree.read(response)
+                    }
+                    WorkspaceGitHubSelfEdit.prepare(raw, selected.path, sourceForPatch)
+                }.getOrElse { error ->
+                    fail(run, null, error.message ?: "$label coding response was rejected.")
+                    return
+                }
+                listener.onEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    if (repair) "Repair patch accepted locally" else "Provider patch accepted locally",
+                    label,
+                )
+                commit(run, prepared, expectedHead, repair)
+            }
+        })
     }
-    private fun commit(run: Long, prepared: WorkspaceGitHubSelfEdit.Prepared) {
+
+    private fun commit(
+        run: Long,
+        prepared: WorkspaceGitHubSelfEdit.Prepared,
+        expectedHead: String,
+        repair: Boolean,
+    ) {
         val checked = requireNotNull(access)
         val plan = WorkspaceGitHubWritePolicy.commitPlan(
-            expectedHead = checked.headSha,
-            message = WorkspaceGitHubSelfEdit.commitMessage(prepared.path),
+            expectedHead = expectedHead,
+            message = if (repair) WorkspaceGitHubSelfEdit.repairCommitMessage(prepared.path)
+                else WorkspaceGitHubSelfEdit.commitMessage(prepared.path),
             files = listOf(WorkspaceGitHubWritePolicy.FileChange(prepared.path, prepared.content)),
         )
         listener.onEvent(WorkspaceWorkPhase.CODING, "Committing protected feature-branch edit", prepared.path)
@@ -258,12 +410,13 @@ internal class WorkspaceGitHubSelfEditFlow(
             "GitHub commit was not confirmed. Do not retry automatically.",
         ) { response ->
             val receipt = WorkspaceGitHubConnector.readCommitReceipt(response)
-            require(receipt.previousHead == checked.headSha &&
+            require(receipt.previousHead == expectedHead &&
                 receipt.branch == checked.branch &&
                 receipt.files == listOf(prepared.path)) {
                 "GitHub commit receipt did not match the authorized self-edit"
             }
-            saveCheckpoint(receipt, "waiting_ci")
+            access = checked.copy(headSha = receipt.commitSha)
+            saveCheckpoint(receipt, if (repair) "repair_waiting_ci" else "waiting_ci")
             awaitExactCi(run, receipt)
         }
     }
@@ -413,14 +566,56 @@ internal class WorkspaceGitHubSelfEditFlow(
             "CI failed and bounded failure details could not be read; checkpoint preserved.",
         ) { response ->
             val failure = WorkspaceGitHubConnector.readWorkflowFailure(response, workflow)
+            val summary = failure.boundedSummary()
             saveCheckpoint(receipt, "ci_failed")
-            fail(
-                run,
-                null,
-                "CI #${workflow.runNumber} failed for ${receipt.commitSha.take(12)}. " +
-                    failure.boundedSummary() +
-                    ". Task is not done; repair must continue from this checkpoint.",
+            if (repairAttempt >= 1) {
+                fail(
+                    run,
+                    null,
+                    "CI #${workflow.runNumber} failed after one repair for " +
+                        receipt.commitSha.take(12) + ". " + summary +
+                        ". Task is not done; checkpoint preserved.",
+                )
+                return@dispatch
+            }
+            repairAttempt = 1
+            ciWatching = false
+            listener.onEvent(
+                WorkspaceWorkPhase.RECOVERING,
+                "Reading failed commit for one bounded repair",
+                "CI #${workflow.runNumber} · ${receipt.commitSha.take(12)}",
             )
+            dispatch(
+                run,
+                WorkspaceGitHubConnector.client,
+                WorkspaceGitHubConnector.fileContentRequest(
+                    token = token,
+                    repository = saved.repository,
+                    headSha = receipt.commitSha,
+                    path = receipt.files.single(),
+                ),
+                "Failed commit source could not be read; checkpoint preserved.",
+            ) { fileResponse ->
+                val currentSource = WorkspaceGitHubConnector.readTextFile(
+                    fileResponse,
+                    receipt.files.single(),
+                )
+                val prompt = WorkspaceGitHubSelfEdit.repairPrompt(
+                    message = instruction,
+                    path = receipt.files.single(),
+                    content = currentSource,
+                    ciFailureSummary = summary,
+                )
+                sendProvider(
+                    run = run,
+                    route = requireNotNull(selectedProvider),
+                    prompt = prompt,
+                    sourceForPatch = currentSource,
+                    expectedHead = receipt.commitSha,
+                    repair = true,
+                    fallbackUsed = false,
+                )
+            }
         }
     }
 
@@ -584,6 +779,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         xKiroPermitted = false
         groqPermitted = false
         selectedProvider = null
+        repairAttempt = 0
         grant = null
         access = null
         candidate = null
