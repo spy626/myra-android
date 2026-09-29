@@ -147,24 +147,6 @@ internal object WorkspaceGitHubSelfEditBatch {
                 "CI repair evidence is missing or sensitive"
             }
         }
-        require(previousPrepared.files.isNotEmpty() &&
-            previousPrepared.files.size <= cleanSources.size) {
-            "Previous reviewer proposal file count is outside the selected source bound"
-        }
-        val previousByPath = linkedMapOf<String, String>()
-        previousPrepared.files.forEach { change ->
-            val path = WorkspaceGitHubWritePolicy.requirePath(change.path)
-            require(path in cleanSources) {
-                "Previous reviewer proposal targeted a path outside the selected source set"
-            }
-            WorkspaceGitHubWritePolicy.requireContent(change.content)
-            require(!WorkspaceSourceContext.containsPossibleSecret(change.content)) {
-                "Possible secret detected in previous reviewer proposal; revision was not sent"
-            }
-            require(previousByPath.put(path, change.content) == null) {
-                "Duplicate previous reviewer proposal path"
-            }
-        }
         val perFileBudget = (MAX_SOURCE_CHARS_TOTAL / cleanSources.size).coerceAtLeast(3_000)
         val body = buildString {
             if (failure == null) {
@@ -226,6 +208,24 @@ internal object WorkspaceGitHubSelfEditBatch {
                 "Possible secret detected in reviewer revision source; nothing was sent to AI"
             }
             require(cleanSources.put(path, content) == null) { "Duplicate reviewer revision source path" }
+        }
+        require(previousPrepared.files.isNotEmpty() &&
+            previousPrepared.files.size <= cleanSources.size) {
+            "Previous reviewer proposal file count is outside the selected source bound"
+        }
+        val previousByPath = linkedMapOf<String, String>()
+        previousPrepared.files.forEach { change ->
+            val path = WorkspaceGitHubWritePolicy.requirePath(change.path)
+            require(path in cleanSources) {
+                "Previous reviewer proposal targeted a path outside the selected source set"
+            }
+            WorkspaceGitHubWritePolicy.requireContent(change.content)
+            require(!WorkspaceSourceContext.containsPossibleSecret(change.content)) {
+                "Possible secret detected in previous reviewer proposal; revision was not sent"
+            }
+            require(previousByPath.put(path, change.content) == null) {
+                "Duplicate previous reviewer proposal path"
+            }
         }
         val perFileBudget = (MAX_SOURCE_CHARS_TOTAL / cleanSources.size).coerceAtLeast(3_000)
         val body = buildString {
