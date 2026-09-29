@@ -127,7 +127,14 @@ class WorkspaceActivity : AppCompatActivity() {
                     WorkspaceGitHubBackgroundService.update(applicationContext, label, detail)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        recordWorkEvent(phase, label, detail)
+                        if (WorkspaceChatConcurrencyPolicy.ownsVisibleTrace(
+                                workTraceMessageId,
+                                githubSelfEditMessageId,
+                            )) {
+                            recordWorkEvent(phase, label, detail)
+                        } else {
+                            updateSendButton()
+                        }
                     }
                 }
 
@@ -152,10 +159,16 @@ class WorkspaceActivity : AppCompatActivity() {
                     WorkspaceGitHubBackgroundService.fail(applicationContext, message)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
+                        val failedMessageId = githubSelfEditMessageId
                         githubSelfEditProjectId = null
                         githubSelfEditMessageId = null
                         if (!hasSavedGitHubSelfEditCheckpoint()) clearGitHubSelfEditTurnCheckpoint()
-                        workTrace.finishError("GitHub self-edit stopped", message)
+                        if (WorkspaceChatConcurrencyPolicy.ownsVisibleTrace(
+                                workTraceMessageId,
+                                failedMessageId,
+                            )) {
+                            workTrace.finishError("GitHub self-edit stopped", message)
+                        }
                         statusMessage = message
                         render()
                     }
@@ -204,6 +217,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private lateinit var content: LinearLayout
     private lateinit var composerArea: LinearLayout
     private lateinit var statusBanner: TextView
+    private lateinit var githubStopButton: TextView
     private lateinit var composer: EditText
     private lateinit var sendButton: ImageButton
     private lateinit var attachmentList: LinearLayout
@@ -683,6 +697,20 @@ class WorkspaceActivity : AppCompatActivity() {
         composerArea.addView(statusBanner, LinearLayout.LayoutParams(-1, -2).apply {
             bottomMargin = dp(5)
         })
+        githubStopButton = label("Stop GitHub task", 12f).apply {
+            visibility = View.GONE
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(236, 202, 202))
+            background = rounded(Color.rgb(51, 27, 31), 14)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Stop background GitHub task"
+            setOnClickListener { stopGitHubSelfEdit() }
+        }
+        composerArea.addView(githubStopButton, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(5)
+        })
         val entry = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             minimumHeight = dp(52)
@@ -744,7 +772,9 @@ class WorkspaceActivity : AppCompatActivity() {
             scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(11), dp(11), dp(11), dp(11))
             contentDescription = "Send message"
-            setOnClickListener { if (isBusy()) stopReply() else sendMessage() }
+            setOnClickListener {
+                if (isForegroundBusy()) stopForegroundReply() else sendMessage()
+            }
         }
         inputRow.addView(sendButton, LinearLayout.LayoutParams(dp(42), dp(42)).apply {
             rightMargin = dp(1)
@@ -761,11 +791,13 @@ class WorkspaceActivity : AppCompatActivity() {
         updateSendButton()
     }
 
-    private fun isBusy(): Boolean =
-        activeRequest != null || coding.isRunning || agentReachActive || githubSelfEdit.isRunning
+    private fun isForegroundBusy(): Boolean =
+        activeRequest != null || coding.isRunning || agentReachActive
 
-    private fun stopReply() {
-        if (!isBusy()) return
+    private fun isBusy(): Boolean = isForegroundBusy() || githubSelfEdit.isRunning
+
+    private fun stopForegroundReply() {
+        if (!isForegroundBusy()) return
         val normalChatWasRunning = activeRequest != null
         val githubReadWasRunning = agentReachActive
         requestGeneration++
@@ -781,13 +813,30 @@ class WorkspaceActivity : AppCompatActivity() {
                 "GitHub read cancelled; no content was installed, executed, or sent to a provider.")
         }
         coding.cancel()
+        codingRetryTarget = null
+        statusMessage = "Stopped. No partial reply was saved."
+        render()
+        if (!workTab) composer.requestFocus()
+    }
+
+    private fun stopGitHubSelfEdit() {
+        if (!githubSelfEdit.isRunning) return
+        val taskMessageId = githubSelfEditMessageId
         githubSelfEdit.cancel(preserveCheckpoint = false)
         WorkspaceGitHubBackgroundService.stop(applicationContext)
         githubSelfEditProjectId = null
         githubSelfEditMessageId = null
         clearGitHubSelfEditTurnCheckpoint()
-        codingRetryTarget = null
-        statusMessage = "Stopped. No partial reply was saved."
+        if (WorkspaceChatConcurrencyPolicy.ownsVisibleTrace(
+                workTraceMessageId,
+                taskMessageId,
+            )) {
+            workTrace.finishError(
+                "GitHub self-edit stopped",
+                "Background GitHub task cancelled by the user.",
+            )
+        }
+        statusMessage = "GitHub task stopped. No background result was added."
         render()
         if (!workTab) composer.requestFocus()
     }
@@ -1006,14 +1055,26 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun updateSendButton() {
         if (!::sendButton.isInitialized || !::composer.isInitialized) return
-        val busy = isBusy()
-        val ready = !workTab && (busy || composer.text.toString().isNotBlank())
+        val state = WorkspaceChatConcurrencyPolicy.state(
+            foregroundBusy = isForegroundBusy(),
+            githubSelfEditRunning = githubSelfEdit.isRunning,
+        )
+        val stoppingForeground =
+            state.composerAction == WorkspaceChatConcurrencyPolicy.ComposerAction.STOP_FOREGROUND
+        val ready = !workTab && (stoppingForeground || composer.text.toString().isNotBlank())
         sendButton.isEnabled = ready
         sendButton.alpha = if (ready) 1f else .5f
-        sendButton.setImageResource(if (busy) R.drawable.ic_workspace_stop else android.R.drawable.ic_menu_send)
-        sendButton.contentDescription = if (busy) "Stop LYRA reply" else "Send message"
+        sendButton.setImageResource(
+            if (stoppingForeground) R.drawable.ic_workspace_stop else android.R.drawable.ic_menu_send
+        )
+        sendButton.contentDescription =
+            if (stoppingForeground) "Stop LYRA reply" else "Send message"
         sendButton.background = rounded(if (ready) Color.rgb(168, 255, 178) else Color.rgb(41, 65, 48), 22)
         sendButton.imageTintList = ColorStateList.valueOf(if (ready) Color.rgb(20, 30, 22) else Color.WHITE)
+        if (::githubStopButton.isInitialized) {
+            githubStopButton.visibility =
+                if (!workTab && state.showGitHubStop) View.VISIBLE else View.GONE
+        }
     }
 
     private fun hideComposerKeyboard() {
@@ -2890,7 +2951,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun sendMessage() {
         if (workTab) return
-        if (isBusy()) { stopReply(); return }
+        if (isForegroundBusy()) { stopForegroundReply(); return }
         val text = composer.text.toString()
         if (text.isBlank()) { toast("Write a message first"); return }
         if (!WorkspaceLongInputPolicy.sendable(text)) {
@@ -2923,6 +2984,16 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val githubSelfEditRequest =
             picked.isEmpty() && WorkspaceGitHubSelfEdit.isExplicitRequest(text)
+        if (githubSelfEditRequest &&
+            !WorkspaceChatConcurrencyPolicy.state(
+                foregroundBusy = false,
+                githubSelfEditRunning = githubSelfEdit.isRunning,
+            ).allowNewGitHubSelfEdit) {
+            statusMessage =
+                "A GitHub task is already running in background. Stop it first or send a normal chat message."
+            render()
+            return
+        }
         val intent = if (githubSelfEditRequest) null
             else WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
@@ -3100,7 +3171,7 @@ class WorkspaceActivity : AppCompatActivity() {
         replacingAssistantId: String? = null,
         skillProjection: WorkspaceSkillInvocation.Projection? = null,
     ) {
-        if (selectedId != id || isBusy() || workTab) return
+        if (selectedId != id || isForegroundBusy() || workTab) return
         if (!WorkspaceCustomProviderStore.chatEnabled(this)) {
             statusMessage = "Custom provider manual Chat route is OFF. Message remains local."
             render()
@@ -3297,7 +3368,7 @@ class WorkspaceActivity : AppCompatActivity() {
         replacingAssistantId: String? = null,
         skillProjection: WorkspaceSkillInvocation.Projection? = null,
     ) {
-        if (selectedId != id || isBusy() || workTab) return
+        if (selectedId != id || isForegroundBusy() || workTab) return
         val cooldown = WorkspaceProviderSessionHealth.cooldownMessage(
             WorkspaceProviderRegistry.id(provider))
         if (cooldown.isNotBlank()) {
