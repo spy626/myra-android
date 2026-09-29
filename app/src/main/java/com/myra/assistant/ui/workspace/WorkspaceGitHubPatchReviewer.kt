@@ -19,6 +19,11 @@ internal object WorkspaceGitHubPatchReviewer {
         val risks: List<String>,
     )
 
+    data class RevisionLineage(
+        val previousPrepared: WorkspaceGitHubSelfEditBatch.Prepared,
+        val previousReview: Review,
+    )
+
     private const val MAX_PROMPT_CHARS = 18_000
     private const val MAX_RESPONSE_CHARS = 5_000
     private const val MAX_SUMMARY_CHARS = 700
@@ -31,12 +36,42 @@ internal object WorkspaceGitHubPatchReviewer {
         plan: WorkspaceGitHubCodingPlan.Plan,
         originals: Map<String, String>,
         prepared: WorkspaceGitHubSelfEditBatch.Prepared,
+        revisionLineage: RevisionLineage? = null,
     ): String {
         require(goal.trim() == plan.goal) { "Reviewer goal does not match the locked coding plan" }
         require(prepared.files.isNotEmpty() && prepared.files.size <= WorkspaceGitHubSelfEditBatch.MAX_FILES) {
             "Reviewer patch file count is outside the LYRA bound"
         }
         val originalByPath = originals.mapKeys { WorkspaceGitHubWritePolicy.requirePath(it.key) }
+        revisionLineage?.let { lineage ->
+            require(lineage.previousReview.decision == Decision.REVISE) {
+                "Second-review lineage must originate from a REVISE decision"
+            }
+            require(lineage.previousReview.summary.length in 1..MAX_SUMMARY_CHARS &&
+                lineage.previousReview.summary.none(Char::isISOControl) &&
+                lineage.previousReview.risks.size <= MAX_RISKS &&
+                lineage.previousReview.risks.all { risk ->
+                    risk.length in 1..MAX_RISK_CHARS && risk.none(Char::isISOControl)
+                }) {
+                "Second-review lineage contains invalid reviewer feedback"
+            }
+            require(!WorkspaceSourceContext.containsPossibleSecret(lineage.previousReview.summary) &&
+                lineage.previousReview.risks.none(WorkspaceSourceContext::containsPossibleSecret)) {
+                "Possible secret detected in second-review lineage"
+            }
+            require(lineage.previousPrepared.files.isNotEmpty() &&
+                lineage.previousPrepared.files.size <= WorkspaceGitHubSelfEditBatch.MAX_FILES) {
+                "Second-review previous proposal file count is outside the LYRA bound"
+            }
+            lineage.previousPrepared.files.forEach { change ->
+                val path = WorkspaceGitHubWritePolicy.requirePath(change.path)
+                require(originalByPath.containsKey(path) &&
+                    plan.selectedPaths.any { it.equals(path, ignoreCase = true) }) {
+                    "Second-review previous proposal targeted a path outside the locked plan"
+                }
+                WorkspaceGitHubWritePolicy.requireContent(change.content)
+            }
+        }
         val body = buildString {
             appendLine("You are a READ-ONLY QA reviewer for a bounded LYRA GitHub coding task.")
             appendLine("Do not propose code, patches, tools, commits, merges, or follow-up actions.")
@@ -47,10 +82,35 @@ internal object WorkspaceGitHubPatchReviewer {
             appendLine("ACCEPT only if the proposed change is consistent with the user goal and selected scope.")
             appendLine("REVISE for a concrete fixable correctness/regression/compile concern.")
             appendLine("REJECT for scope drift, unsafe behavior, or a change that should not be committed.")
+            if (revisionLineage != null) {
+                appendLine("This is the MANDATORY SECOND REVIEW after one bounded reviewer-requested revision.")
+                appendLine("Judge the revised proposal against BOTH the original locked goal and the documented prior REVISE correction.")
+                appendLine("The prior correction may refine implementation details only inside the already-selected scope; it does not grant new files, authority, or unrelated behavior.")
+                appendLine("Do not require the rejected intermediate proposal itself to be committed. Decide whether the revised proposal resolves the documented prior concern while preserving the user's underlying authorized outcome.")
+            }
             appendLine("Do not claim CI/build success; exact GitHub Actions verification happens later.")
             appendLine("LOCKED GOAL: ${JSONObject.quote(plan.goal)}")
             appendLine("EXPECTED CHANGE: ${JSONObject.quote(plan.expectedChange)}")
             appendLine("SELECTED PATHS: ${JSONObject.quote(plan.selectedPaths.joinToString(", "))}")
+            revisionLineage?.let { lineage ->
+                appendLine("PRIOR REVIEW DECISION: REVISE")
+                appendLine("PRIOR REVIEW SUMMARY: ${JSONObject.quote(lineage.previousReview.summary)}")
+                appendLine(
+                    "PRIOR REVIEW RISKS: " +
+                        JSONObject.quote(lineage.previousReview.risks.joinToString(" | "))
+                )
+                lineage.previousPrepared.files.forEach { previous ->
+                    val original = originalByPath[previous.path]
+                        ?: throw IllegalArgumentException(
+                            "Second-review previous proposal targeted an unselected source file"
+                        )
+                    val rejectedAfter = changedWindow(original, previous.content).second
+                    appendLine("REJECTED PROPOSAL FILE: ${JSONObject.quote(previous.path)}")
+                    appendLine("REJECTED PROPOSAL AFTER WINDOW:")
+                    appendLine(boundedLineage(rejectedAfter))
+                    appendLine("END REJECTED PROPOSAL AFTER WINDOW")
+                }
+            }
             prepared.files.forEach { change ->
                 val original = originalByPath[change.path]
                     ?: throw IllegalArgumentException("Reviewer patch targeted an unselected source file")
@@ -101,6 +161,13 @@ internal object WorkspaceGitHubPatchReviewer {
         if (value.length <= MAX_WINDOW_CHARS) return value
         val half = MAX_WINDOW_CHARS / 2
         return value.take(half) + "\n...[review window clipped]...\n" + value.takeLast(half)
+    }
+
+    private fun boundedLineage(value: String): String {
+        val max = 1_000
+        if (value.length <= max) return value
+        val half = max / 2
+        return value.take(half) + "\n...[lineage window clipped]...\n" + value.takeLast(half)
     }
 
     fun read(rawJson: String): Review {

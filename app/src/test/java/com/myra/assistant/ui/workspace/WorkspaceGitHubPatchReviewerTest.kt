@@ -97,4 +97,99 @@ class WorkspaceGitHubPatchReviewerTest {
         }.isFailure)
     }
 
+    @Test fun mandatorySecondReviewReceivesPriorReviseLineage() {
+        val originals = linkedMapOf(
+            "src/A.kt" to "fun a() = 1\n",
+            "src/B.kt" to "fun b() = 2\n",
+        )
+        val rejected = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/A.kt", "fun a() = 10\n")
+            ),
+            rationale = "first proposal",
+        )
+        val revised = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/A.kt", "fun a() = 20\n")
+            ),
+            rationale = "review correction",
+        )
+        val priorReview = WorkspaceGitHubPatchReviewer.Review(
+            decision = WorkspaceGitHubPatchReviewer.Decision.REVISE,
+            summary = "The first proposal violates the existing invariant.",
+            risks = listOf("Keep the correction inside src/A.kt."),
+        )
+
+        val prompt = WorkspaceGitHubPatchReviewer.prompt(
+            plan.goal,
+            plan,
+            originals,
+            revised,
+            WorkspaceGitHubPatchReviewer.RevisionLineage(rejected, priorReview),
+        )
+
+        assertTrue(prompt.contains("MANDATORY SECOND REVIEW"))
+        assertTrue(prompt.contains("PRIOR REVIEW DECISION: REVISE"))
+        assertTrue(prompt.contains("violates the existing invariant"))
+        assertTrue(prompt.contains("Keep the correction inside src/A.kt"))
+        assertTrue(prompt.contains("REJECTED PROPOSAL FILE"))
+        assertTrue(prompt.contains("fun a() = 10"))
+        assertTrue(prompt.contains("fun a() = 20"))
+        assertTrue(prompt.contains("Do not require the rejected intermediate proposal itself to be committed"))
+    }
+
+    @Test fun secondReviewLineageMustComeFromReviseAndStayInLockedScope() {
+        val originals = linkedMapOf(
+            "src/A.kt" to "fun a() = 1\n",
+            "src/B.kt" to "fun b() = 2\n",
+        )
+        val revised = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/A.kt", "fun a() = 20\n")
+            ),
+            rationale = "review correction",
+        )
+        val acceptedReview = WorkspaceGitHubPatchReviewer.Review(
+            WorkspaceGitHubPatchReviewer.Decision.ACCEPT,
+            "accepted",
+            emptyList(),
+        )
+        val rejected = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/A.kt", "fun a() = 10\n")
+            ),
+            rationale = "first",
+        )
+        assertTrue(runCatching {
+            WorkspaceGitHubPatchReviewer.prompt(
+                plan.goal,
+                plan,
+                originals,
+                revised,
+                WorkspaceGitHubPatchReviewer.RevisionLineage(rejected, acceptedReview),
+            )
+        }.isFailure)
+
+        val outside = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/Outside.kt", "fun x() = 9\n")
+            ),
+            rationale = "outside",
+        )
+        val revise = WorkspaceGitHubPatchReviewer.Review(
+            WorkspaceGitHubPatchReviewer.Decision.REVISE,
+            "fix issue",
+            emptyList(),
+        )
+        assertTrue(runCatching {
+            WorkspaceGitHubPatchReviewer.prompt(
+                plan.goal,
+                plan,
+                originals,
+                revised,
+                WorkspaceGitHubPatchReviewer.RevisionLineage(outside, revise),
+            )
+        }.isFailure)
+    }
+
 }

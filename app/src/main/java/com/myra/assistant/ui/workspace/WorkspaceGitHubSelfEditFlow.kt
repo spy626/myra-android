@@ -153,7 +153,13 @@ internal class WorkspaceGitHubSelfEditFlow(
             WorkspaceCodingAutoFallback.groqPermitted(fallbackEnabled, groqFreeZdr, savedGroqKey)
         selectedProvider = checkpoint.provider
         repairAttempt = checkpoint.repairAttempt
-        reviewRevisionAttempt = checkpoint.reviewRevisionAttempt
+        val restartInterruptedReviewCycle =
+            checkpoint.phase == "pre_commit" && checkpoint.reviewRevisionAttempt > 0
+        reviewRevisionAttempt =
+            if (restartInterruptedReviewCycle) 0 else checkpoint.reviewRevisionAttempt
+        if (restartInterruptedReviewCycle) {
+            preferences.edit().putInt(CP_REVIEW_REVISION_ATTEMPT, 0).apply()
+        }
         taskBudget = checkpoint.taskBudget
         codingPlan = WorkspaceGitHubCodingPlan.create(
             goal = checkpoint.instruction,
@@ -166,6 +172,13 @@ internal class WorkspaceGitHubSelfEditFlow(
             "Resuming saved GitHub coding checkpoint",
             checkpoint.phase + " · " + checkpoint.receipt.commitSha.take(12),
         )
+        if (restartInterruptedReviewCycle) {
+            listener.onEvent(
+                WorkspaceWorkPhase.RECOVERING,
+                "Restarting interrupted pre-commit review cycle",
+                "Reviewer lineage is rebuilt from freshly pinned source; no stale second review is assumed",
+            )
+        }
         dispatch(
             run,
             WorkspaceGitHubConnector.client,
@@ -658,7 +671,15 @@ internal class WorkspaceGitHubSelfEditFlow(
         originals: Map<String, String>,
         expectedHead: String,
         repair: Boolean,
+        revisionLineage: WorkspaceGitHubPatchReviewer.RevisionLineage? = null,
     ) {
+        if (reviewRevisionAttempt > 0 && revisionLineage == null) {
+            terminalFail(
+                run,
+                "Mandatory second review lineage was missing; no GitHub write was attempted.",
+            )
+            return
+        }
         val reviewerRoute = alternateProvider(primaryRoute)
         if (reviewerRoute == null) {
             if (reviewRevisionAttempt > 0) {
@@ -680,7 +701,13 @@ internal class WorkspaceGitHubSelfEditFlow(
 
         val plan = requireNotNull(codingPlan) { "Locked coding plan is missing before review" }
         val reviewPrompt = runCatching {
-            WorkspaceGitHubPatchReviewer.prompt(instruction, plan, originals, prepared)
+            WorkspaceGitHubPatchReviewer.prompt(
+                instruction,
+                plan,
+                originals,
+                prepared,
+                revisionLineage,
+            )
         }.getOrElse { error ->
             fail(run, null, error.message ?: "Reviewer context was rejected locally.")
             return
@@ -985,6 +1012,10 @@ internal class WorkspaceGitHubSelfEditFlow(
                     originals = originals,
                     expectedHead = expectedHead,
                     repair = repair,
+                    revisionLineage = WorkspaceGitHubPatchReviewer.RevisionLineage(
+                        previousPrepared = previousPrepared,
+                        previousReview = review,
+                    ),
                 )
             }
         })
