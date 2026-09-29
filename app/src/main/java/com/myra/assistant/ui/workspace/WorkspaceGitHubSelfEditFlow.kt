@@ -790,7 +790,7 @@ internal class WorkspaceGitHubSelfEditFlow(
                     return
                 }
 
-                val review = runCatching {
+                val parsedReview = runCatching {
                     val raw = when (reviewerRoute) {
                         WorkspaceCodingRoleRouter.Provider.XKIRO ->
                             WorkspaceXKiroFree.readDeliberation(response)
@@ -807,6 +807,11 @@ internal class WorkspaceGitHubSelfEditFlow(
                     )
                     return
                 }
+                val review = WorkspaceGitHubReviewerRevisionPhoneProbe.adjust(
+                    reviewRevisionAttempt = reviewRevisionAttempt,
+                    prepared = prepared,
+                    review = parsedReview,
+                )
 
                 when (review.decision) {
                     WorkspaceGitHubPatchReviewer.Decision.ACCEPT -> {
