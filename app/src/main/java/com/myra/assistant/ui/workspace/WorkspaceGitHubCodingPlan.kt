@@ -3,7 +3,7 @@ package com.myra.assistant.ui.workspace
 import java.util.Locale
 
 /**
- * Deterministic local plan and completion gate for protected GitHub coding.
+ * Deterministic local execution plan and completion gate for protected GitHub coding.
  * It is runtime guidance, not another agent/memory owner and never grants tool authority.
  */
 internal object WorkspaceGitHubCodingPlan {
