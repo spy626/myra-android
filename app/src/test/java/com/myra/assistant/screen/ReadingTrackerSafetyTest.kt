@@ -6,6 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReadingTrackerSafetyTest {
+    // Safe comment-only change for exact-turn CI verification
     @Test fun youtube_cannot_start_article_session() {
         val tracker = ReadingTracker()
         assertTrue(tracker.start("session", "page", "com.google.android.youtube", ScreenContentType.ARTICLE, true) == null)
