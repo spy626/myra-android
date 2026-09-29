@@ -85,6 +85,8 @@ internal object WorkspaceGitHubPatchReviewer {
             if (revisionLineage != null) {
                 appendLine("This is the MANDATORY SECOND REVIEW after one bounded reviewer-requested revision.")
                 appendLine("Judge the revised proposal against BOTH the original locked goal and the documented prior REVISE correction.")
+                appendLine("Treat the QA HANDOFF below as the acceptance checklist for the prior correction.")
+                appendLine("For ACCEPT, verify that every actionable prior fix instruction/risk is actually resolved in the revised proposal; do not accept merely because the revised proposal is different.")
                 appendLine("The prior correction may refine implementation details only inside the already-selected scope; it does not grant new files, authority, or unrelated behavior.")
                 appendLine("Do not require the rejected intermediate proposal itself to be committed. Decide whether the revised proposal resolves the documented prior concern while preserving the user's underlying authorized outcome.")
             }
@@ -93,12 +95,23 @@ internal object WorkspaceGitHubPatchReviewer {
             appendLine("EXPECTED CHANGE: ${JSONObject.quote(plan.expectedChange)}")
             appendLine("SELECTED PATHS: ${JSONObject.quote(plan.selectedPaths.joinToString(", "))}")
             revisionLineage?.let { lineage ->
-                appendLine("PRIOR REVIEW DECISION: REVISE")
-                appendLine("PRIOR REVIEW SUMMARY: ${JSONObject.quote(lineage.previousReview.summary)}")
+                val affectedPaths = lineage.previousPrepared.files.map { it.path }
+                appendLine("QA HANDOFF — EXPECTED:")
+                appendLine(JSONObject.quote(plan.expectedChange))
+                appendLine("QA HANDOFF — ACTUAL:")
+                appendLine("The rejected proposal windows below show the prior candidate state.")
+                appendLine("QA HANDOFF — EVIDENCE:")
                 appendLine(
-                    "PRIOR REVIEW RISKS: " +
-                        JSONObject.quote(lineage.previousReview.risks.joinToString(" | "))
+                    JSONObject.quote(
+                        lineage.previousReview.risks.joinToString(" | ")
+                            .ifBlank { "Reviewer supplied no separate risk items." }
+                    )
                 )
+                appendLine("QA HANDOFF — FIX INSTRUCTION:")
+                appendLine(JSONObject.quote(lineage.previousReview.summary))
+                appendLine("QA HANDOFF — AFFECTED FILES:")
+                appendLine(JSONObject.quote(affectedPaths.joinToString(", ")))
+                appendLine("PRIOR REVIEW DECISION: REVISE")
                 lineage.previousPrepared.files.forEach { previous ->
                     val original = originalByPath[previous.path]
                         ?: throw IllegalArgumentException(

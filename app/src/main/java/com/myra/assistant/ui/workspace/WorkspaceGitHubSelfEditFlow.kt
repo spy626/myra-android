@@ -1207,6 +1207,11 @@ internal class WorkspaceGitHubSelfEditFlow(
         ) { response ->
             val failure = WorkspaceGitHubConnector.readWorkflowFailure(response, workflow)
             val summary = failure.boundedSummary()
+            if (repairAttempt < 1) {
+                // A CI repair is a new candidate, so it must start a fresh reviewer-revision cycle.
+                // Never inherit the pre-commit candidate's revision attempt or second-review lineage.
+                reviewRevisionAttempt = 0
+            }
             saveCheckpoint(receipt, "ci_failed")
             if (repairAttempt >= 1) {
                 fail(
@@ -1222,6 +1227,11 @@ internal class WorkspaceGitHubSelfEditFlow(
                 return@dispatch
             }
             ciWatching = false
+            listener.onEvent(
+                WorkspaceWorkPhase.RECOVERING,
+                "Starting fresh review cycle for CI repair",
+                "Previous pre-commit reviewer state is not inherited",
+            )
             listener.onEvent(
                 WorkspaceWorkPhase.RECOVERING,
                 "Reading failed commit for one bounded repair",

@@ -129,12 +129,18 @@ class WorkspaceGitHubPatchReviewerTest {
         )
 
         assertTrue(prompt.contains("MANDATORY SECOND REVIEW"))
+        assertTrue(prompt.contains("QA HANDOFF — EXPECTED"))
+        assertTrue(prompt.contains("QA HANDOFF — ACTUAL"))
+        assertTrue(prompt.contains("QA HANDOFF — EVIDENCE"))
+        assertTrue(prompt.contains("QA HANDOFF — FIX INSTRUCTION"))
+        assertTrue(prompt.contains("QA HANDOFF — AFFECTED FILES"))
         assertTrue(prompt.contains("PRIOR REVIEW DECISION: REVISE"))
         assertTrue(prompt.contains("violates the existing invariant"))
         assertTrue(prompt.contains("Keep the correction inside src/A.kt"))
         assertTrue(prompt.contains("REJECTED PROPOSAL FILE"))
         assertTrue(prompt.contains("fun a() = 10"))
         assertTrue(prompt.contains("fun a() = 20"))
+        assertTrue(prompt.contains("verify that every actionable prior fix instruction/risk is actually resolved"))
         assertTrue(prompt.contains("Do not require the rejected intermediate proposal itself to be committed"))
     }
 
