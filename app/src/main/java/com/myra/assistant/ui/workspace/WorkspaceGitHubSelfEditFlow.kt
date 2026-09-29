@@ -34,6 +34,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         val workflow: WorkspaceGitHubConnector.WorkflowRun,
         val pullRequest: WorkspaceGitHubConnector.PullRequestReceipt?,
         val warning: String? = null,
+        val adaptiveAnswer: String? = null,
     )
 
     interface Listener {
@@ -96,6 +97,7 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var candidates: List<WorkspaceAgentReachGitHubRelevance.Candidate> = emptyList()
     private val originalSources = linkedMapOf<String, String>()
     private var codingPlan: WorkspaceGitHubCodingPlan.Plan? = null
+    private var finalChangeEvidence = ""
 
     private data class Checkpoint(
         val receipt: WorkspaceGitHubConnector.CommitReceipt,
@@ -692,6 +694,9 @@ internal class WorkspaceGitHubSelfEditFlow(
         repair: Boolean,
         revisionLineage: WorkspaceGitHubPatchReviewer.RevisionLineage? = null,
     ) {
+        finalChangeEvidence = runCatching {
+            WorkspaceAdaptiveFinalAnswer.changeEvidence(originals, prepared)
+        }.getOrDefault("")
         if (reviewRevisionAttempt > 0 && revisionLineage == null) {
             terminalFail(
                 run,
@@ -1416,6 +1421,96 @@ internal class WorkspaceGitHubSelfEditFlow(
             "Completion criteria satisfied",
             "Selected scope + exact CI GREEN verified",
         )
+
+        val route = selectedProvider
+        val prompt = runCatching {
+            WorkspaceAdaptiveFinalAnswer.prompt(
+                userTask = instruction,
+                changeEvidence = finalChangeEvidence,
+                result = result,
+            )
+        }.getOrNull()
+        if (route == null || prompt == null ||
+            taskBudget.providerCalls >= WorkspaceGitHubTaskBudget.MAX_PROVIDER_CALLS) {
+            finishCompletion(run, result)
+            return
+        }
+
+        taskBudget = WorkspaceGitHubTaskBudget.consumeProvider(taskBudget)
+        persistBudgetOnly()
+        listener.onEvent(
+            WorkspaceWorkPhase.THINKING,
+            "Preparing result explanation",
+            "Verified task evidence only",
+        )
+        val request = runCatching {
+            when (route) {
+                WorkspaceCodingRoleRouter.Provider.XKIRO ->
+                    WorkspaceXKiroFree.deliberationRequest(xKiroKey, prompt)
+                WorkspaceCodingRoleRouter.Provider.GROQ ->
+                    WorkspaceGroqFree.request(
+                        groqKey,
+                        listOf(
+                            WorkspaceConversationStore.Message(
+                                "github-final-explanation",
+                                "user",
+                                prompt,
+                                nowMs(),
+                            )
+                        ),
+                    )
+            }
+        }.getOrElse {
+            finishCompletion(run, result)
+            return
+        }
+        val client = when (route) {
+            WorkspaceCodingRoleRouter.Provider.XKIRO -> WorkspaceXKiroFree.deliberationClient
+            WorkspaceCodingRoleRouter.Provider.GROQ -> WorkspaceFreeAiSuggestion.client
+        }
+        val call = client.newCall(request)
+        synchronized(this) {
+            if (run != generation) return
+            active = call
+        }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) return
+                    active = null
+                }
+                // The code task is already verified. Presentation failure falls back locally;
+                // never retry across providers or turn a GREEN task into a fake task failure.
+                finishCompletion(run, result)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                synchronized(this@WorkspaceGitHubSelfEditFlow) {
+                    if (run != generation || active !== call) {
+                        response.close()
+                        return
+                    }
+                    active = null
+                }
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                val adaptive = runCatching {
+                    val raw = when (route) {
+                        WorkspaceCodingRoleRouter.Provider.XKIRO ->
+                            WorkspaceXKiroFree.readDeliberation(response)
+                        WorkspaceCodingRoleRouter.Provider.GROQ ->
+                            WorkspaceGroqFree.read(response)
+                    }
+                    WorkspaceAdaptiveFinalAnswer.accept(raw, result)
+                }.getOrNull()
+                finishCompletion(
+                    run,
+                    if (adaptive == null) result else result.copy(adaptiveAnswer = adaptive),
+                )
+            }
+        })
+    }
+
+    private fun finishCompletion(run: Long, result: Completion) {
         synchronized(this) {
             if (run != generation) return
             active = null
@@ -1624,5 +1719,6 @@ internal class WorkspaceGitHubSelfEditFlow(
         candidates = emptyList()
         originalSources.clear()
         codingPlan = null
+        finalChangeEvidence = ""
     }
 }

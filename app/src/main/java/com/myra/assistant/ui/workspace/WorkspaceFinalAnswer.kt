@@ -21,6 +21,9 @@ internal object WorkspaceFinalAnswer {
         require(result.commit.files.isNotEmpty()) {
             "GitHub final answer requires at least one changed file"
         }
+        result.adaptiveAnswer?.let { adaptive ->
+            return WorkspaceAdaptiveFinalAnswer.accept(adaptive, result)
+        }
 
         val changed = when (result.commit.files.size) {
             1 -> "Updated `" + result.commit.files.single() + "` for the requested task."
