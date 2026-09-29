@@ -131,13 +131,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
 
                 override fun onComplete(result: WorkspaceGitHubSelfEditFlow.Completion) {
-                    val pr = result.pullRequest?.let { " Draft PR #${it.number} updated." }
-                        ?: " Draft PR update was not confirmed."
-                    val warning = result.warning?.let { " $it" }.orEmpty()
-                    val summary =
-                        "Updated ${result.commit.files.joinToString()} on agent/myra-phase-1 · " +
-                            "commit ${result.commit.commitSha.take(12)} · CI #${result.workflow.runNumber} GREEN.$pr " +
-                            "main/master was not modified or merged.$warning"
+                    val summary = WorkspaceFinalAnswer.githubSuccess(result)
                     saveGitHubSelfEditCompletionReceipt(summary)
                     clearGitHubSelfEditTurnCheckpoint()
                     WorkspaceGitHubBackgroundService.complete(
@@ -153,7 +147,6 @@ class WorkspaceActivity : AppCompatActivity() {
                         render()
                     }
                 }
-
                 override fun onError(message: String) {
                     WorkspaceGitHubBackgroundService.fail(applicationContext, message)
                     runOnUiThread {
