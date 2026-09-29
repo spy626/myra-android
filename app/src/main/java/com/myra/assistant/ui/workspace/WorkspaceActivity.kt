@@ -109,6 +109,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private val githubSelfEditReceiptProjectKey = "workspace_github_self_edit_receipt_project_id"
     private val githubSelfEditReceiptMessageKey = "workspace_github_self_edit_receipt_message_id"
     private val githubSelfEditReceiptSummaryKey = "workspace_github_self_edit_receipt_summary"
+    private val selectedProjectKey = "workspace_selected_project_id"
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
@@ -303,6 +304,18 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }
 
+    private fun rememberSelectedProject(projectId: String?) {
+        val editor = preferences.edit()
+        if (projectId == null) editor.remove(selectedProjectKey)
+        else editor.putString(selectedProjectKey, projectId)
+        // The transcript is already durable; this pointer reconnects that exact chat after process death.
+        editor.commit()
+    }
+
+    private fun rememberedSelectedProject(): String? =
+        preferences.getString(selectedProjectKey, null)
+            ?.takeIf { projects.getProject(it) != null }
+
     private fun saveGitHubSelfEditCompletionReceipt(summary: String) {
         val projectId = githubSelfEditProjectId
             ?: preferences.getString(githubSelfEditProjectKey, null)
@@ -328,11 +341,13 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             conversations.append(projectId, "assistant", summary)
         }.isSuccess
-        preferences.edit()
-            .remove(githubSelfEditReceiptProjectKey)
-            .remove(githubSelfEditReceiptMessageKey)
-            .remove(githubSelfEditReceiptSummaryKey)
-            .apply()
+        if (consumed) {
+            preferences.edit()
+                .remove(githubSelfEditReceiptProjectKey)
+                .remove(githubSelfEditReceiptMessageKey)
+                .remove(githubSelfEditReceiptSummaryKey)
+                .apply()
+        }
         if (!consumed) {
             statusMessage = "Background GitHub task finished, but its chat receipt could not be attached safely."
         }
@@ -365,6 +380,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val messageId = preferences.getString(githubSelfEditMessageKey, null)
         if (projectId != null && !messageId.isNullOrBlank()) {
             selectedId = projectId
+            rememberSelectedProject(projectId)
             githubSelfEditProjectId = projectId
             githubSelfEditMessageId = messageId
             workTraceMessageId = messageId
@@ -380,8 +396,11 @@ class WorkspaceActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        selectedId = savedInstanceState?.getString("workspace_selected_id")
+        val restoredSelection = savedInstanceState?.getString("workspace_selected_id")
             ?.takeIf { projects.getProject(it) != null }
+        selectedId = restoredSelection ?: rememberedSelectedProject()
+        if (selectedId != null) rememberSelectedProject(selectedId)
+        else if (preferences.contains(selectedProjectKey)) rememberSelectedProject(null)
         workTab = savedInstanceState?.getBoolean("workspace_work_tab") ?: false
         buildUi()
         render()
@@ -562,6 +581,7 @@ class WorkspaceActivity : AppCompatActivity() {
         if (::root.isInitialized) {
             if (selectedId != null && projects.getProject(selectedId!!) == null) {
                 selectedId = null
+                rememberSelectedProject(null)
                 attachments.clear()
                 skillAttachment = null
                 statusMessage = "Selected conversation is unavailable. Choose another chat."
@@ -1807,6 +1827,7 @@ class WorkspaceActivity : AppCompatActivity() {
         coding.cancel()
         codingRetryTarget = null
         selectedId = null
+        rememberSelectedProject(null)
         workTab = false
         attachments.clear()
         skillAttachment = null
@@ -1843,6 +1864,7 @@ class WorkspaceActivity : AppCompatActivity() {
         coding.cancel()
         codingRetryTarget = null
         selectedId = id
+        rememberSelectedProject(id)
         projects.markOpened(id)
         attachments.clear()
         skillAttachment = null
@@ -2444,6 +2466,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 return null
             }
             selectedId = created.projectId
+            rememberSelectedProject(created.projectId)
         }
         val id = selectedId ?: return null
         if (projects.getProject(id) == null) {
@@ -2907,6 +2930,7 @@ class WorkspaceActivity : AppCompatActivity() {
             val created = runCatching { projects.createProject(title, intent ?: WorkspaceProjectType.CHAT) }
                 .getOrElse { toast(it.message ?: "Cannot start chat"); return }
             selectedId = created.projectId
+            rememberSelectedProject(created.projectId)
         }
         val id = selectedId ?: return
         val current = projects.getProject(id) ?: return
