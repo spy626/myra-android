@@ -960,11 +960,11 @@ internal class WorkspaceGitHubSelfEditFlow(
                     }
                     WorkspaceGitHubSelfEditBatch.prepare(raw, originals)
                 }.getOrElse { error ->
-                    fail(
+                    terminalFail(
                         run,
-                        null,
                         "Reviewer-requested revision was rejected locally; no GitHub write was attempted. " +
-                            (error.message ?: ""),
+                            (error.message ?: "") +
+                            " This task is terminal and will not auto-resume.",
                     )
                     return
                 }

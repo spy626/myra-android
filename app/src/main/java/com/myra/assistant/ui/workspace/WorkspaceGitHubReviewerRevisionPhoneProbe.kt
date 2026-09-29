@@ -31,9 +31,9 @@ internal object WorkspaceGitHubReviewerRevisionPhoneProbe {
             decision = WorkspaceGitHubPatchReviewer.Decision.REVISE,
             summary =
                 "Controlled phone probe: revise PROBE_STATE from the requested first-stage " +
-                    "NEEDS_REVIEW value to REVIEWED, preserving the same file and test invariant.",
+                    "NEEDS_REVIEW value to REVIEWED_FINAL, preserving the same file and test invariant.",
             risks = listOf(
-                "NEEDS_REVIEW is intentionally not an acceptable final probe state."
+                "NEEDS_REVIEW is intentionally not an acceptable final probe state; REVIEWED_FINAL is required."
             ),
         )
     }

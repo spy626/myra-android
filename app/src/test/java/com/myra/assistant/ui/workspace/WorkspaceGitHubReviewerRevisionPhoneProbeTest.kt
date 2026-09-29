@@ -25,6 +25,7 @@ class WorkspaceGitHubReviewerRevisionPhoneProbeTest {
             review = accepted,
         )
         assertEquals(WorkspaceGitHubPatchReviewer.Decision.REVISE, forced.decision)
+        assertEquals(true, forced.summary.contains("REVIEWED_FINAL"))
 
         val second = WorkspaceGitHubReviewerRevisionPhoneProbe.adjust(
             reviewRevisionAttempt = 1,
@@ -33,17 +34,17 @@ class WorkspaceGitHubReviewerRevisionPhoneProbeTest {
         )
         assertEquals(WorkspaceGitHubPatchReviewer.Decision.ACCEPT, second.decision)
 
-        val reviewed = needsReview.copy(
+        val reviewedFinal = needsReview.copy(
             files = listOf(
                 WorkspaceGitHubWritePolicy.FileChange(
                     WorkspaceGitHubReviewerRevisionPhoneProbe.TARGET_PATH,
-                    """internal object Probe { const val PROBE_STATE = "REVIEWED" }""",
+                    """internal object Probe { const val PROBE_STATE = "REVIEWED_FINAL" }""",
                 )
             )
         )
         val untouched = WorkspaceGitHubReviewerRevisionPhoneProbe.adjust(
             reviewRevisionAttempt = 0,
-            prepared = reviewed,
+            prepared = reviewedFinal,
             review = accepted,
         )
         assertEquals(WorkspaceGitHubPatchReviewer.Decision.ACCEPT, untouched.decision)
