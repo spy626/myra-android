@@ -335,11 +335,12 @@ class WorkspaceActivity : AppCompatActivity() {
         val messageId = preferences.getString(githubSelfEditReceiptMessageKey, null) ?: return false
         val summary = preferences.getString(githubSelfEditReceiptSummaryKey, null) ?: return false
         val consumed = runCatching {
-            val transcript = conversations.read(projectId)
-            require(transcript.lastOrNull()?.id == messageId) {
-                "Conversation changed; background GitHub receipt was not appended twice"
-            }
-            conversations.append(projectId, "assistant", summary)
+            conversations.attachAssistantToTurn(
+                projectId = projectId,
+                expectedUserId = messageId,
+                assistantId = "github-result-$messageId",
+                text = summary,
+            )
         }.isSuccess
         if (consumed) {
             preferences.edit()

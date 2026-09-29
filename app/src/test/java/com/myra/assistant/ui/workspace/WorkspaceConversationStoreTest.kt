@@ -43,6 +43,70 @@ class WorkspaceConversationStoreTest {
         assertEquals(pasted, reopened.read(project.projectId).single().text)
     }
 
+    @Test fun backgroundResultAttachesToExactOlderTurnAndReplayDoesNotDuplicate() {
+        val projects = WorkspaceProjectStore(temp.newFolder("projects"), { 1000L }, { "background_chat" })
+        val project = projects.createProject("Background", WorkspaceProjectType.CHAT)
+        val root = temp.newFolder("transcripts")
+        val store = WorkspaceConversationStore(projects, root, { 2000L })
+        val original = store.append(project.projectId, "user", "Fix the repository")
+        val newer = store.append(project.projectId, "user", "A newer local turn")
+        val resultId = "github-result-${original.id}"
+
+        val first = store.attachAssistantToTurn(
+            project.projectId,
+            original.id,
+            resultId,
+            "Verified GitHub result",
+        )
+        val replay = WorkspaceConversationStore(projects, root, { 3000L }).attachAssistantToTurn(
+            project.projectId,
+            original.id,
+            resultId,
+            "Verified GitHub result",
+        )
+
+        assertEquals(first.id, replay.id)
+        val persisted = WorkspaceConversationStore(projects, root).read(project.projectId)
+        assertEquals(listOf(original.id, resultId, newer.id), persisted.map { it.id })
+        assertEquals(
+            listOf("Fix the repository", "Verified GitHub result", "A newer local turn"),
+            persisted.map { it.text },
+        )
+    }
+
+    @Test fun backgroundResultCannotOverwriteDifferentAssistantOrWrongTurn() {
+        val ids = ArrayDeque(listOf("protected_chat", "other_chat"))
+        val projects = WorkspaceProjectStore(temp.newFolder("projects"), { 1000L }, { ids.removeFirst() })
+        val protected = projects.createProject("Protected", WorkspaceProjectType.CHAT)
+        val other = projects.createProject("Other", WorkspaceProjectType.CHAT)
+        val root = temp.newFolder("transcripts")
+        val store = WorkspaceConversationStore(projects, root)
+        val user = store.append(protected.projectId, "user", "Original request")
+        store.append(protected.projectId, "assistant", "Existing answer")
+        val otherUser = store.append(other.projectId, "user", "Other request")
+
+        assertTrue(runCatching {
+            store.attachAssistantToTurn(
+                protected.projectId,
+                user.id,
+                "github-result-${user.id}",
+                "Different background result",
+            )
+        }.isFailure)
+        assertTrue(runCatching {
+            store.attachAssistantToTurn(
+                other.projectId,
+                user.id,
+                "github-result-${user.id}",
+                "Wrong project result",
+            )
+        }.isFailure)
+
+        assertEquals(listOf("Original request", "Existing answer"),
+            store.read(protected.projectId).map { it.text })
+        assertEquals(listOf(otherUser.id), store.read(other.projectId).map { it.id })
+    }
+
     @Test fun invalidProjectAndCorruptedIdentityCannotLeakHistory() {
         val projects = WorkspaceProjectStore(temp.newFolder("projects"), { 1000L }, { "safe_project" })
         val project = projects.createProject("Safe", WorkspaceProjectType.WEBSITE)

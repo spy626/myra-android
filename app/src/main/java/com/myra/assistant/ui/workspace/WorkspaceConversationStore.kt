@@ -126,6 +126,55 @@ class WorkspaceConversationStore(
         error("Coding turn changed; stale result was not added to chat")
     }
 
+    /**
+     * Attach a durable background result to the exact USER turn that authorized it.
+     *
+     * [assistantId] must be stable across replay so process-death recovery is idempotent.
+     * Newer turns stay in place; this method never redirects the result to the latest visible chat.
+     */
+    @Synchronized fun attachAssistantToTurn(
+        projectId: String,
+        expectedUserId: String,
+        assistantId: String,
+        text: String,
+    ): Message {
+        require(expectedUserId.isNotBlank() && assistantId.isNotBlank()) { "Message identity is required" }
+        val content = checkedText(text)
+        val history = read(projectId)
+
+        val existingById = history.indexOfFirst { it.id == assistantId }
+        if (existingById >= 0) {
+            val saved = history[existingById]
+            require(saved.role == "assistant" && existingById > 0 &&
+                history[existingById - 1].role == "user" &&
+                history[existingById - 1].id == expectedUserId &&
+                saved.text == content) {
+                "Background result identity conflicts with conversation history"
+            }
+            return saved
+        }
+
+        val userIndex = history.indexOfFirst { it.role == "user" && it.id == expectedUserId }
+        require(userIndex >= 0) { "Background result target is no longer in this conversation" }
+
+        // A result written by an older app version may already be immediately after this turn.
+        // Treat an exact text match as the same durable receipt; never append a duplicate.
+        val next = history.getOrNull(userIndex + 1)
+        if (next?.role == "assistant") {
+            require(next.text == content) { "User turn already has a different assistant result" }
+            return next
+        }
+
+        require(history.size < MAX_MESSAGES || userIndex > 0) {
+            "Conversation is full; exact background result cannot be retained safely"
+        }
+        val saved = Message(assistantId, "assistant", content, now())
+        val updated = history.toMutableList().apply { add(userIndex + 1, saved) }
+        val bounded = if (updated.size <= MAX_MESSAGES) updated else updated.drop(1)
+        write(projectId, bounded)
+        return saved
+    }
+
     @Synchronized fun append(projectId: String, role: String, text: String): Message {
         require(role == "user" || role == "assistant") { "Invalid conversation role" }
         val content = checkedText(text)
