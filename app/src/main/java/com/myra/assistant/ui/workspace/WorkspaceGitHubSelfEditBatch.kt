@@ -25,6 +25,9 @@ internal object WorkspaceGitHubSelfEditBatch {
     )
 
     private val word = Regex("""[A-Za-z0-9_+.-]{3,}""")
+    private val explicitFileReference = Regex(
+        """(?i)(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:md|txt|kt|kts|java|py|js|mjs|cjs|ts|tsx|jsx|json|jsonc|yaml|yml|toml|xml|gradle|properties|rs|go|swift|c|cc|cpp|h|hpp|css|html|htm))(?![A-Za-z0-9_.-])"""
+    )
     private val ignored = setOf(
         "github", "repo", "repository", "codebase", "source", "lyra", "myra", "code",
         "android", "app", "project", "file", "files", "class", "screen", "feature", "please",
@@ -37,6 +40,45 @@ internal object WorkspaceGitHubSelfEditBatch {
         message: String,
         pathMap: WorkspaceAgentReachGitHub.RepositoryPathMap,
     ): List<WorkspaceAgentReachGitHubRelevance.Candidate> {
+        val explicitRefs = explicitFileReference.findAll(message)
+            .map { it.groupValues[1].replace('\\', '/').trimStart('/') }
+            .distinctBy { it.lowercase(Locale.US) }
+            .toList()
+        if (explicitRefs.isNotEmpty()) {
+            require(explicitRefs.size <= MAX_FILES) {
+                "Explicit file request exceeds the LYRA multi-file bound: " +
+                    explicitRefs.size + " files mentioned; allowed 1.." + MAX_FILES
+            }
+            val safeFiles = pathMap.entries.asSequence()
+                .filter { it.kind == WorkspaceAgentReachGitHub.PathEntryKind.FILE }
+                .filter { it.size == null || it.size in 1..WorkspaceGitHubWritePolicy.MAX_FILE_BYTES }
+                .filter { runCatching { WorkspaceGitHubWritePolicy.requirePath(it.path) }.isSuccess }
+                .toList()
+            return explicitRefs.map { reference ->
+                val matches = if ('/' in reference) {
+                    safeFiles.filter { it.path.equals(reference, ignoreCase = true) }
+                } else {
+                    safeFiles.filter {
+                        it.path.substringAfterLast('/').equals(reference, ignoreCase = true)
+                    }
+                }
+                require(matches.isNotEmpty()) {
+                    "Explicitly requested file '$reference' was not found in the pinned repository."
+                }
+                require(matches.size == 1) {
+                    "Explicit filename '$reference' is ambiguous in the repository; " +
+                        "mention its full path so LYRA will not guess."
+                }
+                val entry = matches.single()
+                WorkspaceAgentReachGitHubRelevance.Candidate(
+                    path = entry.path,
+                    score = Int.MAX_VALUE,
+                    reason = "explicit file reference '$reference'",
+                    size = entry.size,
+                )
+            }
+        }
+
         val matched = WorkspaceAgentReachGitHubRelevance.select(message, pathMap)
             .filter { it.reason.contains("matches", ignoreCase = true) }
         val best = matched.firstOrNull() ?: throw IllegalArgumentException(
@@ -224,7 +266,8 @@ internal object WorkspaceGitHubSelfEditBatch {
         }
         val edits = root.getJSONArray("edits")
         require(edits.length() in 1..normalizedOriginals.size) {
-            "AI multi-file edit count is outside the selected-file bound"
+            "AI multi-file edit count is outside the selected-file bound: returned " +
+                edits.length() + " edits; allowed 1.." + normalizedOriginals.size
         }
         val seen = mutableSetOf<String>()
         val files = buildList {

@@ -71,4 +71,75 @@ class WorkspaceGitHubSelfEditBatchTest {
         assertTrue(prompt.contains("Do not claim build"))
     }
 
+    @Test fun explicitFilenamePinsExactlyOneFileBeforeRelatedExpansion() {
+        val map = WorkspaceAgentReachGitHub.RepositoryPathMap(
+            commitSha = "a".repeat(40),
+            entries = listOf(
+                WorkspaceAgentReachGitHub.PathEntry(
+                    "app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceGitHubCodingPlan.kt",
+                    WorkspaceAgentReachGitHub.PathEntryKind.FILE, "b".repeat(40), 100
+                ),
+                WorkspaceAgentReachGitHub.PathEntry(
+                    "app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceGitHubSelfEditBatch.kt",
+                    WorkspaceAgentReachGitHub.PathEntryKind.FILE, "c".repeat(40), 100
+                ),
+                WorkspaceAgentReachGitHub.PathEntry(
+                    "app/src/test/java/com/myra/assistant/ui/workspace/WorkspaceGitHubCodingPlanTest.kt",
+                    WorkspaceAgentReachGitHub.PathEntryKind.FILE, "d".repeat(40), 100
+                ),
+            ),
+        )
+        val selected = WorkspaceGitHubSelfEditBatch.selectCandidates(
+            "GitHub WorkspaceGitHubCodingPlan.kt file ke top comment me text change karo.",
+            map,
+        )
+        assertEquals(1, selected.size)
+        assertEquals(
+            "app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceGitHubCodingPlan.kt",
+            selected.single().path,
+        )
+        assertTrue(selected.single().reason.contains("explicit file reference"))
+    }
+
+    @Test fun explicitFullPathDisambiguatesDuplicateBasenameAndBareNameRefusesGuess() {
+        val map = WorkspaceAgentReachGitHub.RepositoryPathMap(
+            commitSha = "a".repeat(40),
+            entries = listOf(
+                WorkspaceAgentReachGitHub.PathEntry(
+                    "src/main/Foo.kt", WorkspaceAgentReachGitHub.PathEntryKind.FILE,
+                    "b".repeat(40), 100
+                ),
+                WorkspaceAgentReachGitHub.PathEntry(
+                    "src/test/Foo.kt", WorkspaceAgentReachGitHub.PathEntryKind.FILE,
+                    "c".repeat(40), 100
+                ),
+            ),
+        )
+        val exact = WorkspaceGitHubSelfEditBatch.selectCandidates(
+            "GitHub src/main/Foo.kt me comment fix karo", map
+        )
+        assertEquals(listOf("src/main/Foo.kt"), exact.map { it.path })
+
+        val ambiguous = runCatching {
+            WorkspaceGitHubSelfEditBatch.selectCandidates("GitHub Foo.kt me comment fix karo", map)
+        }.exceptionOrNull()
+        assertTrue(ambiguous?.message?.contains("ambiguous") == true)
+        assertTrue(ambiguous?.message?.contains("full path") == true)
+    }
+
+    @Test fun providerEditCountErrorReportsReturnedAndAllowedCounts() {
+        val originals = linkedMapOf("src/A.kt" to "fun a() = 1\n")
+        val zero = """{"schemaVersion":2,"operation":"replace_exact_once_batch","edits":[],"rationale":"none"}"""
+        val zeroError = runCatching {
+            WorkspaceGitHubSelfEditBatch.prepare(zero, originals)
+        }.exceptionOrNull()
+        assertTrue(zeroError?.message?.contains("returned 0 edits; allowed 1..1") == true)
+
+        val two = """{"schemaVersion":2,"operation":"replace_exact_once_batch","edits":[{"path":"src/A.kt","oldText":"= 1","newText":"= 2"},{"path":"src/A.kt","oldText":"fun a","newText":"fun aa"}],"rationale":"too many"}"""
+        val twoError = runCatching {
+            WorkspaceGitHubSelfEditBatch.prepare(two, originals)
+        }.exceptionOrNull()
+        assertTrue(twoError?.message?.contains("returned 2 edits; allowed 1..1") == true)
+    }
+
 }
