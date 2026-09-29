@@ -824,11 +824,10 @@ internal class WorkspaceGitHubSelfEditFlow(
                     }
                     WorkspaceGitHubPatchReviewer.Decision.REVISE -> {
                         if (reviewRevisionAttempt >= 1) {
-                            fail(
+                            terminalFail(
                                 run,
-                                null,
                                 "Reviewer requested another revision after the single bounded revision: " +
-                                    review.summary + ". No GitHub write was attempted.",
+                                    review.summary + ". No GitHub write was attempted; this task is terminal and will not auto-resume.",
                             )
                             return
                         }
@@ -836,17 +835,17 @@ internal class WorkspaceGitHubSelfEditFlow(
                             run = run,
                             primaryRoute = primaryRoute,
                             originals = originals,
+                            previousPrepared = prepared,
                             expectedHead = expectedHead,
                             repair = repair,
                             review = review,
                         )
                     }
                     WorkspaceGitHubPatchReviewer.Decision.REJECT -> {
-                        fail(
+                        terminalFail(
                             run,
-                            null,
                             "Reviewer rejected the proposed patch before commit: " + review.summary +
-                                ". No GitHub write was attempted.",
+                                ". No GitHub write was attempted; this task is terminal and will not auto-resume.",
                         )
                     }
                 }
@@ -858,6 +857,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         run: Long,
         primaryRoute: WorkspaceCodingRoleRouter.Provider,
         originals: Map<String, String>,
+        previousPrepared: WorkspaceGitHubSelfEditBatch.Prepared,
         expectedHead: String,
         repair: Boolean,
         review: WorkspaceGitHubPatchReviewer.Review,
@@ -867,6 +867,7 @@ internal class WorkspaceGitHubSelfEditFlow(
             WorkspaceGitHubSelfEditBatch.reviewRevisionPrompt(
                 message = instruction,
                 sources = originals,
+                previousPrepared = previousPrepared,
                 reviewSummary = review.summary,
                 reviewRisks = review.risks,
             )
@@ -1353,13 +1354,22 @@ internal class WorkspaceGitHubSelfEditFlow(
         listener.onComplete(result)
     }
 
-    private fun fail(run: Long, call: Call?, message: String) {
+    private fun terminalFail(run: Long, message: String) {
+        fail(run, null, message, preserveCheckpoint = false)
+    }
+
+    private fun fail(
+        run: Long,
+        call: Call?,
+        message: String,
+        preserveCheckpoint: Boolean = true,
+    ) {
         synchronized(this) {
             if (run != generation || (call != null && active !== call)) return
             taskBudget = runCatching {
                 WorkspaceGitHubTaskBudget.withFailure(taskBudget, message)
             }.getOrDefault(taskBudget)
-            persistBudgetOnly()
+            if (preserveCheckpoint) persistBudgetOnly() else clearCheckpoint()
             active = null
             ciWatching = false
             pollHandler.removeCallbacksAndMessages(null)

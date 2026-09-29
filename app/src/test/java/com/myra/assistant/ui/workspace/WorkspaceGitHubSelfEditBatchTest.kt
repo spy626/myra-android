@@ -61,6 +61,12 @@ class WorkspaceGitHubSelfEditBatchTest {
                 "src/A.kt" to "fun a() = 1\n",
                 "src/B.kt" to "fun b() = 2\n",
             ),
+            previousPrepared = WorkspaceGitHubSelfEditBatch.Prepared(
+                files = listOf(
+                    WorkspaceGitHubWritePolicy.FileChange("src/A.kt", "fun a() = 10\n")
+                ),
+                rationale = "first proposal",
+            ),
             reviewSummary = "Handle negative input before committing.",
             reviewRisks = listOf("negative limit can crash"),
         )
@@ -68,6 +74,9 @@ class WorkspaceGitHubSelfEditBatchTest {
         assertTrue(prompt.contains("Handle negative input"))
         assertTrue(prompt.contains("negative limit can crash"))
         assertTrue(prompt.contains("src/A.kt"))
+        assertTrue(prompt.contains("PREVIOUS PROPOSED RESULT WINDOW"))
+        assertTrue(prompt.contains("fun a() = 10"))
+        assertTrue(prompt.contains("Build the final replacement against CURRENT SOURCE"))
         assertTrue(prompt.contains("Do not claim build"))
     }
 
@@ -140,6 +149,25 @@ class WorkspaceGitHubSelfEditBatchTest {
             WorkspaceGitHubSelfEditBatch.prepare(two, originals)
         }.exceptionOrNull()
         assertTrue(twoError?.message?.contains("returned 2 edits; allowed 1..1") == true)
+    }
+
+    @Test fun reviewerRevisionPromptRejectsPreviousProposalOutsideSelectedScope() {
+        val sources = linkedMapOf("src/A.kt" to "fun a() = 1\n")
+        val previous = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/B.kt", "fun b() = 2\n")
+            ),
+            rationale = "scope drift",
+        )
+        assertTrue(runCatching {
+            WorkspaceGitHubSelfEditBatch.reviewRevisionPrompt(
+                message = "GitHub src/A.kt fix karo",
+                sources = sources,
+                previousPrepared = previous,
+                reviewSummary = "Fix the proposal.",
+                reviewRisks = emptyList(),
+            )
+        }.isFailure)
     }
 
 }
