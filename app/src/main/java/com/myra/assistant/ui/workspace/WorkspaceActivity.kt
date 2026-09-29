@@ -127,14 +127,9 @@ class WorkspaceActivity : AppCompatActivity() {
                     WorkspaceGitHubBackgroundService.update(applicationContext, label, detail)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        if (WorkspaceChatConcurrencyPolicy.ownsVisibleTrace(
-                                workTraceMessageId,
-                                githubSelfEditMessageId,
-                            )) {
-                            recordWorkEvent(phase, label, detail)
-                        } else {
-                            updateSendButton()
-                        }
+                        githubSelfEditMessageId?.let { messageId ->
+                            recordWorkEventForTurn(messageId, phase, label, detail)
+                        } ?: updateSendButton()
                     }
                 }
 
@@ -163,11 +158,13 @@ class WorkspaceActivity : AppCompatActivity() {
                         githubSelfEditProjectId = null
                         githubSelfEditMessageId = null
                         if (!hasSavedGitHubSelfEditCheckpoint()) clearGitHubSelfEditTurnCheckpoint()
-                        if (WorkspaceChatConcurrencyPolicy.ownsVisibleTrace(
-                                workTraceMessageId,
-                                failedMessageId,
-                            )) {
-                            workTrace.finishError("GitHub self-edit stopped", message)
+                        failedMessageId?.let { messageId ->
+                            recordWorkEventForTurn(
+                                messageId,
+                                WorkspaceWorkPhase.ERROR,
+                                "GitHub self-edit stopped",
+                                message,
+                            )
                         }
                         statusMessage = message
                         render()
@@ -177,10 +174,21 @@ class WorkspaceActivity : AppCompatActivity() {
         )
     }
     private var statusMessage = ""
-    private val workTrace = WorkspaceWorkTrace()
-    private var workTraceExpanded = false
-    // The live receipt belongs inside the exact user turn that started the work.
+    private val workTraces = WorkspaceTurnWorkTraces()
+    private val detachedWorkTrace = WorkspaceWorkTrace()
+    // The currently foreground-owned receipt. Background GitHub work keeps its own exact turn.
     private var workTraceMessageId: String? = null
+    private val expandedWorkTraceMessageIds = mutableSetOf<String>()
+    private val workTrace: WorkspaceWorkTrace
+        get() = workTraceMessageId?.let(workTraces::getOrCreate) ?: detachedWorkTrace
+    private var workTraceExpanded: Boolean
+        get() = workTraceMessageId?.let { it in expandedWorkTraceMessageIds } ?: false
+        set(value) {
+            workTraceMessageId?.let { id ->
+                if (value) expandedWorkTraceMessageIds.add(id)
+                else expandedWorkTraceMessageIds.remove(id)
+            }
+        }
     private data class LiveWorkRow(
         val event: WorkspaceWorkEvent,
         val icon: WorkspaceMiniLyraView,
@@ -398,7 +406,7 @@ class WorkspaceActivity : AppCompatActivity() {
             rememberSelectedProject(projectId)
             githubSelfEditProjectId = projectId
             githubSelfEditMessageId = messageId
-            workTraceMessageId = messageId
+            activateWorkTrace(messageId)
         }
         ensureGitHubBackgroundNotificationPermission()
         WorkspaceGitHubBackgroundService.start(
@@ -827,11 +835,10 @@ class WorkspaceActivity : AppCompatActivity() {
         githubSelfEditProjectId = null
         githubSelfEditMessageId = null
         clearGitHubSelfEditTurnCheckpoint()
-        if (WorkspaceChatConcurrencyPolicy.ownsVisibleTrace(
-                workTraceMessageId,
-                taskMessageId,
-            )) {
-            workTrace.finishError(
+        taskMessageId?.let { messageId ->
+            recordWorkEventForTurn(
+                messageId,
+                WorkspaceWorkPhase.ERROR,
                 "GitHub self-edit stopped",
                 "Background GitHub task cancelled by the user.",
             )
@@ -841,25 +848,62 @@ class WorkspaceActivity : AppCompatActivity() {
         if (!workTab) composer.requestFocus()
     }
 
-    private fun recordWorkEvent(phase: WorkspaceWorkPhase, label: String, detail: String? = null) {
-        val before = workTrace.snapshot()
+    private fun activateWorkTrace(messageId: String): WorkspaceWorkTrace {
+        workTraceMessageId = messageId
+        expandedWorkTraceMessageIds.remove(messageId)
+        return workTraces.reset(messageId)
+    }
+
+    private fun clearForegroundWorkTraceSelection() {
+        val current = workTraceMessageId
+        if (current != null && current != githubSelfEditMessageId) {
+            workTraces.remove(current)
+            expandedWorkTraceMessageIds.remove(current)
+        }
+        workTraceMessageId = null
+        detachedWorkTrace.clear()
+    }
+
+    private fun mutateWorkTrace(
+        trace: WorkspaceWorkTrace,
+        phase: WorkspaceWorkPhase,
+        label: String,
+        detail: String?,
+    ) {
+        val before = trace.snapshot()
         when (phase) {
             WorkspaceWorkPhase.DONE -> {
-                if (before.events.isEmpty()) workTrace.begin(WorkspaceWorkPhase.DONE, label, detail)
-                else workTrace.finishSuccess(label, detail)
+                if (before.events.isEmpty()) trace.begin(WorkspaceWorkPhase.DONE, label, detail)
+                else trace.finishSuccess(label, detail)
             }
             WorkspaceWorkPhase.ERROR -> {
-                if (before.events.isEmpty()) workTrace.begin(WorkspaceWorkPhase.ERROR, label, detail)
-                else workTrace.finishError(label, detail)
+                if (before.events.isEmpty()) trace.begin(WorkspaceWorkPhase.ERROR, label, detail)
+                else trace.finishError(label, detail)
             }
             else -> {
-                if (before.events.isEmpty()) workTrace.begin(phase, label, detail)
-                else workTrace.add(phase, label, detail)
+                if (before.events.isEmpty()) trace.begin(phase, label, detail)
+                else trace.add(phase, label, detail)
             }
         }
+    }
+
+    private fun recordWorkEvent(phase: WorkspaceWorkPhase, label: String, detail: String? = null) {
+        val messageId = workTraceMessageId ?: return
+        recordWorkEventForTurn(messageId, phase, label, detail)
+    }
+
+    private fun recordWorkEventForTurn(
+        messageId: String,
+        phase: WorkspaceWorkPhase,
+        label: String,
+        detail: String? = null,
+    ) {
+        val trace = workTraces.getOrCreate(messageId)
+        mutateWorkTrace(trace, phase, label, detail)
         if (!::root.isInitialized) return
         val host = liveWorkTranscript
-        if (!workTab && host != null && liveWorkTranscriptMessageId == workTraceMessageId) {
+        if (!workTab && messageId == workTraceMessageId &&
+            host != null && liveWorkTranscriptMessageId == messageId) {
             syncLiveWorkTranscript(animateNew = true)
             updateSendButton()
         } else {
@@ -1049,6 +1093,52 @@ class WorkspaceActivity : AppCompatActivity() {
                 ?: error("LYRA work row could not be created")
             host.addView(rowView, LinearLayout.LayoutParams(-1, -2))
             liveWorkRows.add(liveRow)
+        }
+        return host
+    }
+
+    private fun createRetainedWorkTranscript(
+        messageId: String,
+        trace: WorkspaceWorkTrace,
+    ): LinearLayout? {
+        val snapshot = trace.snapshot()
+        if (snapshot.current == null) return null
+        val expanded = messageId in expandedWorkTraceMessageIds
+        val host = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), dp(3), dp(2), dp(3))
+        }
+        WorkspaceWorkPresentation.compactRow(
+            snapshot = snapshot,
+            expanded = expanded,
+            nowMs = System.currentTimeMillis(),
+        )?.let { compact ->
+            host.addView(label(compact, 11.25f).apply {
+                setTextColor(Color.rgb(120, 133, 149))
+                setPadding(dp(32), dp(3), dp(4), dp(3))
+                isClickable = true
+                isFocusable = true
+                contentDescription = if (expanded) "Hide work details" else "Show work details"
+                setOnClickListener {
+                    if (!expandedWorkTraceMessageIds.add(messageId)) {
+                        expandedWorkTraceMessageIds.remove(messageId)
+                    }
+                    render()
+                }
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
+        val visible = WorkspaceWorkPresentation.visibleEvents(snapshot, expanded)
+        visible.forEachIndexed { index, event ->
+            val newest = index == visible.lastIndex
+            val row = createWorkEventRow(
+                event = event,
+                isCurrent = newest,
+                active = newest && snapshot.active,
+                animateEntry = false,
+            )
+            val rowView = row.title.parent?.parent as? View
+                ?: error("LYRA retained work row could not be created")
+            host.addView(rowView, LinearLayout.LayoutParams(-1, -2))
         }
         return host
     }
@@ -1751,13 +1841,20 @@ class WorkspaceActivity : AppCompatActivity() {
                 item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(40)))
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
-            if (mine && message.id == workTraceMessageId) {
-                createInlineWorkTranscript()?.let { traceView ->
-                    content.addView(traceView, LinearLayout.LayoutParams(-1, -2).apply {
-                        leftMargin = dp(10)
-                        rightMargin = dp(6)
-                        bottomMargin = dp(8)
-                    })
+            if (mine) {
+                workTraces.existing(message.id)?.let { trace ->
+                    val traceView = if (message.id == workTraceMessageId) {
+                        createInlineWorkTranscript()
+                    } else {
+                        createRetainedWorkTranscript(message.id, trace)
+                    }
+                    traceView?.let {
+                        content.addView(it, LinearLayout.LayoutParams(-1, -2).apply {
+                            leftMargin = dp(10)
+                            rightMargin = dp(6)
+                            bottomMargin = dp(8)
+                        })
+                    }
                 }
             }
         }
@@ -1899,9 +1996,7 @@ class WorkspaceActivity : AppCompatActivity() {
         pendingSkillCreate = null
         composer.text.clear()
         statusMessage = ""
-        workTrace.clear()
-        workTraceExpanded = false
-        workTraceMessageId = null
+        clearForegroundWorkTraceSelection()
         render()
     }
 
@@ -1936,9 +2031,7 @@ class WorkspaceActivity : AppCompatActivity() {
         pendingSkillCreate = null
         composer.setText(localDrafts[id].orEmpty())
         statusMessage = ""
-        workTrace.clear()
-        workTraceExpanded = false
-        workTraceMessageId = null
+        clearForegroundWorkTraceSelection()
         render()
     }
 
@@ -2554,9 +2647,7 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         composer.text.clear()
         localDrafts.remove(id)
-        workTrace.clear()
-        workTraceExpanded = false
-        workTraceMessageId = null
+        clearForegroundWorkTraceSelection()
         statusMessage = ""
         render()
         composer.requestFocus()
@@ -2614,10 +2705,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val serial = ++requestGeneration
         val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
         activeRequest = call
-        workTrace.clear()
-        workTraceExpanded = false
-        workTraceMessageId = messageId
-        workTrace.begin(
+        activateWorkTrace(messageId).begin(
             WorkspaceWorkPhase.THINKING,
             "Creating skill draft",
             providerLabel(provider),
@@ -2823,9 +2911,7 @@ class WorkspaceActivity : AppCompatActivity() {
         createSkillStarted = true
         composer.text.clear()
         localDrafts.remove(id)
-        workTrace.clear()
-        workTraceExpanded = false
-        workTraceMessageId = stored.id
+        activateWorkTrace(stored.id)
         statusMessage = ""
         render()
         composer.requestFocus()
@@ -3035,9 +3121,7 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val stored = runCatching { conversations.append(id, "user", text) }
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
-        workTrace.clear()
-        workTraceExpanded = false
-        workTraceMessageId = stored.id
+        activateWorkTrace(stored.id)
         composer.text.clear()
         // Keep the keyboard's typing target after Send; opening the keyboard is still user-driven.
         composer.requestFocus()
@@ -3228,9 +3312,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val serial = ++requestGeneration
         val call = WorkspaceCustomProviderConnection.client(profile).newCall(outgoing)
         activeRequest = call
-        workTrace.clear()
-        workTraceExpanded = false
-        workTraceMessageId = messageId
+        activateWorkTrace(messageId)
         if (skillProjection != null) {
             workTrace.begin(
                 WorkspaceWorkPhase.READING,
@@ -3376,9 +3458,7 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
-        workTrace.clear()
-        workTraceExpanded = false
-        workTraceMessageId = messageId
+        activateWorkTrace(messageId)
         val history = runCatching { conversations.read(id) }
             .getOrElse { toast("Conversation unavailable"); return }
         val transcript = if (replacingAssistantId == null) history else {
