@@ -130,16 +130,33 @@ internal object WorkspaceGitHubPatchReviewer {
         require(summary.length in 1..MAX_SUMMARY_CHARS && summary.none(Char::isISOControl)) {
             "Reviewer summary is invalid"
         }
-        val rawRisks = root.getJSONArray("risks")
-        require(rawRisks.length() <= MAX_RISKS) { "Reviewer returned too many risks" }
-        val risks = buildList {
-            for (index in 0 until rawRisks.length()) {
-                val risk = rawRisks.getString(index).trim()
-                require(risk.length in 1..MAX_RISK_CHARS && risk.none(Char::isISOControl)) {
+        val risks = when (val rawRisks = root.get("risks")) {
+            is JSONArray -> {
+                require(rawRisks.length() <= MAX_RISKS) { "Reviewer returned too many risks" }
+                buildList {
+                    for (index in 0 until rawRisks.length()) {
+                        val value = rawRisks.opt(index)
+                        require(value is String) { "Reviewer risk must be text" }
+                        val risk = value.trim()
+                        require(risk.length in 1..MAX_RISK_CHARS &&
+                            risk.none(Char::isISOControl)) {
+                            "Reviewer risk text is invalid"
+                        }
+                        add(risk)
+                    }
+                }
+            }
+            is String -> {
+                val risk = rawRisks.trim()
+                require(risk.length in 1..MAX_RISK_CHARS &&
+                    risk.none(Char::isISOControl)) {
                     "Reviewer risk text is invalid"
                 }
-                add(risk)
+                listOf(risk)
             }
+            else -> throw IllegalArgumentException(
+                "Reviewer risks must be a JSON array or one bounded text value"
+            )
         }
         return Review(decision, summary, risks)
     }

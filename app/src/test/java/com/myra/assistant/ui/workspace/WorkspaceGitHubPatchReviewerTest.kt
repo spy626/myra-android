@@ -66,4 +66,35 @@ class WorkspaceGitHubPatchReviewerTest {
             WorkspaceGitHubPatchReviewer.prompt(plan.goal, plan, originals, prepared)
         }.isFailure)
     }
+    @Test fun reviewerNormalizesOneBoundedRiskStringButRejectsOtherTypes() {
+        val single = WorkspaceGitHubPatchReviewer.read(
+            """{"schemaVersion":1,"decision":"ACCEPT","summary":"Comment-only change.","risks":"No functional impact."}"""
+        )
+        assertEquals(listOf("No functional impact."), single.risks)
+
+        assertTrue(runCatching {
+            WorkspaceGitHubPatchReviewer.read(
+                """{"schemaVersion":1,"decision":"ACCEPT","summary":"x","risks":42}"""
+            )
+        }.isFailure)
+        assertTrue(runCatching {
+            WorkspaceGitHubPatchReviewer.read(
+                """{"schemaVersion":1,"decision":"ACCEPT","summary":"x","risks":{"text":"no"}}"""
+            )
+        }.isFailure)
+        assertTrue(runCatching {
+            WorkspaceGitHubPatchReviewer.read(
+                """{"schemaVersion":1,"decision":"ACCEPT","summary":"x","risks":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"""
+            )
+        }.isFailure)
+    }
+
+    @Test fun reviewerRiskArrayStillRequiresOnlyBoundedStrings() {
+        assertTrue(runCatching {
+            WorkspaceGitHubPatchReviewer.read(
+                """{"schemaVersion":1,"decision":"ACCEPT","summary":"x","risks":["ok",7]}"""
+            )
+        }.isFailure)
+    }
+
 }
