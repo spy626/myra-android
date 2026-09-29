@@ -4,7 +4,7 @@ import java.util.Locale
 
 /**
  * Deterministic local execution plan and completion gate for protected GitHub coding.
- * It is runtime guidance, not another agent/memory owner and never grants tool authority.
+ * It is local runtime guidance, not another agent/memory owner and never grants tool authority.
  */
 internal object WorkspaceGitHubCodingPlan {
     private const val MAX_GOAL_CHARS = 2_000
