@@ -15,11 +15,17 @@ internal enum class WorkspaceWorkPhase {
     ERROR,
 }
 
+internal enum class WorkspaceWorkPresentationKind {
+    DEFAULT,
+    EVIDENCE,
+}
+
 internal data class WorkspaceWorkEvent(
     val phase: WorkspaceWorkPhase,
     val label: String,
     val detail: String?,
     val atMs: Long,
+    val presentation: WorkspaceWorkPresentationKind = WorkspaceWorkPresentationKind.DEFAULT,
 )
 
 internal data class WorkspaceWorkSnapshot(
@@ -88,25 +94,46 @@ internal class WorkspaceWorkTrace(
 
     @Synchronized fun begin(phase: WorkspaceWorkPhase, label: String, detail: String? = null) {
         clear()
-        addLocked(phase, label, detail)
+        addLocked(phase, label, detail, WorkspaceWorkPresentationKind.DEFAULT)
     }
 
     @Synchronized fun add(phase: WorkspaceWorkPhase, label: String, detail: String? = null) {
         if (events.isEmpty() || currentTerminal()) {
             clear()
         }
-        addLocked(phase, label, detail)
+        addLocked(phase, label, detail, WorkspaceWorkPresentationKind.DEFAULT)
+    }
+
+    @Synchronized fun addEvidence(
+        phase: WorkspaceWorkPhase,
+        label: String,
+        detail: String? = null,
+    ) {
+        if (events.isEmpty() || currentTerminal()) {
+            clear()
+        }
+        addLocked(phase, label, detail, WorkspaceWorkPresentationKind.EVIDENCE)
     }
 
     @Synchronized fun finishSuccess(label: String = "Done", detail: String? = null) {
         if (events.isEmpty()) return
-        addLocked(WorkspaceWorkPhase.DONE, label, detail)
+        addLocked(
+            WorkspaceWorkPhase.DONE,
+            label,
+            detail,
+            WorkspaceWorkPresentationKind.DEFAULT,
+        )
         endedAtMs = events.last().atMs
     }
 
     @Synchronized fun finishError(label: String = "Work stopped", detail: String? = null) {
         if (events.isEmpty()) return
-        addLocked(WorkspaceWorkPhase.ERROR, label, detail)
+        addLocked(
+            WorkspaceWorkPhase.ERROR,
+            label,
+            detail,
+            WorkspaceWorkPresentationKind.DEFAULT,
+        )
         endedAtMs = events.last().atMs
     }
 
@@ -116,7 +143,12 @@ internal class WorkspaceWorkTrace(
     private fun currentTerminal(): Boolean =
         events.lastOrNull()?.phase in setOf(WorkspaceWorkPhase.DONE, WorkspaceWorkPhase.ERROR)
 
-    private fun addLocked(phase: WorkspaceWorkPhase, label: String, detail: String?) {
+    private fun addLocked(
+        phase: WorkspaceWorkPhase,
+        label: String,
+        detail: String?,
+        presentation: WorkspaceWorkPresentationKind,
+    ) {
         val safeLabel = safeText(label, MAX_LABEL_CHARS).ifBlank { return }
         val safeDetail = detail?.let { safeText(it, MAX_DETAIL_CHARS) }?.takeIf { it.isNotBlank() }
         val timestamp = now()
@@ -125,9 +157,18 @@ internal class WorkspaceWorkTrace(
 
         // Do not spam the timeline when render/report emits the same real state repeatedly.
         val last = events.lastOrNull()
-        if (last?.phase == phase && last.label == safeLabel && last.detail == safeDetail) return
+        if (last?.phase == phase && last.label == safeLabel && last.detail == safeDetail &&
+            last.presentation == presentation) return
 
-        events.addLast(WorkspaceWorkEvent(phase, safeLabel, safeDetail, timestamp))
+        events.addLast(
+            WorkspaceWorkEvent(
+                phase = phase,
+                label = safeLabel,
+                detail = safeDetail,
+                atMs = timestamp,
+                presentation = presentation,
+            )
+        )
         while (events.size > MAX_EVENTS) events.removeFirst()
     }
 }

@@ -157,6 +157,7 @@ internal object WorkspaceGitHubSelfEditBatch {
             }
             appendLine("Return exactly ONE JSON object and nothing else.")
             appendLine("Root keys only: schemaVersion, operation, edits, rationale.")
+            appendLine("rationale must be one concise user-facing sentence, using the USER REQUEST language when practical, describing only the proposed change; never claim review, CI, tests, merge, or completion.")
             appendLine("schemaVersion must be 2 and operation must be replace_exact_once_batch.")
             appendLine("edits must contain 1 to ${cleanSources.size} objects; each object keys only: path, oldText, newText.")
             appendLine("Each path may appear at most once and must be one of the provided PATH values.")
@@ -236,6 +237,7 @@ internal object WorkspaceGitHubSelfEditBatch {
             appendLine("If reviewer feedback conflicts with an intermediate value or implementation choice from the original request, correct that implementation choice while preserving the user's underlying requested outcome and scope.")
             appendLine("Return exactly ONE JSON object and nothing else.")
             appendLine("Root keys only: schemaVersion, operation, edits, rationale.")
+            appendLine("rationale must be one concise user-facing sentence, using the ORIGINAL USER REQUEST language when practical, describing only the revised proposal; never claim review acceptance, CI, tests, merge, or completion.")
             appendLine("schemaVersion must be 2 and operation must be replace_exact_once_batch.")
             appendLine("edits must contain 1 to ${cleanSources.size} objects; each object keys only: path, oldText, newText.")
             appendLine("Each path may appear at most once and must be one of the provided PATH values.")

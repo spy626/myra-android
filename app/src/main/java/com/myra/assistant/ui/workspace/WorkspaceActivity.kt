@@ -133,6 +133,20 @@ class WorkspaceActivity : AppCompatActivity() {
                     }
                 }
 
+                override fun onEvidence(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    WorkspaceGitHubBackgroundService.update(applicationContext, label, detail)
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        githubSelfEditMessageId?.let { messageId ->
+                            recordEvidenceWorkEventForTurn(messageId, phase, label, detail)
+                        } ?: updateSendButton()
+                    }
+                }
+
                 override fun onComplete(result: WorkspaceGitHubSelfEditFlow.Completion) {
                     val summary = WorkspaceFinalAnswer.githubSuccess(result)
                     saveGitHubSelfEditCompletionReceipt(summary)
@@ -900,6 +914,21 @@ class WorkspaceActivity : AppCompatActivity() {
     ) {
         val trace = workTraces.getOrCreate(messageId)
         mutateWorkTrace(trace, phase, label, detail)
+        refreshWorkTraceUi(messageId)
+    }
+
+    private fun recordEvidenceWorkEventForTurn(
+        messageId: String,
+        phase: WorkspaceWorkPhase,
+        label: String,
+        detail: String? = null,
+    ) {
+        val trace = workTraces.getOrCreate(messageId)
+        trace.addEvidence(phase, label, detail)
+        refreshWorkTraceUi(messageId)
+    }
+
+    private fun refreshWorkTraceUi(messageId: String) {
         if (!::root.isInitialized) return
         val host = liveWorkTranscript
         if (!workTab && messageId == workTraceMessageId &&

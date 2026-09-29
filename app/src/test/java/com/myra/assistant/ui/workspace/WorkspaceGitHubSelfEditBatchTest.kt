@@ -53,6 +53,8 @@ class WorkspaceGitHubSelfEditBatchTest {
         assertTrue(prompt.contains("CI #42 failed"))
         assertTrue(prompt.contains("src/A.kt"))
         assertTrue(prompt.contains("src/B.kt"))
+        assertTrue(prompt.contains("rationale must be one concise user-facing sentence"))
+        assertTrue(prompt.contains("USER REQUEST language"))
     }
     @Test fun reviewerRevisionPromptCarriesFeedbackWithoutClaimingVerification() {
         val prompt = WorkspaceGitHubSelfEditBatch.reviewRevisionPrompt(

@@ -39,6 +39,9 @@ internal class WorkspaceGitHubSelfEditFlow(
 
     interface Listener {
         fun onEvent(phase: WorkspaceWorkPhase, label: String, detail: String? = null)
+        fun onEvidence(phase: WorkspaceWorkPhase, label: String, detail: String? = null) {
+            onEvent(phase, label, detail)
+        }
         fun onComplete(result: Completion)
         fun onError(message: String)
     }
@@ -392,11 +395,9 @@ internal class WorkspaceGitHubSelfEditFlow(
                 branch = saved.branch,
                 selectedPaths = candidates.map { it.path },
             )
-            listener.onEvent(
-                WorkspaceWorkPhase.THINKING,
-                "Execution plan locked",
-                requireNotNull(codingPlan).traceSummary(),
-            )
+            WorkspaceAdaptiveWorkUpdate.scope(requireNotNull(codingPlan).selectedPaths).let { update ->
+                listener.onEvidence(update.phase, update.label, update.detail)
+            }
             readSelectedFiles(run)
         }
     }
@@ -668,11 +669,12 @@ internal class WorkspaceGitHubSelfEditFlow(
                     fail(run, null, error.message ?: "$label coding response was rejected.")
                     return
                 }
-                listener.onEvent(
-                    WorkspaceWorkPhase.VERIFYING,
-                    if (repair) "Repair patch accepted locally" else "Provider patch accepted locally",
-                    label,
-                )
+                WorkspaceAdaptiveWorkUpdate.proposal(
+                    prepared = prepared,
+                    ciRepair = repair,
+                ).let { update ->
+                    listener.onEvidence(update.phase, update.label, update.detail)
+                }
                 reviewOrCommit(
                     run = run,
                     primaryRoute = route,
@@ -866,14 +868,21 @@ internal class WorkspaceGitHubSelfEditFlow(
 
                 when (review.decision) {
                     WorkspaceGitHubPatchReviewer.Decision.ACCEPT -> {
-                        listener.onEvent(
-                            WorkspaceWorkPhase.VERIFYING,
-                            "Reviewer ACCEPT",
-                            reviewerLabel,
-                        )
+                        WorkspaceAdaptiveWorkUpdate.review(
+                            review = review,
+                            afterRevision = reviewRevisionAttempt > 0,
+                        ).let { update ->
+                            listener.onEvidence(update.phase, update.label, update.detail)
+                        }
                         commit(run, prepared, expectedHead, repair)
                     }
                     WorkspaceGitHubPatchReviewer.Decision.REVISE -> {
+                        WorkspaceAdaptiveWorkUpdate.review(
+                            review = review,
+                            afterRevision = reviewRevisionAttempt > 0,
+                        ).let { update ->
+                            listener.onEvidence(update.phase, update.label, update.detail)
+                        }
                         if (reviewRevisionAttempt >= 1) {
                             terminalFail(
                                 run,
@@ -893,6 +902,12 @@ internal class WorkspaceGitHubSelfEditFlow(
                         )
                     }
                     WorkspaceGitHubPatchReviewer.Decision.REJECT -> {
+                        WorkspaceAdaptiveWorkUpdate.review(
+                            review = review,
+                            afterRevision = reviewRevisionAttempt > 0,
+                        ).let { update ->
+                            listener.onEvidence(update.phase, update.label, update.detail)
+                        }
                         terminalFail(
                             run,
                             "Reviewer rejected the proposed patch before commit: " + review.summary +
@@ -1024,11 +1039,13 @@ internal class WorkspaceGitHubSelfEditFlow(
                 }
                 reviewRevisionAttempt = 1
                 savePreCommitCheckpoint(expectedHead, originals.keys.toList())
-                listener.onEvent(
-                    WorkspaceWorkPhase.VERIFYING,
-                    "Revised patch accepted locally",
-                    "$label · mandatory second review",
-                )
+                WorkspaceAdaptiveWorkUpdate.proposal(
+                    prepared = revised,
+                    revised = true,
+                    ciRepair = repair,
+                ).let { update ->
+                    listener.onEvidence(update.phase, update.label, update.detail)
+                }
                 reviewOrCommit(
                     run = run,
                     primaryRoute = primaryRoute,
@@ -1079,6 +1096,9 @@ internal class WorkspaceGitHubSelfEditFlow(
                 "GitHub commit receipt did not match the authorized self-edit"
             }
             access = checked.copy(headSha = receipt.commitSha)
+            WorkspaceAdaptiveWorkUpdate.committed(receipt).let { update ->
+                listener.onEvidence(update.phase, update.label, update.detail)
+            }
             if (repair) {
                 repairAttempt = 1
                 ciRepairReserved = false
@@ -1179,21 +1199,20 @@ internal class WorkspaceGitHubSelfEditFlow(
                     return
                 }
                 if (workflow.status != "completed") {
-                    listener.onEvent(
-                        WorkspaceWorkPhase.VERIFYING,
-                        "CI #${workflow.runNumber} ${workflow.status}",
-                        receipt.commitSha.take(12),
-                    )
+                    WorkspaceAdaptiveWorkUpdate.ciRunning(
+                        runNumber = workflow.runNumber,
+                        status = workflow.status,
+                    ).let { update ->
+                        listener.onEvidence(update.phase, update.label, update.detail)
+                    }
                     scheduleExactCi(run, receipt, token, attempt + 1, 0)
                     return
                 }
                 if (workflow.conclusion == "success") {
                     saveCheckpoint(receipt, "ci_green")
-                    listener.onEvent(
-                        WorkspaceWorkPhase.VERIFYING,
-                        "CI #${workflow.runNumber} GREEN",
-                        receipt.commitSha.take(12),
-                    )
+                    WorkspaceAdaptiveWorkUpdate.ciPassed(workflow.runNumber).let { update ->
+                        listener.onEvidence(update.phase, update.label, update.detail)
+                    }
                     ensureDraftPr(run, receipt, workflow)
                     return
                 }
@@ -1234,6 +1253,9 @@ internal class WorkspaceGitHubSelfEditFlow(
         ) { response ->
             val failure = WorkspaceGitHubConnector.readWorkflowFailure(response, workflow)
             val summary = failure.boundedSummary()
+            WorkspaceAdaptiveWorkUpdate.ciFailed(workflow.runNumber, summary).let { update ->
+                listener.onEvidence(update.phase, update.label, update.detail)
+            }
             if (repairAttempt < 1) {
                 // A CI repair is a new candidate, so it must start a fresh reviewer-revision cycle.
                 // Never inherit the pre-commit candidate's revision attempt or second-review lineage.

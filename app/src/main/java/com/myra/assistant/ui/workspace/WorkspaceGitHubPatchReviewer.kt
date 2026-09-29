@@ -77,6 +77,7 @@ internal object WorkspaceGitHubPatchReviewer {
             appendLine("Do not propose code, patches, tools, commits, merges, or follow-up actions.")
             appendLine("Return exactly ONE JSON object and nothing else.")
             appendLine("Keys only: schemaVersion, decision, summary, risks.")
+            appendLine("summary must be one concise user-facing explanation of the decision, using the LOCKED GOAL language when practical; do not mention provider names or claim CI/build success.")
             appendLine("schemaVersion must be 1.")
             appendLine("decision must be exactly ACCEPT, REVISE, or REJECT.")
             appendLine("ACCEPT only if the proposed change is consistent with the user goal and selected scope.")

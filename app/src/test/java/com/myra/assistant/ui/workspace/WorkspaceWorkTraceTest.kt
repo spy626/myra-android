@@ -41,6 +41,21 @@ class WorkspaceWorkTraceTest {
         assertTrue(detail.contains("[redacted]"))
     }
 
+    @Test fun evidenceEventIsMarkedWithoutChangingRawSafetyBounds() {
+        val trace = WorkspaceWorkTrace { 10L }
+        trace.begin(WorkspaceWorkPhase.THINKING, "Analyzing")
+        trace.addEvidence(
+            WorkspaceWorkPhase.VERIFYING,
+            "Review found a fixable issue",
+            "Handle the null guard before commit.",
+        )
+
+        val evidence = trace.snapshot().events.last()
+        assertEquals(WorkspaceWorkPresentationKind.EVIDENCE, evidence.presentation)
+        assertEquals("Review found a fixable issue", evidence.label)
+        assertTrue(evidence.detail.orEmpty().contains("null guard"))
+    }
+
     @Test fun terminalTraceStartsFreshOnNextTask() {
         var now = 100L
         val trace = WorkspaceWorkTrace { now }

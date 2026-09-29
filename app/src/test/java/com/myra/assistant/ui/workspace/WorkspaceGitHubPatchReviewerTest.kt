@@ -29,6 +29,8 @@ class WorkspaceGitHubPatchReviewerTest {
         assertTrue(prompt.contains("src/A.kt"))
         assertTrue(prompt.contains("fun a() = 1"))
         assertTrue(prompt.contains("fun a() = 10"))
+        assertTrue(prompt.contains("summary must be one concise user-facing explanation"))
+        assertTrue(prompt.contains("LOCKED GOAL language"))
     }
 
     @Test fun strictReviewContractAcceptsOnlyKnownDecisionsAndKeys() {

@@ -113,6 +113,28 @@ class WorkspaceWorkNarrationTest {
         assertFalse(visible.any { it.label.contains("verified", ignoreCase = true) })
     }
 
+    @Test fun evidenceGroundedUpdateKeepsItsSituationSpecificMeaning() {
+        val snapshot = WorkspaceWorkSnapshot(
+            events = listOf(
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "Review found a fixable issue",
+                    "Revision repeated the rejected proposal instead of fixing the guard.",
+                    1L,
+                    WorkspaceWorkPresentationKind.EVIDENCE,
+                ),
+            ),
+            startedAtMs = 1L,
+            endedAtMs = null,
+        )
+
+        val visible = WorkspaceWorkNarration.events(snapshot)
+
+        assertEquals(1, visible.size)
+        assertEquals("Review found a fixable issue", visible.single().label)
+        assertTrue(visible.single().detail.orEmpty().contains("repeated the rejected proposal"))
+    }
+
     @Test fun repeatedTechnicalStatusesCollapseIntoOneHumanMilestone() {
         val snapshot = WorkspaceWorkSnapshot(
             events = listOf(

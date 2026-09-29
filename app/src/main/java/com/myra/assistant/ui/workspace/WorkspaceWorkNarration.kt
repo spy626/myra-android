@@ -42,6 +42,9 @@ internal object WorkspaceWorkNarration {
     }
 
     private fun narrate(raw: WorkspaceWorkEvent): WorkspaceWorkEvent? {
+        if (raw.presentation == WorkspaceWorkPresentationKind.EVIDENCE) {
+            return raw
+        }
         if (budget.matches(raw.label)) return null
         val label = when (raw.phase) {
             WorkspaceWorkPhase.THINKING -> "Analyzing the task"
