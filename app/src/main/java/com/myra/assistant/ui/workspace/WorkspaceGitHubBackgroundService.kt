@@ -11,7 +11,7 @@ import android.os.IBinder
 import java.lang.ref.WeakReference
 
 /**
- * Process-lifetime guard for a protected GitHub coding task.
+ * Process-lifetime execution guard for a protected GitHub coding task.
  *
  * The actual task state stays in WorkspaceGitHubSelfEditFlow + its durable checkpoint. This
  * foreground service keeps the process eligible while the user opens another app, provides the
