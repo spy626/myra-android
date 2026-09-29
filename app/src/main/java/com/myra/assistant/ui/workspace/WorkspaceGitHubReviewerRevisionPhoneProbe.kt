@@ -1,11 +1,11 @@
 package com.myra.assistant.ui.workspace
 
 /**
- * Temporary physical-phone acceptance instrumentation for the reviewer revision loop.
+ * Temporary physical-phone acceptance instrumentation for the generic reviewer revision loop.
  *
- * It never grants write authority and never forces ACCEPT. For one exact test file only, the first
- * successfully parsed review of the NEEDS_REVIEW probe state is converted to a bounded REVISE so
- * the same-coder revision + mandatory second-review path can be exercised on a real phone.
+ * It never grants write authority and never forces ACCEPT. For one exact test-only file, the first
+ * successfully parsed review of CANDIDATE is converted to a bounded REVISE asking for the valid
+ * final marker. The original phone-test instruction explicitly authorizes that reviewer correction.
  *
  * Remove this object together with WorkspaceGitHubReviewerRevisionProbeTest after phone acceptance.
  */
@@ -22,7 +22,7 @@ internal object WorkspaceGitHubReviewerRevisionPhoneProbe {
             prepared.files.size != 1 ||
             prepared.files.single().path != TARGET_PATH ||
             !prepared.files.single().content.contains(
-                """const val PROBE_STATE = "NEEDS_REVIEW""""
+                """const val REVIEW_MARKER = "CANDIDATE""""
             )
         ) {
             return review
@@ -30,10 +30,11 @@ internal object WorkspaceGitHubReviewerRevisionPhoneProbe {
         return WorkspaceGitHubPatchReviewer.Review(
             decision = WorkspaceGitHubPatchReviewer.Decision.REVISE,
             summary =
-                "Controlled phone probe: revise PROBE_STATE from the requested first-stage " +
-                    "NEEDS_REVIEW value to REVIEWED_FINAL, preserving the same file and test invariant.",
+                "Controlled phone probe: the candidate marker is intentionally not a valid final " +
+                    "state. Keep the same requested test-only scope and revise REVIEW_MARKER to " +
+                    "REVIEWED_FINAL so the existing invariant remains valid.",
             risks = listOf(
-                "NEEDS_REVIEW is intentionally not an acceptable final probe state; REVIEWED_FINAL is required."
+                "CANDIDATE is not an allowed final marker in the existing test invariant."
             ),
         )
     }

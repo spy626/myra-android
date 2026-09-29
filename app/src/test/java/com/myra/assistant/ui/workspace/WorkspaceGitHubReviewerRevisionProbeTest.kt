@@ -4,20 +4,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Temporary physical-phone probe for reviewer REVISE -> same-coder revision -> second review.
+ * Temporary phone probe for generic reviewer REVISE -> coder revision -> second review.
  *
- * BASELINE is the clean setup state. NEEDS_REVIEW is intentionally invalid as a final committed
- * state. REVIEWED_FINAL is the expected state after the bounded reviewer-requested revision.
+ * BASELINE is the clean repository state. CANDIDATE is intentionally reviewable but not a valid
+ * final committed state. REVIEWED_FINAL is the valid post-review final state.
  */
 internal object WorkspaceGitHubReviewerRevisionProbe {
-    const val PROBE_STATE = "BASELINE"
+    const val REVIEW_MARKER = "BASELINE"
 }
 
 class WorkspaceGitHubReviewerRevisionProbeTest {
-    @Test fun reviewerRevisionProbeMustNotCommitFirstStageState() {
+    @Test fun reviewerRevisionProbeMustEndInAValidState() {
         assertTrue(
-            "Reviewer revision probe must finish BASELINE or REVIEWED_FINAL, never NEEDS_REVIEW",
-            WorkspaceGitHubReviewerRevisionProbe.PROBE_STATE in setOf("BASELINE", "REVIEWED_FINAL"),
+            "Reviewer probe must finish BASELINE or REVIEWED_FINAL, never CANDIDATE",
+            WorkspaceGitHubReviewerRevisionProbe.REVIEW_MARKER in
+                setOf("BASELINE", "REVIEWED_FINAL"),
         )
     }
 }
