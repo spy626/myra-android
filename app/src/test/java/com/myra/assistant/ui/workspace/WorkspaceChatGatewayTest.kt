@@ -106,4 +106,22 @@ class WorkspaceChatGatewayTest {
         assertTrue(failure!!.message.orEmpty().contains("limit"))
         assertFalse(failure.message.orEmpty().contains("secret echoed"))
     }
+    @Test fun normalChatGetsSemanticContinuityWithoutRewritingLatestUserTurn() {
+        val messages = listOf(
+            message("user", "Earlier we compared repository handoff architecture."),
+            message("assistant", "Okay."),
+            message("user", "bro wahi concept se continue karo"),
+        )
+        val payload = WorkspaceChatGateway.openAiMessages(messages)
+        val system = payload.getJSONObject(0).getString("content")
+
+        assertTrue(system.contains("SEMANTIC TASK CONTINUITY"))
+        assertTrue(system.contains("repository handoff architecture"))
+        assertTrue(system.contains("current-turn execution gates remain separate"))
+        assertEquals(
+            "bro wahi concept se continue karo",
+            payload.getJSONObject(payload.length() - 1).getString("content"),
+        )
+    }
+
 }

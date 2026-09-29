@@ -118,12 +118,16 @@ internal object WorkspaceChatGateway {
         }
         // AIRI-style turn state is a bounded, read-only projection of this same Chat.
         // Dedicated writing, follow-up, coding and task prompts are never replaced.
-        val turnFrame = if (revisionKind == null && contextDecision == null &&
-            writingInstructions.isBlank() && codeInstructions.isBlank())
+        val normalConversation = revisionKind == null && contextDecision == null &&
+            writingInstructions.isBlank() && codeInstructions.isBlank()
+        val semanticTaskFrame = if (normalConversation)
+            WorkspaceSemanticTaskFrame.instructions(messages) else ""
+        val turnFrame = if (normalConversation)
             WorkspaceChatTurnFrame.instructions(recent) else ""
         val instructions = listOf(
             CHAT_REPLY_DISCIPLINE,
             extra,
+            semanticTaskFrame,
             turnFrame,
             writingInstructions,
             earlier,
