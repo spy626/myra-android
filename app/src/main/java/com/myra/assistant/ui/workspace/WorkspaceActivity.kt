@@ -171,7 +171,7 @@ class WorkspaceActivity : AppCompatActivity() {
     }
     private var statusMessage = ""
     private val workTrace = WorkspaceWorkTrace()
-    private var workTraceExpanded = true
+    private var workTraceExpanded = false
     // The live receipt belongs inside the exact user turn that started the work.
     private var workTraceMessageId: String? = null
     private data class LiveWorkRow(
@@ -907,12 +907,15 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun addWorkDuration(host: LinearLayout, snapshot: WorkspaceWorkSnapshot, animateEntry: Boolean) {
-        if (snapshot.active || snapshot.startedAtMs == null || liveWorkDurationView != null) return
-        val end = snapshot.endedAtMs ?: System.currentTimeMillis()
-        val seconds = ((end - snapshot.startedAtMs).coerceAtLeast(0L) / 1_000L).coerceAtLeast(1L)
-        val duration = label("Worked for ${seconds}s", 11.25f).apply {
+        if (liveWorkDurationView != null) return
+        val compact = WorkspaceWorkPresentation.compactRow(
+            snapshot = snapshot,
+            expanded = workTraceExpanded,
+            nowMs = System.currentTimeMillis(),
+        ) ?: return
+        val duration = label(compact, 11.25f).apply {
             setTextColor(Color.rgb(120, 133, 149))
-            setPadding(dp(32), dp(3), dp(4), dp(2))
+            setPadding(dp(32), dp(3), dp(4), dp(3))
             isClickable = true
             isFocusable = true
             contentDescription = if (workTraceExpanded) "Hide work details" else "Show work details"
@@ -934,9 +937,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun syncLiveWorkTranscript(animateNew: Boolean) {
         val host = liveWorkTranscript ?: return
         val snapshot = workTrace.snapshot()
-        val narrated = WorkspaceWorkNarration.events(snapshot)
-        val visibleEvents = if (!snapshot.active && !workTraceExpanded)
-            narrated.takeLast(1) else narrated.takeLast(8)
+        val visibleEvents = WorkspaceWorkPresentation.visibleEvents(
+            snapshot,
+            expanded = workTraceExpanded,
+        )
 
         // Incremental updates are used only while expanded/live. Collapse uses a full render.
         if (visibleEvents.size < liveWorkRows.size ||
@@ -965,9 +969,11 @@ class WorkspaceActivity : AppCompatActivity() {
         liveWorkRows.clear()
         liveWorkDurationView = null
 
-        val narrated = WorkspaceWorkNarration.events(snapshot)
-        val visibleEvents = if (!snapshot.active && !workTraceExpanded)
-            narrated.takeLast(1) else narrated.takeLast(8)
+        addWorkDuration(host, snapshot, animateEntry = false)
+        val visibleEvents = WorkspaceWorkPresentation.visibleEvents(
+            snapshot,
+            expanded = workTraceExpanded,
+        )
         visibleEvents.forEachIndexed { index, event ->
             val isNewest = index == visibleEvents.lastIndex
             val liveRow = createWorkEventRow(
@@ -981,7 +987,6 @@ class WorkspaceActivity : AppCompatActivity() {
             host.addView(rowView, LinearLayout.LayoutParams(-1, -2))
             liveWorkRows.add(liveRow)
         }
-        addWorkDuration(host, snapshot, animateEntry = false)
         return host
     }
 
@@ -1819,7 +1824,7 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.text.clear()
         statusMessage = ""
         workTrace.clear()
-        workTraceExpanded = true
+        workTraceExpanded = false
         workTraceMessageId = null
         render()
     }
@@ -1855,7 +1860,7 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.setText(localDrafts[id].orEmpty())
         statusMessage = ""
         workTrace.clear()
-        workTraceExpanded = true
+        workTraceExpanded = false
         workTraceMessageId = null
         render()
     }
@@ -2472,7 +2477,7 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.text.clear()
         localDrafts.remove(id)
         workTrace.clear()
-        workTraceExpanded = true
+        workTraceExpanded = false
         workTraceMessageId = null
         statusMessage = ""
         render()
@@ -2532,7 +2537,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
         activeRequest = call
         workTrace.clear()
-        workTraceExpanded = true
+        workTraceExpanded = false
         workTraceMessageId = messageId
         workTrace.begin(
             WorkspaceWorkPhase.THINKING,
@@ -2741,7 +2746,7 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.text.clear()
         localDrafts.remove(id)
         workTrace.clear()
-        workTraceExpanded = true
+        workTraceExpanded = false
         workTraceMessageId = stored.id
         statusMessage = ""
         render()
@@ -2942,7 +2947,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val stored = runCatching { conversations.append(id, "user", text) }
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
         workTrace.clear()
-        workTraceExpanded = true
+        workTraceExpanded = false
         workTraceMessageId = stored.id
         composer.text.clear()
         // Keep the keyboard's typing target after Send; opening the keyboard is still user-driven.
@@ -3135,7 +3140,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val call = WorkspaceCustomProviderConnection.client(profile).newCall(outgoing)
         activeRequest = call
         workTrace.clear()
-        workTraceExpanded = true
+        workTraceExpanded = false
         workTraceMessageId = messageId
         if (skillProjection != null) {
             workTrace.begin(
@@ -3283,7 +3288,7 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         workTrace.clear()
-        workTraceExpanded = true
+        workTraceExpanded = false
         workTraceMessageId = messageId
         val history = runCatching { conversations.read(id) }
             .getOrElse { toast("Conversation unavailable"); return }
