@@ -1,5 +1,6 @@
 package com.myra.assistant.ui.workspace
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -11,7 +12,9 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.content.pm.PackageManager
 import android.provider.OpenableColumns
 import android.text.Editable
 import android.text.InputFilter
@@ -103,6 +106,12 @@ class WorkspaceActivity : AppCompatActivity() {
     private var githubSelfEditMessageId: String? = null
     private val githubSelfEditProjectKey = "workspace_github_self_edit_project_id"
     private val githubSelfEditMessageKey = "workspace_github_self_edit_message_id"
+    private val githubSelfEditReceiptProjectKey = "workspace_github_self_edit_receipt_project_id"
+    private val githubSelfEditReceiptMessageKey = "workspace_github_self_edit_receipt_message_id"
+    private val githubSelfEditReceiptSummaryKey = "workspace_github_self_edit_receipt_summary"
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
     private val githubSelfEdit by lazy {
         WorkspaceGitHubSelfEditFlow(
             store = WorkspaceConnectorCredentialStore(this),
@@ -114,6 +123,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     label: String,
                     detail: String?,
                 ) {
+                    WorkspaceGitHubBackgroundService.update(applicationContext, label, detail)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         recordWorkEvent(phase, label, detail)
@@ -121,35 +131,31 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
 
                 override fun onComplete(result: WorkspaceGitHubSelfEditFlow.Completion) {
+                    val pr = result.pullRequest?.let { " Draft PR #${it.number} updated." }
+                        ?: " Draft PR update was not confirmed."
+                    val warning = result.warning?.let { " $it" }.orEmpty()
+                    val summary =
+                        "Updated ${result.commit.files.joinToString()} on agent/myra-phase-1 · " +
+                            "commit ${result.commit.commitSha.take(12)} · CI #${result.workflow.runNumber} GREEN.$pr " +
+                            "main/master was not modified or merged.$warning"
+                    saveGitHubSelfEditCompletionReceipt(summary)
+                    clearGitHubSelfEditTurnCheckpoint()
+                    WorkspaceGitHubBackgroundService.complete(
+                        applicationContext,
+                        "CI #${result.workflow.runNumber} GREEN · ${result.commit.commitSha.take(12)}",
+                    )
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        val id = githubSelfEditProjectId
-                        val messageId = githubSelfEditMessageId
                         githubSelfEditProjectId = null
                         githubSelfEditMessageId = null
-                        clearGitHubSelfEditTurnCheckpoint()
-                        if (id == null || messageId == null || selectedId != id) return@runOnUiThread
-                        val pr = result.pullRequest?.let { " Draft PR #${it.number} updated." }
-                            ?: " Draft PR update was not confirmed."
-                        val warning = result.warning?.let { " $it" }.orEmpty()
-                        val summary =
-                            "Updated ${result.commit.files.joinToString()} on agent/myra-phase-1 · " +
-                                "commit ${result.commit.commitSha.take(12)} · CI #${result.workflow.runNumber} GREEN.$pr " +
-                                "main/master was not modified or merged.$warning"
-                        runCatching {
-                            require(conversations.read(id).lastOrNull()?.id == messageId) {
-                                "Conversation changed; GitHub self-edit receipt was not saved"
-                            }
-                            conversations.append(id, "assistant", summary)
-                        }.onFailure {
-                            statusMessage = it.message ?: "GitHub self-edit receipt could not be saved."
-                        }
+                        consumeGitHubSelfEditCompletionReceipt()
                         codingRetryTarget = null
                         render()
                     }
                 }
 
                 override fun onError(message: String) {
+                    WorkspaceGitHubBackgroundService.fail(applicationContext, message)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         githubSelfEditProjectId = null
@@ -296,6 +302,50 @@ class WorkspaceActivity : AppCompatActivity() {
     }
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_LONG).show()
 
+    private fun ensureGitHubBackgroundNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun saveGitHubSelfEditCompletionReceipt(summary: String) {
+        val projectId = githubSelfEditProjectId
+            ?: preferences.getString(githubSelfEditProjectKey, null)
+            ?: return
+        val messageId = githubSelfEditMessageId
+            ?: preferences.getString(githubSelfEditMessageKey, null)
+            ?: return
+        preferences.edit()
+            .putString(githubSelfEditReceiptProjectKey, projectId)
+            .putString(githubSelfEditReceiptMessageKey, messageId)
+            .putString(githubSelfEditReceiptSummaryKey, summary.take(3_000))
+            .apply()
+    }
+
+    private fun consumeGitHubSelfEditCompletionReceipt(): Boolean {
+        val projectId = preferences.getString(githubSelfEditReceiptProjectKey, null) ?: return false
+        val messageId = preferences.getString(githubSelfEditReceiptMessageKey, null) ?: return false
+        val summary = preferences.getString(githubSelfEditReceiptSummaryKey, null) ?: return false
+        val consumed = runCatching {
+            val transcript = conversations.read(projectId)
+            require(transcript.lastOrNull()?.id == messageId) {
+                "Conversation changed; background GitHub receipt was not appended twice"
+            }
+            conversations.append(projectId, "assistant", summary)
+        }.isSuccess
+        preferences.edit()
+            .remove(githubSelfEditReceiptProjectKey)
+            .remove(githubSelfEditReceiptMessageKey)
+            .remove(githubSelfEditReceiptSummaryKey)
+            .apply()
+        if (!consumed) {
+            statusMessage = "Background GitHub task finished, but its chat receipt could not be attached safely."
+        }
+        return consumed
+    }
+
     private fun saveGitHubSelfEditTurnCheckpoint(projectId: String, messageId: String) {
         preferences.edit()
             .putString(githubSelfEditProjectKey, projectId)
@@ -310,13 +360,10 @@ class WorkspaceActivity : AppCompatActivity() {
             .apply()
     }
 
-    private fun hasSavedGitHubSelfEditCheckpoint(): Boolean {
-        val sha = preferences.getString("workspace_github_self_edit_checkpoint_sha", null)
-            ?.trim()
-            ?.lowercase()
-            ?: return false
-        return Regex("[0-9a-f]{40,64}").matches(sha)
-    }
+    private fun hasSavedGitHubSelfEditCheckpoint(): Boolean =
+        WorkspaceGitHubBackgroundPolicy.hasCheckpoint(
+            preferences.getString(WorkspaceGitHubBackgroundPolicy.CHECKPOINT_SHA_KEY, null)
+        )
 
     private fun resumeGitHubSelfEditIfNeeded() {
         if (!githubSelfEdit.hasCheckpoint() || githubSelfEdit.isRunning) return
@@ -329,6 +376,12 @@ class WorkspaceActivity : AppCompatActivity() {
             githubSelfEditMessageId = messageId
             workTraceMessageId = messageId
         }
+        ensureGitHubBackgroundNotificationPermission()
+        WorkspaceGitHubBackgroundService.start(
+            applicationContext,
+            "Resuming LYRA GitHub coding",
+            "Saved checkpoint · protected branch",
+        )
         githubSelfEdit.resumeCheckpoint()
     }
 
@@ -520,6 +573,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 skillAttachment = null
                 statusMessage = "Selected conversation is unavailable. Choose another chat."
             }
+            consumeGitHubSelfEditCompletionReceipt()
             render()
             resumeGitHubSelfEditIfNeeded()
         }
@@ -531,9 +585,8 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest = null
         clearAgentReachState()
         coding.cancel()
-        githubSelfEdit.cancel()
-        githubSelfEditProjectId = null
-        githubSelfEditMessageId = null
+        // Protected GitHub self-edit intentionally keeps running under the foreground service.
+        // Explicit Stop is the only lifecycle-independent cancellation path.
         super.onStop()
     }
 
@@ -715,6 +768,7 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         coding.cancel()
         githubSelfEdit.cancel(preserveCheckpoint = false)
+        WorkspaceGitHubBackgroundService.stop(applicationContext)
         githubSelfEditProjectId = null
         githubSelfEditMessageId = null
         clearGitHubSelfEditTurnCheckpoint()
@@ -2903,6 +2957,12 @@ class WorkspaceActivity : AppCompatActivity() {
             githubSelfEditProjectId = id
             githubSelfEditMessageId = stored.id
             saveGitHubSelfEditTurnCheckpoint(id, stored.id)
+            ensureGitHubBackgroundNotificationPermission()
+            WorkspaceGitHubBackgroundService.start(
+                applicationContext,
+                "LYRA GitHub coding",
+                "Protected task running · you can use other apps",
+            )
             statusMessage = ""
             render()
             githubSelfEdit.start(text)
