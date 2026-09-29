@@ -10,7 +10,7 @@ import org.junit.Test
  * the first commit only; exact CI should fail, then LYRA's same-task CI repair must restore SAFE.
  */
 internal object WorkspaceGitHubCiRepairProbe {
-    const val PROBE_STATE = "SAFE"
+    const val PROBE_STATE = "BROKEN_ONCE"
 }
 
 class WorkspaceGitHubCiRepairProbeTest {
