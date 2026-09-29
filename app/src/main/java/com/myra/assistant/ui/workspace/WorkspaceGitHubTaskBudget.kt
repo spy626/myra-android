@@ -1,7 +1,7 @@
 package com.myra.assistant.ui.workspace
 
 /**
- * Small deterministic per-task budget for the protected GitHub coding loop.
+ * Small deterministic per-task execution budget for the protected GitHub coding loop.
  *
  * It is not provider ranking or retry authority. Callers must explicitly consume a unit before
  * each bounded action. The state is persisted by the owning self-edit checkpoint.
