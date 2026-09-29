@@ -10,7 +10,7 @@ import org.junit.Test
  * state. REVIEWED is the expected state after the bounded reviewer-requested revision.
  */
 internal object WorkspaceGitHubReviewerRevisionProbe {
-    const val PROBE_STATE = "INITIAL"
+    const val PROBE_STATE = "REVIEWED"
 }
 
 class WorkspaceGitHubReviewerRevisionProbeTest {
