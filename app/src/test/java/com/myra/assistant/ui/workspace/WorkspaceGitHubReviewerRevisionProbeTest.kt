@@ -4,21 +4,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Temporary phone probe for generic reviewer REVISE -> coder revision -> second review.
- *
- * BASELINE is the clean repository state. CANDIDATE is intentionally reviewable but not a valid
- * final committed state. REVIEWED_FINAL is the valid post-review final state.
+ * Temporary phone probe for a QA handoff:
+ * first proposal reaches the requested final marker, then reviewer feedback may add the same-file
+ * evidence required by the acceptance invariant before the mandatory second review.
  */
 internal object WorkspaceGitHubReviewerRevisionProbe {
     const val REVIEW_MARKER = "BASELINE"
+    const val REVIEW_EVIDENCE = "NONE"
 }
 
 class WorkspaceGitHubReviewerRevisionProbeTest {
-    @Test fun reviewerRevisionProbeMustEndInAValidState() {
+    @Test fun reviewerRevisionProbeMustSatisfyMarkerAndHandoffEvidenceTogether() {
+        val valid =
+            (WorkspaceGitHubReviewerRevisionProbe.REVIEW_MARKER == "BASELINE" &&
+                WorkspaceGitHubReviewerRevisionProbe.REVIEW_EVIDENCE == "NONE") ||
+            (WorkspaceGitHubReviewerRevisionProbe.REVIEW_MARKER == "REVIEWED_FINAL" &&
+                WorkspaceGitHubReviewerRevisionProbe.REVIEW_EVIDENCE == "QA_HANDOFF_CONFIRMED")
         assertTrue(
-            "Reviewer probe must finish BASELINE or REVIEWED_FINAL, never CANDIDATE",
-            WorkspaceGitHubReviewerRevisionProbe.REVIEW_MARKER in
-                setOf("BASELINE", "REVIEWED_FINAL"),
+            "Final reviewed state requires its QA handoff evidence in the same file",
+            valid,
         )
     }
 }

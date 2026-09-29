@@ -3,11 +3,9 @@ package com.myra.assistant.ui.workspace
 /**
  * Temporary physical-phone acceptance instrumentation for the generic reviewer revision loop.
  *
- * It never grants write authority and never forces ACCEPT. For one exact test-only file, the first
- * successfully parsed review of CANDIDATE is converted to a bounded REVISE asking for the valid
- * final marker. The original phone-test instruction explicitly authorizes that reviewer correction.
- *
- * Remove this object together with WorkspaceGitHubReviewerRevisionProbeTest after phone acceptance.
+ * This models a QA handoff: the user's final marker remains unchanged across the revision, while
+ * the first reviewer asks for one same-file acceptance-evidence correction. It never grants write
+ * authority and never forces ACCEPT. Remove with the probe after physical-phone acceptance.
  */
 internal object WorkspaceGitHubReviewerRevisionPhoneProbe {
     const val TARGET_PATH =
@@ -22,7 +20,10 @@ internal object WorkspaceGitHubReviewerRevisionPhoneProbe {
             prepared.files.size != 1 ||
             prepared.files.single().path != TARGET_PATH ||
             !prepared.files.single().content.contains(
-                """const val REVIEW_MARKER = "CANDIDATE""""
+                """const val REVIEW_MARKER = "REVIEWED_FINAL""""
+            ) ||
+            !prepared.files.single().content.contains(
+                """const val REVIEW_EVIDENCE = "NONE""""
             )
         ) {
             return review
@@ -30,11 +31,12 @@ internal object WorkspaceGitHubReviewerRevisionPhoneProbe {
         return WorkspaceGitHubPatchReviewer.Review(
             decision = WorkspaceGitHubPatchReviewer.Decision.REVISE,
             summary =
-                "Controlled phone probe: the candidate marker is intentionally not a valid final " +
-                    "state. Keep the same requested test-only scope and revise REVIEW_MARKER to " +
-                    "REVIEWED_FINAL so the existing invariant remains valid.",
+                "Controlled QA handoff: the requested REVIEW_MARKER is correct, but the existing " +
+                    "same-file acceptance invariant also requires REVIEW_EVIDENCE to be " +
+                    "QA_HANDOFF_CONFIRMED before commit. Keep REVIEW_MARKER unchanged and update " +
+                    "only that evidence value.",
             risks = listOf(
-                "CANDIDATE is not an allowed final marker in the existing test invariant."
+                "Committing REVIEWED_FINAL with REVIEW_EVIDENCE=NONE would fail the existing test invariant."
             ),
         )
     }
