@@ -934,8 +934,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun syncLiveWorkTranscript(animateNew: Boolean) {
         val host = liveWorkTranscript ?: return
         val snapshot = workTrace.snapshot()
+        val narrated = WorkspaceWorkNarration.events(snapshot)
         val visibleEvents = if (!snapshot.active && !workTraceExpanded)
-            snapshot.events.takeLast(1) else snapshot.events.takeLast(14)
+            narrated.takeLast(1) else narrated.takeLast(8)
 
         // Incremental updates are used only while expanded/live. Collapse uses a full render.
         if (visibleEvents.size < liveWorkRows.size ||
@@ -964,8 +965,9 @@ class WorkspaceActivity : AppCompatActivity() {
         liveWorkRows.clear()
         liveWorkDurationView = null
 
+        val narrated = WorkspaceWorkNarration.events(snapshot)
         val visibleEvents = if (!snapshot.active && !workTraceExpanded)
-            snapshot.events.takeLast(1) else snapshot.events.takeLast(14)
+            narrated.takeLast(1) else narrated.takeLast(8)
         visibleEvents.forEachIndexed { index, event ->
             val isNewest = index == visibleEvents.lastIndex
             val liveRow = createWorkEventRow(
