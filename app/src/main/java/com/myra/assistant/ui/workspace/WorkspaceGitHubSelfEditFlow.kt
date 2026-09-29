@@ -958,7 +958,10 @@ internal class WorkspaceGitHubSelfEditFlow(
                         WorkspaceCodingRoleRouter.Provider.GROQ ->
                             WorkspaceGroqFree.read(response)
                     }
-                    WorkspaceGitHubSelfEditBatch.prepare(raw, originals)
+                    WorkspaceGitHubSelfEditBatch.requireMaterialRevision(
+                        previous = previousPrepared,
+                        revised = WorkspaceGitHubSelfEditBatch.prepare(raw, originals),
+                    )
                 }.getOrElse { error ->
                     terminalFail(
                         run,

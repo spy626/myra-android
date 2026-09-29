@@ -77,6 +77,8 @@ class WorkspaceGitHubSelfEditBatchTest {
         assertTrue(prompt.contains("PREVIOUS PROPOSED RESULT WINDOW"))
         assertTrue(prompt.contains("fun a() = 10"))
         assertTrue(prompt.contains("Build the final replacement against CURRENT SOURCE"))
+        assertTrue(prompt.contains("REQUIRED CORRECTION CONSTRAINTS"))
+        assertTrue(prompt.contains("Do not repeat the rejected proposal unchanged"))
         assertTrue(prompt.contains("Do not claim build"))
     }
 
@@ -168,6 +170,50 @@ class WorkspaceGitHubSelfEditBatchTest {
                 reviewRisks = emptyList(),
             )
         }.isFailure)
+    }
+
+    @Test fun reviewerRevisionMustMateriallyDifferFromRejectedProposal() {
+        val previous = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/A.kt", "fun a() = 2\n")
+            ),
+            rationale = "first",
+        )
+        val repeated = previous.copy(rationale = "different words only")
+        assertTrue(runCatching {
+            WorkspaceGitHubSelfEditBatch.requireMaterialRevision(previous, repeated)
+        }.isFailure)
+
+        val corrected = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/A.kt", "fun a() = 3\n")
+            ),
+            rationale = "review correction",
+        )
+        assertEquals(
+            corrected,
+            WorkspaceGitHubSelfEditBatch.requireMaterialRevision(previous, corrected),
+        )
+    }
+
+    @Test fun reviewerRevisionMayNarrowFilesWhenContentActuallyChanges() {
+        val previous = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/A.kt", "fun a() = 2\n"),
+                WorkspaceGitHubWritePolicy.FileChange("src/B.kt", "fun b() = 3\n"),
+            ),
+            rationale = "first",
+        )
+        val corrected = WorkspaceGitHubSelfEditBatch.Prepared(
+            files = listOf(
+                WorkspaceGitHubWritePolicy.FileChange("src/A.kt", "fun a() = 4\n")
+            ),
+            rationale = "review correction",
+        )
+        assertEquals(
+            corrected,
+            WorkspaceGitHubSelfEditBatch.requireMaterialRevision(previous, corrected),
+        )
     }
 
 }

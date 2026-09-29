@@ -231,6 +231,9 @@ internal object WorkspaceGitHubSelfEditBatch {
         val body = buildString {
             appendLine("Your previous proposed patch for this SAME LYRA GitHub task was reviewed BEFORE commit.")
             appendLine("Make exactly ONE bounded revised proposal that addresses the reviewer feedback.")
+            appendLine("Treat the reviewer summary and risks as REQUIRED CORRECTION CONSTRAINTS within the original user-requested scope.")
+            appendLine("Do not repeat the rejected proposal unchanged; the revised file result must materially differ wherever the reviewer requested correction.")
+            appendLine("If reviewer feedback conflicts with an intermediate value or implementation choice from the original request, correct that implementation choice while preserving the user's underlying requested outcome and scope.")
             appendLine("Return exactly ONE JSON object and nothing else.")
             appendLine("Root keys only: schemaVersion, operation, edits, rationale.")
             appendLine("schemaVersion must be 2 and operation must be replace_exact_once_batch.")
@@ -261,6 +264,24 @@ internal object WorkspaceGitHubSelfEditBatch {
             "Reviewer revision prompt exceeds the provider bound"
         }
         return body
+    }
+
+    fun requireMaterialRevision(previous: Prepared, revised: Prepared): Prepared {
+        require(previous.files.isNotEmpty() && revised.files.isNotEmpty()) {
+            "Reviewer revision comparison requires non-empty proposals"
+        }
+        val previousFiles = previous.files.associate { change ->
+            WorkspaceGitHubWritePolicy.requirePath(change.path).lowercase(Locale.US) to
+                WorkspaceGitHubWritePolicy.requireContent(change.content)
+        }
+        val revisedFiles = revised.files.associate { change ->
+            WorkspaceGitHubWritePolicy.requirePath(change.path).lowercase(Locale.US) to
+                WorkspaceGitHubWritePolicy.requireContent(change.content)
+        }
+        require(previousFiles != revisedFiles) {
+            "Reviewer-requested revision repeated the rejected proposal without a material file change"
+        }
+        return revised
     }
 
     private fun proposalWindow(before: String, after: String): String {
