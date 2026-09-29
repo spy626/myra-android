@@ -10,7 +10,7 @@ import org.junit.Test
  */
 internal object WorkspaceGitHubReviewerRevisionProbe {
     const val REVIEW_MARKER = "REVIEWED_FINAL"
-    const val REVIEW_EVIDENCE = "NONE"
+    const val REVIEW_EVIDENCE = "QA_HANDOFF_CONFIRMED"
 }
 
 class WorkspaceGitHubReviewerRevisionProbeTest {
