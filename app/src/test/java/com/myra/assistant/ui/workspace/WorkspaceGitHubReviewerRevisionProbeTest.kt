@@ -9,7 +9,7 @@ import org.junit.Test
  * evidence required by the acceptance invariant before the mandatory second review.
  */
 internal object WorkspaceGitHubReviewerRevisionProbe {
-    const val REVIEW_MARKER = "REVIEWED_FINAL"
+    const val REVIEW_MARKER = "BASELINE"
     const val REVIEW_EVIDENCE = "NONE"
 }
 

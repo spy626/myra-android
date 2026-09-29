@@ -66,7 +66,12 @@ internal class WorkspaceGitHubSelfEditFlow(
         const val CP_LAST_FAILURE = "workspace_github_self_edit_last_failure"
         val CHECKPOINT_SHA = Regex("[0-9a-f]{40,64}")
         val CHECKPOINT_PHASES = setOf(
-            "pre_commit", "waiting_ci", "repair_waiting_ci", "ci_failed", "ci_green"
+            "pre_commit",
+            "waiting_ci",
+            "repair_pre_commit",
+            "repair_waiting_ci",
+            "ci_failed",
+            "ci_green",
         )
     }
 
@@ -84,6 +89,7 @@ internal class WorkspaceGitHubSelfEditFlow(
     private var selectedProvider: WorkspaceCodingRoleRouter.Provider? = null
     private var repairAttempt = 0
     private var reviewRevisionAttempt = 0
+    private var ciRepairReserved = false
     private var taskBudget = WorkspaceGitHubTaskBudget.State()
     private var grant: WorkspaceGitHubConnector.InstallationGrant? = null
     private var access: WorkspaceGitHubConnector.WriteAccess? = null
@@ -161,6 +167,12 @@ internal class WorkspaceGitHubSelfEditFlow(
             preferences.edit().putInt(CP_REVIEW_REVISION_ATTEMPT, 0).apply()
         }
         taskBudget = checkpoint.taskBudget
+        val repairReservation = WorkspaceGitHubCiRepairCheckpoint.classify(
+            phase = checkpoint.phase,
+            repairAttempt = checkpoint.repairAttempt,
+            budget = checkpoint.taskBudget,
+        )
+        ciRepairReserved = repairReservation.reserved
         codingPlan = WorkspaceGitHubCodingPlan.create(
             goal = checkpoint.instruction,
             repository = checkpoint.receipt.repository,
@@ -177,6 +189,13 @@ internal class WorkspaceGitHubSelfEditFlow(
                 WorkspaceWorkPhase.RECOVERING,
                 "Restarting interrupted pre-commit review cycle",
                 "Reviewer lineage is rebuilt from freshly pinned source; no stale second review is assumed",
+            )
+        }
+        if (repairReservation.legacyMigration) {
+            listener.onEvent(
+                WorkspaceWorkPhase.RECOVERING,
+                "Recovering reserved CI repair",
+                "Legacy ci_failed checkpoint already spent its single repair unit; it will not be charged twice",
             )
         }
         dispatch(
@@ -1055,7 +1074,10 @@ internal class WorkspaceGitHubSelfEditFlow(
                 "GitHub commit receipt did not match the authorized self-edit"
             }
             access = checked.copy(headSha = receipt.commitSha)
-            if (repair) repairAttempt = 1
+            if (repair) {
+                repairAttempt = 1
+                ciRepairReserved = false
+            }
             saveCheckpoint(receipt, if (repair) "repair_waiting_ci" else "waiting_ci")
             awaitExactCi(run, receipt)
         }
@@ -1223,14 +1245,26 @@ internal class WorkspaceGitHubSelfEditFlow(
                 )
                 return@dispatch
             }
-            if (!consumeTaskBudget(run, WorkspaceGitHubTaskBudget::consumeCiRepair)) {
-                return@dispatch
+            if (!ciRepairReserved) {
+                if (!consumeTaskBudget(run, WorkspaceGitHubTaskBudget::consumeCiRepair)) {
+                    return@dispatch
+                }
+                ciRepairReserved = true
+            } else {
+                require(taskBudget.ciRepairs == WorkspaceGitHubTaskBudget.MAX_CI_REPAIRS) {
+                    "Reserved CI repair checkpoint did not carry the consumed repair budget"
+                }
             }
+            reviewRevisionAttempt = 0
+            // Persist phase + already-consumed budget before any repair provider/network work.
+            // If the process dies after this point, resume must not charge the same repair twice.
+            saveCheckpoint(receipt, WorkspaceGitHubCiRepairCheckpoint.PHASE)
             ciWatching = false
             listener.onEvent(
                 WorkspaceWorkPhase.RECOVERING,
                 "Starting fresh review cycle for CI repair",
-                "Previous pre-commit reviewer state is not inherited",
+                if (ciRepairReserved) "Single CI repair is reserved; previous pre-commit reviewer state is not inherited"
+                else "Previous pre-commit reviewer state is not inherited",
             )
             listener.onEvent(
                 WorkspaceWorkPhase.RECOVERING,
@@ -1583,6 +1617,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         selectedProvider = null
         repairAttempt = 0
         reviewRevisionAttempt = 0
+        ciRepairReserved = false
         taskBudget = WorkspaceGitHubTaskBudget.State()
         grant = null
         access = null
