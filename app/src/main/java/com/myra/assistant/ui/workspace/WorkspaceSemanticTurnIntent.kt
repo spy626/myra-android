@@ -68,7 +68,9 @@ internal object WorkspaceSemanticTurnIntent {
             return Proposal(Kind.CAPABILITY_QUERY, Effect.NONE, 0.96)
         }
 
-        val writeAuthorized = WorkspaceExecutionAuthority.allowsCodingMutation(text)
+        val writeAuthorized =
+            WorkspaceExecutionAuthority.requestedProjectType(text) != null ||
+                WorkspaceExecutionAuthority.allowsCodingMutation(text)
         val readOnly = !writeAuthorized &&
             readCue.containsMatchIn(text) &&
             (resultCue.containsMatchIn(text) ||
