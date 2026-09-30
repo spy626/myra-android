@@ -16,7 +16,7 @@ internal object WorkspacePublicWorkNarration {
             Update(
                 "write-safety",
                 "Checking write safety",
-                "Write scope safe hai bro — protected feature branch binding match kar raha hai. Main/master write ya merge is task ka part nahi hai.",
+                "Repo write check clear hai bro — task feature branch tak locked hai; main/master untouched rahega.",
             )
         } else {
             Update(
@@ -38,9 +38,9 @@ internal object WorkspacePublicWorkNarration {
                 if (names.size == 1) "Scoped work to ${names.single()}"
                 else "Scoped work across ${names.size} related files",
                 if (names.size == 1) {
-                    "Scope clear hai bro — requested task ke liye $target select hua hai. Unrelated working code ko touch nahi karunga."
+                    "Scope bhi clear hai bro — $target hi requested task ka target hai. Unrelated working code ko touch nahi karunga."
                 } else {
-                    "Scope clear hai bro — task ${names.size} bounded files tak limited hai: $target. Iske bahar code touch nahi karunga."
+                    "Scope bhi clear hai bro — task ${names.size} bounded files tak limited hai: $target. Iske bahar code touch nahi karunga."
                 },
             )
         } else {
@@ -73,13 +73,13 @@ internal object WorkspacePublicWorkNarration {
             else -> "Prepared a change proposal"
         }
         val fallback = if (isHinglish(instruction)) {
-            "Change proposal ready hai — bounded files: $files. Ab write se pehle review/validation kar raha hoon."
+            "Proposal ready hai — bounded files: $files. Ab write se pehle review/validation kar raha hoon."
         } else {
             "The change proposal is ready for $files. I’m reviewing it before any protected write."
         }
         val body = rationale?.let {
             if (isHinglish(instruction)) {
-                "Change proposal ready hai: $it Ab write se pehle review/validation kar raha hoon."
+                "Proposal ready hai: $it Ab write se pehle review/validation kar raha hoon."
             } else {
                 "The change proposal is ready: $it I’m reviewing it before any protected write."
             }
@@ -108,7 +108,7 @@ internal object WorkspacePublicWorkNarration {
         val text = when (review.decision) {
             WorkspaceGitHubPatchReviewer.Decision.ACCEPT ->
                 if (isHinglish(instruction)) {
-                    "Review clear hai ✅ $summary Ab protected write ke next verified step par ja raha hoon."
+                    "Reviewer ne change clear kiya ✅ $summary Ab approved patch ko write stage me le ja raha hoon."
                 } else {
                     "The review is clear ✅ $summary I’m moving to the next verified write step."
                 }
@@ -143,7 +143,7 @@ internal object WorkspacePublicWorkNarration {
             "commit",
             label,
             if (isHinglish(instruction)) {
-                "Push confirm ho gaya bro ✅ ${receipt.files.size} changed file(s) protected feature branch par commit hue. Ab exact pushed commit ka CI verify kar raha hoon; CI evidence ke bina task complete nahi bolunga."
+                "Push confirm ho gaya bro ✅ ${receipt.files.size} file(s) update hui. Ab isi commit ka exact CI dekh raha hoon; GREEN evidence se pehle task done nahi bolunga."
             } else {
                 "The push is confirmed ✅ ${receipt.files.size} changed file(s) were committed to the protected feature branch. I’m verifying the exact pushed commit with CI before calling the task complete."
             },
@@ -157,7 +157,7 @@ internal object WorkspacePublicWorkNarration {
             "ci-running-$runNumber",
             "CI #$runNumber is $clean",
             if (isHinglish(instruction)) {
-                "Exact CI #$runNumber mil gaya bro — abhi status $clean hai. Main isi pushed commit ka result follow kar raha hoon."
+                "CI #$runNumber ab $clean hai bro. Main isi commit ka terminal result follow kar raha hoon."
             } else {
                 "Exact CI #$runNumber is now $clean. I’m following this pushed commit through to its terminal result."
             },
@@ -199,7 +199,7 @@ internal object WorkspacePublicWorkNarration {
             "ci-passed-$runNumber",
             "CI #$runNumber passed for this commit",
             if (isHinglish(instruction)) {
-                "CI #$runNumber GREEN aa gaya bro ✅ Configured build/tests isi pushed commit ke liye pass hue. Ab verified completion result prepare kar raha hoon."
+                "CI #$runNumber GREEN ✅ Isi pushed commit ke configured build/tests pass hue. Ab final verified result wrap up kar raha hoon."
             } else {
                 "CI #$runNumber is GREEN ✅ The configured build/tests passed for this pushed commit. I’m preparing the verified completion result now."
             },

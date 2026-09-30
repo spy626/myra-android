@@ -1008,7 +1008,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun refreshWorkTraceUi(messageId: String) {
         if (!::root.isInitialized) return
         val host = liveWorkTranscript
-        if (!workTab && messageId == workTraceMessageId &&
+        val hasPublicNarration = publicWorkNarrations.forTurn(messageId).isNotEmpty()
+        if (!hasPublicNarration && !workTab && messageId == workTraceMessageId &&
             host != null && liveWorkTranscriptMessageId == messageId) {
             syncLiveWorkTranscript(animateNew = true)
             updateSendButton()
@@ -1169,23 +1170,66 @@ class WorkspaceActivity : AppCompatActivity() {
         scroll.post { scroll.scrollTo(0, content.height) }
     }
 
-    private fun addPublicWorkNarrations(
+    private fun addPublicWorkMessage(
         host: LinearLayout,
-        messageId: String,
+        item: WorkspaceWorkConversationItem.Public,
     ) {
-        publicWorkNarrations.forTurn(messageId).forEach { update ->
-            host.addView(label(update.statusLabel, 13.5f).apply {
+        val live = item.liveEvent
+        if (live != null) {
+            val row = createWorkEventRow(
+                event = live,
+                isCurrent = true,
+                active = true,
+                animateEntry = false,
+            )
+            val rowView = row.title.parent?.parent as? View
+                ?: error("LYRA public work status row could not be created")
+            host.addView(rowView, LinearLayout.LayoutParams(-1, -2).apply {
+                topMargin = dp(4)
+            })
+        } else {
+            host.addView(label(item.message.statusLabel, 13.5f).apply {
                 setTextColor(Color.rgb(145, 157, 171))
-                setPadding(dp(4), dp(8), dp(8), dp(2))
+                setPadding(dp(4), dp(7), dp(8), dp(2))
                 maxLines = 2
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(-1, -2))
-            host.addView(label(update.text, 16f).apply {
-                text = WorkspaceMarkdownText.render(update.text)
-                setTextColor(Color.rgb(230, 236, 244))
-                setPadding(dp(4), 0, dp(8), dp(8))
-                setTextIsSelectable(true)
-            }, LinearLayout.LayoutParams(-1, -2))
+        }
+        host.addView(label(item.message.text, 16f).apply {
+            text = WorkspaceMarkdownText.render(item.message.text)
+            setTextColor(Color.rgb(230, 236, 244))
+            setPadding(dp(4), 0, dp(8), dp(10))
+            setTextIsSelectable(true)
+        }, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    private fun addWorkConversationTimeline(
+        host: LinearLayout,
+        messageId: String,
+        snapshot: WorkspaceWorkSnapshot,
+    ) {
+        val public = publicWorkNarrations.forTurn(messageId)
+        val items = if (snapshot.active) {
+            WorkspaceWorkConversationTimeline.active(snapshot, public)
+        } else {
+            WorkspaceWorkConversationTimeline.completed(snapshot, public)
+        }
+        items.forEach { item ->
+            when (item) {
+                is WorkspaceWorkConversationItem.Public ->
+                    addPublicWorkMessage(host, item)
+                is WorkspaceWorkConversationItem.Work -> {
+                    val row = createWorkEventRow(
+                        event = item.event,
+                        isCurrent = item.current,
+                        active = item.current && snapshot.active,
+                        animateEntry = false,
+                    )
+                    val rowView = row.title.parent?.parent as? View
+                        ?: error("LYRA merged work row could not be created")
+                    host.addView(rowView, LinearLayout.LayoutParams(-1, -2))
+                }
+            }
         }
     }
 
@@ -1221,32 +1265,27 @@ class WorkspaceActivity : AppCompatActivity() {
         val messageId = workTraceMessageId
         if (messageId != null) {
             addKickoffToExpandedHistory(host, messageId, snapshot, workTraceExpanded)
-            if (!snapshot.active && workTraceExpanded) {
-                addPublicWorkNarrations(host, messageId)
+            if (snapshot.active || workTraceExpanded) {
+                addWorkConversationTimeline(host, messageId, snapshot)
             }
-        }
-        val lastPublicStatus = messageId
-            ?.let(publicWorkNarrations::forTurn)
-            ?.lastOrNull()
-            ?.statusLabel
-        val visibleEvents = WorkspaceWorkPresentation.visibleEvents(
-            snapshot,
-            expanded = workTraceExpanded,
-        ).filterNot { event ->
-            snapshot.active && lastPublicStatus != null && event.label == lastPublicStatus
-        }
-        visibleEvents.forEachIndexed { index, event ->
-            val isNewest = index == visibleEvents.lastIndex
-            val liveRow = createWorkEventRow(
-                event = event,
-                isCurrent = isNewest,
-                active = isNewest && snapshot.active,
-                animateEntry = isNewest && snapshot.active,
+        } else {
+            val visibleEvents = WorkspaceWorkPresentation.visibleEvents(
+                snapshot,
+                expanded = workTraceExpanded,
             )
-            val rowView = liveRow.title.parent?.parent as? View
-                ?: error("LYRA work row could not be created")
-            host.addView(rowView, LinearLayout.LayoutParams(-1, -2))
-            liveWorkRows.add(liveRow)
+            visibleEvents.forEachIndexed { index, event ->
+                val isNewest = index == visibleEvents.lastIndex
+                val liveRow = createWorkEventRow(
+                    event = event,
+                    isCurrent = isNewest,
+                    active = isNewest && snapshot.active,
+                    animateEntry = isNewest && snapshot.active,
+                )
+                val rowView = liveRow.title.parent?.parent as? View
+                    ?: error("LYRA work row could not be created")
+                host.addView(rowView, LinearLayout.LayoutParams(-1, -2))
+                liveWorkRows.add(liveRow)
+            }
         }
         return host
     }
@@ -1282,21 +1321,8 @@ class WorkspaceActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(-1, -2))
         }
         addKickoffToExpandedHistory(host, messageId, snapshot, expanded)
-        if (!snapshot.active && expanded) {
-            addPublicWorkNarrations(host, messageId)
-        }
-        val visible = WorkspaceWorkPresentation.visibleEvents(snapshot, expanded)
-        visible.forEachIndexed { index, event ->
-            val newest = index == visible.lastIndex
-            val row = createWorkEventRow(
-                event = event,
-                isCurrent = newest,
-                active = newest && snapshot.active,
-                animateEntry = false,
-            )
-            val rowView = row.title.parent?.parent as? View
-                ?: error("LYRA retained work row could not be created")
-            host.addView(rowView, LinearLayout.LayoutParams(-1, -2))
+        if (snapshot.active || expanded) {
+            addWorkConversationTimeline(host, messageId, snapshot)
         }
         return host
     }
@@ -2013,20 +2039,6 @@ class WorkspaceActivity : AppCompatActivity() {
                             rightMargin = dp(12)
                             bottomMargin = dp(2)
                         })
-                    }
-                    if (turnSnapshot?.active == true) {
-                        val publicHost = LinearLayout(this).apply {
-                            orientation = LinearLayout.VERTICAL
-                            setPadding(dp(6), 0, dp(10), dp(2))
-                        }
-                        addPublicWorkNarrations(publicHost, message.id)
-                        if (publicHost.childCount > 0) {
-                            content.addView(publicHost, LinearLayout.LayoutParams(-1, -2).apply {
-                                leftMargin = dp(10)
-                                rightMargin = dp(12)
-                                bottomMargin = dp(2)
-                            })
-                        }
                     }
                 }
                 turnTrace?.let { trace ->

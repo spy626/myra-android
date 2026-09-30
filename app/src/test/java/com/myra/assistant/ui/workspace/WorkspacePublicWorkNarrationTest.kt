@@ -38,11 +38,11 @@ class WorkspacePublicWorkNarrationTest {
             ),
         )
 
-        assertTrue(scope.text.contains("Scope clear hai bro"))
+        assertTrue(scope.text.contains("Scope bhi clear hai bro"))
         assertTrue(scope.text.contains("ReadingTrackerSafetyTest.kt"))
-        assertTrue(proposal.text.contains("Change proposal ready hai"))
+        assertTrue(proposal.text.contains("Proposal ready hai"))
         assertTrue(commit.text.contains("Push confirm ho gaya bro"))
-        assertTrue(commit.text.contains("CI evidence ke bina task complete nahi bolunga"))
+        assertTrue(commit.text.contains("GREEN evidence se pehle task done nahi bolunga"))
     }
 
     @Test fun reviewDecisionChangesNarrationInsteadOfUsingOneFixedSentence() {
@@ -67,7 +67,7 @@ class WorkspacePublicWorkNarrationTest {
         )
 
         assertNotEquals(accepted.text, revise.text)
-        assertTrue(accepted.text.contains("Review clear hai"))
+        assertTrue(accepted.text.contains("Reviewer ne change clear kiya"))
         assertTrue(revise.text.contains("fixable issue"))
         assertTrue(revise.text.contains("Null guard"))
     }
@@ -77,8 +77,8 @@ class WorkspacePublicWorkNarrationTest {
         val running = WorkspacePublicWorkNarration.ciRunning(instruction, 3314L, "in_progress")
         val passed = WorkspacePublicWorkNarration.ciPassed(instruction, 3314L)
 
-        assertTrue(running.text.contains("isi pushed commit"))
-        assertTrue(passed.text.contains("Configured build/tests"))
+        assertTrue(running.text.contains("isi commit"))
+        assertTrue(passed.text.contains("configured build/tests"))
         assertFalse(passed.text.contains("phone-pass", ignoreCase = true))
         assertFalse(passed.text.contains("sab kuch verified", ignoreCase = true))
     }
