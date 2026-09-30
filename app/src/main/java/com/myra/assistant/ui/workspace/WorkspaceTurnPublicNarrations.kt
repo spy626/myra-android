@@ -60,6 +60,34 @@ internal class WorkspaceTurnPublicNarrations(
     @Synchronized fun forTurn(messageId: String): List<WorkspacePublicWorkMessage> =
         entries[requireId(messageId)]?.values?.toList().orEmpty()
 
+    @Synchronized fun restore(
+        messageId: String,
+        messages: List<WorkspacePublicWorkMessage>,
+    ) {
+        val id = requireId(messageId)
+        val turn = linkedMapOf<String, WorkspacePublicWorkMessage>()
+        messages.sortedBy { it.atMs }.forEach { raw ->
+            if (WorkspaceSourceContext.containsPossibleSecret(raw.statusLabel) ||
+                WorkspaceSourceContext.containsPossibleSecret(raw.text)) return@forEach
+            val key = WorkspaceWorkTrace.safeText(raw.key, 80)
+                .takeIf { it.isNotBlank() && it.none(Char::isISOControl) }
+                ?: return@forEach
+            val status = WorkspaceWorkTrace.safeText(raw.statusLabel, 90)
+                .takeIf(String::isNotBlank)
+                ?: return@forEach
+            val body = WorkspaceWorkTrace.safeText(raw.text, 420)
+                .takeIf(String::isNotBlank)
+                ?: return@forEach
+            if (raw.atMs < 0L) return@forEach
+            turn.remove(key)
+            turn[key] = WorkspacePublicWorkMessage(key, status, body, raw.atMs)
+            while (turn.size > maxEntriesPerTurn) turn.remove(turn.keys.first())
+        }
+        entries.remove(id)
+        entries[id] = turn
+        trimTurns(protectedId = id)
+    }
+
     @Synchronized fun remove(messageId: String) {
         entries.remove(requireId(messageId))
     }

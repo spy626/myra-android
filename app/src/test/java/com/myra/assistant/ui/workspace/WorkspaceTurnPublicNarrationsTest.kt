@@ -38,6 +38,22 @@ class WorkspaceTurnPublicNarrationsTest {
         assertEquals(listOf("x"), store.forTurn("second").map { it.key })
     }
 
+    @Test fun restoreKeepsOriginalOrderTimestampAndBounds() {
+        val store = WorkspaceTurnPublicNarrations(maxTurns = 3, maxEntriesPerTurn = 2)
+        store.restore(
+            "turn",
+            listOf(
+                WorkspacePublicWorkMessage("a", "A", "First A", 30L),
+                WorkspacePublicWorkMessage("b", "B", "First B", 10L),
+                WorkspacePublicWorkMessage("c", "C", "First C", 20L),
+            ),
+        )
+
+        val restored = store.forTurn("turn")
+        assertEquals(listOf("c", "a"), restored.map { it.key })
+        assertEquals(listOf(20L, 30L), restored.map { it.atMs })
+    }
+
     @Test fun secretLikePublicNarrationIsDropped() {
         val store = WorkspaceTurnPublicNarrations(maxTurns = 3, maxEntriesPerTurn = 3)
         store.reset("turn")

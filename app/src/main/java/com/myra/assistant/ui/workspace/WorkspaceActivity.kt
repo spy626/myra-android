@@ -107,11 +107,15 @@ class WorkspaceActivity : AppCompatActivity() {
     private val githubSelfEditProjectKey = "workspace_github_self_edit_project_id"
     private val githubSelfEditMessageKey = "workspace_github_self_edit_message_id"
     private val githubSelfEditKickoffKey = "workspace_github_self_edit_kickoff"
+    private val githubSelfEditPublicNarrationKey =
+        "workspace_github_self_edit_public_narration"
     private val workKickoffs = LinkedHashMap<String, String>()
     private val githubSelfEditReceiptProjectKey = "workspace_github_self_edit_receipt_project_id"
     private val githubSelfEditReceiptMessageKey = "workspace_github_self_edit_receipt_message_id"
     private val githubSelfEditReceiptSummaryKey = "workspace_github_self_edit_receipt_summary"
     private val githubSelfEditReceiptKickoffKey = "workspace_github_self_edit_receipt_kickoff"
+    private val githubSelfEditReceiptNarrationKey =
+        "workspace_github_self_edit_receipt_public_narration"
     private val selectedProjectKey = "workspace_selected_project_id"
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -155,17 +159,23 @@ class WorkspaceActivity : AppCompatActivity() {
                     statusLabel: String,
                     text: String,
                 ) {
+                    val projectId = githubSelfEditProjectId
+                        ?: preferences.getString(githubSelfEditProjectKey, null)
+                    val messageId = githubSelfEditMessageId
+                        ?: preferences.getString(githubSelfEditMessageKey, null)
+                    val saved = if (projectId != null && !messageId.isNullOrBlank()) {
+                        publicWorkNarrations.upsert(
+                            messageId = messageId,
+                            key = key,
+                            statusLabel = statusLabel,
+                            text = text,
+                        )?.also {
+                            persistGitHubPublicNarration(projectId, messageId)
+                        }
+                    } else null
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        githubSelfEditMessageId?.let { messageId ->
-                            publicWorkNarrations.upsert(
-                                messageId = messageId,
-                                key = key,
-                                statusLabel = statusLabel,
-                                text = text,
-                            )
-                            render()
-                        } ?: updateSendButton()
+                        if (saved != null) render() else updateSendButton()
                     }
                 }
 
@@ -392,6 +402,44 @@ class WorkspaceActivity : AppCompatActivity() {
         }.getOrNull()
     }
 
+    private fun persistGitHubPublicNarration(
+        projectId: String,
+        messageId: String,
+    ) {
+        val messages = publicWorkNarrations.forTurn(messageId)
+        if (messages.isEmpty()) return
+        val encoded = runCatching {
+            WorkspacePublicWorkNarrationSnapshot.encode(
+                projectId = projectId,
+                messageId = messageId,
+                messages = messages,
+            )
+        }.getOrNull() ?: return
+        preferences.edit()
+            .putString(githubSelfEditPublicNarrationKey, encoded)
+            .commit()
+    }
+
+    private fun restoreGitHubPublicNarration(
+        projectId: String,
+        messageId: String,
+        preferenceKey: String = githubSelfEditPublicNarrationKey,
+    ): Boolean {
+        val restored = WorkspacePublicWorkNarrationSnapshot.decode(
+            raw = preferences.getString(preferenceKey, null),
+            expectedProjectId = projectId,
+            expectedMessageId = messageId,
+        )
+        if (restored.isEmpty()) return false
+        publicWorkNarrations.restore(messageId, restored)
+        return true
+    }
+
+    private fun resetGitHubPublicNarration(messageId: String) {
+        publicWorkNarrations.reset(messageId)
+        preferences.edit().remove(githubSelfEditPublicNarrationKey).commit()
+    }
+
     private fun saveGitHubSelfEditCompletionReceipt(summary: String) {
         val projectId = githubSelfEditProjectId
             ?: preferences.getString(githubSelfEditProjectKey, null)
@@ -401,6 +449,17 @@ class WorkspaceActivity : AppCompatActivity() {
             ?: return
         val kickoff = workKickoffs[messageId]
             ?: preferences.getString(githubSelfEditKickoffKey, null)
+        val narration = publicWorkNarrations.forTurn(messageId)
+            .takeIf { it.isNotEmpty() }
+            ?.let { messages ->
+                runCatching {
+                    WorkspacePublicWorkNarrationSnapshot.encode(
+                        projectId = projectId,
+                        messageId = messageId,
+                        messages = messages,
+                    )
+                }.getOrNull()
+            }
         val editor = preferences.edit()
             .putString(githubSelfEditReceiptProjectKey, projectId)
             .putString(githubSelfEditReceiptMessageKey, messageId)
@@ -409,6 +468,11 @@ class WorkspaceActivity : AppCompatActivity() {
             editor.putString(githubSelfEditReceiptKickoffKey, kickoff.take(360))
         } else {
             editor.remove(githubSelfEditReceiptKickoffKey)
+        }
+        if (!narration.isNullOrBlank()) {
+            editor.putString(githubSelfEditReceiptNarrationKey, narration)
+        } else {
+            editor.remove(githubSelfEditReceiptNarrationKey)
         }
         editor.apply()
     }
@@ -420,6 +484,11 @@ class WorkspaceActivity : AppCompatActivity() {
         preferences.getString(githubSelfEditReceiptKickoffKey, null)
             ?.takeIf { it.isNotBlank() }
             ?.let { rememberWorkKickoff(messageId, it) }
+        restoreGitHubPublicNarration(
+            projectId = projectId,
+            messageId = messageId,
+            preferenceKey = githubSelfEditReceiptNarrationKey,
+        )
         workTraces.ensureSuccess(
             messageId = messageId,
             label = "GitHub change verified",
@@ -439,6 +508,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 .remove(githubSelfEditReceiptMessageKey)
                 .remove(githubSelfEditReceiptSummaryKey)
                 .remove(githubSelfEditReceiptKickoffKey)
+                .remove(githubSelfEditReceiptNarrationKey)
                 .apply()
         }
         if (!consumed) {
@@ -476,6 +546,7 @@ class WorkspaceActivity : AppCompatActivity() {
             .remove(githubSelfEditProjectKey)
             .remove(githubSelfEditMessageKey)
             .remove(githubSelfEditKickoffKey)
+            .remove(githubSelfEditPublicNarrationKey)
             .apply()
     }
 
@@ -496,6 +567,7 @@ class WorkspaceActivity : AppCompatActivity() {
             githubSelfEditProjectId = projectId
             githubSelfEditMessageId = messageId
             kickoff?.takeIf { it.isNotBlank() }?.let { rememberWorkKickoff(messageId, it) }
+            restoreGitHubPublicNarration(projectId, messageId)
             activateWorkTrace(messageId)
         }
         ensureGitHubBackgroundNotificationPermission()
@@ -3335,7 +3407,7 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             githubSelfEditProjectId = id
             githubSelfEditMessageId = stored.id
-            publicWorkNarrations.reset(stored.id)
+            resetGitHubPublicNarration(stored.id)
             val kickoff = WorkspaceWorkKickoff.github(text)
             saveGitHubSelfEditTurnCheckpoint(id, stored.id, kickoff)
             ensureGitHubBackgroundNotificationPermission()
