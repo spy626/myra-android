@@ -44,10 +44,10 @@ class WorkspaceFinalAnswerTest {
         val answer = WorkspaceFinalAnswer.githubSuccess(success())
 
         assertTrue(answer.startsWith("Requested change across 2 files is complete."))
-        assertTrue(answer.contains("Exact CI #3272 passed for the pushed commit."))
+        assertTrue(answer.contains("Exact CI #3272 passed the configured build/tests for the pushed commit."))
         assertTrue(answer.contains("feature-branch write stayed isolated"))
         assertTrue(answer.contains("no merge was performed"))
-        assertTrue(answer.contains("not physical phone behavior"))
+        assertTrue(answer.contains("CI does not verify physical phone behavior"))
 
         assertFalse(answer.contains("What changed:"))
         assertFalse(answer.contains("commit `"))
@@ -57,6 +57,34 @@ class WorkspaceFinalAnswerTest {
         assertFalse(answer.contains("xKiro"))
         assertFalse(answer.contains("Groq"))
         assertFalse(answer.contains("phone pass", ignoreCase = true))
+    }
+
+    @Test fun githubFallbackMatchesHinglishUserToneWithoutRawTechnicalDump() {
+        val answer = WorkspaceFinalAnswer.githubSuccess(
+            result = success(),
+            userTask = "Bro GitHub repo me A.kt me safe change karo aur exact CI GREEN tak verify karo.",
+        )
+
+        assertTrue(answer.startsWith("Bro ✅"))
+        assertTrue(answer.contains("2 files me complete ho gaya"))
+        assertTrue(answer.contains("configured build/tests"))
+        assertTrue(answer.contains("pass hue"))
+        assertTrue(answer.contains("Phone behavior ko CI verify nahi karta"))
+        assertFalse(answer.contains("agent/myra-phase-1"))
+        assertFalse(answer.contains("Draft PR #"))
+        assertFalse(answer.contains("sab kuch verified", ignoreCase = true))
+        assertFalse(answer.contains("commit `" + "b".repeat(12)))
+    }
+
+    @Test fun sensitiveUserTaskIsNeverEchoedIntoFallback() {
+        val answer = WorkspaceFinalAnswer.githubSuccess(
+            result = success(),
+            userTask = "Bro GitHub repo me A.kt update karo api_key=sk-super-secret-123456",
+        )
+
+        assertFalse(answer.contains("super-secret"))
+        assertFalse(answer.contains("api_key"))
+        assertTrue(answer.contains("Exact CI #3272"))
     }
 
     @Test fun missingDraftPrIsAQualifiedNoteNotAFakeFailure() {

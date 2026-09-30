@@ -32,13 +32,19 @@ internal object WorkspaceWorkNarration {
             raw.presentation == WorkspaceWorkPresentationKind.EVIDENCE &&
                 ci.containsMatchIn(raw.label)
         }
+        val hasReviewEvidence = snapshot.events.any { raw ->
+            raw.presentation == WorkspaceWorkPresentationKind.EVIDENCE &&
+                review.containsMatchIn(raw.label)
+        }
         snapshot.events.forEach { raw ->
             if (raw.presentation == WorkspaceWorkPresentationKind.DEFAULT) {
                 if (draftPr.containsMatchIn(raw.label) ||
                     completion.containsMatchIn(raw.label) ||
                     raw.label.equals("Preparing result explanation", ignoreCase = true) ||
                     (raw.phase == WorkspaceWorkPhase.VERIFYING &&
-                        hasExactCiEvidence && ci.containsMatchIn(raw.label))) {
+                        hasExactCiEvidence && ci.containsMatchIn(raw.label)) ||
+                    (raw.phase == WorkspaceWorkPhase.VERIFYING &&
+                        hasReviewEvidence && review.containsMatchIn(raw.label))) {
                     return@forEach
                 }
             }

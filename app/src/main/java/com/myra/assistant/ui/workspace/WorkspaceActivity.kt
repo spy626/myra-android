@@ -151,7 +151,10 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
 
                 override fun onComplete(result: WorkspaceGitHubSelfEditFlow.Completion) {
-                    val summary = WorkspaceFinalAnswer.githubSuccess(result)
+                    val summary = WorkspaceFinalAnswer.githubSuccess(
+                        result = result,
+                        userTask = currentGitHubSelfEditUserTask(),
+                    )
                     saveGitHubSelfEditCompletionReceipt(summary)
                     clearGitHubSelfEditTurnCheckpoint()
                     WorkspaceGitHubBackgroundService.complete(
@@ -354,6 +357,20 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun rememberedSelectedProject(): String? =
         preferences.getString(selectedProjectKey, null)
             ?.takeIf { projects.getProject(it) != null }
+
+    private fun currentGitHubSelfEditUserTask(): String? {
+        val projectId = githubSelfEditProjectId
+            ?: preferences.getString(githubSelfEditProjectKey, null)
+            ?: return null
+        val messageId = githubSelfEditMessageId
+            ?: preferences.getString(githubSelfEditMessageKey, null)
+            ?: return null
+        return runCatching {
+            conversations.read(projectId)
+                .firstOrNull { it.id == messageId && it.role == "user" }
+                ?.text
+        }.getOrNull()
+    }
 
     private fun saveGitHubSelfEditCompletionReceipt(summary: String) {
         val projectId = githubSelfEditProjectId

@@ -158,6 +158,42 @@ class WorkspaceWorkNarrationTest {
         assertTrue(visible.any { it.label == "Scoped work to A.kt" })
     }
 
+    @Test fun reviewEvidenceSuppressesGenericReviewRowButKeepsSpecificDecision() {
+        val snapshot = WorkspaceWorkSnapshot(
+            events = listOf(
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "Second-provider QA review",
+                    "read-only",
+                    1L,
+                ),
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "Review accepted the proposed change",
+                    "The requested comment-only change is scoped correctly.",
+                    2L,
+                    WorkspaceWorkPresentationKind.EVIDENCE,
+                ),
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.DONE,
+                    "GitHub self-edit CI verified",
+                    "CI #3310",
+                    3L,
+                ),
+            ),
+            startedAtMs = 1L,
+            endedAtMs = 3L,
+        )
+
+        val visible = WorkspaceWorkNarration.events(snapshot)
+
+        assertEquals(
+            listOf("Review accepted the proposed change", "GitHub change verified"),
+            visible.map { it.label },
+        )
+        assertFalse(visible.any { it.label == "Reviewing the change" })
+    }
+
     @Test fun exactCiEvidenceSuppressesGenericCiAndBookkeepingRows() {
         val snapshot = WorkspaceWorkSnapshot(
             events = listOf(
