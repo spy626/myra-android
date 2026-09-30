@@ -50,12 +50,11 @@ class WorkspaceWorkConversationTimelineTest {
 
         val items = WorkspaceWorkConversationTimeline.active(snapshot, public)
 
-        assertEquals(3, items.size)
+        assertEquals(2, items.size)
         assertTrue(items[0] is WorkspaceWorkConversationItem.Public)
-        assertTrue(items[1] is WorkspaceWorkConversationItem.Public)
-        val current = items[2] as WorkspaceWorkConversationItem.Work
-        assertTrue(current.current)
-        assertEquals("Verifying exact CI", current.event.label)
+        val current = items[1] as WorkspaceWorkConversationItem.Public
+        assertNotNull(current.liveEvent)
+        assertEquals("CI #3316 is in progress", current.liveEvent?.label)
     }
 
     @Test fun activeTimelineUsesPublicMilestoneAsLiveRowWhenItMatchesCurrentStatus() {
