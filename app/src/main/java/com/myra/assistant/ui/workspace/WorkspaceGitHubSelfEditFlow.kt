@@ -42,6 +42,7 @@ internal class WorkspaceGitHubSelfEditFlow(
         fun onEvidence(phase: WorkspaceWorkPhase, label: String, detail: String? = null) {
             onEvent(phase, label, detail)
         }
+        fun onPublicUpdate(key: String, statusLabel: String, text: String) = Unit
         fun onComplete(result: Completion)
         fun onError(message: String)
     }
@@ -371,6 +372,9 @@ internal class WorkspaceGitHubSelfEditFlow(
                 "GitHub write binding did not match LYRA's protected self-edit policy"
             }
             access = checked
+            WorkspacePublicWorkNarration.writeSafety(instruction).let { update ->
+                listener.onPublicUpdate(update.key, update.statusLabel, update.text)
+            }
             readPathMap(run)
         }
     }
@@ -397,6 +401,12 @@ internal class WorkspaceGitHubSelfEditFlow(
             )
             WorkspaceAdaptiveWorkUpdate.scope(requireNotNull(codingPlan).selectedPaths).let { update ->
                 listener.onEvidence(update.phase, update.label, update.detail)
+            }
+            WorkspacePublicWorkNarration.scope(
+                instruction = instruction,
+                paths = requireNotNull(codingPlan).selectedPaths,
+            ).let { update ->
+                listener.onPublicUpdate(update.key, update.statusLabel, update.text)
             }
             readSelectedFiles(run)
         }
@@ -675,6 +685,13 @@ internal class WorkspaceGitHubSelfEditFlow(
                 ).let { update ->
                     listener.onEvidence(update.phase, update.label, update.detail)
                 }
+                WorkspacePublicWorkNarration.proposal(
+                    instruction = instruction,
+                    prepared = prepared,
+                    ciRepair = repair,
+                ).let { update ->
+                    listener.onPublicUpdate(update.key, update.statusLabel, update.text)
+                }
                 reviewOrCommit(
                     run = run,
                     primaryRoute = route,
@@ -874,6 +891,13 @@ internal class WorkspaceGitHubSelfEditFlow(
                         ).let { update ->
                             listener.onEvidence(update.phase, update.label, update.detail)
                         }
+                        WorkspacePublicWorkNarration.review(
+                            instruction = instruction,
+                            review = review,
+                            afterRevision = reviewRevisionAttempt > 0,
+                        ).let { update ->
+                            listener.onPublicUpdate(update.key, update.statusLabel, update.text)
+                        }
                         commit(run, prepared, expectedHead, repair)
                     }
                     WorkspaceGitHubPatchReviewer.Decision.REVISE -> {
@@ -882,6 +906,13 @@ internal class WorkspaceGitHubSelfEditFlow(
                             afterRevision = reviewRevisionAttempt > 0,
                         ).let { update ->
                             listener.onEvidence(update.phase, update.label, update.detail)
+                        }
+                        WorkspacePublicWorkNarration.review(
+                            instruction = instruction,
+                            review = review,
+                            afterRevision = reviewRevisionAttempt > 0,
+                        ).let { update ->
+                            listener.onPublicUpdate(update.key, update.statusLabel, update.text)
                         }
                         if (reviewRevisionAttempt >= 1) {
                             terminalFail(
@@ -907,6 +938,13 @@ internal class WorkspaceGitHubSelfEditFlow(
                             afterRevision = reviewRevisionAttempt > 0,
                         ).let { update ->
                             listener.onEvidence(update.phase, update.label, update.detail)
+                        }
+                        WorkspacePublicWorkNarration.review(
+                            instruction = instruction,
+                            review = review,
+                            afterRevision = reviewRevisionAttempt > 0,
+                        ).let { update ->
+                            listener.onPublicUpdate(update.key, update.statusLabel, update.text)
                         }
                         terminalFail(
                             run,
@@ -1046,6 +1084,14 @@ internal class WorkspaceGitHubSelfEditFlow(
                 ).let { update ->
                     listener.onEvidence(update.phase, update.label, update.detail)
                 }
+                WorkspacePublicWorkNarration.proposal(
+                    instruction = instruction,
+                    prepared = revised,
+                    revised = true,
+                    ciRepair = repair,
+                ).let { update ->
+                    listener.onPublicUpdate(update.key, update.statusLabel, update.text)
+                }
                 reviewOrCommit(
                     run = run,
                     primaryRoute = primaryRoute,
@@ -1098,6 +1144,12 @@ internal class WorkspaceGitHubSelfEditFlow(
             access = checked.copy(headSha = receipt.commitSha)
             WorkspaceAdaptiveWorkUpdate.committed(receipt).let { update ->
                 listener.onEvidence(update.phase, update.label, update.detail)
+            }
+            WorkspacePublicWorkNarration.committed(
+                instruction = instruction,
+                receipt = receipt,
+            ).let { update ->
+                listener.onPublicUpdate(update.key, update.statusLabel, update.text)
             }
             if (repair) {
                 repairAttempt = 1
@@ -1205,6 +1257,13 @@ internal class WorkspaceGitHubSelfEditFlow(
                     ).let { update ->
                         listener.onEvidence(update.phase, update.label, update.detail)
                     }
+                    WorkspacePublicWorkNarration.ciRunning(
+                        instruction = instruction,
+                        runNumber = workflow.runNumber,
+                        status = workflow.status,
+                    ).let { update ->
+                        listener.onPublicUpdate(update.key, update.statusLabel, update.text)
+                    }
                     scheduleExactCi(run, receipt, token, attempt + 1, 0)
                     return
                 }
@@ -1212,6 +1271,12 @@ internal class WorkspaceGitHubSelfEditFlow(
                     saveCheckpoint(receipt, "ci_green")
                     WorkspaceAdaptiveWorkUpdate.ciPassed(workflow.runNumber).let { update ->
                         listener.onEvidence(update.phase, update.label, update.detail)
+                    }
+                    WorkspacePublicWorkNarration.ciPassed(
+                        instruction = instruction,
+                        runNumber = workflow.runNumber,
+                    ).let { update ->
+                        listener.onPublicUpdate(update.key, update.statusLabel, update.text)
                     }
                     ensureDraftPr(run, receipt, workflow)
                     return
@@ -1255,6 +1320,14 @@ internal class WorkspaceGitHubSelfEditFlow(
             val summary = failure.boundedSummary()
             WorkspaceAdaptiveWorkUpdate.ciFailed(workflow.runNumber, summary).let { update ->
                 listener.onEvidence(update.phase, update.label, update.detail)
+            }
+            WorkspacePublicWorkNarration.ciFailed(
+                instruction = instruction,
+                runNumber = workflow.runNumber,
+                summary = summary,
+                willRepair = repairAttempt < 1,
+            ).let { update ->
+                listener.onPublicUpdate(update.key, update.statusLabel, update.text)
             }
             if (repairAttempt < 1) {
                 // A CI repair is a new candidate, so it must start a fresh reviewer-revision cycle.

@@ -150,6 +150,25 @@ class WorkspaceActivity : AppCompatActivity() {
                     }
                 }
 
+                override fun onPublicUpdate(
+                    key: String,
+                    statusLabel: String,
+                    text: String,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        githubSelfEditMessageId?.let { messageId ->
+                            publicWorkNarrations.upsert(
+                                messageId = messageId,
+                                key = key,
+                                statusLabel = statusLabel,
+                                text = text,
+                            )
+                            render()
+                        } ?: updateSendButton()
+                    }
+                }
+
                 override fun onComplete(result: WorkspaceGitHubSelfEditFlow.Completion) {
                     val summary = WorkspaceFinalAnswer.githubSuccess(
                         result = result,
@@ -195,6 +214,7 @@ class WorkspaceActivity : AppCompatActivity() {
     }
     private var statusMessage = ""
     private val workTraces = WorkspaceTurnWorkTraces()
+    private val publicWorkNarrations = WorkspaceTurnPublicNarrations()
     private val detachedWorkTrace = WorkspaceWorkTrace()
     // The currently foreground-owned receipt. Background GitHub work keeps its own exact turn.
     private var workTraceMessageId: String? = null
@@ -928,6 +948,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val current = workTraceMessageId
         if (current != null && current != githubSelfEditMessageId) {
             workTraces.remove(current)
+            publicWorkNarrations.remove(current)
             expandedWorkTraceMessageIds.remove(current)
         }
         workTraceMessageId = null
@@ -1148,6 +1169,26 @@ class WorkspaceActivity : AppCompatActivity() {
         scroll.post { scroll.scrollTo(0, content.height) }
     }
 
+    private fun addPublicWorkNarrations(
+        host: LinearLayout,
+        messageId: String,
+    ) {
+        publicWorkNarrations.forTurn(messageId).forEach { update ->
+            host.addView(label(update.statusLabel, 13.5f).apply {
+                setTextColor(Color.rgb(145, 157, 171))
+                setPadding(dp(4), dp(8), dp(8), dp(2))
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(-1, -2))
+            host.addView(label(update.text, 16f).apply {
+                text = WorkspaceMarkdownText.render(update.text)
+                setTextColor(Color.rgb(230, 236, 244))
+                setPadding(dp(4), 0, dp(8), dp(8))
+                setTextIsSelectable(true)
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
+    }
+
     private fun addKickoffToExpandedHistory(
         host: LinearLayout,
         messageId: String,
@@ -1180,11 +1221,20 @@ class WorkspaceActivity : AppCompatActivity() {
         val messageId = workTraceMessageId
         if (messageId != null) {
             addKickoffToExpandedHistory(host, messageId, snapshot, workTraceExpanded)
+            if (!snapshot.active && workTraceExpanded) {
+                addPublicWorkNarrations(host, messageId)
+            }
         }
+        val lastPublicStatus = messageId
+            ?.let(publicWorkNarrations::forTurn)
+            ?.lastOrNull()
+            ?.statusLabel
         val visibleEvents = WorkspaceWorkPresentation.visibleEvents(
             snapshot,
             expanded = workTraceExpanded,
-        )
+        ).filterNot { event ->
+            snapshot.active && lastPublicStatus != null && event.label == lastPublicStatus
+        }
         visibleEvents.forEachIndexed { index, event ->
             val isNewest = index == visibleEvents.lastIndex
             val liveRow = createWorkEventRow(
@@ -1232,6 +1282,9 @@ class WorkspaceActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(-1, -2))
         }
         addKickoffToExpandedHistory(host, messageId, snapshot, expanded)
+        if (!snapshot.active && expanded) {
+            addPublicWorkNarrations(host, messageId)
+        }
         val visible = WorkspaceWorkPresentation.visibleEvents(snapshot, expanded)
         visible.forEachIndexed { index, event ->
             val newest = index == visible.lastIndex
@@ -1953,13 +2006,27 @@ class WorkspaceActivity : AppCompatActivity() {
                     workKickoffs[message.id]?.let { kickoff ->
                         content.addView(label(kickoff, 16f).apply {
                             text = WorkspaceMarkdownText.render(kickoff)
-                            setTextColor(Color.rgb(226, 233, 242))
+                            setTextColor(Color.rgb(230, 236, 244))
                             setPadding(dp(6), dp(4), dp(10), dp(8))
                         }, LinearLayout.LayoutParams(-1, -2).apply {
                             leftMargin = dp(10)
                             rightMargin = dp(12)
                             bottomMargin = dp(2)
                         })
+                    }
+                    if (turnSnapshot?.active == true) {
+                        val publicHost = LinearLayout(this).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(dp(6), 0, dp(10), dp(2))
+                        }
+                        addPublicWorkNarrations(publicHost, message.id)
+                        if (publicHost.childCount > 0) {
+                            content.addView(publicHost, LinearLayout.LayoutParams(-1, -2).apply {
+                                leftMargin = dp(10)
+                                rightMargin = dp(12)
+                                bottomMargin = dp(2)
+                            })
+                        }
                     }
                 }
                 turnTrace?.let { trace ->
@@ -3256,6 +3323,7 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             githubSelfEditProjectId = id
             githubSelfEditMessageId = stored.id
+            publicWorkNarrations.reset(stored.id)
             val kickoff = WorkspaceWorkKickoff.github(text)
             saveGitHubSelfEditTurnCheckpoint(id, stored.id, kickoff)
             ensureGitHubBackgroundNotificationPermission()
