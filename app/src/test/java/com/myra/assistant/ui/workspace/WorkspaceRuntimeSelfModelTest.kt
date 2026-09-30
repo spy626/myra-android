@@ -64,4 +64,30 @@ class WorkspaceRuntimeSelfModelTest {
         assertFalse(combined.contains("\nxxxxxxxx"))
         assertFalse(combined.contains("x".repeat(400)))
     }
+
+    @Test fun recentGitHubActionIsProjectedAsEvidenceButNotSpecificLineAttribution() {
+        val receipt = WorkspaceRecentGitHubActionReceipt.Receipt(
+            repository = "spy626/myra-android",
+            branch = "agent/myra-phase-1",
+            userTask = "Add runtime provenance support",
+            commitSha = "1234567890abcdef1234567890abcdef12345678",
+            files = listOf("app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt"),
+            ciRunNumber = 3342L,
+            ciStatus = "completed",
+            ciConclusion = "success",
+            ciUrl = "https://github.com/spy626/myra-android/actions/runs/44",
+            completedAtMs = 1234L,
+        )
+        val text = WorkspaceRuntimeSelfModel.instructions(
+            WorkspaceRuntimeSelfModel.Snapshot(
+                github = WorkspaceRuntimeSelfModel.GitHubState(connected = true),
+                recentGitHubAction = receipt,
+            )
+        )
+
+        assertTrue(text.contains("RECENT VERIFIED GITHUB ACTION"))
+        assertTrue(text.contains("Add runtime provenance support"))
+        assertTrue(text.contains("does NOT by itself prove why a specific comment"))
+        assertTrue(text.contains("say the specific purpose is not established"))
+    }
 }

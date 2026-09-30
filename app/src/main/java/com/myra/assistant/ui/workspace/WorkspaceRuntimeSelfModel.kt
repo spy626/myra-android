@@ -23,6 +23,7 @@ internal object WorkspaceRuntimeSelfModel {
         val projectType: WorkspaceProjectType? = null,
         val currentGoal: String? = null,
         val taskStatus: WorkspaceTaskStatus? = null,
+        val recentGitHubAction: WorkspaceRecentGitHubActionReceipt.Receipt? = null,
     )
 
     private fun bounded(value: String?, max: Int): String? =
@@ -61,12 +62,18 @@ internal object WorkspaceRuntimeSelfModel {
             snapshot.taskStatus?.let {
                 appendLine("- Current saved task status: ${it.name}.")
             }
+            snapshot.recentGitHubAction?.let { receipt ->
+                appendLine(WorkspaceRecentGitHubActionReceipt.instructions(receipt))
+            }
             appendLine("RUNTIME TRUTH CONTRACT:")
             appendLine("- Use this evidence when answering what LYRA can or cannot do; do not contradict an AVAILABLE capability without newer runtime failure evidence.")
             appendLine("- A capability question, hypothetical, explanation request, or old conversation never authorizes execution.")
             appendLine("- Only the exact current user turn may grant mutation authority through the existing deterministic execution gates.")
             appendLine("- If a capability is not established here or by another authoritative runtime source, do not invent it.")
             appendLine("- Never claim a current commit, CI/build, release, artifact or APK result unless separate verified runtime evidence establishes it.")
+            appendLine("- For questions about why a prior change was made, prefer the structured recent-action provenance above over plausible interpretation of code wording.")
+            appendLine("- A recent task/commit receipt does NOT by itself prove why a specific comment, line, symbol or behavior exists. Only attribute that specific item when the current turn, a verified source read/history lookup, or another explicit provenance record links it.")
+            appendLine("- If that link is missing, say the specific purpose is not established instead of inventing one.")
             appendLine("- CI success is not physical Android phone-pass; only real phone testing can establish phone-pass.")
             append("- No connector token, pairing secret, API key or credential is included in this projection.")
         }

@@ -121,6 +121,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private val githubSelfEditReceiptKickoffKey = "workspace_github_self_edit_receipt_kickoff"
     private val githubSelfEditReceiptNarrationKey =
         "workspace_github_self_edit_receipt_public_narration"
+    private val recentGitHubActionReceiptKey =
+        "workspace_recent_github_action_receipt"
     private val selectedProjectKey = "workspace_selected_project_id"
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -185,10 +187,34 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
 
                 override fun onComplete(result: WorkspaceGitHubSelfEditFlow.Completion) {
+                    val userTask = currentGitHubSelfEditUserTask()
                     val summary = WorkspaceFinalAnswer.githubSuccess(
                         result = result,
-                        userTask = currentGitHubSelfEditUserTask(),
+                        userTask = userTask,
                     )
+                    runCatching {
+                        val receipt = WorkspaceRecentGitHubActionReceipt.fromCompletion(
+                            result = result,
+                            userTask = userTask,
+                            completedAtMs = System.currentTimeMillis(),
+                        )
+                        check(
+                            preferences.edit()
+                                .putString(
+                                    recentGitHubActionReceiptKey,
+                                    WorkspaceRecentGitHubActionReceipt.encode(receipt),
+                                )
+                                .commit()
+                        ) { "Recent GitHub action receipt could not be saved" }
+                    }.onFailure {
+                        // Final completion remains valid; only future provenance follow-ups lose this aid.
+                        recordWorkEventForTurn(
+                            githubSelfEditMessageId ?: return@onFailure,
+                            WorkspaceWorkPhase.ERROR,
+                            "GitHub provenance receipt not saved",
+                            it.message,
+                        )
+                    }
                     saveGitHubSelfEditCompletionReceipt(summary)
                     clearGitHubSelfEditTurnCheckpoint()
                     WorkspaceGitHubBackgroundService.complete(
@@ -406,6 +432,9 @@ class WorkspaceActivity : AppCompatActivity() {
         }.getOrNull()
         val project = projects.getProject(projectId)
         val task = runCatching { tasks.get(projectId) }.getOrNull()
+        val recentGitHubAction = preferences
+            .getString(recentGitHubActionReceiptKey, null)
+            ?.let(WorkspaceRecentGitHubActionReceipt::decode)
         val snapshot = WorkspaceRuntimeSelfModel.Snapshot(
             github = WorkspaceRuntimeSelfModel.GitHubState(
                 connected = connection != null,
@@ -418,6 +447,7 @@ class WorkspaceActivity : AppCompatActivity() {
             projectType = project?.type,
             currentGoal = task?.goal,
             taskStatus = task?.status,
+            recentGitHubAction = recentGitHubAction,
         )
         return WorkspaceRuntimeSelfModel.combine(
             WorkspaceRuntimeSelfModel.instructions(snapshot),
