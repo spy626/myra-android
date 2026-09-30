@@ -120,6 +120,10 @@ internal object WorkspaceChatGateway {
         // Dedicated writing, follow-up, coding and task prompts are never replaced.
         val normalConversation = revisionKind == null && contextDecision == null &&
             writingInstructions.isBlank() && codeInstructions.isBlank()
+        val semanticTurnIntent = if (normalConversation && latest != null)
+            WorkspaceSemanticTurnIntent.instructions(
+                WorkspaceSemanticTurnIntent.propose(latest)
+            ) else ""
         val semanticTaskFrame = if (normalConversation)
             WorkspaceSemanticTaskFrame.instructions(messages) else ""
         val turnFrame = if (normalConversation)
@@ -127,6 +131,7 @@ internal object WorkspaceChatGateway {
         val instructions = listOf(
             CHAT_REPLY_DISCIPLINE,
             extra,
+            semanticTurnIntent,
             semanticTaskFrame,
             turnFrame,
             writingInstructions,

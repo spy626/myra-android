@@ -41,6 +41,8 @@ internal object WorkspaceGitHubSelfEdit {
     )
 
     fun isExplicitRequest(message: String): Boolean {
+        val proposal = WorkspaceSemanticTurnIntent.propose(message)
+        if (proposal.effect != WorkspaceSemanticTurnIntent.Effect.WRITE) return false
         if (!WorkspaceExecutionAuthority.allowsCodingMutation(message)) return false
         return repoScope.containsMatchIn(message) ||
             (selfName.containsMatchIn(message) && codeScope.containsMatchIn(message))

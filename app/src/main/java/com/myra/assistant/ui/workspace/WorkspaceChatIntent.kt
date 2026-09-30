@@ -8,10 +8,16 @@ package com.myra.assistant.ui.workspace
  * remain conversation. This class never infers authority from an older turn.
  */
 internal object WorkspaceChatIntent {
-    fun requestedProjectType(message: String): WorkspaceProjectType? =
-        WorkspaceExecutionAuthority.requestedProjectType(message)
+    fun requestedProjectType(message: String): WorkspaceProjectType? {
+        val proposal = WorkspaceSemanticTurnIntent.propose(message)
+        if (proposal.effect != WorkspaceSemanticTurnIntent.Effect.WRITE) return null
+        return WorkspaceExecutionAuthority.requestedProjectType(message)
+    }
 
     /** Only for an already selected coding project, never for ordinary/general chats. */
-    fun isCodingFollowUp(message: String): Boolean =
-        WorkspaceExecutionAuthority.allowsCodingMutation(message)
+    fun isCodingFollowUp(message: String): Boolean {
+        val proposal = WorkspaceSemanticTurnIntent.propose(message)
+        return proposal.effect == WorkspaceSemanticTurnIntent.Effect.WRITE &&
+            WorkspaceExecutionAuthority.allowsCodingMutation(message)
+    }
 }
