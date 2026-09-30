@@ -40,24 +40,22 @@ class WorkspaceFinalAnswerTest {
         warning = warning,
     )
 
-    @Test fun githubFinalAnswerIsHumanReadableAndEvidenceGrounded() {
+    @Test fun githubFinalAnswerFallbackIsConciseAndEvidenceGrounded() {
         val answer = WorkspaceFinalAnswer.githubSuccess(success())
 
-        assertTrue(answer.startsWith("✅ GitHub task complete"))
-        assertTrue(answer.contains("What changed:"))
-        assertTrue(answer.contains("2 files"))
-        assertTrue(answer.contains("CI #3272 GREEN"))
-        assertTrue(answer.contains("commit `" + "b".repeat(12) + "`"))
-        assertTrue(answer.contains("write stayed on `agent/myra-phase-1`"))
-        assertTrue(answer.contains("Draft PR #7 is updated"))
-        assertTrue(answer.contains("Next: test the changed behavior on your phone"))
+        assertTrue(answer.startsWith("Requested change across 2 files is complete."))
+        assertTrue(answer.contains("Exact CI #3272 passed for the pushed commit."))
+        assertTrue(answer.contains("feature-branch write stayed isolated"))
+        assertTrue(answer.contains("no merge was performed"))
         assertTrue(answer.contains("not physical phone behavior"))
 
+        assertFalse(answer.contains("What changed:"))
+        assertFalse(answer.contains("commit `"))
+        assertFalse(answer.contains("Draft PR #7"))
+        assertFalse(answer.contains("agent/myra-phase-1"))
         assertFalse(answer.contains("provider 1/5"))
-        assertFalse(answer.contains("review 1/3"))
         assertFalse(answer.contains("xKiro"))
         assertFalse(answer.contains("Groq"))
-        assertFalse(answer.contains(" on agent/myra-phase-1 · commit "))
         assertFalse(answer.contains("phone pass", ignoreCase = true))
     }
 
@@ -69,9 +67,10 @@ class WorkspaceFinalAnswerTest {
             )
         )
 
-        assertTrue(answer.contains("CI #3272 GREEN"))
-        assertTrue(answer.contains("Draft PR update was not confirmed"))
+        assertTrue(answer.contains("Exact CI #3272 passed"))
         assertTrue(answer.contains("Note: CI passed, but the draft PR update was not confirmed."))
+        assertFalse(answer.contains("Draft PR update was not confirmed.") &&
+            !answer.contains("Note:"))
         assertFalse(answer.contains("task failed", ignoreCase = true))
     }
 
@@ -89,6 +88,14 @@ class WorkspaceFinalAnswerTest {
                     status = "in_progress",
                     conclusion = null,
                 ))
+            )
+        }.isFailure)
+
+        assertTrue(runCatching {
+            WorkspaceFinalAnswer.githubSuccess(
+                base.copy(
+                    pullRequest = base.pullRequest?.copy(head = "wrong-branch"),
+                )
             )
         }.isFailure)
     }

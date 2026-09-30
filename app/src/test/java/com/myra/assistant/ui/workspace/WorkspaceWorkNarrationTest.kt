@@ -158,6 +158,74 @@ class WorkspaceWorkNarrationTest {
         assertTrue(visible.any { it.label == "Scoped work to A.kt" })
     }
 
+    @Test fun exactCiEvidenceSuppressesGenericCiAndBookkeepingRows() {
+        val snapshot = WorkspaceWorkSnapshot(
+            events = listOf(
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "Waiting for exact GitHub Actions result",
+                    "sha",
+                    1L,
+                ),
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "CI #3302 is in progress",
+                    "Waiting for this exact commit to finish.",
+                    2L,
+                    WorkspaceWorkPresentationKind.EVIDENCE,
+                ),
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "Updating draft PR",
+                    "No merge",
+                    3L,
+                ),
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "Completion criteria satisfied",
+                    "Selected scope + exact CI GREEN verified",
+                    4L,
+                ),
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.THINKING,
+                    "Preparing result explanation",
+                    "Verified task evidence only",
+                    5L,
+                ),
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.VERIFYING,
+                    "CI #3302 passed for this commit",
+                    "Configured build/tests completed successfully.",
+                    6L,
+                    WorkspaceWorkPresentationKind.EVIDENCE,
+                ),
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.DONE,
+                    "GitHub self-edit CI verified",
+                    "CI #3302",
+                    7L,
+                ),
+            ),
+            startedAtMs = 1L,
+            endedAtMs = null,
+        )
+
+        val visible = WorkspaceWorkNarration.events(snapshot)
+
+        assertEquals(
+            listOf(
+                "CI #3302 is in progress",
+                "CI #3302 passed for this commit",
+                "GitHub change verified",
+            ),
+            visible.map { it.label },
+        )
+        assertFalse(visible.any { it.label == "Analyzing the task" })
+        assertFalse(visible.any { it.label == "Updating the draft PR" })
+        assertFalse(visible.any { it.label == "Confirming completion" })
+        assertFalse(visible.any { it.label == "Verifying exact CI" })
+    }
+
     @Test fun repeatedTechnicalStatusesCollapseIntoOneHumanMilestone() {
         val snapshot = WorkspaceWorkSnapshot(
             events = listOf(

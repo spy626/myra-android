@@ -70,6 +70,8 @@ class WorkspaceAdaptiveFinalAnswerTest {
         assertTrue(prompt.contains("CI GREEN proves only"))
         assertTrue(prompt.contains("Bro is bug ko fix karo"))
         assertTrue(prompt.contains("Exact CI: #3280"))
+        assertTrue(prompt.contains("prefer 2–4 short natural sentences"))
+        assertTrue(prompt.contains("Normally omit commit SHA, draft PR number and raw branch identifier"))
         assertFalse(prompt.contains("What changed:"))
     }
 

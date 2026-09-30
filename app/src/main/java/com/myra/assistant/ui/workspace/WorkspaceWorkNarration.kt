@@ -28,7 +28,20 @@ internal object WorkspaceWorkNarration {
     fun events(snapshot: WorkspaceWorkSnapshot): List<WorkspaceWorkEvent> {
         val projected = mutableListOf<WorkspaceWorkEvent>()
         val seenGenericLabels = mutableSetOf<String>()
+        val hasExactCiEvidence = snapshot.events.any { raw ->
+            raw.presentation == WorkspaceWorkPresentationKind.EVIDENCE &&
+                ci.containsMatchIn(raw.label)
+        }
         snapshot.events.forEach { raw ->
+            if (raw.presentation == WorkspaceWorkPresentationKind.DEFAULT) {
+                if (draftPr.containsMatchIn(raw.label) ||
+                    completion.containsMatchIn(raw.label) ||
+                    raw.label.equals("Preparing result explanation", ignoreCase = true) ||
+                    (raw.phase == WorkspaceWorkPhase.VERIFYING &&
+                        hasExactCiEvidence && ci.containsMatchIn(raw.label))) {
+                    return@forEach
+                }
+            }
             val event = narrate(raw) ?: return@forEach
             val previous = projected.lastOrNull()
             if (previous != null &&

@@ -25,59 +25,36 @@ internal object WorkspaceFinalAnswer {
             return WorkspaceAdaptiveFinalAnswer.accept(adaptive, result)
         }
 
-        val changed = when (result.commit.files.size) {
-            1 -> "Updated `" + result.commit.files.single() + "` for the requested task."
-            else -> buildString {
-                append("Applied the requested change across ")
-                append(result.commit.files.size)
-                append(" files:")
-                result.commit.files.take(5).forEach { path ->
-                    append("\n• `")
-                    append(path)
-                    append("`")
-                }
-                if (result.commit.files.size > 5) {
-                    append("\n• +")
-                    append(result.commit.files.size - 5)
-                    append(" more")
-                }
-            }
-        }
-
-        val pr = result.pullRequest?.let { receipt ->
+        result.pullRequest?.let { receipt ->
             require(receipt.draft && receipt.head == result.commit.branch) {
                 "GitHub final answer PR does not match the protected branch"
             }
-            "Draft PR #" + receipt.number + " is updated; no merge was performed."
-        } ?: "Draft PR update was not confirmed."
+        }
+
+        val changed = when (result.commit.files.size) {
+            1 -> "Requested change to `" + result.commit.files.single().substringAfterLast('/') + "` is complete."
+            else -> "Requested change across " + result.commit.files.size + " files is complete."
+        }
 
         val warning = result.warning
             ?.let { WorkspaceWorkTrace.safeText(it, MAX_WARNING_CHARS) }
             ?.takeIf(String::isNotBlank)
 
         return buildString {
-            appendLine("✅ GitHub task complete")
-            appendLine()
-            appendLine("What changed: " + changed)
-            appendLine()
-            appendLine(
-                "Verified: CI #" + result.workflow.runNumber + " GREEN · commit `" +
-                    result.commit.commitSha.take(12) + "`."
-            )
-            appendLine(
-                "Safety: write stayed on `" + result.commit.branch +
-                    "`; main/master was not written or merged by this task."
-            )
-            appendLine(pr)
+            append(changed)
+            append(" Exact CI #")
+            append(result.workflow.runNumber)
+            append(" passed for the pushed commit.")
+            append(" The protected feature-branch write stayed isolated; no merge was performed.")
             if (warning != null) {
                 appendLine()
-                appendLine("Note: " + warning)
+                appendLine()
+                append("Note: ")
+                append(warning)
             }
             appendLine()
-            append(
-                "Next: test the changed behavior on your phone. CI verifies build/tests, " +
-                    "not physical phone behavior."
-            )
+            appendLine()
+            append("CI verifies the configured build/tests, not physical phone behavior.")
         }.trim()
     }
 }

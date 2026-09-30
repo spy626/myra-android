@@ -1460,11 +1460,6 @@ internal class WorkspaceGitHubSelfEditFlow(
 
         taskBudget = WorkspaceGitHubTaskBudget.consumeProvider(taskBudget)
         persistBudgetOnly()
-        listener.onEvent(
-            WorkspaceWorkPhase.THINKING,
-            "Preparing result explanation",
-            "Verified task evidence only",
-        )
         val request = runCatching {
             when (route) {
                 WorkspaceCodingRoleRouter.Provider.XKIRO ->
