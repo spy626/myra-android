@@ -14,9 +14,21 @@ internal object WorkspaceWorkPresentation {
         snapshot: WorkspaceWorkSnapshot,
         expanded: Boolean,
     ): List<WorkspaceWorkEvent> {
+        val narrated = WorkspaceWorkNarration.events(snapshot)
+        if (snapshot.active && !expanded) {
+            return narrated.lastOrNull()?.let(::listOf).orEmpty()
+        }
         if (!snapshot.active && !expanded) return emptyList()
-        return WorkspaceWorkNarration.events(snapshot).takeLast(MAX_VISIBLE_EVENTS)
+        return narrated.takeLast(MAX_VISIBLE_EVENTS)
     }
+
+    fun showKickoffOutside(snapshot: WorkspaceWorkSnapshot): Boolean =
+        snapshot.active
+
+    fun showKickoffInsideHistory(
+        snapshot: WorkspaceWorkSnapshot,
+        expanded: Boolean,
+    ): Boolean = !snapshot.active && expanded
 
     fun compactRow(
         snapshot: WorkspaceWorkSnapshot,

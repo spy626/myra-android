@@ -135,6 +135,29 @@ class WorkspaceWorkNarrationTest {
         assertTrue(visible.single().detail.orEmpty().contains("repeated the rejected proposal"))
     }
 
+    @Test fun repeatedGenericReadingRowsAreSuppressedAcrossEvidenceUpdates() {
+        val snapshot = WorkspaceWorkSnapshot(
+            events = listOf(
+                WorkspaceWorkEvent(WorkspaceWorkPhase.READING, "Refreshing GitHub read access", null, 1L),
+                WorkspaceWorkEvent(
+                    WorkspaceWorkPhase.THINKING,
+                    "Scoped work to A.kt",
+                    "Only the selected file is in this bounded change.",
+                    2L,
+                    WorkspaceWorkPresentationKind.EVIDENCE,
+                ),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.READING, "Reading bounded related source set", null, 3L),
+            ),
+            startedAtMs = 1L,
+            endedAtMs = null,
+        )
+
+        val visible = WorkspaceWorkNarration.events(snapshot)
+
+        assertEquals(1, visible.count { it.label == "Reading relevant context" })
+        assertTrue(visible.any { it.label == "Scoped work to A.kt" })
+    }
+
     @Test fun repeatedTechnicalStatusesCollapseIntoOneHumanMilestone() {
         val snapshot = WorkspaceWorkSnapshot(
             events = listOf(

@@ -997,17 +997,17 @@ class WorkspaceActivity : AppCompatActivity() {
             gravity = Gravity.TOP
             setPadding(0, dp(2), 0, dp(3))
         }
-        val iconSize = if (isCurrent) 24 else 20
+        val iconSize = if (isCurrent) 20 else 18
         val icon = WorkspaceMiniLyraView(this).apply {
             setPhase(event.phase, animate = isCurrent && active)
         }
         row.addView(icon, LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)).apply {
-            topMargin = if (iconSize < 24) dp(2) else 0
-            rightMargin = if (iconSize < 24) dp(12) else dp(8)
+            topMargin = if (iconSize < 20) dp(2) else 0
+            rightMargin = dp(8)
         })
 
         val textColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val title = label(event.label, 13.5f).apply {
+        val title = label(event.label, 14.5f).apply {
             setTextColor(if (isCurrent && active) Color.rgb(226, 233, 242)
                 else completedWorkColor(event.phase))
             setPadding(0, 0, dp(4), 0)
@@ -1016,8 +1016,8 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         textColumn.addView(title, LinearLayout.LayoutParams(-1, -2))
         event.detail?.let { detail ->
-            textColumn.addView(label(detail, 11.25f).apply {
-                setTextColor(Color.rgb(125, 138, 154))
+            textColumn.addView(label(detail, 12.5f).apply {
+                setTextColor(Color.rgb(151, 163, 177))
                 setPadding(0, dp(1), dp(4), 0)
                 maxLines = 3
                 ellipsize = android.text.TextUtils.TruncateAt.END
@@ -1071,9 +1071,9 @@ class WorkspaceActivity : AppCompatActivity() {
             expanded = workTraceExpanded,
             nowMs = System.currentTimeMillis(),
         ) ?: return
-        val duration = label(compact, 11.25f).apply {
-            setTextColor(Color.rgb(120, 133, 149))
-            setPadding(dp(32), dp(3), dp(4), dp(3))
+        val duration = label(compact, 12.25f).apply {
+            setTextColor(Color.rgb(145, 157, 171))
+            setPadding(dp(4), dp(4), dp(4), dp(5))
             isClickable = true
             isFocusable = true
             contentDescription = if (workTraceExpanded) "Hide work details" else "Show work details"
@@ -1114,6 +1114,21 @@ class WorkspaceActivity : AppCompatActivity() {
         scroll.post { scroll.scrollTo(0, content.height) }
     }
 
+    private fun addKickoffToExpandedHistory(
+        host: LinearLayout,
+        messageId: String,
+        snapshot: WorkspaceWorkSnapshot,
+        expanded: Boolean,
+    ) {
+        if (!WorkspaceWorkPresentation.showKickoffInsideHistory(snapshot, expanded)) return
+        val kickoff = workKickoffs[messageId] ?: return
+        host.addView(label(kickoff, 15.25f).apply {
+            text = WorkspaceMarkdownText.render(kickoff)
+            setTextColor(Color.rgb(216, 224, 233))
+            setPadding(dp(4), dp(5), dp(8), dp(8))
+        }, LinearLayout.LayoutParams(-1, -2))
+    }
+
     private fun createInlineWorkTranscript(): LinearLayout? {
         val snapshot = workTrace.snapshot()
         if (snapshot.current == null) return null
@@ -1128,6 +1143,10 @@ class WorkspaceActivity : AppCompatActivity() {
         liveWorkDurationView = null
 
         addWorkDuration(host, snapshot, animateEntry = false)
+        val messageId = workTraceMessageId
+        if (messageId != null) {
+            addKickoffToExpandedHistory(host, messageId, snapshot, workTraceExpanded)
+        }
         val visibleEvents = WorkspaceWorkPresentation.visibleEvents(
             snapshot,
             expanded = workTraceExpanded,
@@ -1164,9 +1183,9 @@ class WorkspaceActivity : AppCompatActivity() {
             expanded = expanded,
             nowMs = System.currentTimeMillis(),
         )?.let { compact ->
-            host.addView(label(compact, 11.25f).apply {
-                setTextColor(Color.rgb(120, 133, 149))
-                setPadding(dp(32), dp(3), dp(4), dp(3))
+            host.addView(label(compact, 12.25f).apply {
+                setTextColor(Color.rgb(145, 157, 171))
+                setPadding(dp(4), dp(4), dp(4), dp(5))
                 isClickable = true
                 isFocusable = true
                 contentDescription = if (expanded) "Hide work details" else "Show work details"
@@ -1178,6 +1197,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
             }, LinearLayout.LayoutParams(-1, -2))
         }
+        addKickoffToExpandedHistory(host, messageId, snapshot, expanded)
         val visible = WorkspaceWorkPresentation.visibleEvents(snapshot, expanded)
         visible.forEachIndexed { index, event ->
             val newest = index == visible.lastIndex
@@ -1819,7 +1839,7 @@ class WorkspaceActivity : AppCompatActivity() {
             } else if (codeParts.any { it is WorkspaceCodeBlocks.Part.Code }) {
                 codeParts.forEach { part ->
                     when (part) {
-                        is WorkspaceCodeBlocks.Part.Prose -> item.addView(label("", 15f).apply {
+                        is WorkspaceCodeBlocks.Part.Prose -> item.addView(label("", 16f).apply {
                             text = WorkspaceMarkdownText.render(part.text)
                             setTextIsSelectable(true)
                             setPadding(dp(14), dp(9), dp(14), dp(9))
@@ -1837,7 +1857,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = if (mine) Gravity.END else Gravity.START
                 }
-                val bubble = label(message.text, 15f).apply {
+                val bubble = label(message.text, if (mine) 15f else 16f).apply {
                     if (!mine) text = WorkspaceMarkdownText.render(message.text)
                     maxWidth = resources.displayMetrics.widthPixels - dp(72)
                     setTextIsSelectable(!mine)
@@ -1893,18 +1913,22 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
             if (mine) {
-                workKickoffs[message.id]?.let { kickoff ->
-                    content.addView(label(kickoff, 15.5f).apply {
-                        text = WorkspaceMarkdownText.render(kickoff)
-                        setTextColor(Color.rgb(226, 233, 242))
-                        setPadding(dp(10), dp(4), dp(14), dp(8))
-                    }, LinearLayout.LayoutParams(-1, -2).apply {
-                        leftMargin = dp(10)
-                        rightMargin = dp(12)
-                        bottomMargin = dp(2)
-                    })
+                val turnTrace = workTraces.existing(message.id)
+                val turnSnapshot = turnTrace?.snapshot()
+                if (turnSnapshot == null || WorkspaceWorkPresentation.showKickoffOutside(turnSnapshot)) {
+                    workKickoffs[message.id]?.let { kickoff ->
+                        content.addView(label(kickoff, 16f).apply {
+                            text = WorkspaceMarkdownText.render(kickoff)
+                            setTextColor(Color.rgb(226, 233, 242))
+                            setPadding(dp(6), dp(4), dp(10), dp(8))
+                        }, LinearLayout.LayoutParams(-1, -2).apply {
+                            leftMargin = dp(10)
+                            rightMargin = dp(12)
+                            bottomMargin = dp(2)
+                        })
+                    }
                 }
-                workTraces.existing(message.id)?.let { trace ->
+                turnTrace?.let { trace ->
                     val traceView = if (message.id == workTraceMessageId) {
                         createInlineWorkTranscript()
                     } else {
@@ -1913,7 +1937,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     traceView?.let {
                         content.addView(it, LinearLayout.LayoutParams(-1, -2).apply {
                             leftMargin = dp(10)
-                            rightMargin = dp(6)
+                            rightMargin = dp(8)
                             bottomMargin = dp(8)
                         })
                     }

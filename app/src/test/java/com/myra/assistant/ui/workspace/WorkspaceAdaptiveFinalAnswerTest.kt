@@ -82,6 +82,24 @@ class WorkspaceAdaptiveFinalAnswerTest {
         assertEquals(raw, WorkspaceFinalAnswer.githubSuccess(result.copy(adaptiveAnswer = raw)))
     }
 
+    @Test fun adaptiveAnswerCollapsesImmediateRepeatedOpening() {
+        val result = success()
+        val raw = "Bro, kaam hoBro, kaam ho gaya! Exact CI #3280 GREEN hai."
+
+        val accepted = WorkspaceAdaptiveFinalAnswer.accept(raw, result)
+
+        assertEquals("Bro, kaam ho gaya! Exact CI #3280 GREEN hai.", accepted)
+    }
+
+    @Test fun adaptiveAnswerPreservesParagraphBreaks() {
+        val result = success()
+        val raw = "Bro ✅ requested fix complete ho gaya.\n\nExact CI #3280 GREEN hai."
+
+        val accepted = WorkspaceAdaptiveFinalAnswer.accept(raw, result)
+
+        assertEquals(raw, accepted)
+    }
+
     @Test fun adaptiveAnswerRejectsInventedVerificationFacts() {
         val result = success()
 

@@ -17,9 +17,11 @@ class WorkspaceWorkPresentationTest {
         )
 
         assertEquals(
-            listOf("Analyzing the task", "Applying the requested change"),
+            listOf("Applying the requested change"),
             WorkspaceWorkPresentation.visibleEvents(snapshot, expanded = false).map { it.label },
         )
+        assertTrue(WorkspaceWorkPresentation.showKickoffOutside(snapshot))
+        assertTrue(!WorkspaceWorkPresentation.showKickoffInsideHistory(snapshot, expanded = false))
         assertNull(WorkspaceWorkPresentation.compactRow(snapshot, expanded = false, nowMs = 9_000L))
     }
 
@@ -35,6 +37,8 @@ class WorkspaceWorkPresentationTest {
         )
 
         assertTrue(WorkspaceWorkPresentation.visibleEvents(snapshot, expanded = false).isEmpty())
+        assertTrue(!WorkspaceWorkPresentation.showKickoffOutside(snapshot))
+        assertTrue(!WorkspaceWorkPresentation.showKickoffInsideHistory(snapshot, expanded = false))
         assertEquals(
             "Worked for 3m 50s ›",
             WorkspaceWorkPresentation.compactRow(snapshot, expanded = false, nowMs = 999_000L),
@@ -56,6 +60,7 @@ class WorkspaceWorkPresentationTest {
             listOf("Applying the requested change", "Reviewing the change", "GitHub change verified"),
             WorkspaceWorkPresentation.visibleEvents(snapshot, expanded = true).map { it.label },
         )
+        assertTrue(WorkspaceWorkPresentation.showKickoffInsideHistory(snapshot, expanded = true))
         assertEquals(
             "Worked for 5s ⌄",
             WorkspaceWorkPresentation.compactRow(snapshot, expanded = true, nowMs = 99_000L),

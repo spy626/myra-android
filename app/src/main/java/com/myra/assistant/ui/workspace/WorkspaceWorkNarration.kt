@@ -27,6 +27,7 @@ internal object WorkspaceWorkNarration {
 
     fun events(snapshot: WorkspaceWorkSnapshot): List<WorkspaceWorkEvent> {
         val projected = mutableListOf<WorkspaceWorkEvent>()
+        val seenGenericLabels = mutableSetOf<String>()
         snapshot.events.forEach { raw ->
             val event = narrate(raw) ?: return@forEach
             val previous = projected.lastOrNull()
@@ -34,6 +35,11 @@ internal object WorkspaceWorkNarration {
                 previous.phase == event.phase &&
                 previous.label == event.label &&
                 previous.detail == event.detail) {
+                return@forEach
+            }
+            if (event.presentation == WorkspaceWorkPresentationKind.DEFAULT &&
+                event.detail == null &&
+                !seenGenericLabels.add(event.label)) {
                 return@forEach
             }
             projected += event
