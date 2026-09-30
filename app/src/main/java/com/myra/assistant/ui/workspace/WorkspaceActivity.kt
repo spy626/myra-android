@@ -1199,9 +1199,9 @@ class WorkspaceActivity : AppCompatActivity() {
             expanded = workTraceExpanded,
             nowMs = System.currentTimeMillis(),
         ) ?: return
-        val duration = label(compact, 12.25f).apply {
-            setTextColor(Color.rgb(145, 157, 171))
-            setPadding(dp(4), dp(4), dp(4), dp(5))
+        val duration = label(compact, 13f).apply {
+            setTextColor(Color.rgb(151, 163, 177))
+            setPadding(dp(4), dp(6), dp(4), dp(7))
             isClickable = true
             isFocusable = true
             contentDescription = if (workTraceExpanded) "Hide work details" else "Show work details"

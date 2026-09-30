@@ -43,11 +43,11 @@ class WorkspaceFinalAnswerTest {
     @Test fun githubFinalAnswerFallbackIsConciseAndEvidenceGrounded() {
         val answer = WorkspaceFinalAnswer.githubSuccess(success())
 
-        assertTrue(answer.startsWith("Requested change across 2 files is complete."))
-        assertTrue(answer.contains("Exact CI #3272 passed the configured build/tests for the pushed commit."))
-        assertTrue(answer.contains("feature-branch write stayed isolated"))
-        assertTrue(answer.contains("no merge was performed"))
-        assertTrue(answer.contains("CI does not verify physical phone behavior"))
+        assertTrue(answer.startsWith("**Done ✅** The requested change across 2 files is complete."))
+        assertTrue(answer.contains("CI #3272 is GREEN"))
+        assertTrue(answer.contains("configured build/tests passed for this pushed commit"))
+        assertTrue(answer.contains("Main/master was not written or merged"))
+        assertTrue(answer.contains("Phone behavior still needs a physical phone test"))
 
         assertFalse(answer.contains("What changed:"))
         assertFalse(answer.contains("commit `"))
@@ -65,11 +65,12 @@ class WorkspaceFinalAnswerTest {
             userTask = "Bro GitHub repo me A.kt me safe change karo aur exact CI GREEN tak verify karo.",
         )
 
-        assertTrue(answer.startsWith("Bro ✅"))
+        assertTrue(answer.startsWith("**Done bro ✅**"))
         assertTrue(answer.contains("2 files me complete ho gaya"))
-        assertTrue(answer.contains("configured build/tests"))
-        assertTrue(answer.contains("pass hue"))
-        assertTrue(answer.contains("Phone behavior ko CI verify nahi karta"))
+        assertTrue(answer.contains("CI #3272 GREEN hai"))
+        assertTrue(answer.contains("configured build/tests pass hue"))
+        assertTrue(answer.contains("Main/master ko touch ya merge nahi kiya"))
+        assertTrue(answer.contains("Phone behavior ka final check physical phone test se hi hoga"))
         assertFalse(answer.contains("agent/myra-phase-1"))
         assertFalse(answer.contains("Draft PR #"))
         assertFalse(answer.contains("sab kuch verified", ignoreCase = true))
@@ -84,7 +85,7 @@ class WorkspaceFinalAnswerTest {
 
         assertFalse(answer.contains("super-secret"))
         assertFalse(answer.contains("api_key"))
-        assertTrue(answer.contains("Exact CI #3272"))
+        assertTrue(answer.contains("CI #3272"))
     }
 
     @Test fun missingDraftPrIsAQualifiedNoteNotAFakeFailure() {
@@ -95,7 +96,7 @@ class WorkspaceFinalAnswerTest {
             )
         )
 
-        assertTrue(answer.contains("Exact CI #3272 passed"))
+        assertTrue(answer.contains("CI #3272 is GREEN"))
         assertTrue(answer.contains("Note: CI passed, but the draft PR update was not confirmed."))
         assertFalse(answer.contains("Draft PR update was not confirmed.") &&
             !answer.contains("Note:"))

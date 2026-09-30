@@ -49,20 +49,21 @@ internal object WorkspaceFinalAnswer {
 
         return if (useHinglish) {
             buildString {
-                append("Bro ✅ ")
+                append("**Done bro ✅** ")
                 if (fileName != null) {
-                    append("requested change `")
+                    append("`")
                     append(fileName)
-                    append("` me complete ho gaya.")
+                    append("` me requested change complete ho gaya.")
                 } else {
-                    append("requested change ")
+                    append("Requested change ")
                     append(result.commit.files.size)
                     append(" files me complete ho gaya.")
                 }
-                append(" Exact CI #")
+                appendLine()
+                appendLine()
+                append("CI #")
                 append(result.workflow.runNumber)
-                append(" ke configured build/tests pushed commit ke liye pass hue.")
-                append(" Protected feature branch par hi write raha; merge nahi hua.")
+                append(" GREEN hai — isi pushed commit ke configured build/tests pass hue. Main/master ko touch ya merge nahi kiya.")
                 if (warning != null) {
                     appendLine()
                     appendLine()
@@ -71,23 +72,25 @@ internal object WorkspaceFinalAnswer {
                 }
                 appendLine()
                 appendLine()
-                append("Phone behavior ko CI verify nahi karta.")
+                append("Phone behavior ka final check physical phone test se hi hoga.")
             }.trim()
         } else {
             buildString {
+                append("**Done ✅** ")
                 if (fileName != null) {
-                    append("Requested change to `")
+                    append("The requested change to `")
                     append(fileName)
                     append("` is complete.")
                 } else {
-                    append("Requested change across ")
+                    append("The requested change across ")
                     append(result.commit.files.size)
                     append(" files is complete.")
                 }
-                append(" Exact CI #")
+                appendLine()
+                appendLine()
+                append("CI #")
                 append(result.workflow.runNumber)
-                append(" passed the configured build/tests for the pushed commit.")
-                append(" The protected feature-branch write stayed isolated; no merge was performed.")
+                append(" is GREEN — the configured build/tests passed for this pushed commit. Main/master was not written or merged.")
                 if (warning != null) {
                     appendLine()
                     appendLine()
@@ -96,7 +99,7 @@ internal object WorkspaceFinalAnswer {
                 }
                 appendLine()
                 appendLine()
-                append("CI does not verify physical phone behavior.")
+                append("Phone behavior still needs a physical phone test.")
             }.trim()
         }
     }
