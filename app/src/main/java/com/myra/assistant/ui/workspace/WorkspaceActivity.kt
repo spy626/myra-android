@@ -388,6 +388,38 @@ class WorkspaceActivity : AppCompatActivity() {
         preferences.getString(selectedProjectKey, null)
             ?.takeIf { projects.getProject(it) != null }
 
+    /**
+     * Read-only application truth for normal Chat. This projection never grants action authority,
+     * never exposes connector credentials, and never replaces the existing execution gates.
+     */
+    private fun runtimeSelfModelInstructions(
+        projectId: String,
+        extraSystemInstructions: String? = null,
+    ): String {
+        val connection = runCatching {
+            WorkspaceConnectorCredentialStore(this).loadGitHub()
+        }.getOrNull()
+        val project = projects.getProject(projectId)
+        val task = runCatching { tasks.get(projectId) }.getOrNull()
+        val snapshot = WorkspaceRuntimeSelfModel.Snapshot(
+            github = WorkspaceRuntimeSelfModel.GitHubState(
+                connected = connection != null,
+                repository = connection?.repository,
+                branch = connection?.branch,
+                readAvailable = connection != null,
+                protectedWriteAvailable = connection?.pairingSecret != null,
+                taskRunning = githubSelfEditProjectId != null || hasSavedGitHubSelfEditCheckpoint(),
+            ),
+            projectType = project?.type,
+            currentGoal = task?.goal,
+            taskStatus = task?.status,
+        )
+        return WorkspaceRuntimeSelfModel.combine(
+            WorkspaceRuntimeSelfModel.instructions(snapshot),
+            extraSystemInstructions,
+        )
+    }
+
     private fun currentGitHubSelfEditUserTask(): String? {
         val projectId = githubSelfEditProjectId
             ?: preferences.getString(githubSelfEditProjectKey, null)
@@ -1901,8 +1933,9 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun sendEditedMessage(id: String, messageId: String) {
-        val provider = runCatching { selectedProvider() }
-            .getOrElse { statusMessage = "Secure provider key storage unavailable. Edit saved locally."; render(); return }
+        val provider = runCatching {
+            selectedProvider(extraSystemInstructions = runtimeSelfModelInstructions(id))
+        }.getOrElse { statusMessage = "Secure provider key storage unavailable. Edit saved locally."; render(); return }
         if (provider == null) {
             statusMessage = "Edit saved locally. Add a free OpenRouter key to request a reply."
             render()
@@ -1992,8 +2025,9 @@ class WorkspaceActivity : AppCompatActivity() {
             requestCustomReply(id, user.id, assistantId)
             return
         }
-        val provider = runCatching { selectedProvider() }
-            .getOrElse { toast("Secure provider key storage unavailable"); return }
+        val provider = runCatching {
+            selectedProvider(extraSystemInstructions = runtimeSelfModelInstructions(id))
+        }.getOrElse { toast("Secure provider key storage unavailable"); return }
         if (provider == null) {
             toast("Add a free OpenRouter key in API & Cloud Settings to retry")
             return
@@ -3496,10 +3530,11 @@ class WorkspaceActivity : AppCompatActivity() {
             requestCustomReply(id, stored.id, skillProjection = skillProjection)
             return
         }
+        val runtimeInstructions = runtimeSelfModelInstructions(id, skillProjection?.prompt)
         val provider = runCatching {
             selectedProvider(
                 picked.isNotEmpty(),
-                extraSystemInstructions = skillProjection?.prompt,
+                extraSystemInstructions = runtimeInstructions,
             )
         }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
@@ -3572,10 +3607,11 @@ class WorkspaceActivity : AppCompatActivity() {
         require(replacingAssistantId == null || skillProjection == null) {
             "Skill projection cannot be reused on retry"
         }
+        val systemInstructions = runtimeSelfModelInstructions(id, skillProjection?.prompt)
         val outgoing = runCatching {
             WorkspaceCustomProviderChat.request(
                 profile, key, transcript,
-                extraSystemInstructions = skillProjection?.prompt,
+                extraSystemInstructions = systemInstructions,
             )
         }.getOrElse {
             statusMessage = it.message ?: "Custom provider request is unavailable."
@@ -3780,13 +3816,14 @@ class WorkspaceActivity : AppCompatActivity() {
         require(replacingAssistantId == null || skillProjection == null) {
             "Skill projection cannot be reused on retry"
         }
+        val systemInstructions = runtimeSelfModelInstructions(id, skillProjection?.prompt)
         val outgoing = runCatching {
             WorkspaceChatGateway.request(
                 provider,
                 keyFor(provider),
                 enriched,
                 image,
-                extraSystemInstructions = skillProjection?.prompt,
+                extraSystemInstructions = systemInstructions,
             )
         }.getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
