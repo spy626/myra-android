@@ -106,6 +106,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private var githubSelfEditMessageId: String? = null
     private val githubSelfEditProjectKey = "workspace_github_self_edit_project_id"
     private val githubSelfEditMessageKey = "workspace_github_self_edit_message_id"
+    private val githubSelfEditKickoffKey = "workspace_github_self_edit_kickoff"
+    private val workKickoffs = LinkedHashMap<String, String>()
     private val githubSelfEditReceiptProjectKey = "workspace_github_self_edit_receipt_project_id"
     private val githubSelfEditReceiptMessageKey = "workspace_github_self_edit_receipt_message_id"
     private val githubSelfEditReceiptSummaryKey = "workspace_github_self_edit_receipt_summary"
@@ -391,10 +393,27 @@ class WorkspaceActivity : AppCompatActivity() {
         return consumed
     }
 
-    private fun saveGitHubSelfEditTurnCheckpoint(projectId: String, messageId: String) {
+    private fun rememberWorkKickoff(messageId: String, kickoff: String) {
+        val id = messageId.trim()
+        val text = WorkspaceWorkTrace.safeText(kickoff, 360)
+        if (id.isBlank() || text.isBlank()) return
+        workKickoffs.remove(id)
+        workKickoffs[id] = text
+        while (workKickoffs.size > 24) {
+            workKickoffs.remove(workKickoffs.keys.first())
+        }
+    }
+
+    private fun saveGitHubSelfEditTurnCheckpoint(
+        projectId: String,
+        messageId: String,
+        kickoff: String,
+    ) {
+        rememberWorkKickoff(messageId, kickoff)
         preferences.edit()
             .putString(githubSelfEditProjectKey, projectId)
             .putString(githubSelfEditMessageKey, messageId)
+            .putString(githubSelfEditKickoffKey, kickoff.take(360))
             .apply()
     }
 
@@ -402,6 +421,7 @@ class WorkspaceActivity : AppCompatActivity() {
         preferences.edit()
             .remove(githubSelfEditProjectKey)
             .remove(githubSelfEditMessageKey)
+            .remove(githubSelfEditKickoffKey)
             .apply()
     }
 
@@ -415,11 +435,13 @@ class WorkspaceActivity : AppCompatActivity() {
         val projectId = preferences.getString(githubSelfEditProjectKey, null)
             ?.takeIf { projects.getProject(it) != null }
         val messageId = preferences.getString(githubSelfEditMessageKey, null)
+        val kickoff = preferences.getString(githubSelfEditKickoffKey, null)
         if (projectId != null && !messageId.isNullOrBlank()) {
             selectedId = projectId
             rememberSelectedProject(projectId)
             githubSelfEditProjectId = projectId
             githubSelfEditMessageId = messageId
+            kickoff?.takeIf { it.isNotBlank() }?.let { rememberWorkKickoff(messageId, it) }
             activateWorkTrace(messageId)
         }
         ensureGitHubBackgroundNotificationPermission()
@@ -1871,6 +1893,17 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
             if (mine) {
+                workKickoffs[message.id]?.let { kickoff ->
+                    content.addView(label(kickoff, 15.5f).apply {
+                        text = WorkspaceMarkdownText.render(kickoff)
+                        setTextColor(Color.rgb(226, 233, 242))
+                        setPadding(dp(10), dp(4), dp(14), dp(8))
+                    }, LinearLayout.LayoutParams(-1, -2).apply {
+                        leftMargin = dp(10)
+                        rightMargin = dp(12)
+                        bottomMargin = dp(2)
+                    })
+                }
                 workTraces.existing(message.id)?.let { trace ->
                     val traceView = if (message.id == workTraceMessageId) {
                         createInlineWorkTranscript()
@@ -3165,7 +3198,8 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             githubSelfEditProjectId = id
             githubSelfEditMessageId = stored.id
-            saveGitHubSelfEditTurnCheckpoint(id, stored.id)
+            val kickoff = WorkspaceWorkKickoff.github(text)
+            saveGitHubSelfEditTurnCheckpoint(id, stored.id, kickoff)
             ensureGitHubBackgroundNotificationPermission()
             WorkspaceGitHubBackgroundService.start(
                 applicationContext,
