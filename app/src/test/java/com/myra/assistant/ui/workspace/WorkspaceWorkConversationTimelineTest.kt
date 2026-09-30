@@ -84,6 +84,10 @@ class WorkspaceWorkConversationTimelineTest {
 
         assertNotNull(item.liveEvent)
         assertEquals("CI #3316 is in progress", item.liveEvent?.label)
+        assertEquals("Waiting for this exact commit to finish.", item.liveEvent?.detail)
+        val display = WorkspaceWorkConversationTimeline.liveEventForDisplay(item)
+        assertEquals("CI #3316 is in progress", display?.label)
+        assertEquals(null, display?.detail)
     }
 
     @Test fun completedTimelineInterleavesByTimeAndSuppressesCoveredDuplicateRows() {

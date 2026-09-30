@@ -1174,7 +1174,7 @@ class WorkspaceActivity : AppCompatActivity() {
         host: LinearLayout,
         item: WorkspaceWorkConversationItem.Public,
     ) {
-        val live = item.liveEvent
+        val live = WorkspaceWorkConversationTimeline.liveEventForDisplay(item)
         if (live != null) {
             val row = createWorkEventRow(
                 event = live,

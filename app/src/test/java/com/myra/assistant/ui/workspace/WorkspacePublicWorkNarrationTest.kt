@@ -41,6 +41,7 @@ class WorkspacePublicWorkNarrationTest {
         assertTrue(scope.text.contains("Scope bhi clear hai bro"))
         assertTrue(scope.text.contains("ReadingTrackerSafetyTest.kt"))
         assertTrue(proposal.text.contains("Proposal ready hai"))
+        assertFalse(proposal.text.contains("Requested comment-only cleanup"))
         assertTrue(commit.text.contains("Push confirm ho gaya bro"))
         assertTrue(commit.text.contains("GREEN evidence se pehle task done nahi bolunga"))
     }
@@ -67,9 +68,27 @@ class WorkspacePublicWorkNarrationTest {
         )
 
         assertNotEquals(accepted.text, revise.text)
-        assertTrue(accepted.text.contains("Reviewer ne change clear kiya"))
+        assertTrue(accepted.text.contains("Reviewer ne requested scope ke against change clear kiya"))
+        assertFalse(accepted.text.contains("Requested change is scoped correctly"))
         assertTrue(revise.text.contains("fixable issue"))
         assertTrue(revise.text.contains("Null guard"))
+    }
+
+    @Test fun hinglishRevisionKeepsSpecificReviewerReason() {
+        val instruction = "Bro GitHub repo me safe fix karo."
+        val revise = WorkspacePublicWorkNarration.review(
+            instruction,
+            WorkspaceGitHubPatchReviewer.Review(
+                WorkspaceGitHubPatchReviewer.Decision.REVISE,
+                "Null guard is still missing.",
+                listOf("Crash path remains."),
+            ),
+            afterRevision = false,
+        )
+
+        assertTrue(revise.text.contains("fixable issue"))
+        assertTrue(revise.text.contains("Null guard is still missing"))
+        assertFalse(revise.text.contains("provider", ignoreCase = true))
     }
 
     @Test fun ciNarrationQualifiesEvidenceAndDoesNotClaimPhonePass() {

@@ -28,6 +28,9 @@ internal sealed interface WorkspaceWorkConversationItem {
 internal object WorkspaceWorkConversationTimeline {
     private const val MAX_COMPLETED_ITEMS = 16
 
+    fun liveEventForDisplay(item: WorkspaceWorkConversationItem.Public): WorkspaceWorkEvent? =
+        item.liveEvent?.copy(detail = null)
+
     fun active(
         snapshot: WorkspaceWorkSnapshot,
         publicMessages: List<WorkspacePublicWorkMessage>,

@@ -77,13 +77,13 @@ internal object WorkspacePublicWorkNarration {
         } else {
             "The change proposal is ready for $files. I’m reviewing it before any protected write."
         }
-        val body = rationale?.let {
-            if (isHinglish(instruction)) {
-                "Proposal ready hai: $it Ab write se pehle review/validation kar raha hoon."
-            } else {
+        val body = if (isHinglish(instruction)) {
+            fallback
+        } else {
+            rationale?.let {
                 "The change proposal is ready: $it I’m reviewing it before any protected write."
-            }
-        } ?: fallback
+            } ?: fallback
+        }
         return Update(
             key = when {
                 ciRepair -> "proposal-repair"
@@ -108,19 +108,19 @@ internal object WorkspacePublicWorkNarration {
         val text = when (review.decision) {
             WorkspaceGitHubPatchReviewer.Decision.ACCEPT ->
                 if (isHinglish(instruction)) {
-                    "Reviewer ne change clear kiya ✅ $summary Ab approved patch ko write stage me le ja raha hoon."
+                    "Reviewer ne requested scope ke against change clear kiya ✅ Koi blocking issue report nahi hua. Ab approved patch ko write stage me le ja raha hoon."
                 } else {
                     "The review is clear ✅ $summary I’m moving to the next verified write step."
                 }
             WorkspaceGitHubPatchReviewer.Decision.REVISE ->
                 if (isHinglish(instruction)) {
-                    "Review ne fixable issue pakda: $summary Isi bounded task me ek revision kar raha hoon; abhi write complete nahi hai."
+                    "Reviewer ne ek fixable issue flag kiya — $summary Isi bounded task me ek revision kar raha hoon; abhi write complete nahi hai."
                 } else {
                     "The review found a fixable issue: $summary I’m applying one bounded revision; the write is not complete yet."
                 }
             WorkspaceGitHubPatchReviewer.Decision.REJECT ->
                 if (isHinglish(instruction)) {
-                    "Review ne proposed change block kiya: $summary Isliye unsafe write continue nahi karunga."
+                    "Reviewer ne proposed change block kiya — $summary Isliye unsafe write continue nahi karunga."
                 } else {
                     "The review blocked the proposed change: $summary I won’t continue with an unsafe write."
                 }
