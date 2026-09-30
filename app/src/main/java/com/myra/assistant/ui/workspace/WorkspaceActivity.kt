@@ -111,6 +111,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private val githubSelfEditReceiptProjectKey = "workspace_github_self_edit_receipt_project_id"
     private val githubSelfEditReceiptMessageKey = "workspace_github_self_edit_receipt_message_id"
     private val githubSelfEditReceiptSummaryKey = "workspace_github_self_edit_receipt_summary"
+    private val githubSelfEditReceiptKickoffKey = "workspace_github_self_edit_receipt_kickoff"
     private val selectedProjectKey = "workspace_selected_project_id"
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -361,17 +362,32 @@ class WorkspaceActivity : AppCompatActivity() {
         val messageId = githubSelfEditMessageId
             ?: preferences.getString(githubSelfEditMessageKey, null)
             ?: return
-        preferences.edit()
+        val kickoff = workKickoffs[messageId]
+            ?: preferences.getString(githubSelfEditKickoffKey, null)
+        val editor = preferences.edit()
             .putString(githubSelfEditReceiptProjectKey, projectId)
             .putString(githubSelfEditReceiptMessageKey, messageId)
             .putString(githubSelfEditReceiptSummaryKey, summary.take(3_000))
-            .apply()
+        if (!kickoff.isNullOrBlank()) {
+            editor.putString(githubSelfEditReceiptKickoffKey, kickoff.take(360))
+        } else {
+            editor.remove(githubSelfEditReceiptKickoffKey)
+        }
+        editor.apply()
     }
 
     private fun consumeGitHubSelfEditCompletionReceipt(): Boolean {
         val projectId = preferences.getString(githubSelfEditReceiptProjectKey, null) ?: return false
         val messageId = preferences.getString(githubSelfEditReceiptMessageKey, null) ?: return false
         val summary = preferences.getString(githubSelfEditReceiptSummaryKey, null) ?: return false
+        preferences.getString(githubSelfEditReceiptKickoffKey, null)
+            ?.takeIf { it.isNotBlank() }
+            ?.let { rememberWorkKickoff(messageId, it) }
+        workTraces.ensureSuccess(
+            messageId = messageId,
+            label = "GitHub change verified",
+        )
+        expandedWorkTraceMessageIds.remove(messageId)
         val consumed = runCatching {
             conversations.attachAssistantToTurn(
                 projectId = projectId,
@@ -385,6 +401,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 .remove(githubSelfEditReceiptProjectKey)
                 .remove(githubSelfEditReceiptMessageKey)
                 .remove(githubSelfEditReceiptSummaryKey)
+                .remove(githubSelfEditReceiptKickoffKey)
                 .apply()
         }
         if (!consumed) {

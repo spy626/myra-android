@@ -37,6 +37,18 @@ internal class WorkspaceTurnWorkTraces(
     @Synchronized fun existing(messageId: String): WorkspaceWorkTrace? =
         traces[requireId(messageId)]
 
+    @Synchronized fun ensureSuccess(
+        messageId: String,
+        label: String = "Done",
+        detail: String? = null,
+    ): WorkspaceWorkTrace {
+        val id = requireId(messageId)
+        val trace = traces[id] ?: factory().also { traces[id] = it }
+        trace.ensureSuccess(label, detail)
+        trim(protectedId = id)
+        return trace
+    }
+
     @Synchronized fun remove(messageId: String) {
         traces.remove(requireId(messageId))
     }

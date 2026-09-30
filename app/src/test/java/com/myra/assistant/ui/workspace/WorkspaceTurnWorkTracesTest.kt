@@ -43,6 +43,62 @@ class WorkspaceTurnWorkTracesTest {
         assertEquals("Thinking", store.existing("second")?.snapshot()?.current?.label)
     }
 
+    @Test fun completionReceiptAlwaysTerminalizesExactTurnAndIsIdempotent() {
+        var tick = 4_000L
+        val store = WorkspaceTurnWorkTraces(maxTraces = 4) {
+            WorkspaceWorkTrace { tick++ }
+        }
+        store.reset("github-turn").begin(WorkspaceWorkPhase.VERIFYING, "CI running")
+
+        val first = store.ensureSuccess("github-turn", "GitHub change verified")
+        val eventCount = first.snapshot().events.size
+        store.ensureSuccess("github-turn", "GitHub change verified")
+
+        val snapshot = store.existing("github-turn")!!.snapshot()
+        assertFalse(snapshot.active)
+        assertEquals(WorkspaceWorkPhase.DONE, snapshot.current?.phase)
+        assertEquals(eventCount, snapshot.events.size)
+        assertTrue(
+            WorkspaceWorkPresentation.compactRow(snapshot, expanded = false, nowMs = 10_000L)
+                .orEmpty()
+                .startsWith("Worked for ")
+        )
+    }
+
+    @Test fun completionReceiptRecreatesMinimalTerminalTraceIfMemoryWasLost() {
+        var tick = 5_000L
+        val store = WorkspaceTurnWorkTraces(maxTraces = 4) {
+            WorkspaceWorkTrace { tick++ }
+        }
+
+        store.ensureSuccess("restored-turn", "GitHub change verified")
+
+        val snapshot = store.existing("restored-turn")!!.snapshot()
+        assertFalse(snapshot.active)
+        assertEquals(WorkspaceWorkPhase.DONE, snapshot.current?.phase)
+        assertEquals(
+            "Worked for 1s ›",
+            WorkspaceWorkPresentation.compactRow(snapshot, expanded = false, nowMs = 9_000L),
+        )
+    }
+
+    @Test fun completionReceiptNeverOverwritesExistingError() {
+        var tick = 6_000L
+        val store = WorkspaceTurnWorkTraces(maxTraces = 4) {
+            WorkspaceWorkTrace { tick++ }
+        }
+        store.reset("failed-turn").apply {
+            begin(WorkspaceWorkPhase.VERIFYING, "Reviewing")
+            finishError("Work stopped", "Reviewer rejected the change")
+        }
+
+        store.ensureSuccess("failed-turn", "GitHub change verified")
+
+        val snapshot = store.existing("failed-turn")!!.snapshot()
+        assertEquals(WorkspaceWorkPhase.ERROR, snapshot.current?.phase)
+        assertTrue(snapshot.current?.detail.orEmpty().contains("Reviewer rejected"))
+    }
+
     @Test fun boundedStoreEvictsOldTerminalTraceBeforeActiveTrace() {
         var tick = 3_000L
         val store = WorkspaceTurnWorkTraces(maxTraces = 2) {

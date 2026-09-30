@@ -126,6 +126,23 @@ internal class WorkspaceWorkTrace(
         endedAtMs = events.last().atMs
     }
 
+    /**
+     * Idempotent terminalization used by exact-turn completion receipts.
+     * It can recreate a minimal terminal receipt if in-memory progress was lost,
+     * but it never overwrites an existing error or completed state.
+     */
+    @Synchronized fun ensureSuccess(label: String = "Done", detail: String? = null) {
+        val current = events.lastOrNull()?.phase
+        if (current == WorkspaceWorkPhase.DONE || current == WorkspaceWorkPhase.ERROR) return
+        addLocked(
+            WorkspaceWorkPhase.DONE,
+            label,
+            detail,
+            WorkspaceWorkPresentationKind.DEFAULT,
+        )
+        endedAtMs = events.last().atMs
+    }
+
     @Synchronized fun finishError(label: String = "Work stopped", detail: String? = null) {
         if (events.isEmpty()) return
         addLocked(

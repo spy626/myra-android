@@ -72,6 +72,9 @@ class WorkspaceAdaptiveFinalAnswerTest {
         assertTrue(prompt.contains("Exact CI: #3280"))
         assertTrue(prompt.contains("prefer 2–4 short natural sentences"))
         assertTrue(prompt.contains("Normally omit commit SHA, draft PR number and raw branch identifier"))
+        assertTrue(prompt.contains("Never say everything or sab kuch is verified"))
+        assertFalse(prompt.contains("agent/myra-phase-1"))
+        assertFalse(prompt.contains("b".repeat(40)))
         assertFalse(prompt.contains("What changed:"))
     }
 
@@ -121,5 +124,16 @@ class WorkspaceAdaptiveFinalAnswerTest {
             WorkspaceAdaptiveFinalAnswer.accept(
                 "Main branch updated and task complete.", result)
         }.isFailure)
+        assertTrue(runCatching {
+            WorkspaceAdaptiveFinalAnswer.accept(
+                "Bro agent/myra-phase-1 par change complete hai. CI #3280 GREEN.", result)
+        }.isFailure)
+        assertTrue(runCatching {
+            WorkspaceAdaptiveFinalAnswer.accept(
+                "Bro, sab kuch verified hai. CI #3280 GREEN.", result)
+        }.isFailure)
+
+        val qualified = "Bro requested change complete hai. CI #3280 ke configured build/tests passed."
+        assertEquals(qualified, WorkspaceAdaptiveFinalAnswer.accept(qualified, result))
     }
 }
