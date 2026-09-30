@@ -194,6 +194,21 @@ internal object WorkspaceGitHubConnector {
         )
     }
 
+    fun workflowRunsForBranchRequest(
+        token: String,
+        repository: String,
+        branch: String,
+    ): Request {
+        val clean = WorkspaceConnectorPolicy.binding(repository, branch)
+        val parts = clean.repository.split('/')
+        return request(
+            "/repos/" + encode(parts[0]) + "/" + encode(parts[1]) +
+                "/actions/runs?branch=" + encode(clean.branch) +
+                "&event=push&per_page=100",
+            token,
+        )
+    }
+
     fun workflowRunJobsRequest(
         token: String,
         repository: String,
@@ -439,6 +454,47 @@ internal object WorkspaceGitHubConnector {
             matches += WorkflowRun(
                 id = id,
                 runNumber = runNumber,
+                name = name,
+                headSha = head,
+                status = status,
+                conclusion = conclusion,
+                url = url,
+            )
+        }
+        return matches.maxByOrNull { it.id }
+    }
+
+    fun readWorkflowRunByNumber(
+        response: Response,
+        expectedRunNumber: Long,
+        expectedBranch: String,
+    ): WorkflowRun? {
+        require(expectedRunNumber > 0L) { "GitHub workflow run number is invalid" }
+        val branch = WorkspaceConnectorPolicy.requireFeatureBranch(expectedBranch)
+        val root = parseJson(response, "GitHub Actions workflow runs")
+        val array = root.optJSONArray("workflow_runs") ?: JSONArray()
+        val matches = mutableListOf<WorkflowRun>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            if (item.optLong("run_number", -1L) != expectedRunNumber) continue
+            if (item.optString("head_branch").trim() != branch) continue
+            val name = item.optString("name").trim()
+            if (name != "Build Android APK") continue
+            val id = item.optLong("id", -1L)
+            val status = item.optString("status").trim()
+            val head = requireSha(item.optString("head_sha"), "GitHub workflow commit")
+            val url = item.optString("html_url").trim()
+            require(id > 0L && status.isNotBlank()) {
+                "GitHub Actions workflow run metadata is invalid"
+            }
+            require(url.startsWith("https://github.com/")) {
+                "GitHub Actions workflow URL is invalid"
+            }
+            val conclusion = item.optString("conclusion").trim()
+                .takeIf { it.isNotBlank() && it != "null" }
+            matches += WorkflowRun(
+                id = id,
+                runNumber = expectedRunNumber,
                 name = name,
                 headSha = head,
                 status = status,

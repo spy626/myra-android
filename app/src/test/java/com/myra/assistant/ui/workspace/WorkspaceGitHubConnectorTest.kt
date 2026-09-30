@@ -1,5 +1,10 @@
 package com.myra.assistant.ui.workspace
 
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -23,12 +28,17 @@ class WorkspaceGitHubConnectorTest {
             "agent/myra-phase-1",
             head,
         )
+        val recentRuns = WorkspaceGitHubConnector.workflowRunsForBranchRequest(
+            token,
+            "spy626/myra-android",
+            "agent/myra-phase-1",
+        )
         val jobs = WorkspaceGitHubConnector.workflowRunJobsRequest(
             token,
             "spy626/myra-android",
             123L,
         )
-        listOf(repo, branch, runs, jobs).forEach { request ->
+        listOf(repo, branch, runs, recentRuns, jobs).forEach { request ->
             assertEquals("https", request.url.scheme)
             assertEquals("api.github.com", request.url.host)
             assertTrue(request.url.toString().contains(token).not())
@@ -40,7 +50,42 @@ class WorkspaceGitHubConnectorTest {
         assertEquals("agent/myra-phase-1", runs.url.queryParameter("branch"))
         assertEquals(head, runs.url.queryParameter("head_sha"))
         assertEquals("5", runs.url.queryParameter("per_page"))
+        assertEquals("push", recentRuns.url.queryParameter("event"))
+        assertEquals("agent/myra-phase-1", recentRuns.url.queryParameter("branch"))
+        assertEquals("100", recentRuns.url.queryParameter("per_page"))
+        assertTrue(recentRuns.url.queryParameter("head_sha") == null)
         assertTrue(jobs.url.encodedPath.endsWith("/actions/runs/123/jobs"))
+    }
+
+    private fun response(json: String): Response = Response.Builder()
+        .request(Request.Builder()
+            .url("https://api.github.com/repos/spy626/myra-android/actions/runs")
+            .build())
+        .protocol(Protocol.HTTP_1_1)
+        .code(200)
+        .message("OK")
+        .body(json.toResponseBody("application/json".toMediaType()))
+        .build()
+
+    @Test fun exactRunNumberReadIsBoundToConnectedFeatureBranchAndWorkflow() {
+        val wanted = "1234567890abcdef1234567890abcdef12345678"
+        val other = "abcdef1234567890abcdef1234567890abcdef12"
+        val run = WorkspaceGitHubConnector.readWorkflowRunByNumber(
+            response(
+                """{"workflow_runs":[
+                    {"id":1,"run_number":3324,"name":"Build Android APK","head_branch":"other/branch","head_sha":"$other","status":"completed","conclusion":"success","html_url":"https://github.com/spy626/myra-android/actions/runs/1"},
+                    {"id":2,"run_number":3324,"name":"Other Workflow","head_branch":"agent/myra-phase-1","head_sha":"$other","status":"completed","conclusion":"success","html_url":"https://github.com/spy626/myra-android/actions/runs/2"},
+                    {"id":3,"run_number":3324,"name":"Build Android APK","head_branch":"agent/myra-phase-1","head_sha":"$wanted","status":"completed","conclusion":"success","html_url":"https://github.com/spy626/myra-android/actions/runs/3"}
+                ]}"""
+            ),
+            expectedRunNumber = 3324L,
+            expectedBranch = "agent/myra-phase-1",
+        )
+
+        assertEquals(3324L, run?.runNumber)
+        assertEquals("success", run?.conclusion)
+        assertEquals(wanted, run?.headSha)
+        assertEquals(3L, run?.id)
     }
 
     @Test fun brokerRequestsKeepPairingSecretOutOfUrls() {

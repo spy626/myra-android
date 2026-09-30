@@ -102,6 +102,11 @@ class WorkspaceActivity : AppCompatActivity() {
     private var agentReachBaseCompletion: WorkspaceAgentReachGitHubRunner.Completion? = null
     private var agentReachRunner: WorkspaceAgentReachGitHubRunner? = null
     private var agentReachRelevantRunner: WorkspaceAgentReachGitHubRelevantRunner? = null
+    private var connectedRunVerificationActive = false
+    private var connectedRunVerificationProjectId: String? = null
+    private var connectedRunVerificationMessageId: String? = null
+    private var connectedRunVerificationNumber: Long? = null
+    private var connectedRunVerificationRunner: WorkspaceConnectedGitHubRunRunner? = null
     private var githubSelfEditProjectId: String? = null
     private var githubSelfEditMessageId: String? = null
     private val githubSelfEditProjectKey = "workspace_github_self_edit_project_id"
@@ -623,6 +628,97 @@ class WorkspaceActivity : AppCompatActivity() {
         render()
     }
 
+    private fun connectedRunVerifier(): WorkspaceConnectedGitHubRunRunner {
+        connectedRunVerificationRunner?.let { return it }
+        return WorkspaceConnectedGitHubRunRunner(
+            store = WorkspaceConnectorCredentialStore(this),
+            listener = object : WorkspaceConnectedGitHubRunRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !connectedRunVerificationActive) {
+                            return@runOnUiThread
+                        }
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(
+                    completion: WorkspaceConnectedGitHubRunRunner.Completion
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !connectedRunVerificationActive) {
+                            return@runOnUiThread
+                        }
+                        finishConnectedRunVerification(
+                            WorkspaceConnectedGitHubRunIntent.receipt(completion)
+                        )
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !connectedRunVerificationActive) {
+                            return@runOnUiThread
+                        }
+                        finishConnectedRunVerification(
+                            "I couldn't verify that connected GitHub build safely: " + message
+                        )
+                    }
+                }
+            },
+        ).also { connectedRunVerificationRunner = it }
+    }
+
+    private fun clearConnectedRunVerification(cancel: Boolean = true) {
+        if (cancel) connectedRunVerificationRunner?.cancel()
+        connectedRunVerificationActive = false
+        connectedRunVerificationProjectId = null
+        connectedRunVerificationMessageId = null
+        connectedRunVerificationNumber = null
+    }
+
+    private fun finishConnectedRunVerification(reply: String) {
+        val id = connectedRunVerificationProjectId
+        val messageId = connectedRunVerificationMessageId
+        clearConnectedRunVerification(cancel = false)
+        if (id == null || messageId == null || selectedId != id) return
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == messageId) {
+                "Conversation changed; GitHub build verification was not saved"
+            }
+            conversations.append(id, "assistant", reply)
+        }.onSuccess {
+            statusMessage = ""
+        }.onFailure {
+            statusMessage = it.message ?: "GitHub build verification receipt could not be saved."
+            recordWorkEvent(
+                WorkspaceWorkPhase.ERROR,
+                "GitHub build receipt not saved",
+                statusMessage,
+            )
+        }
+        render()
+    }
+
+    private fun startConnectedRunVerification(
+        id: String,
+        messageId: String,
+        runNumber: Long,
+    ) {
+        clearConnectedRunVerification()
+        connectedRunVerificationActive = true
+        connectedRunVerificationProjectId = id
+        connectedRunVerificationMessageId = messageId
+        connectedRunVerificationNumber = runNumber
+        statusMessage = ""
+        render()
+        connectedRunVerifier().start(runNumber)
+    }
+
     private fun githubReachRunner(): WorkspaceAgentReachGitHubRunner {
         agentReachRunner?.let { return it }
         return WorkspaceAgentReachGitHubRunner(
@@ -814,6 +910,7 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest?.cancel()
         activeRequest = null
         clearAgentReachState()
+        clearConnectedRunVerification()
         coding.cancel()
         // Protected GitHub self-edit intentionally keeps running under the foreground service.
         // Explicit Stop is the only lifecycle-independent cancellation path.
@@ -994,7 +1091,8 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun isForegroundBusy(): Boolean =
-        activeRequest != null || coding.isRunning || agentReachActive
+        activeRequest != null || coding.isRunning || agentReachActive ||
+            connectedRunVerificationActive
 
     private fun isBusy(): Boolean = isForegroundBusy() || githubSelfEdit.isRunning
 
@@ -1002,6 +1100,7 @@ class WorkspaceActivity : AppCompatActivity() {
         if (!isForegroundBusy()) return
         val normalChatWasRunning = activeRequest != null
         val githubReadWasRunning = agentReachActive
+        val connectedRunReadWasRunning = connectedRunVerificationActive
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
@@ -1013,6 +1112,12 @@ class WorkspaceActivity : AppCompatActivity() {
             workTrace.finishError(
                 "Stopped",
                 "GitHub read cancelled; no content was installed, executed, or sent to a provider.")
+        }
+        if (connectedRunReadWasRunning) {
+            clearConnectedRunVerification()
+            workTrace.finishError(
+                "Stopped",
+                "GitHub build verification cancelled; no repository change was made.")
         }
         coding.cancel()
         codingRetryTarget = null
@@ -3486,6 +3591,25 @@ class WorkspaceActivity : AppCompatActivity() {
                 return
             }
         } else null
+        if (skillProjection == null &&
+            picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
+            WorkspaceConnectedGitHubRunIntent.decide(text)?.let { decision ->
+                decision.localError?.let { reason ->
+                    statusMessage = reason
+                    recordWorkEvent(
+                        WorkspaceWorkPhase.ERROR,
+                        "GitHub build read not started",
+                        reason,
+                    )
+                    render()
+                    return
+                }
+                decision.runNumber?.let { runNumber ->
+                    startConnectedRunVerification(id, stored.id, runNumber)
+                    return
+                }
+            }
+        }
         if (skillProjection == null &&
             picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
             WorkspaceAgentReachChatIntent.decide(text)?.let { decision ->
