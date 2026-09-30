@@ -76,6 +76,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private val skillStore by lazy {
         WorkspaceSkillStore(File(noBackupFilesDir, WorkspaceSkillStore.APP_DIRECTORY))
     }
+    private val workflowExperienceStore by lazy {
+        WorkspaceWorkflowExperienceStore(File(noBackupFilesDir, "workspace-experience"))
+    }
     private val keys by lazy { ApiKeyStore(this) }
     private val preferences by lazy { getSharedPreferences("workspace_ui", Context.MODE_PRIVATE) }
     private val localDrafts = mutableMapOf<String, String>()
@@ -192,26 +195,50 @@ class WorkspaceActivity : AppCompatActivity() {
                         result = result,
                         userTask = userTask,
                     )
-                    runCatching {
-                        val receipt = WorkspaceRecentGitHubActionReceipt.fromCompletion(
+                    val verifiedReceipt = runCatching {
+                        WorkspaceRecentGitHubActionReceipt.fromCompletion(
                             result = result,
                             userTask = userTask,
                             completedAtMs = System.currentTimeMillis(),
                         )
-                        check(
-                            preferences.edit()
-                                .putString(
-                                    recentGitHubActionReceiptKey,
-                                    WorkspaceRecentGitHubActionReceipt.encode(receipt),
-                                )
-                                .commit()
-                        ) { "Recent GitHub action receipt could not be saved" }
+                    }
+                    verifiedReceipt.onSuccess { receipt ->
+                        runCatching {
+                            check(
+                                preferences.edit()
+                                    .putString(
+                                        recentGitHubActionReceiptKey,
+                                        WorkspaceRecentGitHubActionReceipt.encode(receipt),
+                                    )
+                                    .commit()
+                            ) { "Recent GitHub action receipt could not be saved" }
+                        }.onFailure {
+                            recordWorkEventForTurn(
+                                githubSelfEditMessageId ?: return@onFailure,
+                                WorkspaceWorkPhase.ERROR,
+                                "GitHub provenance receipt not saved",
+                                it.message,
+                            )
+                        }
+                        runCatching {
+                            workflowExperienceStore.record(
+                                WorkspaceWorkflowExperience.fromVerifiedGitHub(receipt)
+                            )
+                        }.onFailure {
+                            // Learning evidence is optional; verified task completion remains authoritative.
+                            recordWorkEventForTurn(
+                                githubSelfEditMessageId ?: return@onFailure,
+                                WorkspaceWorkPhase.ERROR,
+                                "Workflow experience evidence not saved",
+                                it.message,
+                            )
+                        }
                     }.onFailure {
-                        // Final completion remains valid; only future provenance follow-ups lose this aid.
+                        // A malformed verified receipt must not silently become learning evidence.
                         recordWorkEventForTurn(
                             githubSelfEditMessageId ?: return@onFailure,
                             WorkspaceWorkPhase.ERROR,
-                            "GitHub provenance receipt not saved",
+                            "Verified GitHub evidence not captured",
                             it.message,
                         )
                     }
