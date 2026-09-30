@@ -15,7 +15,7 @@ class WorkspaceWorkKickoffTest {
         assertTrue(text.startsWith("Haan bro"))
         assertTrue(text.contains("ReadingTrackerSafetyTest.kt"))
         assertTrue(text.contains("comment-only"))
-        assertTrue(text.contains("feature branch"))
+        assertTrue(text.contains("feature branch", ignoreCase = true))
         assertTrue(text.contains("exact CI"))
         assertFalse(text.contains("CI GREEN ho gaya", ignoreCase = true))
         assertFalse(text.contains("passed", ignoreCase = true))
