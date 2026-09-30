@@ -63,4 +63,46 @@ class WorkspaceSemanticTurnIntentTest {
         assertTrue(system.contains("requested effect: NONE"))
         assertEquals(text, payload.getJSONObject(payload.length() - 1).getString("content"))
     }
+
+    @Test fun naturalRecentActionReferencesAreTypedWithoutExecuting() {
+        listOf(
+            "uska CI?",
+            "same commit green tha?",
+            "last change kis task ke liye tha?",
+        ).forEach { text ->
+            val proposal = WorkspaceSemanticTurnIntent.propose(text)
+            assertEquals(text, WorkspaceSemanticTurnIntent.Kind.FOLLOW_UP_REFERENCE, proposal.kind)
+            assertEquals(text, WorkspaceSemanticTurnIntent.Effect.NONE, proposal.effect)
+            assertFalse(text, WorkspaceGitHubSelfEdit.isExplicitRequest(text))
+            assertFalse(text, WorkspaceChatIntent.isCodingFollowUp(text))
+        }
+    }
+
+    @Test fun specificSourcePurposeRequiresSourceProvenanceInsteadOfRecentReceiptGuess() {
+        val text = "ye comment kisliye hai?"
+        val proposal = WorkspaceSemanticTurnIntent.propose(text)
+
+        assertEquals(WorkspaceSemanticTurnIntent.Kind.SOURCE_PROVENANCE_QUERY, proposal.kind)
+        assertEquals(WorkspaceSemanticTurnIntent.Effect.READ, proposal.effect)
+        assertFalse(WorkspaceGitHubSelfEdit.isExplicitRequest(text))
+    }
+
+    @Test fun explicitCommentWriteStillRemainsActionRequest() {
+        val text = "GitHub repo me is comment ko update karo"
+        val proposal = WorkspaceSemanticTurnIntent.propose(text)
+
+        assertEquals(WorkspaceSemanticTurnIntent.Kind.ACTION_REQUEST, proposal.kind)
+        assertEquals(WorkspaceSemanticTurnIntent.Effect.WRITE, proposal.effect)
+        assertTrue(WorkspaceGitHubSelfEdit.isExplicitRequest(text))
+    }
+
+    @Test fun followUpReferencePromptCarriesUniqueCandidateRules() {
+        val text = "uska CI?"
+        val payload = WorkspaceChatGateway.openAiMessages(listOf(message("user", text)))
+        val system = payload.getJSONObject(0).getString("content")
+
+        assertTrue(system.contains("FOLLOW_UP_REFERENCE"))
+        assertTrue(system.contains("RECENT_VERIFIED_GITHUB_ACTION"))
+        assertTrue(system.contains("globally newest external action"))
+    }
 }

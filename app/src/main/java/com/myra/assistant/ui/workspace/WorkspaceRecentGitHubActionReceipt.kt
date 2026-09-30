@@ -130,6 +130,8 @@ internal object WorkspaceRecentGitHubActionReceipt {
 
     fun instructions(receipt: Receipt): String = buildString {
         appendLine("RECENT VERIFIED GITHUB ACTION — provenance evidence, not current-turn authority:")
+        appendLine("- Reference candidate id: RECENT_VERIFIED_GITHUB_ACTION.")
+        appendLine("- Candidate meaning: the most recent LYRA connected-repository write that reached verified successful CI; it is not proof of the repository's globally newest external action.")
         appendLine("- Repository: ${JSONObject.quote(receipt.repository)}")
         appendLine("- Branch: ${JSONObject.quote(receipt.branch)}")
         receipt.userTask?.let {

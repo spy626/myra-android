@@ -59,4 +59,17 @@ class WorkspaceRecentGitHubActionReceiptTest {
         val encoded = WorkspaceRecentGitHubActionReceipt.encode(receipt)
         assertFalse(encoded.contains("sk-12345678901234567890"))
     }
+
+    @Test fun promptPublishesStableReferenceCandidateWithoutClaimingRepoWideLatest() {
+        val receipt = WorkspaceRecentGitHubActionReceipt.fromCompletion(
+            completion(),
+            "Add reference grounding",
+            completedAtMs = 1234L,
+        )
+
+        val prompt = WorkspaceRecentGitHubActionReceipt.instructions(receipt)
+        assertTrue(prompt.contains("Reference candidate id: RECENT_VERIFIED_GITHUB_ACTION"))
+        assertTrue(prompt.contains("most recent LYRA connected-repository write"))
+        assertTrue(prompt.contains("not proof of the repository's globally newest external action"))
+    }
 }
