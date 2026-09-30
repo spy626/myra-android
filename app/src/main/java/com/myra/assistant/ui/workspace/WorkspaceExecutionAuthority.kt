@@ -34,7 +34,7 @@ internal object WorkspaceExecutionAuthority {
 
     /** These ask for information, not execution, when they govern the same clause as an action. */
     private val informational = Regex(
-        """\b(?:how\s+to|how\s+do|how\s+can|what\s+is|what\s+are|what\s+would|why|which\s+would|should\s+i|should\s+we|tutorial|explain|tell\s+me\s+about|show\s+me\s+how|difference|teach\s+me|review|analy[sz]e|suggest|recommend)\b|कैसे|क्या\s+है"""
+        """\b(?:how\s+to|how\s+do|how\s+can|what\s+is|what\s+are|what\s+would|why|which\s+would|should\s+i|should\s+we|tutorial|explain|tell\s+me\s+about|show\s+me\s+how|difference|teach\s+me|review|analy[sz]e|suggest|recommend|kyu|kyun|kis(?:\s+\p{L}+){0,4}\s+liye)\b|कैसे|क्या\s+है"""
     )
 
     /** Writing a prompt/plan/spec about coding is not permission to execute that coding. */

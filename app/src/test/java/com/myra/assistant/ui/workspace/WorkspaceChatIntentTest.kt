@@ -111,6 +111,22 @@ class WorkspaceChatIntentTest {
         ))
     }
 
+
+    @Test fun hinglishPurposeQuestionsNeverGrantMutationAuthority() {
+        listOf(
+            "last change kis task ke liye tha?",
+            "ye change kyu kiya?",
+            "same code kyun change hua?",
+        ).forEach {
+            assertFalse("Hinglish purpose question executed: $it",
+                WorkspaceChatIntent.isCodingFollowUp(it))
+        }
+
+        assertTrue(WorkspaceChatIntent.isCodingFollowUp(
+            "last change ko update karo"
+        ))
+    }
+
     @Test fun explicitBuildRequestsAreTyped() {
         listOf(
             "Ek website banao bro",
