@@ -152,6 +152,7 @@ internal class WorkspaceWorkflowExperienceStore(
         val reopened = list().firstOrNull { it.id == safe.id }
             ?: throw IllegalStateException("Workflow experience could not be verified after write")
         require(reopened == safe) { "Workflow experience changed after persistence" }
+        pruneInvalidPlanningActivations()
         return reopened
     }
 
@@ -222,6 +223,8 @@ internal class WorkspaceWorkflowExperienceStore(
         val reopened = listFeedback().firstOrNull { it.id == safe.id }
             ?: throw IllegalStateException("Workflow feedback could not be verified after write")
         require(reopened == safe) { "Workflow feedback changed after persistence" }
+        // Revoke stale/contradicted planning guidance durably, not merely in one prompt.
+        pruneInvalidPlanningActivations()
         return reopened
     }
 
@@ -377,5 +380,91 @@ internal class WorkspaceWorkflowExperienceStore(
             ?: throw IllegalStateException("Workflow activation was not verified after write")
         require(reopened == safe) { "Workflow activation changed after persistence" }
         return reopened
+    }
+
+    /**
+     * One clearly user-authorized approval + planning activation operation.
+     * Approval-only records already on disk are NEVER auto-promoted here.
+     * Rebuild evidence before consent persistence and again after it; a correction always wins.
+     */
+    @Synchronized fun approveAndActivatePlanning(
+        proposal: WorkspaceWorkflowImprovementProposal.Proposal,
+        sourceTurnId: String,
+        atMs: Long,
+    ): WorkspaceWorkflowImprovementActivation.ApprovalActivation? {
+        if (sourceTurnId.isBlank() || atMs < 0L) return null
+        val beforeExperiences = list()
+        val beforeFeedback = listFeedback()
+        val current = WorkspaceWorkflowImprovementActivation.currentProposals(
+            beforeExperiences, beforeFeedback
+        ).singleOrNull { it.id == proposal.id } ?: return null
+        if (current != proposal) return null
+        val prospectiveApproval = WorkspaceWorkflowImprovementApproval.fromUserTurn(
+            proposal = current,
+            sourceTurnId = sourceTurnId,
+            approvedAtMs = atMs,
+        )
+        // This checks ALL retained counter-evidence before recording any consent.
+        val preflight = WorkspaceWorkflowImprovementActivation.issue(
+            requestedProposalId = current.id,
+            sourceTurnId = sourceTurnId,
+            activatedAtMs = atMs,
+            experiences = beforeExperiences,
+            feedback = beforeFeedback,
+            approvals = listOf(prospectiveApproval),
+        ) ?: return null
+        if (preflight.approvalId != prospectiveApproval.id) return null
+
+        val approval = recordApproval(prospectiveApproval)
+        // No historical approval can substitute for the current turn's exact consent.
+        val activation = WorkspaceWorkflowImprovementActivation.issue(
+            requestedProposalId = current.id,
+            sourceTurnId = sourceTurnId,
+            activatedAtMs = atMs,
+            experiences = list(),
+            feedback = listFeedback(),
+            approvals = listApprovals(),
+        )?.takeIf { it.approvalId == approval.id }
+            ?: return WorkspaceWorkflowImprovementActivation.ApprovalActivation(
+                approval = approval,
+                activation = null,
+            )
+        val recorded = runCatching { recordActivation(activation) }.getOrNull()
+        val effective = recorded?.let { safeRecord ->
+            runCatching {
+                WorkspaceWorkflowImprovementActivation.effective(
+                    safeRecord, list(), listFeedback(), listApprovals()
+                )
+            }.getOrDefault(false)
+        } ?: false
+        return WorkspaceWorkflowImprovementActivation.ApprovalActivation(
+            approval = approval,
+            activation = recorded?.takeIf { effective },
+        )
+    }
+
+    /**
+     * Experience or feedback changes invalidate prior proposal snapshots. Delete ineffective
+     * activation records from the same private owner so feedback eviction or app restart cannot
+     * resurrect revoked planning guidance. Never touches approvals or execution authority.
+     */
+    private fun pruneInvalidPlanningActivations() {
+        if (!activationFile().exists()) return
+        val previous = listActivations()
+        if (previous.isEmpty()) return
+        val experiences = list()
+        val feedback = listFeedback()
+        val approvals = listApprovals()
+        val valid = previous.filter {
+            WorkspaceWorkflowImprovementActivation.effective(
+                it, experiences, feedback, approvals
+            )
+        }
+        if (valid.size != previous.size) {
+            atomicWrite(activationFile(), encodeActivations(valid))
+            require(listActivations() == valid) {
+                "Workflow activation revocation could not be verified"
+            }
+        }
     }
 }

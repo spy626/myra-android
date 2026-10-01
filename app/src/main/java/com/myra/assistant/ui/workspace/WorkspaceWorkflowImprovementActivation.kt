@@ -20,6 +20,13 @@ internal object WorkspaceWorkflowImprovementActivation {
         val activatedAtMs: Long,
     )
 
+    // Outcome of a single user-authorized approval-plus-activation turn. The approval may
+    // survive a failed post-write revalidation, but activation is never claimed without proof.
+    data class ApprovalActivation(
+        val approval: WorkspaceWorkflowImprovementApproval.Record,
+        val activation: Record?,
+    )
+
     private val sha = Regex("""[0-9a-f]{64}""")
     private val proposalIdPattern = Regex("""workflow-proposal:[0-9a-f]{64}""")
     private val approvalIdPattern = Regex("""workflow-approval:[0-9a-f]{64}""")

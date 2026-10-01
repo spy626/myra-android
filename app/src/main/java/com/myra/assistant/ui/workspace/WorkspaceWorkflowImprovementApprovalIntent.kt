@@ -20,6 +20,21 @@ internal object WorkspaceWorkflowImprovementApprovalIntent {
         """(?iu)\b(?:i\s+approve|approve\s+(?:this|it|proposal|karo|kar\s+do)|haan\s+approve|han\s+approve|yes\s+approve|manzoor\s+hai)\b"""
     )
 
+    // This must be a distinct, explicit approval-plus-planning-activation instruction.
+    // Bare approval and historic approval records remain consent-only.
+    private val combinedPrefix = Regex(
+        """(?iu)^(?:(?:haan|han|yes|please|i)\s+)?approve\s+(?:and|&|aur)\s+activate(?:\s+(?:(?:this|the)\s+)?proposal(?:\s+workflow-proposal:[0-9a-f]{64})?|planning|karo|kar\s+do)?\s*[.!]?$"""
+    )
+    private val combinedSuffix = Regex(
+        """(?iu)^(?:(?:haan|han|yes|please|i)\s+)?approve\s+(?:(?:this|the)\s+)?proposal(?:\s+workflow-proposal:[0-9a-f]{64})?\s+(?:and|&|aur)\s+activate(?:\s+karo)?\s*[.!]?$"""
+    )
+
+    fun requestsPlanningActivation(raw: String): Boolean {
+        val text = raw.trim().replace(Regex("""[\s\p{Z}]+"""), " ")
+        if (text.length !in 1..300 || decide(text) == null) return false
+        return combinedPrefix.matches(text) || combinedSuffix.matches(text)
+    }
+
     fun decide(raw: String): Decision? {
         val text = raw.trim().replace(Regex("""[\s\p{Z}]+"""), " ").take(1_000)
         if (text.isBlank() || WorkspaceSourceContext.containsPossibleSecret(text)) return null

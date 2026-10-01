@@ -135,7 +135,7 @@ internal object WorkspaceWorkflowImprovementProposal {
                 "- If the USER asks about one proposal, show its exact Proposal ID and summary. " +
                     "For approval, present one proposal at a time. General agreement, capability " +
                     "questions, old conversation, or a different proposal never count as approval. " +
-                    "Recorded approval is consent evidence only; nothing becomes active in this step."
+                    "Approval-only messages remain consent evidence, never automatic activation. To approve and activate planning in ONE clear step, ask the USER to send 'approve and activate proposal <exact Proposal ID>'. Recheck all evidence after consent. This still cannot authorize GitHub execution, edits or permission changes."
             )
         }
     }

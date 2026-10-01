@@ -162,4 +162,137 @@ class WorkspaceWorkflowImprovementActivationTest {
             current.id, "activate", 33L, two, negative, listOf(approval)
         ))
     }
+
+    @Test fun combinedConsentRequiresExplicitCurrentActionAndNoQuestions() {
+        val intent = WorkspaceWorkflowImprovementApprovalIntent
+        assertTrue(intent.requestsPlanningActivation("approve and activate this proposal"))
+        assertTrue(intent.requestsPlanningActivation("haan approve aur activate karo"))
+        assertTrue(intent.requestsPlanningActivation("approve & activate planning"))
+        assertTrue(intent.requestsPlanningActivation(
+            "approve and activate proposal " + proposal().id
+        ))
+        assertTrue(intent.requestsPlanningActivation("approve this proposal and activate"))
+        assertFalse(intent.requestsPlanningActivation("approve this proposal"))
+        assertFalse(intent.requestsPlanningActivation("haan sahi hai"))
+        assertFalse(intent.requestsPlanningActivation("should I approve and activate this proposal?"))
+        assertFalse(intent.requestsPlanningActivation("I approve and activate this proposal?"))
+        assertFalse(intent.requestsPlanningActivation("do not approve and activate this proposal"))
+        assertFalse(intent.requestsPlanningActivation("approve and activate GitHub writes"))
+    }
+
+    @Test fun explicitStaleProposalIdCannotFallbackToAnotherVisibleProposal() {
+        val live = proposal()
+        val stale = "workflow-proposal:" + "f".repeat(64)
+        val grounding = WorkspaceWorkflowImprovementApprovalGrounding
+        assertNull(grounding.resolve(
+            "approve and activate proposal " + stale,
+            listOf(live.summary),
+            listOf(live),
+        ))
+        assertNull(grounding.resolve(
+            "approve and activate workflow-proposal:old",
+            listOf(live.summary),
+            listOf(live),
+        ))
+        assertEquals(live, grounding.resolve(
+            "approve and activate proposal " + live.id,
+            emptyList(),
+            listOf(live),
+        ))
+    }
+
+    @Test fun oneFreshConsentTurnApprovesAndActivatesPlanningWithoutOldApprovalAutoplay() {
+        val root = Files.createTempDirectory("workflow-auto-approval").toFile()
+        try {
+            val store = WorkspaceWorkflowExperienceStore(root)
+            two.forEach { store.record(it) }
+            positive.forEach { store.recordFeedback(it) }
+            val current = proposal()
+            assertEquals(emptyList<WorkspaceWorkflowImprovementApproval.Record>(), store.listApprovals())
+            assertEquals(emptyList<WorkspaceWorkflowImprovementActivation.Record>(), store.listActivations())
+            val historical = WorkspaceWorkflowImprovementApproval.fromUserTurn(
+                current, "old-approval-only-turn", 10L
+            )
+            store.recordApproval(historical)
+            // Historic approval never becomes an active overlay just by being loaded.
+            assertTrue(store.listActivations().isEmpty())
+            val combined = requireNotNull(store.approveAndActivatePlanning(
+                proposal = current, sourceTurnId = "new-combined-user-turn", atMs = 20L
+            ))
+            val active = requireNotNull(combined.activation)
+            assertNotEquals(historical.id, combined.approval.id)
+            assertEquals(combined.approval.id, active.approvalId)
+            assertTrue(WorkspaceWorkflowImprovementActivation.effective(
+                active, store.list(), store.listFeedback(), store.listApprovals()
+            ))
+            val reopened = WorkspaceWorkflowExperienceStore(root)
+            assertTrue(reopened.listActivations().contains(active))
+            assertTrue(WorkspaceWorkflowImprovementActivation.instructions(
+                reopened.listActivations(),
+                reopened.list(),
+                reopened.listFeedback(),
+                reopened.listApprovals(),
+            ).contains("ACTIVE_PLANNING_ONLY"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun staleCandidateBeforeCombinedConsentWritesNeitherApprovalNorActivation() {
+        val root = Files.createTempDirectory("workflow-auto-stale").toFile()
+        try {
+            val store = WorkspaceWorkflowExperienceStore(root)
+            two.forEach { store.record(it) }
+            positive.forEach { store.recordFeedback(it) }
+            val old = proposal()
+            store.record(experience('c', 3364, 9L))
+            assertNull(store.approveAndActivatePlanning(old, "stale-turn", 20L))
+            assertTrue(store.listApprovals().isEmpty())
+            assertTrue(store.listActivations().isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun correctionAutoRevokesPermanentlyEvenIfLaterConfirmationArrives() {
+        val root = Files.createTempDirectory("workflow-auto-revoke").toFile()
+        try {
+            val store = WorkspaceWorkflowExperienceStore(root)
+            two.forEach { store.record(it) }
+            positive.forEach { store.recordFeedback(it) }
+            val combined = requireNotNull(store.approveAndActivatePlanning(
+                proposal(), "combined-turn", 20L
+            ))
+            assertTrue(combined.activation != null)
+            val negative = feedback(two[0], WorkspaceWorkflowFeedbackIntent.Kind.CORRECT, 30L)
+            store.recordFeedback(negative)
+            assertTrue(store.listActivations().isEmpty())
+            store.recordFeedback(feedback(
+                two[0], WorkspaceWorkflowFeedbackIntent.Kind.CONFIRM, 31L
+            ))
+            assertTrue(WorkspaceWorkflowExperienceStore(root).listActivations().isEmpty())
+            assertEquals("", WorkspaceWorkflowImprovementActivation.instructions(
+                store.listActivations(), store.list(), store.listFeedback(), store.listApprovals()
+            ))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun newExecutionAutomaticallyInvalidatesPriorProposalActivation() {
+        val root = Files.createTempDirectory("workflow-auto-experience").toFile()
+        try {
+            val store = WorkspaceWorkflowExperienceStore(root)
+            two.forEach { store.record(it) }
+            positive.forEach { store.recordFeedback(it) }
+            val combined = requireNotNull(store.approveAndActivatePlanning(
+                proposal(), "combined-turn", 20L
+            ))
+            assertTrue(combined.activation != null)
+            store.record(experience('c', 3364, 30L))
+            assertTrue(WorkspaceWorkflowExperienceStore(root).listActivations().isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

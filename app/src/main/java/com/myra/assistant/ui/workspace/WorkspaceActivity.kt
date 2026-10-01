@@ -531,6 +531,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private data class CapturedWorkflowImprovementApproval(
         val proposal: WorkspaceWorkflowImprovementProposal.Proposal,
         val approval: WorkspaceWorkflowImprovementApproval.Record,
+        val activation: WorkspaceWorkflowImprovementActivation.Record? = null,
     )
 
     private fun currentWorkflowImprovementProposals():
@@ -566,6 +567,22 @@ class WorkspaceActivity : AppCompatActivity() {
             recentAssistantTexts = recentAssistantTexts,
             proposals = proposals,
         ) ?: return null
+        // A clearly combined current USER instruction replaces the older two-command flow.
+        // Approval-only messages, including historical approvals, NEVER trigger this path.
+        if (WorkspaceWorkflowImprovementApprovalIntent.requestsPlanningActivation(userText)) {
+            val result = runCatching {
+                workflowExperienceStore.approveAndActivatePlanning(
+                    proposal = proposal,
+                    sourceTurnId = sourceTurnId,
+                    atMs = System.currentTimeMillis(),
+                )
+            }.getOrNull() ?: return null
+            return CapturedWorkflowImprovementApproval(
+                proposal = proposal,
+                approval = result.approval,
+                activation = result.activation,
+            )
+        }
         val approval = runCatching {
             workflowExperienceStore.recordApproval(
                 WorkspaceWorkflowImprovementApproval.fromUserTurn(
@@ -3756,12 +3773,16 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val stored = runCatching { conversations.append(id, "user", text) }
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
+        val workflowCombinedApprovalAttempt = picked.isEmpty() &&
+            current.type == WorkspaceProjectType.CHAT &&
+            WorkspaceWorkflowImprovementApprovalIntent.requestsPlanningActivation(text)
         val workflowApprovalAttempt =
             WorkspaceWorkflowImprovementApprovalIntent.decide(text) != null
         val workflowActivationAttempt = picked.isEmpty() &&
             current.type == WorkspaceProjectType.CHAT &&
             WorkspaceWorkflowImprovementActivation.isExplicitRequest(text)
-        val workflowApproval = if (workflowApprovalAttempt) {
+        val workflowApproval = if (workflowApprovalAttempt && picked.isEmpty() &&
+            current.type == WorkspaceProjectType.CHAT) {
             captureWorkflowImprovementApprovalIfGrounded(
                 projectId = id,
                 sourceTurnId = stored.id,
@@ -3776,16 +3797,32 @@ class WorkspaceActivity : AppCompatActivity() {
         composer.requestFocus()
         localDrafts.remove(id)
         attachments.clear()
-        if (workflowApproval != null) {
-            val receipt = WorkspaceWorkflowImprovementApproval.receipt(
-                proposal = workflowApproval.proposal,
-                approval = workflowApproval.approval,
-            )
+        if (workflowApproval != null || workflowCombinedApprovalAttempt) {
+            val receipt = when {
+                workflowApproval?.activation != null ->
+                    "Improvement approved and planning guidance activated in one step.\n" +
+                        WorkspaceWorkflowImprovementActivation.receipt(
+                            workflowApproval.activation
+                        )
+                workflowCombinedApprovalAttempt && workflowApproval != null ->
+                    "Exact proposal approval recorded, but activation was NOT VERIFIED " +
+                        "after revalidation. No GitHub action or code/skill edit was started. " +
+                        "The current runtime evidence determines whether planning guidance is active."
+                workflowCombinedApprovalAttempt ->
+                    "Approval & activation could NOT be verified. Exactly one CURRENT proposal " +
+                        "must be grounded by this chat or an explicit Proposal ID, with unchanged " +
+                        "evidence and no correction/undo. No GitHub execution was started; no " +
+                        "activation is claimed without verified persisted evidence."
+                else -> WorkspaceWorkflowImprovementApproval.receipt(
+                    proposal = requireNotNull(workflowApproval).proposal,
+                    approval = workflowApproval.approval,
+                )
+            }
             runCatching {
                 conversations.attachAssistantToTurn(
                     projectId = id,
                     expectedUserId = stored.id,
-                    assistantId = "workflow-approval-" + workflowApproval.approval.id,
+                    assistantId = "workflow-approval-" + stored.id,
                     text = receipt,
                 )
             }.onFailure {

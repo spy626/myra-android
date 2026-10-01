@@ -15,9 +15,15 @@ internal object WorkspaceWorkflowImprovementApprovalGrounding {
         if (proposals.isEmpty()) return null
         val byId = proposals.associateBy { it.id }
 
-        val userMatches = byId.keys.filter(userText::contains).distinct()
-        if (userMatches.size == 1) return byId[userMatches.single()]
-        if (userMatches.size > 1) return null
+        // Any explicit Proposal ID is authoritative: NEVER fall back to another visible
+        // proposal when the typed ID is stale, malformed relative to current state or ambiguous.
+        val mentionedIds = Regex("""workflow-proposal:[0-9a-f]{64}""")
+            .findAll(userText).map { it.value }.distinct().toList()
+        if (mentionedIds.isNotEmpty()) {
+            return mentionedIds.singleOrNull()?.let(byId::get)
+        }
+        // Incomplete IDs are also explicit attempts and must fail closed.
+        if (userText.contains("workflow-proposal:", ignoreCase = true)) return null
 
         val visible = recentAssistantTexts
             .takeLast(6)
