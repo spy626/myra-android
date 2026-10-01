@@ -128,12 +128,18 @@ internal object WorkspaceChatGateway {
             WorkspaceSemanticTaskFrame.instructions(messages) else ""
         val turnFrame = if (normalConversation)
             WorkspaceChatTurnFrame.instructions(recent) else ""
+        // Advice-only turns may mention "coding" solely to prohibit it, which activates
+        // the existing code-format cue. Still project practical planning guidance here.
+        val practicalPlanning = if (revisionKind == null && contextDecision == null &&
+            writingInstructions.isBlank() && latest != null
+        ) WorkspacePracticalPlanningGuide.instructions(latest) else ""
         val instructions = listOf(
             CHAT_REPLY_DISCIPLINE,
             extra,
             semanticTurnIntent,
             semanticTaskFrame,
             turnFrame,
+            practicalPlanning,
             writingInstructions,
             earlier,
             codeInstructions,

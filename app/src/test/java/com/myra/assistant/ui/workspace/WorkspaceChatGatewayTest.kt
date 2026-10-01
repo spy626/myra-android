@@ -95,6 +95,33 @@ class WorkspaceChatGatewayTest {
             .getJSONObject("image_url").getString("url").startsWith("data:image/png;base64,"))
     }
 
+    @Test fun practicalPlanningInstructionsReachAllFreeProvidersWithoutChangingLatestTurn() {
+        val original = "bro mere paas sirf Android phone hai aur mujhe free mein ek simple " +
+            "grocery app banana hai. Sabse pehle kya karna chahiye? 3 practical steps " +
+            "batao, abhi coding start mat karna 😂"
+        val messages = listOf(message("user", original))
+        val common = WorkspaceChatGateway.openAiMessages(messages)
+        val system = common.getJSONObject(0).getString("content")
+        assertTrue(system.contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+        assertTrue(system.contains("ONE coherent feasible starting route"))
+        assertTrue(system.contains("exactly that many MAIN steps"))
+        assertTrue(system.contains("do NOT claim to have coded"))
+        assertEquals(original, common.getJSONObject(common.length() - 1).getString("content"))
+
+        val groq = JSONObject(WorkspaceGroqFree.body(messages)).getJSONArray("messages")
+        val llm7 = JSONObject(WorkspaceLlm7Free.body(messages)).getJSONArray("messages")
+        listOf(groq, llm7).forEach { out ->
+            assertTrue(out.getJSONObject(0).getString("content")
+                .contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+            assertEquals(original,
+                out.getJSONObject(out.length() - 1).getString("content"))
+        }
+        assertFalse(WorkspaceChatGateway.openAiMessages(listOf(
+            message("user", "hi bro, how are you today?")
+        )).getJSONObject(0).getString("content")
+            .contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+    }
+
     @Test fun quotaFailureDoesNotExposeProviderBodyOrRetry() {
         val request = Request.Builder().url("https://openrouter.ai/api/v1/chat/completions").build()
         val response = Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(429)
