@@ -494,6 +494,14 @@ class WorkspaceActivity : AppCompatActivity() {
         val workflowImprovementApprovals = runCatching {
             workflowExperienceStore.listApprovals()
         }.getOrDefault(emptyList())
+        val activeWorkflowGuidance = runCatching {
+            WorkspaceWorkflowImprovementActivation.instructions(
+                records = workflowExperienceStore.listActivations(),
+                experiences = experienceEvidence,
+                feedback = feedbackEvidence,
+                approvals = workflowImprovementApprovals,
+            )
+        }.getOrDefault("")
         val snapshot = WorkspaceRuntimeSelfModel.Snapshot(
             github = WorkspaceRuntimeSelfModel.GitHubState(
                 connected = connection != null,
@@ -512,6 +520,7 @@ class WorkspaceActivity : AppCompatActivity() {
             workflowImprovementCandidates = workflowImprovementCandidates,
             workflowImprovementProposals = workflowImprovementProposals,
             workflowImprovementApprovals = workflowImprovementApprovals,
+            activatedWorkflowPlanningGuidance = activeWorkflowGuidance,
         )
         return WorkspaceRuntimeSelfModel.combine(
             WorkspaceRuntimeSelfModel.instructions(snapshot),
@@ -568,6 +577,40 @@ class WorkspaceActivity : AppCompatActivity() {
         }.getOrNull() ?: return null
         return CapturedWorkflowImprovementApproval(proposal, approval)
     }
+
+    /**
+     * Deliberate second USER turn after approval. A missing/stale approval or any counter-evidence
+     * fails closed; it never invokes a GitHub action or changes a skill.
+     */
+    private fun activateWorkflowImprovementIfGrounded(
+        projectId: String,
+        sourceTurnId: String,
+        userText: String,
+    ): WorkspaceWorkflowImprovementActivation.Record? = runCatching {
+        val experiences = workflowExperienceStore.list()
+        val feedback = workflowExperienceStore.listFeedback()
+        val approvals = workflowExperienceStore.listApprovals()
+        val proposals = WorkspaceWorkflowImprovementActivation.currentProposals(
+            experiences, feedback
+        )
+        val recentAssistantTexts = conversations.read(projectId)
+            .asReversed().filter { it.role == "assistant" }.take(6)
+            .map { it.text }.asReversed()
+        val proposal = WorkspaceWorkflowImprovementApprovalGrounding.resolve(
+            userText = userText,
+            recentAssistantTexts = recentAssistantTexts,
+            proposals = proposals,
+        ) ?: return@runCatching null
+        val activation = WorkspaceWorkflowImprovementActivation.issue(
+            requestedProposalId = proposal.id,
+            sourceTurnId = sourceTurnId,
+            activatedAtMs = System.currentTimeMillis(),
+            experiences = experiences,
+            feedback = feedback,
+            approvals = approvals,
+        ) ?: return@runCatching null
+        workflowExperienceStore.recordActivation(activation)
+    }.getOrNull()
 
     private fun captureWorkflowFeedbackIfGrounded(
         projectId: String,
@@ -3715,6 +3758,9 @@ class WorkspaceActivity : AppCompatActivity() {
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
         val workflowApprovalAttempt =
             WorkspaceWorkflowImprovementApprovalIntent.decide(text) != null
+        val workflowActivationAttempt = picked.isEmpty() &&
+            current.type == WorkspaceProjectType.CHAT &&
+            WorkspaceWorkflowImprovementActivation.isExplicitRequest(text)
         val workflowApproval = if (workflowApprovalAttempt) {
             captureWorkflowImprovementApprovalIfGrounded(
                 projectId = id,
@@ -3722,7 +3768,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 userText = text,
             )
         } else null
-        if (!workflowApprovalAttempt) {
+        if (!workflowApprovalAttempt && !workflowActivationAttempt) {
             captureWorkflowFeedbackIfGrounded(id, stored.id, text)
         }
         composer.text.clear()
@@ -3748,6 +3794,29 @@ class WorkspaceActivity : AppCompatActivity() {
             }.onSuccess {
                 statusMessage = ""
             }
+            render()
+            return
+        }
+        if (workflowActivationAttempt) {
+            val activation = activateWorkflowImprovementIfGrounded(
+                projectId = id,
+                sourceTurnId = stored.id,
+                userText = text,
+            )
+            val receipt = activation?.let(WorkspaceWorkflowImprovementActivation::receipt)
+                ?: "Activation NOT recorded. This command requires exactly one CURRENT " +
+                    "proposal, its exact persisted approval and unchanged eligible evidence; " +
+                    "any grounded correction/undo blocks activation. No action was executed."
+            runCatching {
+                conversations.attachAssistantToTurn(
+                    projectId = id,
+                    expectedUserId = stored.id,
+                    assistantId = "workflow-activation-" + stored.id,
+                    text = receipt,
+                )
+            }.onFailure {
+                statusMessage = it.message ?: "Workflow activation receipt could not be saved."
+            }.onSuccess { statusMessage = "" }
             render()
             return
         }

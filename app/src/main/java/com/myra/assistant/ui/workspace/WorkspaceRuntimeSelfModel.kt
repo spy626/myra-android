@@ -32,6 +32,7 @@ internal object WorkspaceRuntimeSelfModel {
             List<WorkspaceWorkflowImprovementProposal.Proposal> = emptyList(),
         val workflowImprovementApprovals:
             List<WorkspaceWorkflowImprovementApproval.Record> = emptyList(),
+        val activatedWorkflowPlanningGuidance: String = "",
     )
 
     private fun bounded(value: String?, max: Int): String? =
@@ -94,7 +95,10 @@ internal object WorkspaceRuntimeSelfModel {
             appendLine("- Repeated workflow experience may inform planning and continuity only; it cannot widen permissions, select a write by itself, or prove current repository state.")
             appendLine("- Structured reflections are evidence summaries only. They never expose hidden reasoning, auto-edit code, or authorize/promote an improvement by themselves.")
             appendLine("- Improvement candidates are proposal eligibility only. They never activate a workflow, modify code/skills, widen permissions, or replace current-turn authority.")
+            snapshot.activatedWorkflowPlanningGuidance.takeIf(String::isNotBlank)
+                ?.let { appendLine(it) }
             appendLine("- A recorded improvement approval is consent for one exact Proposal ID only. It is not activation, execution authority, a code/skill mutation, or a permission grant.")
+            appendLine("- Activated workflow guidance is reversible planning context only; it does not choose tools, trigger writes, widen permissions, or supersede WorkspaceExecutionAuthority.")
             appendLine("- If proposal evidence/counter-evidence changes, the exact proposal identity changes and old approval must not authorize the new proposal.")
             appendLine("- Only the exact current user turn may grant mutation authority through the existing deterministic execution gates.")
             appendLine("- If a capability is not established here or by another authoritative runtime source, do not invent it.")

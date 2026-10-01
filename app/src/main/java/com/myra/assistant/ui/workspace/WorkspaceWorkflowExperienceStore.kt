@@ -22,9 +22,11 @@ internal class WorkspaceWorkflowExperienceStore(
         private const val FILE = "verified-workflows.json"
         private const val FEEDBACK_FILE = "verified-workflow-feedback.json"
         private const val APPROVAL_FILE = "workflow-improvement-approvals.json"
+        private const val ACTIVATION_FILE = "workflow-improvement-activations.json"
         private const val MAX_RECORDS = 64
         private const val MAX_FEEDBACK_RECORDS = 128
         private const val MAX_APPROVAL_RECORDS = 64
+        private const val MAX_ACTIVATION_RECORDS = 64
         private const val MAX_BYTES = 256 * 1024L
     }
 
@@ -43,6 +45,9 @@ internal class WorkspaceWorkflowExperienceStore(
 
     private fun approvalFile(): File =
         storageFile(APPROVAL_FILE, "Workflow improvement approval")
+
+    private fun activationFile(): File =
+        storageFile(ACTIVATION_FILE, "Workflow improvement activation")
 
     private fun storageFile(name: String, label: String): File {
         val parent = base()
@@ -292,6 +297,85 @@ internal class WorkspaceWorkflowExperienceStore(
         val reopened = listApprovals().firstOrNull { it.id == safe.id }
             ?: throw IllegalStateException("Workflow approval could not be verified after write")
         require(reopened == safe) { "Workflow approval changed after persistence" }
+        return reopened
+    }
+
+    private fun decodeActivations(
+        raw: String,
+    ): List<WorkspaceWorkflowImprovementActivation.Record> {
+        require(raw.toByteArray().size <= MAX_BYTES) {
+            "Workflow activation store is too large"
+        }
+        val rootJson = JSONObject(raw)
+        require(rootJson.getInt("schema") == SCHEMA) {
+            "Unsupported workflow activation schema"
+        }
+        val array = rootJson.getJSONArray("records")
+        require(array.length() <= MAX_ACTIVATION_RECORDS) {
+            "Workflow activation record count is invalid"
+        }
+        val records = buildList {
+            for (i in 0 until array.length()) {
+                add(requireNotNull(
+                    WorkspaceWorkflowImprovementActivation.fromJson(array.getJSONObject(i))
+                ) { "Workflow activation record is invalid" })
+            }
+        }
+        require(records.map { it.id }.distinct().size == records.size) {
+            "Workflow activation IDs must be unique"
+        }
+        return records
+    }
+
+    private fun encodeActivations(
+        records: List<WorkspaceWorkflowImprovementActivation.Record>,
+    ): String {
+        require(records.size <= MAX_ACTIVATION_RECORDS &&
+            records.map { it.id }.distinct().size == records.size) {
+            "Workflow activation records are invalid"
+        }
+        val text = JSONObject()
+            .put("schema", SCHEMA)
+            .put("records", JSONArray(records.map(
+                WorkspaceWorkflowImprovementActivation::toJson)))
+            .toString()
+        require(text.toByteArray().size <= MAX_BYTES) {
+            "Workflow activation store exceeds its byte bound"
+        }
+        return text
+    }
+
+    @Synchronized fun listActivations():
+        List<WorkspaceWorkflowImprovementActivation.Record> {
+        val target = activationFile()
+        if (!target.exists()) return emptyList()
+        require(target.isFile && target.length() in 1..MAX_BYTES) {
+            "Workflow activation store is unavailable or too large"
+        }
+        return decodeActivations(target.readText())
+    }
+
+    @Synchronized fun recordActivation(
+        record: WorkspaceWorkflowImprovementActivation.Record,
+    ): WorkspaceWorkflowImprovementActivation.Record {
+        val safe = WorkspaceWorkflowImprovementActivation.validate(record)
+        // A separate activation gate, never an approval write, is the only caller.
+        require(listApprovals().any {
+            it.id == safe.approvalId &&
+                it.proposalId == safe.proposalId &&
+                it.candidateSignatureSha256 == safe.candidateSignatureSha256 &&
+                it.evidenceSha256 == safe.evidenceSha256
+        }) { "Activation has no matching persisted exact approval" }
+        listActivations().firstOrNull { it.id == safe.id }?.let { return it }
+        val next = (listActivations() + safe)
+            .sortedWith(
+                compareBy<WorkspaceWorkflowImprovementActivation.Record> { it.activatedAtMs }
+                    .thenBy { it.id }
+            ).takeLast(MAX_ACTIVATION_RECORDS)
+        atomicWrite(activationFile(), encodeActivations(next))
+        val reopened = listActivations().firstOrNull { it.id == safe.id }
+            ?: throw IllegalStateException("Workflow activation was not verified after write")
+        require(reopened == safe) { "Workflow activation changed after persistence" }
         return reopened
     }
 }
