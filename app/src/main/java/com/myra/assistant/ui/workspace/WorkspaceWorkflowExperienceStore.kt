@@ -21,8 +21,10 @@ internal class WorkspaceWorkflowExperienceStore(
         private const val SCHEMA = 1
         private const val FILE = "verified-workflows.json"
         private const val FEEDBACK_FILE = "verified-workflow-feedback.json"
+        private const val APPROVAL_FILE = "workflow-improvement-approvals.json"
         private const val MAX_RECORDS = 64
         private const val MAX_FEEDBACK_RECORDS = 128
+        private const val MAX_APPROVAL_RECORDS = 64
         private const val MAX_BYTES = 256 * 1024L
     }
 
@@ -38,6 +40,9 @@ internal class WorkspaceWorkflowExperienceStore(
 
     private fun feedbackFile(): File =
         storageFile(FEEDBACK_FILE, "Workflow feedback")
+
+    private fun approvalFile(): File =
+        storageFile(APPROVAL_FILE, "Workflow improvement approval")
 
     private fun storageFile(name: String, label: String): File {
         val parent = base()
@@ -212,6 +217,81 @@ internal class WorkspaceWorkflowExperienceStore(
         val reopened = listFeedback().firstOrNull { it.id == safe.id }
             ?: throw IllegalStateException("Workflow feedback could not be verified after write")
         require(reopened == safe) { "Workflow feedback changed after persistence" }
+        return reopened
+    }
+
+    private fun decodeApprovals(
+        raw: String,
+    ): List<WorkspaceWorkflowImprovementApproval.Record> {
+        require(raw.toByteArray().size <= MAX_BYTES) {
+            "Workflow approval store is too large"
+        }
+        val rootJson = JSONObject(raw)
+        require(rootJson.getInt("schema") == SCHEMA) {
+            "Unsupported workflow approval schema"
+        }
+        val array = rootJson.getJSONArray("records")
+        require(array.length() <= MAX_APPROVAL_RECORDS) {
+            "Workflow approval record count is invalid"
+        }
+        val records = buildList {
+            for (i in 0 until array.length()) {
+                add(requireNotNull(
+                    WorkspaceWorkflowImprovementApproval.fromJson(array.getJSONObject(i))
+                ) { "Workflow approval record is invalid" })
+            }
+        }
+        require(records.map { it.id }.distinct().size == records.size) {
+            "Workflow approval IDs must be unique"
+        }
+        return records
+    }
+
+    private fun encodeApprovals(
+        records: List<WorkspaceWorkflowImprovementApproval.Record>,
+    ): String {
+        require(records.size <= MAX_APPROVAL_RECORDS) {
+            "Workflow approval store exceeds its bound"
+        }
+        require(records.map { it.id }.distinct().size == records.size) {
+            "Workflow approval IDs must be unique"
+        }
+        val text = JSONObject()
+            .put("schema", SCHEMA)
+            .put("records", JSONArray(records.map(
+                WorkspaceWorkflowImprovementApproval::toJson)))
+            .toString()
+        require(text.toByteArray().size <= MAX_BYTES) {
+            "Workflow approval store exceeds its byte bound"
+        }
+        return text
+    }
+
+    @Synchronized fun listApprovals():
+        List<WorkspaceWorkflowImprovementApproval.Record> {
+        val target = approvalFile()
+        if (!target.exists()) return emptyList()
+        require(target.isFile && target.length() in 1..MAX_BYTES) {
+            "Workflow approval store is unavailable or too large"
+        }
+        return decodeApprovals(target.readText())
+    }
+
+    @Synchronized fun recordApproval(
+        record: WorkspaceWorkflowImprovementApproval.Record,
+    ): WorkspaceWorkflowImprovementApproval.Record {
+        val safe = WorkspaceWorkflowImprovementApproval.validate(record)
+        val current = listApprovals().filterNot { it.id == safe.id }
+        val next = (current + safe)
+            .sortedWith(
+                compareBy<WorkspaceWorkflowImprovementApproval.Record> { it.approvedAtMs }
+                    .thenBy { it.id }
+            )
+            .takeLast(MAX_APPROVAL_RECORDS)
+        atomicWrite(approvalFile(), encodeApprovals(next))
+        val reopened = listApprovals().firstOrNull { it.id == safe.id }
+            ?: throw IllegalStateException("Workflow approval could not be verified after write")
+        require(reopened == safe) { "Workflow approval changed after persistence" }
         return reopened
     }
 }

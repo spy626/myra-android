@@ -486,6 +486,14 @@ class WorkspaceActivity : AppCompatActivity() {
         val workflowImprovementCandidates = runCatching {
             WorkspaceWorkflowImprovementGate.evaluate(workflowReflections)
         }.getOrDefault(emptyList())
+        val workflowImprovementProposals = runCatching {
+            workflowImprovementCandidates.map(
+                WorkspaceWorkflowImprovementProposal::fromCandidate
+            )
+        }.getOrDefault(emptyList())
+        val workflowImprovementApprovals = runCatching {
+            workflowExperienceStore.listApprovals()
+        }.getOrDefault(emptyList())
         val snapshot = WorkspaceRuntimeSelfModel.Snapshot(
             github = WorkspaceRuntimeSelfModel.GitHubState(
                 connected = connection != null,
@@ -502,11 +510,63 @@ class WorkspaceActivity : AppCompatActivity() {
             workflowPatterns = workflowPatterns,
             workflowReflections = workflowReflections,
             workflowImprovementCandidates = workflowImprovementCandidates,
+            workflowImprovementProposals = workflowImprovementProposals,
+            workflowImprovementApprovals = workflowImprovementApprovals,
         )
         return WorkspaceRuntimeSelfModel.combine(
             WorkspaceRuntimeSelfModel.instructions(snapshot),
             extraSystemInstructions,
         )
+    }
+
+    private data class CapturedWorkflowImprovementApproval(
+        val proposal: WorkspaceWorkflowImprovementProposal.Proposal,
+        val approval: WorkspaceWorkflowImprovementApproval.Record,
+    )
+
+    private fun currentWorkflowImprovementProposals():
+        List<WorkspaceWorkflowImprovementProposal.Proposal> = runCatching {
+        val experiences = workflowExperienceStore.list()
+        val feedback = workflowExperienceStore.listFeedback()
+        val reflections = WorkspaceWorkflowReflection.reflect(
+            experiences = experiences,
+            feedback = feedback,
+        )
+        WorkspaceWorkflowImprovementGate.evaluate(reflections)
+            .map(WorkspaceWorkflowImprovementProposal::fromCandidate)
+    }.getOrDefault(emptyList())
+
+    private fun captureWorkflowImprovementApprovalIfGrounded(
+        projectId: String,
+        sourceTurnId: String,
+        userText: String,
+    ): CapturedWorkflowImprovementApproval? {
+        WorkspaceWorkflowImprovementApprovalIntent.decide(userText) ?: return null
+        val proposals = currentWorkflowImprovementProposals()
+        if (proposals.isEmpty()) return null
+        val recentAssistantTexts = runCatching {
+            conversations.read(projectId)
+                .asReversed()
+                .filter { it.role == "assistant" }
+                .take(6)
+                .map { it.text }
+                .asReversed()
+        }.getOrDefault(emptyList())
+        val proposal = WorkspaceWorkflowImprovementApprovalGrounding.resolve(
+            userText = userText,
+            recentAssistantTexts = recentAssistantTexts,
+            proposals = proposals,
+        ) ?: return null
+        val approval = runCatching {
+            workflowExperienceStore.recordApproval(
+                WorkspaceWorkflowImprovementApproval.fromUserTurn(
+                    proposal = proposal,
+                    sourceTurnId = sourceTurnId,
+                    approvedAtMs = System.currentTimeMillis(),
+                )
+            )
+        }.getOrNull() ?: return null
+        return CapturedWorkflowImprovementApproval(proposal, approval)
     }
 
     private fun captureWorkflowFeedbackIfGrounded(
@@ -3653,13 +3713,45 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val stored = runCatching { conversations.append(id, "user", text) }
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
-        captureWorkflowFeedbackIfGrounded(id, stored.id, text)
-        activateWorkTrace(stored.id)
+        val workflowApprovalAttempt =
+            WorkspaceWorkflowImprovementApprovalIntent.decide(text) != null
+        val workflowApproval = if (workflowApprovalAttempt) {
+            captureWorkflowImprovementApprovalIfGrounded(
+                projectId = id,
+                sourceTurnId = stored.id,
+                userText = text,
+            )
+        } else null
+        if (!workflowApprovalAttempt) {
+            captureWorkflowFeedbackIfGrounded(id, stored.id, text)
+        }
         composer.text.clear()
         // Keep the keyboard's typing target after Send; opening the keyboard is still user-driven.
         composer.requestFocus()
         localDrafts.remove(id)
         attachments.clear()
+        if (workflowApproval != null) {
+            val receipt = WorkspaceWorkflowImprovementApproval.receipt(
+                proposal = workflowApproval.proposal,
+                approval = workflowApproval.approval,
+            )
+            runCatching {
+                conversations.attachAssistantToTurn(
+                    projectId = id,
+                    expectedUserId = stored.id,
+                    assistantId = "workflow-approval-" + workflowApproval.approval.id,
+                    text = receipt,
+                )
+            }.onFailure {
+                statusMessage =
+                    it.message ?: "Workflow proposal approval receipt could not be saved."
+            }.onSuccess {
+                statusMessage = ""
+            }
+            render()
+            return
+        }
+        activateWorkTrace(stored.id)
         if (githubSelfEditRequest) {
             if (projects.getProject(id)?.type != WorkspaceProjectType.CHAT) {
                 statusMessage =
