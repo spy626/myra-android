@@ -34,6 +34,8 @@ class WorkspaceConnectedGitHubDownloadIntentTest {
             .decide("bro #3372 APK link bhej do", emptyList())?.runNumber)
         assertEquals(3376L, WorkspaceConnectedGitHubDownloadIntent
             .decide("3376 download link chahiye", emptyList())?.runNumber)
+        assertEquals(3374L, WorkspaceConnectedGitHubDownloadIntent
+            .decide("bro build #3374 ka APK download link bhejo", emptyList())?.runNumber)
         val multiple = WorkspaceConnectedGitHubDownloadIntent
             .decide("build 3374 aur 3376 APK download links bhejo", preceding)
         assertNull(multiple?.runNumber)

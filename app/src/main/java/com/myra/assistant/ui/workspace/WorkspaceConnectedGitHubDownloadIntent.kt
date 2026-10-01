@@ -30,10 +30,15 @@ internal object WorkspaceConnectedGitHubDownloadIntent {
             WorkspaceSourceContext.containsPossibleSecret(text)) return null
         val asked = boundary.find(text)?.let { text.substring(0, it.range.first) } ?: text
         if (!artifact.containsMatchIn(asked) || !request.containsMatchIn(asked)) return null
-        val semantic = WorkspaceSemanticTurnIntent.propose(text)
+        // In "build #3374 ka APK", build names an EXISTING run, not permission
+        // to create a build. Mask only number-bound nouns during the mutation scan.
+        // All independent edit/create/build imperatives still reach the authority gate.
+        val mutationScanText = Regex("""(?iu)\bbuild\s*#?\s*\d{3,9}\b""")
+            .replace(text, "verified run reference")
+        val semantic = WorkspaceSemanticTurnIntent.propose(mutationScanText)
         if (semantic.effect == WorkspaceSemanticTurnIntent.Effect.WRITE ||
             semantic.kind == WorkspaceSemanticTurnIntent.Kind.CAPABILITY_QUERY ||
-            WorkspaceExecutionAuthority.allowsCodingMutation(text)) return null
+            WorkspaceExecutionAuthority.allowsCodingMutation(mutationScanText)) return null
         val numbers = number.findAll(asked).mapNotNull {
             it.groupValues[1].toLongOrNull()
         }.distinct().toList()
