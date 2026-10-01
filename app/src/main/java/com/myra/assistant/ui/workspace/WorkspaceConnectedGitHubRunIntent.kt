@@ -105,7 +105,7 @@ internal object WorkspaceConnectedGitHubRunIntent {
                 appendLine("`${run.headSha}`")
             }
             appendLine()
-            append("[↗ Open build #${run.runNumber} on GitHub](${run.url})")
+            append("[🔗 GitHub Build #${run.runNumber} ↗](${run.url})")
         }
     }
 }

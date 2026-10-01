@@ -32,6 +32,14 @@ internal object WorkspaceChatReadability {
         verticalPaddingDp = 11,
     )
 
+    /** Full commit SHAs must stay wrap-capable instead of becoming one oversized pill. */
+    fun useCodePill(token: String): Boolean =
+        token.isNotBlank() && token.length <= 28 && '\n' !in token && '\r' !in token
+
+    // Neutral dark inline-code chip and light text (native rounded rendering).
+    val codePillBackgroundColor: Int = 0xFF383D3B.toInt()
+    val codePillTextColor: Int = 0xFFE9EFEC.toInt()
+
     // Light mint contrasts with the near-black chat background; avoids theme-default dark red.
     val verifiedLinkColor: Int = 0xFF9CE8BC.toInt()
 }

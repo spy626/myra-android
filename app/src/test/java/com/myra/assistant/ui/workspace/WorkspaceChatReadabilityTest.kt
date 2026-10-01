@@ -24,6 +24,16 @@ class WorkspaceChatReadabilityTest {
         assertEquals(3, reply.extraLineDp)
     }
 
+    @Test fun compactInlineCodeGetsPillButLongShaKeepsLineWrapping() {
+        assertTrue(WorkspaceChatReadability.useCodePill("agent/myra-phase-1"))
+        assertTrue(WorkspaceChatReadability.useCodePill("main"))
+        assertTrue(!WorkspaceChatReadability.useCodePill("a".repeat(40)))
+        assertTrue(!WorkspaceChatReadability.useCodePill(" "))
+        assertTrue(!WorkspaceChatReadability.useCodePill("a\nb"))
+        assertEquals(0xFF383D3B.toInt(), WorkspaceChatReadability.codePillBackgroundColor)
+        assertEquals(0xFFE9EFEC.toInt(), WorkspaceChatReadability.codePillTextColor)
+    }
+
     @Test fun verifiedLinkAccentContrastsWithDarkChatBackground() {
         fun luminance(color: Int): Double {
             val channels = intArrayOf((color ushr 16) and 255, (color ushr 8) and 255, color and 255)

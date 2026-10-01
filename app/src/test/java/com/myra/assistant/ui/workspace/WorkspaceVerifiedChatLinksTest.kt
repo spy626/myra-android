@@ -26,6 +26,18 @@ class WorkspaceVerifiedChatLinksTest {
         )
     }
 
+    @Test fun conciseLinkWithChainIconAndExternalArrowRetainsVerifiedDestination() {
+        val original = "[🔗 GitHub Build #3382 ↗]" +
+            "(https://github.com/spy626/myra-android/actions/runs/36852520030)"
+        val links = WorkspaceVerifiedChatLinks.find(original)
+        assertEquals(1, links.size)
+        assertEquals("🔗 GitHub Build #3382 ↗", links.single().label)
+        assertEquals(
+            "https://github.com/spy626/myra-android/actions/runs/36852520030",
+            links.single().url,
+        )
+    }
+
     @Test fun unsafeOrUnrelatedLinksNeverGetNativeClickableSpan() {
         listOf(
             "[Open](javascript:alert(1))",

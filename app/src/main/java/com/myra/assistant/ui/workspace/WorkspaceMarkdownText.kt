@@ -3,6 +3,7 @@ package com.myra.assistant.ui.workspace
 import android.graphics.Typeface
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.style.ReplacementSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
@@ -21,21 +22,26 @@ internal object WorkspaceMarkdownText {
             if (index != 0) result.append('\n')
             val match = heading.matchEntire(original)
             val line = SpannableStringBuilder(match?.groupValues?.get(2) ?: original)
-            fun style(pattern: Regex, makeSpan: () -> Any) {
+            fun style(pattern: Regex, makeSpan: (String) -> Any) {
                 pattern.findAll(line.toString()).toList().asReversed().forEach { item ->
                     val value = item.groupValues[1]
                     val begin = item.range.first
                     line.replace(begin, item.range.last + 1, value)
-                    val span = makeSpan()
+                    val span = makeSpan(value)
                     when (span) {
                         is StyleSpan -> line.setSpan(span, begin, begin + value.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                         is TypefaceSpan -> line.setSpan(span, begin, begin + value.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                        is ReplacementSpan -> line.setSpan(span, begin, begin + value.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     }
                 }
             }
             style(bold) { StyleSpan(Typeface.BOLD) }
             style(italic) { StyleSpan(Typeface.ITALIC) }
-            style(code) { TypefaceSpan("monospace") }
+            // Keep long IDs/SHA wrap-capable; compact inline tokens get native rounded pills.
+            style(code) { token ->
+                if (WorkspaceChatReadability.useCodePill(token)) WorkspaceRoundedCodePillSpan()
+                else TypefaceSpan("monospace")
+            }
             // Only exact HTTPS GitHub Actions links become tappable; never execute HTML/scripts.
             WorkspaceVerifiedChatLinks.find(line.toString()).asReversed().forEach { link ->
                 line.replace(link.range.first, link.range.last + 1, link.label)

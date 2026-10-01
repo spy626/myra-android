@@ -53,7 +53,7 @@ class WorkspaceConnectedGitHubRunIntentTest {
         assertTrue(receipt.contains("  • **Result:** Success"))
         assertTrue(receipt.contains("  • **Branch:** `agent/myra-phase-1`"))
         assertTrue(receipt.contains("Commit SHA:\n`1234567890abcdef1234567890abcdef12345678`"))
-        assertTrue(receipt.contains("[↗ Open build #3324 on GitHub](https://github.com/spy626/myra-android/actions/runs/3)"))
+        assertTrue(receipt.contains("[🔗 GitHub Build #3324 ↗](https://github.com/spy626/myra-android/actions/runs/3)"))
         assertTrue(!receipt.contains("phone-pass"))
         assertTrue(!receipt.contains("Verified read only"))
     }
@@ -79,7 +79,7 @@ class WorkspaceConnectedGitHubRunIntentTest {
         assertTrue(text.contains("  • **Result:** Success"))
         assertTrue(!text.contains("e66f891b6ebc73bca7dd74349d209733783adb14"))
         assertTrue(!text.contains("Details: https://"))
-        assertTrue(text.contains("[↗ Open build #3376 on GitHub](https://github.com/"))
+        assertTrue(text.contains("[🔗 GitHub Build #3376 ↗](https://github.com/"))
         val requested = WorkspaceConnectedGitHubRunIntent.decide("Bro #3376 status aur uska commit SHA bhi bata do")
         assertTrue(requested?.includeCommitSha == true)
         assertTrue(WorkspaceConnectedGitHubRunIntent.receipt(run, requested!!.includeCommitSha).contains(
