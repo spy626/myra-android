@@ -22,6 +22,8 @@ internal object WorkspaceGitHubConnector {
     private const val API = "https://api.github.com"
     const val BROKER = "https://lyra-github-connector.everspy626.workers.dev"
     private const val MAX_JSON_BYTES = 256_000L
+    const val RUN_LOOKUP_PAGE_SIZE = 5
+    const val RUN_LOOKUP_MAX_PAGES = 20
     private val JSON = "application/json; charset=utf-8".toMediaType()
     private val pairingPattern = Regex("[0-9a-f]{64}")
     private val shaPattern = Regex("[0-9a-fA-F]{40,64}")
@@ -37,6 +39,7 @@ internal object WorkspaceGitHubConnector {
         val conclusion: String?,
         val url: String,
     )
+    data class RunLookupPage(val run: WorkflowRun?, val fetchedCount: Int)
     data class WorkflowFailure(
         val runId: Long,
         val runNumber: Long,
@@ -199,13 +202,17 @@ internal object WorkspaceGitHubConnector {
         token: String,
         repository: String,
         branch: String,
+        page: Int = 1,
     ): Request {
+        require(page in 1..RUN_LOOKUP_MAX_PAGES) {
+            "GitHub build lookup page is out of bounded range"
+        }
         val clean = WorkspaceConnectorPolicy.binding(repository, branch)
         val parts = clean.repository.split('/')
         return request(
             "/repos/" + encode(parts[0]) + "/" + encode(parts[1]) +
                 "/actions/runs?branch=" + encode(clean.branch) +
-                "&event=push&per_page=100",
+                "&event=push&per_page=" + RUN_LOOKUP_PAGE_SIZE + "&page=" + page,
             token,
         )
     }
@@ -469,7 +476,15 @@ internal object WorkspaceGitHubConnector {
         response: Response,
         expectedRunNumber: Long,
         expectedBranch: String,
-    ): WorkflowRun? {
+    ): WorkflowRun? = readWorkflowRunPageByNumber(
+        response, expectedRunNumber, expectedBranch
+    ).run
+
+    fun readWorkflowRunPageByNumber(
+        response: Response,
+        expectedRunNumber: Long,
+        expectedBranch: String,
+    ): RunLookupPage {
         require(expectedRunNumber > 0L) { "GitHub workflow run number is invalid" }
         val branch = WorkspaceConnectorPolicy.requireFeatureBranch(expectedBranch)
         val root = parseJson(response, "GitHub Actions workflow runs")
@@ -503,7 +518,7 @@ internal object WorkspaceGitHubConnector {
                 url = url,
             )
         }
-        return matches.maxByOrNull { it.id }
+        return RunLookupPage(matches.maxByOrNull { it.id }, array.length())
     }
 
     fun readWorkflowFailure(

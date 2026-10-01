@@ -100,11 +100,15 @@ internal class WorkspaceConnectedGitHubRunRunner(
         repository: String,
         branch: String,
         token: String,
+        page: Int = 1,
     ) {
+        synchronized(this) {
+            if (generationId != generation) return
+        }
         listener.onEvent(
             WorkspaceWorkPhase.VERIFYING,
             "Checking GitHub Actions build",
-            "#$runNumber · $branch",
+            "#$runNumber · $branch · page $page",
         )
         dispatch(
             generationId,
@@ -112,19 +116,27 @@ internal class WorkspaceConnectedGitHubRunRunner(
                 token = token,
                 repository = repository,
                 branch = branch,
+                page = page,
             ),
             "GitHub Actions build list could not be read; no repository change was attempted.",
         ) { response ->
-            val found = WorkspaceGitHubConnector.readWorkflowRunByNumber(
+            val lookup = WorkspaceGitHubConnector.readWorkflowRunPageByNumber(
                 response = response,
                 expectedRunNumber = runNumber,
                 expectedBranch = branch,
             )
-            if (found == null) {
+            if (lookup.run == null) {
+                if (lookup.fetchedCount == WorkspaceGitHubConnector.RUN_LOOKUP_PAGE_SIZE &&
+                    page < WorkspaceGitHubConnector.RUN_LOOKUP_MAX_PAGES
+                ) {
+                    readRun(generationId, runNumber, repository, branch, token, page + 1)
+                    return@dispatch
+                }
                 throw IllegalArgumentException(
                     "Build #$runNumber was not found among the latest 100 push runs on $branch."
                 )
             }
+            val found = lookup.run
             synchronized(this) {
                 if (generationId != generation) return@dispatch
             }
