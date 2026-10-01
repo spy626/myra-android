@@ -106,6 +106,11 @@ class WorkspaceChatGatewayTest {
         assertTrue(system.contains("ONE coherent feasible starting route"))
         assertTrue(system.contains("exactly that many MAIN steps"))
         assertTrue(system.contains("do NOT claim to have coded"))
+        assertTrue(system.contains("device the user HAS"))
+        assertTrue(system.contains("minimum viable FIRST version"))
+        assertTrue(system.contains("Defer IDE installation"))
+        assertTrue(system.lastIndexOf("PRACTICAL PLANNING RESPONSE GUIDANCE") >
+            system.lastIndexOf("Code-answer formatting when supplying code"))
         assertEquals(original, common.getJSONObject(common.length() - 1).getString("content"))
 
         val groq = JSONObject(WorkspaceGroqFree.body(messages)).getJSONArray("messages")

@@ -139,10 +139,12 @@ internal object WorkspaceChatGateway {
             semanticTurnIntent,
             semanticTaskFrame,
             turnFrame,
-            practicalPlanning,
             writingInstructions,
             earlier,
             codeInstructions,
+            // Put grounded planning guidance after generic code-format cues: "don't code"
+            // is not an invitation to supply code or initialize a project.
+            practicalPlanning,
         ).filter(String::isNotBlank).joinToString("\n\n")
         if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", instructions))

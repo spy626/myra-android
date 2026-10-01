@@ -19,6 +19,30 @@ class WorkspacePracticalPlanningGuideTest {
             assertTrue(it, guidance.contains("exactly that many MAIN steps"))
             assertTrue(it, guidance.contains("DO and what small concrete result"))
             assertTrue(it, guidance.contains("do NOT claim to have coded"))
+            assertTrue(it, guidance.contains("minimum viable FIRST version"))
+            assertTrue(it, guidance.contains("the intended END-USER journey"))
+        }
+    }
+
+    @Test fun devicePlatformAndWorkSequencingAreDistinctWithoutCannedRecommendations() {
+        val prompts = listOf(
+            "I only have an Android phone and no money. What are 3 first steps for a simple booking app? Don't code yet.",
+            "bro sirf phone se portfolio banana hai, pehle 3 steps batao; abhi coding mat karo",
+            "How should I plan a low-cost community event website before building it?",
+            "I specifically want a native Android app. What planning steps come first?",
+            "I want a browser-based shop; suggest a first-stage plan, no coding."
+        )
+        prompts.forEach { prompt ->
+            val guidance = WorkspacePracticalPlanningGuide.instructions(prompt)
+            assertTrue(prompt, guidance.contains("device the user HAS"))
+            assertTrue(prompt, guidance.contains("does NOT by itself require a native Android"))
+            assertTrue(prompt, guidance.contains("explicitly specifies native/web/no-code"))
+            assertTrue(prompt, guidance.contains("customer-facing actions from owner/admin"))
+            assertTrue(prompt, guidance.contains("Defer IDE installation"))
+            assertTrue(prompt, guidance.contains("no code blocks"))
+            assertFalse(prompt, guidance.contains("SPCK"))
+            assertFalse(prompt, guidance.contains("AIDE"))
+            assertFalse(prompt, guidance.contains("grocery"))
         }
     }
 
