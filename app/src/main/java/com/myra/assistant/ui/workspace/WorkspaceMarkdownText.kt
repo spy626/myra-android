@@ -6,6 +6,7 @@ import android.text.Spanned
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
+import android.text.style.URLSpan
 
 /** Small native, non-HTML formatter. No WebView, links, script execution or network content. */
 internal object WorkspaceMarkdownText {
@@ -35,6 +36,16 @@ internal object WorkspaceMarkdownText {
             style(bold) { StyleSpan(Typeface.BOLD) }
             style(italic) { StyleSpan(Typeface.ITALIC) }
             style(code) { TypefaceSpan("monospace") }
+            // Only exact HTTPS GitHub Actions links become tappable; never execute HTML/scripts.
+            WorkspaceVerifiedChatLinks.find(line.toString()).asReversed().forEach { link ->
+                line.replace(link.range.first, link.range.last + 1, link.label)
+                line.setSpan(
+                    URLSpan(link.url),
+                    link.range.first,
+                    link.range.first + link.label.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
             if (match != null && line.isNotEmpty()) {
                 line.setSpan(StyleSpan(Typeface.BOLD), 0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 line.setSpan(RelativeSizeSpan(if (match.groupValues[1].length == 1) 1.35f else 1.17f),

@@ -10,6 +10,7 @@ internal object WorkspaceConnectedGitHubRunIntent {
     data class Decision(
         val runNumber: Long? = null,
         val localError: String? = null,
+        val includeCommitSha: Boolean = false,
     ) {
         init {
             require((runNumber == null) xor (localError == null)) {
@@ -32,6 +33,9 @@ internal object WorkspaceConnectedGitHubRunIntent {
     )
     private val readRequest = Regex(
         """(?iu)\b(?:check|verify|read|fetch|show|get|tell|dekh\p{L}*|bata\p{L}*|kya|green|red|pass(?:ed)?|fail(?:ed)?|status|result)\b|\?"""
+    )
+    private val explicitCommitSha = Regex(
+        """(?iu)\b(?:commit\s+(?:sha|hash|id)|full\s+sha|sha\s+(?:bhi|also|too))\b"""
     )
     private val constraintBoundary = Regex(
         """(?iu)(?:\b(?:do\s+not|don't|dont|never|without)\b|\b(?:kuch\s+change\s+mat)\b)"""
@@ -64,30 +68,44 @@ internal object WorkspaceConnectedGitHubRunIntent {
             return Decision(localError =
                 "I found multiple build/run numbers. Ask me to verify one GitHub Actions run at a time; nothing was changed.")
         }
-        return Decision(runNumber = values.single())
+        return Decision(
+            runNumber = values.single(),
+            includeCommitSha = explicitCommitSha.containsMatchIn(requested),
+        )
     }
 
-    fun receipt(completion: WorkspaceConnectedGitHubRunRunner.Completion): String {
+    /** Compact verified result, not a dump of connector metadata. */
+    fun receipt(
+        completion: WorkspaceConnectedGitHubRunRunner.Completion,
+        includeCommitSha: Boolean = false,
+    ): String {
         val run = completion.run
-        val state = when {
-            run.status != "completed" -> run.status.uppercase()
-            run.conclusion == "success" -> "GREEN"
-            run.conclusion.isNullOrBlank() -> "COMPLETED"
-            else -> run.conclusion.uppercase()
+        val status = run.status.replace('_', ' ').replaceFirstChar { it.titlecase() }
+        val result = run.conclusion?.replace('_', ' ')
+            ?.replaceFirstChar { it.titlecase() }
+            ?: if (run.status == "completed") "Unavailable" else "Pending"
+        val headline = when {
+            run.status != "completed" ->
+                "Bro, **Build #${run.runNumber} abhi ${status.uppercase()} hai** ⏳"
+            run.conclusion == "success" ->
+                "Haan bro 😂💚 **Build #${run.runNumber} GREEN hai!**"
+            run.conclusion == "failure" ->
+                "Bro, **Build #${run.runNumber} FAILED hai** ❌"
+            else -> "Bro, build #${run.runNumber} ka result **$result** hai."
         }
         return buildString {
-            append("Bro, build #")
-            append(run.runNumber)
-            append(" ka status **")
-            append(state)
-            append("** hai")
-            append(if (state == "GREEN") " ✅" else if (state == "FAILURE") " ❌" else "")
-            append(".")
-            append("\nCommit SHA: `")
-            append(run.headSha)
-            append("`")
-            append("\nDetails: ")
-            append(run.url)
+            appendLine(headline)
+            appendLine()
+            appendLine("• Status: $status" + if (run.status == "completed" && run.conclusion == "success") " ✅" else "")
+            appendLine("• Result: $result")
+            appendLine("• Branch: `${completion.branch}`")
+            if (includeCommitSha) {
+                appendLine()
+                appendLine("Commit SHA:")
+                appendLine("`${run.headSha}`")
+            }
+            appendLine()
+            append("[GitHub Build #${run.runNumber}](${run.url})")
         }
     }
 }

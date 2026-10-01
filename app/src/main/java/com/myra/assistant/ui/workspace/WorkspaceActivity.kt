@@ -109,6 +109,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private var connectedRunVerificationProjectId: String? = null
     private var connectedRunVerificationMessageId: String? = null
     private var connectedRunVerificationNumber: Long? = null
+    private var connectedRunVerificationIncludeSha = false
     private var connectedRunVerificationRunner: WorkspaceConnectedGitHubRunRunner? = null
     private var connectedHeadsReadActive = false
     private var connectedHeadsReadProjectId: String? = null
@@ -986,7 +987,10 @@ class WorkspaceActivity : AppCompatActivity() {
                             return@runOnUiThread
                         }
                         finishConnectedRunVerification(
-                            WorkspaceConnectedGitHubRunIntent.receipt(completion)
+                            WorkspaceConnectedGitHubRunIntent.receipt(
+                                completion,
+                                includeCommitSha = connectedRunVerificationIncludeSha,
+                            )
                         )
                     }
                 }
@@ -1011,6 +1015,7 @@ class WorkspaceActivity : AppCompatActivity() {
         connectedRunVerificationProjectId = null
         connectedRunVerificationMessageId = null
         connectedRunVerificationNumber = null
+        connectedRunVerificationIncludeSha = false
     }
 
     private fun finishConnectedRunVerification(reply: String) {
@@ -1040,12 +1045,14 @@ class WorkspaceActivity : AppCompatActivity() {
         id: String,
         messageId: String,
         runNumber: Long,
+        includeCommitSha: Boolean,
     ) {
         clearConnectedRunVerification()
         connectedRunVerificationActive = true
         connectedRunVerificationProjectId = id
         connectedRunVerificationMessageId = messageId
         connectedRunVerificationNumber = runNumber
+        connectedRunVerificationIncludeSha = includeCommitSha
         statusMessage = ""
         render()
         connectedRunVerifier().start(runNumber)
@@ -2523,9 +2530,20 @@ class WorkspaceActivity : AppCompatActivity() {
                     gravity = if (mine) Gravity.END else Gravity.START
                 }
                 val bubble = label(message.text, if (mine) 15f else 16f).apply {
-                    if (!mine) text = WorkspaceMarkdownText.render(message.text)
+                    if (!mine) {
+                        val rendered = WorkspaceMarkdownText.render(message.text)
+                        text = rendered
+                        // Links are opened only on tap. Other replies remain selectable.
+                        if ((rendered as? android.text.Spanned)
+                                ?.getSpans(0, rendered.length, android.text.style.URLSpan::class.java)
+                                ?.isNotEmpty() == true
+                        ) {
+                            movementMethod = android.text.method.LinkMovementMethod.getInstance()
+                        } else {
+                            setTextIsSelectable(true)
+                        }
+                    }
                     maxWidth = resources.displayMetrics.widthPixels - dp(72)
-                    setTextIsSelectable(!mine)
                     setPadding(dp(14), dp(10), dp(14), dp(10))
                     if (mine) {
                         background = rounded(Color.rgb(28, 46, 37), 18)
@@ -3981,7 +3999,9 @@ class WorkspaceActivity : AppCompatActivity() {
                         }.onFailure { statusMessage = it.message ?: "Read clarification not saved." }
                         render()
                     } else {
-                        startConnectedRunVerification(id, stored.id, requireNotNull(choice.runNumber))
+                        startConnectedRunVerification(
+                            id, stored.id, requireNotNull(choice.runNumber), choice.includeCommitSha
+                        )
                     }
                 }
                 is WorkspaceConnectedGitHubReadRouting.Route.Heads ->
