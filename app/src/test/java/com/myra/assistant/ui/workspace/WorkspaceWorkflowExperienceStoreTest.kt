@@ -165,4 +165,27 @@ class WorkspaceWorkflowExperienceStoreTest {
         )
         assertNull(feedback.feedbackText)
     }
+
+    @Test fun executionRecoveryStatsRoundTripWithVerifiedExperience() {
+        val record = WorkspaceWorkflowExperience.fromVerifiedGitHub(
+            receipt(),
+            WorkspaceGitHubSelfEditFlow.ExecutionSummary(
+                providerCalls = 4,
+                reviewCalls = 2,
+                fallbackSwitches = 1,
+                ciRepairs = 1,
+                commitAttempts = 2,
+            ),
+        )
+        val decoded = WorkspaceWorkflowExperience.fromJson(
+            WorkspaceWorkflowExperience.toJson(record)
+        )
+
+        assertEquals(record, decoded)
+        assertEquals(4, decoded?.providerCalls)
+        assertEquals(2, decoded?.reviewCalls)
+        assertEquals(1, decoded?.fallbackSwitches)
+        assertEquals(1, decoded?.ciRepairs)
+        assertEquals(2, decoded?.commitAttempts)
+    }
 }

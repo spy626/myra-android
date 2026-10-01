@@ -222,7 +222,10 @@ class WorkspaceActivity : AppCompatActivity() {
                         }
                         runCatching {
                             workflowExperienceStore.record(
-                                WorkspaceWorkflowExperience.fromVerifiedGitHub(receipt)
+                                WorkspaceWorkflowExperience.fromVerifiedGitHub(
+                                    receipt = receipt,
+                                    execution = result.execution,
+                                )
                             )
                         }.onFailure {
                             // Learning evidence is optional; verified task completion remains authoritative.
@@ -462,10 +465,22 @@ class WorkspaceActivity : AppCompatActivity() {
         val recentGitHubAction = preferences
             .getString(recentGitHubActionReceiptKey, null)
             ?.let(WorkspaceRecentGitHubActionReceipt::decode)
+        val experienceEvidence = runCatching {
+            workflowExperienceStore.list()
+        }.getOrDefault(emptyList())
+        val feedbackEvidence = runCatching {
+            workflowExperienceStore.listFeedback()
+        }.getOrDefault(emptyList())
         val workflowPatterns = runCatching {
             WorkspaceWorkflowExperiencePatterns.recognize(
-                records = workflowExperienceStore.list(),
-                feedback = workflowExperienceStore.listFeedback(),
+                records = experienceEvidence,
+                feedback = feedbackEvidence,
+            )
+        }.getOrDefault(emptyList())
+        val workflowReflections = runCatching {
+            WorkspaceWorkflowReflection.reflect(
+                experiences = experienceEvidence,
+                feedback = feedbackEvidence,
             )
         }.getOrDefault(emptyList())
         val snapshot = WorkspaceRuntimeSelfModel.Snapshot(
@@ -482,6 +497,7 @@ class WorkspaceActivity : AppCompatActivity() {
             taskStatus = task?.status,
             recentGitHubAction = recentGitHubAction,
             workflowPatterns = workflowPatterns,
+            workflowReflections = workflowReflections,
         )
         return WorkspaceRuntimeSelfModel.combine(
             WorkspaceRuntimeSelfModel.instructions(snapshot),

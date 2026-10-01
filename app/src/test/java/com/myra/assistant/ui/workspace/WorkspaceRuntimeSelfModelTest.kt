@@ -121,4 +121,50 @@ class WorkspaceRuntimeSelfModelTest {
         assertTrue(text.contains("learned workflow pattern never authorizes execution"))
         assertTrue(text.contains("cannot widen permissions"))
     }
+
+    @Test fun structuredWorkflowReflectionIsProjectedWithoutAutoImprovementAuthority() {
+        val reflection = WorkspaceWorkflowReflection.Record(
+            experienceId = "github:" + "3".padStart(40, '0'),
+            intent = "fix runtime state",
+            kind = WorkspaceWorkflowExperience.Kind.CONNECTED_GITHUB_SELF_EDIT,
+            repository = "spy626/myra-android",
+            branch = "agent/myra-phase-1",
+            capabilities = listOf(
+                "CONNECTED_REPOSITORY_READ",
+                "PROTECTED_FEATURE_BRANCH_WRITE",
+                "GITHUB_ACTIONS_CI_VERIFY",
+            ),
+            constraints = listOf(
+                "CURRENT_TURN_AUTHORITY_REQUIRED",
+                "FEATURE_BRANCH_ONLY",
+                "MAIN_MASTER_FORBIDDEN",
+                "EXACT_CI_GREEN_REQUIRED",
+                "CI_IS_NOT_PHONE_PASS",
+            ),
+            verificationRef = "ci:3356",
+            outcome = WorkspaceWorkflowExperience.Outcome.VERIFIED_SUCCESS,
+            providerCalls = 3,
+            reviewCalls = 1,
+            fallbackSwitches = 0,
+            ciRepairs = 1,
+            commitAttempts = 2,
+            recoverySignals = listOf("CI_REPAIR_USED", "MULTIPLE_COMMIT_ATTEMPTS"),
+            feedbackState = WorkspaceWorkflowReflection.FeedbackState.CONFIRMED,
+            feedbackRef = "feedback:" + "a".repeat(64),
+            disposition = WorkspaceWorkflowReflection.Disposition.USER_SUPPORTED,
+            reflectedAtMs = 3L,
+        )
+        val text = WorkspaceRuntimeSelfModel.instructions(
+            WorkspaceRuntimeSelfModel.Snapshot(
+                github = WorkspaceRuntimeSelfModel.GitHubState(connected = true),
+                workflowReflections = listOf(reflection),
+            )
+        )
+
+        assertTrue(text.contains("STRUCTURED WORKFLOW REFLECTIONS"))
+        assertTrue(text.contains("CI_REPAIR_USED"))
+        assertTrue(text.contains("USER_SUPPORTED"))
+        assertTrue(text.contains("never expose hidden reasoning"))
+        assertTrue(text.contains("auto-edit code"))
+    }
 }

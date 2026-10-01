@@ -29,12 +29,21 @@ internal class WorkspaceGitHubSelfEditFlow(
     private val listener: Listener,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
+    data class ExecutionSummary(
+        val providerCalls: Int = 0,
+        val reviewCalls: Int = 0,
+        val fallbackSwitches: Int = 0,
+        val ciRepairs: Int = 0,
+        val commitAttempts: Int = 0,
+    )
+
     data class Completion(
         val commit: WorkspaceGitHubConnector.CommitReceipt,
         val workflow: WorkspaceGitHubConnector.WorkflowRun,
         val pullRequest: WorkspaceGitHubConnector.PullRequestReceipt?,
         val warning: String? = null,
         val adaptiveAnswer: String? = null,
+        val execution: ExecutionSummary = ExecutionSummary(),
     )
 
     interface Listener {
@@ -1601,20 +1610,31 @@ internal class WorkspaceGitHubSelfEditFlow(
     }
 
     private fun finishCompletion(run: Long, result: Completion) {
-        synchronized(this) {
+        val completed = synchronized(this) {
             if (run != generation) return
+            val budget = WorkspaceGitHubTaskBudget.validate(taskBudget)
+            val snapshot = result.copy(
+                execution = ExecutionSummary(
+                    providerCalls = budget.providerCalls,
+                    reviewCalls = budget.reviewCalls,
+                    fallbackSwitches = budget.fallbackSwitches,
+                    ciRepairs = budget.ciRepairs,
+                    commitAttempts = budget.commitAttempts,
+                )
+            )
             active = null
             ciWatching = false
             pollHandler.removeCallbacksAndMessages(null)
             clearCheckpoint()
             clearState()
+            snapshot
         }
         listener.onEvent(
             WorkspaceWorkPhase.DONE,
             "GitHub self-edit CI verified",
-            "CI #${result.workflow.runNumber} · ${result.commit.commitSha.take(12)}",
+            "CI #${completed.workflow.runNumber} · ${completed.commit.commitSha.take(12)}",
         )
-        listener.onComplete(result)
+        listener.onComplete(completed)
     }
 
     private fun terminalFail(run: Long, message: String) {

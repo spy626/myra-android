@@ -28,6 +28,11 @@ internal object WorkspaceWorkflowExperience {
         val verificationUrl: String,
         val outcome: Outcome,
         val capturedAtMs: Long,
+        val providerCalls: Int = 0,
+        val reviewCalls: Int = 0,
+        val fallbackSwitches: Int = 0,
+        val ciRepairs: Int = 0,
+        val commitAttempts: Int = 0,
     )
 
     private val sha = Regex("""[0-9a-f]{40,64}""")
@@ -35,7 +40,11 @@ internal object WorkspaceWorkflowExperience {
     private val capability = Regex("""[A-Z][A-Z0-9_]{1,63}""")
     private val verificationRef = Regex("""ci:[1-9][0-9]{0,11}""")
 
-    fun fromVerifiedGitHub(receipt: WorkspaceRecentGitHubActionReceipt.Receipt): Record {
+    fun fromVerifiedGitHub(
+        receipt: WorkspaceRecentGitHubActionReceipt.Receipt,
+        execution: WorkspaceGitHubSelfEditFlow.ExecutionSummary =
+            WorkspaceGitHubSelfEditFlow.ExecutionSummary(),
+    ): Record {
         require(receipt.ciStatus == "completed" && receipt.ciConclusion == "success") {
             "Workflow experience requires deterministic successful CI verification"
         }
@@ -63,6 +72,11 @@ internal object WorkspaceWorkflowExperience {
                 verificationUrl = receipt.ciUrl,
                 outcome = Outcome.VERIFIED_SUCCESS,
                 capturedAtMs = receipt.completedAtMs,
+                providerCalls = execution.providerCalls,
+                reviewCalls = execution.reviewCalls,
+                fallbackSwitches = execution.fallbackSwitches,
+                ciRepairs = execution.ciRepairs,
+                commitAttempts = execution.commitAttempts,
             )
         )
     }
@@ -116,6 +130,21 @@ internal object WorkspaceWorkflowExperience {
             "Workflow experience outcome is invalid"
         }
         require(record.capturedAtMs >= 0L) { "Workflow experience timestamp is invalid" }
+        require(record.providerCalls in 0..WorkspaceGitHubTaskBudget.MAX_PROVIDER_CALLS) {
+            "Workflow experience provider-call count is invalid"
+        }
+        require(record.reviewCalls in 0..WorkspaceGitHubTaskBudget.MAX_REVIEW_CALLS) {
+            "Workflow experience review-call count is invalid"
+        }
+        require(record.fallbackSwitches in 0..WorkspaceGitHubTaskBudget.MAX_FALLBACK_SWITCHES) {
+            "Workflow experience fallback count is invalid"
+        }
+        require(record.ciRepairs in 0..WorkspaceGitHubTaskBudget.MAX_CI_REPAIRS) {
+            "Workflow experience CI-repair count is invalid"
+        }
+        require(record.commitAttempts in 0..WorkspaceGitHubTaskBudget.MAX_COMMIT_ATTEMPTS) {
+            "Workflow experience commit-attempt count is invalid"
+        }
         return record
     }
 
@@ -136,6 +165,11 @@ internal object WorkspaceWorkflowExperience {
             .put("verificationUrl", safe.verificationUrl)
             .put("outcome", safe.outcome.name)
             .put("capturedAtMs", safe.capturedAtMs)
+            .put("providerCalls", safe.providerCalls)
+            .put("reviewCalls", safe.reviewCalls)
+            .put("fallbackSwitches", safe.fallbackSwitches)
+            .put("ciRepairs", safe.ciRepairs)
+            .put("commitAttempts", safe.commitAttempts)
     }
 
     fun fromJson(root: JSONObject): Record? = runCatching {
@@ -164,6 +198,11 @@ internal object WorkspaceWorkflowExperience {
                 verificationUrl = root.getString("verificationUrl"),
                 outcome = Outcome.valueOf(root.getString("outcome")),
                 capturedAtMs = root.getLong("capturedAtMs"),
+                providerCalls = root.optInt("providerCalls", 0),
+                reviewCalls = root.optInt("reviewCalls", 0),
+                fallbackSwitches = root.optInt("fallbackSwitches", 0),
+                ciRepairs = root.optInt("ciRepairs", 0),
+                commitAttempts = root.optInt("commitAttempts", 0),
             )
         )
     }.getOrNull()
