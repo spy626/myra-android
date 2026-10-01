@@ -483,6 +483,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 feedback = feedbackEvidence,
             )
         }.getOrDefault(emptyList())
+        val workflowImprovementCandidates = runCatching {
+            WorkspaceWorkflowImprovementGate.evaluate(workflowReflections)
+        }.getOrDefault(emptyList())
         val snapshot = WorkspaceRuntimeSelfModel.Snapshot(
             github = WorkspaceRuntimeSelfModel.GitHubState(
                 connected = connection != null,
@@ -498,6 +501,7 @@ class WorkspaceActivity : AppCompatActivity() {
             recentGitHubAction = recentGitHubAction,
             workflowPatterns = workflowPatterns,
             workflowReflections = workflowReflections,
+            workflowImprovementCandidates = workflowImprovementCandidates,
         )
         return WorkspaceRuntimeSelfModel.combine(
             WorkspaceRuntimeSelfModel.instructions(snapshot),

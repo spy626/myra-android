@@ -137,4 +137,16 @@ class WorkspaceWorkflowReflectionTest {
         assertTrue(text.contains("do not auto-edit"))
         assertTrue(text.contains("separate improvement gate"))
     }
+
+    @Test fun reflectionKeepsRetainedHistoryForImprovementGateButPromptStaysBounded() {
+        val experiences = (1..6).map(::experience)
+        val reflections = WorkspaceWorkflowReflection.reflect(
+            experiences = experiences,
+            feedback = emptyList(),
+        )
+
+        assertEquals(6, reflections.size)
+        val prompt = WorkspaceWorkflowReflection.instructions(reflections)
+        assertEquals(5, Regex("github:").findAll(prompt).count())
+    }
 }

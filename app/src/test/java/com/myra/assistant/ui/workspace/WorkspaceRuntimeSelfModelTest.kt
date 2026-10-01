@@ -167,4 +167,44 @@ class WorkspaceRuntimeSelfModelTest {
         assertTrue(text.contains("never expose hidden reasoning"))
         assertTrue(text.contains("auto-edit code"))
     }
+
+    @Test fun workflowImprovementCandidateIsProjectedAsProposalOnly() {
+        val candidate = WorkspaceWorkflowImprovementGate.Candidate(
+            signatureSha256 = "b".repeat(64),
+            status =
+                WorkspaceWorkflowImprovementGate.Status.READY_FOR_MANUAL_IMPROVEMENT_PROPOSAL,
+            kind = WorkspaceWorkflowExperience.Kind.CONNECTED_GITHUB_SELF_EDIT,
+            repository = "spy626/myra-android",
+            branch = "agent/myra-phase-1",
+            capabilities = listOf(
+                "CONNECTED_REPOSITORY_READ",
+                "PROTECTED_FEATURE_BRANCH_WRITE",
+                "GITHUB_ACTIONS_CI_VERIFY",
+            ),
+            constraints = listOf(
+                "CURRENT_TURN_AUTHORITY_REQUIRED",
+                "FEATURE_BRANCH_ONLY",
+                "MAIN_MASTER_FORBIDDEN",
+                "EXACT_CI_GREEN_REQUIRED",
+                "CI_IS_NOT_PHONE_PASS",
+            ),
+            verifiedExecutions = 2,
+            userSupportedExecutions = 2,
+            evidenceRefs = listOf("ci:3360", "ci:3359"),
+            recoverySignals = listOf("CI_REPAIR_USED"),
+            lastReflectedAtMs = 10L,
+        )
+        val text = WorkspaceRuntimeSelfModel.instructions(
+            WorkspaceRuntimeSelfModel.Snapshot(
+                github = WorkspaceRuntimeSelfModel.GitHubState(connected = true),
+                workflowImprovementCandidates = listOf(candidate),
+            )
+        )
+
+        assertTrue(text.contains("WORKFLOW IMPROVEMENT CANDIDATES"))
+        assertTrue(text.contains("grounded USER-supported=2"))
+        assertTrue(text.contains("NEVER execution/promotion authority"))
+        assertTrue(text.contains("never activate a workflow, modify code/skills"))
+        assertTrue(text.contains("replace current-turn authority"))
+    }
 }

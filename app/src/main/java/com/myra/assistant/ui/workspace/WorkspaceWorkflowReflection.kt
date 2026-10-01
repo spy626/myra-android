@@ -111,7 +111,7 @@ internal object WorkspaceWorkflowReflection {
         }.sortedWith(
             compareByDescending<Record> { it.reflectedAtMs }
                 .thenBy { it.experienceId }
-        ).take(MAX_REFLECTIONS)
+        )
     }
 
     fun instructions(reflections: List<Record>): String {
