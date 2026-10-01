@@ -15,21 +15,20 @@ internal object WorkspaceWorkflowFeedbackIntent {
     )
 
     private val undoCue = Regex(
-        """(?iu)(?:undo|revert|rollback|wapas|vaapas|wapis)"""
+        """(?iu)\b(?:undo|revert|rollback|wapas|vaapas|wapis)\b"""
     )
     private val correctionCue = Regex(
-        """(?iu)(?:wrong|galat|incorrect|nahi|nahin|nehi|nots+right|nots+whats+is+(?:asked|meant)|maines+yes+nahi|aisas+nahi)"""
+        """(?iu)\b(?:wrong|galat|incorrect|nahi|nahin|nehi|not\s+right|not\s+what\s+i\s+(?:asked|meant)|maine\s+ye\s+nahi|aisa\s+nahi)\b"""
     )
     private val confirmationCue = Regex(
-        """(?iu)(?:right|correct|sahi|perfect|good|worked|works|theek|thik|yes|haan|han)"""
+        """(?iu)\b(?:right|correct|sahi|perfect|good|worked|works|theek|thik|yes|haan|han)\b"""
     )
     private val workflowReferenceCue = Regex(
-        """(?iu)(?:this|that|it|same|last|previous|prior|ye|yah|vo|woh|uska|iska|change|work|task|commit|ci|build|result)"""
+        """(?iu)\b(?:this|that|it|same|last|previous|prior|ye|yah|vo|woh|uska|iska|change|work|task|commit|ci|build|result)\b"""
     )
 
     private fun normalized(raw: String): String = raw.trim()
-        .replace('’', ''')
-        .replace(Regex("""[sp{Z}]+"""), " ")
+        .replace(Regex("""[\s\p{Z}]+"""), " ")
         .take(1_000)
 
     fun looksLikeFeedback(raw: String): Boolean {
