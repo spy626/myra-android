@@ -105,4 +105,27 @@ class WorkspaceSemanticTurnIntentTest {
         assertTrue(system.contains("RECENT_VERIFIED_GITHUB_ACTION"))
         assertTrue(system.contains("globally newest external action"))
     }
+
+    @Test fun liveHeadReadWithNegativeActionListCannotBecomeSelfEdit() {
+        val exact = "LYRA, use your connected GitHub read capability to fetch the LIVE current HEAD " +
+            "commit SHA of agent/myra-phase-1 and main in spy626/myra-android. " +
+            "Do not guess from conversation history. Do not modify files, push commits, or start a build. " +
+            "If the live read fails, clearly report the failure."
+        for (text in listOf(
+            exact,
+            "Fetch LIVE current GitHub HEAD SHA for agent/myra-phase-1. No edits or pushes.",
+            "Show me the connected GitHub branch HEAD read-only. Do not change code or build.",
+            "GitHub ki current branch SHA check karo; code change mat karna, build bhi mat karna.",
+        )) {
+            val proposal = WorkspaceSemanticTurnIntent.propose(text)
+            assertEquals(text, WorkspaceSemanticTurnIntent.Kind.READ_ONLY_VERIFICATION, proposal.kind)
+            assertEquals(text, WorkspaceSemanticTurnIntent.Effect.READ, proposal.effect)
+            assertFalse(text, WorkspaceGitHubSelfEdit.isExplicitRequest(text))
+            assertNull(text, WorkspaceChatIntent.requestedProjectType(text))
+        }
+        assertEquals(WorkspaceSemanticTurnIntent.Effect.WRITE,
+            WorkspaceSemanticTurnIntent.propose(
+                "GitHub repo me runtime label fix karo, but don't change main"
+            ).effect)
+    }
 }

@@ -139,11 +139,12 @@ internal object WorkspaceGitHubConnector {
     }
 
     fun branchRequest(token: String, repository: String, branch: String): Request {
-        val clean = WorkspaceConnectorPolicy.binding(repository, branch)
-        val parts = clean.repository.split('/')
+        val cleanRepository = WorkspaceConnectorPolicy.requireRepository(repository)
+        val cleanBranch = WorkspaceConnectorPolicy.requireReadBranch(branch)
+        val parts = cleanRepository.split('/')
         return request(
             "/repos/" + encode(parts[0]) + "/" + encode(parts[1]) +
-                "/branches/" + encode(clean.branch),
+                "/branches/" + encode(cleanBranch),
             token,
         )
     }
@@ -595,7 +596,7 @@ internal object WorkspaceGitHubConnector {
     }
 
     fun readBranch(response: Response, expectedBranch: String): Branch {
-        val expected = WorkspaceConnectorPolicy.requireFeatureBranch(expectedBranch)
+        val expected = WorkspaceConnectorPolicy.requireReadBranch(expectedBranch)
         val root = parseJson(response, "GitHub branch verification")
         val name = root.optString("name").trim()
         require(name == expected) { "GitHub branch identity did not match" }

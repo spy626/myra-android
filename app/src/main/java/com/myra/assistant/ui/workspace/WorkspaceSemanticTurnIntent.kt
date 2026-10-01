@@ -39,15 +39,16 @@ internal object WorkspaceSemanticTurnIntent {
             """.{0,24}(?:\?|\bkya\b|\bho\b)?\s*$"""
     )
     private val readCue = Regex(
-        """(?iu)\b(?:check|read|inspect|review|verify|status|dekh\p{L}*|dekho|analyse|analyze|explain|summari[sz]e)\b"""
+        """(?iu)\b(?:check|fetch|show|get|list|read|inspect|review|verify|status|dekh\p{L}*|dekho|analyse|analyze|explain|summari[sz]e)\b"""
     )
     private val resultCue = Regex(
-        """(?iu)\b(?:green|red|pass(?:ed)?|fail(?:ed)?|status|result|ci|build|workflow|run|commit|artifact|apk|release)\b|#\d+"""
+        """(?iu)\b(?:green|red|pass(?:ed)?|fail(?:ed)?|status|result|ci|build|workflow|run|commit|head|sha|branch|artifact|apk|release)\b|#\d+"""
     )
     private val explicitNoMutation = Regex(
-        """(?iu)(?:\b(?:do\s+not|don't|dont|never)\b.{0,28}\b(?:change|edit|modify|write|update|push|commit)\b)|""" +
-            """(?:\b(?:change|edit|modify|write|update|push|commit)\b.{0,28}\b(?:mat|nahi|nahin|nehi)\b)|""" +
-            """(?:\bkuch\s+change\s+mat\b)|(?:\bno\s+changes?\b)"""
+        """(?iu)(?:\b(?:do\s+not|don't|dont|never)\b.{0,40}\b(?:change|edit|modify|write|update|push|commit|execute|run|start)\b)|""" +
+            """(?:\b(?:change|edit|modify|write|update|push|commit|execute|run|start)\b.{0,28}\b(?:mat|nahi|nahin|nehi)\b)|""" +
+            """(?:\bkuch\s+change\s+mat\b)|(?:\bno\s+.{0,20}\b(?:changes?|writes?|edits?|commits?|push(?:es)?|builds?)\b)|""" +
+            """(?:\bread[ -]?only\b)|(?:\bwithout\s+(?:making\s+)?(?:changes?|edits?|writes?|pushing)\b)"""
     )
     private val questionCue = Regex(
         """(?iu)(?:\?|\b(?:kya|kia|what|which|is|are|did|has|have|can|could|would)\b)"""
@@ -77,6 +78,17 @@ internal object WorkspaceSemanticTurnIntent {
                 hinglishAbilityQuestion.containsMatchIn(text)
         if (capabilityQuestion) {
             return Proposal(Kind.CAPABILITY_QUERY, Effect.NONE, 0.96)
+        }
+
+        // Read-focused requests with an explicit no-mutation boundary must be resolved
+        // BEFORE scanning separated action words. For example, "do not modify files,
+        // push commits, or start a build" is one prohibition, not permission to build.
+        // This is interpretation only; actual reads still need a separate grounded route.
+        if (readCue.containsMatchIn(text) &&
+            resultCue.containsMatchIn(text) &&
+            explicitNoMutation.containsMatchIn(text)
+        ) {
+            return Proposal(Kind.READ_ONLY_VERIFICATION, Effect.READ, 0.98)
         }
 
         val writeAuthorized =

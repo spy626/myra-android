@@ -59,6 +59,20 @@ internal object WorkspaceConnectorPolicy {
         return clean
     }
 
+    /**
+     * Read-only branch identity may include main/master. This MUST NOT be used by
+     * feature-branch binding, write plans or mutation authority.
+     */
+    fun requireReadBranch(value: String): String {
+        val clean = value.trim()
+        require(safeBranch.matches(clean) &&
+            !clean.startsWith("/") && !clean.endsWith("/") &&
+            clean.split('/').all { it.isNotBlank() && it != "." && it != ".." }) {
+            "GitHub read branch is invalid"
+        }
+        return clean
+    }
+
     fun binding(repository: String, branch: String): GitHubBinding =
         GitHubBinding(requireRepository(repository), requireFeatureBranch(branch))
 

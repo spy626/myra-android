@@ -110,6 +110,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private var connectedRunVerificationMessageId: String? = null
     private var connectedRunVerificationNumber: Long? = null
     private var connectedRunVerificationRunner: WorkspaceConnectedGitHubRunRunner? = null
+    private var connectedHeadsReadActive = false
+    private var connectedHeadsReadProjectId: String? = null
+    private var connectedHeadsReadMessageId: String? = null
+    private var connectedHeadsRunner: WorkspaceConnectedGitHubHeadsRunner? = null
     private var githubSelfEditProjectId: String? = null
     private var githubSelfEditMessageId: String? = null
     private val githubSelfEditProjectKey = "workspace_github_self_edit_project_id"
@@ -870,6 +874,92 @@ class WorkspaceActivity : AppCompatActivity() {
         render()
     }
 
+    private fun connectedHeadReader(): WorkspaceConnectedGitHubHeadsRunner {
+        connectedHeadsRunner?.let { return it }
+        return WorkspaceConnectedGitHubHeadsRunner(
+            store = WorkspaceConnectorCredentialStore(this),
+            listener = object : WorkspaceConnectedGitHubHeadsRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !connectedHeadsReadActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(
+                    completion: WorkspaceConnectedGitHubHeadsRunner.Completion,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !connectedHeadsReadActive) return@runOnUiThread
+                        finishConnectedHeadsRead(WorkspaceConnectedGitHubHeadsIntent.receipt(completion))
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !connectedHeadsReadActive) return@runOnUiThread
+                        finishConnectedHeadsRead(
+                            "I couldn't verify the LIVE GitHub HEADs: " + message +
+                                "\nNo repository change or build was started."
+                        )
+                    }
+                }
+            },
+        ).also { connectedHeadsRunner = it }
+    }
+
+    private fun clearConnectedHeadsRead(cancel: Boolean = true) {
+        if (cancel) connectedHeadsRunner?.cancel()
+        connectedHeadsReadActive = false
+        connectedHeadsReadProjectId = null
+        connectedHeadsReadMessageId = null
+    }
+
+    private fun finishConnectedHeadsRead(reply: String) {
+        val id = connectedHeadsReadProjectId
+        val messageId = connectedHeadsReadMessageId
+        clearConnectedHeadsRead(cancel = false)
+        if (id == null || messageId == null || selectedId != id) return
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == messageId) {
+                "Conversation changed; stale GitHub HEAD read was discarded"
+            }
+            conversations.append(id, "assistant", reply)
+        }.onSuccess {
+            statusMessage = ""
+        }.onFailure {
+            statusMessage = it.message ?: "GitHub HEAD read receipt could not be saved."
+            recordWorkEvent(WorkspaceWorkPhase.ERROR, "GitHub HEAD receipt not saved", statusMessage)
+        }
+        render()
+    }
+
+    private fun startConnectedHeadsRead(
+        id: String,
+        messageId: String,
+        decision: WorkspaceConnectedGitHubHeadsIntent.Decision,
+    ) {
+        clearConnectedHeadsRead()
+        connectedHeadsReadActive = true
+        connectedHeadsReadProjectId = id
+        connectedHeadsReadMessageId = messageId
+        statusMessage = ""
+        render()
+        runCatching {
+            connectedHeadReader().start(decision)
+        }.onFailure {
+            finishConnectedHeadsRead(
+                "LIVE GitHub HEAD read was not started: " +
+                    (it.message ?: "secure connector unavailable") +
+                    "\nNo repository change or build was started."
+            )
+        }
+    }
+
     private fun connectedRunVerifier(): WorkspaceConnectedGitHubRunRunner {
         connectedRunVerificationRunner?.let { return it }
         return WorkspaceConnectedGitHubRunRunner(
@@ -1153,6 +1243,7 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest = null
         clearAgentReachState()
         clearConnectedRunVerification()
+        clearConnectedHeadsRead()
         coding.cancel()
         // Protected GitHub self-edit intentionally keeps running under the foreground service.
         // Explicit Stop is the only lifecycle-independent cancellation path.
@@ -1334,7 +1425,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun isForegroundBusy(): Boolean =
         activeRequest != null || coding.isRunning || agentReachActive ||
-            connectedRunVerificationActive
+            connectedRunVerificationActive || connectedHeadsReadActive
 
     private fun isBusy(): Boolean = isForegroundBusy() || githubSelfEdit.isRunning
 
@@ -1343,6 +1434,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val normalChatWasRunning = activeRequest != null
         val githubReadWasRunning = agentReachActive
         val connectedRunReadWasRunning = connectedRunVerificationActive
+        val connectedHeadsWasRunning = connectedHeadsReadActive
         requestGeneration++
         activeRequest?.cancel()
         activeRequest = null
@@ -1360,6 +1452,13 @@ class WorkspaceActivity : AppCompatActivity() {
             workTrace.finishError(
                 "Stopped",
                 "GitHub build verification cancelled; no repository change was made.")
+        }
+        if (connectedHeadsWasRunning) {
+            clearConnectedHeadsRead()
+            workTrace.finishError(
+                "Stopped",
+                "Live GitHub HEAD read cancelled; no repository change or build was started."
+            )
         }
         coding.cancel()
         codingRetryTarget = null
@@ -2635,6 +2734,8 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest?.cancel()
         activeRequest = null
         clearAgentReachState()
+        clearConnectedHeadsRead()
+        clearConnectedRunVerification()
         coding.cancel()
         codingRetryTarget = null
         selectedId = null
@@ -2670,6 +2771,8 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest?.cancel()
         activeRequest = null
         clearAgentReachState()
+        clearConnectedHeadsRead()
+        clearConnectedRunVerification()
         coding.cancel()
         codingRetryTarget = null
         selectedId = id
@@ -3720,8 +3823,12 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
+        val connectedHeadsIntent = if (picked.isEmpty() && skillCommand == null) {
+            WorkspaceConnectedGitHubHeadsIntent.decide(text)
+        } else null
         val githubSelfEditRequest =
-            picked.isEmpty() && WorkspaceGitHubSelfEdit.isExplicitRequest(text)
+            picked.isEmpty() && connectedHeadsIntent == null &&
+                WorkspaceGitHubSelfEdit.isExplicitRequest(text)
         if (githubSelfEditRequest &&
             !WorkspaceChatConcurrencyPolicy.state(
                 foregroundBusy = false,
@@ -3858,6 +3965,10 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         activateWorkTrace(stored.id)
+        if (connectedHeadsIntent != null && current.type == WorkspaceProjectType.CHAT) {
+            startConnectedHeadsRead(id, stored.id, connectedHeadsIntent)
+            return
+        }
         if (githubSelfEditRequest) {
             if (projects.getProject(id)?.type != WorkspaceProjectType.CHAT) {
                 statusMessage =

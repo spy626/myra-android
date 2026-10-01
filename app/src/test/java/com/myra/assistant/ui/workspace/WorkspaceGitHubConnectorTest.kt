@@ -149,8 +149,35 @@ class WorkspaceGitHubConnectorTest {
         assertTrue(runCatching {
             WorkspaceGitHubConnector.installationTokenRequest("not-a-pairing-key")
         }.isFailure)
+        // main/master remain forbidden as the configured WRITE feature branch, not as reads.
         assertTrue(runCatching {
-            WorkspaceGitHubConnector.branchRequest(token, "spy626/myra-android", "main")
+            WorkspaceConnectorPolicy.binding("spy626/myra-android", "main")
+        }.isFailure)
+    }
+
+    @Test fun liveMainBranchReadUsesGetAndValidatedHeadWithoutGrantingMainWrites() {
+        val request = WorkspaceGitHubConnector.branchRequest(
+            token, "spy626/myra-android", "main"
+        )
+        assertEquals("GET", request.method)
+        assertEquals("api.github.com", request.url.host)
+        assertTrue(request.url.encodedPath.endsWith("/branches/main"))
+        assertTrue(!request.url.toString().contains(token))
+        assertEquals("Bearer $token", request.header("Authorization"))
+
+        val value = WorkspaceGitHubConnector.readBranch(
+            response("""{"name":"main","commit":{"sha":"$head"}}"""),
+            "main",
+        )
+        assertEquals("main", value.name)
+        assertEquals(head, value.headSha)
+        assertTrue(runCatching {
+            WorkspaceGitHubConnector.readBranch(
+                response("""{"name":"other","commit":{"sha":"$head"}}"""), "main"
+            )
+        }.isFailure)
+        assertTrue(runCatching {
+            WorkspaceConnectorPolicy.requireFeatureBranch("main")
         }.isFailure)
     }
 }
