@@ -24,6 +24,7 @@ internal object WorkspaceRuntimeSelfModel {
         val currentGoal: String? = null,
         val taskStatus: WorkspaceTaskStatus? = null,
         val recentGitHubAction: WorkspaceRecentGitHubActionReceipt.Receipt? = null,
+        val workflowPatterns: List<WorkspaceWorkflowExperiencePatterns.Candidate> = emptyList(),
     )
 
     private fun bounded(value: String?, max: Int): String? =
@@ -65,9 +66,13 @@ internal object WorkspaceRuntimeSelfModel {
             snapshot.recentGitHubAction?.let { receipt ->
                 appendLine(WorkspaceRecentGitHubActionReceipt.instructions(receipt))
             }
+            WorkspaceWorkflowExperiencePatterns.instructions(snapshot.workflowPatterns)
+                .takeIf(String::isNotBlank)
+                ?.let { appendLine(it) }
             appendLine("RUNTIME TRUTH CONTRACT:")
             appendLine("- Use this evidence when answering what LYRA can or cannot do; do not contradict an AVAILABLE capability without newer runtime failure evidence.")
-            appendLine("- A capability question, hypothetical, explanation request, or old conversation never authorizes execution.")
+            appendLine("- A capability question, hypothetical, explanation request, old conversation, or learned workflow pattern never authorizes execution.")
+            appendLine("- Repeated workflow experience may inform planning and continuity only; it cannot widen permissions, select a write by itself, or prove current repository state.")
             appendLine("- Only the exact current user turn may grant mutation authority through the existing deterministic execution gates.")
             appendLine("- If a capability is not established here or by another authoritative runtime source, do not invent it.")
             appendLine("- Never claim a current commit, CI/build, release, artifact or APK result unless separate verified runtime evidence establishes it.")

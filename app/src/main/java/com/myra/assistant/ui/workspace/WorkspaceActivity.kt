@@ -462,6 +462,9 @@ class WorkspaceActivity : AppCompatActivity() {
         val recentGitHubAction = preferences
             .getString(recentGitHubActionReceiptKey, null)
             ?.let(WorkspaceRecentGitHubActionReceipt::decode)
+        val workflowPatterns = runCatching {
+            WorkspaceWorkflowExperiencePatterns.recognize(workflowExperienceStore.list())
+        }.getOrDefault(emptyList())
         val snapshot = WorkspaceRuntimeSelfModel.Snapshot(
             github = WorkspaceRuntimeSelfModel.GitHubState(
                 connected = connection != null,
@@ -475,6 +478,7 @@ class WorkspaceActivity : AppCompatActivity() {
             currentGoal = task?.goal,
             taskStatus = task?.status,
             recentGitHubAction = recentGitHubAction,
+            workflowPatterns = workflowPatterns,
         )
         return WorkspaceRuntimeSelfModel.combine(
             WorkspaceRuntimeSelfModel.instructions(snapshot),

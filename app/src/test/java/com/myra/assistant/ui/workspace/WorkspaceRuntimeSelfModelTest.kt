@@ -90,4 +90,34 @@ class WorkspaceRuntimeSelfModelTest {
         assertTrue(text.contains("does NOT by itself prove why a specific comment"))
         assertTrue(text.contains("say the specific purpose is not established"))
     }
+
+    @Test fun repeatedWorkflowPatternIsProjectedWithoutGrantingExecution() {
+        val pattern = WorkspaceWorkflowExperiencePatterns.Candidate(
+            signatureSha256 = "a".repeat(64),
+            kind = WorkspaceWorkflowExperience.Kind.CONNECTED_GITHUB_SELF_EDIT,
+            repository = "spy626/myra-android",
+            branch = "agent/myra-phase-1",
+            capabilities = listOf(
+                "CONNECTED_REPOSITORY_READ",
+                "PROTECTED_FEATURE_BRANCH_WRITE",
+                "GITHUB_ACTIONS_CI_VERIFY",
+            ),
+            verifiedExecutions = 2,
+            firstVerifiedAtMs = 1L,
+            lastVerifiedAtMs = 2L,
+            latestVerificationRefs = listOf("ci:3352", "ci:3350"),
+            taskExamples = listOf("add provenance", "fix runtime state"),
+        )
+        val text = WorkspaceRuntimeSelfModel.instructions(
+            WorkspaceRuntimeSelfModel.Snapshot(
+                github = WorkspaceRuntimeSelfModel.GitHubState(connected = true),
+                workflowPatterns = listOf(pattern),
+            )
+        )
+
+        assertTrue(text.contains("VERIFIED WORKFLOW EXPERIENCE PATTERNS"))
+        assertTrue(text.contains("2 distinct verified successful executions"))
+        assertTrue(text.contains("learned workflow pattern never authorizes execution"))
+        assertTrue(text.contains("cannot widen permissions"))
+    }
 }
