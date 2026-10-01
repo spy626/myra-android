@@ -2511,10 +2511,17 @@ class WorkspaceActivity : AppCompatActivity() {
             } else if (codeParts.any { it is WorkspaceCodeBlocks.Part.Code }) {
                 codeParts.forEach { part ->
                     when (part) {
-                        is WorkspaceCodeBlocks.Part.Prose -> item.addView(label("", 16f).apply {
+                        is WorkspaceCodeBlocks.Part.Prose -> item.addView(label(
+                            "", WorkspaceChatReadability.assistant.fontSp
+                        ).apply {
                             text = WorkspaceMarkdownText.render(part.text)
+                            setTextColor(Color.rgb(230, 236, 244))
+                            setLineSpacing(
+                                dp(WorkspaceChatReadability.assistant.extraLineDp).toFloat(),
+                                WorkspaceChatReadability.assistant.lineMultiplier,
+                            )
                             setTextIsSelectable(true)
-                            setPadding(dp(14), dp(9), dp(14), dp(9))
+                            setPadding(dp(10), dp(11), dp(10), dp(11))
                         }, LinearLayout.LayoutParams(-1, -2))
                         is WorkspaceCodeBlocks.Part.Code -> item.addView(
                             WorkspaceCodeCardView.create(this, part) { copyMessage(part.source) },
@@ -2529,22 +2536,30 @@ class WorkspaceActivity : AppCompatActivity() {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = if (mine) Gravity.END else Gravity.START
                 }
-                val bubble = label(message.text, if (mine) 15f else 16f).apply {
+                val chatStyle = if (mine) WorkspaceChatReadability.user
+                    else WorkspaceChatReadability.assistant
+                val bubble = label(message.text, chatStyle.fontSp).apply {
                     if (!mine) {
+                        setTextColor(Color.rgb(230, 236, 244))
                         val rendered = WorkspaceMarkdownText.render(message.text)
                         text = rendered
-                        // Links are opened only on tap. Other replies remain selectable.
+                        // Verified HTTPS run links remain tappable and visible in the dark theme.
                         if ((rendered as? android.text.Spanned)
                                 ?.getSpans(0, rendered.length, android.text.style.URLSpan::class.java)
                                 ?.isNotEmpty() == true
                         ) {
+                            setLinkTextColor(WorkspaceChatReadability.verifiedLinkColor)
                             movementMethod = android.text.method.LinkMovementMethod.getInstance()
                         } else {
                             setTextIsSelectable(true)
                         }
                     }
-                    maxWidth = resources.displayMetrics.widthPixels - dp(72)
-                    setPadding(dp(14), dp(10), dp(14), dp(10))
+                    setLineSpacing(dp(chatStyle.extraLineDp).toFloat(), chatStyle.lineMultiplier)
+                    maxWidth = resources.displayMetrics.widthPixels - dp(chatStyle.maxWidthGutterDp)
+                    setPadding(
+                        dp(chatStyle.horizontalPaddingDp), dp(chatStyle.verticalPaddingDp),
+                        dp(chatStyle.horizontalPaddingDp), dp(chatStyle.verticalPaddingDp),
+                    )
                     if (mine) {
                         background = rounded(Color.rgb(28, 46, 37), 18)
                         isLongClickable = true
