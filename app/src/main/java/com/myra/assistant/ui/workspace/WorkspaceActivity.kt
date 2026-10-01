@@ -111,6 +111,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private var connectedRunVerificationNumber: Long? = null
     private var connectedRunVerificationIncludeSha = false
     private var connectedRunVerificationRunner: WorkspaceConnectedGitHubRunRunner? = null
+    private var connectedDownloadReadActive = false
+    private var connectedDownloadReadProjectId: String? = null
+    private var connectedDownloadReadMessageId: String? = null
+    private var connectedDownloadReader: WorkspaceConnectedGitHubDownloadRunner? = null
     private var connectedHeadsReadActive = false
     private var connectedHeadsReadProjectId: String? = null
     private var connectedHeadsReadMessageId: String? = null
@@ -1058,6 +1062,101 @@ class WorkspaceActivity : AppCompatActivity() {
         connectedRunVerifier().start(runNumber)
     }
 
+    private fun connectedDownloadRunner(): WorkspaceConnectedGitHubDownloadRunner {
+        connectedDownloadReader?.let { return it }
+        return WorkspaceConnectedGitHubDownloadRunner(
+            store = WorkspaceConnectorCredentialStore(this),
+            listener = object : WorkspaceConnectedGitHubDownloadRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !connectedDownloadReadActive) {
+                            return@runOnUiThread
+                        }
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(
+                    completion: WorkspaceConnectedGitHubDownloadRunner.Completion
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !connectedDownloadReadActive) {
+                            return@runOnUiThread
+                        }
+                        finishConnectedDownloadRead(
+                            WorkspaceConnectedGitHubDownloadIntent.receipt(completion)
+                        )
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !connectedDownloadReadActive) {
+                            return@runOnUiThread
+                        }
+                        finishConnectedDownloadRead(
+                            "Bro, verified APK download link nahi mil paya: " + message
+                        )
+                    }
+                }
+            },
+        ).also { connectedDownloadReader = it }
+    }
+
+    private fun clearConnectedDownloadRead(cancel: Boolean = true) {
+        if (cancel) connectedDownloadReader?.cancel()
+        connectedDownloadReadActive = false
+        connectedDownloadReadProjectId = null
+        connectedDownloadReadMessageId = null
+    }
+
+    private fun finishConnectedDownloadRead(reply: String) {
+        val id = connectedDownloadReadProjectId
+        val userMessageId = connectedDownloadReadMessageId
+        clearConnectedDownloadRead(cancel = false)
+        if (id == null || userMessageId == null || selectedId != id) return
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == userMessageId) {
+                "Conversation changed; stale APK lookup result was discarded"
+            }
+            conversations.append(id, "assistant", reply)
+        }.onSuccess {
+            statusMessage = ""
+        }.onFailure {
+            statusMessage = it.message ?: "Verified APK reply could not be saved."
+            recordWorkEvent(
+                WorkspaceWorkPhase.ERROR,
+                "Verified APK reply not saved",
+                statusMessage,
+            )
+        }
+        render()
+    }
+
+    private fun startConnectedDownloadRead(
+        id: String,
+        userMessageId: String,
+        runNumber: Long,
+    ) {
+        clearConnectedDownloadRead()
+        connectedDownloadReadActive = true
+        connectedDownloadReadProjectId = id
+        connectedDownloadReadMessageId = userMessageId
+        statusMessage = ""
+        render()
+        runCatching { connectedDownloadRunner().start(runNumber) }
+            .onFailure {
+                finishConnectedDownloadRead(
+                    "Bro, APK verification start nahi ho paayi: " +
+                        (it.message ?: "GitHub connector unavailable")
+                )
+            }
+    }
+
     private fun githubReachRunner(): WorkspaceAgentReachGitHubRunner {
         agentReachRunner?.let { return it }
         return WorkspaceAgentReachGitHubRunner(
@@ -1250,6 +1349,7 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest = null
         clearAgentReachState()
         clearConnectedRunVerification()
+        clearConnectedDownloadRead()
         clearConnectedHeadsRead()
         coding.cancel()
         // Protected GitHub self-edit intentionally keeps running under the foreground service.
@@ -1432,7 +1532,8 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun isForegroundBusy(): Boolean =
         activeRequest != null || coding.isRunning || agentReachActive ||
-            connectedRunVerificationActive || connectedHeadsReadActive
+            connectedRunVerificationActive || connectedDownloadReadActive ||
+            connectedHeadsReadActive
 
     private fun isBusy(): Boolean = isForegroundBusy() || githubSelfEdit.isRunning
 
@@ -1441,6 +1542,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val normalChatWasRunning = activeRequest != null
         val githubReadWasRunning = agentReachActive
         val connectedRunReadWasRunning = connectedRunVerificationActive
+        val connectedDownloadWasRunning = connectedDownloadReadActive
         val connectedHeadsWasRunning = connectedHeadsReadActive
         requestGeneration++
         activeRequest?.cancel()
@@ -1459,6 +1561,12 @@ class WorkspaceActivity : AppCompatActivity() {
             workTrace.finishError(
                 "Stopped",
                 "GitHub build verification cancelled; no repository change was made.")
+        }
+        if (connectedDownloadWasRunning) {
+            clearConnectedDownloadRead()
+            workTrace.finishError(
+                "Stopped", "APK lookup cancelled; no repository change was made."
+            )
         }
         if (connectedHeadsWasRunning) {
             clearConnectedHeadsRead()
@@ -2769,6 +2877,7 @@ class WorkspaceActivity : AppCompatActivity() {
         clearAgentReachState()
         clearConnectedHeadsRead()
         clearConnectedRunVerification()
+        clearConnectedDownloadRead()
         coding.cancel()
         codingRetryTarget = null
         selectedId = null
@@ -2806,6 +2915,7 @@ class WorkspaceActivity : AppCompatActivity() {
         clearAgentReachState()
         clearConnectedHeadsRead()
         clearConnectedRunVerification()
+        clearConnectedDownloadRead()
         coding.cancel()
         codingRetryTarget = null
         selectedId = id
@@ -3857,7 +3967,10 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         val connectedReadRoute = if (picked.isEmpty() && skillCommand == null) {
-            WorkspaceConnectedGitHubReadRouting.decide(text)
+            val prior = selectedId?.let {
+                runCatching { conversations.read(it) }.getOrDefault(emptyList())
+            } ?: emptyList()
+            WorkspaceConnectedGitHubReadRouting.decide(text, prior)
         } else null
         val githubSelfEditRequest =
             picked.isEmpty() && connectedReadRoute == null &&
@@ -4016,6 +4129,26 @@ class WorkspaceActivity : AppCompatActivity() {
                     } else {
                         startConnectedRunVerification(
                             id, stored.id, requireNotNull(choice.runNumber), choice.includeCommitSha
+                        )
+                    }
+                }
+                is WorkspaceConnectedGitHubReadRouting.Route.Download -> {
+                    val choice = connectedReadRoute.decision
+                    if (choice.localError != null) {
+                        runCatching {
+                            conversations.attachAssistantToTurn(
+                                projectId = id,
+                                expectedUserId = stored.id,
+                                assistantId = "github-download-" + stored.id,
+                                text = choice.localError,
+                            )
+                        }.onFailure {
+                            statusMessage = it.message ?: "APK clarification not saved."
+                        }
+                        render()
+                    } else {
+                        startConnectedDownloadRead(
+                            id, stored.id, requireNotNull(choice.runNumber)
                         )
                     }
                 }

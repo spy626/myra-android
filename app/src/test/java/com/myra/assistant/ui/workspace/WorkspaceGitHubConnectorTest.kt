@@ -133,6 +133,55 @@ class WorkspaceGitHubConnectorTest {
         assertEquals(sha, second.run?.headSha)
     }
 
+    @Test fun downloadReleaseRequiresExactLiveTagAndDirectAsset() {
+        val head = "b6bdd82a97a5feb4869da20cca9ae3c3c16e0de6"
+        val wrongHead = "a".repeat(40)
+        val tag = "airi-memory-b6bdd82a97a5"
+        val refRequest = WorkspaceGitHubConnector.workflowReleaseTagRequest(
+            token, "spy626/myra-android", head
+        )
+        val releaseRequest = WorkspaceGitHubConnector.workflowReleaseRequest(
+            token, "spy626/myra-android", head
+        )
+        listOf(refRequest, releaseRequest).forEach {
+            assertEquals("GET", it.method)
+            assertEquals("api.github.com", it.url.host)
+            assertTrue(!it.url.toString().contains(token))
+        }
+        assertTrue(refRequest.url.encodedPath.endsWith("/git/ref/tags/$tag"))
+        assertTrue(releaseRequest.url.encodedPath.endsWith("/releases/tags/$tag"))
+        WorkspaceGitHubConnector.verifyReleaseTagCommit(response(
+            """{"ref":"refs/tags/$tag","object":{"type":"commit","sha":"$head"}}"""
+        ), head)
+        assertTrue(runCatching {
+            WorkspaceGitHubConnector.verifyReleaseTagCommit(response(
+                """{"ref":"refs/tags/$tag","object":{"type":"commit","sha":"$wrongHead"}}"""
+            ), head)
+        }.isFailure)
+
+        val url = "https://github.com/spy626/myra-android/releases/download/$tag/lyra-phone-test.apk"
+        val json = """{"tag_name":"$tag","target_commitish":"$head","draft":false,
+            "assets":[{"name":"lyra-phone-test.apk","state":"uploaded","size":126050195,
+            "content_type":"application/vnd.android.package-archive","browser_download_url":"$url"}]}"""
+        val verified = WorkspaceGitHubConnector.readVerifiedApkRelease(
+            response(json), "spy626/myra-android", head
+        )
+        assertEquals(url, verified.url)
+        assertEquals(126050195L, verified.sizeBytes)
+        assertTrue(runCatching {
+            WorkspaceGitHubConnector.readVerifiedApkRelease(
+                response(json.replace(url, "https://example.org/fake.apk")),
+                "spy626/myra-android", head
+            )
+        }.isFailure)
+        assertTrue(runCatching {
+            WorkspaceGitHubConnector.readVerifiedApkRelease(
+                response(json.replace(head, wrongHead)),
+                "spy626/myra-android", head
+            )
+        }.isFailure)
+    }
+
     @Test fun brokerRequestsKeepPairingSecretOutOfUrls() {
         val write = WorkspaceGitHubConnector.writeAccessRequest(pairing)
         val commit = WorkspaceGitHubConnector.commitRequest(

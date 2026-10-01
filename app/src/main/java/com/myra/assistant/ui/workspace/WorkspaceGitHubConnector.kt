@@ -40,6 +40,7 @@ internal object WorkspaceGitHubConnector {
         val url: String,
     )
     data class RunLookupPage(val run: WorkflowRun?, val fetchedCount: Int)
+    data class VerifiedApkAsset(val url: String, val sizeBytes: Long, val tag: String)
     data class WorkflowFailure(
         val runId: Long,
         val runNumber: Long,
@@ -215,6 +216,81 @@ internal object WorkspaceGitHubConnector {
                 "&event=push&per_page=" + RUN_LOOKUP_PAGE_SIZE + "&page=" + page,
             token,
         )
+    }
+
+    /** Binds the release tag to the verified full Actions HEAD; GET-only. */
+    private fun releaseTag(headSha: String): String =
+        "airi-memory-" + requireSha(headSha, "Verified build commit").take(12)
+
+    fun workflowReleaseTagRequest(token: String, repository: String, headSha: String): Request {
+        val clean = WorkspaceConnectorPolicy.requireRepository(repository).split('/')
+        return request(
+            "/repos/" + encode(clean[0]) + "/" + encode(clean[1]) +
+                "/git/ref/tags/" + releaseTag(headSha),
+            token,
+        )
+    }
+
+    fun workflowReleaseRequest(token: String, repository: String, headSha: String): Request {
+        val clean = WorkspaceConnectorPolicy.requireRepository(repository).split('/')
+        return request(
+            "/repos/" + encode(clean[0]) + "/" + encode(clean[1]) +
+                "/releases/tags/" + releaseTag(headSha),
+            token,
+        )
+    }
+
+    fun verifyReleaseTagCommit(response: Response, expectedHeadSha: String) {
+        val fullSha = requireSha(expectedHeadSha, "Verified build commit")
+        val tag = releaseTag(fullSha)
+        val root = parseJson(response, "GitHub build release tag")
+        require(root.optString("ref") == "refs/tags/" + tag) {
+            "Release tag identity does not match the verified build"
+        }
+        val target = root.optJSONObject("object")
+            ?: error("GitHub release tag target is missing")
+        require(target.optString("type") == "commit" &&
+            target.optString("sha").equals(fullSha, ignoreCase = true)) {
+            "Release tag does not point to this verified build commit"
+        }
+    }
+
+    fun readVerifiedApkRelease(
+        response: Response,
+        repository: String,
+        expectedHeadSha: String,
+    ): VerifiedApkAsset {
+        val repo = WorkspaceConnectorPolicy.requireRepository(repository)
+        val sha = requireSha(expectedHeadSha, "Verified build commit")
+        val tag = releaseTag(sha)
+        val root = parseJson(response, "GitHub build APK release")
+        require(root.optString("tag_name") == tag &&
+            root.optString("target_commitish").equals(sha, ignoreCase = true) &&
+            !root.optBoolean("draft", true)) {
+            "Published APK release is not bound to this verified build"
+        }
+        val assets = root.optJSONArray("assets") ?: error("GitHub release has no APK assets")
+        val valid = buildList {
+            for (i in 0 until assets.length()) {
+                val asset = assets.optJSONObject(i) ?: continue
+                if (asset.optString("name") != "lyra-phone-test.apk") continue
+                if (asset.optString("state") != "uploaded" ||
+                    asset.optLong("size", -1L) !in 1_000_000L..500_000_000L) continue
+                if (asset.optString("content_type") !in setOf(
+                        "application/vnd.android.package-archive",
+                        "application/octet-stream",
+                    )) continue
+                val url = asset.optString("browser_download_url").trim()
+                val expected = "https://github.com/" + repo +
+                    "/releases/download/" + tag + "/lyra-phone-test.apk"
+                if (url != expected) continue
+                add(VerifiedApkAsset(url, asset.optLong("size"), tag))
+            }
+        }
+        require(valid.size == 1) {
+            "No uniquely verified direct phone-test APK is published for this build"
+        }
+        return valid.single()
     }
 
     fun workflowRunJobsRequest(

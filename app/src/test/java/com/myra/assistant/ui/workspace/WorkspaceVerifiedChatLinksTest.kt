@@ -38,6 +38,19 @@ class WorkspaceVerifiedChatLinksTest {
         )
     }
 
+    @Test fun verifiedDirectApkReleaseLinkIsTappable() {
+        val raw = "[⬇ Download LYRA Test APK #3374]" +
+            "(https://github.com/spy626/myra-android/releases/download/" +
+            "airi-memory-b6bdd82a97a5/lyra-phone-test.apk)"
+        val found = WorkspaceVerifiedChatLinks.find(raw)
+        assertEquals(1, found.size)
+        assertEquals("⬇ Download LYRA Test APK #3374", found.single().label)
+        assertEquals(
+            "https://github.com/spy626/myra-android/releases/download/" +
+                "airi-memory-b6bdd82a97a5/lyra-phone-test.apk", found.single().url
+        )
+    }
+
     @Test fun unsafeOrUnrelatedLinksNeverGetNativeClickableSpan() {
         listOf(
             "[Open](javascript:alert(1))",
@@ -45,6 +58,8 @@ class WorkspaceVerifiedChatLinksTest {
             "[Other](http://github.com/spy626/myra-android/actions/runs/3)",
             "[Repo](https://github.com/spy626/myra-android)",
             "[Invalid](https://github.com/spy626/myra-android/actions/runs/abc)",
+            "[Fake](https://github.com/spy626/myra-android/releases/download/evil-tag/lyra-phone-test.apk)",
+            "[Fake](https://github.com/spy626/myra-android/releases/download/airi-memory-b6bdd82a97a5/not-apk.exe)",
         ).forEach { assertTrue(it, WorkspaceVerifiedChatLinks.find(it).isEmpty()) }
     }
 }

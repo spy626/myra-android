@@ -10,10 +10,17 @@ package com.myra.assistant.ui.workspace
 internal object WorkspaceConnectedGitHubReadRouting {
     sealed interface Route {
         data class Build(val decision: WorkspaceConnectedGitHubRunIntent.Decision) : Route
+        data class Download(val decision: WorkspaceConnectedGitHubDownloadIntent.Decision) : Route
         data class Heads(val decision: WorkspaceConnectedGitHubHeadsIntent.Decision) : Route
     }
 
-    fun decide(userTurn: String): Route? {
+    fun decide(
+        userTurn: String,
+        precedingChat: List<WorkspaceConversationStore.Message> = emptyList(),
+    ): Route? {
+        WorkspaceConnectedGitHubDownloadIntent.decide(userTurn, precedingChat)?.let {
+            return Route.Download(it)
+        }
         WorkspaceConnectedGitHubRunIntent.decide(userTurn)?.let {
             return Route.Build(it)
         }

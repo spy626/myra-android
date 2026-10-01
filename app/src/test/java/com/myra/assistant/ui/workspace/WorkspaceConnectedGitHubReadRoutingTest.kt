@@ -46,6 +46,25 @@ class WorkspaceConnectedGitHubReadRoutingTest {
         assertTrue(negativeRun is WorkspaceConnectedGitHubReadRouting.Route.Heads)
     }
 
+    @Test fun naturalApkFollowUpTakesPrecedenceWithoutStealingWrites() {
+        fun msg(role: String, text: String) =
+            WorkspaceConversationStore.Message(role, role, text, 1L)
+        val previous = listOf(
+            msg("user", "bro 3374 green hai kya check kro"),
+            msg("assistant", "Haan bro Build #3374 GREEN hai\n" +
+                "[🔗 GitHub Build #3374 ↗](https://github.com/spy626/myra-android/actions/runs/36837049059)")
+        )
+        val route = WorkspaceConnectedGitHubReadRouting.decide(
+            "achha bro iska APK download link bhi bhej do 😂", previous
+        )
+        assertTrue(route is WorkspaceConnectedGitHubReadRouting.Route.Download)
+        assertEquals(3374L, (route as WorkspaceConnectedGitHubReadRouting.Route.Download)
+            .decision.runNumber)
+        assertNull(WorkspaceConnectedGitHubReadRouting.decide(
+            "APK download button fix karo", previous
+        ))
+    }
+
     @Test fun ambiguousRunsFailClosedAndWritesAreNotDispatchedAsReads() {
         val ambiguous = WorkspaceConnectedGitHubReadRouting.decide(
             "Check build #3372 and build #3370 status, no changes."
