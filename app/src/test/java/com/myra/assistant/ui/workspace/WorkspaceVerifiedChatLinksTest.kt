@@ -14,6 +14,18 @@ class WorkspaceVerifiedChatLinksTest {
         assertEquals("https://github.com/spy626/myra-android/actions/runs/36841743155", links.single().url)
     }
 
+    @Test fun arrowLabelFromBuildReceiptIsStillOneVerifiedNativeLink() {
+        val original = "[↗ Open build #3380 on GitHub]" +
+            "(https://github.com/spy626/myra-android/actions/runs/36849363404)"
+        val links = WorkspaceVerifiedChatLinks.find(original)
+        assertEquals(1, links.size)
+        assertEquals("↗ Open build #3380 on GitHub", links.single().label)
+        assertEquals(
+            "https://github.com/spy626/myra-android/actions/runs/36849363404",
+            links.single().url,
+        )
+    }
+
     @Test fun unsafeOrUnrelatedLinksNeverGetNativeClickableSpan() {
         listOf(
             "[Open](javascript:alert(1))",

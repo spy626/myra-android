@@ -16,7 +16,12 @@ class WorkspaceChatReadabilityTest {
         assertTrue(reply.extraLineDp >= mine.extraLineDp)
         assertTrue(reply.maxWidthGutterDp < mine.maxWidthGutterDp)
         assertTrue(reply.horizontalPaddingDp < mine.horizontalPaddingDp)
-        assertTrue(reply.verticalPaddingDp >= mine.verticalPaddingDp)
+        assertTrue(reply.verticalPaddingDp > mine.verticalPaddingDp)
+        assertEquals(56, mine.maxWidthGutterDp)
+        assertEquals(12, mine.horizontalPaddingDp)
+        assertEquals(8, mine.verticalPaddingDp)
+        assertEquals(0, mine.extraLineDp)
+        assertEquals(3, reply.extraLineDp)
     }
 
     @Test fun verifiedLinkAccentContrastsWithDarkChatBackground() {

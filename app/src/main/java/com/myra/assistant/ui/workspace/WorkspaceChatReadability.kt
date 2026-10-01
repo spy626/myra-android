@@ -16,17 +16,17 @@ internal object WorkspaceChatReadability {
 
     val user = Style(
         fontSp = 16f,
-        lineMultiplier = 1.06f,
-        extraLineDp = 1,
-        maxWidthGutterDp = 72,
-        horizontalPaddingDp = 14,
-        verticalPaddingDp = 10,
+        lineMultiplier = 1.04f,
+        extraLineDp = 0,
+        maxWidthGutterDp = 56,
+        horizontalPaddingDp = 12,
+        verticalPaddingDp = 8,
     )
 
     val assistant = Style(
         fontSp = 17f,
         lineMultiplier = 1.08f,
-        extraLineDp = 2,
+        extraLineDp = 3,
         maxWidthGutterDp = 32,
         horizontalPaddingDp = 10,
         verticalPaddingDp = 11,

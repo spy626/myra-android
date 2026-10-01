@@ -96,16 +96,16 @@ internal object WorkspaceConnectedGitHubRunIntent {
         return buildString {
             appendLine(headline)
             appendLine()
-            appendLine("• Status: $status" + if (run.status == "completed" && run.conclusion == "success") " ✅" else "")
-            appendLine("• Result: $result")
-            appendLine("• Branch: `${completion.branch}`")
+            appendLine("  • **Status:** $status" + if (run.status == "completed" && run.conclusion == "success") " ✅" else "")
+            appendLine("  • **Result:** $result")
+            appendLine("  • **Branch:** `${completion.branch}`")
             if (includeCommitSha) {
                 appendLine()
                 appendLine("Commit SHA:")
                 appendLine("`${run.headSha}`")
             }
             appendLine()
-            append("[GitHub Build #${run.runNumber}](${run.url})")
+            append("[↗ Open build #${run.runNumber} on GitHub](${run.url})")
         }
     }
 }
