@@ -37,6 +37,24 @@ class WorkspaceWorkflowExperiencePatternsTest {
         )
     }
 
+    private fun feedback(
+        target: WorkspaceWorkflowExperience.Record,
+        kind: WorkspaceWorkflowFeedbackIntent.Kind,
+        at: Long,
+        turn: String,
+    ): WorkspaceWorkflowFeedback.Record =
+        WorkspaceWorkflowFeedback.fromUserTurn(
+            targetExperienceId = target.id,
+            decision = WorkspaceWorkflowFeedbackIntent.Decision(kind, 0.96),
+            sourceTurnId = turn,
+            userText = when (kind) {
+                WorkspaceWorkflowFeedbackIntent.Kind.CONFIRM -> "haan sahi tha"
+                WorkspaceWorkflowFeedbackIntent.Kind.CORRECT -> "ye galat tha"
+                WorkspaceWorkflowFeedbackIntent.Kind.UNDO -> "undo last change"
+            },
+            capturedAtMs = at,
+        )
+
     @Test fun oneVerifiedExecutionDoesNotBecomeLearnedPattern() {
         assertTrue(
             WorkspaceWorkflowExperiencePatterns.recognize(
@@ -89,5 +107,71 @@ class WorkspaceWorkflowExperiencePatternsTest {
         assertTrue(text.contains("NEVER action authority"))
         assertTrue(text.contains("do not execute unless the exact current user turn"))
         assertTrue(text.contains("do not claim current GitHub state"))
+    }
+
+    @Test fun groundedCounterEvidenceSuppressesLearnedPattern() {
+        val first = record(1)
+        val second = record(2)
+        val patterns = WorkspaceWorkflowExperiencePatterns.recognize(
+            records = listOf(first, second),
+            feedback = listOf(
+                feedback(
+                    target = second,
+                    kind = WorkspaceWorkflowFeedbackIntent.Kind.CORRECT,
+                    at = 10L,
+                    turn = "turn-correct",
+                )
+            ),
+        )
+
+        assertTrue(patterns.isEmpty())
+    }
+
+    @Test fun groundedConfirmationSupportsPatternWithoutGrantingAuthority() {
+        val first = record(1)
+        val second = record(2)
+        val patterns = WorkspaceWorkflowExperiencePatterns.recognize(
+            records = listOf(first, second),
+            feedback = listOf(
+                feedback(
+                    target = second,
+                    kind = WorkspaceWorkflowFeedbackIntent.Kind.CONFIRM,
+                    at = 10L,
+                    turn = "turn-confirm",
+                )
+            ),
+        )
+
+        val candidate = patterns.single()
+        assertEquals(1, candidate.userConfirmations)
+        assertTrue(
+            WorkspaceWorkflowExperiencePatterns.instructions(listOf(candidate))
+                .contains("Grounded USER confirmations: 1")
+        )
+    }
+
+    @Test fun latestFeedbackForSameExecutionWinsDeterministically() {
+        val first = record(1)
+        val second = record(2)
+        val patterns = WorkspaceWorkflowExperiencePatterns.recognize(
+            records = listOf(first, second),
+            feedback = listOf(
+                feedback(
+                    target = second,
+                    kind = WorkspaceWorkflowFeedbackIntent.Kind.CORRECT,
+                    at = 10L,
+                    turn = "turn-old-correct",
+                ),
+                feedback(
+                    target = second,
+                    kind = WorkspaceWorkflowFeedbackIntent.Kind.CONFIRM,
+                    at = 11L,
+                    turn = "turn-new-confirm",
+                ),
+            ),
+        )
+
+        assertEquals(1, patterns.size)
+        assertEquals(1, patterns.single().userConfirmations)
     }
 }

@@ -109,4 +109,60 @@ class WorkspaceWorkflowExperienceStoreTest {
             root.deleteRecursively()
         }
     }
+
+    @Test fun groundedWorkflowFeedbackPersistsIdempotentlyAgainstVerifiedTarget() {
+        val root = Files.createTempDirectory("workflow-feedback-test").toFile()
+        try {
+            val store = WorkspaceWorkflowExperienceStore(root)
+            val experience = WorkspaceWorkflowExperience.fromVerifiedGitHub(receipt())
+            store.record(experience)
+            val feedback = WorkspaceWorkflowFeedback.fromUserTurn(
+                targetExperienceId = experience.id,
+                decision = WorkspaceWorkflowFeedbackIntent.Decision(
+                    WorkspaceWorkflowFeedbackIntent.Kind.CONFIRM,
+                    0.95,
+                ),
+                sourceTurnId = "turn-1",
+                userText = "haan sahi tha",
+                capturedAtMs = 2000L,
+            )
+
+            assertEquals(feedback, store.recordFeedback(feedback))
+            assertEquals(feedback, store.recordFeedback(feedback))
+            assertEquals(listOf(feedback), store.listFeedback())
+            assertEquals(
+                WorkspaceSkillImprovementEvidence.Kind.USER_CONFIRMED,
+                feedback.kind,
+            )
+            assertEquals(
+                WorkspaceSkillImprovementEvidence.Signal.SUPPORTS_IMPROVEMENT,
+                feedback.signal,
+            )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun correctionFeedbackIsCounterEvidenceAndSecretTextIsRedacted() {
+        val feedback = WorkspaceWorkflowFeedback.fromUserTurn(
+            targetExperienceId = "github:" + sha,
+            decision = WorkspaceWorkflowFeedbackIntent.Decision(
+                WorkspaceWorkflowFeedbackIntent.Kind.CORRECT,
+                0.96,
+            ),
+            sourceTurnId = "turn-2",
+            userText = "api_key=sk-12345678901234567890 ye galat tha",
+            capturedAtMs = 2001L,
+        )
+
+        assertEquals(
+            WorkspaceSkillImprovementEvidence.Kind.USER_CORRECTED,
+            feedback.kind,
+        )
+        assertEquals(
+            WorkspaceSkillImprovementEvidence.Signal.COUNTER_EVIDENCE,
+            feedback.signal,
+        )
+        assertNull(feedback.feedbackText)
+    }
 }

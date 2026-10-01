@@ -20,7 +20,9 @@ internal class WorkspaceWorkflowExperienceStore(
     companion object {
         private const val SCHEMA = 1
         private const val FILE = "verified-workflows.json"
+        private const val FEEDBACK_FILE = "verified-workflow-feedback.json"
         private const val MAX_RECORDS = 64
+        private const val MAX_FEEDBACK_RECORDS = 128
         private const val MAX_BYTES = 256 * 1024L
     }
 
@@ -32,14 +34,19 @@ internal class WorkspaceWorkflowExperienceStore(
         return root.canonicalFile
     }
 
-    private fun file(): File {
+    private fun file(): File = storageFile(FILE, "Workflow experience")
+
+    private fun feedbackFile(): File =
+        storageFile(FEEDBACK_FILE, "Workflow feedback")
+
+    private fun storageFile(name: String, label: String): File {
         val parent = base()
-        val value = File(parent, FILE)
+        val value = File(parent, name)
         require(!Files.isSymbolicLink(value.toPath())) {
-            "Workflow experience file link is forbidden"
+            "$label file link is forbidden"
         }
         require(value.canonicalFile.parentFile == parent) {
-            "Workflow experience path escaped storage"
+            "$label path escaped storage"
         }
         return value.canonicalFile
     }
@@ -135,6 +142,76 @@ internal class WorkspaceWorkflowExperienceStore(
         val reopened = list().firstOrNull { it.id == safe.id }
             ?: throw IllegalStateException("Workflow experience could not be verified after write")
         require(reopened == safe) { "Workflow experience changed after persistence" }
+        return reopened
+    }
+
+    private fun decodeFeedback(raw: String): List<WorkspaceWorkflowFeedback.Record> {
+        require(raw.toByteArray().size <= MAX_BYTES) {
+            "Workflow feedback store is too large"
+        }
+        val rootJson = JSONObject(raw)
+        require(rootJson.getInt("schema") == SCHEMA) {
+            "Unsupported workflow feedback schema"
+        }
+        val array = rootJson.getJSONArray("records")
+        require(array.length() <= MAX_FEEDBACK_RECORDS) {
+            "Workflow feedback record count is invalid"
+        }
+        val records = buildList {
+            for (i in 0 until array.length()) {
+                add(requireNotNull(
+                    WorkspaceWorkflowFeedback.fromJson(array.getJSONObject(i))
+                ) { "Workflow feedback record is invalid" })
+            }
+        }
+        require(records.map { it.id }.distinct().size == records.size) {
+            "Workflow feedback IDs must be unique"
+        }
+        return records
+    }
+
+    private fun encodeFeedback(records: List<WorkspaceWorkflowFeedback.Record>): String {
+        require(records.size <= MAX_FEEDBACK_RECORDS) {
+            "Workflow feedback store exceeds its bound"
+        }
+        require(records.map { it.id }.distinct().size == records.size) {
+            "Workflow feedback IDs must be unique"
+        }
+        val text = JSONObject()
+            .put("schema", SCHEMA)
+            .put("records", JSONArray(records.map(WorkspaceWorkflowFeedback::toJson)))
+            .toString()
+        require(text.toByteArray().size <= MAX_BYTES) {
+            "Workflow feedback store exceeds its byte bound"
+        }
+        return text
+    }
+
+    @Synchronized fun listFeedback(): List<WorkspaceWorkflowFeedback.Record> {
+        val target = feedbackFile()
+        if (!target.exists()) return emptyList()
+        require(target.isFile && target.length() in 1..MAX_BYTES) {
+            "Workflow feedback store is unavailable or too large"
+        }
+        return decodeFeedback(target.readText())
+    }
+
+    @Synchronized fun recordFeedback(
+        record: WorkspaceWorkflowFeedback.Record,
+    ): WorkspaceWorkflowFeedback.Record {
+        val safe = WorkspaceWorkflowFeedback.validate(record)
+        require(list().any { it.id == safe.targetExperienceId }) {
+            "Workflow feedback target is not a retained verified experience"
+        }
+        val current = listFeedback().filterNot { it.id == safe.id }
+        val next = (current + safe)
+            .sortedWith(compareBy<WorkspaceWorkflowFeedback.Record> { it.capturedAtMs }
+                .thenBy { it.id })
+            .takeLast(MAX_FEEDBACK_RECORDS)
+        atomicWrite(feedbackFile(), encodeFeedback(next))
+        val reopened = listFeedback().firstOrNull { it.id == safe.id }
+            ?: throw IllegalStateException("Workflow feedback could not be verified after write")
+        require(reopened == safe) { "Workflow feedback changed after persistence" }
         return reopened
     }
 }

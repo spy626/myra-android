@@ -107,6 +107,7 @@ class WorkspaceRuntimeSelfModelTest {
             lastVerifiedAtMs = 2L,
             latestVerificationRefs = listOf("ci:3352", "ci:3350"),
             taskExamples = listOf("add provenance", "fix runtime state"),
+            userConfirmations = 0,
         )
         val text = WorkspaceRuntimeSelfModel.instructions(
             WorkspaceRuntimeSelfModel.Snapshot(

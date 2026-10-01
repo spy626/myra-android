@@ -463,7 +463,10 @@ class WorkspaceActivity : AppCompatActivity() {
             .getString(recentGitHubActionReceiptKey, null)
             ?.let(WorkspaceRecentGitHubActionReceipt::decode)
         val workflowPatterns = runCatching {
-            WorkspaceWorkflowExperiencePatterns.recognize(workflowExperienceStore.list())
+            WorkspaceWorkflowExperiencePatterns.recognize(
+                records = workflowExperienceStore.list(),
+                feedback = workflowExperienceStore.listFeedback(),
+            )
         }.getOrDefault(emptyList())
         val snapshot = WorkspaceRuntimeSelfModel.Snapshot(
             github = WorkspaceRuntimeSelfModel.GitHubState(
@@ -484,6 +487,44 @@ class WorkspaceActivity : AppCompatActivity() {
             WorkspaceRuntimeSelfModel.instructions(snapshot),
             extraSystemInstructions,
         )
+    }
+
+    private fun captureWorkflowFeedbackIfGrounded(
+        projectId: String,
+        sourceTurnId: String,
+        userText: String,
+    ) {
+        val receipt = preferences
+            .getString(recentGitHubActionReceiptKey, null)
+            ?.let(WorkspaceRecentGitHubActionReceipt::decode)
+            ?: return
+        val recentAssistantTexts = runCatching {
+            conversations.read(projectId)
+                .asReversed()
+                .filter { it.role == "assistant" }
+                .take(6)
+                .map { it.text }
+                .asReversed()
+        }.getOrDefault(emptyList())
+        val decision = WorkspaceWorkflowFeedbackIntent.decide(
+            raw = userText,
+            exactTargetVisibleInSelectedChat =
+                WorkspaceWorkflowFeedbackGrounding.exactReceiptVisible(
+                    recentAssistantTexts = recentAssistantTexts,
+                    receipt = receipt,
+                ),
+        ) ?: return
+        runCatching {
+            workflowExperienceStore.recordFeedback(
+                WorkspaceWorkflowFeedback.fromUserTurn(
+                    targetExperienceId = "github:" + receipt.commitSha,
+                    decision = decision,
+                    sourceTurnId = sourceTurnId,
+                    userText = userText,
+                    capturedAtMs = System.currentTimeMillis(),
+                )
+            )
+        }
     }
 
     private fun currentGitHubSelfEditUserTask(): String? {
@@ -3592,6 +3633,7 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val stored = runCatching { conversations.append(id, "user", text) }
             .getOrElse { toast(it.message ?: "Cannot save message"); return }
+        captureWorkflowFeedbackIfGrounded(id, stored.id, text)
         activateWorkTrace(stored.id)
         composer.text.clear()
         // Keep the keyboard's typing target after Send; opening the keyboard is still user-driven.

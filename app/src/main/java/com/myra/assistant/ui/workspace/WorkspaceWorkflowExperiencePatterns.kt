@@ -26,6 +26,7 @@ internal object WorkspaceWorkflowExperiencePatterns {
         val lastVerifiedAtMs: Long,
         val latestVerificationRefs: List<String>,
         val taskExamples: List<String>,
+        val userConfirmations: Int,
     )
 
     private fun sha256(value: String): String =
@@ -43,11 +44,26 @@ internal object WorkspaceWorkflowExperiencePatterns {
 
     fun recognize(
         records: Collection<WorkspaceWorkflowExperience.Record>,
+        feedback: Collection<WorkspaceWorkflowFeedback.Record> = emptyList(),
     ): List<Candidate> {
         val safe = records.map(WorkspaceWorkflowExperience::validate)
         require(safe.map { it.id }.distinct().size == safe.size) {
             "Workflow experience pattern input contains duplicate executions"
         }
+        val safeFeedback = feedback.map(WorkspaceWorkflowFeedback::validate)
+        require(safeFeedback.map { it.id }.distinct().size == safeFeedback.size) {
+            "Workflow feedback pattern input contains duplicate evidence"
+        }
+        val retainedIds = safe.map { it.id }.toSet()
+        val latestFeedback = safeFeedback
+            .filter { it.targetExperienceId in retainedIds }
+            .groupBy { it.targetExperienceId }
+            .mapValues { (_, values) ->
+                values.maxWithOrNull(
+                    compareBy<WorkspaceWorkflowFeedback.Record> { it.capturedAtMs }
+                        .thenBy { it.id }
+                )!!
+            }
 
         return safe.groupBy(::mechanics)
             .values
@@ -58,6 +74,12 @@ internal object WorkspaceWorkflowExperiencePatterns {
                     compareBy<WorkspaceWorkflowExperience.Record> { it.capturedAtMs }
                         .thenBy { it.id }
                 )
+                val groupFeedback = ordered.mapNotNull { latestFeedback[it.id] }
+                if (groupFeedback.any {
+                        it.signal == WorkspaceSkillImprovementEvidence.Signal.COUNTER_EVIDENCE
+                    }) {
+                    return@mapNotNull null
+                }
                 val first = ordered.first()
                 Candidate(
                     signatureSha256 = sha256(mechanics(first)),
@@ -78,6 +100,11 @@ internal object WorkspaceWorkflowExperiencePatterns {
                         .filter(String::isNotBlank)
                         .distinct()
                         .take(MAX_TASK_EXAMPLES),
+                    userConfirmations = groupFeedback.count {
+                        it.kind == WorkspaceSkillImprovementEvidence.Kind.USER_CONFIRMED &&
+                            it.signal ==
+                                WorkspaceSkillImprovementEvidence.Signal.SUPPORTS_IMPROVEMENT
+                    },
                 )
             }
             .sortedWith(
@@ -106,6 +133,9 @@ internal object WorkspaceWorkflowExperiencePatterns {
                 appendLine("- Verified capabilities: " + candidate.capabilities.joinToString(", "))
                 appendLine("- Recent verification refs: " +
                     candidate.latestVerificationRefs.joinToString(", "))
+                if (candidate.userConfirmations > 0) {
+                    appendLine("- Grounded USER confirmations: " + candidate.userConfirmations)
+                }
                 if (candidate.taskExamples.isNotEmpty()) {
                     appendLine("- Safe prior USER task examples: " +
                         candidate.taskExamples.joinToString(" | ") { JSONObject.quote(it) })

@@ -11,6 +11,7 @@ internal object WorkspaceSkillImprovementEvidence {
         DETERMINISTIC_VERIFICATION,
         VERIFIED_RECOVERY,
         USER_CONFIRMED,
+        USER_CORRECTED,
         USER_UNDO,
     }
 
