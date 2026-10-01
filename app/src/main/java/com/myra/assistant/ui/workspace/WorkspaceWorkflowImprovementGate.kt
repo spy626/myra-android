@@ -178,8 +178,9 @@ internal object WorkspaceWorkflowImprovementGate {
             }
             append(
                 "- Candidate means the verified workflow mechanics may be proposed for improvement. " +
-                    "It does not apply code, alter a skill, widen permissions, bypass current-turn authority, " +
-                    "or become active automatically. Any grounded correction/undo blocks candidacy."
+                    "It does not apply code, does not alter a skill, does not widen permissions, " +
+                    "does not bypass current-turn authority, and does not become active automatically. " +
+                    "Any grounded correction/undo blocks candidacy."
             )
         }
     }
