@@ -25,17 +25,36 @@ internal object WorkspaceConnectedGitHubRunIntent {
     private val buildCue = Regex(
         """(?iu)\b(?:build|run|workflow|ci|green|red|pass(?:ed)?|fail(?:ed)?|status|result)\b"""
     )
-    private val number = Regex("""(?<!\d)#?(\d{1,9})(?!\d)""")
+    // Numeric build identifiers must never be extracted from a SHA, version or branch token.
+    private val number = Regex("""(?<![\p{L}\d_./-])#?(\d{1,9})(?![\p{L}\d_/-]|\.\d)""")
+    private val statusQuestion = Regex(
+        """(?iu)\b(?:green|red|pass(?:ed)?|fail(?:ed)?|status|result|ci)\b"""
+    )
+    private val readRequest = Regex(
+        """(?iu)\b(?:check|verify|read|fetch|show|get|tell|dekh\p{L}*|bata\p{L}*|kya|green|red|pass(?:ed)?|fail(?:ed)?|status|result)\b|\?"""
+    )
+    private val constraintBoundary = Regex(
+        """(?iu)(?:\b(?:do\s+not|don't|dont|never|without)\b|\b(?:kuch\s+change\s+mat)\b)"""
+    )
 
     fun decide(message: String): Decision? {
         if (url.containsMatchIn(message) || nonBuildReference.containsMatchIn(message)) return null
+        // Negated actions are preservation constraints, not part of the thing to look up.
+        // E.g. "read HEAD SHA; do not start build #3372" is a HEAD request, not a run lookup.
+        val requested = constraintBoundary.find(message)?.let {
+            message.substring(0, it.range.first)
+        } ?: message
         val proposal = WorkspaceSemanticTurnIntent.propose(message)
-        if (proposal.kind != WorkspaceSemanticTurnIntent.Kind.READ_ONLY_VERIFICATION ||
-            proposal.effect != WorkspaceSemanticTurnIntent.Effect.READ ||
-            !buildCue.containsMatchIn(message)
+        if (proposal.effect == WorkspaceSemanticTurnIntent.Effect.WRITE ||
+            proposal.kind == WorkspaceSemanticTurnIntent.Kind.CAPABILITY_QUERY ||
+            proposal.kind == WorkspaceSemanticTurnIntent.Kind.ACTION_REQUEST ||
+            !(buildCue.containsMatchIn(requested) ||
+                statusQuestion.containsMatchIn(message)) ||
+            !(readRequest.containsMatchIn(requested) ||
+                statusQuestion.containsMatchIn(message))
         ) return null
 
-        val values = number.findAll(message)
+        val values = number.findAll(requested)
             .mapNotNull { it.groupValues.getOrNull(1)?.toLongOrNull() }
             .filter { it > 0L }
             .distinct()
@@ -57,22 +76,18 @@ internal object WorkspaceConnectedGitHubRunIntent {
             else -> run.conclusion.uppercase()
         }
         return buildString {
-            append("GitHub Actions ")
-            append(run.name)
-            append(" #")
+            append("Bro, build #")
             append(run.runNumber)
-            append(" is ")
+            append(" ka status **")
             append(state)
-            append(" on ")
-            append(completion.branch)
+            append("** hai")
+            append(if (state == "GREEN") " ✅" else if (state == "FAILURE") " ❌" else "")
             append(".")
-            append("\nCommit: `")
-            append(run.headSha.take(12))
-            append("`.")
-            append("\nRun: ")
+            append("\nCommit SHA: `")
+            append(run.headSha)
+            append("`")
+            append("\nDetails: ")
             append(run.url)
-            append("\nVerified read only — no repository change was made. ")
-            append("This CI result does not prove physical phone-pass.")
         }
     }
 }

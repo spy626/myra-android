@@ -64,12 +64,10 @@ internal object WorkspaceConnectedGitHubHeadsIntent {
 
     fun receipt(completion: WorkspaceConnectedGitHubHeadsRunner.Completion): String =
         buildString {
-            appendLine("LIVE GitHub branch HEADs — verified read only:")
-            appendLine("Repository: " + completion.repository)
+            appendLine("Bro, current branch HEADs check ho gaye:")
+            appendLine(completion.repository)
             completion.branches.forEach { branch ->
                 appendLine("- " + branch.name + ": " + branch.headSha)
             }
-            append("Each SHA came from a live GitHub branch GET. No files were modified, " +
-                "no commit/push/build was started, and this result is not phone-pass proof.")
-        }
+        }.trim()
 }

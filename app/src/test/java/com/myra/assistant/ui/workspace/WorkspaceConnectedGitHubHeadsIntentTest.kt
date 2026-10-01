@@ -50,7 +50,7 @@ class WorkspaceConnectedGitHubHeadsIntentTest {
         }
     }
 
-    @Test fun receiptIncludesOnlyVerifiedFullShaAndNoMutationClaim() {
+    @Test fun receiptShowsVerifiedFullShaWithoutRepeatedDeveloperDisclaimer() {
         val f = "a".repeat(40)
         val m = "b".repeat(40)
         val message = WorkspaceConnectedGitHubHeadsIntent.receipt(
@@ -64,7 +64,9 @@ class WorkspaceConnectedGitHubHeadsIntentTest {
         )
         assertTrue(message.contains("agent/myra-phase-1: $f"))
         assertTrue(message.contains("main: $m"))
-        assertTrue(message.contains("live GitHub branch GET"))
-        assertTrue(message.contains("no commit/push/build was started"))
+        assertTrue(message.contains("Bro, current branch HEADs check ho gaye"))
+        assertTrue(!message.contains("phone-pass"))
+        assertTrue(!message.contains("commit/push/build"))
+        assertTrue(!message.contains("GitHub branch GET"))
     }
 }

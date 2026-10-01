@@ -3823,11 +3823,11 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
-        val connectedHeadsIntent = if (picked.isEmpty() && skillCommand == null) {
-            WorkspaceConnectedGitHubHeadsIntent.decide(text)
+        val connectedReadRoute = if (picked.isEmpty() && skillCommand == null) {
+            WorkspaceConnectedGitHubReadRouting.decide(text)
         } else null
         val githubSelfEditRequest =
-            picked.isEmpty() && connectedHeadsIntent == null &&
+            picked.isEmpty() && connectedReadRoute == null &&
                 WorkspaceGitHubSelfEdit.isExplicitRequest(text)
         if (githubSelfEditRequest &&
             !WorkspaceChatConcurrencyPolicy.state(
@@ -3965,8 +3965,28 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         activateWorkTrace(stored.id)
-        if (connectedHeadsIntent != null && current.type == WorkspaceProjectType.CHAT) {
-            startConnectedHeadsRead(id, stored.id, connectedHeadsIntent)
+        if (connectedReadRoute != null && current.type == WorkspaceProjectType.CHAT) {
+            when (connectedReadRoute) {
+                is WorkspaceConnectedGitHubReadRouting.Route.Build -> {
+                    val choice = connectedReadRoute.decision
+                    if (choice.localError != null) {
+                        val reply = choice.localError
+                        runCatching {
+                            conversations.attachAssistantToTurn(
+                                projectId = id,
+                                expectedUserId = stored.id,
+                                assistantId = "github-read-" + stored.id,
+                                text = reply,
+                            )
+                        }.onFailure { statusMessage = it.message ?: "Read clarification not saved." }
+                        render()
+                    } else {
+                        startConnectedRunVerification(id, stored.id, requireNotNull(choice.runNumber))
+                    }
+                }
+                is WorkspaceConnectedGitHubReadRouting.Route.Heads ->
+                    startConnectedHeadsRead(id, stored.id, connectedReadRoute.decision)
+            }
             return
         }
         if (githubSelfEditRequest) {
@@ -4023,25 +4043,6 @@ class WorkspaceActivity : AppCompatActivity() {
                 return
             }
         } else null
-        if (skillProjection == null &&
-            picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
-            WorkspaceConnectedGitHubRunIntent.decide(text)?.let { decision ->
-                decision.localError?.let { reason ->
-                    statusMessage = reason
-                    recordWorkEvent(
-                        WorkspaceWorkPhase.ERROR,
-                        "GitHub build read not started",
-                        reason,
-                    )
-                    render()
-                    return
-                }
-                decision.runNumber?.let { runNumber ->
-                    startConnectedRunVerification(id, stored.id, runNumber)
-                    return
-                }
-            }
-        }
         if (skillProjection == null &&
             picked.isEmpty() && projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
             WorkspaceAgentReachChatIntent.decide(text)?.let { decision ->
