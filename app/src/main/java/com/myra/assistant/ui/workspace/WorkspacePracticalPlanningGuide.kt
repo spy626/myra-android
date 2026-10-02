@@ -57,4 +57,25 @@ internal object WorkspacePracticalPlanningGuide {
             - If they request a plan only, stay strictly at planning depth. Do not ask for sign-up, installation, opening a builder, making a new project, creating a spreadsheet/backend, authentication, database setup, coding, no code blocks, executable snippets or premature initialization. An optional future implementation tool may be named as a later direction, never as a required TODAY action. The immediate outcome should be a tiny written feature list, customer journey, screen outline or other planning artifact. do NOT claim to have coded, created files, installed software, dispatched a build, or made external changes. Even if the user mentions making an app, advice is not execution permission; only the separate current-turn gate can authorize mutation.
         """.trimIndent()
     }
+
+    /** Concise version of the SAME current-turn guide for Groq's strict Free budget. */
+    fun compactInstructions(latest: String): String {
+        if (instructions(latest).isBlank()) return ""
+        val shape = WorkspacePlanningBrief.parse(latest)
+        return buildString {
+            appendLine("PRACTICAL PLANNING (compact Groq Free; read-only):")
+            appendLine("Requested MAIN steps: " + (shape.stepCount ?: "unspecified"))
+            appendLine("Phone-only: ${shape.phoneOnly}; free-only: ${shape.freeOnly}.")
+            appendLine("Target platform: ${shape.platform}; planning-before-code: ${shape.adviceOnly}.")
+            appendLine("The full USER turn below has highest authority; do not invent requirements.")
+            appendLine("- Give ONE feasible route with a brief reason, not a menu of unrelated builders.")
+            appendLine("- Begin with end-user journey and minimum useful feature/screen outline.")
+            appendLine("- Use short contextual headings, bullets and numbered rows only when helpful; no dense wall or rigid Kahan/Kya/Result.")
+            appendLine("- If the user requests N steps, give exactly N main actions with a concrete outcome each.")
+            appendLine("- Name one NOW tool if necessary and separate any LATER development route. Respect phone, cost and target platform.")
+            appendLine("- Planning-only means NO coding, signup, builder launch, new project, spreadsheet, backend, installation or external changes today.")
+            append("- Never claim work was already done. Execution permission stays with the existing current-turn authority gate.")
+        }
+    }
+
 }

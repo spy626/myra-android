@@ -4269,10 +4269,27 @@ class WorkspaceActivity : AppCompatActivity() {
         }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
         if (provider == null) {
-            statusMessage = "Message saved locally. Configure a free route in Settings; no request was sent."
+            // A saved Groq credential + user Free/ZDR opt-in is NOT an absent route.
+            // The full request may exceed Groq's strict local Free cap. Report that
+            // honestly instead of telling the user to obtain another key.
+            val groqEnabled = picked.isEmpty() &&
+                preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false) &&
+                keys.get(ApiKeyStore.GROQ).isNotBlank()
+            val groqChars = if (groqEnabled) WorkspaceGroqFree.promptChars(
+                conversations.read(id), runtimeInstructions,
+            ) else null
+            val overBudget = groqChars != null &&
+                groqChars > WorkspaceGroqFree.MAX_PROMPT_CHARS
+            statusMessage = if (overBudget)
+                "Groq Free prompt is over the local budget; message saved, no request sent."
+            else "Message saved locally. Configure an eligible Free route in Settings; no request was sent."
             render()
-            AlertDialog.Builder(this).setTitle("No eligible Workspace free route")
-                .setMessage("Save a valid OpenRouter Free key, enable Groq Free/ZDR with a valid Groq key, or enable LLM7 Free with a valid free token. Z.ai is coding-only. No paid fallback.")
+            AlertDialog.Builder(this)
+                .setTitle(if (overBudget) "Groq Free prompt too large"
+                    else "No eligible Workspace free route")
+                .setMessage(if (overBudget)
+                    "Groq Free is configured, but this chat plus instructions exceeds LYRA's 12,000-character local Free guard. No request was sent and no paid fallback was used. For long history, try a new Chat or another already-approved Free provider."
+                else "Save a valid OpenRouter Free key, enable Groq Free/ZDR with a valid Groq key, or enable LLM7 Free with a valid free token. Z.ai is coding-only. No paid fallback.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("API settings") { _, _ ->
                     startActivity(Intent(this, ApiCloudSettingsActivity::class.java))

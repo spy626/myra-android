@@ -14,6 +14,40 @@ class WorkspaceGroqFreeTest {
     private fun message(role: String, text: String) =
         WorkspaceConversationStore.Message("id", role, text, 1L)
 
+    @Test fun groqPhoneOnlyPlanningWithRuntimeFitsWithoutDroppingFullTurn() {
+        val original = "bro mere paas sirf Android phone hai aur mujhe free mein ek simple " +
+            "grocery app banana hai. Sabse pehle kya karna chahiye? 3 practical steps batao, " +
+            "abhi coding start mat karna 😂"
+        val messages = listOf(message("user", original))
+        val runtime = WorkspaceRuntimeSelfModel.instructions(
+            WorkspaceRuntimeSelfModel.Snapshot()
+        )
+        val count = WorkspaceGroqFree.promptChars(messages, runtime)
+        assertTrue("Compact Groq prompt must fit the same preflight/HTTP cap: $count",
+            count != null && count <= WorkspaceGroqFree.MAX_PROMPT_CHARS)
+        assertTrue(WorkspaceGroqFree.withinBudget(messages, runtime))
+        val body = JSONObject(WorkspaceGroqFree.body(messages,
+            extraSystemInstructions = runtime))
+        val payload = body.getJSONArray("messages")
+        val system = payload.getJSONObject(0).getString("content")
+        assertTrue(system.contains("PRACTICAL PLANNING (compact Groq Free"))
+        assertTrue(system.contains("planning-before-code: true"))
+        assertTrue(system.contains("NO coding, signup, builder launch"))
+        assertFalse(system.contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+        assertEquals(original,
+            payload.getJSONObject(payload.length() - 1).getString("content"))
+        assertEquals(WorkspaceChatGateway.Provider.GROQ_FREE,
+            WorkspaceFreeProviderSelection.choose(
+                openRouterAvailable = false,
+                groqAvailable = true,
+                groqFreeZdrApproved = true,
+                groqWithinBudget = WorkspaceGroqFree.withinBudget(messages, runtime),
+                hasAttachments = false,
+            ))
+        assertFalse(body.has("provider"))
+        assertFalse(body.has("plugins"))
+    }
+
     @Test fun groqTextRequestUsesOnlyGroqEndpointAndModel() {
         val original = "LYRA ke liye AI companion prompt do"
         val payload = JSONObject(WorkspaceGroqFree.body(listOf(message("user", original))))

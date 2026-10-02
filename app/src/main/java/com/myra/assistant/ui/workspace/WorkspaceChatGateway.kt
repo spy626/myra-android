@@ -99,6 +99,7 @@ internal object WorkspaceChatGateway {
         messages: List<WorkspaceConversationStore.Message>,
         image: Image? = null,
         extraSystemInstructions: String? = null,
+        compactForGroq: Boolean = false,
     ): JSONArray {
         val entries = JSONArray()
         val recent = WorkspaceLongInputPolicy.outbound(messages)
@@ -140,8 +141,19 @@ internal object WorkspaceChatGateway {
         // the existing code-format cue. Still project practical planning guidance here.
         val practicalPlanning = if (revisionKind == null && contextDecision == null &&
             writingInstructions.isBlank() && latest != null
-        ) WorkspacePracticalPlanningGuide.instructions(latest) else ""
-        val instructions = listOf(
+        ) {
+            if (compactForGroq) WorkspacePracticalPlanningGuide.compactInstructions(latest)
+            else WorkspacePracticalPlanningGuide.instructions(latest)
+        } else ""
+        // Only Groq's strict Free budget uses a short projection of the SAME
+        // read-only context; keep full user messages and safety/execution boundaries.
+        val instructions = (if (compactForGroq) listOf(
+            CHAT_REPLY_DISCIPLINE,
+            extra,
+            writingInstructions,
+            codeInstructions,
+            practicalPlanning,
+        ) else listOf(
             CHAT_REPLY_DISCIPLINE,
             extra,
             semanticTurnIntent,
@@ -153,7 +165,7 @@ internal object WorkspaceChatGateway {
             // Put grounded planning guidance after generic code-format cues: "don't code"
             // is not an invitation to supply code or initialize a project.
             practicalPlanning,
-        ).filter(String::isNotBlank).joinToString("\n\n")
+        )).filter(String::isNotBlank).joinToString("\n\n")
         if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", instructions))
         recent.forEachIndexed { index, message ->
