@@ -138,7 +138,7 @@ internal object WorkspacePlanningAnswerBoundary {
         val shape = WorkspacePlanningBrief.parse(latest)
         if (!shape.adviceOnly) return null
         if (fence.containsMatchIn(completedReply))
-            return "LYRA gave an implementation block although you asked for planning only. Reply not saved; no automatic paid retry."
+            return "LYRA gave a code/implementation block although you asked for planning only. Reply not saved; no automatic paid retry."
 
         val blocks = WorkspaceRichAnswerBlocks.parse(completedReply)
         if (shape.stepCount != null) {
