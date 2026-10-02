@@ -30,10 +30,18 @@ class WorkspaceGroqFreeTest {
             extraSystemInstructions = runtime))
         val payload = body.getJSONArray("messages")
         val system = payload.getJSONObject(0).getString("content")
-        assertTrue(system.contains("PRACTICAL PLANNING (compact Groq Free"))
-        assertTrue(system.contains("planning-before-code: true"))
-        assertTrue(system.contains("NO coding, signup, builder launch"))
-        assertFalse(system.contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+        assertTrue(system.contains("PRACTICAL PLANNING"))
+        val regular = WorkspaceChatGateway.openAiMessages(
+            messages, extraSystemInstructions = runtime
+        )
+        val regularSystem = regular.getJSONObject(0).getString("content")
+        if (regularSystem.length + original.length > WorkspaceGroqFree.MAX_PROMPT_CHARS) {
+            assertTrue(system.contains("PRACTICAL PLANNING (compact Groq Free"))
+            assertTrue(system.contains("planning-before-code: true"))
+            assertTrue(system.contains("NO coding, signup, builder launch"))
+        } else {
+            assertEquals(regularSystem, system)
+        }
         assertEquals(original,
             payload.getJSONObject(payload.length() - 1).getString("content"))
         assertEquals(WorkspaceChatGateway.Provider.GROQ_FREE,

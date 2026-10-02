@@ -127,8 +127,7 @@ class WorkspaceChatGatewayTest {
 
         val groq = JSONObject(WorkspaceGroqFree.body(messages)).getJSONArray("messages")
         val groqSystem = groq.getJSONObject(0).getString("content")
-        assertTrue(groqSystem.contains("PRACTICAL PLANNING (compact Groq Free"))
-        assertFalse(groqSystem.contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+        assertTrue(groqSystem.contains("PRACTICAL PLANNING"))
         assertEquals(original, groq.getJSONObject(groq.length() - 1).getString("content"))
 
         val llm7 = JSONObject(WorkspaceLlm7Free.body(messages)).getJSONArray("messages")

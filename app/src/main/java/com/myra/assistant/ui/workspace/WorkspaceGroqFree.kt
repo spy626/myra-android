@@ -23,11 +23,22 @@ internal object WorkspaceGroqFree {
     private fun projected(
         messages: List<WorkspaceConversationStore.Message>,
         extraSystemInstructions: String?,
-    ) = WorkspaceChatGateway.openAiMessages(
-        messages,
-        extraSystemInstructions = extraSystemInstructions,
-        compactForGroq = true,
-    )
+    ): org.json.JSONArray {
+        // Keep identical normal Chat guidance on OpenRouter and Groq whenever it fits.
+        // ONLY an actually over-budget advice turn uses shorter, equivalent planning
+        // instructions. Never drop current user text or casual-chat continuity.
+        val regular = WorkspaceChatGateway.openAiMessages(
+            messages, extraSystemInstructions = extraSystemInstructions,
+        )
+        if (length(regular) <= MAX_PROMPT_CHARS) return regular
+        val latest = messages.lastOrNull()?.takeIf { it.role == "user" }?.text.orEmpty()
+        if (WorkspacePracticalPlanningGuide.instructions(latest).isBlank()) return regular
+        return WorkspaceChatGateway.openAiMessages(
+            messages,
+            extraSystemInstructions = extraSystemInstructions,
+            compactForGroq = true,
+        )
+    }
 
     private fun length(entries: org.json.JSONArray): Int =
         (0 until entries.length()).sumOf { index ->
