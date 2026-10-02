@@ -116,6 +116,8 @@ class WorkspaceChatGatewayTest {
         assertTrue(system.contains("Explicit target delivery platform: UNSPECIFIED"))
         assertTrue(system.contains("DECISION, NOT MENU"))
         assertTrue(system.contains("PRESENTATION CONTRACT"))
+        assertTrue(system.contains("native-friendly Markdown"))
+        assertTrue(system.contains("then contradict it by naming A under Later"))
         assertTrue(system.lastIndexOf("PRACTICAL PLANNING RESPONSE GUIDANCE") >
             system.lastIndexOf("Code-answer formatting when supplying code"))
         assertEquals(original, common.getJSONObject(common.length() - 1).getString("content"))

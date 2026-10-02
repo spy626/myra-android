@@ -24,6 +24,8 @@ class WorkspacePracticalPlanningGuideTest {
             assertTrue(it, guidance.contains("DECISION, NOT MENU"))
             assertTrue(it, guidance.contains("PRESENTATION CONTRACT"))
             assertTrue(it, guidance.contains("FINAL SILENT CLARITY CHECK"))
+            assertTrue(it, guidance.contains("native-friendly Markdown"))
+            assertTrue(it, guidance.contains("Never transfer the choice back"))
         }
     }
 
@@ -45,8 +47,8 @@ class WorkspacePracticalPlanningGuideTest {
             assertTrue(prompt, guidance.contains("no code blocks"))
             assertTrue(prompt, guidance.contains("WHERE to act"))
             assertTrue(prompt, guidance.contains("WHAT result should exist"))
-            assertTrue(prompt, guidance.contains("Use now:"))
-            assertTrue(prompt, guidance.contains("Later (not now):"))
+            assertTrue(prompt, guidance.contains("tool to open NOW"))
+            assertTrue(prompt, guidance.contains("**Later:**"))
             assertFalse(prompt, guidance.contains("SPCK"))
             assertFalse(prompt, guidance.contains("AIDE"))
             assertFalse(prompt, guidance.contains("grocery"))

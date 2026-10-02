@@ -3,6 +3,7 @@ package com.myra.assistant.ui.workspace
 import android.graphics.Typeface
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.style.LeadingMarginSpan
 import android.text.style.ReplacementSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
@@ -18,7 +19,8 @@ internal object WorkspaceMarkdownText {
 
     fun render(raw: String): CharSequence {
         val result = SpannableStringBuilder()
-        raw.lines().forEachIndexed { index, original ->
+        WorkspaceMarkdownLayout.prepare(raw).forEachIndexed { index, visual ->
+            val original = visual.text
             if (index != 0) result.append('\n')
             val match = heading.matchEntire(original)
             val line = SpannableStringBuilder(match?.groupValues?.get(2) ?: original)
@@ -56,6 +58,21 @@ internal object WorkspaceMarkdownText {
                 line.setSpan(StyleSpan(Typeface.BOLD), 0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 line.setSpan(RelativeSizeSpan(if (match.groupValues[1].length == 1) 1.35f else 1.17f),
                     0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            // Native indentation preserves readable wrapped lines and existing URLSpans.
+            if (line.isNotEmpty()) {
+                val margin = when (visual.kind) {
+                    WorkspaceMarkdownLayout.Kind.BULLET -> LeadingMarginSpan.Standard(8, 24)
+                    WorkspaceMarkdownLayout.Kind.NUMBERED -> LeadingMarginSpan.Standard(0, 24)
+                    WorkspaceMarkdownLayout.Kind.TABLE_ROW -> LeadingMarginSpan.Standard(10, 10)
+                    else -> null
+                }
+                if (margin != null) {
+                    line.setSpan(margin, 0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                if (visual.kind == WorkspaceMarkdownLayout.Kind.TABLE_TITLE) {
+                    line.setSpan(StyleSpan(Typeface.BOLD), 0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
             }
             result.append(line)
         }
