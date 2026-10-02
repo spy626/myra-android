@@ -2607,10 +2607,14 @@ class WorkspaceActivity : AppCompatActivity() {
         messages.forEach { message ->
             val mine = message.role == "user"
             if (mine) latestUserPrompt = message.text
+            // Retain original saved user turns. Existing assistant replies are romanized
+            // for this CHAT display without altering historical database records.
+            val assistantPresentation = if (!mine && current.type == WorkspaceProjectType.CHAT)
+                WorkspaceHinglishReply.normalize(message.text) else message.text
             val item = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             val story = if (!mine && current.type == WorkspaceProjectType.CHAT)
-                WorkspaceStoryScript.card(latestUserPrompt, message.text) else null
-            val codeParts = if (!mine && story == null) WorkspaceCodeBlocks.parse(message.text)
+                WorkspaceStoryScript.card(latestUserPrompt, assistantPresentation) else null
+            val codeParts = if (!mine && story == null) WorkspaceCodeBlocks.parse(assistantPresentation)
                 else emptyList()
             if (story != null) {
                 item.addView(WorkspaceStoryCardView.create(this, story) {
@@ -2634,11 +2638,11 @@ class WorkspaceActivity : AppCompatActivity() {
                             })
                     }
                 }
-            } else if (!mine && WorkspaceRichAnswerBlocks.isStructured(message.text)) {
+            } else if (!mine && WorkspaceRichAnswerBlocks.isStructured(assistantPresentation)) {
                 // A real native block tree for formatted assistant answers, not a single
                 // rich-text TextView. Ordinary conversation and the user's bubble stay as-is.
                 item.addView(
-                    WorkspaceRichAnswerView.create(this, message.text),
+                    WorkspaceRichAnswerView.create(this, assistantPresentation),
                     LinearLayout.LayoutParams(-1, -2).apply {
                         leftMargin = dp(5)
                         rightMargin = dp(5)
@@ -2651,10 +2655,10 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
                 val chatStyle = if (mine) WorkspaceChatReadability.user
                     else WorkspaceChatReadability.assistant
-                val bubble = label(message.text, chatStyle.fontSp).apply {
+                val bubble = label(if (mine) message.text else assistantPresentation, chatStyle.fontSp).apply {
                     if (!mine) {
                         setTextColor(Color.rgb(230, 236, 244))
-                        val rendered = WorkspaceMarkdownText.render(message.text)
+                        val rendered = WorkspaceMarkdownText.render(assistantPresentation)
                         text = rendered
                         // Verified HTTPS run links remain tappable and visible in the dark theme.
                         if ((rendered as? android.text.Spanned)
@@ -2715,7 +2719,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     gravity = Gravity.START
                 }
                 actionRow.addView(messageIcon(R.drawable.ic_workspace_copy, "Copy LYRA reply") {
-                    copyMessage(message.text)
+                    copyMessage(assistantPresentation)
                 }, LinearLayout.LayoutParams(dp(40), dp(40)))
                 actionRow.addView(messageIcon(R.drawable.ic_workspace_retry, "Retry LYRA reply") {
                     retryAssistant(current.projectId, message.id)
@@ -4435,7 +4439,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 skillProjection?.let {
                     WorkspaceSkillInvocationFreshness.requireCurrent(skillStore, it)
                 }
-                WorkspaceSkillResultBoundary.attach(reply, skillProjection)
+                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT)
+                    WorkspaceHinglishReply.normalize(reply) else reply
+                WorkspaceSkillResultBoundary.attach(presented, skillProjection)
             }
             val failure = finalized.exceptionOrNull()
             finalized.onSuccess { reply ->
@@ -4629,7 +4635,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 skillProjection?.let {
                     WorkspaceSkillInvocationFreshness.requireCurrent(skillStore, it)
                 }
-                WorkspaceSkillResultBoundary.attach(reply, skillProjection)
+                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT)
+                    WorkspaceHinglishReply.normalize(reply) else reply
+                WorkspaceSkillResultBoundary.attach(presented, skillProjection)
             }
             val failure = finalized.exceptionOrNull()
             finalized.onSuccess { reply ->

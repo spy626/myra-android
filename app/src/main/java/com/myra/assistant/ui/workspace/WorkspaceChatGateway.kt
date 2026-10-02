@@ -14,7 +14,7 @@ internal object WorkspaceChatGateway {
     // Shared by all approved Free text routes. A conversational instruction, not
     // hardcoded responses, a new memory source, or a claim that model output passed.
     private const val CHAT_REPLY_DISCIPLINE =
-        "You are LYRA. Answer the user's actual latest message in their language and tone, " +
+        "You are LYRA. Answer the user's actual latest message in the requested detail and tone, " +
             "following their requested length. For ordinary friendly conversation, listen first: " +
             "respond to what the user actually shared, with a brief natural reaction and, " +
             "only when useful, one relevant follow-up question. Do not force a question, " +
@@ -149,12 +149,14 @@ internal object WorkspaceChatGateway {
         // read-only context; keep full user messages and safety/execution boundaries.
         val instructions = (if (compactForGroq) listOf(
             CHAT_REPLY_DISCIPLINE,
+            WorkspaceHinglishReply.PROMPT_RULE,
             extra,
             writingInstructions,
             codeInstructions,
             practicalPlanning,
         ) else listOf(
             CHAT_REPLY_DISCIPLINE,
+            WorkspaceHinglishReply.PROMPT_RULE,
             extra,
             semanticTurnIntent,
             semanticTaskFrame,

@@ -95,6 +95,25 @@ class WorkspaceChatGatewayTest {
             .getJSONObject("image_url").getString("url").startsWith("data:image/png;base64,"))
     }
 
+    @Test fun everyFreeTextRouteGetsLatinOnlyHinglishPolicyWithoutEditingLatestUserTurn() {
+        val original = "bro mere paas sirf Android phone hai. 3 steps batao, coding mat karna"
+        val messages = listOf(message("user", original))
+        val standard = WorkspaceChatGateway.openAiMessages(messages)
+        assertTrue(standard.getJSONObject(0).getString("content").contains(
+            WorkspaceHinglishReply.PROMPT_RULE))
+        assertEquals(original, standard.getJSONObject(standard.length() - 1).getString("content"))
+
+        val groq = JSONObject(WorkspaceGroqFree.body(messages)).getJSONArray("messages")
+        assertTrue(groq.getJSONObject(0).getString("content").contains(
+            WorkspaceHinglishReply.PROMPT_RULE))
+        assertEquals(original, groq.getJSONObject(groq.length() - 1).getString("content"))
+
+        val llm7 = JSONObject(WorkspaceLlm7Free.body(messages)).getJSONArray("messages")
+        assertTrue(llm7.getJSONObject(0).getString("content").contains(
+            WorkspaceHinglishReply.PROMPT_RULE))
+        assertEquals(original, llm7.getJSONObject(llm7.length() - 1).getString("content"))
+    }
+
     @Test fun practicalPlanningInstructionsReachAllFreeProvidersWithoutChangingLatestTurn() {
         val original = "bro mere paas sirf Android phone hai aur mujhe free mein ek simple " +
             "grocery app banana hai. Sabse pehle kya karna chahiye? 3 practical steps " +
