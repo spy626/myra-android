@@ -16,8 +16,8 @@ internal object WorkspaceMarkdownLayout {
     private fun cells(value: String): List<String>? {
         val line = value.trim()
         if (!line.startsWith("|") || !line.endsWith("|")) return null
-        val pieces = line.drop(1).dropLast(1).split('|').map(String::trim)
-        return pieces.takeIf { it.size in 2..3 && it.all(String::isNotBlank) }
+        val pieces = line.drop(1).dropLast(1).split('|').map { it.trim() }
+        return pieces.takeIf { it.size in 2..3 && it.all { value -> value.isNotBlank() } }
     }
 
     fun prepare(raw: String): List<Line> {
@@ -33,7 +33,7 @@ internal object WorkspaceMarkdownLayout {
         }
         while (index < source.size) {
             val original = source[index]
-            if (original.trimStart().startsWith("~~~") || original.trimStart().startsWith("\u0060\u0060\u0060")) {
+            if (original.trimStart().startsWith("~~~") || original.trimStart().startsWith("```")) {
                 fenced = !fenced
                 output.add(Line(original))
                 index++
