@@ -126,13 +126,16 @@ class WorkspaceChatGatewayTest {
         assertEquals(original, common.getJSONObject(common.length() - 1).getString("content"))
 
         val groq = JSONObject(WorkspaceGroqFree.body(messages)).getJSONArray("messages")
+        val groqSystem = groq.getJSONObject(0).getString("content")
+        assertTrue(groqSystem.contains("PRACTICAL PLANNING (compact Groq Free"))
+        assertFalse(groqSystem.contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+        assertEquals(original, groq.getJSONObject(groq.length() - 1).getString("content"))
+
         val llm7 = JSONObject(WorkspaceLlm7Free.body(messages)).getJSONArray("messages")
-        listOf(groq, llm7).forEach { out ->
-            assertTrue(out.getJSONObject(0).getString("content")
-                .contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
-            assertEquals(original,
-                out.getJSONObject(out.length() - 1).getString("content"))
-        }
+        assertTrue(llm7.getJSONObject(0).getString("content")
+            .contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+        assertEquals(original,
+            llm7.getJSONObject(llm7.length() - 1).getString("content"))
         assertFalse(WorkspaceChatGateway.openAiMessages(listOf(
             message("user", "hi bro, how are you today?")
         )).getJSONObject(0).getString("content")
