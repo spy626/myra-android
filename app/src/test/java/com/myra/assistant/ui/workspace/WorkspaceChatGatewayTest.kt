@@ -109,6 +109,13 @@ class WorkspaceChatGatewayTest {
         assertTrue(system.contains("device the user HAS"))
         assertTrue(system.contains("minimum viable FIRST version"))
         assertTrue(system.contains("Defer IDE installation"))
+        assertTrue(system.contains("CURRENT USER PLANNING BRIEF"))
+        assertTrue(system.contains("Requested MAIN step count: 3"))
+        assertTrue(system.contains("Phone-only resource explicitly stated: true"))
+        assertTrue(system.contains("Free/zero-budget requirement explicitly stated: true"))
+        assertTrue(system.contains("Explicit target delivery platform: UNSPECIFIED"))
+        assertTrue(system.contains("DECISION, NOT MENU"))
+        assertTrue(system.contains("PRESENTATION CONTRACT"))
         assertTrue(system.lastIndexOf("PRACTICAL PLANNING RESPONSE GUIDANCE") >
             system.lastIndexOf("Code-answer formatting when supplying code"))
         assertEquals(original, common.getJSONObject(common.length() - 1).getString("content"))

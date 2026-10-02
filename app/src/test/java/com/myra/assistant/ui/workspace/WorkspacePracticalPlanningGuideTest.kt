@@ -21,6 +21,9 @@ class WorkspacePracticalPlanningGuideTest {
             assertTrue(it, guidance.contains("do NOT claim to have coded"))
             assertTrue(it, guidance.contains("minimum viable FIRST version"))
             assertTrue(it, guidance.contains("the intended END-USER journey"))
+            assertTrue(it, guidance.contains("DECISION, NOT MENU"))
+            assertTrue(it, guidance.contains("PRESENTATION CONTRACT"))
+            assertTrue(it, guidance.contains("FINAL SILENT CLARITY CHECK"))
         }
     }
 
@@ -40,6 +43,10 @@ class WorkspacePracticalPlanningGuideTest {
             assertTrue(prompt, guidance.contains("customer-facing actions from owner/admin"))
             assertTrue(prompt, guidance.contains("Defer IDE installation"))
             assertTrue(prompt, guidance.contains("no code blocks"))
+            assertTrue(prompt, guidance.contains("WHERE to act"))
+            assertTrue(prompt, guidance.contains("WHAT result should exist"))
+            assertTrue(prompt, guidance.contains("Use now:"))
+            assertTrue(prompt, guidance.contains("Later (not now):"))
             assertFalse(prompt, guidance.contains("SPCK"))
             assertFalse(prompt, guidance.contains("AIDE"))
             assertFalse(prompt, guidance.contains("grocery"))
