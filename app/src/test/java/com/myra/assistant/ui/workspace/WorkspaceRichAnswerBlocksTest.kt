@@ -81,6 +81,33 @@ class WorkspaceRichAnswerBlocksTest {
         assertFalse(WorkspaceRichAnswerBlocks.isStructured(ordinary))
     }
 
+    @Test fun nestedDetailsRemainInsideTheirNumberedStepAndBoldSectionsAreNative() {
+        val reply = """
+            **Start here**
+            1. **Choose customer flow**
+              - Home categories
+              - Cart total
+            2. **Sketch screens**
+              - Use paper
+            3. **Collect sample content**
+
+            **Free tools**
+            | Tool | Role |
+            | --- | --- |
+            | Notes | Planning |
+        """.trimIndent()
+        val blocks = WorkspaceRichAnswerBlocks.parse(reply)
+        assertTrue(blocks.first() is WorkspaceRichAnswerBlocks.Block.Heading)
+        val steps = blocks.filterIsInstance<WorkspaceRichAnswerBlocks.Block.Numbered>().single().items
+        assertEquals(3, steps.size)
+        assertEquals(listOf("Home categories", "Cart total"), steps[0].details)
+        assertEquals(listOf("Use paper"), steps[1].details)
+        assertTrue(steps[2].details.isEmpty())
+        assertTrue(blocks.filterIsInstance<WorkspaceRichAnswerBlocks.Block.Bullets>().isEmpty())
+        assertEquals(2, blocks.filterIsInstance<WorkspaceRichAnswerBlocks.Block.Heading>().size)
+        assertEquals(1, blocks.filterIsInstance<WorkspaceRichAnswerBlocks.Block.Table>().size)
+    }
+
     @Test fun oversizedResponsesNeverExplodeIntoThousandsOfViews() {
         val value = ("- item\n").repeat(5000)
         assertEquals(1, WorkspaceRichAnswerBlocks.parse(value).size)

@@ -6,7 +6,13 @@ internal object WorkspaceCodePrompt {
         """(?i)\b(?:code|coding|html|css|javascript|typescript|python|kotlin|java|react|sql|swift|php|program|script|function|snippet)\b|कोड|کوڈ"""
     )
 
-    fun instructions(latest: String): String = if (codeTerms.containsMatchIn(latest)) """
+    fun instructions(latest: String): String {
+        // "Abhi coding MAT karna" is evidence against coding, not a code request.
+        // Suppress competing code-format guidance only on a genuine advice-only turn.
+        if (WorkspacePlanningBrief.parse(latest).adviceOnly &&
+            WorkspacePracticalPlanningGuide.instructions(latest).isNotBlank()) return ""
+        return if (codeTerms.containsMatchIn(latest)) """
 Code-answer formatting when supplying code: put a short explanation outside the code fence; use one complete Markdown fenced code block with the correct language tag per file. Put programming identifiers, filenames and comments in English unless the user explicitly asks for a different code language; keep user-requested UI strings exactly as requested. For a tiny standalone HTML demonstration, prefer one complete index.html with inline CSS and JavaScript, valid /* CSS comments */, working event handlers and closing tags. Do not write Markdown backticks inside the code itself. Do not claim that code was executed or tested unless it was actually run.
 """.trim() else ""
+    }
 }

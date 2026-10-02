@@ -140,8 +140,11 @@ class WorkspaceChatGatewayTest {
         assertTrue(system.contains("Do not ask for sign-up"))
         assertTrue(system.contains("not a canned template"))
         assertTrue(system.contains("then contradict it by naming A under Later"))
-        assertTrue(system.lastIndexOf("PRACTICAL PLANNING RESPONSE GUIDANCE") >
-            system.lastIndexOf("Code-answer formatting when supplying code"))
+        assertFalse(system.contains("Code-answer formatting when supplying code"))
+        assertTrue(system.contains("CURRENT-TURN ANSWER ACCEPTANCE"))
+        assertTrue(system.contains("PLANNING-ONLY HARD STOP"))
+        assertTrue(system.lastIndexOf("CURRENT-TURN ANSWER ACCEPTANCE") >
+            system.lastIndexOf("PRACTICAL PLANNING RESPONSE GUIDANCE"))
         assertEquals(original, common.getJSONObject(common.length() - 1).getString("content"))
 
         val groq = JSONObject(WorkspaceGroqFree.body(messages)).getJSONArray("messages")

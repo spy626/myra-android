@@ -147,6 +147,10 @@ internal object WorkspaceChatGateway {
         } else ""
         // Only Groq's strict Free budget uses a short projection of the SAME
         // read-only context; keep full user messages and safety/execution boundaries.
+        // Position the exact CURRENT-turn constraints immediately after generic presentation
+        // guidance, for both the normal and compressed Groq Free prompt.
+        val answerBoundary = if (latest != null && practicalPlanning.isNotBlank())
+            WorkspacePlanningAnswerBoundary.instructions(latest) else ""
         val instructions = (if (compactForGroq) listOf(
             CHAT_REPLY_DISCIPLINE,
             WorkspaceHinglishReply.PROMPT_RULE,
@@ -154,6 +158,7 @@ internal object WorkspaceChatGateway {
             writingInstructions,
             codeInstructions,
             practicalPlanning,
+            answerBoundary,
         ) else listOf(
             CHAT_REPLY_DISCIPLINE,
             WorkspaceHinglishReply.PROMPT_RULE,
@@ -167,6 +172,7 @@ internal object WorkspaceChatGateway {
             // Put grounded planning guidance after generic code-format cues: "don't code"
             // is not an invitation to supply code or initialize a project.
             practicalPlanning,
+            answerBoundary,
         )).filter(String::isNotBlank).joinToString("\n\n")
         if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", instructions))

@@ -16,12 +16,13 @@ internal object WorkspaceRichAnswerBlocks {
         object Divider : Block()
     }
     data class Bullet(val text: String, val depth: Int)
-    data class Step(val number: String, val text: String)
+    data class Step(val number: String, val text: String, val details: List<String> = emptyList())
 
     private const val MAX_RICH_CHARS = 24_000
     private val heading = Regex("""^ {0,3}(#{1,3})\s+(.+?)\s*$""")
     private val bullet = Regex("""^( {0,6})[-*+]\s+(.+)$""")
     private val step = Regex("""^ {0,3}(\d{1,2})[.)]\s+(.+)$""")
+    private val boldHeading = Regex("""^\s{0,3}\*\*(.{3,90}?)\*\*:?\s*$""")
     private val rule = Regex("""^\s*(?:-{3,}|\*{3,}|_{3,})\s*$""")
     private val separator = Regex("""^:?-{3,}:?$""")
 
@@ -61,7 +62,8 @@ internal object WorkspaceRichAnswerBlocks {
         fun special(index: Int): Boolean {
             if (index >= lines.size) return true
             val line = lines[index]
-            if (line.isBlank() || heading.matches(line) || rule.matches(line) ||
+            if (line.isBlank() || heading.matches(line) || boldHeading.matches(line) ||
+                rule.matches(line) ||
                 bullet.matches(line) || step.matches(line) || line.trimStart().startsWith("> ")
             ) return true
             val a = cells(line)
@@ -75,6 +77,12 @@ internal object WorkspaceRichAnswerBlocks {
             val h = heading.matchEntire(current)
             if (h != null) {
                 output.add(Block.Heading(h.groupValues[1].length, h.groupValues[2]))
+                i++
+                continue
+            }
+            val standalone = boldHeading.matchEntire(current)
+            if (standalone != null) {
+                output.add(Block.Heading(3, standalone.groupValues[1].trim()))
                 i++
                 continue
             }
@@ -116,14 +124,22 @@ internal object WorkspaceRichAnswerBlocks {
                     val s = step.matchEntire(lines[i]) ?: break
                     val body = StringBuilder(s.groupValues[2])
                     i++
-                    // Preserve the model's own wrapped explanation, not an invented template.
+                    // Keep indented detail bullets inside the parent numbered step.
+                    val details = mutableListOf<String>()
                     while (i < lines.size && lines[i].startsWith("  ") &&
-                        !special(i) && body.length < 2500
+                        body.length < 2500
                     ) {
+                        val nested = bullet.matchEntire(lines[i])
+                        if (nested != null && nested.groupValues[1].isNotEmpty()) {
+                            details.add(nested.groupValues[2])
+                            i++
+                            continue
+                        }
+                        if (special(i)) break
                         body.append(' ').append(lines[i].trim())
                         i++
                     }
-                    items.add(Step(s.groupValues[1], body.toString()))
+                    items.add(Step(s.groupValues[1], body.toString(), details))
                     // Blank lines between numbered steps are allowed.
                     var next = i
                     while (next < lines.size && lines[next].isBlank()) next++

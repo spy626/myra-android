@@ -123,7 +123,20 @@ internal object WorkspaceRichAnswerView {
                         line.addView(number, LinearLayout.LayoutParams(
                             dp(context, 29), dp(context, 29)
                         ).apply { rightMargin = dp(context, 11) })
-                        line.addView(label(context, item.text), LinearLayout.LayoutParams(0, -2, 1f))
+                        val content = column(context)
+                        put(content, label(context, item.text), context)
+                        item.details.forEach { detail ->
+                            val nested = row(context).apply {
+                                setPadding(dp(context, 3), 0, 0, 0)
+                            }
+                            nested.addView(label(context, "•", 15f).apply {
+                                setTextColor(accentColor)
+                            }, LinearLayout.LayoutParams(dp(context, 17), -2))
+                            nested.addView(label(context, detail, 15.5f),
+                                LinearLayout.LayoutParams(0, -2, 1f))
+                            put(content, nested, context, top = 4)
+                        }
+                        line.addView(content, LinearLayout.LayoutParams(0, -2, 1f))
                         put(group, line, context,
                             top = if (stepIndex == 0) 3 else 12, bottom = 5)
                     }

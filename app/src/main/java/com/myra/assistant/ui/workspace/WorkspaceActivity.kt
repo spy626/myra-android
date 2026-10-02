@@ -4432,7 +4432,11 @@ class WorkspaceActivity : AppCompatActivity() {
                     val saved = conversations.read(id)
                     val actual = if (replacingAssistantId != null &&
                         saved.lastOrNull()?.id == replacingAssistantId) saved.dropLast(1) else saved
-                    WorkspaceChatTurnFrame.verify(actual, reply)
+                    val visible = WorkspaceChatTurnFrame.verify(actual, reply)
+                    WorkspacePlanningAnswerBoundary.requireAcceptable(
+                        actual.lastOrNull()?.takeIf { it.role == "user" }?.text.orEmpty(),
+                        visible,
+                    )
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
@@ -4628,7 +4632,11 @@ class WorkspaceActivity : AppCompatActivity() {
                     val saved = conversations.read(id)
                     val actual = if (replacingAssistantId != null &&
                         saved.lastOrNull()?.id == replacingAssistantId) saved.dropLast(1) else saved
-                    WorkspaceChatTurnFrame.verify(actual, reply)
+                    val visible = WorkspaceChatTurnFrame.verify(actual, reply)
+                    WorkspacePlanningAnswerBoundary.requireAcceptable(
+                        actual.lastOrNull()?.takeIf { it.role == "user" }?.text.orEmpty(),
+                        visible,
+                    )
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
