@@ -37,7 +37,15 @@ internal object WorkspaceChatGateway {
             "of what the user said. For questions about the user's earlier words, ground " +
             "claims only in earlier USER turns from this same conversation; quote them " +
             "if necessary. If evidence is absent, say so instead of guessing a name, " +
-            "place, plan or other fact. Never claim phone testing."
+            "place, plan or other fact. Present genuinely multi-part information as " +
+            "short contextual Markdown sections, real bullet/numbered lists, or a small " +
+            "comparison table only when that structure adds clarity. Don't flatten a " +
+            "multi-part answer into one run-on paragraph. Don't repeat the same rigid " +
+            "Where/What/Result or Kahan/Kya/Result fields in every answer. Match the " +
+            "format to the specific question, not a canned template. A short personal " +
+            "reply should remain natural conversation, not become a report. Don't claim " +
+            "to render external app logos, screenshots or interactive elements that " +
+            "were never actually supplied. Never claim phone testing."
     enum class Provider { OPENROUTER_FREE, GROQ_FREE, LLM7_FREE }
     data class Image(val mime: String, val base64: String)
     // One extra try only after specific upstream HTTP rejections. Connection failures and

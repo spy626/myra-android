@@ -26,6 +26,8 @@ class WorkspacePracticalPlanningGuideTest {
             assertTrue(it, guidance.contains("FINAL SILENT CLARITY CHECK"))
             assertTrue(it, guidance.contains("native-friendly Markdown"))
             assertTrue(it, guidance.contains("Never transfer the choice back"))
+            assertTrue(it, guidance.contains("NOT printed as repetitive"))
+            assertTrue(it, guidance.contains("Do not ask for sign-up"))
         }
     }
 

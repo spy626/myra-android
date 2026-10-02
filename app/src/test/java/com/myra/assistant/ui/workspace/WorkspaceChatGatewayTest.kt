@@ -117,6 +117,9 @@ class WorkspaceChatGatewayTest {
         assertTrue(system.contains("DECISION, NOT MENU"))
         assertTrue(system.contains("PRESENTATION CONTRACT"))
         assertTrue(system.contains("native-friendly Markdown"))
+        assertTrue(system.contains("intent-specific rather than a fixed form"))
+        assertTrue(system.contains("Do not ask for sign-up"))
+        assertTrue(system.contains("not a canned template"))
         assertTrue(system.contains("then contradict it by naming A under Later"))
         assertTrue(system.lastIndexOf("PRACTICAL PLANNING RESPONSE GUIDANCE") >
             system.lastIndexOf("Code-answer formatting when supplying code"))

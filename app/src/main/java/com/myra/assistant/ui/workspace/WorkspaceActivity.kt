@@ -2619,18 +2619,13 @@ class WorkspaceActivity : AppCompatActivity() {
             } else if (codeParts.any { it is WorkspaceCodeBlocks.Part.Code }) {
                 codeParts.forEach { part ->
                     when (part) {
-                        is WorkspaceCodeBlocks.Part.Prose -> item.addView(label(
-                            "", WorkspaceChatReadability.assistant.fontSp
-                        ).apply {
-                            text = WorkspaceMarkdownText.render(part.text)
-                            setTextColor(Color.rgb(230, 236, 244))
-                            setLineSpacing(
-                                dp(WorkspaceChatReadability.assistant.extraLineDp).toFloat(),
-                                WorkspaceChatReadability.assistant.lineMultiplier,
-                            )
-                            setTextIsSelectable(true)
-                            setPadding(dp(10), dp(11), dp(10), dp(11))
-                        }, LinearLayout.LayoutParams(-1, -2))
+                        is WorkspaceCodeBlocks.Part.Prose -> item.addView(
+                            WorkspaceRichAnswerView.create(this, part.text),
+                            LinearLayout.LayoutParams(-1, -2).apply {
+                                leftMargin = dp(3)
+                                rightMargin = dp(3)
+                            },
+                        )
                         is WorkspaceCodeBlocks.Part.Code -> item.addView(
                             WorkspaceCodeCardView.create(this, part) { copyMessage(part.source) },
                             LinearLayout.LayoutParams(-1, -2).apply {
@@ -2639,6 +2634,16 @@ class WorkspaceActivity : AppCompatActivity() {
                             })
                     }
                 }
+            } else if (!mine && WorkspaceRichAnswerBlocks.isStructured(message.text)) {
+                // A real native block tree for formatted assistant answers, not a single
+                // rich-text TextView. Ordinary conversation and the user's bubble stay as-is.
+                item.addView(
+                    WorkspaceRichAnswerView.create(this, message.text),
+                    LinearLayout.LayoutParams(-1, -2).apply {
+                        leftMargin = dp(5)
+                        rightMargin = dp(5)
+                    },
+                )
             } else {
                 val line = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
