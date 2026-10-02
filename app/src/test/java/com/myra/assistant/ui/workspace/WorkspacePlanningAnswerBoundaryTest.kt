@@ -84,16 +84,16 @@ class WorkspacePlanningAnswerBoundaryTest {
         val b = WorkspacePlanningAnswerBoundary
         assertEquals(null, b.directiveStage("Rough screen sketch Notes mein banao"))
         assertEquals(null, b.directiveStage("Sample data aur features ki list likho"))
-        assertEquals(b.Stage.SETUP, b.directiveStage("Install a free visual builder"))
-        assertEquals(b.Stage.SETUP, b.directiveStage("Naya Project banao"))
-        assertEquals(b.Stage.SETUP, b.directiveStage("Open an app builder and create a project"))
-        assertEquals(b.Stage.IMPLEMENTATION,
+        assertEquals(WorkspacePlanningAnswerBoundary.Stage.SETUP, b.directiveStage("Install a free visual builder"))
+        assertEquals(WorkspacePlanningAnswerBoundary.Stage.SETUP, b.directiveStage("Naya Project banao"))
+        assertEquals(WorkspacePlanningAnswerBoundary.Stage.SETUP, b.directiveStage("Open an app builder and create a project"))
+        assertEquals(WorkspacePlanningAnswerBoundary.Stage.IMPLEMENTATION,
             b.directiveStage("Actual screens create karo aur blocks connect karo"))
-        assertEquals(b.Stage.IMPLEMENTATION,
+        assertEquals(WorkspacePlanningAnswerBoundary.Stage.IMPLEMENTATION,
             b.directiveStage("Visual components drag karo, events wire karo"))
-        assertEquals(b.Stage.IMPLEMENTATION,
+        assertEquals(WorkspacePlanningAnswerBoundary.Stage.IMPLEMENTATION,
             b.directiveStage("Start building a working grocery app"))
-        assertEquals(b.Stage.IMPLEMENTATION,
+        assertEquals(WorkspacePlanningAnswerBoundary.Stage.IMPLEMENTATION,
             b.directiveStage("Rough idea note karo; phir actual screens create karo"))
     }
 

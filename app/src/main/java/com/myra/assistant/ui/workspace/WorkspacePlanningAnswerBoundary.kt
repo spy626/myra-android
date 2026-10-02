@@ -22,7 +22,7 @@ internal object WorkspacePlanningAnswerBoundary {
             """not\s+yet|mat|nahi|nahin|without|instead\s+of)\b"""
     )
     private val negatedVerb = Regex(
-        """(?i)\b(?:do\s+not|don't|dont|never|avoid|skip|mat|nahi|nahin)\s+""" +
+        """(?i)\b(?:do\s+not|don't|dont|never|avoid|skip|mat|nahi|nahin|no)\s+""" +
             """(?:immediately\s+|abhi\s+)?(?:install|download|open|start|create|""" +
             """write|set\s*up|configure|launch|connect|add|make|build)\b"""
     )
@@ -149,13 +149,13 @@ internal object WorkspacePlanningAnswerBoundary {
                     " numbered planning steps. Reply not saved; tap Retry if useful."
         }
 
-        // A *discussion comparing* tools is informational, not automatically setup.
-        if (comparison.containsMatchIn(latest) && shape.stepCount == null) return null
-
+        // Comparison prose is still checked for orders; descriptive table rows
+        // remain data rather than interpreted as the user's next action.
         var laterSection = false
         for (raw in completedReply.lineSequence().take(160)) {
             val line = cleanLine(raw)
             if (line.isBlank()) continue
+            if (comparison.containsMatchIn(latest) && raw.trimStart().startsWith("|")) continue
             val isHeading = heading.containsMatchIn(raw) ||
                 (raw.trim().startsWith("**") && raw.trim().endsWith("**"))
             if (isHeading) {
