@@ -44,6 +44,21 @@ class WorkspaceMarkdownLayoutTest {
         assertEquals(WorkspaceMarkdownLayout.Kind.PLAIN, lines("Ordinary sentence").single().kind)
     }
 
+
+    @Test fun fourColumnRowsRetainPurposeCostAndTimingInPlainTextFallback() {
+        val raw = """
+            | Tool | Purpose | Cost | When |
+            | --- | --- | --- | --- |
+            | Notes | Sketch | Free | Now |
+        """.trimIndent()
+        val output = WorkspaceMarkdownLayout.prepare(raw)
+        assertEquals(WorkspaceMarkdownLayout.Kind.TABLE_TITLE, output.first().kind)
+        assertEquals(WorkspaceMarkdownLayout.Kind.TABLE_ROW, output[1].kind)
+        assertTrue(output[1].text.contains("**Purpose:** Sketch"))
+        assertTrue(output[1].text.contains("**Cost:** Free"))
+        assertTrue(output[1].text.contains("**When:** Now"))
+    }
+
     @Test fun threeColumnRowsPreserveColumnMeaning() {
         val result = lines("| App | Now | Later |\n| --- | --- | --- |\n| Example | Outline | Build |")
         assertTrue(result.last().text.contains("**Now:** Outline"))

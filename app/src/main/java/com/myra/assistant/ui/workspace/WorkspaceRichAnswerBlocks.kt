@@ -3,7 +3,7 @@ package com.myra.assistant.ui.workspace
 /**
  * Display-only Markdown block model for Chat replies. It reads the model's actual structure;
  * it NEVER generates answers, infers brands, changes the transcript or grants tool access.
- * Unknown / malformed syntax remains ordinary text. Only bounded assistant prose is parsed.
+ * Unknown / malformed syntax remains ordinary text. Only bounded assistant prose is parsed; 2–4-column comparison data is retained.
  */
 internal object WorkspaceRichAnswerBlocks {
     sealed class Block {
@@ -30,7 +30,7 @@ internal object WorkspaceRichAnswerBlocks {
         val value = raw.trim()
         if (!value.startsWith("|") || !value.endsWith("|")) return null
         val result = value.drop(1).dropLast(1).split('|').map { it.trim() }
-        return result.takeIf { it.size in 2..3 && it.all { c -> c.isNotBlank() } }
+        return result.takeIf { it.size in 2..4 && it.all { c -> c.isNotBlank() } }
     }
 
     /**

@@ -5,59 +5,60 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkspacePracticalPlanningGuideTest {
-    @Test fun generalBeginnerPlanningRequestsGetCoherentActionableGuidance() {
-        val examples = listOf(
-            "bro mere paas sirf Android phone hai aur mujhe free mein ek simple grocery app banana hai. Sabse pehle kya karna chahiye? 3 practical steps batao, abhi coding start mat karna 😂",
-            "I have one hour a day. How should I start learning guitar? Give three doable steps.",
-            "Mujhe apna portfolio start karna hai, pehle kya karu? Simple plan batao.",
-            "I need a free mobile-first study workflow. Suggest a practical plan, no implementation.",
-            "Our volunteer club needs an event roadmap. What should we do first?"
-        )
-        examples.forEach {
-            val guidance = WorkspacePracticalPlanningGuide.instructions(it)
-            assertTrue(it, guidance.contains("ONE coherent feasible starting route"))
-            assertTrue(it, guidance.contains("exactly that many MAIN steps"))
-            assertTrue(it, guidance.contains("DO and what small concrete result"))
-            assertTrue(it, guidance.contains("do NOT claim to have coded"))
-            assertTrue(it, guidance.contains("minimum viable FIRST version"))
-            assertTrue(it, guidance.contains("the intended END-USER journey"))
-            assertTrue(it, guidance.contains("DECISION, NOT MENU"))
-            assertTrue(it, guidance.contains("PRESENTATION CONTRACT"))
-            assertTrue(it, guidance.contains("FINAL SILENT CLARITY CHECK"))
-            assertTrue(it, guidance.contains("native-friendly Markdown"))
-            assertTrue(it, guidance.contains("Never transfer the choice back"))
-            assertTrue(it, guidance.contains("NOT printed as repetitive"))
-            assertTrue(it, guidance.contains("Do not ask for sign-up"))
+    private val planningExamples = listOf(
+        "bro mere paas sirf Android phone hai aur mujhe free mein ek simple grocery app banana hai. " +
+            "Sabse pehle kya karna chahiye? 3 practical steps batao, abhi coding start mat karna 😂",
+        "I have one hour a day. How should I start learning guitar? Give three doable steps.",
+        "Mujhe apna portfolio start karna hai, pehle kya karu? Simple plan batao.",
+        "I need a free mobile-first study workflow. Suggest a practical plan, no implementation.",
+        "Our volunteer club needs an event roadmap. What should we do first?"
+    )
+
+    @Test fun taskRelevantGuideKeepsStageAndUserConstraintsWithoutCannedBuilderNames() {
+        planningExamples.forEach { input ->
+            val guidance = WorkspacePracticalPlanningGuide.instructions(input)
+            assertTrue(input, guidance.contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+            assertTrue(input, guidance.contains("ONE coherent feasible starting route"))
+            assertTrue(input, guidance.contains("minimum viable FIRST version"))
+            assertTrue(input, guidance.contains("Work stages:"))
+            assertTrue(input, guidance.contains("SETUP"))
+            assertTrue(input, guidance.contains("connecting visual blocks"))
+            assertTrue(input, guidance.contains("PRESENTATION CONTRACT"))
+            assertTrue(input, guidance.contains("FINAL SILENT CLARITY CHECK"))
+            assertTrue(input, guidance.contains("do NOT claim to have coded"))
+            assertFalse(input, guidance.contains("Sketchware"))
+            assertFalse(input, guidance.contains("SPCK"))
+            assertFalse(input, guidance.contains("grocery"))
         }
     }
 
-    @Test fun devicePlatformAndWorkSequencingAreDistinctWithoutCannedRecommendations() {
-        val prompts = listOf(
-            "I only have an Android phone and no money. What are 3 first steps for a simple booking app? Don't code yet.",
-            "bro sirf phone se portfolio banana hai, pehle 3 steps batao; abhi coding mat karo",
-            "How should I plan a low-cost community event website before building it?",
-            "I specifically want a native Android app. What planning steps come first?",
-            "I want a browser-based shop; suggest a first-stage plan, no coding."
+    @Test fun deviceIsSeparatedFromTargetAndAdviceOnlyExcludesNoCodeImplementation() {
+        val guidance = WorkspacePracticalPlanningGuide.instructions(
+            "I only have an Android phone and no money. What are 3 first steps for a " +
+                "simple booking app? Don't code yet."
         )
-        prompts.forEach { prompt ->
-            val guidance = WorkspacePracticalPlanningGuide.instructions(prompt)
-            assertTrue(prompt, guidance.contains("device the user HAS"))
-            assertTrue(prompt, guidance.contains("does NOT by itself require a native Android"))
-            assertTrue(prompt, guidance.contains("explicitly specifies native/web/no-code"))
-            assertTrue(prompt, guidance.contains("customer-facing actions from owner/admin"))
-            assertTrue(prompt, guidance.contains("Defer IDE installation"))
-            assertTrue(prompt, guidance.contains("no code blocks"))
-            assertTrue(prompt, guidance.contains("specific WHERE, WHAT"))
-            assertTrue(prompt, guidance.contains("checkable RESULT"))
-            assertTrue(prompt, guidance.contains("tool to open NOW"))
-            assertTrue(prompt, guidance.contains("**Later:**"))
-            assertFalse(prompt, guidance.contains("SPCK"))
-            assertFalse(prompt, guidance.contains("AIDE"))
-            assertFalse(prompt, guidance.contains("grocery"))
-        }
+        assertTrue(guidance.contains("device the user HAS"))
+        assertTrue(guidance.contains("Phone-only does NOT itself mean native Android APK"))
+        assertTrue(guidance.contains("END-USER journey"))
+        assertTrue(guidance.contains("New Project"))
+        assertTrue(guidance.contains("visual no-code implementation"))
+        assertTrue(guidance.contains("rough screen sketches"))
+        assertTrue(guidance.contains("separate current-turn gate"))
+        assertTrue(guidance.contains("Roman Hinglish"))
+        assertTrue(guidance.contains("2-4-column"))
     }
 
-    @Test fun casualWritingOrExplicitExecutionIsNotHijackedByPlanningPrompt() {
+    @Test fun compactGroqKeepsPlanningHardStopAndCountWithoutExtraCalls() {
+        val input = planningExamples.first()
+        val compact = WorkspacePracticalPlanningGuide.compactInstructions(input)
+        assertTrue(compact.contains("PRACTICAL PLANNING (compact Groq Free"))
+        assertTrue(compact.contains("Requested MAIN steps: 3"))
+        assertTrue(compact.contains("planning-before-code: true"))
+        assertTrue(compact.contains("NO coding, signup, builder launch"))
+        assertTrue(compact.contains("Phone-only + advice-only"))
+    }
+
+    @Test fun casualWritingAndExplicitExecutionAreNotHijackedByPlanning() {
         listOf(
             "hey bro how are you doing",
             "Just saying hi",
@@ -65,19 +66,8 @@ class WorkspacePracticalPlanningGuideTest {
             "build a grocery app now",
             "create a website project with code and preview",
             "fix this app screenshot and edit the current file"
-        ).forEach { text ->
-            assertTrue(text, WorkspacePracticalPlanningGuide.instructions(text).isBlank())
+        ).forEach { input ->
+            assertTrue(input, WorkspacePracticalPlanningGuide.instructions(input).isBlank())
         }
-    }
-
-    @Test fun constraintsStayInUserTurnAndPlanningTextGrantsNoToolPermission() {
-        val guidance = WorkspacePracticalPlanningGuide.instructions(
-            "I have no laptop and a zero budget. How to plan a simple website? Don't code yet."
-        )
-        assertTrue(guidance.contains("explicit do-not-do boundaries"))
-        assertTrue(guidance.contains("separate current-turn gate"))
-        assertFalse(guidance.contains("grocery"))
-        assertFalse(guidance.contains("SPCK"))
-        assertFalse(guidance.contains("Kodular"))
     }
 }

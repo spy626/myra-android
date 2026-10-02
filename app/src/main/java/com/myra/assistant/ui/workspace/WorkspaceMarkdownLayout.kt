@@ -17,7 +17,7 @@ internal object WorkspaceMarkdownLayout {
         val line = value.trim()
         if (!line.startsWith("|") || !line.endsWith("|")) return null
         val pieces = line.drop(1).dropLast(1).split('|').map { it.trim() }
-        return pieces.takeIf { it.size in 2..3 && it.all { value -> value.isNotBlank() } }
+        return pieces.takeIf { it.size in 2..4 && it.all { value -> value.isNotBlank() } }
     }
 
     fun prepare(raw: String): List<Line> {

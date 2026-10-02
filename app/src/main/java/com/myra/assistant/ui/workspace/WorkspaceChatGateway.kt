@@ -40,7 +40,12 @@ internal object WorkspaceChatGateway {
             "place, plan or other fact. Present genuinely multi-part information as " +
             "short contextual Markdown sections, real bullet/numbered lists, or a small " +
             "comparison table only when that structure adds clarity. Don't flatten a " +
-            "multi-part answer into one run-on paragraph. Don't repeat the same rigid " +
+            "multi-part answer into one run-on paragraph. On comparisons, preserve " +
+            "real values in an aligned 2–4-column Markdown table when that improves " +
+            "clarity; otherwise use prose. On beginner tasks, state one coherent " +
+            "direction and reason before specific actions and expected outcomes. " +
+            "For sourced answers, separate evidence from inference: do not invent " +
+            "media, chart data or citations. Don't repeat the same rigid " +
             "Where/What/Result or Kahan/Kya/Result fields in every answer. Match the " +
             "format to the specific question, not a canned template. A short personal " +
             "reply should remain natural conversation, not become a report. Don't claim " +

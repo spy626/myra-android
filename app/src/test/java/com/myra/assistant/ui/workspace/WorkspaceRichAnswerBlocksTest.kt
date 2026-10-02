@@ -108,6 +108,22 @@ class WorkspaceRichAnswerBlocksTest {
         assertEquals(1, blocks.filterIsInstance<WorkspaceRichAnswerBlocks.Block.Table>().size)
     }
 
+
+    @Test fun fourColumnSourceTableKeepsAllOriginalCellsForNarrowPhoneCards() {
+        val raw = """
+            ## Tool comparison
+            | Tool | Purpose | Cost | When |
+            | --- | --- | --- | --- |
+            | Notes | Sketch | Free | Now |
+            | Code editor | Build | Varies | Later |
+        """.trimIndent()
+        val table = WorkspaceRichAnswerBlocks.parse(raw)
+            .filterIsInstance<WorkspaceRichAnswerBlocks.Block.Table>().single()
+        assertEquals(listOf("Tool", "Purpose", "Cost", "When"), table.headers)
+        assertEquals(listOf("Notes", "Sketch", "Free", "Now"), table.rows.first())
+        assertEquals(listOf("Code editor", "Build", "Varies", "Later"), table.rows.last())
+    }
+
     @Test fun oversizedResponsesNeverExplodeIntoThousandsOfViews() {
         val value = ("- item\n").repeat(5000)
         assertEquals(1, WorkspaceRichAnswerBlocks.parse(value).size)

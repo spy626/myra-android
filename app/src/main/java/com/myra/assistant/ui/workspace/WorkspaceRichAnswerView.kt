@@ -154,6 +154,10 @@ internal object WorkspaceRichAnswerView {
                                 setStroke(dp(context, 1), borderColor)
                             }
                         }
+                        // Stacked comparison cards retain all 2–4 source columns while
+                        // keeping their label/value relationships readable on a narrow phone.
+                        put(item, label(context, block.headers.first(), 12.5f, muted = true),
+                            context, bottom = 2)
                         put(item, label(context, cells[0], 16.5f, bold = true),
                             context, bottom = if (cells.size > 1) 4 else 0)
                         cells.drop(1).forEachIndexed { valueIndex, value ->
