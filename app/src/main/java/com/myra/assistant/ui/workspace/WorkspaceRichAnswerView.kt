@@ -1,6 +1,14 @@
 package com.myra.assistant.ui.workspace
 
 import android.content.Context
+import android.content.res.ColorStateList
+import android.view.Gravity
+import android.widget.HorizontalScrollView
+import android.widget.TableLayout
+import android.widget.TableRow
+import android.widget.RadioGroup
+import android.widget.RadioButton
+import com.google.android.material.button.MaterialButton
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -184,6 +192,166 @@ internal object WorkspaceRichAnswerView {
                         setBackgroundColor(borderColor)
                         minimumHeight = dp(context, 1)
                     }, context, top = 9, bottom = 8)
+                }
+            }
+        }
+        return root
+    }
+
+    /** JSON-driven Android Views renderer; old Markdown path remains for historical replies. */
+    fun createBlocks(
+        context: Context,
+        blocks: List<Block>,
+        onOptionSelected: (String) -> Unit,
+    ): View {
+        val root = column(context).apply {
+            setPadding(dp(context, 9), dp(context, 6), dp(context, 9), dp(context, 10))
+        }
+        blocks.forEach { block ->
+            when (block) {
+                is Block.Text -> put(root, label(context, block.text), context, bottom = 5)
+                is Block.Heading -> put(root, label(context,
+                    (if (block.emoji.isBlank()) "" else block.emoji + " ") + block.text,
+                    fontSp = 19f, bold = true), context, top = 10, bottom = 5)
+                is Block.Bullets -> {
+                    val items = column(context)
+                    block.items.forEach { item ->
+                        val line = row(context)
+                        line.addView(label(context, "•", 17f).apply {
+                            setTextColor(accentColor)
+                        }, LinearLayout.LayoutParams(dp(context, 20), -2))
+                        line.addView(label(context, item, 15.5f),
+                            LinearLayout.LayoutParams(0, -2, 1f))
+                        put(items, line, context, top = 3, bottom = 3)
+                    }
+                    put(root, items, context, top = 2, bottom = 7)
+                }
+                is Block.Table -> {
+                    val horizontal = HorizontalScrollView(context).apply {
+                        isHorizontalScrollBarEnabled = true
+                    }
+                    val table = TableLayout(context).apply {
+                        isShrinkAllColumns = false
+                        isStretchAllColumns = false
+                    }
+                    (listOf(block.columns) + block.rows).forEachIndexed { index, cells ->
+                        val line = TableRow(context)
+                        cells.forEach { cell ->
+                            val view = label(context, cell, 14f, bold = index == 0).apply {
+                                setPadding(dp(context, 10), dp(context, 9),
+                                    dp(context, 10), dp(context, 9))
+                                minWidth = dp(context, 104)
+                                if (index == 0) setBackgroundColor(Color.rgb(28, 46, 37))
+                            }
+                            line.addView(view, TableRow.LayoutParams(-2, -2))
+                        }
+                        table.addView(line, TableLayout.LayoutParams(-2, -2))
+                        table.addView(View(context).apply { setBackgroundColor(borderColor) },
+                            TableLayout.LayoutParams(-1, dp(context, 1)))
+                    }
+                    horizontal.addView(table)
+                    put(root, horizontal, context, top = 6, bottom = 8)
+                }
+                is Block.ImageRow -> {
+                    val placeholder = column(context).apply {
+                        gravity = Gravity.CENTER
+                        background = GradientDrawable().apply {
+                            setColor(Color.rgb(24, 37, 30))
+                            cornerRadius = dp(context, 12).toFloat()
+                            setStroke(dp(context, 1), borderColor)
+                        }
+                        setPadding(dp(context, 12), dp(context, 16),
+                            dp(context, 12), dp(context, 16))
+                    }
+                    placeholder.addView(label(context, "🖼  " + block.query, 14f, muted = true))
+                    if (block.caption.isNotBlank()) {
+                        placeholder.addView(label(context, block.caption, 12.5f, muted = true))
+                    }
+                    put(root, placeholder, context, top = 5, bottom = 7)
+                }
+                is Block.AppCards -> {
+                    block.items.forEach { (name, note) ->
+                        val card = column(context).apply {
+                            setPadding(dp(context, 12), dp(context, 10),
+                                dp(context, 12), dp(context, 10))
+                            background = GradientDrawable().apply {
+                                setColor(Color.rgb(23, 40, 31))
+                                cornerRadius = dp(context, 12).toFloat()
+                                setStroke(dp(context, 1), borderColor)
+                            }
+                        }
+                        put(card, label(context, name, 16f, bold = true), context, bottom = 3)
+                        if (note.isNotBlank())
+                            put(card, label(context, note, 13f, muted = true), context)
+                        put(root, card, context, top = 4, bottom = 4)
+                    }
+                }
+                is Block.Callout -> {
+                    val callout = column(context).apply {
+                        setPadding(dp(context, 13), dp(context, 11),
+                            dp(context, 13), dp(context, 11))
+                        background = GradientDrawable().apply {
+                            setColor(Color.rgb(26, 47, 34))
+                            cornerRadius = dp(context, 12).toFloat()
+                            setStroke(dp(context, 1), accentColor)
+                        }
+                    }
+                    if (block.label.isNotBlank()) {
+                        put(callout, label(context, block.label, 14f, bold = true),
+                            context, bottom = 4)
+                    }
+                    put(callout, label(context, block.text, 15f), context)
+                    put(root, callout, context, top = 5, bottom = 7)
+                }
+                Block.Divider -> put(root, View(context).apply {
+                    setBackgroundColor(borderColor)
+                    minimumHeight = dp(context, 1)
+                }, context, top = 8, bottom = 8)
+                is Block.Options -> {
+                    val options = column(context).apply {
+                        setPadding(dp(context, 12), dp(context, 12),
+                            dp(context, 12), dp(context, 12))
+                        background = GradientDrawable().apply {
+                            setColor(Color.rgb(23, 40, 31))
+                            cornerRadius = dp(context, 12).toFloat()
+                            setStroke(dp(context, 1), borderColor)
+                        }
+                    }
+                    put(options, label(context, block.question, 16f, bold = true),
+                        context, bottom = 5)
+                    val choices = RadioGroup(context).apply {
+                        orientation = RadioGroup.VERTICAL
+                    }
+                    block.choices.forEach { choice ->
+                        choices.addView(RadioButton(context).apply {
+                            id = View.generateViewId()
+                            text = choice
+                            textSize = 14f
+                            setTextColor(bodyColor)
+                            buttonTintList = ColorStateList.valueOf(accentColor)
+                            tag = choice
+                        }, RadioGroup.LayoutParams(-1, -2))
+                    }
+                    put(options, choices, context, bottom = 7)
+                    val button = MaterialButton(context).apply {
+                        text = "Continue  →"
+                        isEnabled = false
+                        setTextColor(Color.rgb(15, 30, 20))
+                        backgroundTintList = ColorStateList.valueOf(accentColor)
+                        setOnClickListener {
+                            val picked = choices.findViewById<RadioButton>(choices.checkedRadioButtonId)
+                            val selected = picked?.tag as? String
+                            if (!selected.isNullOrBlank()) {
+                                isEnabled = false
+                                onOptionSelected(selected)
+                            }
+                        }
+                    }
+                    choices.setOnCheckedChangeListener { _, checked ->
+                        button.isEnabled = checked != -1
+                    }
+                    put(options, button, context)
+                    put(root, options, context, top = 7, bottom = 8)
                 }
             }
         }

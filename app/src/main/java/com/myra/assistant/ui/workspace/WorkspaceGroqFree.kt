@@ -86,7 +86,7 @@ internal object WorkspaceGroqFree {
         // Groq must never receive OpenRouter-only provider settings or paid fallback.
         return JSONObject()
             .put("model", MODEL)
-            .put("stream", false)
+            .put("stream", WorkspaceRichBlocksContract.enabled(extraSystemInstructions))
             .put("messages", entries)
             .put("max_completion_tokens", 2_048)
             .toString()

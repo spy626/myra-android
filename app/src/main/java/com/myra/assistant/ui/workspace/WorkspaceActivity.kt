@@ -293,6 +293,9 @@ class WorkspaceActivity : AppCompatActivity() {
         )
     }
     private var statusMessage = ""
+    // Only closed streamed blocks, never persisted until final reply acceptance.
+    private var liveRichTurnId: String? = null
+    private var liveRichBlocks: List<Block> = emptyList()
     private val workTraces = WorkspaceTurnWorkTraces()
     private val publicWorkNarrations = WorkspaceTurnPublicNarrations()
     private val detachedWorkTrace = WorkspaceWorkTrace()
@@ -534,7 +537,9 @@ class WorkspaceActivity : AppCompatActivity() {
         return WorkspaceRuntimeSelfModel.combine(
             WorkspaceRuntimeSelfModel.instructions(snapshot),
             extraSystemInstructions,
-        )
+        ) + if (project?.type == WorkspaceProjectType.CHAT &&
+            extraSystemInstructions.isNullOrBlank())
+            "\n\n" + WorkspaceRichBlocksContract.INSTRUCTIONS else ""
     }
 
     private data class CapturedWorkflowImprovementApproval(
@@ -2609,14 +2614,31 @@ class WorkspaceActivity : AppCompatActivity() {
             if (mine) latestUserPrompt = message.text
             // Retain original saved user turns. Existing assistant replies are romanized
             // for this CHAT display without altering historical database records.
-            val assistantPresentation = if (!mine && current.type == WorkspaceProjectType.CHAT)
+            val parsedRich = if (!mine && current.type == WorkspaceProjectType.CHAT &&
+                RichBlockParser.isEnvelope(message.text))
+                RichBlockParser.parse(message.text) else null
+            val assistantPresentation = if (!mine && parsedRich == null &&
+                current.type == WorkspaceProjectType.CHAT)
                 WorkspaceHinglishReply.normalize(message.text) else message.text
             val item = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             val story = if (!mine && current.type == WorkspaceProjectType.CHAT)
                 WorkspaceStoryScript.card(latestUserPrompt, assistantPresentation) else null
             val codeParts = if (!mine && story == null) WorkspaceCodeBlocks.parse(assistantPresentation)
                 else emptyList()
-            if (story != null) {
+            if (parsedRich != null) {
+                item.addView(
+                    WorkspaceRichAnswerView.createBlocks(this, parsedRich) { choice ->
+                        if (selectedId == current.projectId && !isForegroundBusy() && !workTab) {
+                            composer.setText(choice)
+                            sendMessage()
+                        }
+                    },
+                    LinearLayout.LayoutParams(-1, -2).apply {
+                        leftMargin = dp(5)
+                        rightMargin = dp(5)
+                    },
+                )
+            } else if (story != null) {
                 item.addView(WorkspaceStoryCardView.create(this, story) {
                     copyMessage(story.copyText)
                 }, LinearLayout.LayoutParams(-1, -2))
@@ -2727,6 +2749,11 @@ class WorkspaceActivity : AppCompatActivity() {
                 item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(40)))
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+            if (mine && activeRequest != null && liveRichTurnId == message.id &&
+                liveRichBlocks.isNotEmpty()) {
+                content.addView(WorkspaceRichAnswerView.createBlocks(this, liveRichBlocks) { },
+                    LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+            }
             if (mine) {
                 val turnTrace = workTraces.existing(message.id)
                 val turnSnapshot = turnTrace?.snapshot()
@@ -4371,6 +4398,9 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val serial = ++requestGeneration
         val call = WorkspaceCustomProviderConnection.client(profile).newCall(outgoing)
+        val richRequested = WorkspaceRichBlocksContract.enabled(systemInstructions)
+        liveRichTurnId = null
+        liveRichBlocks = emptyList()
         activeRequest = call
         activateWorkTrace(messageId)
         if (skillProjection != null) {
@@ -4406,7 +4436,20 @@ class WorkspaceActivity : AppCompatActivity() {
             override fun onResponse(call: Call, response: Response) {
                 completeCustomReply(
                     call, serial, id, messageId, replacingAssistantId,
-                    runCatching { WorkspaceCustomProviderChat.read(response) },
+                    runCatching {
+                        if (richRequested) WorkspaceRichResponse.read(
+                            response, WorkspaceCustomProviderChat::read,
+                        ) { ready ->
+                            runOnUiThread {
+                                if (serial == requestGeneration && activeRequest === call &&
+                                    selectedId == id && !isFinishing && !isDestroyed) {
+                                    liveRichTurnId = messageId
+                                    liveRichBlocks += ready.filterNot { it is Block.Options }
+                                    render()
+                                }
+                            }
+                        } else WorkspaceCustomProviderChat.read(response)
+                    },
                     skillProjection,
                 )
             }
@@ -4426,24 +4469,36 @@ class WorkspaceActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed || serial != requestGeneration ||
                 activeRequest !== call || selectedId != id) return@runOnUiThread
             activeRequest = null
+            liveRichTurnId = null
+            liveRichBlocks = emptyList()
 
             val checked = result.mapCatching { reply ->
                 if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
                     val saved = conversations.read(id)
                     val actual = if (replacingAssistantId != null &&
                         saved.lastOrNull()?.id == replacingAssistantId) saved.dropLast(1) else saved
-                    val visible = WorkspaceChatTurnFrame.verify(actual, reply)
+                    val clean = WorkspaceChatVisibleReply.sanitize(reply)
+                    require(!RichBlockParser.looksLikeEnvelope(clean) ||
+                        (RichBlockParser.isEnvelope(clean) &&
+                            RichBlockParser.parse(clean).isNotEmpty())) {
+                        "LYRA returned invalid rich blocks; incomplete reply not saved"
+                    }
+                    val checkText = if (RichBlockParser.isEnvelope(clean))
+                        RichBlockParser.visibleText(RichBlockParser.parse(clean)) else clean
+                    val visible = WorkspaceChatTurnFrame.verify(actual, checkText)
                     WorkspacePlanningAnswerBoundary.requireAcceptable(
                         actual.lastOrNull()?.takeIf { it.role == "user" }?.text.orEmpty(),
                         visible,
                     )
+                    clean
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
                 skillProjection?.let {
                     WorkspaceSkillInvocationFreshness.requireCurrent(skillStore, it)
                 }
-                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT)
+                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT &&
+                    !RichBlockParser.isEnvelope(reply))
                     WorkspaceHinglishReply.normalize(reply) else reply
                 WorkspaceSkillResultBoundary.attach(presented, skillProjection)
             }
@@ -4585,6 +4640,9 @@ class WorkspaceActivity : AppCompatActivity() {
         }.getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
         val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
+        val richRequested = WorkspaceRichBlocksContract.enabled(systemInstructions)
+        liveRichTurnId = null
+        liveRichBlocks = emptyList()
         activeRequest = call
         if (skillProjection != null && workTrace.snapshot().events.isEmpty()) {
             workTrace.begin(
@@ -4611,7 +4669,20 @@ class WorkspaceActivity : AppCompatActivity() {
             override fun onResponse(call: Call, response: Response) {
                 WorkspaceProviderSessionHealth.recordResponse(response)
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
-                    runCatching { WorkspaceChatGateway.read(provider, response) },
+                    runCatching {
+                        if (richRequested) WorkspaceRichResponse.read(
+                            response, { actual -> WorkspaceChatGateway.read(provider, actual) },
+                        ) { ready ->
+                            runOnUiThread {
+                                if (serial == requestGeneration && activeRequest === call &&
+                                    selectedId == id && !isFinishing && !isDestroyed) {
+                                    liveRichTurnId = messageId
+                                    liveRichBlocks += ready.filterNot { it is Block.Options }
+                                    render()
+                                }
+                            }
+                        } else WorkspaceChatGateway.read(provider, response)
+                    },
                     skillProjection)
             }
         })
@@ -4625,6 +4696,8 @@ class WorkspaceActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed || serial != requestGeneration ||
                 activeRequest !== call || selectedId != id) return@runOnUiThread
             activeRequest = null
+            liveRichTurnId = null
+            liveRichBlocks = emptyList()
             // Check the completed visible draft against the actual USER topic before
             // saving it. This is deliberately conservative and makes NO new AI call.
             val checked = result.mapCatching { reply ->
@@ -4632,18 +4705,28 @@ class WorkspaceActivity : AppCompatActivity() {
                     val saved = conversations.read(id)
                     val actual = if (replacingAssistantId != null &&
                         saved.lastOrNull()?.id == replacingAssistantId) saved.dropLast(1) else saved
-                    val visible = WorkspaceChatTurnFrame.verify(actual, reply)
+                    val clean = WorkspaceChatVisibleReply.sanitize(reply)
+                    require(!RichBlockParser.looksLikeEnvelope(clean) ||
+                        (RichBlockParser.isEnvelope(clean) &&
+                            RichBlockParser.parse(clean).isNotEmpty())) {
+                        "LYRA returned invalid rich blocks; incomplete reply not saved"
+                    }
+                    val checkText = if (RichBlockParser.isEnvelope(clean))
+                        RichBlockParser.visibleText(RichBlockParser.parse(clean)) else clean
+                    val visible = WorkspaceChatTurnFrame.verify(actual, checkText)
                     WorkspacePlanningAnswerBoundary.requireAcceptable(
                         actual.lastOrNull()?.takeIf { it.role == "user" }?.text.orEmpty(),
                         visible,
                     )
+                    clean
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
                 skillProjection?.let {
                     WorkspaceSkillInvocationFreshness.requireCurrent(skillStore, it)
                 }
-                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT)
+                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT &&
+                    !RichBlockParser.isEnvelope(reply))
                     WorkspaceHinglishReply.normalize(reply) else reply
                 WorkspaceSkillResultBoundary.attach(presented, skillProjection)
             }

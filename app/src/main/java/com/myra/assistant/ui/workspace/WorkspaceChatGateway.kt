@@ -171,7 +171,9 @@ internal object WorkspaceChatGateway {
             codeInstructions,
             // Shared planning contract appears once, after generic reply guidance.
             practicalPlanning,
-        )).filter(String::isNotBlank).joinToString("\n\n")
+        )).filter(String::isNotBlank).joinToString("\n\n") +
+            if (WorkspaceRichBlocksContract.enabled(extra))
+                "\n\nFINAL RESPONSE FORMAT: Follow LYRA_RICH_BLOCKS_V1 JSON ONLY, overriding earlier Markdown formatting suggestions." else ""
         if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", instructions))
         recent.forEachIndexed { index, message ->
@@ -194,7 +196,7 @@ internal object WorkspaceChatGateway {
     ): String {
         val entries = openAiMessages(messages, image, extraSystemInstructions)
         return JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
-            .put("stream", false).put("max_tokens", 2_048)
+            .put("stream", WorkspaceRichBlocksContract.enabled(extraSystemInstructions)).put("max_tokens", 2_048)
             // A free label alone is insufficient: reject every endpoint with a nonzero
             // prompt, completion, per-request or image price. Never upgrade silently.
             .put("provider", JSONObject().put("zdr", true).put("data_collection", "deny")
