@@ -106,34 +106,6 @@ internal object WorkspacePlanningAnswerBoundary {
         return null
     }
 
-    private val labelledStep = Regex(
-        """(?i)^\s{0,3}(?:[-*+]\s+)?(?:#{1,4}\s*)?(?:\*\*)?""" +
-            """(?:(?:step|kadam|point)\s+([1-6])(?:\s*[:.)\-–—]|\s+)|([1-6])[.):]\s+)"""
-    )
-
-    /** Counts explicitly indicated MAIN steps, never demands a specific renderer block. */
-    internal fun explicitMainStepNumbers(reply: String): List<Int> {
-        val numbers = mutableListOf<Int>()
-        var later = false
-        for (raw in reply.lineSequence().take(160)) {
-            val line = cleanLine(raw)
-            if (line.isBlank()) continue
-            val isHeading = heading.containsMatchIn(raw) ||
-                (raw.trim().startsWith("**") && raw.trim().endsWith("**"))
-            if (future.containsMatchIn(line) && labelledStep.find(raw) == null) {
-                later = true
-                continue
-            }
-            if (isHeading && now.containsMatchIn(line)) later = false
-            if (later) continue
-            val marker = labelledStep.find(raw) ?: continue
-            val number = marker.groupValues.drop(1).firstOrNull { it.isNotEmpty() }
-                ?.toIntOrNull() ?: continue
-            numbers.add(number)
-        }
-        return numbers
-    }
-
     /**
      * Inspects completed provider output before saving, preserving its original bytes.
      * Explicit comparisons and separate descriptive Future sections are allowed.
@@ -145,16 +117,10 @@ internal object WorkspacePlanningAnswerBoundary {
         if (fence.containsMatchIn(completedReply))
             return "LYRA gave a code/implementation block although you asked for planning only. Reply not saved; no automatic paid retry."
 
-        // Format is not substance. Count only clearly labelled MAIN actions, in
-        // either native numeric form or headings such as "### Step 1: Scope".
-        // Unnumbered useful prose is NOT silently discarded just because the
-        // rich renderer cannot classify it as a Numbered block.
-        if (shape.stepCount != null) {
-            val marked = explicitMainStepNumbers(completedReply)
-            if (marked.isNotEmpty() && marked != (1..shape.stepCount).toList())
-                return "LYRA returned " + marked.size + " identifiable actions, not your " +
-                    shape.stepCount + " numbered planning steps. Reply not saved; tap Retry if useful."
-        }
+        // The exact N-step request is already in the SINGLE shared prompt.
+        // Never discard a useful answer for a formatting or counted-step guess:
+        // there is no reliable semantic step parser in the completed-answer gate.
+        // This gate rejects only unmistakable advice-only execution violations.
 
         // Comparison prose is still checked for orders; descriptive table rows
         // remain data rather than interpreted as the user's next action.

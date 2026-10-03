@@ -131,13 +131,12 @@ class WorkspacePlanningAnswerBoundaryTest {
         assertNotNull(WorkspacePlanningAnswerBoundary.violation(phonePlan, invalid))
     }
 
-    @Test fun stepCountIsValidatedBeforeSavingButNormalAndExplicitBuildStayUntouched() {
-        val wrongCount = """
+    @Test fun missingMarkerCountNeverDiscadsAnswerOrBlocksActualExecutionRequest() {
+        val twoClearIdeas = """
             1. **Features:** List the essentials.
-            2. **Sketch:** Draw Home.
+            2. **Sketch:** Draw Home on paper.
         """.trimIndent()
-        assertTrue(WorkspacePlanningAnswerBoundary.violation(phonePlan, wrongCount)
-            .orEmpty().contains("3 numbered"))
+        assertNull(WorkspacePlanningAnswerBoundary.violation(phonePlan, twoClearIdeas))
         val actualBuildRequest = "Bro ab actual app implementation shuru karo, " +
             "Sketchware mein New Project banao aur screens create karo"
         assertNull(WorkspacePlanningAnswerBoundary.violation(
@@ -148,7 +147,6 @@ class WorkspacePlanningAnswerBoundaryTest {
             "Hi bro kya haal hai?", "Sketchware install mat karo. 😂"
         ))
     }
-
 
     @Test fun latestVideoThreeStepHeadingsAndBoldStepFormatsAreAccepted() {
         val variants = listOf(
@@ -176,8 +174,6 @@ class WorkspacePlanningAnswerBoundaryTest {
             """.trimIndent()
         )
         variants.forEach { valid ->
-            assertEquals(listOf(1, 2, 3),
-                WorkspacePlanningAnswerBoundary.explicitMainStepNumbers(valid))
             assertNull(WorkspacePlanningAnswerBoundary.violation(phonePlan, valid))
             assertEquals(valid, WorkspacePlanningAnswerBoundary.requireAcceptable(phonePlan, valid))
         }
@@ -194,11 +190,10 @@ class WorkspacePlanningAnswerBoundaryTest {
             ## Sample content
             Five grocery item names aur prices ki list banao.
         """.trimIndent()
-        assertTrue(WorkspacePlanningAnswerBoundary.explicitMainStepNumbers(actualPlanning).isEmpty())
         assertNull(WorkspacePlanningAnswerBoundary.violation(phonePlan, actualPlanning))
     }
 
-    @Test fun explicitTwoOrFourMainActionsRemainCountViolations() {
+    @Test fun evenTwoOrFourExplicitMarkersDoNotCauseFormattingRejection() {
         val two = """
             ### Step 1: List features
             ### Step 2: Sketch on paper
@@ -209,10 +204,8 @@ class WorkspacePlanningAnswerBoundaryTest {
             3. **Content:** Write sample prices.
             4. **Another:** Add feature ideas.
         """.trimIndent()
-        assertTrue(WorkspacePlanningAnswerBoundary.violation(phonePlan, two)
-            .orEmpty().contains("3 numbered"))
-        assertTrue(WorkspacePlanningAnswerBoundary.violation(phonePlan, four)
-            .orEmpty().contains("3 numbered"))
+        assertNull(WorkspacePlanningAnswerBoundary.violation(phonePlan, two))
+        assertNull(WorkspacePlanningAnswerBoundary.violation(phonePlan, four))
     }
 
     @Test fun setupStillFailsRegardlessOfVisualStepMarker() {
