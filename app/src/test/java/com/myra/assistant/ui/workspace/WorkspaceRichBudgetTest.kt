@@ -67,7 +67,8 @@ class WorkspaceRichBudgetTest {
             .header("Content-Type", "text/event-stream")
             .body(data.toResponseBody("text/event-stream".toMediaType())).build()
         val error = runCatching {
-            WorkspaceRichResponse.read(response, { error("unexpected fallback") }, {})
+            WorkspaceRichResponse.read(response, { error("unexpected fallback") },
+                onBlocks = {})
         }.exceptionOrNull()
         assertTrue(error is WorkspaceRichResponse.BudgetExceeded)
         val metrics = (error as WorkspaceRichResponse.BudgetExceeded).metrics

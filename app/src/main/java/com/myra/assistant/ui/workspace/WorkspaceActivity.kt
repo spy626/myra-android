@@ -4714,6 +4714,8 @@ class WorkspaceActivity : AppCompatActivity() {
                     val reply = if (richRequested) WorkspaceRichResponse.read(
                         response,
                         { actual -> WorkspaceChatGateway.read(provider, actual) },
+                        { stats -> WorkspaceRichDiagnostics.metrics(
+                            this@WorkspaceActivity, messageId, stats) },
                         { ready ->
                             runOnUiThread {
                                 if (serial == requestGeneration && activeRequest === call &&
@@ -4725,8 +4727,6 @@ class WorkspaceActivity : AppCompatActivity() {
                                 }
                             }
                         },
-                        { stats -> WorkspaceRichDiagnostics.metrics(
-                            this@WorkspaceActivity, messageId, stats) },
                     ) else WorkspaceChatGateway.read(provider, response)
                     if (richRequested && plan) {
                         val preview = WorkspaceRichOutputBudget.compact(reply, true)

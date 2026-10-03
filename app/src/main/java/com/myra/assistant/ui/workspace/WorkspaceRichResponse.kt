@@ -15,8 +15,8 @@ internal object WorkspaceRichResponse {
     fun read(
         response: Response,
         fallback: (Response) -> String,
-        onBlocks: (List<Block>) -> Unit,
         onMetrics: (Metrics) -> Unit = {},
+        onBlocks: (List<Block>) -> Unit,
     ): String {
         if (!response.isSuccessful ||
             !response.header("Content-Type").orEmpty().contains("text/event-stream", true)
