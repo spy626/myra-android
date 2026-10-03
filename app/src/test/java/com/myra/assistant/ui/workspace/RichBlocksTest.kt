@@ -9,6 +9,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RichBlocksTest {
+    @Test fun bodyParagraphParsesButDoesNotSpeakWhileRemainingVisible() {
+        val raw = """{"blocks":[
+            {"type":"heading","text":"Planning"},
+            {"type":"text","style":"body","text":"Pehle features note karo."},
+            {"type":"text","style":"closer","text":"Meri advice: plan first."}
+        ]}"""
+        val parsed = RichBlockParser.parse(raw)
+        assertEquals(3, parsed.size)
+        assertEquals(Block.Text("body", "Pehle features note karo."), parsed[1])
+        assertFalse(RichBlockParser.spokenText(parsed).contains("Pehle features"))
+        assertTrue(RichBlockParser.visibleText(parsed).contains("Pehle features"))
+    }
+
     @Test fun parsesAllTenAllowedBlocksAndSpeaksOnlyOpenerCloser() {
         val reply = """{"blocks":[
           {"type":"text","style":"opener","text":"Hi bro"},
@@ -110,9 +123,9 @@ class RichBlocksTest {
         assertTrue(entries.getJSONObject(0).getString("content")
             .contains("previously worked on a web app using SPCK Editor"))
         assertTrue(entries.getJSONObject(0).getString("content")
-            .contains("For ANY comparison or checklist use a TABLE"))
+            .contains("A table is useful for actual 2-column product/price"))
         assertTrue(entries.getJSONObject(0).getString("content")
-            .contains("Each step MUST have its OWN heading block"))
+            .contains("For N requested steps, give EXACTLY N"))
 
         // The same JSON contract must survive Free-route body generation too.
         val groq = org.json.JSONObject(WorkspaceGroqFree.body(
@@ -127,81 +140,59 @@ class RichBlocksTest {
         assertTrue(llm7.getBoolean("stream"))
     }
 
-    @Test fun fullThreeStepFewShotHasDistinctHeadingAndBodyForEachStep() {
-        val raw = WorkspaceRichBlocksContract.INSTRUCTIONS
-            .substringAfter("COMPLETE THREE-STEP FEW-SHOT (illustrative plan; adapt, never copy as live data):")
-            .substringBefore("END THREE-STEP FEW-SHOT.").trim()
+    @Test fun fullExampleIsNaturalBulletsTableAppRowsNotCompulsoryMockup() {
+        val raw = WorkspaceRichBlocksContract.INSTRUCTIONS.substringAfter(
+            "COMPLETE THREE-STEP FEW-SHOT (illustrative plan; adapt, never copy as live data):"
+        ).substringBefore("END THREE-STEP FEW-SHOT.").trim()
         val blocks = RichBlockParser.parse(raw)
-        assertEquals("Illustrative JSON must parse all nine blocks: " + raw, 9, blocks.size)
-        assertEquals("opener", (blocks.first() as Block.Text).style)
+        assertEquals(8, blocks.size)
         assertEquals(listOf(1, 3, 5), blocks.indices.filter { blocks[it] is Block.Heading })
-        val titles = blocks.filterIsInstance<Block.Heading>().map { it.text }
-        assertTrue(titles[0].startsWith("Step 1"))
-        assertTrue(titles[1].startsWith("Step 2"))
-        assertTrue(titles[2].startsWith("Step 3"))
-        assertTrue(blocks[2] is Block.MockupCard)
-        assertTrue(blocks[4] is Block.AppCards)
-        assertTrue(blocks[6] is Block.Table)
-        assertTrue(blocks[7] is Block.Callout)
-        assertTrue((blocks[8] as Block.Text).text.startsWith("Meri advice:"))
-        val table = blocks[6] as Block.Table
-        assertTrue(table.columns.any { it.contains("Sample") })
-        assertTrue(table.rows.flatten().any { it.contains("₹") })
-        assertTrue((blocks[7] as Block.Callout).text.contains("verified market rates nahi"))
+        assertTrue(blocks[2] is Block.Bullets)
+        assertTrue(blocks[4] is Block.Table)
+        assertEquals(5, (blocks[4] as Block.Table).rows.size)
+        assertTrue(blocks[6] is Block.AppCards)
+        assertTrue((blocks.last() as Block.Text).text.startsWith("Meri advice:"))
+        assertFalse(blocks.any { it is Block.MockupCard || it is Block.Callout })
         assertFalse(RichBlockParser.spokenText(blocks).contains("₹"))
     }
 
-    @Test fun compactGroqFewShotAlsoKeepsThreeStepStructureAndRules() {
+    @Test fun freeSampleUsesSevenNaturalBlocksWithNoForcedVisuals() {
         val compact = WorkspaceRichBlocksContract.COMPACT_GROQ_INSTRUCTIONS
         val raw = compact.substringAfter(
             "THREE-STEP FEW-SHOT JSON (illustrative, not live data):").trim()
         val blocks = RichBlockParser.parse(raw)
         assertEquals(7, blocks.size)
         assertEquals(listOf(0, 2, 4), blocks.indices.filter { blocks[it] is Block.Heading })
-        assertTrue(blocks[1] is Block.MockupCard)
-        assertTrue(blocks[3] is Block.AppCards)
-        assertTrue(blocks[5] is Block.Table)
+        assertTrue(blocks[1] is Block.Bullets)
+        assertTrue(blocks[3] is Block.Table)
+        assertTrue(blocks[5] is Block.AppCards)
         assertTrue(blocks.last() is Block.Text)
-        listOf(WorkspaceRichBlocksContract.INSTRUCTIONS, compact).forEach { instructions ->
-            assertTrue(instructions.contains("12"))
-            assertTrue(instructions.contains("Google Keep"))
-            assertTrue(instructions.contains("SPCK Editor"))
-            assertTrue(instructions.contains("Chrome"))
-            assertTrue(instructions.contains("mockup_card"))
-            assertTrue(instructions.contains("For ANY comparison or checklist use a TABLE"))
-            assertTrue(instructions.contains("Step 1"))
-            assertTrue(instructions.contains("Meri advice:"))
+        listOf(WorkspaceRichBlocksContract.INSTRUCTIONS, compact).forEach { prompt ->
+            assertTrue(prompt.contains("LYRA_RICH_BLOCKS_V1"))
+            assertTrue(prompt.contains("Google Keep"))
+            assertTrue(prompt.contains("SPCK Editor"))
+            assertTrue(prompt.contains("Chrome"))
+            assertTrue(prompt.contains("mockup_card"))
+            assertTrue(prompt.contains("app_cards"))
+            assertTrue(prompt.contains("table"))
+            assertTrue(prompt.contains("Meri advice:"))
         }
-        assertTrue(WorkspaceRichBlocksContract.INSTRUCTIONS
-            .contains("ONE short line, at most 12"))
-        assertTrue(compact.contains("Do NOT compress three steps into one list"))
     }
 
-    @Test fun fewShotIsNotAForcedVisualOrderInFullOrGroqPrompt() {
+    @Test fun proseOnlyPlanIsAllowedByBothContracts() {
         val full = WorkspaceRichBlocksContract.INSTRUCTIONS
         val compact = WorkspaceRichBlocksContract.COMPACT_GROQ_INSTRUCTIONS
-        assertTrue(full.contains("independently for EACH step from mockup_card, app_cards or table"))
-        assertTrue(full.contains("NOT the few-shot's fixed order"))
-        assertTrue(full.contains("Never always repeat mockup_card -> app_cards -> table"))
-        assertTrue(full.contains("FEW-SHOT IS ONLY ONE STRUCTURAL EXAMPLE"))
-        assertTrue(compact.contains("independently"))
-        assertTrue(compact.contains("USER-TASK order, never a fixed sequence"))
-        assertTrue(compact.contains("Do NOT always repeat mockup_card -> app_cards -> table"))
-        assertTrue(compact.contains("The few-shot below demonstrates format only"))
-        // A different valid arrangement must parse unchanged: table -> mockup -> apps.
-        val alternative = """{"blocks":[
-            {"type":"heading","text":"Step 1 — Compare stock","emoji":"📦"},
-            {"type":"table","columns":["Item","Sample"],"rows":[["Rice","₹65"]]},
-            {"type":"heading","text":"Step 2 — Sketch screens","emoji":"📱"},
-            {"type":"mockup_card","title":"Screens","items":["Home","Cart"],"layout":"grid"},
-            {"type":"heading","text":"Step 3 — Select useful tools","emoji":"🛠"},
-            {"type":"app_cards","items":[{"name":"Google Keep","note":"Planning"}]}
-        ]}"""
-        val blocks = RichBlockParser.parse(alternative)
-        assertEquals(6, blocks.size)
-        assertTrue(blocks[1] is Block.Table)
-        assertTrue(blocks[3] is Block.MockupCard)
-        assertTrue(blocks[5] is Block.AppCards)
+        assertTrue(full.contains("No compulsory visual block"))
+        assertTrue(full.contains("NEVER transform planning bullets into a comparison table"))
+        assertTrue(full.contains("mockup_card is optional ONLY"))
+        assertTrue(compact.contains("A visual is OPTIONAL"))
+        assertTrue(compact.contains("ordinary list for steps/features"))
+        val plain = """{"blocks":[{"type":"heading","text":"Features"},
+            {"type":"list","items":["Home","Cart"]},
+            {"type":"text","style":"closer","text":"Meri advice: start with notes."}]}"""
+        val blocks = RichBlockParser.parse(plain)
+        assertEquals(3, blocks.size)
+        assertFalse(blocks.any { WorkspaceRichOutputBudget.isVisual(it) })
     }
 
     @Test fun localIconMapAndReadOnlyAppContextAreDeterministic() {

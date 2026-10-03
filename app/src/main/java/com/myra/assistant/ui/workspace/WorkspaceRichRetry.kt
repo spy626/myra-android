@@ -13,30 +13,34 @@ import org.json.JSONObject
  */
 internal object WorkspaceRichRetry {
     private val SHORT_CONTRACT = """
-        LYRA_RICH_BLOCKS_V1: Return ONLY valid JSON {"blocks":[...]}; no external text.
-        Keep EXACT latest user instructions, no-code, phone-only, privacy and free rules.
-        Very small rich reply, maximum 8 compact blocks. If N steps are requested,
-        use N separate heading blocks, each followed by one brief content block.
-        Never lose all visuals: at least one mockup_card, app_cards or table.
-        Choose types independently by step purpose, not in fixed example order.
-        Prefer a TWO-column TABLE for comparison/checklist/sample data.
-        mockup_card(title,items:[2-4 short strings],layout:"grid"|"list");
-        app_cards(items:[{name,note}]) max 2, each note max FIVE words.
-        table(columns:[2 strings],rows:[up to 3 pairs]); callout(label,text) one line;
-        list(items:[short strings, each max 8 words]); heading(emoji,text).
-        text(style:"opener"|"closer",text) one line; divider allowed.
-        Never fabricate live prices: label examples SAMPLE. Do not use long bullets.
-        For list/table status write "Baaki"/"Ho gaya"/"Nahi hua" as plain text,
-        never red/green/status emoji (✅ ❌ 🟢 🔴 ❓).
-        Full JSON example is NOT a fixed order; change blocks to fit this request:
-        {"blocks":[{"type":"heading","text":"Step 1 — Screens"},
-          {"type":"mockup_card","title":"Layout","layout":"grid","items":["Home","Cart"]},
-          {"type":"heading","text":"Step 2 — Tools"},
-          {"type":"app_cards","items":[{"name":"Google Keep","note":"Plan now"}]},
-          {"type":"heading","text":"Step 3 — Samples"},
-          {"type":"table","columns":["Item","Sample ₹"],"rows":[["Rice","65"]]},
-          {"type":"text","style":"closer","text":"Meri advice: notes first."}]}
-        Natural Roman Hinglish; no invented actions or execution claims.
+        LYRA_RICH_BLOCKS_V1: return ONLY valid JSON {"blocks":[...]}.
+        This is a compact natural ChatGPT-style answer, not a cards dashboard.
+        Every object has type. Allowed fields:
+        text(style:"opener"|"body"|"closer",text); heading(emoji,text);
+        list(items); table(columns,rows); app_cards(items:[{name,note}]);
+        callout(label,text); mockup_card(title,items,layout:"grid"|"list");
+        divider; image_row(query,caption); options(question,choices).
+        Honor latest user's exact N steps with N brief headings and their
+        own natural content: prose/list, actual comparison table or inline
+        app-logo rows if relevant. A visual is OPTIONAL. Do not add fake tables.
+        No mockup_card unless user explicitly asks for a rough screen sketch.
+        Keep total blocks minimal (about seven), text short but complete;
+        table up to five useful rows, two columns; no oversized visual panels.
+        Use plain "Baaki"/"Ho gaya" for status, not colored status emoji.
+        Free phone-only examples: Google Keep for planning NOW,
+        SPCK Editor code LATER, Chrome preview LATER; obey no-code requests.
+        Example prices SAMPLE, never verified/live. End naturally with
+        "Meri advice:" if appropriate. No invented actions or paid providers.
+        The format example is not a mandatory sequence:
+        {"blocks":[{"type":"heading","text":"1. Basic features"},
+         {"type":"list","items":["Home, products and cart","Simple search"]},
+         {"type":"heading","text":"2. Sample items"},
+         {"type":"table","columns":["Item","Sample ₹"],"rows":[["Rice","65"],["Milk","30"]]},
+         {"type":"heading","text":"3. Phone tools"},
+         {"type":"app_cards","items":[{"name":"Google Keep","note":"Plan today"}]},
+         {"type":"text","style":"closer","text":"Meri advice: notes first."}]}
+        Natural Roman Hinglish; only opener/closer spoken.
+        Latest request, consent, runtime, privacy/security and Free gates prevail.
     """.trimIndent()
 
     fun request(original: Request): Request? = runCatching {

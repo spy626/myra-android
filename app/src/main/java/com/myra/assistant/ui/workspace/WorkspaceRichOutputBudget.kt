@@ -68,63 +68,25 @@ internal object WorkspaceRichOutputBudget {
         return JSONObject().put("blocks", a).toString()
     }
 
-    /** Derive a visual solely from actual bullet text when the model omitted visuals. */
-    private fun ensureVisual(blocks: List<Block>, plan: Boolean, changes: MutableList<String>):
-        List<Block> {
-        if (!plan || blocks.any(::isVisual)) return blocks
-        val firstList = blocks.indexOfFirst { it is Block.Bullets }
-        if (firstList < 0) return blocks
-        val source = blocks[firstList] as Block.Bullets
-        val rows = source.items.take(3).mapIndexed { i, item ->
-            listOf((i + 1).toString(), line(item, 80))
-        }
-        changes += "existing list presented as two-column table (no new factual content)"
-        return blocks.toMutableList().apply {
-            set(firstList, Block.Table(listOf("Item", "Action"), rows))
-        }
-    }
-
     fun compact(raw: String, plan: Boolean): Result {
-        if (!RichBlockParser.isEnvelope(raw)) {
-            if (plan && !RichBlockParser.looksLikeEnvelope(raw)) {
-                // An unstructured provider reply can still become a faithful visual
-                // using only its own existing lines; no new recommendation or fact.
-                val lines = raw.lines().map(String::trim).filter(String::isNotBlank)
-                val bullets = lines.mapNotNull {
-                    Regex("""^(?:[-*•]|\d+[.)])\s+(.+)$""").matchEntire(it)
-                        ?.groupValues?.get(1)
-                }
-                val data = if (bullets.isNotEmpty()) bullets else lines.filterNot {
-                    it.startsWith("#")
-                }
-                if (data.isNotEmpty()) {
-                    val title = lines.firstOrNull { it.startsWith("#") }
-                        ?.trimStart('#', ' ')?.take(70) ?: "Plan highlights"
-                    val generated = listOf(
-                        Block.Heading("", title),
-                        Block.Table(listOf("Item", "Action"),
-                            data.take(3).mapIndexed { i, item ->
-                                listOf((i + 1).toString(), line(item, 70))
-                            }),
-                    )
-                    return Result(serialize(generated), listOf("markdown/plain"),
-                        generated.map(::type), listOf(
-                            "existing model words presented as a table; no facts added"))
-                }
-            }
-            return Result(raw, emptyList(), emptyList(),
-                listOf("Provider did not supply a valid rich JSON envelope"))
-        }
+        // Plain Markdown/prose stays plain. Never manufacture a visual/table
+        // out of genuine user-facing bullets merely to satisfy an old prompt rule.
+        if (!RichBlockParser.isEnvelope(raw))
+            return Result(raw, emptyList(), emptyList(), emptyList())
         val source = RichBlockParser.parse(raw)
         if (source.isEmpty()) return Result(raw, emptyList(), emptyList(),
             listOf("No valid blocks"))
         val changes = mutableListOf<String>()
         val before = source.map(::type)
-        // FIRST pass: trim the cheapest text (bullets) before touching visual blocks.
+        // Normal replies must not be chopped or rearranged. Preserve the author's
+        // five-item tables, natural prose and list lengths when under budget.
+        if (raw.length <= TARGET_CHARS)
+            return Result(raw, before, before, emptyList())
+        // For exceptional oversized replies, trim lengthy prose before other blocks.
         var blocks: List<Block> = source.map { b ->
             when (b) {
                 is Block.Bullets -> {
-                    val items = b.items.take(3).map { words(it, 12).take(85).trim() }
+                    val items = b.items.take(7).map { words(it, 18).take(130).trim() }
                     if (items != b.items) changes += "list text/items shortened first"
                     Block.Bullets(items)
                 }
@@ -134,22 +96,22 @@ internal object WorkspaceRichOutputBudget {
         // SECOND pass: compact other prose and enforce strict visual shape limits.
         blocks = blocks.map { b ->
             when (b) {
-                is Block.Text -> b.copy(text = line(b.text, 130))
-                is Block.Heading -> b.copy(text = line(b.text, 76))
+                is Block.Text -> b.copy(text = line(b.text, 210))
+                is Block.Heading -> b.copy(text = line(b.text, 95))
                 is Block.Bullets -> b
                 is Block.MockupCard -> b.copy(
                     title = line(b.title, 52),
                     items = b.items.take(4).map { line(it, 28) },
                 )
                 is Block.AppCards -> b.copy(items = b.items.take(3).map { (n, v) ->
-                    line(n, 50) to words(v, 5).take(65)
+                    line(n, 50) to words(v, 12).take(95)
                 })
                 is Block.Table -> b.copy(
                     columns = b.columns.take(2).map { line(it, 34) },
-                    rows = b.rows.take(3).map { row -> row.take(2).map { line(it, 55) } },
+                    rows = b.rows.take(6).map { row -> row.take(2).map { line(it, 68) } },
                 )
-                is Block.Callout -> b.copy(label = line(b.label, 28),
-                    text = line(b.text, 115))
+                is Block.Callout -> b.copy(label = line(b.label, 32),
+                    text = line(b.text, 170))
                 is Block.ImageRow -> b.copy(query = line(b.query, 70),
                     caption = line(b.caption, 75))
                 is Block.Options -> b.copy(question = line(b.question, 90),
@@ -158,7 +120,7 @@ internal object WorkspaceRichOutputBudget {
             }
         }
         if (blocks != source) changes += "text/visual item limits applied"
-        blocks = ensureVisual(blocks, plan, changes)
+        // A prose-only plan is valid. No compulsory visual or fake table.
         // THIRD pass: compact bullets further before EVER considering removal of visuals.
         if (serialize(blocks).length > TARGET_CHARS) {
             blocks = blocks.map { b ->
@@ -178,12 +140,12 @@ internal object WorkspaceRichOutputBudget {
             blocks = blocks.filterNot { it is Block.Divider || it is Block.ImageRow }
             changes += "optional divider/image placeholder removed; visual cards retained"
         }
-        // Visuals are the LAST removable class, and never remove the final visual
-        // from a plan. Normal small plans will not need this branch.
+        // Optional visuals are the LAST removable class, never mandatory.
+        // Normal prose-first answers almost never enter this oversized branch.
         if (serialize(blocks).length > TARGET_CHARS) {
             val mutable = blocks.toMutableList()
             while (serialize(mutable).length > TARGET_CHARS &&
-                mutable.count(::isVisual) > if (plan) 1 else 0) {
+                mutable.count(::isVisual) > 0) {
                 val index = mutable.indexOfLast(::isVisual)
                 if (index < 0) break
                 changes += "last-resort removed: " + type(mutable[index])
@@ -191,7 +153,7 @@ internal object WorkspaceRichOutputBudget {
             }
             blocks = mutable
         }
-        // We do not silently discard the final visual block to reach a size target.
+        // Never discard the user's underlying original reply in storage pre-checks.
         require(serialize(blocks).length <= WorkspaceConversationStore.MAX_MESSAGE_LENGTH) {
             "Compact rich result still exceeds local message limit"
         }

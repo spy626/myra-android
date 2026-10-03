@@ -10,53 +10,51 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorkspaceRichBudgetTest {
-    @Test fun visualShapesAreBoundedBulletsTrimFirstAndAtLeastOneVisualSurvives() {
+    @Test fun normalFiveRowTableAndNaturalBulletsRemainUntouched() {
         val raw = """{"blocks":[
-            {"type":"text","style":"opener","text":"Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi "},
-            {"type":"heading","text":"Step 1 — plan"},
-            {"type":"list","items":["one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen","another lengthy description of products that nobody needs inside the list item today"]},
-            {"type":"mockup_card","title":"Home screen","layout":"grid","items":["Home","Product","Cart","Checkout","Account","Help"]},
-            {"type":"app_cards","items":[{"name":"Google Keep","note":"one two three four five six seven eight nine"},{"name":"SPCK Editor","note":"Code later"},{"name":"Chrome","note":"Preview later"},{"name":"Another","note":"Not required"}]},
-            {"type":"table","columns":["Item","Sample price","Unit"],"rows":[["Rice","65","kg"],["Milk","30","ml"],["Egg","40","six"],["Sugar","55","kg"]]},
-            {"type":"callout","label":"Tip","text":"Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data "},
-            {"type":"text","style":"closer","text":"Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. "}
-        ]}""".replace("Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi Hi ", "Hi ".repeat(60))
-            .replace("Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data Always use illustrative sample data ",
-                "Always use illustrative sample data ".repeat(15))
-            .replace("Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. Meri advice: keep it short. ",
-                "Meri advice: keep it short. ".repeat(15))
+            {"type":"heading","text":"1. Features"},
+            {"type":"list","items":["Home categories","Search","Product details","Cart and checkout"]},
+            {"type":"heading","text":"2. Sample products"},
+            {"type":"table","columns":["Product","Sample price"],"rows":[
+                ["Rice","₹65"],["Milk","₹30"],["Eggs","₹42"],["Sugar","₹50"],["Oil","₹140"]]},
+            {"type":"heading","text":"3. Tools"},
+            {"type":"app_cards","items":[{"name":"Google Keep","note":"Plan now"},{"name":"SPCK Editor","note":"Code later"}]}
+        ]}"""
         val result = WorkspaceRichOutputBudget.compact(raw, true)
+        assertEquals(raw, result.raw)
+        assertTrue(result.changes.isEmpty())
         val blocks = RichBlockParser.parse(result.raw)
-        assertTrue(result.changes.first().contains("list"))
-        val items = blocks.filterIsInstance<Block.Bullets>().single().items
-        assertTrue(items.all { it.split(" ").size <= 12 })
-        assertEquals(4, blocks.filterIsInstance<Block.MockupCard>().single().items.size)
-        assertEquals(3, blocks.filterIsInstance<Block.AppCards>().single().items.size)
-        assertTrue(blocks.filterIsInstance<Block.AppCards>().single().items.all {
-            it.second.split(" ").size <= 5
-        })
-        assertEquals(2, blocks.filterIsInstance<Block.Table>().single().columns.size)
-        assertEquals(3, blocks.filterIsInstance<Block.Table>().single().rows.size)
-        assertEquals(3, WorkspaceRichOutputBudget.visualCount(result.raw))
-        assertEquals("text", result.before.first())
-        assertTrue(result.after.containsAll(listOf("mockup_card", "app_cards", "table")))
-        assertFalse(result.raw.contains("Account"))
+        assertEquals(4, (blocks[1] as Block.Bullets).items.size)
+        assertEquals(5, (blocks[3] as Block.Table).rows.size)
+        assertEquals(2, (blocks[5] as Block.AppCards).items.size)
+        assertEquals(2, WorkspaceRichOutputBudget.visualCount(result.raw))
     }
 
-    @Test fun missingVisualFromModelBulletsCanBePresentedWithoutInventingFacts() {
-        val model = """{"blocks":[
-            {"type":"heading","text":"Plan"},
-            {"type":"list","items":["Products ka scope decide karo","Paper par screens sketch karo","Sample catalog note karo"]}
-        ]}"""
+    @Test fun proseAndMarkdownPlansDoNotBecomeFakeTables() {
+        val model = """{"blocks":[{"type":"heading","text":"Plan"},
+            {"type":"list","items":["Choose features","Sketch on paper","Note catalog"]}]}"""
         val result = WorkspaceRichOutputBudget.compact(model, true)
-        assertEquals(1, WorkspaceRichOutputBudget.visualCount(result.raw))
-        assertTrue(result.changes.any { it.contains("existing list") })
-        assertTrue(result.raw.contains("Paper par screens sketch karo"))
-        assertTrue(RichBlockParser.parse(result.raw).any { it is Block.Table })
-        val markdown = "## Plan\n• Products ka scope decide karo\n• Cart sketch karo"
-        val converted = WorkspaceRichOutputBudget.compact(markdown, true)
-        assertEquals(1, WorkspaceRichOutputBudget.visualCount(converted.raw))
-        assertTrue(converted.raw.contains("Cart sketch karo"))
+        assertEquals(model, result.raw)
+        assertEquals(0, WorkspaceRichOutputBudget.visualCount(result.raw))
+        assertTrue(RichBlockParser.parse(result.raw)[1] is Block.Bullets)
+        val markdown = "## Plan\\n• Choose features\\n• Sketch on paper"
+        val plain = WorkspaceRichOutputBudget.compact(markdown, true)
+        assertEquals(markdown, plain.raw)
+        assertEquals(0, WorkspaceRichOutputBudget.visualCount(plain.raw))
+    }
+
+    @Test fun exceptionalOversizedProseCanBeShortenedWithoutNewVisuals() {
+        val model = JSONObject().put("blocks", org.json.JSONArray()
+            .put(JSONObject().put("type", "text").put("style", "opener")
+                .put("text", "Long explanation ".repeat(180)))
+            .put(JSONObject().put("type", "text").put("style", "body")
+                .put("text", "Another paragraph ".repeat(180)))
+            .put(JSONObject().put("type", "list")
+                .put("items", org.json.JSONArray().put("One useful action")))).toString()
+        val result = WorkspaceRichOutputBudget.compact(model, true)
+        assertTrue(result.raw.length < model.length)
+        assertTrue(result.changes.isNotEmpty())
+        assertEquals(0, WorkspaceRichOutputBudget.visualCount(result.raw))
     }
 
     @Test fun exactSseBudgetExceptionReportsPartialTransportNotInventedFullSize() {
@@ -94,7 +92,7 @@ class WorkspaceRichBudgetTest {
             .getString("content"))
         val system = json.getJSONArray("messages").getJSONObject(0).getString("content")
         assertTrue(system.contains("RUNTIME-TRUTH: no paid route"))
-        assertTrue(system.contains("at least one mockup_card"))
+        assertTrue(system.contains("A visual is OPTIONAL"))
         assertEquals("Bearer test-groq-key", retry.header("Authorization"))
         assertFalse(body.contains("test-groq-key"))
         assertNull(WorkspaceRichRetry.request(retry))

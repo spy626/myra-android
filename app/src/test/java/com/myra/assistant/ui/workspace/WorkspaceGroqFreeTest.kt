@@ -220,7 +220,7 @@ class WorkspaceGroqFreeTest {
         assertTrue(system.contains("mockup_card"))
         assertTrue(system.contains("table"))
         assertTrue(system.contains("app_cards"))
-        assertTrue(system.contains("For ANY comparison or checklist use a TABLE"))
+        assertTrue(system.contains("ordinary list for steps/features"))
         assertTrue(system.contains("Meri advice:"))
         assertTrue(system.contains("EXACT MAIN STEP COUNT: give exactly 3"))
         assertTrue(system.contains("PLANNING-ONLY HARD STOP"))
@@ -231,9 +231,9 @@ class WorkspaceGroqFreeTest {
         assertTrue(system.contains("Do NOT compress three steps into one list") ||
             system.contains("Each step MUST have its OWN heading block"))
         assertTrue(system.contains("Google Keep"))
-        assertTrue(system.contains("NOT the few-shot's fixed order") ||
-            system.contains("USER-TASK order, never a fixed sequence"))
-        assertTrue(system.contains("12 words") || system.contains("12 whitespace-separated"))
+        assertTrue(system.contains("NOT mandatory fixed block types") ||
+            system.contains("not a mandatory"))
+        assertTrue(system.contains("readable") || system.contains("concise"))
         assertTrue(system.contains("THREE-STEP FEW-SHOT") ||
             system.contains("COMPLETE THREE-STEP FEW-SHOT"))
         val regular = WorkspaceChatGateway.openAiMessages(

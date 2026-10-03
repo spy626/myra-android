@@ -4706,10 +4706,6 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceProviderSessionHealth.recordResponse(response)
                 WorkspaceRichDiagnostics.actual(this@WorkspaceActivity, messageId,
                     response.request)
-                val plan = WorkspacePracticalPlanningGuide.instructions(
-                    enriched.last().text).isNotBlank() ||
-                    WorkspaceRichBlocksContract.shortProjectContext(
-                        enriched.last().text).isNotBlank()
                 val result = runCatching {
                     val reply = if (richRequested) WorkspaceRichResponse.read(
                         response,
@@ -4728,21 +4724,12 @@ class WorkspaceActivity : AppCompatActivity() {
                             }
                         },
                     ) else WorkspaceChatGateway.read(provider, response)
-                    if (richRequested && plan) {
-                        val preview = WorkspaceRichOutputBudget.compact(reply, true)
-                        val shortRetry = call.request().header(
-                            "X-Lyra-Rich-Short-Retry") == "1"
-                        require(WorkspaceRichOutputBudget.visualCount(preview.raw) > 0 &&
-                            (shortRetry ||
-                                WorkspaceRichOutputBudget.visualCount(reply) > 0)) {
-                            "Rich plan missing visual block"
-                        }
-                    }
                     reply
                 }
                 val failure = result.exceptionOrNull()
-                val budgetIssue = failure is WorkspaceRichResponse.BudgetExceeded ||
-                    failure?.message == "Rich plan missing visual block"
+                // Prose and bullets are valid complete answers. Retry ONLY on a
+                // real local transport overflow, not because a visual is absent.
+                val budgetIssue = failure is WorkspaceRichResponse.BudgetExceeded
                 val retryRequest = if (budgetIssue && richRequested &&
                     picked.isEmpty() && skillProjection == null &&
                     replacingAssistantId == null)
