@@ -271,7 +271,8 @@ internal object WorkspaceRichAnswerView {
                 }
                 is Block.AppCards -> {
                     block.items.forEach { (name, note) ->
-                        val card = column(context).apply {
+                        val card = row(context).apply {
+                            gravity = Gravity.CENTER_VERTICAL
                             setPadding(dp(context, 12), dp(context, 10),
                                 dp(context, 12), dp(context, 10))
                             background = GradientDrawable().apply {
@@ -280,9 +281,28 @@ internal object WorkspaceRichAnswerView {
                                 setStroke(dp(context, 1), borderColor)
                             }
                         }
-                        put(card, label(context, name, 16f, bold = true), context, bottom = 3)
+                        // Bundled text/vector-style badges: never remote logos or image requests.
+                        val badge = TextView(context).apply {
+                            text = WorkspaceLocalAppIcons.glyph(name)
+                            gravity = Gravity.CENTER
+                            textSize = 19f
+                            setTypeface(typeface, Typeface.BOLD)
+                            setTextColor(accentColor)
+                            contentDescription = "$name icon"
+                            background = GradientDrawable().apply {
+                                setColor(Color.rgb(30, 59, 42))
+                                cornerRadius = dp(context, 11).toFloat()
+                            }
+                        }
+                        card.addView(badge, LinearLayout.LayoutParams(
+                            dp(context, 44), dp(context, 44)
+                        ).apply { rightMargin = dp(context, 11) })
+                        val details = column(context)
+                        put(details, label(context, name, 16f, bold = true),
+                            context, bottom = 3)
                         if (note.isNotBlank())
-                            put(card, label(context, note, 13f, muted = true), context)
+                            put(details, label(context, note, 13f, muted = true), context)
+                        card.addView(details, LinearLayout.LayoutParams(0, -2, 1f))
                         put(root, card, context, top = 4, bottom = 4)
                     }
                 }
@@ -356,5 +376,18 @@ internal object WorkspaceRichAnswerView {
             }
         }
         return root
+    }
+}
+
+/** Offline app badges; glyphs are local cues, not claims to official brand artwork. */
+internal object WorkspaceLocalAppIcons {
+    fun glyph(name: String): String = when (name.trim().lowercase()) {
+        "chrome", "google chrome", "chrome browser" -> "🌐"
+        "spck", "spck editor", "spck code editor" -> "</>"
+        "firebase", "google firebase" -> "🔥"
+        "github" -> "⌘"
+        "figma" -> "✦"
+        "android studio" -> "🤖"
+        else -> name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
     }
 }

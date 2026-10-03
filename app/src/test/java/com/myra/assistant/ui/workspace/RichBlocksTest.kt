@@ -85,4 +85,66 @@ class RichBlocksTest {
         }) { emitted += it })
         assertEquals(listOf(Block.Text("opener", "Hey")), emitted)
     }
+
+    @Test fun groceryAppRequestActuallyContainsRichSystemPromptAndStreaming() {
+        val input = listOf(WorkspaceConversationStore.Message(
+            id = "u1", role = "user", text = "grocery app", createdAtMs = 0L,
+        ))
+        val outgoing = WorkspaceChatGateway.request(
+            WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+            key = "unit-test-not-a-real-token",
+            messages = input,
+            extraSystemInstructions = WorkspaceRichBlocksContract.INSTRUCTIONS,
+        )
+        val trace = WorkspaceRichDiagnostics.inspect(outgoing, "OpenRouter Free")
+        assertTrue(trace.richPromptInOutboundBody)
+        assertTrue(trace.rulesPresent)
+        assertTrue(trace.streamRequested)
+        val body = okio.Buffer().also { outgoing.body?.writeTo(it) }.readUtf8()
+        val json = org.json.JSONObject(body)
+        val entries = json.getJSONArray("messages")
+        assertEquals("grocery app", entries.getJSONObject(entries.length() - 1).getString("content"))
+        assertTrue(entries.getJSONObject(0).getString("content").contains("Meri advice:"))
+
+        // The same JSON contract must survive Free-route body generation too.
+        val groq = org.json.JSONObject(WorkspaceGroqFree.body(
+            input, extraSystemInstructions = WorkspaceRichBlocksContract.INSTRUCTIONS,
+        ))
+        assertTrue(groq.getBoolean("stream"))
+        assertTrue(groq.getJSONArray("messages")
+            .getJSONObject(0).getString("content").contains(WorkspaceRichBlocksContract.MARKER))
+        val llm7 = org.json.JSONObject(WorkspaceLlm7Free.body(
+            input, extraSystemInstructions = WorkspaceRichBlocksContract.INSTRUCTIONS,
+        ))
+        assertTrue(llm7.getBoolean("stream"))
+    }
+
+    @Test fun completeGroceryPlanExampleContainsSevenRequiredBlocks() {
+        val raw = WorkspaceRichBlocksContract.INSTRUCTIONS
+            .substringAfter("FULL SEVEN-BLOCK EXAMPLE (illustrative, adapt to user's actual context):")
+            .substringBefore("A comparison task").trim()
+        val parsed = RichBlockParser.parse(raw)
+        assertEquals("Raw illustrative model format: " + raw, 7, parsed.size)
+        assertTrue(parsed.first() is Block.Text)
+        assertEquals("opener", (parsed.first() as Block.Text).style)
+        assertTrue(parsed.any { it is Block.Heading })
+        assertTrue(parsed.any { it is Block.AppCards || it is Block.Table })
+        assertTrue(parsed.any { it is Block.Callout })
+        assertTrue(parsed.any { it is Block.Divider })
+        assertTrue(parsed.last() is Block.Text)
+        assertTrue((parsed.last() as Block.Text).text.startsWith("Meri advice:"))
+        val list = parsed.filterIsInstance<Block.Bullets>().single()
+        assertEquals(3, list.items.size)
+        assertTrue(list.items.none { it.trim().matches(Regex("""^(?:[-*•]|\d+[.)]).*""")) })
+    }
+
+    @Test fun localIconMapAndReadOnlyAppContextAreDeterministic() {
+        assertEquals("🌐", WorkspaceLocalAppIcons.glyph("Google Chrome"))
+        assertEquals("</>", WorkspaceLocalAppIcons.glyph("SPCK Editor"))
+        assertEquals("U", WorkspaceLocalAppIcons.glyph("Unknown app"))
+        val focused = WorkspaceRichUserContextInterceptor.queryFor("grocery app")
+        assertTrue(focused.contains("android phone"))
+        assertTrue(focused.contains("SPCK Editor Chrome"))
+        assertEquals("hi bro", WorkspaceRichUserContextInterceptor.queryFor("hi bro"))
+    }
 }

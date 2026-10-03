@@ -2609,9 +2609,13 @@ class WorkspaceActivity : AppCompatActivity() {
                 return
             }
         var latestUserPrompt = ""
+        var latestUserTurnId: String? = null
         messages.forEach { message ->
             val mine = message.role == "user"
-            if (mine) latestUserPrompt = message.text
+            if (mine) {
+                latestUserPrompt = message.text
+                latestUserTurnId = message.id
+            }
             // Retain original saved user turns. Existing assistant replies are romanized
             // for this CHAT display without altering historical database records.
             val parsedRich = if (!mine && current.type == WorkspaceProjectType.CHAT &&
@@ -2746,6 +2750,28 @@ class WorkspaceActivity : AppCompatActivity() {
                 actionRow.addView(messageIcon(R.drawable.ic_workspace_retry, "Retry LYRA reply") {
                     retryAssistant(current.projectId, message.id)
                 }, LinearLayout.LayoutParams(dp(40), dp(40)))
+                if (current.type == WorkspaceProjectType.CHAT) {
+                    val sourceTurnId = latestUserTurnId
+                    val rawButton = label("RAW", 11f).apply {
+                        gravity = Gravity.CENTER
+                        setTextColor(Color.rgb(156, 232, 188))
+                        contentDescription = "Inspect original LYRA reply and request format"
+                        isClickable = true
+                        isFocusable = true
+                        setOnClickListener {
+                            AlertDialog.Builder(this@WorkspaceActivity)
+                                .setTitle("LYRA raw reply and prompt trace")
+                                .setMessage(WorkspaceRichDiagnostics.show(
+                                    this@WorkspaceActivity, sourceTurnId, message.text))
+                                .setNegativeButton("Close", null)
+                                .setPositiveButton("Copy raw") { _, _ ->
+                                    copyMessage(message.text)
+                                }
+                                .show()
+                        }
+                    }
+                    actionRow.addView(rawButton, LinearLayout.LayoutParams(dp(50), dp(40)))
+                }
                 item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(40)))
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
@@ -4399,6 +4425,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val serial = ++requestGeneration
         val call = WorkspaceCustomProviderConnection.client(profile).newCall(outgoing)
         val richRequested = WorkspaceRichBlocksContract.enabled(systemInstructions)
+        WorkspaceRichDiagnostics.record(this, messageId, outgoing, profile.displayName)
         liveRichTurnId = null
         liveRichBlocks = emptyList()
         activeRequest = call
@@ -4641,6 +4668,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val serial = ++requestGeneration
         val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
         val richRequested = WorkspaceRichBlocksContract.enabled(systemInstructions)
+        WorkspaceRichDiagnostics.record(this, messageId, outgoing, provider.name)
         liveRichTurnId = null
         liveRichBlocks = emptyList()
         activeRequest = call

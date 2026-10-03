@@ -56,7 +56,8 @@ internal object WorkspaceChatGateway {
     // One extra try only after specific upstream HTTP rejections. Connection failures and
     // ambiguous timeouts are NOT retried. Retain the existing 35-second total call timeout.
     val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
-        .addInterceptor(WorkspaceMemoryInterceptor()) // only the approved OpenRouter endpoint
+        .addInterceptor(WorkspaceMemoryInterceptor()) // existing opt-in OpenRouter projection
+        .addInterceptor(WorkspaceRichUserContextInterceptor()) // same opt-in, rich Chat only
         .addInterceptor(WorkspaceFreeRouteRetry())
         .build()
 

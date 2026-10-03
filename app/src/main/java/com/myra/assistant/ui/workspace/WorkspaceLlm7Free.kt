@@ -35,6 +35,7 @@ internal object WorkspaceLlm7Free {
         .readTimeout(30, TimeUnit.SECONDS)
         .callTimeout(35, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
+        .addInterceptor(WorkspaceRichUserContextInterceptor())
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
