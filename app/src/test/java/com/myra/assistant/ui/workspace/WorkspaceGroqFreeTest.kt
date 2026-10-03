@@ -228,8 +228,8 @@ class WorkspaceGroqFreeTest {
         assertTrue(system.contains("Direct main/master writes: FORBIDDEN"))
         assertTrue(system.contains("Protected feature-branch write workflow: AVAILABLE"))
         assertTrue(system.contains("previously worked on a web app using SPCK Editor"))
-        assertTrue(system.contains("Do NOT compress three steps into one list") ||
-            system.contains("Each step MUST have its OWN heading block"))
+        assertTrue(system.contains("EXACTLY N separate numbered headings") ||
+            system.contains("For N requested steps, give EXACTLY N"))
         assertTrue(system.contains("Google Keep"))
         assertTrue(system.contains("NOT mandatory fixed block types") ||
             system.contains("not a mandatory"))

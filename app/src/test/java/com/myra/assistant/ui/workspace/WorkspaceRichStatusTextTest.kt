@@ -27,7 +27,8 @@ class WorkspaceRichStatusTextTest {
         assertTrue(full.contains("NEVER use colored/status"))
         assertTrue(compact.contains("status = neutral text"))
         assertTrue(compact.contains("Baaki"))
-        assertTrue(full.contains("Never always repeat mockup_card -> app_cards -> table"))
-        assertTrue(compact.contains("Do NOT always repeat mockup_card -> app_cards -> table"))
+        assertTrue(full.contains("No compulsory visual block"))
+        assertTrue(compact.contains("A visual is OPTIONAL"))
+        assertTrue(full.contains("mockup_card is optional ONLY"))
     }
 }
