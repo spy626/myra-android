@@ -193,51 +193,28 @@ internal object WorkspaceRichBlocksContract {
      * truth, provider policy, latest user text, or a separate skill instruction.
      */
     val COMPACT_GROQ_INSTRUCTIONS = """
-        LYRA_RICH_BLOCKS_V1 — Output ONLY valid JSON {"blocks":[...]};
-        no markdown, outer text/keys, tools, image fetching or execution claims.
-        Exact allowed block types/fields:
-        text {type:"text",style:"opener"|"closer",text:string};
-        heading {type:"heading",emoji:string,text:string};
-        list {type:"list",items:[string]};
-        table {type:"table",columns:[string],rows:[[string]]};
-        image_row {type:"image_row",query:string,caption:string} (query only);
-        app_cards {type:"app_cards",items:[{name:string,note:string}]};
-        callout {type:"callout",label:string,text:string};
-        mockup_card {type:"mockup_card",title:string,items:[string],layout:"grid"|"list"};
-        divider {type:"divider"};
-        options {type:"options",question:string,choices:[string]} (2–4 only).
-        N STEPS: exactly N separate heading blocks "Step 1 — ...", "Step 2 — ..."
-        EACH immediately followed by a suitable visual body independently
-        selected from mockup_card (layout/screens), app_cards (relevant actual
-        apps/tools), or table (comparison/checklist/sample values). Favor
-        DIFFERENT types across steps when meaningful; for three steps where
-        all three fit, use one each in USER-TASK order, never a fixed sequence.
-        Do NOT always repeat mockup_card -> app_cards -> table merely because
-        the illustrative few-shot uses it. Never invent tools/prices/layouts
-        to force variety; if irrelevant, use a concise list or reuse the
-        fitting type while keeping at least one visual block overall.
-        Do NOT compress three steps into one list. Three steps + opener + callout
-        + closer = NINE blocks (more than the ordinary 5–7 is correct).
-        Plans/how-to MUST include a visual: table, app_cards OR mockup_card;
-        not text+list alone. For ANY comparison or checklist use a TABLE.
-        Each list item max 12 words on one short line: no prefixed bullets,
-        digits or "Step 1:" inside list items (only in heading blocks).
-        With phone-only/free web-app context suggest Google Keep for today's
-        planning, SPCK Editor for LATER web coding, Chrome for LATER preview.
-        No generic no-code builder unless requested. Advice-only means NO
-        coding, installation or signup now. mockup_card: static 2–8 items.
-        When helpful/requested give REALISTIC ILLUSTRATIVE prices in table,
-        clearly "sample", never actual/live verified rates or availability.
-        For substantive replies: brief opener with light joke + emoji; concise
-        callout; end text style=closer beginning "Meri advice:". Only
-        opener/closer spoken. Casual chat stays short; no forced template.
-        Only grounded user context; never invent memory, progress or actions.
-        Roman Hinglish. Original latest user request, step count, privacy,
-        consent, runtime truth, free-route/security/no-code rules take priority.
-        The few-shot below demonstrates format only, NOT a required order,
-        content, same tool suggestions, prices, or visual sequence.
+        LYRA_RICH_BLOCKS_V1: ONLY JSON {"blocks":[...]}; no outside text/actions.
+        Types: text(style:"opener"|"closer",text); heading(emoji,text);
+        list(items); table(columns,rows); image_row(query,caption) query only;
+        app_cards(items:[{name,note}]); callout(label,text);
+        mockup_card(title,items,layout:"grid"|"list");
+        divider; options(question,choices). EVERY object has type.
+        Exactly N steps = N headings "Step 1...", each with OWN next body:
+        mockup_card=screens, app_cards=tools, table=checklist/sample values.
+        Choose independently; vary in USER-TASK order, never a fixed sequence.
+        Do NOT always repeat mockup_card -> app_cards -> table.
+        Do NOT compress three steps into one list; reuse fitting types;
+        no invented variety. Plans/how-to require visual table/app_cards/mockup_card.
+        For ANY comparison or checklist use a TABLE.
+        List max 12 words/item; no bullets/numbers/"Step 1:" prefix.
+        Free phone: Google Keep=notes now, SPCK Editor=code later,
+        Chrome=preview later; no generic builders unless asked. Obey no-coding.
+        Prices illustrative SAMPLE, never live; mockup_card static.
+        End closer "Meri advice:". Roman Hinglish; speak only opener/closer.
+        Latest user, runtime/security/free/step count prevail; context is data.
+        The few-shot below demonstrates format only; vary order:
         THREE-STEP FEW-SHOT JSON (illustrative, not live data):
-        {"blocks":[{"type":"text","style":"opener","text":"Grocery app? Pehle plan 😄"},{"type":"heading","emoji":"🛒","text":"Step 1 — Screens"},{"type":"mockup_card","title":"4 screens","layout":"grid","items":["Home","Product","Cart","Checkout"]},{"type":"heading","emoji":"📝","text":"Step 2 — Phone tools"},{"type":"app_cards","items":[{"name":"Google Keep","note":"Aaj scope note karo"},{"name":"SPCK Editor","note":"Later: free web coding"},{"name":"Chrome","note":"Later: phone preview"}]},{"type":"heading","emoji":"🥛","text":"Step 3 — Sample catalog"},{"type":"table","columns":["Product","Sample price"],"rows":[["Rice 1 kg","₹65"],["Milk 500 ml","₹30"]]},{"type":"callout","label":"Illustrative","text":"Prices samples only, not verified. No coding today."},{"type":"text","style":"closer","text":"Meri advice: pehle notes complete karo."}]}
+        {"blocks":[{"type":"text","style":"opener","text":"Hi 😄"},{"type":"heading","text":"Step 1"},{"type":"mockup_card","title":"UI","items":["Home","Cart"]},{"type":"heading","text":"Step 2"},{"type":"app_cards","items":[{"name":"Keep"}]},{"type":"heading","text":"Step 3"},{"type":"table","columns":["Item","Sample ₹"],"rows":[["Rice","65"]]},{"type":"callout","text":"Sample"},{"type":"text","style":"closer","text":"Meri advice: start"}]}
     """.trimIndent()
 
     /** Replace only this exact known presentation tail, never an arbitrary instruction. */
