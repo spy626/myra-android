@@ -1,0 +1,49 @@
+name: One-time Workspace automatic website build
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/workspace-website-auto-build-once.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'spy626/myra-android' && github.ref == 'refs/heads/agent/myra-phase-1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply exact-source integration only on the expected branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          python3 -m py_compile scripts/workspace_website_auto_build_once.py
+          python3 scripts/workspace_website_auto_build_once.py
+          git diff --check
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatCodingFlow.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceWebsiteGeneration.kt
+          git diff --cached --stat
+          if git diff --cached --quiet; then
+            echo 'Expected website integration was not applied' >&2
+            exit 1
+          fi
+      - name: Run Android unit tests and compile debug APK before pushing
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Fast-forward only scoped website changes to phase branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(workspace): build and preview three website files from one user request'
+          git push origin HEAD:agent/myra-phase-1

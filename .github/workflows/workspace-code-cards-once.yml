@@ -1,0 +1,58 @@
+name: One-time native Workspace code cards
+on:
+  push:
+    branches: ['agent/myra-phase-1']
+    paths: ['.github/workflows/workspace-code-cards-once.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'spy626/myra-android' && github.ref == 'refs/heads/agent/myra-phase-1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Apply exact-source anchored chat-only patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          python3 -m py_compile scripts/apply_workspace_code_cards_once.py
+          python3 scripts/apply_workspace_code_cards_once.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceCodeCardView.kt')
+          source = path.read_text(encoding='utf-8')
+          old = '            fillViewport = true\n'
+          if source.count(old) != 1:
+              raise SystemExit('Unexpected code card version; abort rather than change unknown source')
+          path.write_text(source.replace(old, '            isFillViewport = true\n'), encoding='utf-8')
+          PY
+          git diff --check
+          git add app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceActivity.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceChatGateway.kt app/src/main/java/com/myra/assistant/ui/workspace/WorkspaceCodeCardView.kt
+          git diff --cached --stat
+          if git diff --cached --quiet; then
+            echo 'No source changes made' >&2
+            exit 1
+          fi
+      - name: Test native code cards and assemble APK before pushing
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+      - name: Fast-forward only scoped changes to phase branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/myra-phase-1
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/agent/myra-phase-1)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(workspace): render native chat code cards with copy and offline preview'
+          git push origin HEAD:agent/myra-phase-1

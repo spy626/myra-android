@@ -1,0 +1,16 @@
+# LYRA Workspace Phase 5 — Slice 16: free-response token budget recovery
+
+Date: 2026-09-17. Base `0a3fdb43238d37bcb417cb6e75165e30b6207443` (the separately CI-passed error-classification update). This is a narrow response-budget recovery, **not** phone-accepted until the new APK is tested on a real device; Phase 5 remains OPEN.
+
+## Observed failure and scoped fix
+
+- Physical-phone recording `1000060522.mp4` of the preceding APK displayed **"Free AI reached its output-token limit; incomplete suggestion, no edit made"**. That confirms an output truncation category, not its model-internal cause or proof of billable usage. No valid AI patch/Apply/Undo acceptance was shown.
+- Keep the existing `WorkspaceFreeAiSuggestion` transport, `openrouter/free` route, `provider.zdr=true`, `provider.data_collection="deny"`, no retries or redirects, session-only key, full local source/task freshness and privacy checks, existing `WorkspaceStructuredEdit` JSON validator and the **one** `WorkspaceScopedEdit` file writer/rollback. No second planner, model router, agent, memory owner, database, paid fallback, AutoPay or new Android permissions.
+- Increase the single response's bounded `max_tokens` from **750 to 2048**. The output remains capped at 32,768 response bytes and 6,000 candidate characters; only a complete `finish_reason=stop` reply can proceed to independent local JSON validation. A `length` finish is still rejected even when its content looks like valid JSON. Higher cap is **not** an additional request and is not a guarantee that a free model responds.
+- Shorten the existing shared `WorkspaceAiHandoff` prompt without dropping the bounded 1,500-character source excerpt, saved goal, or acceptance criteria. Remove the copyable fake `oldText` example; explicitly demand one compact JSON object with a literal, unique excerpt substring (not task/schema text), short old/new literals and rationale. Untrusted source remains JSON-quoted DATA. Refusal is safer than fabricating an edit.
+
+## Tests and acceptance gates
+
+- JVM regression tests assert the output limit in the actual request, unchanged sole free model and strict provider privacy, key absent from body/URL, no automatic retry or redirects, rejection of `finish_reason=length` even for plausible patch text, sanitized failures, bounded compact prompt with literal source and no fake snippet, and preserved source/approval/rollback checks.
+- A successful *final-commit* Android Actions lint, unit tests, debug APK and release are required before distributing the phone APK. Physical phone test must use non-confidential source and an account with no billing; **do not include the API key in chat or recording**. Make one explicitly approved request, inspect the reply. If a valid proposed patch appears, separately approve Apply then Undo and visually inspect the restored file. If a free/privacy provider rejects or still truncates, leave the file unchanged, preserve the safe refusal and report the exact fixed-category error; do not retry automatically or switch to paid/less private routes.
+- Defer genuine conversational coding, multi-file changes, browser/build verification, provider availability guarantees and final Phase 5 acceptance. A successful local file write alone is not completed product verification.

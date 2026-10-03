@@ -1,0 +1,7 @@
+# Groq Free + ZDR route implementation plan
+
+2026-09-19. User confirmed the Groq account is Free and showed Inference APIs ZDR enabled, Global ZDR disabled. Existing Workspace already stores an encrypted Groq key but currently sends general chat only to OpenRouter free. No Gemini Voice involvement.
+
+Acceptance gates: (1) do not auto-enable a route merely because a key exists or because a screenshot was supplied; a one-time per-device setting acknowledging Free tier, Inference ZDR and that a later paid-tier upgrade could incur charges is needed. (2) keep existing OpenRouter price=0 guard and approved outbound chat only; if Groq is selected, use the same selected-chat prompt and local bounded context. (3) exclude photos, project source and tool/built-in compound models from Groq until separate disclosure and modality checks. (4) use an allowlisted currently supported model, conservative output cap and request byte guard; preserve the latest prompt intact. (5) implement no unverified cross-provider automatic retries, and no automatic edits. (6) test routes with/without opt-in/key, response errors and no data leakage. (7) continue to require physical Android testing independently of green CI.
+
+Note: The Groq REST API does not enforce an app-supplied $0 price ceiling. Free-account status can change outside LYRA. The app cannot guarantee zero billing on an upgraded account; the provider route must remain disabled or require Free-tier reconfirmation if the user changes tier. No private API key is included in this plan.

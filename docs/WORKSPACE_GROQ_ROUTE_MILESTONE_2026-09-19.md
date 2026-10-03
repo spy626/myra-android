@@ -1,0 +1,3 @@
+# Milestone: Groq privacy setting verified on screenshot
+
+2026-09-19: User's Groq Console screenshot visibly shows `Inference APIs ZDR` as `Enabled`; `Global ZDR` remains `Disabled`. The user previously confirmed their account is currently on Free tier. This establishes the stated account/privacy prerequisites for *considering* a Groq Free route in LYRA, but not an API-level guarantee of account tier, model entitlement, request success, or absence of future charges if the account is upgraded. The user must keep Groq Free tier; never assume Groq supports an API-level $0 max-price filter. Integrate only in the existing Workspace gateway, maintain voice isolation and local confirmation of sharing. Do not claim an integrated provider from this ledger entry alone.

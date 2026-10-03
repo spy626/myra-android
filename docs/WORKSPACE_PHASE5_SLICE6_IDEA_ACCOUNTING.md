@@ -1,0 +1,15 @@
+# LYRA Workspace Phase 5 slice 6 — local source snapshot provenance and content freshness
+
+Date: 2026-09-16. Preserve `docs/WORKSPACE_IDEA_LEDGER.md` and the slice 3–5 accounting files unchanged. Previous spec-approval slice is phone-accepted; this slice needs its own physical test.
+
+## Source, existing-owner check and scope
+
+- Saved idea: AIRI/Plast-Mem planning evidence/provenance and the next-slice suggestion in `docs/WORKSPACE_PHASE5_SLICE5_IDEA_ACCOUNTING.md`. The existing-project discipline in `github/spec-kit` (`docs/guides/existing-projects.md` at `45db690bab85924ce53f85a9377076abaca6f1fb`, MIT) favors reusing an existing bounded reader rather than adding a parallel pipeline. BORROW process idea only; no upstream code, CLI or new dependencies copied.
+- MERGED into existing `WorkspaceSourcePreview` and `WorkspaceFileStore`. When the user explicitly selects a file, the local screen displays a UTC read time and full-file SHA-256 alongside the existing 1,500-character excerpt. SHA covers up to the existing 256-KB read bound, not just the excerpt. `compareCurrentContent` re-reads the same project-confined path to return SAME_CONTENT / CHANGED_CONTENT / UNAVAILABLE, never CURRENT on a failed read or cross-project reference. This comparison is a tested local API, not a new on-screen auto-monitor or autonomous executor.
+- No file contents or hashes are sent to any model/provider, and snapshots are not persisted in personal memory or `.lyra/task.json`. No file writes, permissions, model client, router, payment or paid fallback were added. Saving a file produces a new hash when content differs; reopening source preview is an explicit refresh. Hashes prove equality of observed local bytes, not source trust, author identity, security, or successful task verification.
+- Existing task approval, task ID, task metadata, project-file safety and plan reconciliation remain unchanged. UI snapshots do NOT count as `WorkspaceStepEvidence.TOOL_RESULT` or verification; a separately authorized trusted executor and a freshness/provenance gate remain deferred.
+
+## Verification and remaining work
+
+- JVM tests: deterministic timestamp and 64-char fingerprint; change beyond the visible excerpt changes hash; same content matches; cross-project, deleted/renamed and binary sources fail closed; task JSON and planning state unchanged. CI unit tests/APK required; Android lint legacy findings reported separately. Physical phone test: reopen the same selected source after editing beyond its first 1,500 characters and compare full-file SHA-256; confirm saved spec/approval and file bytes are unchanged by read-only review.
+- Deferred from all saved ledgers: trusted executor observation capture and persisted run evidence, redaction/privacy gate before any model-context projection, separate action approvals, spec-to-plan generation, actual AI coding and rollback, free-only routing with account-level cost audit, checkpoint/resume, browser execution and final evidence-based verification. Phase 5 foundational work is NOT equivalent to an autonomous coding assistant.

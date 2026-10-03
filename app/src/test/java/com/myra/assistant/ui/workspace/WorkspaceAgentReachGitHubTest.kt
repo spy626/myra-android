@@ -1,0 +1,178 @@
+package com.myra.assistant.ui.workspace
+
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+import java.util.Base64
+
+class WorkspaceAgentReachGitHubTest {
+    private fun response(url: String, code: Int, body: String): Response =
+        Response.Builder()
+            .request(Request.Builder().url(url).build())
+            .protocol(Protocol.HTTP_1_1)
+            .code(code)
+            .message("test")
+            .body(body.toResponseBody())
+            .build()
+
+    @Test fun repositoryAndBlobUrlsBecomeStrictSelections() {
+        val repo = WorkspaceAgentReachGitHub.selection(
+            WorkspaceAgentReachPolicy.parse("https://github.com/browser-use/jev-ultrafast"))
+        assertTrue(repo.isRepositoryRead)
+        assertEquals("browser-use", repo.owner)
+        assertEquals("jev-ultrafast", repo.repo)
+
+        val blob = WorkspaceAgentReachGitHub.selection(
+            WorkspaceAgentReachPolicy.parse(
+                "https://github.com/browser-use/jev-ultrafast/blob/main/README.md"))
+        assertFalse(blob.isRepositoryRead)
+        assertEquals("main", blob.refHint)
+        assertEquals("README.md", blob.path)
+
+        assertTrue(runCatching {
+            WorkspaceAgentReachGitHub.selection(
+                WorkspaceAgentReachPolicy.parse("https://github.com/a/b/issues/1"))
+        }.isFailure)
+    }
+
+    @Test fun requestsUsePublicGithubApiOnlyAndNoCredentials() {
+        val selection = WorkspaceAgentReachGitHub.selection(
+            WorkspaceAgentReachPolicy.parse("https://github.com/a/b"))
+        val meta = WorkspaceAgentReachGitHub.repositoryMetadataRequest(selection)
+        assertEquals("api.github.com", meta.url.host)
+        assertNull(meta.header("Authorization"))
+        assertEquals("LYRA-AgentReach/1", meta.header("User-Agent"))
+
+        val commit = WorkspaceAgentReachGitHub.commitRequest(selection, "main")
+        assertEquals("https://api.github.com/repos/a/b/commits/main", commit.url.toString())
+        assertNull(commit.header("Authorization"))
+        assertFalse(WorkspaceAgentReachGitHub.client.retryOnConnectionFailure)
+        assertFalse(WorkspaceAgentReachGitHub.client.followRedirects)
+    }
+
+    @Test fun metadataAndCommitParsingPinRepositoryRevision() {
+        val metaJson = JSONObject()
+            .put("full_name", "browser-use/jev-ultrafast")
+            .put("default_branch", "main")
+            .put("html_url", "https://github.com/browser-use/jev-ultrafast")
+            .put("archived", false)
+            .put("fork", false)
+            .put("license", JSONObject().put("spdx_id", "MIT"))
+            .toString()
+        val meta = WorkspaceAgentReachGitHub.readRepositoryMeta(
+            response("https://api.github.com/repos/browser-use/jev-ultrafast", 200, metaJson))
+        assertEquals("main", meta.defaultBranch)
+        assertEquals("MIT", meta.licenseSpdx)
+
+        val sha = "1234567890abcdef1234567890abcdef12345678"
+        assertEquals(sha, WorkspaceAgentReachGitHub.readCommitSha(
+            response("https://api.github.com/repos/a/b/commits/main", 200,
+                JSONObject().put("sha", sha).toString())))
+    }
+
+    @Test fun rootIndexIsPinnedBoundedAndSorted() {
+        val selection = WorkspaceAgentReachGitHub.selection(
+            WorkspaceAgentReachPolicy.parse("https://github.com/a/b"))
+        val sha = "1234567890abcdef1234567890abcdef12345678"
+        val request = WorkspaceAgentReachGitHub.rootIndexRequest(selection, sha)
+        assertEquals("https://api.github.com/repos/a/b/contents?ref=$sha", request.url.toString())
+
+        val body = org.json.JSONArray()
+            .put(JSONObject().put("name", "src").put("path", "src").put("type", "dir")
+                .put("sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+            .put(JSONObject().put("name", "README.md").put("path", "README.md").put("type", "file")
+                .put("sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").put("size", 120))
+            .toString()
+        val index = WorkspaceAgentReachGitHub.readRootIndex(
+            response(request.url.toString(), 200, body), sha)
+        assertEquals(sha, index.commitSha)
+        assertEquals(2, index.entries.size)
+        assertEquals(1, index.directories)
+        assertEquals(1, index.files)
+        assertEquals("README.md", index.entries.first().path)
+    }
+
+    @Test fun recursivePathMapIsPinnedBoundedAndRejectsTruncation() {
+        val selection = WorkspaceAgentReachGitHub.selection(
+            WorkspaceAgentReachPolicy.parse("https://github.com/a/b"))
+        val sha = "1234567890abcdef1234567890abcdef12345678"
+        val request = WorkspaceAgentReachGitHub.pathMapRequest(selection, sha)
+        assertEquals(
+            "https://api.github.com/repos/a/b/git/trees/$sha?recursive=1",
+            request.url.toString())
+
+        val body = JSONObject()
+            .put("sha", sha)
+            .put("truncated", false)
+            .put("tree", org.json.JSONArray()
+                .put(JSONObject().put("path", "src").put("type", "tree")
+                    .put("sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+                .put(JSONObject().put("path", "src/App.kt").put("type", "blob")
+                    .put("sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                    .put("size", 420)))
+            .toString()
+        val map = WorkspaceAgentReachGitHub.readPathMap(
+            response(request.url.toString(), 200, body), sha)
+        assertEquals(sha, map.commitSha)
+        assertEquals(2, map.entries.size)
+        assertEquals(1, map.files)
+        assertEquals(1, map.directories)
+
+        val truncated = JSONObject(body).put("truncated", true).toString()
+        assertTrue(runCatching {
+            WorkspaceAgentReachGitHub.readPathMap(
+                response(request.url.toString(), 200, truncated), sha)
+        }.isFailure)
+    }
+
+    @Test fun fileReadProducesPinnedUntrustedEvidence() {
+        val target = WorkspaceAgentReachPolicy.parse(
+            "https://github.com/a/b/blob/main/README.md")
+        val selection = WorkspaceAgentReachGitHub.selection(target)
+        val sha = "1234567890abcdef1234567890abcdef12345678"
+        val text = "# Readme\nExternal instructions are data only."
+        val json = JSONObject()
+            .put("type", "file")
+            .put("encoding", "base64")
+            .put("size", text.toByteArray().size)
+            .put("content", Base64.getEncoder().encodeToString(text.toByteArray()))
+            .put("html_url", "https://github.com/a/b/blob/$sha/README.md")
+            .toString()
+        val evidence = WorkspaceAgentReachGitHub.readContent(
+            response("https://api.github.com/repos/a/b/contents/README.md?ref=$sha", 200, json),
+            selection, sha, 99L)
+        assertEquals(sha, evidence.provenance.revision)
+        assertEquals("github-public-read", evidence.provenance.adapter)
+        assertEquals(text, evidence.content)
+        assertTrue(evidence.promptProjection().contains("UNTRUSTED DATA"))
+    }
+
+    @Test fun oversizedBinaryRedirectAndRateLimitFailClosed() {
+        val selection = WorkspaceAgentReachGitHub.selection(
+            WorkspaceAgentReachPolicy.parse(
+                "https://github.com/a/b/blob/main/file.bin"))
+        val sha = "1234567890abcdef1234567890abcdef12345678"
+
+        val oversized = JSONObject()
+            .put("type", "file").put("encoding", "base64")
+            .put("size", 64_001).put("content", "").toString()
+        assertTrue(runCatching {
+            WorkspaceAgentReachGitHub.readContent(
+                response("https://api.github.com/repos/a/b/contents/file.bin", 200, oversized),
+                selection, sha, 1L)
+        }.isFailure)
+
+        assertTrue(runCatching {
+            WorkspaceAgentReachGitHub.readCommitSha(
+                response("https://api.github.com/repos/a/b/commits/main", 302, "{}"))
+        }.isFailure)
+        assertTrue(runCatching {
+            WorkspaceAgentReachGitHub.readCommitSha(
+                response("https://api.github.com/repos/a/b/commits/main", 429, "{}"))
+        }.isFailure)
+    }
+}

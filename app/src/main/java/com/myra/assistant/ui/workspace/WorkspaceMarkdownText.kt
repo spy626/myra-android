@@ -1,0 +1,81 @@
+package com.myra.assistant.ui.workspace
+
+import android.graphics.Typeface
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.LeadingMarginSpan
+import android.text.style.ReplacementSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
+import android.text.style.TypefaceSpan
+import android.text.style.URLSpan
+
+/** Small native, non-HTML formatter. No WebView, links, script execution or network content. */
+internal object WorkspaceMarkdownText {
+    private val heading = Regex("^\\s{0,3}(#{1,3})\\s+(.+?)\\s*$")
+    private val bold = Regex("\\*\\*(.+?)\\*\\*")
+    private val italic = Regex("(?<!\\*)\\*([^*\\n]+)\\*(?!\\*)")
+    private val code = Regex("`([^`\\n]+)`")
+
+    fun render(raw: String): CharSequence {
+        val result = SpannableStringBuilder()
+        WorkspaceMarkdownLayout.prepare(raw).forEachIndexed { index, visual ->
+            val original = visual.text
+            if (index != 0) result.append('\n')
+            val match = heading.matchEntire(original)
+            val line = SpannableStringBuilder(match?.groupValues?.get(2) ?: original)
+            fun style(pattern: Regex, makeSpan: (String) -> Any) {
+                pattern.findAll(line.toString()).toList().asReversed().forEach { item ->
+                    val value = item.groupValues[1]
+                    val begin = item.range.first
+                    line.replace(begin, item.range.last + 1, value)
+                    val span = makeSpan(value)
+                    when (span) {
+                        is StyleSpan -> line.setSpan(span, begin, begin + value.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                        is TypefaceSpan -> line.setSpan(span, begin, begin + value.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                        is ReplacementSpan -> line.setSpan(span, begin, begin + value.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                }
+            }
+            style(bold) { StyleSpan(Typeface.BOLD) }
+            style(italic) { StyleSpan(Typeface.ITALIC) }
+            // Keep long IDs/SHA wrap-capable; compact inline tokens get native rounded pills.
+            style(code) { token ->
+                if (WorkspaceChatReadability.useCodePill(token)) WorkspaceRoundedCodePillSpan()
+                else TypefaceSpan("monospace")
+            }
+            // Only exact HTTPS GitHub Actions links become tappable; never execute HTML/scripts.
+            WorkspaceVerifiedChatLinks.find(line.toString()).asReversed().forEach { link ->
+                line.replace(link.range.first, link.range.last + 1, link.label)
+                line.setSpan(
+                    URLSpan(link.url),
+                    link.range.first,
+                    link.range.first + link.label.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+            if (match != null && line.isNotEmpty()) {
+                line.setSpan(StyleSpan(Typeface.BOLD), 0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                line.setSpan(RelativeSizeSpan(if (match.groupValues[1].length == 1) 1.35f else 1.17f),
+                    0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            // Native indentation preserves readable wrapped lines and existing URLSpans.
+            if (line.isNotEmpty()) {
+                val margin = when (visual.kind) {
+                    WorkspaceMarkdownLayout.Kind.BULLET -> LeadingMarginSpan.Standard(8, 24)
+                    WorkspaceMarkdownLayout.Kind.NUMBERED -> LeadingMarginSpan.Standard(0, 24)
+                    WorkspaceMarkdownLayout.Kind.TABLE_ROW -> LeadingMarginSpan.Standard(10, 10)
+                    else -> null
+                }
+                if (margin != null) {
+                    line.setSpan(margin, 0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                if (visual.kind == WorkspaceMarkdownLayout.Kind.TABLE_TITLE) {
+                    line.setSpan(StyleSpan(Typeface.BOLD), 0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
+            result.append(line)
+        }
+        return result
+    }
+}

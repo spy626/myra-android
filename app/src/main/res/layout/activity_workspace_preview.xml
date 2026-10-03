@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#020609">
+
+    <ImageButton
+        android:id="@+id/previewBack"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginStart="12dp"
+        android:layout_marginTop="12dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Back to project"
+        android:src="@drawable/ic_arrow_back"
+        android:tint="#A8FFB2"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/previewHeading"
+        android:layout_width="0dp"
+        android:layout_height="48dp"
+        android:layout_marginStart="6dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="16dp"
+        android:ellipsize="end"
+        android:gravity="center_vertical"
+        android:maxLines="1"
+        android:text="Website preview"
+        android:textColor="#E7FFEC"
+        android:textSize="19sp"
+        android:textStyle="bold"
+        app:layout_constraintStart_toEndOf="@id/previewBack"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <LinearLayout
+        android:id="@+id/previewActions"
+        android:layout_width="0dp"
+        android:layout_height="48dp"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        app:layout_constraintTop_toBottomOf="@id/previewBack"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+        <TextView
+            android:id="@+id/previewEditor"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_workspace_dialog_input"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="☷  Files"
+            android:textColor="#C8F3D0"
+            android:textSize="13sp" />
+        <TextView
+            android:id="@+id/previewRefresh"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_workspace_dialog_input"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="↻  Refresh"
+            android:textColor="#C8F3D0"
+            android:textSize="13sp" />
+        <TextView
+            android:id="@+id/previewChrome"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_field"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="Chrome ↗"
+            android:textColor="#F1FFF3"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/previewStatus"
+        android:layout_width="0dp"
+        android:layout_height="32dp"
+        android:layout_marginStart="17dp"
+        android:layout_marginEnd="17dp"
+        android:gravity="center_vertical"
+        android:text="Starting local preview…"
+        android:textColor="#95BD9E"
+        android:textSize="11sp"
+        app:layout_constraintTop_toBottomOf="@id/previewActions"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <WebView
+        android:id="@+id/previewWebView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="4dp"
+        android:background="#FFFFFF"
+        app:layout_constraintTop_toBottomOf="@id/previewStatus"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+</androidx.constraintlayout.widget.ConstraintLayout>
