@@ -156,11 +156,11 @@ class RichBlocksTest {
         val raw = compact.substringAfter(
             "THREE-STEP FEW-SHOT JSON (illustrative, not live data):").trim()
         val blocks = RichBlockParser.parse(raw)
-        assertEquals(9, blocks.size)
-        assertEquals(listOf(1, 3, 5), blocks.indices.filter { blocks[it] is Block.Heading })
-        assertTrue(blocks[2] is Block.MockupCard)
-        assertTrue(blocks[4] is Block.AppCards)
-        assertTrue(blocks[6] is Block.Table)
+        assertEquals(7, blocks.size)
+        assertEquals(listOf(0, 2, 4), blocks.indices.filter { blocks[it] is Block.Heading })
+        assertTrue(blocks[1] is Block.MockupCard)
+        assertTrue(blocks[3] is Block.AppCards)
+        assertTrue(blocks[5] is Block.Table)
         assertTrue(blocks.last() is Block.Text)
         listOf(WorkspaceRichBlocksContract.INSTRUCTIONS, compact).forEach { instructions ->
             assertTrue(instructions.contains("12"))

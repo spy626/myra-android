@@ -8,14 +8,21 @@ import org.json.JSONObject
  * displays incomplete model JSON. Non-SSE providers keep their existing safe reader.
  */
 internal object WorkspaceRichResponse {
+    data class Metrics(val wireChars: Int, val contentChars: Int, val eventCount: Int)
+    class BudgetExceeded(val metrics: Metrics) :
+        IllegalArgumentException("Provider stream exceeds response budget")
+
     fun read(
         response: Response,
         fallback: (Response) -> String,
         onBlocks: (List<Block>) -> Unit,
+        onMetrics: (Metrics) -> Unit = {},
     ): String {
         if (!response.isSuccessful ||
             !response.header("Content-Type").orEmpty().contains("text/event-stream", true)
-        ) return fallback(response)
+        ) return fallback(response).also {
+            onMetrics(Metrics(-1, it.length, 0))
+        }
         return response.use { sourceResponse ->
             val source = requireNotNull(sourceResponse.body).source()
             val complete = StringBuilder()
@@ -24,10 +31,12 @@ internal object WorkspaceRichResponse {
             var completed = false
             var done = false
             var receivedChars = 0
+            var events = 0
             fun consume() {
                 if (event.isEmpty()) return
                 val data = event.joinToString("\n")
                 event.clear()
+                events++
                 if (data.trim() == "[DONE]") { done = true; return }
                 val json = JSONObject(data)
                 require(!json.has("error")) { "Provider returned a streaming error" }
@@ -49,7 +58,11 @@ internal object WorkspaceRichResponse {
             while (!done) {
                 val line = source.readUtf8Line() ?: break
                 receivedChars += line.length
-                require(receivedChars <= 192_000) { "Provider stream exceeds response budget" }
+                if (receivedChars > 192_000) {
+                    val metrics = Metrics(receivedChars, complete.length, events)
+                    onMetrics(metrics)
+                    throw BudgetExceeded(metrics)
+                }
                 if (line.isBlank()) { consume(); continue }
                 if (line.startsWith("data:")) event.add(line.substring(5).trimStart())
             }
@@ -63,6 +76,7 @@ internal object WorkspaceRichResponse {
             require(!RichBlockParser.looksLikeEnvelope(raw) || RichBlockParser.isEnvelope(raw)) {
                 "Provider sent incomplete rich JSON; no incomplete reply saved"
             }
+            onMetrics(Metrics(receivedChars, raw.length, events))
             raw
         }
     }

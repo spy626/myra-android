@@ -4656,18 +4656,23 @@ class WorkspaceActivity : AppCompatActivity() {
             "Skill projection cannot be reused on retry"
         }
         val systemInstructions = runtimeSelfModelInstructions(id, skillProjection?.prompt)
+        // Every Free Chat route gets the bounded seven-block example; the complete
+        // editorial example remains available only for a larger-budget route.
+        val freeInstructions = if (skillProjection == null)
+            WorkspaceRichBlocksContract.compactForGroq(systemInstructions)
+                ?: systemInstructions else systemInstructions
         val outgoing = runCatching {
             WorkspaceChatGateway.request(
                 provider,
                 keyFor(provider),
                 enriched,
                 image,
-                extraSystemInstructions = systemInstructions,
+                extraSystemInstructions = freeInstructions,
             )
         }.getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
         val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
-        val richRequested = WorkspaceRichBlocksContract.enabled(systemInstructions)
+        val richRequested = WorkspaceRichBlocksContract.enabled(freeInstructions)
         WorkspaceRichDiagnostics.record(this, messageId, outgoing, provider.name)
         liveRichTurnId = null
         liveRichBlocks = emptyList()
@@ -4686,34 +4691,96 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         statusMessage = ""
         render()
-        call.enqueue(object : Callback {
+        val callback = object : Callback {
             override fun onFailure(call: Call, error: IOException) {
                 WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
                     WorkspaceProviderRegistry.id(provider))
+                WorkspaceRichDiagnostics.failure(this@WorkspaceActivity, messageId,
+                    "Uncertain network failure; not auto-retried")
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
-                    Result.failure(IllegalStateException(WorkspaceChatGateway.networkFailure(provider, error))),
-                    skillProjection)
+                    Result.failure(IllegalStateException(
+                        WorkspaceChatGateway.networkFailure(provider, error))), skillProjection)
             }
+
             override fun onResponse(call: Call, response: Response) {
                 WorkspaceProviderSessionHealth.recordResponse(response)
-                complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
-                    runCatching {
-                        if (richRequested) WorkspaceRichResponse.read(
-                            response, { actual -> WorkspaceChatGateway.read(provider, actual) },
-                        ) { ready ->
+                WorkspaceRichDiagnostics.actual(this@WorkspaceActivity, messageId,
+                    response.request)
+                val plan = WorkspacePracticalPlanningGuide.instructions(
+                    enriched.last().text).isNotBlank() ||
+                    WorkspaceRichBlocksContract.shortProjectContext(
+                        enriched.last().text).isNotBlank()
+                val result = runCatching {
+                    val reply = if (richRequested) WorkspaceRichResponse.read(
+                        response,
+                        { actual -> WorkspaceChatGateway.read(provider, actual) },
+                        { ready ->
                             runOnUiThread {
                                 if (serial == requestGeneration && activeRequest === call &&
                                     selectedId == id && !isFinishing && !isDestroyed) {
                                     liveRichTurnId = messageId
-                                    liveRichBlocks += ready.filterNot { it is Block.Options }
+                                    liveRichBlocks += WorkspaceRichOutputBudget.preview(
+                                        ready.filterNot { it is Block.Options })
                                     render()
                                 }
                             }
-                        } else WorkspaceChatGateway.read(provider, response)
-                    },
-                    skillProjection)
+                        },
+                        { stats -> WorkspaceRichDiagnostics.metrics(
+                            this@WorkspaceActivity, messageId, stats) },
+                    ) else WorkspaceChatGateway.read(provider, response)
+                    if (richRequested && plan) {
+                        val preview = WorkspaceRichOutputBudget.compact(reply, true)
+                        val shortRetry = call.request().header(
+                            "X-Lyra-Rich-Short-Retry") == "1"
+                        require(WorkspaceRichOutputBudget.visualCount(preview.raw) > 0 &&
+                            (shortRetry ||
+                                WorkspaceRichOutputBudget.visualCount(reply) > 0)) {
+                            "Rich plan missing visual block"
+                        }
+                    }
+                    reply
+                }
+                val failure = result.exceptionOrNull()
+                val budgetIssue = failure is WorkspaceRichResponse.BudgetExceeded ||
+                    failure?.message == "Rich plan missing visual block"
+                val retryRequest = if (budgetIssue && richRequested &&
+                    picked.isEmpty() && skillProjection == null &&
+                    replacingAssistantId == null)
+                    WorkspaceRichRetry.request(outgoing) else null
+                if (retryRequest != null && call.request()
+                        .header("X-Lyra-Rich-Short-Retry") != "1") {
+                    WorkspaceRichDiagnostics.failure(this@WorkspaceActivity, messageId,
+                        "Local response budget/visual failure; short retry scheduled")
+                    runOnUiThread {
+                        if (serial == requestGeneration && activeRequest === call &&
+                            selectedId == id && !isFinishing && !isDestroyed) {
+                            // Previous streamed partial blocks were display-only.
+                            liveRichTurnId = null
+                            liveRichBlocks = emptyList()
+                            val next = WorkspaceChatGateway.client(provider)
+                                .newCall(retryRequest)
+                            activeRequest = next
+                            WorkspaceRichDiagnostics.record(this@WorkspaceActivity,
+                                messageId, retryRequest, provider.name, retry = true)
+                            workTrace.add(WorkspaceWorkPhase.THINKING,
+                                "Short retry", "Same Free provider, once")
+                            statusMessage = ""
+                            render()
+                            next.enqueue(this)
+                        }
+                    }
+                    return
+                }
+                if (failure != null) WorkspaceRichDiagnostics.failure(
+                    this@WorkspaceActivity, messageId,
+                    if (failure is WorkspaceRichResponse.BudgetExceeded)
+                        "Local SSE response budget exceeded" else
+                        (failure.message ?: "Provider reply failed"))
+                complete(call, serial, id, messageId, replacingAssistantId,
+                    provider, picked, result, skillProjection)
             }
-        })
+        }
+        call.enqueue(callback)
     }
 
     private fun complete(call: Call, serial: Long, id: String, userMessageId: String,
@@ -4734,19 +4801,31 @@ class WorkspaceActivity : AppCompatActivity() {
                     val actual = if (replacingAssistantId != null &&
                         saved.lastOrNull()?.id == replacingAssistantId) saved.dropLast(1) else saved
                     val clean = WorkspaceChatVisibleReply.sanitize(reply)
-                    require(!RichBlockParser.looksLikeEnvelope(clean) ||
-                        (RichBlockParser.isEnvelope(clean) &&
-                            RichBlockParser.parse(clean).isNotEmpty())) {
+                    val userText = actual.lastOrNull()
+                        ?.takeIf { it.role == "user" }?.text.orEmpty()
+                    val plan = WorkspacePracticalPlanningGuide.instructions(userText).isNotBlank() ||
+                        WorkspaceRichBlocksContract.shortProjectContext(userText).isNotBlank()
+                    val output = if (RichBlockParser.isEnvelope(clean) ||
+                        (plan && skillProjection == null))
+                        WorkspaceRichOutputBudget.compact(clean, plan)
+                    else WorkspaceRichOutputBudget.Result(clean, emptyList(), emptyList(),
+                        emptyList())
+                    WorkspaceRichDiagnostics.output(this, userMessageId, output)
+                    val budgeted = output.raw
+                    require(!RichBlockParser.looksLikeEnvelope(budgeted) ||
+                        (RichBlockParser.isEnvelope(budgeted) &&
+                            RichBlockParser.parse(budgeted).isNotEmpty())) {
                         "LYRA returned invalid rich blocks; incomplete reply not saved"
                     }
-                    val checkText = if (RichBlockParser.isEnvelope(clean))
-                        RichBlockParser.visibleText(RichBlockParser.parse(clean)) else clean
+                    val checkText = if (RichBlockParser.isEnvelope(budgeted))
+                        RichBlockParser.visibleText(RichBlockParser.parse(budgeted))
+                    else budgeted
                     val visible = WorkspaceChatTurnFrame.verify(actual, checkText)
                     WorkspacePlanningAnswerBoundary.requireAcceptable(
                         actual.lastOrNull()?.takeIf { it.role == "user" }?.text.orEmpty(),
                         visible,
                     )
-                    clean
+                    budgeted
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
