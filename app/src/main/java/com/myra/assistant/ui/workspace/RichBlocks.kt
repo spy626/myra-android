@@ -39,8 +39,17 @@ internal object WorkspaceRichBlocksContract {
         ANSWER STRUCTURE:
         - If the user explicitly asks for N steps, give EXACTLY N primary actions.
           Each step MUST have its OWN heading block ("Step 1 — ...", etc.)
-          immediately followed by its OWN relevant content block: list, table,
-          app_cards OR mockup_card. Never merge multiple steps under one heading.
+          immediately followed by its OWN relevant content block. Choose
+          independently for EACH step from mockup_card, app_cards or table:
+          mockup_card for screen/layout ideas; app_cards for actually relevant
+          apps/tools; table for comparisons, checklists or illustrative values.
+          Prefer DIFFERENT visual types across steps when their subject warrants
+          it. For 3 steps with all three types relevant, use each once, in the
+          order that matches THIS user's tasks, NOT the few-shot's fixed order.
+          Never always repeat mockup_card -> app_cards -> table. If a type is
+          irrelevant, use a suitable list or repeat a useful type instead of
+          inventing tools, prices or a pointless layout just for diversity.
+          Never merge multiple steps under one heading.
           Keep opener and closer outside step count. N-step replies may need
           more than 7 blocks: opener + 2*N blocks + optional callout + closer.
           For example, three steps with callout = NINE blocks, not 5–7.
@@ -81,6 +90,11 @@ internal object WorkspaceRichBlocksContract {
           The latest user request, exact step count, no-code boundaries, consent,
           privacy, runtime truth and existing action/security gates prevail.
 
+        FEW-SHOT IS ONLY ONE STRUCTURAL EXAMPLE, NOT A MANDATORY TEMPLATE.
+        Independently determine the step subjects and best block types anew
+        for each user request. Vary the visual order when meaning allows;
+        for example, a tools-first plan may use app_cards, then table, then
+        mockup_card. Never copy its wording, tools, prices, or type sequence.
         COMPLETE THREE-STEP FEW-SHOT (illustrative plan; adapt, never copy as live data):
         {
   "blocks": [
@@ -193,7 +207,15 @@ internal object WorkspaceRichBlocksContract {
         divider {type:"divider"};
         options {type:"options",question:string,choices:[string]} (2–4 only).
         N STEPS: exactly N separate heading blocks "Step 1 — ...", "Step 2 — ..."
-        EACH immediately followed by its own list/table/app_cards/mockup_card.
+        EACH immediately followed by a suitable visual body independently
+        selected from mockup_card (layout/screens), app_cards (relevant actual
+        apps/tools), or table (comparison/checklist/sample values). Favor
+        DIFFERENT types across steps when meaningful; for three steps where
+        all three fit, use one each in USER-TASK order, never a fixed sequence.
+        Do NOT always repeat mockup_card -> app_cards -> table merely because
+        the illustrative few-shot uses it. Never invent tools/prices/layouts
+        to force variety; if irrelevant, use a concise list or reuse the
+        fitting type while keeping at least one visual block overall.
         Do NOT compress three steps into one list. Three steps + opener + callout
         + closer = NINE blocks (more than the ordinary 5–7 is correct).
         Plans/how-to MUST include a visual: table, app_cards OR mockup_card;
@@ -212,6 +234,8 @@ internal object WorkspaceRichBlocksContract {
         Only grounded user context; never invent memory, progress or actions.
         Roman Hinglish. Original latest user request, step count, privacy,
         consent, runtime truth, free-route/security/no-code rules take priority.
+        The few-shot below demonstrates format only, NOT a required order,
+        content, same tool suggestions, prices, or visual sequence.
         THREE-STEP FEW-SHOT JSON (illustrative, not live data):
         {"blocks":[{"type":"text","style":"opener","text":"Grocery app? Pehle plan 😄"},{"type":"heading","emoji":"🛒","text":"Step 1 — Screens"},{"type":"mockup_card","title":"4 screens","layout":"grid","items":["Home","Product","Cart","Checkout"]},{"type":"heading","emoji":"📝","text":"Step 2 — Phone tools"},{"type":"app_cards","items":[{"name":"Google Keep","note":"Aaj scope note karo"},{"name":"SPCK Editor","note":"Later: free web coding"},{"name":"Chrome","note":"Later: phone preview"}]},{"type":"heading","emoji":"🥛","text":"Step 3 — Sample catalog"},{"type":"table","columns":["Product","Sample price"],"rows":[["Rice 1 kg","₹65"],["Milk 500 ml","₹30"]]},{"type":"callout","label":"Illustrative","text":"Prices samples only, not verified. No coding today."},{"type":"text","style":"closer","text":"Meri advice: pehle notes complete karo."}]}
     """.trimIndent()

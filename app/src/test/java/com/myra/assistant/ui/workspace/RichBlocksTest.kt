@@ -177,6 +177,33 @@ class RichBlocksTest {
         assertTrue(compact.contains("Do NOT compress three steps into one list"))
     }
 
+    @Test fun fewShotIsNotAForcedVisualOrderInFullOrGroqPrompt() {
+        val full = WorkspaceRichBlocksContract.INSTRUCTIONS
+        val compact = WorkspaceRichBlocksContract.COMPACT_GROQ_INSTRUCTIONS
+        assertTrue(full.contains("independently for EACH step from mockup_card, app_cards or table"))
+        assertTrue(full.contains("NOT the few-shot's fixed order"))
+        assertTrue(full.contains("Never always repeat mockup_card -> app_cards -> table"))
+        assertTrue(full.contains("FEW-SHOT IS ONLY ONE STRUCTURAL EXAMPLE"))
+        assertTrue(compact.contains("independently"))
+        assertTrue(compact.contains("USER-TASK order, never a fixed sequence"))
+        assertTrue(compact.contains("Do NOT always repeat mockup_card -> app_cards -> table"))
+        assertTrue(compact.contains("The few-shot below demonstrates format only"))
+        // A different valid arrangement must parse unchanged: table -> mockup -> apps.
+        val alternative = """{"blocks":[
+            {"type":"heading","text":"Step 1 — Compare stock","emoji":"📦"},
+            {"type":"table","columns":["Item","Sample"],"rows":[["Rice","₹65"]]},
+            {"type":"heading","text":"Step 2 — Sketch screens","emoji":"📱"},
+            {"type":"mockup_card","title":"Screens","items":["Home","Cart"],"layout":"grid"},
+            {"type":"heading","text":"Step 3 — Select useful tools","emoji":"🛠"},
+            {"type":"app_cards","items":[{"name":"Google Keep","note":"Planning"}]}
+        ]}"""
+        val blocks = RichBlockParser.parse(alternative)
+        assertEquals(6, blocks.size)
+        assertTrue(blocks[1] is Block.Table)
+        assertTrue(blocks[3] is Block.MockupCard)
+        assertTrue(blocks[5] is Block.AppCards)
+    }
+
     @Test fun localIconMapAndReadOnlyAppContextAreDeterministic() {
         assertEquals("🌐", WorkspaceLocalAppIcons.glyph("Google Chrome"))
         assertEquals("</>", WorkspaceLocalAppIcons.glyph("SPCK Editor"))
