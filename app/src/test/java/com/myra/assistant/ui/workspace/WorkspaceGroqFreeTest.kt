@@ -228,6 +228,12 @@ class WorkspaceGroqFreeTest {
         assertTrue(system.contains("Direct main/master writes: FORBIDDEN"))
         assertTrue(system.contains("Protected feature-branch write workflow: AVAILABLE"))
         assertTrue(system.contains("previously worked on a web app using SPCK Editor"))
+        assertTrue(system.contains("Do NOT compress three steps into one list") ||
+            system.contains("Each step MUST have its OWN heading block"))
+        assertTrue(system.contains("Google Keep"))
+        assertTrue(system.contains("12 words") || system.contains("12 whitespace-separated"))
+        assertTrue(system.contains("THREE-STEP FEW-SHOT") ||
+            system.contains("COMPLETE THREE-STEP FEW-SHOT"))
         val regular = WorkspaceChatGateway.openAiMessages(
             messages, extraSystemInstructions = extra)
         val regularChars = (0 until regular.length()).sumOf {

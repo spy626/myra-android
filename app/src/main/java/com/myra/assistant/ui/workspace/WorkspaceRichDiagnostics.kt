@@ -23,7 +23,7 @@ internal object WorkspaceRichDiagnostics {
             "Route: " + route + "\n" +
                 "Rich prompt in outgoing request: " +
                 (if (richPromptInOutboundBody) "YES" else "NO") + "\n" +
-                "5-7 block instruction present: " +
+                "Step/visual presentation rules present: " +
                 (if (rulesPresent) "YES" else "NO") + "\n" +
                 "Streaming requested: " + (if (streamRequested) "YES" else "NO")
     }
@@ -38,8 +38,11 @@ internal object WorkspaceRichDiagnostics {
         return Trace(
             richPromptInOutboundBody = prompt.contains(WorkspaceRichBlocksContract.MARKER),
             streamRequested = json.optBoolean("stream", false),
-            rulesPresent = prompt.contains("5–7") && prompt.contains("callout") &&
-                prompt.contains("heading") && prompt.contains("Meri advice:"),
+            rulesPresent = prompt.contains("LYRA_RICH_BLOCKS_V1") &&
+                prompt.contains("callout") && prompt.contains("heading") &&
+                prompt.contains("mockup_card") && prompt.contains("Meri advice:") &&
+                (prompt.contains("Each step MUST have its OWN heading block") ||
+                    prompt.contains("Do NOT compress three steps into one list")),
             route = route.take(64),
         )
     }
