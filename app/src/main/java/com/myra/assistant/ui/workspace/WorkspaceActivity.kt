@@ -2545,7 +2545,8 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun showChatFailure(id: String, messageId: String,
                                 replacingAssistantId: String?, provider: WorkspaceChatGateway.Provider,
-                                picked: List<Attachment>, reason: String) {
+                                picked: List<Attachment>, reason: String,
+                                frameOnlyVideo: Boolean = false) {
         if (selectedId != id || workTab || isBusy()) return
         val history = runCatching { conversations.read(id) }.getOrNull() ?: return
         val eligible = if (replacingAssistantId == null)
@@ -2561,7 +2562,8 @@ class WorkspaceActivity : AppCompatActivity() {
         if (retry.allowImmediateRetry) {
             dialog.setPositiveButton("Retry once") { _, _ ->
                 if (selectedId == id && !workTab && !isBusy())
-                    requestReply(id, messageId, provider, picked, replacingAssistantId)
+                    requestReply(id, messageId, provider, picked, replacingAssistantId,
+                        frameOnlyVideo = frameOnlyVideo)
             }
         } else dialog.setPositiveButton("Close", null)
         dialog.show()
@@ -4067,7 +4069,10 @@ class WorkspaceActivity : AppCompatActivity() {
         return true
     }
 
-    private fun sendMessage(attachmentRouteApproved: Boolean = false) {
+    private fun sendMessage(
+        attachmentRouteApproved: Boolean = false,
+        videoFramesOnly: Boolean = false,
+    ) {
         if (workTab) return
         if (isForegroundBusy()) { stopForegroundReply(); return }
         val typed = composer.text.toString()
@@ -4183,12 +4188,19 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             if ((llm7TextOnly || groqTextOnly || customTextOnly || rawSoundOrVideo) &&
                 !attachmentRouteApproved) {
-                AlertDialog.Builder(this).setTitle("Send with OpenRouter Free?")
-                    .setMessage("Upload selected media to OpenRouter with the $0 price and ZDR restrictions? A full video (including any soundtrack) or audio recording leaves this phone, not just sample screenshots. Availability of a private free multimodal model is NOT guaranteed; if unsupported, the request fails without payment or unsafe fallback.")
+                val hasVideo = picked.any {
+                    WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.VIDEO
+                }
+                val dialog = AlertDialog.Builder(this).setTitle("Send with OpenRouter Free?")
+                    .setMessage("Original video uploads the entire file INCLUDING its soundtrack to OpenRouter under $0 price and ZDR restrictions, but a compatible private Free model is NOT guaranteed. Frames only sends ten spaced screenshots WITHOUT sound; it cannot cover every moment. No paid fallback or automatic second upload.")
                     .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Use OpenRouter Free") { _, _ ->
+                    .setPositiveButton(if (hasVideo) "Original video" else "Use OpenRouter Free") { _, _ ->
                         sendMessage(attachmentRouteApproved = true)
-                    }.show()
+                    }
+                if (hasVideo) dialog.setNeutralButton("Frames only (silent)") { _, _ ->
+                    sendMessage(attachmentRouteApproved = true, videoFramesOnly = true)
+                }
+                dialog.show()
                 return
             }
         }
@@ -4464,6 +4476,7 @@ class WorkspaceActivity : AppCompatActivity() {
         requestReply(
             id, stored.id, provider, picked,
             skillProjection = skillProjection,
+            frameOnlyVideo = videoFramesOnly,
         )
     }
 
@@ -4703,6 +4716,7 @@ class WorkspaceActivity : AppCompatActivity() {
         picked: List<Attachment>,
         replacingAssistantId: String? = null,
         skillProjection: WorkspaceSkillInvocation.Projection? = null,
+        frameOnlyVideo: Boolean = false,
     ) {
         if (selectedId != id || isForegroundBusy() || workTab) return
         val cooldown = WorkspaceProviderSessionHealth.cooldownMessage(
@@ -4745,11 +4759,21 @@ class WorkspaceActivity : AppCompatActivity() {
         val sound = picked.firstOrNull {
             WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.AUDIO
         }
+        if (frameOnlyVideo && video == null) {
+            statusMessage = "Frame-only mode requires one video; nothing uploaded."
+            render()
+            return
+        }
         val enriched = runCatching {
             val addition = picked.filter {
                 WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.TEXT
             }.joinToString("\n\n") { "Document ${it.name}:\n${readAttachmentText(it)}" }
             val mediaNote = when {
+                frameOnlyVideo && video != null ->
+                    "ONLY ten ordered visual samples requested across this video (5%, 15%, ..., 95%) " +
+                    "are attached. Key-frame decoding can shift exact positions. The original video " +
+                    "and soundtrack were NOT uploaded; NO transcript exists. Describe only the sampled " +
+                    "visual evidence; do not invent speech, unseen events or full-video coverage."
                 video != null ->
                     "The ORIGINAL WHOLE video file including its existing audio track is attached " +
                     "as native video_url, not three stills. Analyze only modalities actually " +
@@ -4779,7 +4803,10 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceChatGateway.Image(attachment.mime,
                     android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
             }
-            val fullVideo = video?.let {
+            // The silent local fallback is an explicit choice, never an automatic retry.
+            val sampledFrames = if (frameOnlyVideo && video != null)
+                WorkspaceVideoFrameSampler.frames(this, video.uri) else emptyList()
+            val fullVideo = video?.takeUnless { frameOnlyVideo }?.let {
                 val bytes = contentResolver.openInputStream(it.uri)?.use { stream ->
                     stream.readBounded(WorkspaceMediaLimits.MAX_NATIVE_VIDEO_BYTES)
                 } ?: throw IllegalArgumentException("Original video cannot be read")
@@ -4793,7 +4820,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceChatGateway.Audio(it.mime,
                     android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
             }
-            Triple(photos, fullVideo, fullAudio)
+            Triple(photos + sampledFrames, fullVideo, fullAudio)
         }.getOrElse {
             statusMessage = it.message ?: "Selected media cannot be prepared"
             render()
@@ -4852,7 +4879,8 @@ class WorkspaceActivity : AppCompatActivity() {
                     "Uncertain network failure; not auto-retried")
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
                     Result.failure(IllegalStateException(
-                        WorkspaceChatGateway.networkFailure(provider, error))), skillProjection)
+                        WorkspaceChatGateway.networkFailure(provider, error))), skillProjection,
+                    frameOnlyVideo)
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -4917,7 +4945,7 @@ class WorkspaceActivity : AppCompatActivity() {
                         "Local SSE response budget exceeded" else
                         (failure.message ?: "Provider reply failed"))
                 complete(call, serial, id, messageId, replacingAssistantId,
-                    provider, picked, result, skillProjection)
+                    provider, picked, result, skillProjection, frameOnlyVideo)
             }
         }
         call.enqueue(callback)
@@ -4926,7 +4954,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun complete(call: Call, serial: Long, id: String, userMessageId: String,
                          replacingAssistantId: String?, provider: WorkspaceChatGateway.Provider,
                          picked: List<Attachment>, result: Result<String>,
-                         skillProjection: WorkspaceSkillInvocation.Projection? = null) {
+                         skillProjection: WorkspaceSkillInvocation.Projection? = null,
+                         frameOnlyVideo: Boolean = false) {
         runOnUiThread {
             if (isFinishing || isDestroyed || serial != requestGeneration ||
                 activeRequest !== call || selectedId != id) return@runOnUiThread
@@ -4999,7 +5028,7 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             render()
             if (failure != null) showChatFailure(id, userMessageId, replacingAssistantId,
-                provider, picked, statusMessage)
+                provider, picked, statusMessage, frameOnlyVideo)
         }
     }
 }
