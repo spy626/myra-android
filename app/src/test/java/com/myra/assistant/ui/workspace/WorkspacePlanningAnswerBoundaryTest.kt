@@ -55,17 +55,17 @@ class WorkspacePlanningAnswerBoundaryTest {
         assertNull(WorkspacePlanningAnswerBoundary.violation("Hi bro!", "Install Android Studio"))
     }
 
-    @Test fun constraintsAreSpecificToTheCurrentTaskAndDoNotSelectAPlatform() {
-        val rule = WorkspacePlanningAnswerBoundary.instructions(phonePlan)
-        assertTrue(rule.contains("Exactly 3 MAIN numbered actions"))
-        assertTrue(rule.contains("Phone-only access"))
-        assertTrue(rule.contains("zero budget"))
-        assertTrue(rule.contains("PLANNING-ONLY HARD STOP"))
-        assertTrue(rule.contains("Explicit target: UNSPECIFIED"))
-        assertTrue(rule.contains("Roman Hinglish"))
-        assertFalse(rule.contains("SPCK"))
-        assertFalse(rule.contains("grocery"))
-        assertEquals("", WorkspacePlanningAnswerBoundary.instructions("hi bro"))
+    @Test fun oneConsolidatedGuideOwnsConstraintsNotSecondValidatorPrompt() {
+        val guide = WorkspacePracticalPlanningGuide.instructions(phonePlan)
+        assertTrue(guide.contains("EXACT MAIN STEP COUNT: give exactly 3"))
+        assertTrue(guide.contains("Phone-only access"))
+        assertTrue(guide.contains("Zero-budget"))
+        assertTrue(guide.contains("PLANNING-ONLY HARD STOP"))
+        assertTrue(guide.contains("Explicit target: UNSPECIFIED"))
+        assertTrue(guide.contains("Roman Hinglish"))
+        assertFalse(guide.contains("Sketchware"))
+        assertFalse(guide.contains("grocery"))
+        assertEquals("", WorkspacePracticalPlanningGuide.instructions("hi bro"))
     }
 
     @Test fun visualNoCodeBuilderFailureFromNewPhoneVideoIsAnImplementationViolation() {
@@ -147,6 +147,81 @@ class WorkspacePlanningAnswerBoundaryTest {
         assertNull(WorkspacePlanningAnswerBoundary.violation(
             "Hi bro kya haal hai?", "Sketchware install mat karo. 😂"
         ))
+    }
+
+
+    @Test fun latestVideoThreeStepHeadingsAndBoldStepFormatsAreAccepted() {
+        val variants = listOf(
+            """
+                ## Pehle ye 3 steps
+                ### Step 1: Customer features list likho
+                - Home, Product, Cart.
+                ### Step 2: Rough screen sketch banao Notes par
+                - Bas boxes draw karo.
+                ### Step 3: Sample content plan karo
+                - Five product names aur prices.
+            """.trimIndent(),
+            """
+                **Step 1: Customer flow**
+                Home se cart tak paper par journey likho.
+                **Step 2: Rough screen sketch**
+                Notes par Home/Cart ka draft draw karo.
+                **Step 3: Sample product content**
+                Paanch prices likho.
+            """.trimIndent(),
+            """
+                - **Step 1:** Features ki list
+                - **Step 2:** Rough wireframe on paper
+                - **Step 3:** Sample item data
+            """.trimIndent()
+        )
+        variants.forEach { valid ->
+            assertEquals(listOf(1, 2, 3),
+                WorkspacePlanningAnswerBoundary.explicitMainStepNumbers(valid))
+            assertNull(WorkspacePlanningAnswerBoundary.violation(phonePlan, valid))
+            assertEquals(valid, WorkspacePlanningAnswerBoundary.requireAcceptable(phonePlan, valid))
+        }
+    }
+
+    @Test fun noFormatOnlyRejectionWhenUsefulAdviceLacksNumericMarkdown() {
+        val actualPlanning = """
+            ## Features to decide
+            Home, Product, Cart aur total ka short list Notes mein likho.
+
+            ## Rough design
+            Paper par screen flow draw karo.
+
+            ## Sample content
+            Five grocery item names aur prices ki list banao.
+        """.trimIndent()
+        assertTrue(WorkspacePlanningAnswerBoundary.explicitMainStepNumbers(actualPlanning).isEmpty())
+        assertNull(WorkspacePlanningAnswerBoundary.violation(phonePlan, actualPlanning))
+    }
+
+    @Test fun explicitTwoOrFourMainActionsRemainCountViolations() {
+        val two = """
+            ### Step 1: List features
+            ### Step 2: Sketch on paper
+        """.trimIndent()
+        val four = """
+            1. **Features:** Write list.
+            2. **Flow:** Draw journey.
+            3. **Content:** Write sample prices.
+            4. **Another:** Add feature ideas.
+        """.trimIndent()
+        assertTrue(WorkspacePlanningAnswerBoundary.violation(phonePlan, two)
+            .orEmpty().contains("3 numbered"))
+        assertTrue(WorkspacePlanningAnswerBoundary.violation(phonePlan, four)
+            .orEmpty().contains("3 numbered"))
+    }
+
+    @Test fun setupStillFailsRegardlessOfVisualStepMarker() {
+        val invalid = """
+            ### Step 1: Features list
+            ### Step 2: Visual builder install karo aur New Project create karo
+            ### Step 3: Screen blocks connect karo
+        """.trimIndent()
+        assertNotNull(WorkspacePlanningAnswerBoundary.violation(phonePlan, invalid))
     }
 
     @Test fun comparisonIsNotMistakenForImperativeSetup() {

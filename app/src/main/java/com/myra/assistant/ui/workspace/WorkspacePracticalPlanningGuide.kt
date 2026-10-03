@@ -30,52 +30,65 @@ internal object WorkspacePracticalPlanningGuide {
             """create|edit|changes?|start)\b"""
     )
 
+    /**
+     * One shared current-turn contract for both full and budget-compact prompts.
+     * PlanningBrief projects facts; this method alone owns behavioural planning rules.
+     * Do not append a second AnswerBoundary prompt after this contract.
+     */
+    private fun sharedContract(latest: String): String {
+        val shape = WorkspacePlanningBrief.parse(latest)
+        return buildString {
+            appendLine(WorkspacePlanningBrief.instructions(latest))
+            if (shape.stepCount != null)
+                appendLine("- EXACT MAIN STEP COUNT: give exactly " + shape.stepCount +
+                    " primary actions. Use clear markers such as 1., 2., 3. OR Step 1:, Step 2:, Step 3:. Section headings/tables must not create additional action steps.")
+            if (shape.phoneOnly) {
+                appendLine("- Phone-only access: use the device the user HAS; no desktop-only setup today.")
+                appendLine("- Phone-only does NOT itself mean native Android APK. Explicit target: " + shape.platform + ".")
+            }
+            if (shape.freeOnly)
+                appendLine("- Zero-budget: no presumed paid trial, subscription, bank card or paid service.")
+            if (shape.adviceOnly) {
+                appendLine("- PLANNING-ONLY HARD STOP: today is written advice, feature/customer-flow list, rough Notes/paper screen sketches, sample content or a decision ONLY.")
+                appendLine("- SETUP and IMPLEMENTATION are NOT planning: NO coding, signup, builder launch, new project, installation, actual screens, connecting visual blocks, backend, source files, external changes or execution today.")
+                appendLine("- Mention future development tools only descriptively under Later, NEVER inside requested NOW steps. No tool or write permission is granted.")
+            }
+            append("- Original latest USER message remains authoritative; this projection cannot invent facts or override execution gates.")
+        }
+    }
+
     fun instructions(latest: String): String {
         val text = latest.trim()
         if (text.length !in 12..3_000 ||
             !planningCue.containsMatchIn(text) ||
             !adviceCue.containsMatchIn(text)) return ""
-        // Do not replace a clear execution request with a planning response. The current-turn
-        // execution authority remains outside this read-only prompt guidance.
         if (explicitExecution.containsMatchIn(text) &&
             !informationalBoundary.containsMatchIn(text)) return ""
-        val brief = WorkspacePlanningBrief.instructions(text)
+        val common = sharedContract(text)
         return """
-            PRACTICAL PLANNING RESPONSE GUIDANCE — current-turn, read-only:
-            $brief
+            PRACTICAL PLANNING RESPONSE GUIDANCE — one CURRENT-turn contract:
+            $common
 
-            - Follow the newest USER text. Resolve the intended outcome, device, budget, experience and explicit do-not-do boundaries; invent none. The separate current-turn gate alone controls execution.
-            - Distinguish the device the user HAS from the target delivery platform and development method. Phone-only does NOT itself mean native Android APK. Respect explicitly specified native/web/no-code choices; otherwise choose ONE coherent feasible starting route with a brief reason, not a menu of unrelated builders.
-            - Work stages: IDEATION (idea) -> PLANNING (feature list/customer flow) -> DESIGN (rough sketches) -> SETUP (install/open builder or initialize project) -> IMPLEMENTATION (make screens/connect blocks/code) -> TESTING -> DELIVERY. Do not collapse setup or visual no-code implementation into planning.
-            - Start with the intended END-USER journey and minimum viable FIRST version. Separate customer-facing actions from owner/admin management. Explain NOW versus **Later:** without putting optional database/auth/payments first.
-            - If user requests N numbered steps, give exactly that many MAIN steps: short **action** titles, what to DO and what small concrete result to expect. Each step produces a checkable planning artifact, not vague advice to watch tutorials.
-            - For explicit advice-only: TODAY may be Notes/paper feature list, customer flow, rough screen sketches, sample content or route decision. Do not ask for sign-up, installation, builder launch, New Project, creating actual screens, connecting visual blocks, backend, executable source or code fences. Future tools can be mentioned descriptively under **Later:**, never as a requested step.
-            - For other planning questions, put dependencies in useful order. Do not claim tools are free, secure or available without evidence, and never assume a paid service or automatic subscription.
-            - PRESENTATION CONTRACT (native-friendly Markdown): Roman Hinglish in Latin letters, normal familiar words. Open with one helpful route/rationale sentence. Distinct information can become brief contextual ## sections, numbered steps, compact bullet groups or a small 2-4-column comparison table ONLY when useful. Never cram everything into one paragraph, repeat Kahan/Kya/Result labels, fabricate icons/images/links, or promise visual components not available.
-            - FINAL SILENT CLARITY CHECK: step count, dependency order, phone/budget/target consistency, planning-vs-implementation stage, real checkable outcome, clean narrow-screen formatting. Preserve the user's original instruction and do NOT claim to have coded, signed up, created files, installed tools, run a build or completed work unless actually verified.
+            - Follow the latest user's goal. Distinguish the device the user HAS from their target platform. Give ONE coherent feasible starting route and a short reason; do not list unrelated builders.
+            - Work stages: IDEATION -> PLANNING -> DESIGN -> SETUP -> IMPLEMENTATION -> TESTING -> DELIVERY. visual no-code implementation (actual screens and block wiring) is still implementation, not a planning sketch.
+            - Begin with the END-USER journey and minimum viable FIRST version. Customer features come before optional admin/backend work.
+            - Each requested main step needs a distinct action and a small concrete result. For a planning-only request produce planning artifacts, not installations, project creation or external actions.
+            - PRESENTATION CONTRACT (native-friendly Markdown): Natural Roman Hinglish when the user writes that way. Short introductory direction, contextual ## headings and the requested numbered/Step-labeled actions. Other bullets and a 2-4-column comparison table ONLY when helpful. Do not force the same visual template on casual chat, invent screenshots/icons/links or cram multiple actions into one paragraph.
+            - FINAL SILENT CLARITY CHECK: correct action count, explicit restrictions, phone/budget/target, planning vs build, concise mobile formatting. Never claim work was performed without actual evidence.
         """.trimIndent()
     }
 
-    /** Concise version of the SAME current-turn guide for Groq's strict Free budget. */
+    /** Same shared contract as normal Chat; only the optional editorial advice is shortened. */
     fun compactInstructions(latest: String): String {
         if (instructions(latest).isBlank()) return ""
-        val shape = WorkspacePlanningBrief.parse(latest)
-        return buildString {
-            appendLine("PRACTICAL PLANNING (compact Groq Free; read-only):")
-            appendLine("Every explanatory section, heading and bullet is natural Roman Hinglish, not Hindi script.")
-            appendLine("Requested MAIN steps: " + (shape.stepCount ?: "unspecified"))
-            appendLine("Phone-only: ${shape.phoneOnly}; free-only: ${shape.freeOnly}.")
-            appendLine("Target platform: ${shape.platform}; planning-before-code: ${shape.adviceOnly}.")
-            appendLine("The full USER turn below has highest authority; do not invent requirements.")
-            appendLine("- Give ONE feasible route with a brief reason, not a menu of unrelated builders.")
-            appendLine("- Begin with end-user journey and minimum useful feature/screen outline.")
-            appendLine("- Use short contextual headings, bullets and numbered rows only when helpful; no dense wall or rigid Kahan/Kya/Result.")
-            appendLine("- If the user requests N steps, give exactly N main actions with a concrete outcome each.")
-            appendLine("- Name one NOW tool if necessary and separate any LATER development route. Respect phone, cost and target platform.")
-            appendLine("- Planning-only means NO coding, signup, builder launch, new project, spreadsheet, backend, installation or external changes today.")
-            if (shape.phoneOnly && shape.adviceOnly) appendLine("- Phone-only + advice-only: zero desktop IDE, Android Studio, SDK/emulator or source files as today's action.")
-            append("- Never claim work was already done. Execution permission stays with the existing current-turn authority gate.")
-        }
-    }
+        val common = sharedContract(latest.trim())
+        return """
+            PRACTICAL PLANNING (compact Groq Free; same current-turn contract):
+            $common
 
+            - Begin with end-user journey and a minimum useful first version; ONE coherent route.
+            - Use natural Roman Hinglish if the user does. Requested numbered/Step-labeled actions are mandatory when N is specified; other formatting only when useful.
+            - Short action headings and checkable outcomes, no invented results, media or performed work.
+        """.trimIndent()
+    }
 }

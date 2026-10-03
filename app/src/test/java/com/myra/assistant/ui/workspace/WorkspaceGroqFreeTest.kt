@@ -37,7 +37,8 @@ class WorkspaceGroqFreeTest {
         val regularSystem = regular.getJSONObject(0).getString("content")
         if (regularSystem.length + original.length > WorkspaceGroqFree.MAX_PROMPT_CHARS) {
             assertTrue(system.contains("PRACTICAL PLANNING (compact Groq Free"))
-            assertTrue(system.contains("planning-before-code: true"))
+            assertTrue(system.contains("EXACT MAIN STEP COUNT: give exactly 3"))
+            assertTrue(system.contains("PLANNING-ONLY HARD STOP"))
             assertTrue(system.contains("NO coding, signup, builder launch"))
         } else {
             assertEquals(regularSystem, system)

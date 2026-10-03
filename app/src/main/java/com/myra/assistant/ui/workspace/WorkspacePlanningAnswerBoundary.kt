@@ -106,27 +106,32 @@ internal object WorkspacePlanningAnswerBoundary {
         return null
     }
 
-    fun instructions(latest: String): String {
-        if (WorkspacePracticalPlanningGuide.instructions(latest).isBlank()) return ""
-        val shape = WorkspacePlanningBrief.parse(latest)
-        return buildString {
-            appendLine("CURRENT-TURN ANSWER ACCEPTANCE — latest USER request overrides generic advice:")
-            if (shape.stepCount != null)
-                appendLine("- Exactly " + shape.stepCount + " MAIN numbered actions; each yields a distinct practical planning result.")
-            if (shape.phoneOnly) {
-                appendLine("- Phone-only access: never prescribe desktop installation as today's action.")
-                appendLine("- Android phone is NOT an explicit native APK request. Explicit target: " + shape.platform + ".")
+    private val labelledStep = Regex(
+        """(?i)^\s{0,3}(?:[-*+]\s+)?(?:#{1,4}\s*)?(?:\*\*)?""" +
+            """(?:(?:step|kadam|point)\s+([1-6])(?:\s*[:.)\-–—]|\s+)|([1-6])[.):]\s+)"""
+    )
+
+    /** Counts explicitly indicated MAIN steps, never demands a specific renderer block. */
+    internal fun explicitMainStepNumbers(reply: String): List<Int> {
+        val numbers = mutableListOf<Int>()
+        var later = false
+        for (raw in reply.lineSequence().take(160)) {
+            val line = cleanLine(raw)
+            if (line.isBlank()) continue
+            val isHeading = heading.containsMatchIn(raw) ||
+                (raw.trim().startsWith("**") && raw.trim().endsWith("**"))
+            if (future.containsMatchIn(line) && labelledStep.find(raw) == null) {
+                later = true
+                continue
             }
-            if (shape.freeOnly) appendLine("- Stay within zero budget. No presumed subscription, payment or card.")
-            if (shape.adviceOnly) {
-                appendLine("- PLANNING-ONLY HARD STOP: TODAY actions are a feature list, customer journey, rough screen sketch, sample content or written decision only.")
-                appendLine("- SETUP and IMPLEMENTATION are NOT planning: no installing ANY IDE/builder, signup, New Project, actual screens, connecting visual blocks, XML/code, database, execution or deployment.")
-                appendLine("- Descriptive future tools belong in a separate **Later:** note, not requested MAIN steps. No execution authority granted.")
-            }
-            appendLine("- One coherent feasible direction and brief why; start with useful end-user flow, not optional admin/backend work.")
-            appendLine("- Natural Roman Hinglish. Clear action headings, useful bullets/table, no rigid Kahan/Kya/Result template; casual chat stays conversational.")
-            append("- Check original phone, budget, exact count and do-not-do instructions. Never invent media, citations or tool results.")
+            if (isHeading && now.containsMatchIn(line)) later = false
+            if (later) continue
+            val marker = labelledStep.find(raw) ?: continue
+            val number = marker.groupValues.drop(1).firstOrNull { it.isNotEmpty() }
+                ?.toIntOrNull() ?: continue
+            numbers.add(number)
         }
+        return numbers
     }
 
     /**
@@ -140,13 +145,15 @@ internal object WorkspacePlanningAnswerBoundary {
         if (fence.containsMatchIn(completedReply))
             return "LYRA gave a code/implementation block although you asked for planning only. Reply not saved; no automatic paid retry."
 
-        val blocks = WorkspaceRichAnswerBlocks.parse(completedReply)
+        // Format is not substance. Count only clearly labelled MAIN actions, in
+        // either native numeric form or headings such as "### Step 1: Scope".
+        // Unnumbered useful prose is NOT silently discarded just because the
+        // rich renderer cannot classify it as a Numbered block.
         if (shape.stepCount != null) {
-            val given = blocks.filterIsInstance<WorkspaceRichAnswerBlocks.Block.Numbered>()
-                .sumOf { it.items.size }
-            if (given != shape.stepCount)
-                return "LYRA did not follow your requested " + shape.stepCount +
-                    " numbered planning steps. Reply not saved; tap Retry if useful."
+            val marked = explicitMainStepNumbers(completedReply)
+            if (marked.isNotEmpty() && marked != (1..shape.stepCount).toList())
+                return "LYRA returned " + marked.size + " identifiable actions, not your " +
+                    shape.stepCount + " numbered planning steps. Reply not saved; tap Retry if useful."
         }
 
         // Comparison prose is still checked for orders; descriptive table rows

@@ -127,7 +127,6 @@ class WorkspaceChatGatewayTest {
         assertTrue(system.contains("minimum viable FIRST version"))
         assertTrue(system.contains("Work stages:"))
         assertTrue(system.contains("visual no-code implementation"))
-        assertTrue(system.contains("New Project"))
         assertTrue(system.contains("PRESENTATION CONTRACT"))
         assertTrue(system.contains("native-friendly Markdown"))
         assertTrue(system.contains("CURRENT USER PLANNING BRIEF"))
@@ -135,22 +134,28 @@ class WorkspaceChatGatewayTest {
         assertTrue(system.contains("Phone-only resource explicitly stated: true"))
         assertTrue(system.contains("Free/zero-budget requirement explicitly stated: true"))
         assertTrue(system.contains("Explicit target delivery platform: UNSPECIFIED"))
+        assertTrue(system.contains("EXACT MAIN STEP COUNT: give exactly 3"))
         assertTrue(system.contains("PLANNING-ONLY HARD STOP"))
         assertTrue(system.contains("SETUP and IMPLEMENTATION are NOT planning"))
-        assertTrue(system.contains("no installing ANY IDE/builder"))
+        assertTrue(system.contains("NO coding, signup, builder launch"))
         assertFalse(system.contains("Code-answer formatting when supplying code"))
-        assertTrue(system.lastIndexOf("CURRENT-TURN ANSWER ACCEPTANCE") >
-            system.lastIndexOf("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+        assertFalse(system.contains("CURRENT-TURN ANSWER ACCEPTANCE"))
+        assertEquals(1, Regex("PLANNING-ONLY HARD STOP").findAll(system).count())
         assertEquals(original, common.getJSONObject(common.length() - 1).getString("content"))
 
         val groq = JSONObject(WorkspaceGroqFree.body(messages)).getJSONArray("messages")
         val groqSystem = groq.getJSONObject(0).getString("content")
         assertTrue(groqSystem.contains("PRACTICAL PLANNING"))
+        assertTrue(groqSystem.contains("EXACT MAIN STEP COUNT: give exactly 3"))
+        assertEquals(1, Regex("PLANNING-ONLY HARD STOP").findAll(groqSystem).count())
         assertEquals(original, groq.getJSONObject(groq.length() - 1).getString("content"))
 
         val llm7 = JSONObject(WorkspaceLlm7Free.body(messages)).getJSONArray("messages")
         assertTrue(llm7.getJSONObject(0).getString("content")
             .contains("PRACTICAL PLANNING RESPONSE GUIDANCE"))
+        assertEquals(1, Regex("PLANNING-ONLY HARD STOP").findAll(
+            llm7.getJSONObject(0).getString("content")
+        ).count())
         assertEquals(original,
             llm7.getJSONObject(llm7.length() - 1).getString("content"))
         assertFalse(WorkspaceChatGateway.openAiMessages(listOf(
