@@ -47,7 +47,7 @@ internal object WorkspaceCustomProviderChat {
 
         val body = JSONObject()
             .put("model", profile.modelId)
-            .put("stream", false)
+            .put("stream", WorkspaceRichBlocksContract.enabled(extraSystemInstructions))
             .put("max_tokens", profile.maxOutputTokens)
             .put("temperature", 0.2)
             .put("messages", WorkspaceChatGateway.openAiMessages(
