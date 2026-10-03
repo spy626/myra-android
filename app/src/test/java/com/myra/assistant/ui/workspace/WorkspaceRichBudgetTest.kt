@@ -83,9 +83,8 @@ class WorkspaceRichBudgetTest {
             WorkspaceRichBlocksContract.COMPACT_GROQ_INSTRUCTIONS
         val original = WorkspaceGroqFree.request("test-groq-key", input,
             extraSystemInstructions = extra)
-        val retry = WorkspaceRichRetry.request(original)
-        assertNotNull(retry)
-        val body = okio.Buffer().also { retry!!.body?.writeTo(it) }.readUtf8()
+        val retry = requireNotNull(WorkspaceRichRetry.request(original))
+        val body = okio.Buffer().also { retry.body?.writeTo(it) }.readUtf8()
         val json = JSONObject(body)
         assertEquals(WorkspaceGroqFree.MODEL, json.getString("model"))
         assertEquals("api.groq.com", retry.url.host)
