@@ -64,7 +64,21 @@ internal class WorkspaceRichUserContextInterceptor(
             ).filterNot { system.optString("content").contains(it) }.take(4)
             val note = SavedMemoryContextFormatter.format(relevant, 4)
             if (note.isBlank() || chain.call().isCanceled()) return@runCatching original
-            system.put("content", system.optString("content") + "\n" + note)
+            val previousSystem = system.optString("content")
+            val updatedSystem = previousSystem + "\n" + note
+            // An optional memory projection must never defeat Free route prompt budgets.
+            val maxPrompt = when (original.url.toString()) {
+                WorkspaceGroqFree.ENDPOINT -> WorkspaceGroqFree.MAX_PROMPT_CHARS
+                WorkspaceLlm7Free.ENDPOINT -> WorkspaceLlm7Free.MAX_PROMPT_CHARS
+                else -> Int.MAX_VALUE
+            }
+            val projectedChars = (0 until messages.length()).sumOf { index ->
+                val value = messages.optJSONObject(index)?.opt("content") as? String
+                if (index == 0) updatedSystem.length
+                else value?.length ?: maxPrompt
+            }
+            if (projectedChars > maxPrompt) return@runCatching original
+            system.put("content", updatedSystem)
             original.newBuilder().method("POST", json.toString()
                 .toRequestBody("application/json; charset=utf-8".toMediaType())).build()
         }.getOrDefault(original)
