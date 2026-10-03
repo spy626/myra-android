@@ -4177,9 +4177,14 @@ class WorkspaceActivity : AppCompatActivity() {
                     }.show()
                 return
             }
-            if ((llm7TextOnly || groqTextOnly || customTextOnly) && !attachmentRouteApproved) {
+            val rawSoundOrVideo = picked.any {
+                WorkspaceAttachmentPolicy.kind(it.mime) in setOf(
+                    WorkspaceAttachmentPolicy.Kind.AUDIO, WorkspaceAttachmentPolicy.Kind.VIDEO)
+            }
+            if ((llm7TextOnly || groqTextOnly || customTextOnly || rawSoundOrVideo) &&
+                !attachmentRouteApproved) {
                 AlertDialog.Builder(this).setTitle("Send with OpenRouter Free?")
-                    .setMessage("Use OpenRouter's $0 ceiling for ten photos or original video/audio? No free video/audio model is guaranteed; if unavailable the request fails without payment.")
+                    .setMessage("Upload selected media to OpenRouter with the $0 price and ZDR restrictions? A full video (including any soundtrack) or audio recording leaves this phone, not just sample screenshots. Availability of a private free multimodal model is NOT guaranteed; if unsupported, the request fails without payment or unsafe fallback.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Use OpenRouter Free") { _, _ ->
                         sendMessage(attachmentRouteApproved = true)
@@ -4816,7 +4821,10 @@ class WorkspaceActivity : AppCompatActivity() {
             )
         }.getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
-        val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
+        val hasNativeMedia = nativeMedia.first.isNotEmpty() ||
+            nativeMedia.second != null || nativeMedia.third != null
+        val call = (if (hasNativeMedia) WorkspaceChatGateway.mediaClient
+            else WorkspaceChatGateway.client(provider)).newCall(outgoing)
         val richRequested = WorkspaceRichBlocksContract.enabled(freeInstructions)
         WorkspaceRichDiagnostics.record(this, messageId, outgoing, provider.name)
         liveRichTurnId = null

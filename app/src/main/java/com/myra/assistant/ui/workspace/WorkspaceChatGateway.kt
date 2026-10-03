@@ -63,6 +63,15 @@ internal object WorkspaceChatGateway {
         .addInterceptor(WorkspaceFreeRouteRetry())
         .build()
 
+    // Bounded whole-file media uploads need a longer request window than everyday text.
+    // Same provider, zero-price, ZDR interceptors and no new fallback; voice engine unchanged.
+    val mediaClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .callTimeout(110, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
     /** Each request includes only bounded messages from the explicitly selected project. */
     fun request(
         provider: Provider,

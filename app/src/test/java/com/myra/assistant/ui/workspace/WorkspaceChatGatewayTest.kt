@@ -21,6 +21,15 @@ class WorkspaceChatGatewayTest {
         }
     }
 
+    @Test fun mediaUsesLongerBoundedTimeoutWithoutChangingProviderInterceptors() {
+        assertTrue(WorkspaceChatGateway.mediaClient.callTimeoutMillis >
+            WorkspaceChatGateway.client.callTimeoutMillis)
+        assertEquals(110_000, WorkspaceChatGateway.mediaClient.callTimeoutMillis)
+        assertEquals(90_000, WorkspaceChatGateway.mediaClient.readTimeoutMillis)
+        assertEquals(WorkspaceChatGateway.client.interceptors.map { it::class.java },
+            WorkspaceChatGateway.mediaClient.interceptors.map { it::class.java })
+    }
+
     @Test fun onlyExplicitWorkspaceFreeRoutesAreExposed() {
         assertEquals(listOf(
             WorkspaceChatGateway.Provider.OPENROUTER_FREE,
