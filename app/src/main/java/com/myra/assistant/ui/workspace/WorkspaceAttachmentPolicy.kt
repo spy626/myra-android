@@ -1,7 +1,7 @@
 package com.myra.assistant.ui.workspace
 
-/** Local attachment classification. Audio/video may be selected locally but are fail-closed
- * until a provider route explicitly supports them. */
+/** Attachment categories. Video is sent only as sampled stills via an explicitly approved
+ * image-capable route; audio remains local-only. */
 internal object WorkspaceAttachmentPolicy {
     enum class Kind { IMAGE, TEXT, AUDIO, VIDEO, UNSUPPORTED }
 
@@ -30,7 +30,7 @@ internal object WorkspaceAttachmentPolicy {
     }
 
     fun sendableNow(kind: Kind): Boolean =
-        kind == Kind.IMAGE || kind == Kind.TEXT
+        kind == Kind.IMAGE || kind == Kind.TEXT || kind == Kind.VIDEO
 
     fun label(kind: Kind): String = when (kind) {
         Kind.IMAGE -> "Photo"

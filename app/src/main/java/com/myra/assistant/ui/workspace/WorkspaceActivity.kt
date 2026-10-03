@@ -354,8 +354,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private lateinit var attachmentList: LinearLayout
 
     private val photoPicker =
-        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            uri?.let { addAttachment(it) }
+        registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(3)) { uris ->
+            uris.distinct().forEach { addAttachment(it) }
         }
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(::routePickedDocument)
@@ -2005,7 +2005,7 @@ class WorkspaceActivity : AppCompatActivity() {
         )
         val stoppingForeground =
             state.composerAction == WorkspaceChatConcurrencyPolicy.ComposerAction.STOP_FOREGROUND
-        val ready = !workTab && (stoppingForeground || composer.text.toString().isNotBlank())
+        val ready = !workTab && (stoppingForeground || composer.text.toString().isNotBlank() || attachments.isNotEmpty())
         sendButton.isEnabled = ready
         sendButton.alpha = if (ready) 1f else .5f
         sendButton.setImageResource(
@@ -3109,7 +3109,7 @@ class WorkspaceActivity : AppCompatActivity() {
         if ((source.mime == "image/jpeg" || source.mime == "image/png") &&
             source.size in 1L..2_000_000L) {
             val extension = if (source.mime == "image/png") ".png" else ".jpg"
-            val output = File(dir, "photo-${System.currentTimeMillis()}$extension")
+            val output = File(dir, "photo-${java.util.UUID.randomUUID()}$extension")
             val bytes = contentResolver.openInputStream(source.uri)?.use {
                 it.readBounded(2_000_000)
             } ?: throw IllegalArgumentException("Photo cannot be read")
@@ -3152,7 +3152,7 @@ class WorkspaceActivity : AppCompatActivity() {
             )
         } ?: throw IllegalArgumentException("Photo cannot be decoded")
 
-        val output = File(dir, "photo-${System.currentTimeMillis()}.jpg")
+        val output = File(dir, "photo-${java.util.UUID.randomUUID()}.jpg")
         var quality = 92
         var saved = false
         while (quality >= 52) {
@@ -3189,7 +3189,11 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         if (attachments.size >= 3) {
-            toast("Maximum three local attachments")
+            toast("Maximum three attachments per request")
+            return
+        }
+        if (attachments.any { it.uri == uri }) {
+            toast("This item is already attached")
             return
         }
         if (uri.scheme != "content") {
@@ -3223,6 +3227,8 @@ class WorkspaceActivity : AppCompatActivity() {
                 mime = when {
                     name.endsWith(".jpg", true) || name.endsWith(".jpeg", true) -> "image/jpeg"
                     name.endsWith(".png", true) -> "image/png"
+                    name.endsWith(".mp4", true) -> "video/mp4"
+                    name.endsWith(".webm", true) -> "video/webm"
                     else -> ""
                 }
             }
@@ -3254,8 +3260,14 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
                 require(attachments.none {
-                    WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.IMAGE
-                }) { "Only one photo per request" }
+                    WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.VIDEO
+                }) { "Remove video before adding photos; video uses three frame slots" }
+            }
+            if (kind == WorkspaceAttachmentPolicy.Kind.VIDEO) {
+                require(attachments.none {
+                    WorkspaceAttachmentPolicy.kind(it.mime) in setOf(
+                        WorkspaceAttachmentPolicy.Kind.IMAGE, WorkspaceAttachmentPolicy.Kind.VIDEO)
+                }) { "Choose one video OR up to three photos" }
             }
             val source = Attachment(uri, name, mime, size)
             if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
@@ -3509,7 +3521,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     attachmentList.addView(
                         compactAttachmentCard(
                             title = attachment.name,
-                            subtitle = "Video · local only",
+                            subtitle = "Video · 3 sampled frames (no audio)",
                             thumbnail = videoThumbnail(attachment.uri),
                             onRemove = {
                                 attachments.remove(attachment)
@@ -3545,6 +3557,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
         attachmentList.visibility =
             if (skillAttachment != null || attachments.isNotEmpty()) View.VISIBLE else View.GONE
+        updateSendButton()
     }
 
     private fun InputStream.readBounded(max: Int): ByteArray {
@@ -3995,11 +4008,22 @@ class WorkspaceActivity : AppCompatActivity() {
         return true
     }
 
-    private fun sendMessage() {
+    private fun sendMessage(attachmentRouteApproved: Boolean = false) {
         if (workTab) return
         if (isForegroundBusy()) { stopForegroundReply(); return }
-        val text = composer.text.toString()
-        if (text.isBlank()) { toast("Write a message first"); return }
+        val typed = composer.text.toString()
+        val text = typed.ifBlank {
+            when {
+                attachments.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                    WorkspaceAttachmentPolicy.Kind.VIDEO } ->
+                    "Describe the visible content of this video using its three sampled still frames."
+                attachments.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                    WorkspaceAttachmentPolicy.Kind.IMAGE } ->
+                    "Describe these attached images."
+                else -> ""
+            }
+        }
+        if (text.isBlank()) { toast("Write a message or attach photos/video"); return }
         if (!WorkspaceLongInputPolicy.sendable(text)) {
             statusMessage = "The complete pasted draft is still in the chat box. " +
                 "This app supports up to ${WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS} characters per message; nothing was sent."
@@ -4024,7 +4048,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceAttachmentPolicy.label(WorkspaceAttachmentPolicy.kind(it.mime))
             }.distinct().joinToString(" / ")
             statusMessage =
-                "$types attachment is selected locally, but audio/video model sending is not active yet. Nothing was sent."
+                "$types attachment is selected locally, but audio model sending is not active. Nothing was sent."
             render()
             return
         }
@@ -4080,9 +4104,24 @@ class WorkspaceActivity : AppCompatActivity() {
             val groqTextOnly = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false) &&
                 keys.get(ApiKeyStore.GROQ).isNotBlank()
             val customTextOnly = WorkspaceCustomProviderStore.chatEnabled(this)
-            if (llm7TextOnly || groqTextOnly || customTextOnly) {
-                statusMessage = "The enabled text route does not accept attachments in LYRA. Remove the attachment or turn that text route OFF; nothing was sent."
+            if (keys.get(ApiKeyStore.OPENROUTER).isBlank()) {
+                statusMessage = "An OpenRouter Free key is required for media. Groq and LLM7 are text-only. Draft and attachments retained; nothing sent."
                 render()
+                AlertDialog.Builder(this).setTitle("Free media route unavailable")
+                    .setMessage("Add an OpenRouter Free key for up to three photos or three still frames extracted from a video. Video audio is not analyzed. Nothing has been uploaded.")
+                    .setNegativeButton("Later", null)
+                    .setPositiveButton("API settings") { _, _ ->
+                        startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
+                    }.show()
+                return
+            }
+            if ((llm7TextOnly || groqTextOnly || customTextOnly) && !attachmentRouteApproved) {
+                AlertDialog.Builder(this).setTitle("Send with OpenRouter Free?")
+                    .setMessage("Your enabled text route cannot receive media. Use OpenRouter's zero-price-guarded image route for these attachments? Video is represented by three sampled stills only, without audio or full-motion understanding.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Use OpenRouter Free") { _, _ ->
+                        sendMessage(attachmentRouteApproved = true)
+                    }.show()
                 return
             }
         }
@@ -4633,24 +4672,43 @@ class WorkspaceActivity : AppCompatActivity() {
                 "${picked.size} selected item${if (picked.size == 1) "" else "s"}")
             if (::root.isInitialized) render()
         }
+        val video = picked.firstOrNull {
+            WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.VIDEO
+        }
         val enriched = runCatching {
-            val addition = picked.filterNot { it.mime.startsWith("image/") }
-                .joinToString("\n\n") { "Document ${it.name}:\n${readAttachmentText(it)}" }
+            val addition = picked.filter {
+                WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.TEXT
+            }.joinToString("\n\n") { "Document ${it.name}:\n${readAttachmentText(it)}" }
+            val videoNote = if (video == null) "" else
+                "Video ${video.name} is supplied as THREE still frames: early, middle, late. " +
+                "They do NOT include audio or continuous movement. Explain this limitation " +
+                "and never claim to have watched or heard the full video."
             val last = transcript.last()
-            val expanded = last.text + if (addition.isBlank()) "" else "\n\n$addition"
+            val extras = listOf(addition, videoNote).filter(String::isNotBlank)
+            val expanded = last.text + if (extras.isEmpty()) "" else
+                "\n\n" + extras.joinToString("\n\n")
             require(expanded.length <= WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS) {
                 "Attachments exceed the private request limit"
             }
             transcript.dropLast(1) + last.copy(text = expanded)
         }.getOrElse { statusMessage = it.message ?: "Document unavailable"; render(); return }
-        val image = picked.firstOrNull { it.mime.startsWith("image/") }?.let { attachment ->
-            runCatching {
-                val bytes = contentResolver.openInputStream(attachment.uri)?.use { it.readBounded(2_000_000) }
-                    ?: throw IllegalArgumentException("Cannot read photo")
+        val media = runCatching {
+            val photos = picked.filter {
+                WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.IMAGE
+            }.map { attachment ->
+                val bytes = contentResolver.openInputStream(attachment.uri)?.use {
+                    it.readBounded(2_000_000)
+                } ?: throw IllegalArgumentException("Photo cannot be read")
                 require(bytes.isNotEmpty()) { "Photo is empty" }
                 WorkspaceChatGateway.Image(attachment.mime,
                     android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
-            }.getOrElse { statusMessage = it.message ?: "Photo unavailable"; render(); return }
+            }
+            photos + if (video != null) WorkspaceVideoFrameSampler.frames(this, video.uri)
+                else emptyList()
+        }.getOrElse {
+            statusMessage = it.message ?: "Photo or video frames could not be prepared"
+            render()
+            return
         }
         require(replacingAssistantId == null || skillProjection == null) {
             "Skill projection cannot be reused on retry"
@@ -4666,8 +4724,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 provider,
                 keyFor(provider),
                 enriched,
-                image,
+                image = null,
                 extraSystemInstructions = freeInstructions,
+                images = media,
             )
         }.getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration

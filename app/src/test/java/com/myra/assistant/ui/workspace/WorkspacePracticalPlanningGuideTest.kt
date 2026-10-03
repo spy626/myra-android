@@ -42,6 +42,8 @@ class WorkspacePracticalPlanningGuideTest {
         assertTrue(guidance.contains("EXACT MAIN STEP COUNT: give exactly 3"))
         assertTrue(guidance.contains("1., 2., 3. OR Step 1:"))
         assertTrue(guidance.contains("PLANNING-ONLY HARD STOP"))
+        assertTrue(guidance.contains("Do NOT recommend unrequested no-code app builders"))
+        assertTrue(guidance.contains("Development tooling belongs only under LATER"))
         assertTrue(guidance.contains("NO coding, signup, builder launch"))
         assertTrue(guidance.contains("no tool or write permission", ignoreCase = true))
         assertTrue(guidance.contains("Zero-budget"))
@@ -67,6 +69,7 @@ class WorkspacePracticalPlanningGuideTest {
             assertTrue("Missing in regular: " + required, regular.contains(required))
             assertTrue("Missing in compact: " + required, compact.contains(required))
         }
+        assertTrue(compact.contains("Do NOT recommend unrequested no-code app builders"))
         assertFalse(compact.contains("numbered rows only when helpful"))
         assertEquals(1, Regex("PLANNING-ONLY HARD STOP").findAll(compact).count())
     }

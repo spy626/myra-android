@@ -68,6 +68,7 @@ internal object WorkspaceChatGateway {
         messages: List<WorkspaceConversationStore.Message>,
         image: Image? = null,
         extraSystemInstructions: String? = null,
+        images: List<Image> = emptyList(),
     ): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "Set a valid provider key in API & Cloud Settings"
@@ -77,21 +78,25 @@ internal object WorkspaceChatGateway {
         require(WorkspaceLongInputPolicy.requestFits(messages)) {
             "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
+        val media = listOfNotNull(image) + images
+        require(media.size <= 3) { "At most three photos or sampled video frames per request" }
         if (provider == Provider.GROQ_FREE) {
-            return WorkspaceGroqFree.request(key, messages, image, extraSystemInstructions)
+            require(media.isEmpty()) { "Groq Free cannot receive images; use OpenRouter Free" }
+            return WorkspaceGroqFree.request(key, messages, null, extraSystemInstructions)
         }
         if (provider == Provider.LLM7_FREE) {
-            return WorkspaceLlm7Free.request(key, messages, image, extraSystemInstructions)
+            require(media.isEmpty()) { "LLM7 Free cannot receive images; use OpenRouter Free" }
+            return WorkspaceLlm7Free.request(key, messages, null, extraSystemInstructions)
         }
-        image?.let {
-            require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
+        media.forEach {
+            require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported image format" }
             require(it.base64.length in 1..2_700_000 &&
-                it.base64.all { char -> char.isLetterOrDigit() || char == '+' || char == '/' || char == '=' }) {
-                "Photo is invalid or exceeds the request limit"
+                it.base64.all { ch -> ch.isLetterOrDigit() || ch == '+' || ch == '/' || ch == '=' }) {
+                "Photo/frame is invalid or exceeds the request limit"
             }
         }
         // Inspect earlier user intent locally when needed, but transmit only recent raw turns.
-        val body = openRouterBody(messages, image, extraSystemInstructions)
+        val body = openRouterBody(messages, image, extraSystemInstructions, images)
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder()
             .url(WorkspaceFreeAiSuggestion.ENDPOINT)
@@ -106,6 +111,7 @@ internal object WorkspaceChatGateway {
         image: Image? = null,
         extraSystemInstructions: String? = null,
         compactForGroq: Boolean = false,
+        images: List<Image> = emptyList(),
     ): JSONArray {
         val entries = JSONArray()
         val recent = WorkspaceLongInputPolicy.outbound(messages)
@@ -186,10 +192,15 @@ internal object WorkspaceChatGateway {
         recent.forEachIndexed { index, message ->
             require(message.role == "user" || message.role == "assistant") { "Invalid chat role" }
             require(message.text.length in 1..WorkspaceConversationStore.MAX_MESSAGE_LENGTH) { "Invalid message size" }
-            val content: Any = if (image != null && index == recent.lastIndex) {
-                JSONArray().put(JSONObject().put("type", "text").put("text", message.text))
-                    .put(JSONObject().put("type", "image_url")
-                        .put("image_url", JSONObject().put("url", "data:${image.mime};base64,${image.base64}")))
+            val media = listOfNotNull(image) + images
+            val content: Any = if (media.isNotEmpty() && index == recent.lastIndex) {
+                JSONArray().put(JSONObject().put("type", "text").put("text", message.text)).apply {
+                    media.forEach { frame ->
+                        put(JSONObject().put("type", "image_url")
+                            .put("image_url", JSONObject()
+                                .put("url", "data:${frame.mime};base64,${frame.base64}")))
+                    }
+                }
             } else message.text
             entries.put(JSONObject().put("role", message.role).put("content", content))
         }
@@ -200,8 +211,9 @@ internal object WorkspaceChatGateway {
         messages: List<WorkspaceConversationStore.Message>,
         image: Image? = null,
         extraSystemInstructions: String? = null,
+        images: List<Image> = emptyList(),
     ): String {
-        val entries = openAiMessages(messages, image, extraSystemInstructions)
+        val entries = openAiMessages(messages, image, extraSystemInstructions, images = images)
         return JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
             .put("stream", WorkspaceRichBlocksContract.enabled(extraSystemInstructions)).put("max_tokens", 2_048)
             // A free label alone is insufficient: reject every endpoint with a nonzero

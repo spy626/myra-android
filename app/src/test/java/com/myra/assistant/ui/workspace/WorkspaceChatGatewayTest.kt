@@ -95,6 +95,48 @@ class WorkspaceChatGatewayTest {
             .getJSONObject("image_url").getString("url").startsWith("data:image/png;base64,"))
     }
 
+    @Test fun threePhotosAreSentInSelectionOrderOnlyOnLatestTurnWithZeroPrice() {
+        val media = listOf("YWJj", "ZGVm", "Z2hp").map {
+            WorkspaceChatGateway.Image("image/jpeg", it)
+        }
+        val conversation = listOf(message("user", "Earlier"), message("assistant", "Okay"),
+            message("user", "Compare these three screenshots"))
+        val request = WorkspaceChatGateway.request(
+            WorkspaceChatGateway.Provider.OPENROUTER_FREE, "test-key", conversation,
+            images = media)
+        val buffer = okio.Buffer().also { request.body?.writeTo(it) }
+        val body = JSONObject(buffer.readUtf8())
+        assertZeroPrice(body)
+        assertEquals("openrouter/free", body.getString("model"))
+        val transcript = body.getJSONArray("messages")
+        assertEquals("Earlier", transcript.getJSONObject(1).getString("content"))
+        val last = transcript.getJSONObject(transcript.length() - 1).getJSONArray("content")
+        assertEquals(4, last.length())
+        assertEquals("Compare these three screenshots", last.getJSONObject(0).getString("text"))
+        media.forEachIndexed { index, image ->
+            val content = last.getJSONObject(index + 1).getJSONObject("image_url")
+                .getString("url")
+            assertEquals("data:image/jpeg;base64," + image.base64, content)
+        }
+        assertFalse(body.toString().contains("test-key"))
+    }
+
+    @Test fun mediaIsBoundedAndTextOnlyRoutesRejectImagePartsBeforeNetwork() {
+        val conversation = listOf(message("user", "Check my photos"))
+        val image = WorkspaceChatGateway.Image("image/png", "cG5n")
+        assertTrue(runCatching {
+            WorkspaceChatGateway.request(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+                "test-key", conversation, images = List(4) { image })
+        }.isFailure)
+        listOf(WorkspaceChatGateway.Provider.GROQ_FREE,
+            WorkspaceChatGateway.Provider.LLM7_FREE).forEach { provider ->
+            assertTrue(runCatching {
+                WorkspaceChatGateway.request(provider, "test-key", conversation,
+                    images = listOf(image))
+            }.isFailure)
+        }
+    }
+
     @Test fun everyFreeTextRouteGetsLatinOnlyHinglishPolicyWithoutEditingLatestUserTurn() {
         val original = "bro mere paas sirf Android phone hai. 3 steps batao, coding mat karna"
         val messages = listOf(message("user", original))
