@@ -1,7 +1,7 @@
 package com.myra.assistant.ui.workspace
 
-/** Attachment categories. Video is sent only as sampled stills via an explicitly approved
- * image-capable route; audio remains local-only. */
+/** Bounded attachment families; audio/native video require a compatible zero-priced model.
+ * Selecting a file alone never guarantees the free provider can interpret its modality. */
 internal object WorkspaceAttachmentPolicy {
     enum class Kind { IMAGE, TEXT, AUDIO, VIDEO, UNSUPPORTED }
 
@@ -22,15 +22,16 @@ internal object WorkspaceAttachmentPolicy {
     }
 
     fun maxBytes(kind: Kind): Long = when (kind) {
-        // Source photos are normalized into LYRA's <=2 MB outbound JPEG boundary.
+        // Source photos are normalized to the ten-image outbound byte budget.
         Kind.IMAGE -> 30_000_000L
         Kind.TEXT -> 3_000L
-        Kind.AUDIO, Kind.VIDEO -> 50_000_000L
+        Kind.AUDIO -> WorkspaceMediaLimits.MAX_AUDIO_BYTES.toLong()
+        Kind.VIDEO -> WorkspaceMediaLimits.MAX_NATIVE_VIDEO_BYTES.toLong()
         Kind.UNSUPPORTED -> 0L
     }
 
     fun sendableNow(kind: Kind): Boolean =
-        kind == Kind.IMAGE || kind == Kind.TEXT || kind == Kind.VIDEO
+        kind == Kind.IMAGE || kind == Kind.TEXT || kind == Kind.VIDEO || kind == Kind.AUDIO
 
     fun label(kind: Kind): String = when (kind) {
         Kind.IMAGE -> "Photo"

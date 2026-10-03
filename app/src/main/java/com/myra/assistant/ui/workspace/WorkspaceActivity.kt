@@ -354,7 +354,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private lateinit var attachmentList: LinearLayout
 
     private val photoPicker =
-        registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(3)) { uris ->
+        registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(WorkspaceMediaLimits.MAX_PHOTOS)) { uris ->
             uris.distinct().forEach { addAttachment(it) }
         }
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -3107,15 +3107,15 @@ class WorkspaceActivity : AppCompatActivity() {
         // copy a bounded JPEG/PNG immediately while the grant is fresh so thumbnail, markup
         // and send all use LYRA-owned local bytes.
         if ((source.mime == "image/jpeg" || source.mime == "image/png") &&
-            source.size in 1L..2_000_000L) {
+            source.size in 1L..WorkspaceMediaLimits.MAX_PHOTO_BYTES.toLong()) {
             val extension = if (source.mime == "image/png") ".png" else ".jpg"
             val output = File(dir, "photo-${java.util.UUID.randomUUID()}$extension")
             val bytes = contentResolver.openInputStream(source.uri)?.use {
-                it.readBounded(2_000_000)
+                it.readBounded(WorkspaceMediaLimits.MAX_PHOTO_BYTES)
             } ?: throw IllegalArgumentException("Photo cannot be read")
             require(bytes.isNotEmpty()) { "Photo is empty" }
             output.writeBytes(bytes)
-            require(output.length() in 1L..2_000_000L) { "Photo copy is invalid" }
+            require(output.length() in 1L..WorkspaceMediaLimits.MAX_PHOTO_BYTES.toLong()) { "Photo copy is invalid" }
             val uri = FileProvider.getUriForFile(
                 this,
                 "${packageName}.fileprovider",
@@ -3153,21 +3153,27 @@ class WorkspaceActivity : AppCompatActivity() {
         } ?: throw IllegalArgumentException("Photo cannot be decoded")
 
         val output = File(dir, "photo-${java.util.UUID.randomUUID()}.jpg")
-        var quality = 92
+        // Ten-photo Free payload: re-encode oversized images at controlled size.
+        val longest = maxOf(bitmap.width, bitmap.height)
+        val ratio = if (longest > 1400) 1400f / longest else 1f
+        val scaled = if (ratio < 1f) Bitmap.createScaledBitmap(bitmap,
+            (bitmap.width * ratio).toInt().coerceAtLeast(1),
+            (bitmap.height * ratio).toInt().coerceAtLeast(1), true) else bitmap
         var saved = false
-        while (quality >= 52) {
+        for (quality in listOf(88, 78, 68, 58, 48, 38)) {
             java.io.FileOutputStream(output).use { stream ->
-                require(bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)) {
+                require(scaled.compress(Bitmap.CompressFormat.JPEG, quality, stream)) {
                     "Photo could not be prepared"
                 }
             }
-            if (output.length() in 1L..2_000_000L) {
+            if (output.length() in 1L..WorkspaceMediaLimits.MAX_PHOTO_BYTES.toLong()) {
                 saved = true
                 break
             }
-            quality -= 10
         }
-        require(saved) { "Photo could not be reduced below LYRA's 2 MB send limit" }
+        if (scaled !== bitmap) scaled.recycle()
+        bitmap.recycle()
+        require(saved) { "Photo could not fit LYRA's ten-photo Free upload budget" }
 
         val uri = FileProvider.getUriForFile(
             this,
@@ -3183,13 +3189,52 @@ class WorkspaceActivity : AppCompatActivity() {
         )
     }
 
+    /** Copy private local audio/video immediately; Android picker grants can be temporary. */
+    private fun prepareNativeMediaAttachment(source: Attachment): Attachment {
+        val kind = WorkspaceAttachmentPolicy.kind(source.mime)
+        require(kind == WorkspaceAttachmentPolicy.Kind.VIDEO ||
+            kind == WorkspaceAttachmentPolicy.Kind.AUDIO) { "Expected audio/video media" }
+        if (kind == WorkspaceAttachmentPolicy.Kind.VIDEO) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(this, source.uri)
+                val durationMs = retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                    ?: throw IllegalArgumentException("Video duration could not be verified")
+                require(durationMs in 1L..WorkspaceMediaLimits.MAX_VIDEO_DURATION_MS.toLong()) {
+                    "Full-video Free upload supports up to five minutes"
+                }
+            } finally {
+                retriever.release()
+            }
+        }
+        val cap = WorkspaceAttachmentPolicy.maxBytes(kind).toInt()
+        val bytes = contentResolver.openInputStream(source.uri)?.use { it.readBounded(cap) }
+            ?: throw IllegalArgumentException("Media could not be read")
+        require(bytes.isNotEmpty()) { "Selected media is empty" }
+        val dir = File(cacheDir, "workspace-media").apply { mkdirs() }
+        require(dir.isDirectory) { "Private media cache unavailable" }
+        val extension = when (source.mime) {
+            "video/mp4" -> "mp4"
+            "video/webm" -> "webm"
+            "audio/mpeg", "audio/mp3" -> "mp3"
+            "audio/wav", "audio/x-wav" -> "wav"
+            else -> throw IllegalArgumentException("Unsupported audio/video encoding")
+        }
+        val saved = File(dir, "media-${java.util.UUID.randomUUID()}.$extension")
+        saved.writeBytes(bytes)
+        val copy = FileProvider.getUriForFile(this,
+            "${packageName}.fileprovider", saved)
+        return source.copy(uri = copy, size = saved.length())
+    }
+
     private fun addAttachment(uri: Uri, requirePhoto: Boolean = false) {
         if (workTab || isBusy()) {
             toast("Wait for the current reply before adding files")
             return
         }
-        if (attachments.size >= 3) {
-            toast("Maximum three attachments per request")
+        if (attachments.size >= WorkspaceMediaLimits.MAX_PHOTOS) {
+            toast("Maximum ten photos/attachments per request")
             return
         }
         if (attachments.any { it.uri == uri }) {
@@ -3229,6 +3274,8 @@ class WorkspaceActivity : AppCompatActivity() {
                     name.endsWith(".png", true) -> "image/png"
                     name.endsWith(".mp4", true) -> "video/mp4"
                     name.endsWith(".webm", true) -> "video/webm"
+                    name.endsWith(".mp3", true) -> "audio/mpeg"
+                    name.endsWith(".wav", true) -> "audio/wav"
                     else -> ""
                 }
             }
@@ -3252,28 +3299,38 @@ class WorkspaceActivity : AppCompatActivity() {
                 when (kind) {
                     WorkspaceAttachmentPolicy.Kind.IMAGE -> "Photo must be 30 MB or smaller"
                     WorkspaceAttachmentPolicy.Kind.TEXT -> "Text document must be 3 KB or smaller"
-                    WorkspaceAttachmentPolicy.Kind.AUDIO,
+                    WorkspaceAttachmentPolicy.Kind.AUDIO ->
+                        "MP3/WAV audio must be 8 MB or smaller for the Free route"
                     WorkspaceAttachmentPolicy.Kind.VIDEO ->
-                        "Audio/video file must be 50 MB or smaller"
+                        "Complete MP4/WebM video must be 12 MB or smaller for the Free route"
                     WorkspaceAttachmentPolicy.Kind.UNSUPPORTED -> "Unsupported attachment"
                 }
             }
             if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
                 require(attachments.none {
-                    WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.VIDEO
-                }) { "Remove video before adding photos; video uses three frame slots" }
+                    WorkspaceAttachmentPolicy.kind(it.mime) in setOf(
+                        WorkspaceAttachmentPolicy.Kind.VIDEO, WorkspaceAttachmentPolicy.Kind.AUDIO)
+                }) { "Choose up to ten photos OR one video/audio file" }
             }
-            if (kind == WorkspaceAttachmentPolicy.Kind.VIDEO) {
+            if (kind == WorkspaceAttachmentPolicy.Kind.VIDEO ||
+                kind == WorkspaceAttachmentPolicy.Kind.AUDIO) {
                 require(attachments.none {
                     WorkspaceAttachmentPolicy.kind(it.mime) in setOf(
-                        WorkspaceAttachmentPolicy.Kind.IMAGE, WorkspaceAttachmentPolicy.Kind.VIDEO)
-                }) { "Choose one video OR up to three photos" }
+                        WorkspaceAttachmentPolicy.Kind.IMAGE, WorkspaceAttachmentPolicy.Kind.VIDEO,
+                        WorkspaceAttachmentPolicy.Kind.AUDIO)
+                }) { "Choose one original video/audio file OR up to ten photos" }
+            }
+            if (kind == WorkspaceAttachmentPolicy.Kind.AUDIO) {
+                require(mime in setOf("audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav")) {
+                    "Select MP3 or WAV audio for the zero-price multimodal route"
+                }
             }
             val source = Attachment(uri, name, mime, size)
-            if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
-                preparePhotoAttachment(source)
-            } else {
-                source
+            when (kind) {
+                WorkspaceAttachmentPolicy.Kind.IMAGE -> preparePhotoAttachment(source)
+                WorkspaceAttachmentPolicy.Kind.VIDEO, WorkspaceAttachmentPolicy.Kind.AUDIO ->
+                    prepareNativeMediaAttachment(source)
+                else -> source
             }
         }.getOrElse {
             toast(it.message ?: "Attachment unavailable")
@@ -3306,12 +3363,14 @@ class WorkspaceActivity : AppCompatActivity() {
                 contentResolver.openFileDescriptor(replacement, "r")?.use { size = it.statSize }
             }
             require(size in 1L..2_000_000L) { "Marked photo must be 2 MB or smaller" }
-            attachments[index].copy(
+            // Markup output can exceed the new ten-photo cap. Re-normalize it
+            // rather than letting a seemingly attached image fail at Send.
+            preparePhotoAttachment(attachments[index].copy(
                 uri = replacement,
                 name = name.take(120),
                 mime = "image/jpeg",
                 size = size,
-            )
+            ))
         }.getOrElse {
             toast(it.message ?: "Marked photo could not be attached")
             return
@@ -3521,7 +3580,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     attachmentList.addView(
                         compactAttachmentCard(
                             title = attachment.name,
-                            subtitle = "Video · 3 sampled frames (no audio)",
+                            subtitle = "Original video + soundtrack (model-dependent)",
                             thumbnail = videoThumbnail(attachment.uri),
                             onRemove = {
                                 attachments.remove(attachment)
@@ -4016,14 +4075,17 @@ class WorkspaceActivity : AppCompatActivity() {
             when {
                 attachments.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
                     WorkspaceAttachmentPolicy.Kind.VIDEO } ->
-                    "Describe the visible content of this video using its three sampled still frames."
+                    "Analyze this entire video and its original soundtrack if the free model supports both."
                 attachments.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
                     WorkspaceAttachmentPolicy.Kind.IMAGE } ->
                     "Describe these attached images."
+                attachments.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                    WorkspaceAttachmentPolicy.Kind.AUDIO } ->
+                    "Transcribe and summarize this audio file if the free model supports audio."
                 else -> ""
             }
         }
-        if (text.isBlank()) { toast("Write a message or attach photos/video"); return }
+        if (text.isBlank()) { toast("Write a message or attach media"); return }
         if (!WorkspaceLongInputPolicy.sendable(text)) {
             statusMessage = "The complete pasted draft is still in the chat box. " +
                 "This app supports up to ${WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS} characters per message; nothing was sent."
@@ -4108,7 +4170,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 statusMessage = "An OpenRouter Free key is required for media. Groq and LLM7 are text-only. Draft and attachments retained; nothing sent."
                 render()
                 AlertDialog.Builder(this).setTitle("Free media route unavailable")
-                    .setMessage("Add an OpenRouter Free key for up to three photos or three still frames extracted from a video. Video audio is not analyzed. Nothing has been uploaded.")
+                    .setMessage("Add an OpenRouter Free key for up to ten photos, one complete MP4/WebM (soundtrack intact), or one MP3/WAV. Video/audio requires a compatible $0 model. Nothing uploaded.")
                     .setNegativeButton("Later", null)
                     .setPositiveButton("API settings") { _, _ ->
                         startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
@@ -4117,7 +4179,7 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             if ((llm7TextOnly || groqTextOnly || customTextOnly) && !attachmentRouteApproved) {
                 AlertDialog.Builder(this).setTitle("Send with OpenRouter Free?")
-                    .setMessage("Your enabled text route cannot receive media. Use OpenRouter's zero-price-guarded image route for these attachments? Video is represented by three sampled stills only, without audio or full-motion understanding.")
+                    .setMessage("Use OpenRouter's $0 ceiling for ten photos or original video/audio? No free video/audio model is guaranteed; if unavailable the request fails without payment.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Use OpenRouter Free") { _, _ ->
                         sendMessage(attachmentRouteApproved = true)
@@ -4675,16 +4737,25 @@ class WorkspaceActivity : AppCompatActivity() {
         val video = picked.firstOrNull {
             WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.VIDEO
         }
+        val sound = picked.firstOrNull {
+            WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.AUDIO
+        }
         val enriched = runCatching {
             val addition = picked.filter {
                 WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.TEXT
             }.joinToString("\n\n") { "Document ${it.name}:\n${readAttachmentText(it)}" }
-            val videoNote = if (video == null) "" else
-                "Video ${video.name} is supplied as THREE still frames: early, middle, late. " +
-                "They do NOT include audio or continuous movement. Explain this limitation " +
-                "and never claim to have watched or heard the full video."
+            val mediaNote = when {
+                video != null ->
+                    "The ORIGINAL WHOLE video file including its existing audio track is attached " +
+                    "as native video_url, not three stills. Analyze only modalities actually " +
+                    "decoded by your model. If audio or video understanding is unavailable, " +
+                    "state the limitation; never pretend to have heard unseen content."
+                sound != null ->
+                    "The actual audio is attached as input_audio; transcribe only if decoded."
+                else -> ""
+            }
             val last = transcript.last()
-            val extras = listOf(addition, videoNote).filter(String::isNotBlank)
+            val extras = listOf(addition, mediaNote).filter(String::isNotBlank)
             val expanded = last.text + if (extras.isEmpty()) "" else
                 "\n\n" + extras.joinToString("\n\n")
             require(expanded.length <= WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS) {
@@ -4692,21 +4763,34 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             transcript.dropLast(1) + last.copy(text = expanded)
         }.getOrElse { statusMessage = it.message ?: "Document unavailable"; render(); return }
-        val media = runCatching {
+        val nativeMedia = runCatching {
             val photos = picked.filter {
                 WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.IMAGE
             }.map { attachment ->
                 val bytes = contentResolver.openInputStream(attachment.uri)?.use {
-                    it.readBounded(2_000_000)
+                    it.readBounded(WorkspaceMediaLimits.MAX_PHOTO_BYTES)
                 } ?: throw IllegalArgumentException("Photo cannot be read")
                 require(bytes.isNotEmpty()) { "Photo is empty" }
                 WorkspaceChatGateway.Image(attachment.mime,
                     android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
             }
-            photos + if (video != null) WorkspaceVideoFrameSampler.frames(this, video.uri)
-                else emptyList()
+            val fullVideo = video?.let {
+                val bytes = contentResolver.openInputStream(it.uri)?.use { stream ->
+                    stream.readBounded(WorkspaceMediaLimits.MAX_NATIVE_VIDEO_BYTES)
+                } ?: throw IllegalArgumentException("Original video cannot be read")
+                WorkspaceChatGateway.NativeVideo(it.mime,
+                    android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+            }
+            val fullAudio = sound?.let {
+                val bytes = contentResolver.openInputStream(it.uri)?.use { stream ->
+                    stream.readBounded(WorkspaceMediaLimits.MAX_AUDIO_BYTES)
+                } ?: throw IllegalArgumentException("Original audio cannot be read")
+                WorkspaceChatGateway.Audio(it.mime,
+                    android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+            }
+            Triple(photos, fullVideo, fullAudio)
         }.getOrElse {
-            statusMessage = it.message ?: "Photo or video frames could not be prepared"
+            statusMessage = it.message ?: "Selected media cannot be prepared"
             render()
             return
         }
@@ -4726,7 +4810,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 enriched,
                 image = null,
                 extraSystemInstructions = freeInstructions,
-                images = media,
+                images = nativeMedia.first,
+                video = nativeMedia.second,
+                audio = nativeMedia.third,
             )
         }.getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration

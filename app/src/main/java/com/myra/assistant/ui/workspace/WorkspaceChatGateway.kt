@@ -53,6 +53,8 @@ internal object WorkspaceChatGateway {
             "were never actually supplied. Never claim phone testing."
     enum class Provider { OPENROUTER_FREE, GROQ_FREE, LLM7_FREE }
     data class Image(val mime: String, val base64: String)
+    data class NativeVideo(val mime: String, val base64: String)
+    data class Audio(val mime: String, val base64: String)
     // One extra try only after specific upstream HTTP rejections. Connection failures and
     // ambiguous timeouts are NOT retried. Retain the existing 35-second total call timeout.
     val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
@@ -69,6 +71,8 @@ internal object WorkspaceChatGateway {
         image: Image? = null,
         extraSystemInstructions: String? = null,
         images: List<Image> = emptyList(),
+        video: NativeVideo? = null,
+        audio: Audio? = null,
     ): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "Set a valid provider key in API & Cloud Settings"
@@ -79,24 +83,52 @@ internal object WorkspaceChatGateway {
             "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
         val media = listOfNotNull(image) + images
-        require(media.size <= 3) { "At most three photos or sampled video frames per request" }
+        require(media.size <= WorkspaceMediaLimits.MAX_PHOTOS) {
+            "At most ten photos per request"
+        }
+        require((if (media.isNotEmpty()) 1 else 0) +
+            (if (video != null) 1 else 0) + (if (audio != null) 1 else 0) <= 1) {
+            "Choose up to ten photos OR one original video OR one audio file"
+        }
         if (provider == Provider.GROQ_FREE) {
-            require(media.isEmpty()) { "Groq Free cannot receive images; use OpenRouter Free" }
+            require(media.isEmpty() && video == null && audio == null) {
+                "Groq Free Chat is text-only; media requires an approved OpenRouter Free route"
+            }
             return WorkspaceGroqFree.request(key, messages, null, extraSystemInstructions)
         }
         if (provider == Provider.LLM7_FREE) {
-            require(media.isEmpty()) { "LLM7 Free cannot receive images; use OpenRouter Free" }
+            require(media.isEmpty() && video == null && audio == null) {
+                "LLM7 Free Chat is text-only; media requires an approved OpenRouter Free route"
+            }
             return WorkspaceLlm7Free.request(key, messages, null, extraSystemInstructions)
+        }
+        require(media.isEmpty() ||
+            WorkspaceMediaLimits.imageEnvelopeSizes(media.map { it.base64.length })) {
+            "The selected photos exceed the bounded ten-photo Free request budget"
         }
         media.forEach {
             require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported image format" }
-            require(it.base64.length in 1..2_700_000 &&
+            require(it.base64.all { ch -> ch.isLetterOrDigit() || ch == '+' || ch == '/' || ch == '=' }) {
+                "Invalid photo bytes"
+            }
+        }
+        video?.let {
+            require(it.mime == "video/mp4" || it.mime == "video/webm") { "Unsupported video type" }
+            require(it.base64.length in 1..WorkspaceMediaLimits.MAX_NATIVE_VIDEO_BASE64 &&
                 it.base64.all { ch -> ch.isLetterOrDigit() || ch == '+' || ch == '/' || ch == '=' }) {
-                "Photo/frame is invalid or exceeds the request limit"
+                "Original video exceeds LYRA's safe full-file Free upload budget"
+            }
+        }
+        audio?.let {
+            require(it.mime == "audio/mpeg" || it.mime == "audio/mp3" ||
+                it.mime == "audio/wav" || it.mime == "audio/x-wav") { "Only MP3 and WAV audio are supported" }
+            require(it.base64.length in 1..WorkspaceMediaLimits.MAX_AUDIO_BASE64 &&
+                it.base64.all { ch -> ch.isLetterOrDigit() || ch == '+' || ch == '/' || ch == '=' }) {
+                "Audio exceeds LYRA's safe Free upload budget"
             }
         }
         // Inspect earlier user intent locally when needed, but transmit only recent raw turns.
-        val body = openRouterBody(messages, image, extraSystemInstructions, images)
+        val body = openRouterBody(messages, image, extraSystemInstructions, images, video, audio)
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder()
             .url(WorkspaceFreeAiSuggestion.ENDPOINT)
@@ -112,6 +144,8 @@ internal object WorkspaceChatGateway {
         extraSystemInstructions: String? = null,
         compactForGroq: Boolean = false,
         images: List<Image> = emptyList(),
+        video: NativeVideo? = null,
+        audio: Audio? = null,
     ): JSONArray {
         val entries = JSONArray()
         val recent = WorkspaceLongInputPolicy.outbound(messages)
@@ -193,12 +227,24 @@ internal object WorkspaceChatGateway {
             require(message.role == "user" || message.role == "assistant") { "Invalid chat role" }
             require(message.text.length in 1..WorkspaceConversationStore.MAX_MESSAGE_LENGTH) { "Invalid message size" }
             val media = listOfNotNull(image) + images
-            val content: Any = if (media.isNotEmpty() && index == recent.lastIndex) {
+            val content: Any = if ((media.isNotEmpty() || video != null || audio != null) &&
+                index == recent.lastIndex) {
                 JSONArray().put(JSONObject().put("type", "text").put("text", message.text)).apply {
                     media.forEach { frame ->
                         put(JSONObject().put("type", "image_url")
                             .put("image_url", JSONObject()
                                 .put("url", "data:${frame.mime};base64,${frame.base64}")))
+                    }
+                    video?.let { original ->
+                        put(JSONObject().put("type", "video_url")
+                            .put("video_url", JSONObject()
+                                .put("url", "data:${original.mime};base64,${original.base64}")))
+                    }
+                    audio?.let { sample ->
+                        put(JSONObject().put("type", "input_audio")
+                            .put("input_audio", JSONObject()
+                                .put("data", sample.base64)
+                                .put("format", if (sample.mime.contains("wav")) "wav" else "mp3")))
                     }
                 }
             } else message.text
@@ -212,8 +258,11 @@ internal object WorkspaceChatGateway {
         image: Image? = null,
         extraSystemInstructions: String? = null,
         images: List<Image> = emptyList(),
+        video: NativeVideo? = null,
+        audio: Audio? = null,
     ): String {
-        val entries = openAiMessages(messages, image, extraSystemInstructions, images = images)
+        val entries = openAiMessages(messages, image, extraSystemInstructions,
+            images = images, video = video, audio = audio)
         return JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
             .put("stream", WorkspaceRichBlocksContract.enabled(extraSystemInstructions)).put("max_tokens", 2_048)
             // A free label alone is insufficient: reject every endpoint with a nonzero
