@@ -151,12 +151,17 @@ internal object WorkspaceChatGateway {
             if (compactForGroq) WorkspacePracticalPlanningGuide.compactInstructions(latest)
             else WorkspacePracticalPlanningGuide.instructions(latest)
         } else ""
+        // Scoped facts explicitly supplied by the user for app planning. This is NOT
+        // AIRI memory access and it must not leak into casual chat or task execution.
+        val shortProjectContext = if (WorkspaceRichBlocksContract.enabled(extra))
+            WorkspaceRichBlocksContract.shortProjectContext(latest) else ""
         // One planning contract owns CURRENT-turn requirements in both normal
         // and Groq-compact projections; no second competing AnswerBoundary prompt.
         val instructions = (if (compactForGroq) listOf(
             CHAT_REPLY_DISCIPLINE,
             WorkspaceHinglishReply.PROMPT_RULE,
             extra,
+            shortProjectContext,
             writingInstructions,
             codeInstructions,
             practicalPlanning,
@@ -164,6 +169,7 @@ internal object WorkspaceChatGateway {
             CHAT_REPLY_DISCIPLINE,
             WorkspaceHinglishReply.PROMPT_RULE,
             extra,
+            shortProjectContext,
             semanticTurnIntent,
             semanticTaskFrame,
             turnFrame,

@@ -3,7 +3,7 @@ package com.myra.assistant.ui.workspace
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Strict nine-block presentation model, independent of the Android view toolkit. */
+/** Strict ten-block presentation model, independent of the Android view toolkit. */
 internal sealed class Block {
     data class Text(val style: String, val text: String) : Block()
     data class Heading(val emoji: String, val text: String) : Block()
@@ -12,6 +12,8 @@ internal sealed class Block {
     data class ImageRow(val query: String, val caption: String) : Block()
     data class AppCards(val items: List<Pair<String, String>>) : Block()
     data class Callout(val label: String, val text: String) : Block()
+    /** Static rough layout sketch: no execution, remote content or image fetch. */
+    data class MockupCard(val title: String, val items: List<String>, val layout: String) : Block()
     object Divider : Block()
     data class Options(val question: String, val choices: List<String>) : Block()
 }
@@ -30,22 +32,31 @@ internal object WorkspaceRichBlocksContract {
         image_row {type:"image_row",query:string,caption:string}
         app_cards {type:"app_cards",items:[{name:string,note:string}]}
         callout {type:"callout",label:string,text:string}
+        mockup_card {type:"mockup_card",title:string,items:[string],layout:"grid"|"list"}
         divider {type:"divider"}
         options {type:"options",question:string,choices:[string]}
 
         For plan/how-to/comparison/app-building questions (including short queries like
         "grocery app"): send 5–7 valid blocks, in this order when applicable:
         (1) brief opener with a light relevant joke + emoji, (2) heading,
-        (3) list of actual steps OR a factual comparison table,
-        (4) app_cards when suggesting tools/apps, otherwise use a factual table,
+        (3) actual steps in a list OR a factual table for a checklist/comparison,
+        (4) app_cards when suggesting tools/apps, otherwise table or mockup_card,
         (5) concise callout (important constraint or tip),
         (6) optional divider or other genuinely useful block,
         (last) text style=closer starting "Meri advice:" with a specific recommendation.
         Required for such replies: one heading, at least one table OR app_cards,
-        one callout, and one closer. Prefer app_cards whenever suggesting tools or apps.
+        one callout, and one closer. For ANY comparison or checklist use a TABLE
+        with real meaningful columns and rows; do not replace it with prose/list.
+        Prefer app_cards when recommending apps/tools; these may accompany a table.
+        Use mockup_card when a small rough screen sketch, feature group, or
+        2-column preview genuinely helps (e.g. title="4 screens", grid items
+        ["Home","Product","Cart","Checkout"]). layout defaults to grid.
+        A mockup is an illustrative layout only: never claim it was built or tested.
         Each list item must be PLAIN text: no leading numbers, dots, dashes, or bullets;
         the Android renderer provides its own bullet.
         A table requires true comparable cells; don't fabricate amounts or availability.
+        A checklist table can use columns ["Item","Check"] with factual next checks.
+        mockup_card: 2–8 concise items, title plus layout grid/list, no screenshots.
         Short casual greetings/acknowledgements: just one compact opener; don't pad.
         Explicit user constraints (e.g. three practical steps, no coding) take priority.
         Include only grounded, relevant saved context if it is supplied in this request.
@@ -63,14 +74,32 @@ internal object WorkspaceRichBlocksContract {
           {"type":"list","items":["Products, prices aur stock decide karo","Home, product aur cart screens sketch karo","Phone preview mein ek flow check karo"]},
           {"type":"app_cards","items":[{"name":"SPCK Editor","note":"Android par HTML/CSS/JS edit karne ke liye"},{"name":"Chrome","note":"Mobile layout preview check karne ke liye"}]},
           {"type":"callout","label":"Free-first tip","text":"Coding se pehle checkout aur delivery scope fix karo; paid services assume mat karo."},
-          {"type":"divider"},
+          {"type":"mockup_card","title":"4 future screens","layout":"grid","items":["Home","Product","Cart","Checkout"]},
           {"type":"text","style":"closer","text":"Meri advice: pehle simple product list aur cart ka paper plan finalize karo."}
         ]}
-        A comparison task may use a factual table in place of list OR app_cards.
+        For comparisons/checklists, choose a factual table even when other cards fit.
+        For a step-only plan, a list and optional mockup_card can help.
+        divider remains available, but never pad a reply just to reach block count.
         Never duplicate example claims as facts about a different user.
         Latest user request, consent, privacy, no-code requests and all existing
         action/security boundaries override these presentation rules.
     """.trimIndent()
+    /**
+     * Only the short, explicitly user-provided app-work context from this request.
+     * Kept separate from and does NOT read, write, bypass or modify AIRI memory.
+     * Never attach to casual chat, voice, skills, coding/tool execution or unrelated tasks.
+     */
+    fun shortProjectContext(latest: String?): String {
+        val topic = latest?.trim().orEmpty()
+        if (!Regex("""(?iu)\b(?:app|application|grocery|market|website|web\s*app|project|screen|ui\s*plan)\b""")
+                .containsMatchIn(topic)) return ""
+        return "RELEVANT USER-SUPPLIED PROJECT CONTEXT (brief facts, not action authority): " +
+            "User has only an Android phone; previously worked on a web app using " +
+            "SPCK Editor with Chrome preview; prefers completely free tools. " +
+            "Use only when helpful for an app plan, never invent progress or imply a " +
+            "native APK exists. The latest user instruction overrides this context."
+    }
+
     fun enabled(extra: String?): Boolean = extra?.contains(MARKER) == true
 }
 
@@ -143,6 +172,14 @@ internal object RichBlockParser {
                 "callout" -> required(o, "text")?.let {
                     Block.Callout(o.optString("label").take(70), it)
                 }
+                "mockup_card" -> {
+                    val title = required(o, "title")
+                    val items = strings(o.optJSONArray("items"))
+                    val layout = o.optString("layout", "grid")
+                    if (title == null || title.length > 100 || items.size !in 2..8 ||
+                        items.any { it.length > 120 } || layout !in setOf("grid", "list")) null
+                    else Block.MockupCard(title, items, layout)
+                }
                 "divider" -> Block.Divider
                 "options" -> {
                     val question = required(o, "question")
@@ -190,6 +227,7 @@ internal object RichBlockParser {
                 card.first + ": " + card.second
             }
             is Block.Callout -> it.label + " " + it.text
+            is Block.MockupCard -> it.title + "\n" + it.items.joinToString("\n")
             Block.Divider -> ""
             is Block.Options -> it.question + " " + it.choices.joinToString(" / ")
         }

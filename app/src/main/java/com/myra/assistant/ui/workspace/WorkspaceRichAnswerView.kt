@@ -18,6 +18,7 @@ import android.text.style.URLSpan
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ImageView
 
 /**
  * Native block renderer for Chat assistant prose. No WebView, remote images or simulated
@@ -28,7 +29,9 @@ internal object WorkspaceRichAnswerView {
     private val bodyColor = Color.rgb(230, 236, 244)
     private val mutedColor = Color.rgb(172, 190, 180)
     private val accentColor = Color.rgb(156, 232, 188)
-    private val borderColor = Color.rgb(43, 59, 49)
+    private val borderColor = Color.rgb(66, 68, 73)
+    private val cardColor = Color.rgb(35, 36, 40)
+    private val cardInsetColor = Color.rgb(43, 44, 48)
 
     private fun dp(context: Context, value: Int): Int =
         (value * context.resources.displayMetrics.density + 0.5f).toInt()
@@ -241,7 +244,7 @@ internal object WorkspaceRichAnswerView {
                                 setPadding(dp(context, 10), dp(context, 9),
                                     dp(context, 10), dp(context, 9))
                                 minWidth = dp(context, 104)
-                                if (index == 0) setBackgroundColor(Color.rgb(28, 46, 37))
+                                if (index == 0) setBackgroundColor(cardInsetColor)
                             }
                             line.addView(view, TableRow.LayoutParams(-2, -2))
                         }
@@ -256,7 +259,7 @@ internal object WorkspaceRichAnswerView {
                     val placeholder = column(context).apply {
                         gravity = Gravity.CENTER
                         background = GradientDrawable().apply {
-                            setColor(Color.rgb(24, 37, 30))
+                            setColor(cardColor)
                             cornerRadius = dp(context, 12).toFloat()
                             setStroke(dp(context, 1), borderColor)
                         }
@@ -276,21 +279,29 @@ internal object WorkspaceRichAnswerView {
                             setPadding(dp(context, 12), dp(context, 10),
                                 dp(context, 12), dp(context, 10))
                             background = GradientDrawable().apply {
-                                setColor(Color.rgb(23, 40, 31))
+                                setColor(cardColor)
                                 cornerRadius = dp(context, 12).toFloat()
                                 setStroke(dp(context, 1), borderColor)
                             }
                         }
-                        // Bundled text/vector-style badges: never remote logos or image requests.
-                        val badge = TextView(context).apply {
+                        // Local drawable for known apps, first-letter fallback for unknown names.
+                        val badge: View = WorkspaceLocalAppIcons.icon(name)?.let { drawable ->
+                            ImageView(context).apply {
+                                setImageDrawable(drawable)
+                                scaleType = ImageView.ScaleType.FIT_CENTER
+                                contentDescription = "$name local icon"
+                                setPadding(dp(context, 3), dp(context, 3),
+                                    dp(context, 3), dp(context, 3))
+                            }
+                        } ?: TextView(context).apply {
                             text = WorkspaceLocalAppIcons.glyph(name)
                             gravity = Gravity.CENTER
                             textSize = 19f
                             setTypeface(typeface, Typeface.BOLD)
                             setTextColor(accentColor)
-                            contentDescription = "$name icon"
+                            contentDescription = "$name initial"
                             background = GradientDrawable().apply {
-                                setColor(Color.rgb(30, 59, 42))
+                                setColor(cardInsetColor)
                                 cornerRadius = dp(context, 11).toFloat()
                             }
                         }
@@ -307,21 +318,93 @@ internal object WorkspaceRichAnswerView {
                     }
                 }
                 is Block.Callout -> {
-                    val callout = column(context).apply {
-                        setPadding(dp(context, 13), dp(context, 11),
-                            dp(context, 13), dp(context, 11))
+                    // ChatGPT-like neutral surface and hairline outline, with a SHORT
+                    // green accent strip only on the left (not an aggressive green border).
+                    val callout = row(context).apply {
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(context, 11), dp(context, 10),
+                            dp(context, 12), dp(context, 10))
                         background = GradientDrawable().apply {
-                            setColor(Color.rgb(26, 47, 34))
+                            setColor(cardColor)
                             cornerRadius = dp(context, 12).toFloat()
-                            setStroke(dp(context, 1), accentColor)
+                            setStroke(dp(context, 1), borderColor)
                         }
                     }
-                    if (block.label.isNotBlank()) {
-                        put(callout, label(context, block.label, 14f, bold = true),
-                            context, bottom = 4)
+                    val accent = View(context).apply {
+                        background = GradientDrawable().apply {
+                            setColor(accentColor)
+                            cornerRadius = dp(context, 2).toFloat()
+                        }
                     }
-                    put(callout, label(context, block.text, 15f), context)
+                    callout.addView(accent, LinearLayout.LayoutParams(
+                        dp(context, 3), dp(context, 35)).apply {
+                        rightMargin = dp(context, 11)
+                    })
+                    val copy = column(context)
+                    if (block.label.isNotBlank()) {
+                        put(copy, label(context, block.label, 13.5f, bold = true).apply {
+                            setTextColor(accentColor)
+                        }, context, bottom = 4)
+                    }
+                    put(copy, label(context, block.text, 15f), context)
+                    callout.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
                     put(root, callout, context, top = 5, bottom = 7)
+                }
+                is Block.MockupCard -> {
+                    val mockup = column(context).apply {
+                        setPadding(dp(context, 12), dp(context, 11),
+                            dp(context, 12), dp(context, 12))
+                        background = GradientDrawable().apply {
+                            setColor(cardColor)
+                            cornerRadius = dp(context, 12).toFloat()
+                            setStroke(dp(context, 1), borderColor)
+                        }
+                    }
+                    put(mockup, label(context, block.title, 15f, bold = true),
+                        context, bottom = 9)
+                    if (block.layout == "list") {
+                        block.items.forEach { item ->
+                            val line = row(context).apply {
+                                gravity = Gravity.CENTER_VERTICAL
+                                setPadding(dp(context, 10), dp(context, 9),
+                                    dp(context, 9), dp(context, 9))
+                                background = GradientDrawable().apply {
+                                    setColor(cardInsetColor)
+                                    cornerRadius = dp(context, 7).toFloat()
+                                }
+                            }
+                            line.addView(label(context, "▪", 13f).apply {
+                                setTextColor(accentColor)
+                            }, LinearLayout.LayoutParams(dp(context, 17), -2))
+                            line.addView(label(context, item, 13.5f),
+                                LinearLayout.LayoutParams(0, -2, 1f))
+                            put(mockup, line, context, bottom = 5)
+                        }
+                    } else {
+                        block.items.chunked(2).forEach { pair ->
+                            val line = row(context)
+                            pair.forEach { item ->
+                                val cell = label(context, item, 13.5f).apply {
+                                    gravity = Gravity.CENTER
+                                    minHeight = dp(context, 51)
+                                    setPadding(dp(context, 6), dp(context, 8),
+                                        dp(context, 6), dp(context, 8))
+                                    background = GradientDrawable().apply {
+                                        setColor(cardInsetColor)
+                                        cornerRadius = dp(context, 8).toFloat()
+                                    }
+                                }
+                                line.addView(cell, LinearLayout.LayoutParams(
+                                    0, -2, 1f).apply {
+                                    rightMargin = dp(context, 4)
+                                })
+                            }
+                            if (pair.size == 1) line.addView(View(context),
+                                LinearLayout.LayoutParams(0, -2, 1f))
+                            put(mockup, line, context, bottom = 5)
+                        }
+                    }
+                    put(root, mockup, context, top = 5, bottom = 7)
                 }
                 Block.Divider -> put(root, View(context).apply {
                     setBackgroundColor(borderColor)
@@ -332,7 +415,7 @@ internal object WorkspaceRichAnswerView {
                         setPadding(dp(context, 12), dp(context, 12),
                             dp(context, 12), dp(context, 12))
                         background = GradientDrawable().apply {
-                            setColor(Color.rgb(23, 40, 31))
+                            setColor(cardColor)
                             cornerRadius = dp(context, 12).toFloat()
                             setStroke(dp(context, 1), borderColor)
                         }
@@ -379,15 +462,3 @@ internal object WorkspaceRichAnswerView {
     }
 }
 
-/** Offline app badges; glyphs are local cues, not claims to official brand artwork. */
-internal object WorkspaceLocalAppIcons {
-    fun glyph(name: String): String = when (name.trim().lowercase()) {
-        "chrome", "google chrome", "chrome browser" -> "🌐"
-        "spck", "spck editor", "spck code editor" -> "</>"
-        "firebase", "google firebase" -> "🔥"
-        "github" -> "⌘"
-        "figma" -> "✦"
-        "android studio" -> "🤖"
-        else -> name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
-    }
-}
