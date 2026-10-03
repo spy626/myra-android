@@ -183,4 +183,85 @@ class WorkspaceGroqFreeTest {
         assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
             WorkspaceFreeProviderSelection.choose(true, true, false, true, false))
     }
+
+    @Test fun screenshotGroceryPromptWithFullV3RuntimeUsesSafeGroqRichCompaction() {
+        val original = "bro mere paas sirf Android phone hai aur mujhe free mein " +
+            "ek simple grocery app banana hai. Sabse pehle kya karna chahiye? " +
+            "3 practical steps batao, abhi coding start mat karna 😂"
+        val messages = listOf(message("user", original))
+        val runtime = WorkspaceRuntimeSelfModel.instructions(
+            WorkspaceRuntimeSelfModel.Snapshot(
+                github = WorkspaceRuntimeSelfModel.GitHubState(
+                    connected = true,
+                    repository = "spy626/myra-android",
+                    branch = "agent/myra-phase-1",
+                    readAvailable = true,
+                    protectedWriteAvailable = true,
+                ),
+                projectType = WorkspaceProjectType.CHAT,
+            )
+        )
+        // Match the real WorkspaceActivity one-turn extra: runtime + rich contract.
+        val extra = runtime + "\n\n" + WorkspaceRichBlocksContract.INSTRUCTIONS
+        val result = WorkspaceGroqFree.promptChars(messages, extra)
+        assertTrue("Groq must accept short phone-only grocery turn with V3 rich contract: $result",
+            result != null && result <= WorkspaceGroqFree.MAX_PROMPT_CHARS)
+        assertTrue(WorkspaceGroqFree.withinBudget(messages, extra))
+        val payload = JSONObject(WorkspaceGroqFree.body(messages,
+            extraSystemInstructions = extra))
+        assertTrue(payload.getBoolean("stream"))
+        assertFalse(payload.has("provider"))
+        assertFalse(payload.has("plugins"))
+        val projected = payload.getJSONArray("messages")
+        assertEquals(original, projected.getJSONObject(projected.length() - 1)
+            .getString("content"))
+        val system = projected.getJSONObject(0).getString("content")
+        assertTrue(system.contains(WorkspaceRichBlocksContract.MARKER))
+        assertTrue(system.contains("mockup_card"))
+        assertTrue(system.contains("table"))
+        assertTrue(system.contains("app_cards"))
+        assertTrue(system.contains("For ANY comparison or checklist use a TABLE"))
+        assertTrue(system.contains("Meri advice:"))
+        assertTrue(system.contains("EXACT MAIN STEP COUNT: give exactly 3"))
+        assertTrue(system.contains("PLANNING-ONLY HARD STOP"))
+        assertTrue(system.contains("NO coding, signup, builder launch"))
+        assertTrue(system.contains("Direct main/master writes: FORBIDDEN"))
+        assertTrue(system.contains("Protected feature-branch write workflow: AVAILABLE"))
+        assertTrue(system.contains("previously worked on a web app using SPCK Editor"))
+        val regular = WorkspaceChatGateway.openAiMessages(
+            messages, extraSystemInstructions = extra)
+        val regularChars = (0 until regular.length()).sumOf {
+            regular.getJSONObject(it).getString("content").length
+        }
+        if (regularChars > WorkspaceGroqFree.MAX_PROMPT_CHARS) {
+            assertTrue(system.contains("LYRA_RICH_BLOCKS_V1"))
+            assertFalse(system.contains("FULL SEVEN-BLOCK EXAMPLE"))
+        }
+    }
+
+    @Test fun groqCompactionNeverDropsOtherRequiredExtrasOrRaisesTwelveKLimit() {
+        val message = listOf(message("user", "grocery app"))
+        val other = "AUTHORITATIVE-EXTRA-KEEP-ME"
+        val extra = other + "\n\n" + WorkspaceRichBlocksContract.INSTRUCTIONS
+        assertTrue(WorkspaceRichBlocksContract.compactForGroq(extra).orEmpty()
+            .contains(other))
+        assertTrue(WorkspaceRichBlocksContract.compactForGroq(extra).orEmpty()
+            .contains("mockup_card"))
+        assertTrue(WorkspaceRichBlocksContract.compactForGroq(extra).orEmpty()
+            .contains("options"))
+        assertTrue(WorkspaceGroqFree.withinBudget(message, extra))
+        val body = JSONObject(WorkspaceGroqFree.body(message,
+            extraSystemInstructions = extra))
+        assertTrue(body.getJSONArray("messages").getJSONObject(0)
+            .getString("content").contains(other))
+        // A genuinely oversized mandatory instruction is still rejected, not
+        // truncated, hidden, rewritten or routed to a paid provider.
+        val huge = "MANDATORY-EXTRA-" + "x".repeat(12_100) +
+            "\n\n" + WorkspaceRichBlocksContract.INSTRUCTIONS
+        assertFalse(WorkspaceGroqFree.withinBudget(message, huge))
+        assertTrue(runCatching {
+            WorkspaceGroqFree.body(message, extraSystemInstructions = huge)
+        }.isFailure)
+    }
+
 }
