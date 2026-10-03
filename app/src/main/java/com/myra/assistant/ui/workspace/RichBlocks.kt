@@ -69,6 +69,11 @@ internal object WorkspaceRichBlocksContract {
         - Keep every list item ONE short line, at most 12 whitespace-separated
           words. NEVER prefix an item with "Step 1:", digits, bullets or dashes.
           Step numbering lives ONLY in separate heading blocks, not list items.
+        - In any list or table, write statuses as short NEUTRAL TEXT: "Baaki",
+          "Ho gaya", "Nahi hua", or "Check karna hai". NEVER use colored/status
+          emoji (✅ ❌ 🟢 🔴 ❓ 🟡) in list items, headers or table cells.
+          Status must remain understandable without color; friendly opener
+          emoji may still be used when relevant.
         - When proposing tools for a user with phone-only/free web-app context,
           choose relevant free Android/browser workflow such as Google Keep
           (rough plan), SPCK Editor (later HTML/CSS/JS), Chrome (later preview).
@@ -203,6 +208,7 @@ internal object WorkspaceRichBlocksContract {
         no invented variety. Plans/how-to require visual table/app_cards/mockup_card.
         For ANY comparison or checklist use a TABLE.
         List max 12 words/item; no bullets/numbers/"Step 1:" prefix.
+        List/table status = neutral text "Baaki"/"Ho gaya", NOT ✅❌🟢🔴❓.
         Free phone: Google Keep=notes now, SPCK Editor=code later,
         Chrome=preview later; no generic builders unless asked. Obey no-coding.
         Prices illustrative SAMPLE, never live; mockup_card static.

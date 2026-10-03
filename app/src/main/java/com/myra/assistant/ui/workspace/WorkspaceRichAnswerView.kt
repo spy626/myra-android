@@ -26,12 +26,13 @@ import android.widget.ImageView
  * copied, retried and sent to the provider unchanged.
  */
 internal object WorkspaceRichAnswerView {
-    private val bodyColor = Color.rgb(230, 236, 244)
-    private val mutedColor = Color.rgb(172, 190, 180)
-    private val accentColor = Color.rgb(156, 232, 188)
-    private val borderColor = Color.rgb(66, 68, 73)
-    private val cardColor = Color.rgb(35, 36, 40)
-    private val cardInsetColor = Color.rgb(43, 44, 48)
+    // Answer-only palette: neutral ChatGPT-like surfaces. The parent chat
+    // send button, user bubble, and input bar retain their independent LYRA theme.
+    private val bodyColor = Color.rgb(232, 232, 232)
+    private val mutedColor = Color.rgb(174, 174, 174)
+    private val borderColor = Color.argb(20, 255, 255, 255) // ~8% white
+    private val cardColor = Color.rgb(42, 42, 42) // #2A2A2A
+    private val cardInsetColor = Color.rgb(49, 49, 49)
 
     private fun dp(context: Context, value: Int): Int =
         (value * context.resources.displayMetrics.density + 0.5f).toInt()
@@ -62,7 +63,7 @@ internal object WorkspaceRichAnswerView {
                 0, formatted.length, URLSpan::class.java
             )?.isNotEmpty() == true
         ) {
-            setLinkTextColor(WorkspaceChatReadability.verifiedLinkColor)
+            setLinkTextColor(mutedColor)
             movementMethod = LinkMovementMethod.getInstance()
         } else {
             setTextIsSelectable(true)
@@ -79,6 +80,42 @@ internal object WorkspaceRichAnswerView {
             topMargin = dp(context, top)
             bottomMargin = dp(context, bottom)
         })
+    }
+
+    /** Shared full-width neutral table for JSON and Markdown answer blocks. */
+    private fun neutralTable(
+        context: Context, headers: List<String>, rows: List<List<String>>,
+    ): View {
+        val horizontal = HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = true
+        }
+        val table = TableLayout(context).apply {
+            isStretchAllColumns = true
+            isShrinkAllColumns = false
+        }
+        (listOf(headers) + rows).forEachIndexed { rowIndex, cells ->
+            val line = TableRow(context).apply { gravity = Gravity.CENTER_VERTICAL }
+            cells.forEach { cell ->
+                val view = label(context, WorkspaceRichStatusText.neutralize(cell),
+                    if (rowIndex == 0) 13.5f else 14.5f, bold = rowIndex == 0).apply {
+                    setPadding(dp(context, 7),
+                        dp(context, if (rowIndex == 0) 11 else 13),
+                        dp(context, 7),
+                        dp(context, if (rowIndex == 0) 11 else 13))
+                    minWidth = dp(context, if (headers.size == 2) 122 else 82)
+                    // No distinct header fill; only typography and hairline dividers.
+                }
+                line.addView(view, TableRow.LayoutParams(0, -2, 1f))
+            }
+            table.addView(line, TableLayout.LayoutParams(-1, -2))
+            if (rowIndex < rows.size) {
+                table.addView(View(context).apply { setBackgroundColor(borderColor) },
+                    TableLayout.LayoutParams(-1, dp(context, 1)))
+            }
+        }
+        horizontal.addView(table, android.widget.FrameLayout.LayoutParams(-1, -2))
+        return horizontal
     }
 
     fun create(context: Context, raw: String): View {
@@ -109,9 +146,9 @@ internal object WorkspaceRichAnswerView {
                             setPadding(dp(context, 7 + item.depth * 13), 0, 0, 0)
                         }
                         line.addView(label(context, "•", 17f).apply {
-                            setTextColor(accentColor)
+                            setTextColor(mutedColor)
                         }, LinearLayout.LayoutParams(dp(context, 18), -2))
-                        line.addView(label(context, item.text, 16.5f),
+                        line.addView(label(context, WorkspaceRichStatusText.neutralize(item.text), 16.5f),
                             LinearLayout.LayoutParams(0, -2, 1f))
                         put(group, line, context, top = 3, bottom = 3)
                     }
@@ -124,10 +161,10 @@ internal object WorkspaceRichAnswerView {
                             setPadding(dp(context, 1), 0, 0, 0)
                         }
                         val number = label(context, item.number, 13.5f, bold = true).apply {
-                            setTextColor(accentColor)
+                            setTextColor(mutedColor)
                             gravity = android.view.Gravity.CENTER
                             background = GradientDrawable().apply {
-                                setColor(Color.rgb(22, 49, 35))
+                                setColor(cardInsetColor)
                                 cornerRadius = dp(context, 10).toFloat()
                             }
                         }
@@ -135,15 +172,15 @@ internal object WorkspaceRichAnswerView {
                             dp(context, 29), dp(context, 29)
                         ).apply { rightMargin = dp(context, 11) })
                         val content = column(context)
-                        put(content, label(context, item.text), context)
+                        put(content, label(context, WorkspaceRichStatusText.neutralize(item.text)), context)
                         item.details.forEach { detail ->
                             val nested = row(context).apply {
                                 setPadding(dp(context, 3), 0, 0, 0)
                             }
                             nested.addView(label(context, "•", 15f).apply {
-                                setTextColor(accentColor)
+                                setTextColor(mutedColor)
                             }, LinearLayout.LayoutParams(dp(context, 17), -2))
-                            nested.addView(label(context, detail, 15.5f),
+                            nested.addView(label(context, WorkspaceRichStatusText.neutralize(detail), 15.5f),
                                 LinearLayout.LayoutParams(0, -2, 1f))
                             put(content, nested, context, top = 4)
                         }
@@ -154,30 +191,8 @@ internal object WorkspaceRichAnswerView {
                     put(root, group, context, top = 2, bottom = 7)
                 }
                 is WorkspaceRichAnswerBlocks.Block.Table -> {
-                    val group = column(context)
-                    block.rows.forEachIndexed { rowIndex, cells ->
-                        val item = column(context).apply {
-                            setPadding(dp(context, 12), dp(context, 10),
-                                dp(context, 12), dp(context, 10))
-                            background = GradientDrawable().apply {
-                                setColor(Color.rgb(19, 28, 23))
-                                cornerRadius = dp(context, 11).toFloat()
-                                setStroke(dp(context, 1), borderColor)
-                            }
-                        }
-                        // Stacked comparison cards retain all 2–4 source columns while
-                        // keeping their label/value relationships readable on a narrow phone.
-                        put(item, label(context, block.headers.first(), 12.5f, muted = true),
-                            context, bottom = 2)
-                        put(item, label(context, cells[0], 16.5f, bold = true),
-                            context, bottom = if (cells.size > 1) 4 else 0)
-                        cells.drop(1).forEachIndexed { valueIndex, value ->
-                            put(item, label(context, "**" + block.headers[valueIndex + 1] +
-                                ":** " + value, 15.5f), context, top = 1)
-                        }
-                        put(group, item, context, top = if (rowIndex == 0) 2 else 6)
-                    }
-                    put(root, group, context, top = 4, bottom = 7)
+                    put(root, neutralTable(context, block.headers, block.rows), context,
+                        top = 5, bottom = 9)
                 }
                 is WorkspaceRichAnswerBlocks.Block.Quote -> {
                     val quote = row(context)
@@ -221,39 +236,17 @@ internal object WorkspaceRichAnswerView {
                     block.items.forEach { item ->
                         val line = row(context)
                         line.addView(label(context, "•", 17f).apply {
-                            setTextColor(accentColor)
+                            setTextColor(mutedColor)
                         }, LinearLayout.LayoutParams(dp(context, 20), -2))
-                        line.addView(label(context, item, 15.5f),
+                        line.addView(label(context, WorkspaceRichStatusText.neutralize(item), 15.5f),
                             LinearLayout.LayoutParams(0, -2, 1f))
                         put(items, line, context, top = 3, bottom = 3)
                     }
                     put(root, items, context, top = 2, bottom = 7)
                 }
                 is Block.Table -> {
-                    val horizontal = HorizontalScrollView(context).apply {
-                        isHorizontalScrollBarEnabled = true
-                    }
-                    val table = TableLayout(context).apply {
-                        isShrinkAllColumns = false
-                        isStretchAllColumns = false
-                    }
-                    (listOf(block.columns) + block.rows).forEachIndexed { index, cells ->
-                        val line = TableRow(context)
-                        cells.forEach { cell ->
-                            val view = label(context, cell, 14f, bold = index == 0).apply {
-                                setPadding(dp(context, 10), dp(context, 9),
-                                    dp(context, 10), dp(context, 9))
-                                minWidth = dp(context, 104)
-                                if (index == 0) setBackgroundColor(cardInsetColor)
-                            }
-                            line.addView(view, TableRow.LayoutParams(-2, -2))
-                        }
-                        table.addView(line, TableLayout.LayoutParams(-2, -2))
-                        table.addView(View(context).apply { setBackgroundColor(borderColor) },
-                            TableLayout.LayoutParams(-1, dp(context, 1)))
-                    }
-                    horizontal.addView(table)
-                    put(root, horizontal, context, top = 6, bottom = 8)
+                    put(root, neutralTable(context, block.columns, block.rows),
+                        context, top = 5, bottom = 9)
                 }
                 is Block.ImageRow -> {
                     val placeholder = column(context).apply {
@@ -276,12 +269,11 @@ internal object WorkspaceRichAnswerView {
                     block.items.forEach { (name, note) ->
                         val card = row(context).apply {
                             gravity = Gravity.CENTER_VERTICAL
-                            setPadding(dp(context, 12), dp(context, 10),
-                                dp(context, 12), dp(context, 10))
+                            setPadding(dp(context, 9), dp(context, 8),
+                                dp(context, 9), dp(context, 8))
                             background = GradientDrawable().apply {
                                 setColor(cardColor)
-                                cornerRadius = dp(context, 12).toFloat()
-                                setStroke(dp(context, 1), borderColor)
+                                cornerRadius = dp(context, 11).toFloat()
                             }
                         }
                         // Local drawable for known apps, first-letter fallback for unknown names.
@@ -298,7 +290,7 @@ internal object WorkspaceRichAnswerView {
                             gravity = Gravity.CENTER
                             textSize = 19f
                             setTypeface(typeface, Typeface.BOLD)
-                            setTextColor(accentColor)
+                            setTextColor(mutedColor)
                             contentDescription = "$name initial"
                             background = GradientDrawable().apply {
                                 setColor(cardInsetColor)
@@ -318,65 +310,48 @@ internal object WorkspaceRichAnswerView {
                     }
                 }
                 is Block.Callout -> {
-                    // ChatGPT-like neutral surface and hairline outline, with a SHORT
-                    // green accent strip only on the left (not an aggressive green border).
-                    val callout = row(context).apply {
-                        gravity = Gravity.CENTER_VERTICAL
-                        setPadding(dp(context, 11), dp(context, 10),
-                            dp(context, 12), dp(context, 10))
+                    // Neutral label-over-text card: no green strip, glow, or colored border.
+                    val callout = column(context).apply {
+                        setPadding(dp(context, 10), dp(context, 9),
+                            dp(context, 10), dp(context, 10))
                         background = GradientDrawable().apply {
                             setColor(cardColor)
-                            cornerRadius = dp(context, 12).toFloat()
-                            setStroke(dp(context, 1), borderColor)
+                            cornerRadius = dp(context, 11).toFloat()
                         }
                     }
-                    val accent = View(context).apply {
-                        background = GradientDrawable().apply {
-                            setColor(accentColor)
-                            cornerRadius = dp(context, 2).toFloat()
-                        }
-                    }
-                    callout.addView(accent, LinearLayout.LayoutParams(
-                        dp(context, 3), dp(context, 35)).apply {
-                        rightMargin = dp(context, 11)
-                    })
-                    val copy = column(context)
                     if (block.label.isNotBlank()) {
-                        put(copy, label(context, block.label, 13.5f, bold = true).apply {
-                            setTextColor(accentColor)
-                        }, context, bottom = 4)
+                        put(callout, label(context, block.label, 13.5f, bold = true),
+                            context, bottom = 4)
                     }
-                    put(copy, label(context, block.text, 15f), context)
-                    callout.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
+                    put(callout, label(context, block.text, 15f), context)
                     put(root, callout, context, top = 5, bottom = 7)
                 }
                 is Block.MockupCard -> {
                     val mockup = column(context).apply {
-                        setPadding(dp(context, 12), dp(context, 11),
-                            dp(context, 12), dp(context, 12))
+                        setPadding(dp(context, 10), dp(context, 9),
+                            dp(context, 10), dp(context, 9))
                         background = GradientDrawable().apply {
                             setColor(cardColor)
-                            cornerRadius = dp(context, 12).toFloat()
-                            setStroke(dp(context, 1), borderColor)
+                            cornerRadius = dp(context, 11).toFloat()
                         }
                     }
                     put(mockup, label(context, block.title, 15f, bold = true),
-                        context, bottom = 9)
+                        context, bottom = 7)
                     if (block.layout == "list") {
                         block.items.forEach { item ->
                             val line = row(context).apply {
                                 gravity = Gravity.CENTER_VERTICAL
-                                setPadding(dp(context, 10), dp(context, 9),
-                                    dp(context, 9), dp(context, 9))
+                                setPadding(dp(context, 8), dp(context, 7),
+                                    dp(context, 8), dp(context, 7))
                                 background = GradientDrawable().apply {
                                     setColor(cardInsetColor)
                                     cornerRadius = dp(context, 7).toFloat()
                                 }
                             }
                             line.addView(label(context, "▪", 13f).apply {
-                                setTextColor(accentColor)
+                                setTextColor(mutedColor)
                             }, LinearLayout.LayoutParams(dp(context, 17), -2))
-                            line.addView(label(context, item, 13.5f),
+                            line.addView(label(context, WorkspaceRichStatusText.neutralize(item), 13.5f),
                                 LinearLayout.LayoutParams(0, -2, 1f))
                             put(mockup, line, context, bottom = 5)
                         }
@@ -384,11 +359,11 @@ internal object WorkspaceRichAnswerView {
                         block.items.chunked(2).forEach { pair ->
                             val line = row(context)
                             pair.forEach { item ->
-                                val cell = label(context, item, 13.5f).apply {
+                                val cell = label(context, WorkspaceRichStatusText.neutralize(item), 13.5f).apply {
                                     gravity = Gravity.CENTER
-                                    minHeight = dp(context, 51)
-                                    setPadding(dp(context, 6), dp(context, 8),
-                                        dp(context, 6), dp(context, 8))
+                                    minHeight = dp(context, 44)
+                                    setPadding(dp(context, 6), dp(context, 7),
+                                        dp(context, 6), dp(context, 7))
                                     background = GradientDrawable().apply {
                                         setColor(cardInsetColor)
                                         cornerRadius = dp(context, 8).toFloat()
@@ -431,7 +406,7 @@ internal object WorkspaceRichAnswerView {
                             text = choice
                             textSize = 14f
                             setTextColor(bodyColor)
-                            buttonTintList = ColorStateList.valueOf(accentColor)
+                            buttonTintList = ColorStateList.valueOf(mutedColor)
                             tag = choice
                         }, RadioGroup.LayoutParams(-1, -2))
                     }
@@ -439,8 +414,8 @@ internal object WorkspaceRichAnswerView {
                     val button = MaterialButton(context).apply {
                         text = "Continue  →"
                         isEnabled = false
-                        setTextColor(Color.rgb(15, 30, 20))
-                        backgroundTintList = ColorStateList.valueOf(accentColor)
+                        setTextColor(bodyColor)
+                        backgroundTintList = ColorStateList.valueOf(Color.rgb(62, 62, 62))
                         setOnClickListener {
                             val picked = choices.findViewById<RadioButton>(choices.checkedRadioButtonId)
                             val selected = picked?.tag as? String

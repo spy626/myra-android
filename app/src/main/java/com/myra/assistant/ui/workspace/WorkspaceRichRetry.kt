@@ -26,6 +26,8 @@ internal object WorkspaceRichRetry {
         list(items:[short strings, each max 8 words]); heading(emoji,text).
         text(style:"opener"|"closer",text) one line; divider allowed.
         Never fabricate live prices: label examples SAMPLE. Do not use long bullets.
+        For list/table status write "Baaki"/"Ho gaya"/"Nahi hua" as plain text,
+        never red/green/status emoji (✅ ❌ 🟢 🔴 ❓).
         Full JSON example is NOT a fixed order; change blocks to fit this request:
         {"blocks":[{"type":"heading","text":"Step 1 — Screens"},
           {"type":"mockup_card","title":"Layout","layout":"grid","items":["Home","Cart"]},
