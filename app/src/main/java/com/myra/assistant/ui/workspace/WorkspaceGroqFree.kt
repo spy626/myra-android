@@ -19,25 +19,41 @@ internal object WorkspaceGroqFree {
     const val MAX_PROMPT_CHARS = 12_000
     private const val MAX_RESPONSE_BYTES = 96_000L
 
-    /** Preflight and HTTP body use the SAME compact Groq Free projection. */
+    /**
+     * One immutable projection for preflight and HTTP body. When a long chat
+     * exceeds Groq Free's conservative 12k-character local ceiling, first use
+     * the existing compact planning prompt (if applicable), then drop only
+     * whole OLD conversation turns in the outbound request copy. Never slice
+     * the latest user turn, mutate the conversation store, omit approved
+     * runtime instructions or invoke another provider.
+     */
     private fun projected(
         messages: List<WorkspaceConversationStore.Message>,
         extraSystemInstructions: String?,
     ): org.json.JSONArray {
-        // Keep identical normal Chat guidance on OpenRouter and Groq whenever it fits.
-        // ONLY an actually over-budget advice turn uses shorter, equivalent planning
-        // instructions. Never drop current user text or casual-chat continuity.
-        val regular = WorkspaceChatGateway.openAiMessages(
-            messages, extraSystemInstructions = extraSystemInstructions,
-        )
-        if (length(regular) <= MAX_PROMPT_CHARS) return regular
-        val latest = messages.lastOrNull()?.takeIf { it.role == "user" }?.text.orEmpty()
-        if (WorkspacePracticalPlanningGuide.instructions(latest).isBlank()) return regular
-        return WorkspaceChatGateway.openAiMessages(
-            messages,
-            extraSystemInstructions = extraSystemInstructions,
-            compactForGroq = true,
-        )
+        var window = WorkspaceLongInputPolicy.outbound(messages)
+        while (true) {
+            val regular = WorkspaceChatGateway.openAiMessages(
+                window, extraSystemInstructions = extraSystemInstructions,
+            )
+            if (length(regular) <= MAX_PROMPT_CHARS) return regular
+
+            val latest = window.last().text
+            val compact = if (WorkspacePracticalPlanningGuide.instructions(latest).isNotBlank())
+                WorkspaceChatGateway.openAiMessages(
+                    window, extraSystemInstructions = extraSystemInstructions,
+                    compactForGroq = true,
+                ) else null
+            val best = if (compact != null && length(compact) < length(regular))
+                compact else regular
+            if (length(best) <= MAX_PROMPT_CHARS || window.size == 1) return best
+
+            // Discard an oldest prior turn, never partial text. Avoid an orphan
+            // preceding assistant turn when the corresponding user turn goes.
+            window = window.drop(1)
+            if (window.size > 1 && window.first().role == "assistant")
+                window = window.drop(1)
+        }
     }
 
     private fun length(entries: org.json.JSONArray): Int =

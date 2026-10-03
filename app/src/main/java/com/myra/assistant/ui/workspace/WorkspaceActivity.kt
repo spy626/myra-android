@@ -4292,7 +4292,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 .setTitle(if (overBudget) "Groq Free prompt too large"
                     else "No eligible Workspace free route")
                 .setMessage(if (overBudget)
-                    "Groq Free is configured, but this chat plus instructions exceeds LYRA's 12,000-character local Free guard. No request was sent and no paid fallback was used. For long history, try a new Chat or another already-approved Free provider."
+                    "Even after trimming older outbound history, the latest message plus required instructions exceeds LYRA's 12,000-character local Groq Free guard. The original chat was not deleted or shortened; no request was sent and no paid fallback was used. Shorten the latest task or use another already-approved Free route."
                 else "Save a valid OpenRouter Free key, enable Groq Free/ZDR with a valid Groq key, or enable LLM7 Free with a valid free token. Z.ai is coding-only. No paid fallback.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("API settings") { _, _ ->

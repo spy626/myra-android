@@ -121,10 +121,56 @@ class WorkspaceGroqFreeTest {
         assertTrue(runCatching { WorkspaceGroqFree.body(listOf(near)) }.isFailure)
         val history = listOf(message("user", "first"),
             message("assistant", "a".repeat(11_990)), message("user", "follow up"))
-        assertFalse(WorkspaceGroqFree.withinBudget(history))
-        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+        // The latest user turn survives; ONLY the outbound copy of oversized
+        // older conversation turns is pruned before a Groq Free request.
+        assertTrue(WorkspaceGroqFree.withinBudget(history))
+        val projected = JSONObject(WorkspaceGroqFree.body(history)).getJSONArray("messages")
+        assertEquals("follow up", projected.getJSONObject(projected.length() - 1)
+            .getString("content"))
+        assertEquals(2, projected.length())
+        assertEquals(WorkspaceChatGateway.Provider.GROQ_FREE,
             WorkspaceFreeProviderSelection.choose(true, true, true,
                 WorkspaceGroqFree.withinBudget(history), false))
+    }
+
+
+    @Test fun longRealChatIsCompactedWithoutChangingLatestOrMandatoryRuntimeContext() {
+        val latest = "bro mere paas sirf Android phone hai. 3 practical steps batao, " +
+            "abhi coding start mat karna"
+        val history = mutableListOf<WorkspaceConversationStore.Message>()
+        repeat(8) { n ->
+            history.add(message("user", "Older question $n " + "u".repeat(850)))
+            history.add(message("assistant", "Older answer $n " + "a".repeat(950)))
+        }
+        history.add(message("user", latest))
+        val runtime = "RUNTIME-REQUIRED-CURRENT-STATE"
+        assertTrue(WorkspaceGroqFree.withinBudget(history, runtime))
+        val request = JSONObject(WorkspaceGroqFree.body(history,
+            extraSystemInstructions = runtime)).getJSONArray("messages")
+        val preflightChars = WorkspaceGroqFree.promptChars(history, runtime)
+        assertTrue(preflightChars != null && preflightChars <= WorkspaceGroqFree.MAX_PROMPT_CHARS)
+        assertEquals(latest, request.getJSONObject(request.length() - 1)
+            .getString("content"))
+        assertTrue(request.getJSONObject(0).getString("content").contains(runtime))
+        assertTrue(request.getJSONObject(0).getString("content")
+            .contains("PLANNING-ONLY HARD STOP"))
+        assertTrue(request.length() < WorkspaceLongInputPolicy.outbound(history).size + 1)
+        assertFalse(JSONObject(WorkspaceGroqFree.body(history,
+            extraSystemInstructions = runtime)).has("provider"))
+    }
+
+    @Test fun noHistoryTrimmingCanSendAnOversizedLatestOrRequiredRuntimeInstruction() {
+        val single = listOf(message("user", "X".repeat(
+            WorkspaceGroqFree.MAX_PROMPT_CHARS + 1)))
+        assertFalse(WorkspaceGroqFree.withinBudget(single))
+        assertTrue(runCatching { WorkspaceGroqFree.body(single) }.isFailure)
+        val extras = "AUTHORITATIVE-EXTRA-" + "Z".repeat(
+            WorkspaceGroqFree.MAX_PROMPT_CHARS)
+        val latest = listOf(message("user", "hello"))
+        assertFalse(WorkspaceGroqFree.withinBudget(latest, extras))
+        assertTrue(runCatching {
+            WorkspaceGroqFree.body(latest, extraSystemInstructions = extras)
+        }.isFailure)
     }
 
     @Test fun attachmentsNeverChooseGroqAndDoNotAutoEnableWithoutConsent() {
