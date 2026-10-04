@@ -93,7 +93,7 @@ internal object RenderedBrowserScrollPolicy {
             secondForeground == null || dispatchedAt <= 0L ||
             first.timestamp <= dispatchedAt || second.timestamp <= first.timestamp ||
             second.timestamp - first.timestamp < 180L || second.timestamp > now ||
-            now - second.timestamp > 1_500L || second.timestamp - dispatchedAt > 3_500L ||
+            now - second.timestamp > 1_500L || second.timestamp - dispatchedAt >= 3_500L ||
             first.confidence < .60 || second.confidence < .60 ||
             listOf(first, second).any {
                 it.packageName != plan.packageName || it.windowId != plan.windowId ||
