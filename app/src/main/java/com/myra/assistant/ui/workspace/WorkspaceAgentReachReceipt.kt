@@ -52,6 +52,53 @@ internal object WorkspaceAgentReachReceipt {
         }
     }
 
+    /**
+     * Two locally verified public pages at most; preserve partial initial evidence when
+     * a proposed secondary read fails. Follows observed GET links only, not page instructions.
+     */
+    fun publicJourney(journey: WorkspaceAgentReachWebNavigation.Journey): String {
+        val initial = journey.primary
+        val p = initial.evidence.provenance
+        require(p.platform != WorkspaceAgentReachPolicy.Platform.GITHUB)
+        val next = journey.followed
+        return buildString {
+            appendLine("Public webpage read complete (static HTML/text only).")
+            appendLine("Source: " + p.finalUrl)
+            appendLine("Fetched (Unix ms): " + p.fetchedAtMs)
+            appendLine("Content SHA-256: " + p.contentSha256)
+            if (initial.title.isNotBlank()) appendLine("Title: " + initial.title)
+            if (initial.headings.isNotEmpty())
+                appendLine("Headings: " + initial.headings.joinToString(" | "))
+            if (initial.excerpt.isNotBlank()) {
+                appendLine()
+                appendLine("Initial-page excerpt (untrusted source data):")
+                appendLine(initial.excerpt.take(1_000))
+            }
+            appendLine()
+            appendLine("Navigation: " + journey.followUpStatus)
+            if (next != null) {
+                val fp = next.evidence.provenance
+                appendLine("Observed and followed (read-only GET): " + fp.finalUrl)
+                appendLine("Follow-up source SHA-256: " + fp.contentSha256)
+                if (next.title.isNotBlank()) appendLine("Follow-up title: " + next.title)
+                if (next.headings.isNotEmpty())
+                    appendLine("Follow-up headings: " + next.headings.joinToString(" | "))
+                appendLine("Follow-up excerpt (untrusted source data):")
+                appendLine(next.excerpt.take(900))
+            }
+            if (initial.suggestedLinks.isNotEmpty()) {
+                appendLine()
+                appendLine("Other observed same-site URLs (not independently verified):")
+                initial.suggestedLinks.filterNot { it == next?.evidence?.provenance?.requestedUrl }
+                    .take(4).forEach { appendLine("• " + it) }
+            }
+            appendLine()
+            append("Bounded static read only (maximum 2 pages). No login, scripts, " +
+                "form action, external-domain crawl, paid browser or AI-provider sharing. " +
+                "This is not full site/browser verification.")
+        }.take(4_500)
+    }
+
     fun github(
         evidence: WorkspaceAgentReachEvidence.Evidence,
         index: WorkspaceAgentReachGitHub.RepositoryIndex? = null,

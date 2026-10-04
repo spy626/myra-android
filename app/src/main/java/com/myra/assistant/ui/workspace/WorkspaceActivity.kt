@@ -1177,7 +1177,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     }
                 }
 
-                override fun onComplete(page: WorkspaceAgentReachPublicWeb.Page) {
+                override fun onComplete(journey: WorkspaceAgentReachWebNavigation.Journey) {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
                         val id = agentReachProjectId
@@ -1189,7 +1189,7 @@ class WorkspaceActivity : AppCompatActivity() {
                                 "Conversation changed; public page receipt was not saved"
                             }
                             conversations.append(id, "assistant",
-                                WorkspaceAgentReachReceipt.publicPage(page))
+                                WorkspaceAgentReachReceipt.publicJourney(journey))
                         }.onSuccess {
                             statusMessage = ""
                         }.onFailure {
@@ -1365,6 +1365,7 @@ class WorkspaceActivity : AppCompatActivity() {
         id: String,
         messageId: String,
         target: WorkspaceAgentReachPolicy.Target,
+        userRequest: String,
     ) {
         clearAgentReachState()
         agentReachActive = true
@@ -1373,7 +1374,7 @@ class WorkspaceActivity : AppCompatActivity() {
         agentReachMessageId = messageId
         statusMessage = ""
         render()
-        publicWebReachRunner().start(target)
+        publicWebReachRunner().start(target, userRequest)
     }
 
     private fun startGitHubReach(
@@ -4490,7 +4491,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     if (target.platform == WorkspaceAgentReachPolicy.Platform.GITHUB) {
                         startGitHubReach(id, stored.id, target, text)
                     } else {
-                        startPublicWebReach(id, stored.id, target)
+                        startPublicWebReach(id, stored.id, target, text)
                     }
                     return
                 }

@@ -12,12 +12,14 @@ import java.nio.charset.CodingErrorAction
 /** Read-only public HTTPS adapter. Uses existing guarded DNS client; never runs JS or uses cookies. */
 internal object WorkspaceAgentReachPublicWeb {
     private const val MAX_BYTES = 96_000L
+    data class Link(val url: String, val label: String)
     data class Page(
         val evidence: WorkspaceAgentReachEvidence.Evidence,
         val title: String,
         val headings: List<String>,
         val excerpt: String,
         val suggestedLinks: List<String>,
+        val observedLinks: List<Link> = emptyList(),
     )
 
     fun request(target: WorkspaceAgentReachPolicy.Target): Request {
@@ -57,17 +59,21 @@ internal object WorkspaceAgentReachPublicWeb {
         .replace(Regex("""[ \t]+"""), " ")
         .replace(Regex("""\n\s*\n+"""), "\n").trim()
 
-    private fun links(html: String, target: WorkspaceAgentReachPolicy.Target): List<String> {
+    /** Only anchors observed in sanitized static HTML are eligible for later navigation. */
+    private fun links(html: String, target: WorkspaceAgentReachPolicy.Target): List<Link> {
         val base = URI(target.canonicalUrl)
-        return Regex("""(?is)\bhref\s*=\s*["']([^"']{1,1024})["']""")
+        return Regex("""(?is)<a\b[^>]{0,1800}\bhref\s*=\s*["']([^"']{1,1024})["'][^>]{0,1800}>(.*?)</a\s*>""")
             .findAll(html).mapNotNull { match ->
                 runCatching {
                     val next = WorkspaceAgentReachPolicy.parse(
                         base.resolve(unescape(match.groupValues[1])).toASCIIString())
-                    next.canonicalUrl.takeIf { next.host == target.host &&
-                        next.platform == target.platform && it != target.canonicalUrl }
+                    val label = text(match.groupValues[2]).take(120)
+                    Link(next.canonicalUrl, label).takeIf {
+                        next.host == target.host && next.platform == target.platform &&
+                            next.canonicalUrl != target.canonicalUrl
+                    }
                 }.getOrNull()
-            }.distinct().take(5).toList()
+            }.distinctBy { it.url }.take(16).toList()
     }
 
     fun read(
@@ -104,7 +110,8 @@ internal object WorkspaceAgentReachPublicWeb {
             .findAll(raw).map { text(it.groupValues[1]).take(160) }
             .filter(String::isNotBlank).distinct().take(8).toList() else emptyList()
         val cleaned = if (html) raw
-            .replace(Regex("""(?is)<(script|style|noscript|svg|iframe|form)\b[^>]*>.*?</\1\s*>"""), " ")
+            .replace(Regex("""(?s)<!--.*?-->"""), " ")
+            .replace(Regex("""(?is)<(script|style|noscript|svg|iframe|form|template)\b[^>]*>.*?</\1\s*>"""), " ")
             .replace(Regex("""(?is)<head\b[^>]*>.*?</head\s*>"""), " ")
             .replace(Regex("""(?is)<br\b[^>]*>"""), "\n")
             .replace(Regex("""(?is)</(?:p|div|article|main|section|li|h[1-6])\s*>"""), "\n")
@@ -121,30 +128,95 @@ internal object WorkspaceAgentReachPublicWeb {
         }.take(12_000)
         val evidence = WorkspaceAgentReachEvidence.create(
             requested, final, "public-html-static", content, atMs)
-        return Page(evidence, title, headings, excerpt, if (html) links(raw, final) else emptyList())
+        val observed = if (html) links(cleaned, final) else emptyList()
+        return Page(evidence, title, headings, excerpt,
+            observed.take(5).map { it.url }, observed)
     }
 }
 
-/** One page, at most two same-host safe redirects, cancellation on conversation changes. */
+/**
+ * Existing native public reader's bounded observe -> choose -> verify extension.
+ * One initial page + at most ONE user-topic-relevant observed same-site link; no recursion.
+ * Source text and navigational labels are never sent to an AI provider by this runner.
+ */
 internal class WorkspaceAgentReachPublicWebRunner(
     private val currentTarget: () -> WorkspaceAgentReachPolicy.Target?,
     private val listener: Listener,
     private val now: () -> Long = System::currentTimeMillis,
+    private val executor: Executor = OkHttpExecutor,
 ) {
+    interface Cancelable {
+        fun cancel()
+    }
+
+    fun interface Executor {
+        fun enqueue(request: Request, callback: (Result<Response>) -> Unit): Cancelable
+    }
+
+    private object OkHttpExecutor : Executor {
+        override fun enqueue(
+            request: Request,
+            callback: (Result<Response>) -> Unit,
+        ): Cancelable {
+            val call = WorkspaceAgentReachGitHub.client.newCall(request)
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    callback(Result.failure(e))
+                }
+                override fun onResponse(call: Call, response: Response) {
+                    callback(Result.success(response))
+                }
+            })
+            return object : Cancelable {
+                override fun cancel() = call.cancel()
+            }
+        }
+    }
+
     interface Listener {
         fun onEvent(phase: WorkspaceWorkPhase, label: String, detail: String? = null)
-        fun onComplete(page: WorkspaceAgentReachPublicWeb.Page)
+        fun onComplete(journey: WorkspaceAgentReachWebNavigation.Journey)
         fun onError(message: String)
     }
 
     private var generation = 0L
-    private var active: Call? = null
+    private var active: Cancelable? = null
 
-    @Synchronized fun start(target: WorkspaceAgentReachPolicy.Target) {
+    @Synchronized fun start(
+        target: WorkspaceAgentReachPolicy.Target,
+        userRequest: String,
+    ) {
         cancel()
         val run = ++generation
         listener.onEvent(WorkspaceWorkPhase.VISITING, "Opening public page", target.host)
-        visit(run, target, target, 0)
+        visit(run, target, target, target, depth = 0,
+            onPage = { primary ->
+                val choice = WorkspaceAgentReachWebNavigation.choose(primary, userRequest)
+                if (choice == null) {
+                    complete(run, target, WorkspaceAgentReachWebNavigation.Journey(primary))
+                } else {
+                    listener.onEvent(WorkspaceWorkPhase.THINKING,
+                        "Choosing observed relevant same-site link",
+                        choice.matchedTerms.joinToString(", ").take(90))
+                    listener.onEvent(WorkspaceWorkPhase.VISITING,
+                        "Opening one relevant public page", choice.target.canonicalUrl.take(160))
+                    visit(run, target, choice.target, choice.target, depth = 0,
+                        onPage = { followed ->
+                            val journey = runCatching {
+                                WorkspaceAgentReachWebNavigation.verify(primary, choice, followed)
+                            }.getOrElse {
+                                WorkspaceAgentReachWebNavigation.Journey(primary, null, choice,
+                                    "Follow-up verification failed; no secondary content was accepted")
+                            }
+                            complete(run, target, journey)
+                        },
+                        onError = {
+                            complete(run, target, WorkspaceAgentReachWebNavigation.Journey(
+                                primary, null, choice,
+                                "Relevant follow-up page was unavailable; initial verified page retained"))
+                        })
+                }
+            }, onError = { fail(run, it) })
     }
 
     @Synchronized fun cancel() {
@@ -153,55 +225,79 @@ internal class WorkspaceAgentReachPublicWebRunner(
         active = null
     }
 
-    @Synchronized private fun current(run: Long, original: WorkspaceAgentReachPolicy.Target) =
-        run == generation && currentTarget()?.canonicalUrl == original.canonicalUrl
+    @Synchronized private fun current(
+        run: Long,
+        origin: WorkspaceAgentReachPolicy.Target,
+    ) = run == generation && currentTarget()?.canonicalUrl == origin.canonicalUrl
 
     private fun visit(
         run: Long,
-        original: WorkspaceAgentReachPolicy.Target,
+        origin: WorkspaceAgentReachPolicy.Target,
+        requested: WorkspaceAgentReachPolicy.Target,
         target: WorkspaceAgentReachPolicy.Target,
         depth: Int,
+        onPage: (WorkspaceAgentReachPublicWeb.Page) -> Unit,
+        onError: (String) -> Unit,
     ) {
-        val call = WorkspaceAgentReachGitHub.client.newCall(WorkspaceAgentReachPublicWeb.request(target))
-        synchronized(this) {
-            if (!current(run, original)) return
-            active = call
-        }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                fail(run, "Public page network read failed. No retry sent.")
+        val request = WorkspaceAgentReachPublicWeb.request(target)
+        synchronized(this) { if (!current(run, origin)) return }
+        val handle = executor.enqueue(request) { responseResult ->
+            val response = responseResult.getOrElse {
+                if (current(run, origin)) onError("Public page network read failed; no retry")
+                return@enqueue
             }
-
-            override fun onResponse(call: Call, response: Response) {
-                response.use { result ->
-                    if (!current(run, original)) return@use
-                    runCatching {
-                        if (result.code in 300..399) {
-                            require(depth < 2) { "Too many public page redirects" }
-                            val next = WorkspaceAgentReachPublicWeb.redirect(
-                                target, result.header("Location").orEmpty())
-                            listener.onEvent(WorkspaceWorkPhase.VISITING, "Safe page redirect", next.host)
-                            visit(run, original, next, depth + 1)
-                        } else {
-                            listener.onEvent(WorkspaceWorkPhase.READING, "Reading static page", target.host)
-                            val page = WorkspaceAgentReachPublicWeb.read(result, original, target, now())
-                            if (current(run, original)) {
-                                listener.onEvent(WorkspaceWorkPhase.DONE, "Public page read complete", target.host)
-                                listener.onComplete(page)
-                            }
+            response.use { result ->
+                if (!current(run, origin)) return@use
+                runCatching {
+                    if (result.code in 300..399) {
+                        require(depth < 2) { "Too many redirects" }
+                        val next = WorkspaceAgentReachPublicWeb.redirect(
+                            target, result.header("Location").orEmpty())
+                        require(next.host == origin.host) {
+                            "Redirect left the originally approved public site"
                         }
-                    }.onFailure { fail(run, it.message ?: "Public page read stopped safely") }
+                        listener.onEvent(WorkspaceWorkPhase.VISITING, "Safe page redirect", next.host)
+                        visit(run, origin, requested, next, depth + 1, onPage, onError)
+                    } else {
+                        listener.onEvent(WorkspaceWorkPhase.READING, "Reading bounded static page",
+                            target.canonicalUrl.take(160))
+                        val page = WorkspaceAgentReachPublicWeb.read(
+                            result, requested, target, now())
+                        if (current(run, origin)) onPage(page)
+                    }
+                }.onFailure {
+                    if (current(run, origin))
+                        onError(it.message ?: "Public page read stopped safely")
                 }
             }
-        })
+        }
+        synchronized(this) {
+            if (current(run, origin)) active = handle else handle.cancel()
+        }
     }
 
-    private fun fail(run: Long, reason: String) {
+    private fun complete(
+        run: Long,
+        origin: WorkspaceAgentReachPolicy.Target,
+        journey: WorkspaceAgentReachWebNavigation.Journey,
+    ) {
+        synchronized(this) {
+            if (!current(run, origin)) return
+            active = null
+            ++generation // Exactly one terminal receipt for this request.
+        }
+        listener.onEvent(WorkspaceWorkPhase.VERIFYING, "Verified public evidence",
+            if (journey.followed != null) "2 bounded pages" else "1 bounded page")
+        listener.onComplete(journey)
+    }
+
+    private fun fail(run: Long, message: String) {
         synchronized(this) {
             if (run != generation) return
             active = null
+            ++generation
         }
-        listener.onEvent(WorkspaceWorkPhase.ERROR, "Public page read stopped", reason)
-        listener.onError(reason)
+        listener.onEvent(WorkspaceWorkPhase.ERROR, "Public page read stopped", message)
+        listener.onError(message)
     }
 }

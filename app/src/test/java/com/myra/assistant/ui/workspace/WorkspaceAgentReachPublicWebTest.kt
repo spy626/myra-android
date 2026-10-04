@@ -42,6 +42,8 @@ class WorkspaceAgentReachPublicWebTest {
         assertFalse(page.excerpt.contains("leak()"))
         assertFalse(page.excerpt.contains("private"))
         assertTrue(page.suggestedLinks.contains("https://example.com/next"))
+        assertTrue(page.observedLinks.any { it.url == "https://example.com/next" &&
+            it.label == "Next" })
         assertFalse(page.suggestedLinks.any { it.contains("evil.example") })
         assertEquals("public-html-static", page.evidence.provenance.adapter)
         assertEquals(64, page.evidence.provenance.contentSha256.length)
