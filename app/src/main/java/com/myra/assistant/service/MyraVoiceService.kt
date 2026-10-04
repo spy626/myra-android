@@ -51,6 +51,7 @@ import com.myra.assistant.screen.RenderedBrowserObservation
 import com.myra.assistant.screen.RenderedBrowserNavigationPolicy
 import com.myra.assistant.screen.RenderedBrowserScrollPolicy
 import com.myra.assistant.screen.RenderedBrowserPageEvidence
+import com.myra.assistant.screen.RenderedBrowserResearchContinuity
 import com.myra.assistant.screen.ScreenFramePrivacyFilter
 import com.myra.assistant.screen.ScreenPrivacyResult
 import com.myra.assistant.screen.ScreenQueryDispatchPolicy
@@ -180,6 +181,8 @@ class MyraVoiceService : Service() {
     private var lastUserIntentText = ""
     // A fresh user utterance invalidates any pending post-click browser attribution.
     private val browserLinkActionEpoch = java.util.concurrent.atomic.AtomicLong(0L)
+    // RAM-only, bounded source correlation for a later explicit SCREEN QUESTION.
+    @Volatile private var lastBrowserPageEvidence: RenderedBrowserPageEvidence.Receipt? = null
     private val stagedMemorySemantics = java.util.concurrent.ConcurrentHashMap<Long, List<MemorySemanticFrame>>()
     // One ephemeral model research suggestion per active voice turn; no execution authority.
     private val stagedResearchGoals =
@@ -2075,6 +2078,7 @@ class MyraVoiceService : Service() {
             return
         }
         suppressModelForTurn = true
+        lastBrowserPageEvidence = null // a new attempt invalidates previous continuity
         localCommandExecutedThisTurn = true
         output.clear()
         cancelSpeechForNewAction()
@@ -2095,6 +2099,7 @@ class MyraVoiceService : Service() {
                 " destinationUrlVerified=false autonomousContinuation=false")
             // Quote raw page data in local chat only; controlled speech receives status,
             // never website text as instructions or an automatically shared provider prompt.
+            if (source != null) lastBrowserPageEvidence = source
             val localText = source?.let {
                 message + "\nObserved rendered text (untrusted): “" + it.localPreview() +
                     "”\nVisible-text SHA-256: " + it.contentSha256
@@ -2197,6 +2202,7 @@ class MyraVoiceService : Service() {
             return
         }
         suppressModelForTurn = true
+        lastBrowserPageEvidence = null // a new attempt invalidates previous continuity
         localCommandExecutedThisTurn = true
         output.clear()
         cancelSpeechForNewAction()
@@ -2215,6 +2221,7 @@ class MyraVoiceService : Service() {
                 " taskRecorded=" + accepted + " status=" + evidence.generalStatus +
                 " sourceSha256=" + (source?.contentSha256 ?: "none") +
                 " destinationVerified=false autonomousContinuation=false")
+            if (source != null) lastBrowserPageEvidence = source
             val localText = source?.let {
                 message + "\nObserved rendered text (untrusted): “" + it.localPreview() +
                     "”\nVisible-text SHA-256: " + it.contentSha256
@@ -2811,11 +2818,22 @@ class MyraVoiceService : Service() {
                         now = frameReadyAt,
                     )
                 } else null
+                // The user explicitly asked a new screen question. Only now can the
+                // previously verified local browser receipt annotate the fresh frame.
+                val browserContinuity = if (renderedBrowserQuestion) {
+                    RenderedBrowserResearchContinuity.correlate(
+                        lastBrowserPageEvidence, renderedBrowser, frameReadyAt)
+                } else null
+                if (renderedBrowserQuestion && browserContinuity == null) {
+                    lastBrowserPageEvidence = null // stale/window-changed/unmatched: discard
+                }
                 val ui = if (renderedBrowserQuestion) {
-                    renderedBrowser?.prompt() ?: "The current browser's Accessibility text was " +
+                    val browserPrompt = renderedBrowser?.prompt() ?: "The current browser's Accessibility text was " +
                         "not safely verified for this exact window and screenshot. Use only " +
                         "the privacy-filtered screenshot; do not assert a verified URL, " +
                         "hidden DOM, successful link navigation or unseen webpage content."
+                    if (browserContinuity == null) browserPrompt
+                    else (browserPrompt + "\n" + browserContinuity.prompt()).take(4_000)
                 } else {
                     elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
                         .joinToString("\n") {
@@ -2827,6 +2845,7 @@ class MyraVoiceService : Service() {
                         "matchedFreshWindow=${renderedBrowser != null} package=${current.packageName} " +
                         "safeLines=${renderedBrowser?.textLines?.size ?: 0} " +
                         "linkLabels=${renderedBrowser?.linkLabels?.size ?: 0} " +
+                        "priorActionCorrelated=${browserContinuity != null} " +
                         "urlVerified=false actionAuthorized=false")
                 }
                 voiceLog(
