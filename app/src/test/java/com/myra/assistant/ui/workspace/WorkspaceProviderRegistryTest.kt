@@ -22,6 +22,27 @@ class WorkspaceProviderRegistryTest {
         assertFalse(r.supports(WorkspaceProviderRegistry.Id.ZAI_FREE, WorkspaceProviderRegistry.TaskKind.CHAT_TEXT))
     }
 
+    @Test fun attachmentCapabilitiesDistinguishDeclaredImagesFromUnverifiedOriginalMedia() {
+        val id = WorkspaceProviderRegistry.Id.OPENROUTER_FREE
+        val kind = WorkspaceProviderRegistry.AttachmentKind
+        val evidence = WorkspaceProviderRegistry.AttachmentSupport
+        assertEquals(evidence.DECLARED_INPUT, r.attachmentSupport(id, kind.PHOTO))
+        assertEquals(evidence.DECLARED_INPUT, r.attachmentSupport(id, kind.VIDEO_FRAMES_SILENT))
+        assertEquals(evidence.DECLARED_INPUT, r.attachmentSupport(id, kind.DOCUMENT_TEXT))
+        assertEquals(evidence.EXPERIMENTAL_UNVERIFIED, r.attachmentSupport(id, kind.VIDEO_ORIGINAL))
+        assertEquals(evidence.EXPERIMENTAL_UNVERIFIED, r.attachmentSupport(id, kind.AUDIO_ORIGINAL))
+        assertTrue(r.supportsAttachment(id, kind.VIDEO_FRAMES_SILENT))
+        assertFalse(r.supportsAttachment(id, kind.VIDEO_ORIGINAL))
+        assertFalse(r.supportsAttachment(id, kind.AUDIO_ORIGINAL))
+        assertTrue(r.supportsAttachment(id, kind.VIDEO_ORIGINAL, experimentalApproved = true))
+        assertTrue(r.supportsAttachment(id, kind.AUDIO_ORIGINAL, experimentalApproved = true))
+        listOf(WorkspaceProviderRegistry.Id.GROQ_FREE, WorkspaceProviderRegistry.Id.LLM7_FREE,
+            WorkspaceProviderRegistry.Id.XKIRO_FREE, WorkspaceProviderRegistry.Id.ZAI_FREE).forEach {
+            assertEquals(evidence.UNSUPPORTED, r.attachmentSupport(it, kind.PHOTO))
+            assertFalse(r.supportsAttachment(it, kind.VIDEO_ORIGINAL, experimentalApproved = true))
+        }
+    }
+
     @Test fun freeAssuranceDoesNotPretendEveryProviderHasSameGuarantee() {
         assertEquals(WorkspaceProviderRegistry.FreeAssurance.API_ZERO_PRICE_CEILING,
             r.capability(WorkspaceProviderRegistry.Id.OPENROUTER_FREE).freeAssurance)

@@ -2998,12 +2998,16 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     /** Single Workspace selection point; full same-chat request budget, never only latest text.
+     * Typed attachment capability is checked here; unverified whole-file media requires consent.
      * Attachments use the existing OpenRouter route or stay local; no auto retry or paid route.
      * Groq Free/ZDR opt-in does not certify an account that is later upgraded to paid.
      */
     private fun selectedProvider(
         hasAttachments: Boolean = false,
         extraSystemInstructions: String? = null,
+        attachmentKind: WorkspaceProviderRegistry.AttachmentKind =
+            WorkspaceProviderRegistry.AttachmentKind.PHOTO,
+        experimentalAttachmentApproved: Boolean = false,
     ): WorkspaceChatGateway.Provider? {
         val openRouterAvailable = keys.get(ApiKeyStore.OPENROUTER).isNotBlank()
         val groqAvailable = keys.get(ApiKeyStore.GROQ).isNotBlank()
@@ -3020,7 +3024,9 @@ class WorkspaceActivity : AppCompatActivity() {
             ?.let { WorkspaceLlm7Free.withinBudget(it, extraSystemInstructions) } ?: false
         return WorkspaceFreeProviderSelection.choose(
             openRouterAvailable, groqAvailable, groqApproved, groqFits, hasAttachments,
-            llm7Available, llm7Approved, llm7Fits)
+            llm7Available, llm7Approved, llm7Fits,
+            attachmentKind = attachmentKind,
+            experimentalAttachmentApproved = experimentalAttachmentApproved)
     }
 
     private fun keyFor(provider: WorkspaceChatGateway.Provider): String = when (provider) {
@@ -4191,8 +4197,21 @@ class WorkspaceActivity : AppCompatActivity() {
                 val hasVideo = picked.any {
                     WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.VIDEO
                 }
+                val consentDescription = if (hasVideo)
+                    "Original video is an EXPERIMENTAL upload of the whole file INCLUDING its " +
+                        "soundtrack. The changing OpenRouter Free pool does NOT guarantee a " +
+                        "compatible $0/ZDR video model. Frames only sends ten spaced silent " +
+                        "screenshots through image input, never the soundtrack. No paid " +
+                        "fallback or automatic second upload."
+                else if (picked.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                        WorkspaceAttachmentPolicy.Kind.AUDIO })
+                    "Original audio is an EXPERIMENTAL upload. The OpenRouter Free pool does " +
+                        "NOT guarantee a compatible $0/ZDR audio model or transcription. " +
+                        "No paid fallback or automatic resend."
+                else "This sends selected photos through OpenRouter Free image input instead " +
+                    "of your text-only provider. No paid fallback."
                 val dialog = AlertDialog.Builder(this).setTitle("Send with OpenRouter Free?")
-                    .setMessage("Original video uploads the entire file INCLUDING its soundtrack to OpenRouter under $0 price and ZDR restrictions, but a compatible private Free model is NOT guaranteed. Frames only sends ten spaced screenshots WITHOUT sound; it cannot cover every moment. No paid fallback or automatic second upload.")
+                    .setMessage(consentDescription)
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton(if (hasVideo) "Original video" else "Use OpenRouter Free") { _, _ ->
                         sendMessage(attachmentRouteApproved = true)
@@ -4440,6 +4459,20 @@ class WorkspaceActivity : AppCompatActivity() {
             selectedProvider(
                 picked.isNotEmpty(),
                 extraSystemInstructions = runtimeInstructions,
+                attachmentKind = when {
+                    videoFramesOnly -> WorkspaceProviderRegistry.AttachmentKind.VIDEO_FRAMES_SILENT
+                    picked.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                        WorkspaceAttachmentPolicy.Kind.VIDEO } ->
+                        WorkspaceProviderRegistry.AttachmentKind.VIDEO_ORIGINAL
+                    picked.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                        WorkspaceAttachmentPolicy.Kind.AUDIO } ->
+                        WorkspaceProviderRegistry.AttachmentKind.AUDIO_ORIGINAL
+                    picked.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                        WorkspaceAttachmentPolicy.Kind.IMAGE } ->
+                        WorkspaceProviderRegistry.AttachmentKind.PHOTO
+                    else -> WorkspaceProviderRegistry.AttachmentKind.DOCUMENT_TEXT
+                },
+                experimentalAttachmentApproved = attachmentRouteApproved,
             )
         }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }

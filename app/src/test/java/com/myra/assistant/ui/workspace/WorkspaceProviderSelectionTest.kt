@@ -34,4 +34,28 @@ class WorkspaceProviderSelectionTest {
         assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
             WorkspaceFreeProviderSelection.choose(true, true, true, true, true))
     }
+    @Test fun typedMediaSelectionNeverConflatesImagesWithOriginalVideoOrAudio() {
+        val media = WorkspaceProviderRegistry.AttachmentKind
+        val chooseVideo = WorkspaceFreeProviderSelection.choose(true, true, true, true, true,
+            attachmentKind = media.VIDEO_ORIGINAL)
+        assertNull(chooseVideo)
+        assertNull(WorkspaceFreeProviderSelection.choose(true, true, true, true, true,
+            attachmentKind = media.AUDIO_ORIGINAL))
+        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+            WorkspaceFreeProviderSelection.choose(true, true, true, true, true,
+                attachmentKind = media.VIDEO_FRAMES_SILENT))
+        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+            WorkspaceFreeProviderSelection.choose(true, true, true, true, true,
+                attachmentKind = media.DOCUMENT_TEXT))
+        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+            WorkspaceFreeProviderSelection.choose(true, true, true, true, true,
+                attachmentKind = media.VIDEO_ORIGINAL,
+                experimentalAttachmentApproved = true))
+        assertEquals(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+            WorkspaceFreeProviderSelection.choose(true, true, true, true, true,
+                attachmentKind = media.AUDIO_ORIGINAL,
+                experimentalAttachmentApproved = true))
+        assertNull(WorkspaceFreeProviderSelection.choose(false, true, true, true, true,
+            attachmentKind = media.VIDEO_FRAMES_SILENT))
+    }
 }

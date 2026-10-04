@@ -23,6 +23,14 @@ internal object WorkspaceProviderRegistry {
         WEBSITE_BUILD,
     }
 
+    /** An attachment is a semantic modality, not merely hasAttachments=true. */
+    enum class AttachmentKind {
+        DOCUMENT_TEXT, PHOTO, VIDEO_FRAMES_SILENT, VIDEO_ORIGINAL, AUDIO_ORIGINAL,
+    }
+
+    /** Declared input is not a live model-health guarantee. Never upgrade experimental to proven. */
+    enum class AttachmentSupport { DECLARED_INPUT, EXPERIMENTAL_UNVERIFIED, UNSUPPORTED }
+
     enum class FreeAssurance {
         /** API request itself enforces a literal zero-price ceiling. */
         API_ZERO_PRICE_CEILING,
@@ -50,6 +58,7 @@ internal object WorkspaceProviderRegistry {
         val tasks: Set<TaskKind>,
         val sourceAllowed: Boolean,
         val attachmentsAllowed: Boolean,
+        val attachmentSupport: Map<AttachmentKind, AttachmentSupport> = emptyMap(),
         val freeAssurance: FreeAssurance,
         val fallbackRule: FallbackRule,
         val budgets: Map<TaskKind, Budget>,
@@ -81,6 +90,15 @@ internal object WorkspaceProviderRegistry {
                 TaskKind.CODE_EDIT, TaskKind.WEBSITE_BUILD),
             sourceAllowed = true,
             attachmentsAllowed = true,
+            attachmentSupport = mapOf(
+                AttachmentKind.DOCUMENT_TEXT to AttachmentSupport.DECLARED_INPUT,
+                AttachmentKind.PHOTO to AttachmentSupport.DECLARED_INPUT,
+                // Ten locally sampled silent frames are transmitted as image_url parts.
+                AttachmentKind.VIDEO_FRAMES_SILENT to AttachmentSupport.DECLARED_INPUT,
+                // openrouter/free is a changing pool: video_url and input_audio are NOT proven.
+                AttachmentKind.VIDEO_ORIGINAL to AttachmentSupport.EXPERIMENTAL_UNVERIFIED,
+                AttachmentKind.AUDIO_ORIGINAL to AttachmentSupport.EXPERIMENTAL_UNVERIFIED,
+            ),
             freeAssurance = FreeAssurance.API_ZERO_PRICE_CEILING,
             fallbackRule = FallbackRule.USER_CONSENTED_DEFINITE_HTTP_ONLY,
             budgets = mapOf(
@@ -154,6 +172,20 @@ internal object WorkspaceProviderRegistry {
     fun supports(id: Id, task: TaskKind): Boolean = task in capability(id).tasks
 
     fun allowsAttachments(id: Id): Boolean = capability(id).attachmentsAllowed
+
+    fun attachmentSupport(id: Id, kind: AttachmentKind): AttachmentSupport =
+        capability(id).attachmentSupport[kind] ?: AttachmentSupport.UNSUPPORTED
+
+    /** Experimental original files require affirmative, per-send user consent. */
+    fun supportsAttachment(id: Id, kind: AttachmentKind,
+                           experimentalApproved: Boolean = false): Boolean {
+        if (!supports(id, TaskKind.CHAT_ATTACHMENT) || !allowsAttachments(id)) return false
+        return when (attachmentSupport(id, kind)) {
+            AttachmentSupport.DECLARED_INPUT -> true
+            AttachmentSupport.EXPERIMENTAL_UNVERIFIED -> experimentalApproved
+            AttachmentSupport.UNSUPPORTED -> false
+        }
+    }
 
     fun allowsSource(id: Id): Boolean = capability(id).sourceAllowed
 
