@@ -53,7 +53,7 @@ class VerifiedSearchStrategyRestartTest {
                 relevantApp = "com.android.chrome", textHint = "ai",
                 requiredCapabilities = setOf(ToolCapability.WEB_SEARCH), confidence = .9)
             val t = runtime.start(turn, intent)!!
-            val beforeScene = ScreenScene("com.android.chrome", "chrome",
+            val beforeScene = ScreenScene("com.android.chrome", "com.android.chrome",
                 windowId = 1, generation = turn * 10, screenType = "SEARCH",
                 semanticElements = emptyList(), screenshotReference = null,
                 observedAt = turn * 10, confidence = .9)
