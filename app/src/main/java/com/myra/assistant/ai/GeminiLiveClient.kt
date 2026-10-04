@@ -166,7 +166,7 @@ class GeminiLiveClient(
             .put("source_span", JSONObject().put("type", "STRING"))
             .put("query_span", JSONObject().put("type", "STRING"))
             .put("confidence", JSONObject().put("type", "NUMBER")))
-            .put("required", JSONArray(listOf("kind", "source_span", "query_span", "confidence")))
+            .put("required", JSONArray(listOf("kind", "source_span", "query_span", "confidence"))))
 
     private fun phoneActionDeclaration() = JSONObject()
         .put("name", "perform_phone_action")
