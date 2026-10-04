@@ -141,7 +141,11 @@ sealed interface PlannerResult {
 
 /** Plans one safe next step. Existing platform executors remain adapters beneath capabilities. */
 class GeneralAgentPlanner {
-    fun next(task: GeneralRuntimeTask, perception: PerceptionSnapshot?, relevantTools: List<ToolDefinition>): PlannerResult {
+    fun next(
+        task: GeneralRuntimeTask, perception: PerceptionSnapshot?,
+        relevantTools: List<ToolDefinition>,
+        verifiedFeedback: VerifiedSearchStrategyFeedback? = null,
+    ): PlannerResult {
         if (!task.intent.requiresAction) return PlannerResult.Complete("conversation_tools_locked")
         if (task.recoveryCount > MAX_RECOVERIES) return PlannerResult.Fail("safe_retry_limit")
         task.currentStep?.takeIf { task.status == AgentRuntimeStatus.WAITING_FOR_RESULT }?.let {
@@ -193,9 +197,17 @@ class GeneralAgentPlanner {
             ToolCapability.VISUAL_CHECK -> ToolCapability.OBSERVE_SCREEN
             else -> null
         }?.takeIf { it in task.intent.requiredCapabilities }
-        val selected = relevantTools.firstOrNull { it.capability == preferred } ?:
+        val baseline = relevantTools.firstOrNull { it.capability == preferred } ?:
             relevantTools.firstOrNull { it.capability == equivalent }
             ?: return PlannerResult.Fail("no_safe_tool")
+        val recommendation = if (task.status != AgentRuntimeStatus.RECOVERING)
+            verifiedFeedback?.recommend(
+                baseline.capability,
+                if (baseline.capability == preferred) equivalent else preferred,
+                task.intent.requiredCapabilities, relevantTools.map { it.capability }.toSet(),
+                task.intent.relevantApp,
+            ) else null
+        val selected = relevantTools.firstOrNull { it.capability == recommendation } ?: baseline
         val capability = selected.capability
         if (perception == null && capability.requiresScreen()) {
             return PlannerResult.NeedObservation(visual = task.intent.turnIntent == TurnIntent.SCREEN_QUESTION)
@@ -209,7 +221,12 @@ class GeneralAgentPlanner {
                 targetDescription = task.intent.targetDescription,
                 textPayload = task.intent.textHint,
                 parameters = task.intent.parameters,
-                strategy = if (task.status == AgentRuntimeStatus.RECOVERING) "safe_retry_${task.recoveryCount}" else "primary",
+                strategy = when {
+                    task.status == AgentRuntimeStatus.RECOVERING -> "safe_retry_${task.recoveryCount}"
+                    selected.capability != baseline.capability ->
+                        "verified_outcome_preferred_${selected.capability.name.lowercase()}"
+                    else -> "primary"
+                },
                 expectedOutcome = expected,
                 requiresFreshPerception = capability.requiresScreen(),
                 requiresVerification = capability !in setOf(ToolCapability.OBSERVE_SCREEN, ToolCapability.VISUAL_CHECK),
@@ -476,7 +493,8 @@ class GeneralAgentRuntime(
     private val planner: GeneralAgentPlanner = GeneralAgentPlanner(),
     private val verifier: GeneralVerifier = GeneralVerifier(),
     private val recovery: GeneralRecoveryEngine = GeneralRecoveryEngine(),
-    private val now: () -> Long = System::currentTimeMillis
+    private val now: () -> Long = System::currentTimeMillis,
+    private val searchFeedback: VerifiedSearchStrategyFeedback = VerifiedSearchStrategyFeedback(),
 ) {
     @Volatile private var active: GeneralRuntimeTask? = null
     @Volatile private var lastCompleted: GeneralRuntimeTask? = null
@@ -493,10 +511,14 @@ class GeneralAgentRuntime(
     fun activeTask(): GeneralRuntimeTask? = active
     fun lastCompletedTask(): GeneralRuntimeTask? = lastCompleted
 
-    @Synchronized fun next(perception: PerceptionSnapshot?): PlannerResult {
+    @Synchronized fun next(
+        perception: PerceptionSnapshot?,
+        executableCapabilities: Set<ToolCapability>? = null,
+    ): PlannerResult {
         val task = active ?: return PlannerResult.Fail("no_active_task")
         val tools = registry.relevant(task.intent.requiredCapabilities)
-        val result = planner.next(task, perception, tools)
+            .filter { executableCapabilities == null || it.capability in executableCapabilities }
+        val result = planner.next(task, perception, tools, searchFeedback)
         active = when (result) {
             is PlannerResult.Next -> task.copy(status = AgentRuntimeStatus.READY_TO_ACT, currentStep = result.step, planRevision = task.planRevision + 1, updatedAt = now())
             is PlannerResult.Recover -> task.copy(status = AgentRuntimeStatus.READY_TO_ACT, currentStep = result.step, planRevision = task.planRevision + 1, updatedAt = now())
@@ -541,6 +563,8 @@ class GeneralAgentRuntime(
             evidence = listOf("adapter_rejected"), mismatchReason = history?.failureReason ?: "dispatch_rejected"
         )
         val updatedHistory = task.actionHistory.map { if (it.stepId == step.id) it.copy(afterGeneration = after.scene.generation, verification = result.status) else it }
+        // Learn once from actual, freshly verified actions; never from UNKNOWN or rejected dispatch.
+        if (history?.accepted == true) searchFeedback.record(task, step, result)
         if (result.status == GeneralVerificationStatus.SUCCESS) {
             val goalResearch = task.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
                 step.capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH, ToolCapability.OBSERVE_SCREEN)

@@ -3922,7 +3922,8 @@ class MyraVoiceService : Service() {
             before = runtimePerception(task.id)
         }
         voiceLog("PLANNER_STARTED taskId=${task.id} turnId=${task.turnId} status=${task.status} recoveryCount=${task.recoveryCount}")
-        val planned = runtime.next(before)
+        // The actual router, not the registry wish-list, defines executable tools.
+        val planned = runtime.next(before, generalActionRouter.registeredCapabilities())
         runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, before?.scene) }
         voiceLog("PLANNER_RESULT taskId=${task.id} turnId=${task.turnId} result=${planned.javaClass.simpleName}")
         if (planned is PlannerResult.NeedObservation) {
