@@ -193,7 +193,7 @@ internal class WorkspaceAgentReachPublicWebRunner(
             onPage = { primary ->
                 val choice = WorkspaceAgentReachWebNavigation.choose(primary, userRequest)
                 if (choice == null) {
-                    complete(run, target, WorkspaceAgentReachWebNavigation.Journey(primary))
+                    complete(run, target, WorkspaceAgentReachWebNavigation.Journey(primary), userRequest)
                 } else {
                     listener.onEvent(WorkspaceWorkPhase.THINKING,
                         "Choosing observed relevant same-site link",
@@ -208,12 +208,12 @@ internal class WorkspaceAgentReachPublicWebRunner(
                                 WorkspaceAgentReachWebNavigation.Journey(primary, null, choice,
                                     "Follow-up verification failed; no secondary content was accepted")
                             }
-                            complete(run, target, journey)
+                            complete(run, target, journey, userRequest)
                         },
                         onError = {
                             complete(run, target, WorkspaceAgentReachWebNavigation.Journey(
                                 primary, null, choice,
-                                "Relevant follow-up page was unavailable; initial verified page retained"))
+                                "Relevant follow-up page was unavailable; initial verified page retained"), userRequest)
                         })
                 }
             }, onError = { fail(run, it) })
@@ -280,15 +280,22 @@ internal class WorkspaceAgentReachPublicWebRunner(
         run: Long,
         origin: WorkspaceAgentReachPolicy.Target,
         journey: WorkspaceAgentReachWebNavigation.Journey,
+        userRequest: String,
     ) {
         synchronized(this) {
             if (!current(run, origin)) return
             active = null
             ++generation // Exactly one terminal receipt for this request.
         }
+        // Deterministic bounded synthesis runs only on this accepted terminal path.
+        // No new network step, model provider request, persistence or permission.
+        val analysis = WorkspaceAgentReachSourceAnalysis.analyze(userRequest, journey)
+        val completed = journey.copy(analysis = analysis)
         listener.onEvent(WorkspaceWorkPhase.VERIFYING, "Verified public evidence",
-            if (journey.followed != null) "2 bounded pages" else "1 bounded page")
-        listener.onComplete(journey)
+            if (analysis.verifiedPageCount == 2) "2 bounded pages" else "1 bounded page")
+        listener.onEvent(WorkspaceWorkPhase.THINKING, "Comparing goal-relevant source evidence",
+            "${analysis.findings.size} bounded excerpts; goal completion unverified")
+        listener.onComplete(completed)
     }
 
     private fun fail(run: Long, message: String) {

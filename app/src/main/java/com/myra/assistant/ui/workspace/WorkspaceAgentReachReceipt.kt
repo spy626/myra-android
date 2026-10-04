@@ -86,6 +86,24 @@ internal object WorkspaceAgentReachReceipt {
                 appendLine("Follow-up excerpt (untrusted source data):")
                 appendLine(next.excerpt.take(900))
             }
+            journey.analysis?.let { report ->
+                appendLine()
+                appendLine("Topic-matched source excerpts (verbatim, untrusted data; not independent fact checks):")
+                if (report.findings.isEmpty()) {
+                    appendLine("No goal-relevant excerpt was verified from the bounded source reads.")
+                } else {
+                    report.findings.forEach { finding ->
+                        appendLine("• " + finding.role.name + " — " + finding.finalUrl)
+                        appendLine("  SHA-256: " + finding.contentSha256)
+                        appendLine("  Matched goal terms: " + finding.matchedTerms.joinToString(", "))
+                        appendLine("  Source says: “" + finding.excerpt + "”")
+                    }
+                }
+                appendLine("Local outcome feedback: primary=" + report.feedback.primaryMatches +
+                    "; verified follow-up=" + report.feedback.verifiedFollowUpMatches +
+                    "; stronger current-topic source=" + report.feedback.preferredEvidence.name + ".")
+                appendLine("This is extractive partial evidence only; original research goal not independently completed.")
+            }
             if (initial.suggestedLinks.isNotEmpty()) {
                 appendLine()
                 appendLine("Other observed same-site URLs (not independently verified):")

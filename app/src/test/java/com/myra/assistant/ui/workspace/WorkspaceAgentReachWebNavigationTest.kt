@@ -116,6 +116,8 @@ class WorkspaceAgentReachWebNavigationTest {
             "<html><head><title>Updates</title></head><body><h1>Security</h1><p>Fixes listed here</p></body></html>")))
         assertEquals(1, completions.size)
         assertEquals("Updates", completions.single().followed?.title)
+        assertNotNull(completions.single().analysis)
+        assertEquals(2, completions.single().analysis?.verifiedPageCount)
         assertEquals(2, queued.size)
         assertTrue(events.any { it.contains("Verified public evidence") })
     }
@@ -146,6 +148,7 @@ class WorkspaceAgentReachWebNavigationTest {
         assertNull(completions.single().followed)
         assertTrue(completions.single().primary.title == "Guide")
         assertTrue(completions.single().followUpStatus.contains("unavailable"))
+        assertEquals(1, completions.single().analysis?.verifiedPageCount)
         runner.start(root, "Read https://example.com/start security")
         val stale = queued.last()
         runner.cancel()

@@ -21,6 +21,7 @@ internal object WorkspaceAgentReachWebNavigation {
         val followed: WorkspaceAgentReachPublicWeb.Page? = null,
         val selected: Choice? = null,
         val followUpStatus: String = "No relevant safe same-site link was selected",
+        val analysis: WorkspaceAgentReachSourceAnalysis.Report? = null,
     )
 
     private val nonTopic = setOf(
