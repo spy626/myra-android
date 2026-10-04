@@ -73,4 +73,19 @@ class BrowserNavigationTaskEvidenceTest {
         assertEquals(TaskCompletionState.FAILURE,
             working.snapshot().lastCompletedTask?.completionState)
     }
+
+    @Test fun explicitlyRequestedOneScrollHasItsOwnOutcomeWithoutInventingUrl() {
+        val accepted = BrowserNavigationTaskEvidence.afterScroll(true)
+        assertEquals(GeneralVerificationStatus.SUCCESS, accepted.generalStatus)
+        assertEquals(TaskCompletionState.SUCCESS, accepted.taskState)
+        assertFalse(accepted.destinationVerified)
+        assertFalse(accepted.permitsAutonomousContinuation)
+        assertTrue(accepted.observed.contains("two_fresh_observations"))
+        val unknown = BrowserNavigationTaskEvidence.afterScroll(false)
+        assertEquals(GeneralVerificationStatus.UNKNOWN, unknown.generalStatus)
+        assertEquals(TaskCompletionState.UNKNOWN, unknown.taskState)
+        assertEquals(GeneralVerificationStatus.FAILURE,
+            BrowserNavigationTaskEvidence.scrollRejected().generalStatus)
+    }
+
 }

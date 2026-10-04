@@ -49,6 +49,7 @@ import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenPrivacyPolicy
 import com.myra.assistant.screen.RenderedBrowserObservation
 import com.myra.assistant.screen.RenderedBrowserNavigationPolicy
+import com.myra.assistant.screen.RenderedBrowserScrollPolicy
 import com.myra.assistant.screen.ScreenFramePrivacyFilter
 import com.myra.assistant.screen.ScreenPrivacyResult
 import com.myra.assistant.screen.ScreenQueryDispatchPolicy
@@ -1252,6 +1253,18 @@ class MyraVoiceService : Service() {
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
+                // Browser-specific final-turn contract precedes generic scrolling. A
+                // rejected browser-scroll-shaped command cannot fall through to repeats.
+                if (turnDecision.authorizesPhoneActions &&
+                    RenderedBrowserScrollPolicy.isBrowserPageScrollShaped(
+                        userText, AccessibilityHelperService.instance?.currentForegroundContext()?.packageName)
+                ) {
+                    pendingScrollCandidates.discardForTurn(activeTurnId)
+                    executeOneBrowserPageScroll(userText, activeTurnId)
+                    resetTurnBuffers("browser_one_verified_scroll")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
+                }
                 if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
                     unifiedTask?.interpretedGoal == com.myra.assistant.agent.AgentGoalType.SCROLL
                 ) {
@@ -2048,6 +2061,108 @@ class MyraVoiceService : Service() {
         } finally {
             before.recycle()
             after.recycle()
+        }
+    }
+
+    /**
+     * One explicit user-requested browser-page scroll through the existing Accessibility
+     * owner. A changed UI signature alone cannot establish new meaningful page content.
+     */
+    private fun executeOneBrowserPageScroll(finalText: String, userTurnId: Long) {
+        if (!screenCommandTurnGuard.tryCommit(userTurnId)) {
+            voiceLog("BROWSER_ONE_SCROLL_REJECTED turnId=$userTurnId reason=duplicate_turn")
+            return
+        }
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        output.clear()
+        cancelSpeechForNewAction()
+        val taskId = GeneralAgentRuntimeStore.runtime.activeTask()
+            ?.takeIf { it.turnId == userTurnId }?.id
+        fun report(message: String, error: Boolean, evidence: BrowserNavigationTaskEvidence.Result) {
+            val recorded = BrowserNavigationTaskEvidence.completeOwned(
+                userTurnId, taskId, evidence,
+                GeneralAgentRuntimeStore.runtime, WorkingTaskRuntime.store)
+            voiceLog("BROWSER_ONE_SCROLL_TASK_EVIDENCE turnId=$userTurnId " +
+                "taskRecorded=$recorded status=" + evidence.generalStatus +
+                " destinationUrlVerified=false autonomousContinuation=false")
+            listener?.onMyraText(message, error)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = true)
+        }
+        val accessibility = AccessibilityHelperService.instance
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            report("Browser Accessibility available nahi hai; scroll execute nahi hua.", true,
+                BrowserNavigationTaskEvidence.scrollRejected())
+            return
+        }
+        accessibility.refreshScreenContext(force = true)
+        val foreground = accessibility.currentForegroundContext()
+        val plan = RenderedBrowserScrollPolicy.plan(
+            finalText, ActivityContextStore.snapshot(), foreground,
+            android.os.SystemClock.elapsedRealtime())
+        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
+        if (plan == null || scope == null) {
+            voiceLog("BROWSER_ONE_SCROLL_REJECTED turnId=$userTurnId reason=not_explicit_fresh_safe_page")
+            report("Ek fresh safe browser page aur exact one-scroll direction verify nahi hue.", true,
+                BrowserNavigationTaskEvidence.scrollRejected())
+            return
+        }
+        val actionEpoch = browserLinkActionEpoch.get()
+        fun ownsResult(): Boolean = browserLinkActionEpoch.get() == actionEpoch &&
+            (activeTurnId == 0L || activeTurnId == userTurnId)
+        val dispatchedAt = android.os.SystemClock.elapsedRealtime()
+        val accepted = accessibility.scrollCurrentForegroundVerified(
+            scope, plan.down
+        ) { signatureChanged ->
+            mainHandler.post {
+                if (!ownsResult()) {
+                    voiceLog("BROWSER_ONE_SCROLL_DROPPED turnId=$userTurnId reason=stale_after_dispatch")
+                    return@post
+                }
+                if (!signatureChanged) {
+                    report("Scroll ka naya visible content verify nahi hua.", true,
+                        BrowserNavigationTaskEvidence.afterScroll(false))
+                    return@post
+                }
+                val first = ActivityContextStore.snapshot()
+                val firstForeground = accessibility.currentForegroundContext()
+                mainHandler.postDelayed({
+                    if (!ownsResult()) {
+                        voiceLog("BROWSER_ONE_SCROLL_DROPPED turnId=$userTurnId reason=new_turn_before_second_read")
+                        return@postDelayed
+                    }
+                    accessibility.refreshScreenContext(force = true)
+                    val second = ActivityContextStore.snapshot()
+                    val secondForeground = accessibility.currentForegroundContext()
+                    val verification = RenderedBrowserScrollPolicy.verify(
+                        plan, first, firstForeground, second, secondForeground,
+                        dispatchedAt, android.os.SystemClock.elapsedRealtime())
+                    if (!ownsResult()) {
+                        voiceLog("BROWSER_ONE_SCROLL_DROPPED turnId=$userTurnId reason=new_turn_after_second_read")
+                        return@postDelayed
+                    }
+                    val verified = verification ==
+                        RenderedBrowserScrollPolicy.Verification.NEW_STABLE_VISIBLE_TEXT_URL_UNVERIFIED
+                    voiceLog("BROWSER_ONE_SCROLL_VERIFICATION turnId=$userTurnId " +
+                        "result=$verification observations=2 scrollCount=1 urlVerified=false")
+                    report(
+                        if (verified) "Browser par ek scroll ke baad naya readable text do observations mein verify hua; poori website ya URL verify nahi hui."
+                        else "Scroll dispatch hua, lekin naya readable page text stable verify nahi hua.",
+                        !verified, BrowserNavigationTaskEvidence.afterScroll(verified))
+                }, 420L)
+            }
+        }
+        if (!accepted) {
+            voiceLog("BROWSER_ONE_SCROLL_REJECTED turnId=$userTurnId reason=scroll_not_dispatched")
+            report("Browser par safe scrollable area nahi mila; kuch scroll nahi hua.", true,
+                BrowserNavigationTaskEvidence.scrollRejected())
+        } else {
+            latestActionDispatchedAt = dispatchedAt
+            voiceLog("BROWSER_ONE_SCROLL_DISPATCHED turnId=$userTurnId direction=" +
+                (if (plan.down) "DOWN" else "UP") +
+                " package=" + plan.packageName + " windowId=" + plan.windowId +
+                " generation=" + plan.generation + " count=1")
         }
     }
 

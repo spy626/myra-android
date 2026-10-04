@@ -38,6 +38,27 @@ internal object BrowserNavigationTaskEvidence {
             )
     }
 
+    /** A one-step scroll may succeed as SCROLL, without proving a URL or authorizing a click. */
+    fun scrollRejected(): Result = Result(
+        generalStatus = GeneralVerificationStatus.FAILURE,
+        taskState = TaskCompletionState.FAILURE,
+        observed = "explicit_browser_scroll_not_dispatched;no_autonomous_continuation",
+    )
+
+    fun afterScroll(verifiedNewVisibleText: Boolean): Result =
+        if (verifiedNewVisibleText) Result(
+            generalStatus = GeneralVerificationStatus.SUCCESS,
+            taskState = TaskCompletionState.SUCCESS,
+            observed = "one_final_user_authorized_browser_scroll;" +
+                "two_fresh_observations_stable_new_visible_text;" +
+                "destination_url_unverified;no_autonomous_continuation",
+        ) else Result(
+            generalStatus = GeneralVerificationStatus.UNKNOWN,
+            taskState = TaskCompletionState.UNKNOWN,
+            observed = "one_browser_scroll_dispatched;" +
+                "new_visible_text_not_stably_verified;no_autonomous_continuation",
+        )
+
     /**
      * Exactly the currently accepted FINAL turn and its pre-existing Android task may
      * receive evidence. Stale callbacks MUST NOT terminate a newer task.
