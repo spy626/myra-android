@@ -33,7 +33,10 @@ internal object WorkspaceAgentReachChatIntent {
         raw.trim().trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}')
 
     fun decide(message: String): Decision? {
-        if (blockedIntent.containsMatchIn(message)) return null
+        // A link can sit between a negative verb and "mat": "research [URL] mat".
+        // Mask URLs for NEGATION detection only; never alter the actual requested target.
+        if (blockedIntent.containsMatchIn(message) ||
+            blockedIntent.containsMatchIn(message.replace(url, " "))) return null
         val candidates = url.findAll(message)
             .map { cleanUrl(it.value) }
             .distinct()
