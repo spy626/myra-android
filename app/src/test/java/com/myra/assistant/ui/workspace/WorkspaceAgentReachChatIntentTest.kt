@@ -17,6 +17,8 @@ class WorkspaceAgentReachChatIntentTest {
             "Please inspect https://github.com/a/b/blob/main/README.md",
             "ye repo dekho https://github.com/a/b",
             "read https://raw.githubusercontent.com/a/b/main/README.md",
+            "Research https://example.com/guide security updates",
+            "Explore https://example.com/guide for installation",
         ).forEach { text ->
             assertNotNull("Read intent missed: $text",
                 WorkspaceAgentReachChatIntent.decide(text)?.target)
@@ -52,6 +54,10 @@ class WorkspaceAgentReachChatIntentTest {
             "My friend sent https://example.com/docs yesterday"))
         assertNull(WorkspaceAgentReachChatIntent.decide(
             "Don't open https://example.com/docs"))
+        assertNull(WorkspaceAgentReachChatIntent.decide(
+            "Don't research https://example.com/docs"))
+        assertNull(WorkspaceAgentReachChatIntent.decide(
+            "research https://example.com/docs mat"))
         val two = WorkspaceAgentReachChatIntent.decide(
             "read https://github.com/a/b and https://example.com/docs")
         assertNull(two?.target)

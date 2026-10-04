@@ -20,13 +20,13 @@ internal object WorkspaceAgentReachChatIntent {
 
     private val url = Regex("""https://[^\s<>"']+""", RegexOption.IGNORE_CASE)
     private val readIntent = Regex(
-        """(?i)\b(?:check|read|inspect|review|open|analyse|analyze|summarise|summarize|""" +
+        """(?i)\b(?:check|read|inspect|review|open|analyse|analyze|summarise|summarize|research|explore|study|investigate|""" +
             """dekh|dekho|dekhe|samjho)\b|\bcheck\s+k(?:a)?ro\b|\bcheck\s+kro\b"""
     )
     private val blockedIntent = Regex(
-        """(?i)(?:\b(?:do\s+not|don't|dont)\s+(?:open|read|check|inspect|review|analy[sz]e)\b)|""" +
-            """(?:\bmat\s+(?:khol|open|read|check|dekh|inspect)\b)|""" +
-            """(?:\b(?:open|read|check|dekh|inspect)\s+mat\b)"""
+        """(?i)(?:\b(?:do\s+not|don't|dont)\s+(?:open|read|check|inspect|review|analy[sz]e|research|explore|study|investigate)\b)|""" +
+            """(?:\bmat\s+(?:khol|open|read|check|dekh|inspect|research|explore|study)\b)|""" +
+            """(?:\b(?:open|read|check|dekh|inspect|research|explore|study)\s+mat\b)"""
     )
 
     private fun cleanUrl(raw: String): String =
