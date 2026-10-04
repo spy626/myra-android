@@ -2125,6 +2125,7 @@ class MyraVoiceService : Service() {
                         BrowserNavigationTaskEvidence.afterScroll(false))
                     return@post
                 }
+                accessibility.refreshScreenContext(force = true)
                 val first = ActivityContextStore.snapshot()
                 val firstForeground = accessibility.currentForegroundContext()
                 mainHandler.postDelayed({
