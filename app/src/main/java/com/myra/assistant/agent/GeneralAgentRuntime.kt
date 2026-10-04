@@ -90,6 +90,15 @@ data class GeneralActionResult(
     val metadata: Map<String, String> = emptyMap()
 )
 
+/** Only successful, verified substeps are recorded. No webpage text or credentials are kept. */
+data class VerifiedGoalSubstep(
+    val stepId: String,
+    val capability: ToolCapability,
+    val packageName: String,
+    val generation: Long,
+    val evidence: List<String>,
+)
+
 data class GeneralRuntimeTask(
     val id: String = UUID.randomUUID().toString(),
     val turnId: Long,
@@ -101,6 +110,7 @@ data class GeneralRuntimeTask(
     val rejectedTargets: Set<String> = emptySet(),
     val recoveryCount: Int = 0,
     val planRevision: Int = 0,
+    val verifiedGoalSubsteps: List<VerifiedGoalSubstep> = emptyList(),
     val createdAt: Long,
     val updatedAt: Long = createdAt
 )
@@ -141,6 +151,34 @@ class GeneralAgentPlanner {
             ModalSafetyPolicy.requiresAuthorization(perception.scene)
         ) {
             return PlannerResult.NeedClarification("Screen par protected dialog hai. Kya karun?")
+        }
+        // A multi-step search is NOT finished merely because search results appeared.
+        // After one verified search, perform exactly ONE independently observed read-only
+        // results step. Never redispatch search or promote observation into click authority.
+        val previous = task.verifiedGoalSubsteps
+        if (task.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL && previous.isNotEmpty()) {
+            if (previous.size >= 2) {
+                return PlannerResult.NeedClarification("research_goal_needs_independent_source_analysis")
+            }
+            if (previous.single().capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH) &&
+                ToolCapability.OBSERVE_SCREEN in task.intent.requiredCapabilities
+            ) {
+                val observer = relevantTools.firstOrNull { it.capability == ToolCapability.OBSERVE_SCREEN }
+                    ?: return PlannerResult.Fail("declared_observer_unavailable")
+                if (perception == null || perception.taskId != task.id)
+                    return PlannerResult.NeedObservation(visual = false)
+                return PlannerResult.Next(GeneralPlanStep(
+                    taskId = task.id, category = ActionCategory.SCREEN_PERCEPTION,
+                    capability = observer.capability, strategy = "verified_search_followup_observation",
+                    targetDescription = task.intent.targetDescription,
+                    parameters = task.intent.parameters,
+                    expectedOutcome = ExpectedOutcome(ExpectedOutcomeType.RESULT_SET_CHANGED,
+                        "independent fresh search-result observation",
+                        task.intent.relevantApp, task.intent.textHint),
+                    risk = observer.risk,
+                ))
+            }
+            return PlannerResult.NeedClarification("no_authorized_safe_continuation")
         }
         // Choose from the tools the existing execution owner actually supplied, not merely
         // the first capability in a static wish list. Only same-purpose alternatives that
@@ -504,6 +542,24 @@ class GeneralAgentRuntime(
         )
         val updatedHistory = task.actionHistory.map { if (it.stepId == step.id) it.copy(afterGeneration = after.scene.generation, verification = result.status) else it }
         if (result.status == GeneralVerificationStatus.SUCCESS) {
+            val goalResearch = task.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
+                step.capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH, ToolCapability.OBSERVE_SCREEN)
+            if (goalResearch && (task.verifiedGoalSubsteps.isNotEmpty() ||
+                    ToolCapability.OBSERVE_SCREEN in task.intent.requiredCapabilities)) {
+                // A verified step is progress, not verified fulfillment of the original goal.
+                // No repeat search: clear currentStep; only a declared observation can follow.
+                val proof = VerifiedGoalSubstep(step.id, step.capability,
+                    after.scene.externalForegroundPackage, after.scene.generation,
+                    result.evidence.take(8))
+                active = task.copy(
+                    status = if (step.capability == ToolCapability.OBSERVE_SCREEN)
+                        AgentRuntimeStatus.PLANNING else AgentRuntimeStatus.OBSERVING,
+                    currentStep = null, actionHistory = updatedHistory,
+                    verifiedGoalSubsteps = (task.verifiedGoalSubsteps + proof).take(2),
+                    updatedAt = now(),
+                )
+                return result to null
+            }
             val completed = task.copy(status = AgentRuntimeStatus.COMPLETED, actionHistory = updatedHistory, updatedAt = now())
             active = null; lastCompleted = completed
             return result to null

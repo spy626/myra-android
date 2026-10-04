@@ -4087,6 +4087,35 @@ class MyraVoiceService : Service() {
                 runtimeOwnsRecoveryCount = true
             )
             if (verification.status == GeneralVerificationStatus.SUCCESS) {
+                val goal = runtime.activeTask()?.takeIf {
+                    it.id == task.id && it.turnId == task.turnId &&
+                        it.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
+                        it.verifiedGoalSubsteps.lastOrNull()?.stepId == step.id
+                }
+                if (goal != null && step.capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)) {
+                    voiceLog("AUTONOMOUS_GOAL_STEP_VERIFIED taskId=${task.id} turnId=${task.turnId} " +
+                        "completed=${goal.verifiedGoalSubsteps.size} next=ONE_FRESH_OBSERVATION")
+                    // No extra physical navigation. The existing registered observation
+                    // adapter alone performs this bounded follow-up; same task and turn.
+                    val scheduled = executeGeneralRuntimeCapability(
+                        ToolCapability.OBSERVE_SCREEN, requestedTurnId, requestedTaskId, onTerminal)
+                    if (!scheduled) {
+                        runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN,
+                            "verified_search_followup_observation_unavailable")
+                        onTerminal(GeneralVerificationStatus.UNKNOWN,
+                            "verified_search_followup_observation_unavailable")
+                    }
+                    return@observe
+                }
+                if (goal != null && step.capability == ToolCapability.OBSERVE_SCREEN) {
+                    // Both substeps are verified. The original research objective remains
+                    // unproven until a separately grounded source-analysis step exists.
+                    voiceLog("AUTONOMOUS_GOAL_PROGRESS taskId=${task.id} turnId=${task.turnId} " +
+                        "verifiedSteps=${goal.verifiedGoalSubsteps.size} goalComplete=false")
+                    onTerminal(GeneralVerificationStatus.SUCCESS,
+                        "search_and_fresh_observation_verified_goal_not_yet_complete")
+                    return@observe
+                }
                 runtime.lastCompletedTask()?.takeIf { expectedCapability != ToolCapability.BROWSER_SEARCH }?.let {
                     WorkingTaskRuntime.store.completeRuntime(it, verification.observed, TaskCompletionState.SUCCESS)
                 }
@@ -4255,8 +4284,15 @@ class MyraVoiceService : Service() {
     }
 
     private fun finishSearchTaskResult(turnId: Long, verification: SearchVerification, observed: String) {
+        val goalProgress = GeneralAgentRuntimeStore.runtime.activeTask()?.takeIf {
+            it.turnId == turnId && it.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
+                it.verifiedGoalSubsteps.isNotEmpty()
+        }
+        // Search opening is only a verified substep; do not mark the broader research
+        // objective as completed in Working Task Memory.
         val completion = when (verification) {
-            SearchVerification.SUCCESS -> TaskCompletionState.SUCCESS
+            SearchVerification.SUCCESS ->
+                if (goalProgress != null) TaskCompletionState.UNKNOWN else TaskCompletionState.SUCCESS
             SearchVerification.FAILURE -> TaskCompletionState.FAILURE
             SearchVerification.UNKNOWN -> TaskCompletionState.UNKNOWN
         }
@@ -4284,6 +4320,11 @@ class MyraVoiceService : Service() {
         voiceLog("SEARCH_RESULT_OWNER turnId=$turnId owner=CONTROLLED_AGENT release=NEXT_USER_TURN")
         when (verification) {
             SearchVerification.SUCCESS -> {
+                if (goalProgress != null) {
+                    val message = "Search aur fresh result observation verified hain; full research goal abhi complete verify nahi hua."
+                    listener?.onMyraText(message)
+                    voiceLog("RESEARCH_GOAL_PROGRESS turnId=$turnId verifiedSteps=${goalProgress.verifiedGoalSubsteps.size} completed=false")
+                }
                 emitState("Sun rahi hoon…")
                 voiceLog("task_result_spoken turnId=$turnId spoken=false result=SUCCESS")
                 voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=false result=SUCCESS")
