@@ -93,6 +93,38 @@ class MemoryBrainCoordinator(
         }
     }
 
+    /** Existing single memory owner also retains bounded non-personal search tool telemetry.
+     * This does not mint a semantic fact, approve a tool or alter final-turn authority. */
+    suspend fun loadVerifiedSearchStrategies(
+        at: Long = System.currentTimeMillis()
+    ): List<com.myra.assistant.agent.VerifiedSearchStrategyFeedback.Record> =
+        AiriSearchStrategyRetention.retained(
+            store.behaviorByKind(AiriSearchStrategyRetention.KIND, 100), at)
+
+    suspend fun retainVerifiedSearchStrategy(
+        record: com.myra.assistant.agent.VerifiedSearchStrategyFeedback.Record,
+        at: Long = System.currentTimeMillis()
+    ): Boolean {
+        val row = runCatching { AiriSearchStrategyRetention.encode(record, at) }.getOrNull()
+            ?: return false
+        return store.transaction {
+            // Same task/capability can never be rewritten into a different outcome.
+            if (behavior(row.stableKey) != null) return@transaction false
+            upsertBehavior(row)
+            val all = behaviorByKind(AiriSearchStrategyRetention.KIND, 100)
+                .sortedWith(compareByDescending<BehaviorObservationEntity> { it.lastObservedAt }
+                    .thenBy { it.stableKey })
+            all.forEachIndexed { index, older ->
+                if (index >= AiriSearchStrategyRetention.MAX_RECORDS ||
+                    AiriSearchStrategyRetention.decode(older, at) == null
+                ) deleteBehavior(older.stableKey)
+            }
+            behavior(row.stableKey)?.let {
+                AiriSearchStrategyRetention.decode(it, at) == record
+            } == true
+        }
+    }
+
     suspend fun prepareFinalTurn(evidence: AuthoritativeMemoryTurnEvidence, staged: List<MemorySemanticFrame>, semanticConsistent: Boolean = true): FinalMemoryTurnPlan {
         if (ownedSessions.add(evidence.sessionId)) {
             AiriMemoryRuntime.beginSession(evidence.sessionId, evidence.turnId)

@@ -396,6 +396,14 @@ class MyraVoiceService : Service() {
             .apply { setReferenceCounted(false); acquire() }
         isRunning = true
         ScreenCaptureService.listeners += screenCaptureListener
+        // Restore bounded verified tool history without blocking the foreground service.
+        // The single AIRI memory coordinator remains the only persistent owner.
+        serviceScope.launch {
+            val remembered = runCatching { memoryBrain.loadVerifiedSearchStrategies() }
+                .getOrDefault(emptyList())
+            GeneralAgentRuntimeStore.runtime.restoreVerifiedSearchOutcomes(remembered)
+            voiceLog("SEARCH_STRATEGY_MEMORY_RESTORED records=${remembered.size}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -4063,6 +4071,15 @@ class MyraVoiceService : Service() {
                 )
             }
             val (verification, recovery) = runtime.verify(after)
+            val verifiedStrategies = runtime.takeVerifiedSearchOutcomes()
+            if (verifiedStrategies.isNotEmpty()) serviceScope.launch {
+                verifiedStrategies.forEach { record ->
+                    val saved = runCatching {
+                        memoryBrain.retainVerifiedSearchStrategy(record)
+                    }.getOrDefault(false)
+                    voiceLog("SEARCH_STRATEGY_MEMORY_WRITE verified=${saved} capability=${record.capability}")
+                }
+            }
             val verificationAt = android.os.SystemClock.elapsedRealtime()
             if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) scrollContinuationTelemetry.verified(task.id, verification.status.name)
             turnLatency.record(task.turnId, Field.VERIFICATION_COMPLETED, verificationAt)

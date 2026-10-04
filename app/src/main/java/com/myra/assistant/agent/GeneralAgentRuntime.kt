@@ -499,6 +499,17 @@ class GeneralAgentRuntime(
     @Volatile private var active: GeneralRuntimeTask? = null
     @Volatile private var lastCompleted: GeneralRuntimeTask? = null
     private val beforeByStep = mutableMapOf<String, PerceptionSnapshot>()
+    private val pendingSearchOutcomes =
+        ArrayDeque<VerifiedSearchStrategyFeedback.Record>()
+
+    /** Restore only from the existing memory owner's validated behavior rows. */
+    @Synchronized fun restoreVerifiedSearchOutcomes(
+        rows: Collection<VerifiedSearchStrategyFeedback.Record>
+    ) { searchFeedback.restore(rows) }
+
+    /** A read-once outbox; execution is never delayed for disk IO. */
+    @Synchronized fun takeVerifiedSearchOutcomes(): List<VerifiedSearchStrategyFeedback.Record> =
+        pendingSearchOutcomes.toList().also { pendingSearchOutcomes.clear() }
 
     @Synchronized fun start(turnId: Long, intent: StructuredAgentIntent, taskId: String? = null): GeneralRuntimeTask? {
         active = active?.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now())
@@ -564,7 +575,10 @@ class GeneralAgentRuntime(
         )
         val updatedHistory = task.actionHistory.map { if (it.stepId == step.id) it.copy(afterGeneration = after.scene.generation, verification = result.status) else it }
         // Learn once from actual, freshly verified actions; never from UNKNOWN or rejected dispatch.
-        if (history?.accepted == true) searchFeedback.record(task, step, result)
+        if (history?.accepted == true && searchFeedback.record(task, step, result)) {
+            searchFeedback.snapshot().lastOrNull()?.let { pendingSearchOutcomes.addLast(it) }
+            while (pendingSearchOutcomes.size > 32) pendingSearchOutcomes.removeFirst()
+        }
         if (result.status == GeneralVerificationStatus.SUCCESS) {
             val goalResearch = task.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
                 step.capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH, ToolCapability.OBSERVE_SCREEN)
