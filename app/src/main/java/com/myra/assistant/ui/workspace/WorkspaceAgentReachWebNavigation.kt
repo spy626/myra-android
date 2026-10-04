@@ -43,10 +43,18 @@ internal object WorkspaceAgentReachWebNavigation {
             """json|csv|xml|js|css|woff2?)$"""
     )
 
+    private val noFollow = Regex(
+        """(?iu)\b(?:do\s+not|don't|dont|never)\s+(?:follow|navigate|visit|explore)\b|""" +
+            """\b(?:follow|navigate|visit|explore)\s+mat\b|""" +
+            """\bmat\s+(?:follow|navigate|visit|explore)\b|""" +
+            """\b(?:only|just)\s+(?:this|the)\s+(?:page|link)\b"""
+    )
+
     fun choose(
         primary: WorkspaceAgentReachPublicWeb.Page,
         userRequest: String,
     ): Choice? {
+        if (noFollow.containsMatchIn(userRequest)) return null
         val origin = runCatching {
             WorkspaceAgentReachPolicy.parse(primary.evidence.provenance.finalUrl)
         }.getOrNull() ?: return null

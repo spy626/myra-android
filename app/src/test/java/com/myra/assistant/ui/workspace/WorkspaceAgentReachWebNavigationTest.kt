@@ -51,6 +51,10 @@ class WorkspaceAgentReachWebNavigationTest {
         val page = firstPage()
         assertNull(WorkspaceAgentReachWebNavigation.choose(page, "https://example.com/start"))
         assertNull(WorkspaceAgentReachWebNavigation.choose(
+            page, "Check https://example.com/start security updates but don't follow links"))
+        assertNull(WorkspaceAgentReachWebNavigation.choose(
+            page, "Read only this page https://example.com/start security updates"))
+        assertNull(WorkspaceAgentReachWebNavigation.choose(
             page, "Read https://example.com/start and explain the whole website"))
         assertNull(WorkspaceAgentReachWebNavigation.choose(
             page, "Read https://example.com/start account delete"))
