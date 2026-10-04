@@ -48,6 +48,7 @@ import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenPrivacyPolicy
 import com.myra.assistant.screen.RenderedBrowserObservation
+import com.myra.assistant.screen.RenderedBrowserNavigationPolicy
 import com.myra.assistant.screen.ScreenFramePrivacyFilter
 import com.myra.assistant.screen.ScreenPrivacyResult
 import com.myra.assistant.screen.ScreenQueryDispatchPolicy
@@ -174,6 +175,8 @@ class MyraVoiceService : Service() {
     private val screenActionRegistry = ScreenActionIntentRegistry()
     private val textComposeSession = TextComposeSession()
     private var lastUserIntentText = ""
+    // A fresh user utterance invalidates any pending post-click browser attribution.
+    private val browserLinkActionEpoch = java.util.concurrent.atomic.AtomicLong(0L)
     private val stagedMemorySemantics = java.util.concurrent.ConcurrentHashMap<Long, List<MemorySemanticFrame>>()
     // One ephemeral model research suggestion per active voice turn; no execution authority.
     private val stagedResearchGoals =
@@ -635,6 +638,7 @@ class MyraVoiceService : Service() {
                     return@inputTranscript
                 }
                 if (input.isEmpty()) {
+                    browserLinkActionEpoch.incrementAndGet()
                     if (activeTurnId == 0L) activeTurnId = ++turnSequence
                     inputTurnStartedAt = android.os.SystemClock.elapsedRealtime()
                     turnLatency.record(activeTurnId, Field.INPUT_STARTED, inputTurnStartedAt)
@@ -1271,6 +1275,17 @@ class MyraVoiceService : Service() {
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
+                // One explicitly named browser link, bound to the accepted FINAL user turn.
+                // Rejected link-shaped requests cannot fall through to legacy generic tapping.
+                if (turnDecision.authorizesPhoneActions &&
+                    RenderedBrowserNavigationPolicy.isLinkShapedCommand(
+                        userText, AccessibilityHelperService.instance?.currentForegroundContext()?.packageName)
+                ) {
+                    executeNamedBrowserLink(userText, activeTurnId)
+                    resetTurnBuffers("verified_browser_named_link")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
+                }
                 val screenMode = ScreenModeCommandParser.parse(userText)
                     ?: ScreenModeCommandParser.parse(normalizedFinalUserText)
                 if (turnDecision.authorizesPhoneActions && screenMode != null) {
@@ -1727,6 +1742,16 @@ class MyraVoiceService : Service() {
 
     private fun handleScreenActionTool(id: String, args: org.json.JSONObject) {
         val intentText = lastUserIntentText.ifBlank { input.toString().trim() }
+        if (RenderedBrowserNavigationPolicy.isLinkShapedCommand(
+                intentText, AccessibilityHelperService.instance?.currentForegroundContext()?.packageName)) {
+            // The model must not click a guessed browser link on a partial transcript.
+            // The final-turn route independently selects exactly one observed, safe label.
+            suppressModelForTurn = true
+            output.clear()
+            voiceLog("BROWSER_NAMED_LINK_MODEL_HELD turnId=$activeTurnId reason=FINAL_OWNER_REQUIRED")
+            live?.sendToolHeld(id, "perform_screen_action")
+            return
+        }
         val activeVisualTurn = fastVisualTurns.current()
         val actionTurnId = activeVisualTurn?.userTurnId?.takeIf { it > 0L }
             ?: screenResponseUserTurnId.takeIf { it > 0L }
@@ -2023,6 +2048,89 @@ class MyraVoiceService : Service() {
             before.recycle()
             after.recycle()
         }
+    }
+
+    /**
+     * Explicit final-turn browser link action. Reuses the existing Accessibility owner and
+     * its actual live node resolver, but enforces a tighter read-only-navigation policy
+     * than ordinary buttons. Cannot select an unseen URL or auto-follow page suggestions.
+     */
+    private fun executeNamedBrowserLink(finalText: String, userTurnId: Long) {
+        if (!screenCommandTurnGuard.tryCommit(userTurnId)) {
+            voiceLog("BROWSER_NAMED_LINK_REJECTED turnId=$userTurnId reason=duplicate_turn")
+            return
+        }
+        suppressModelForTurn = true
+        localCommandExecutedThisTurn = true
+        output.clear()
+        cancelSpeechForNewAction()
+        fun report(message: String, error: Boolean) {
+            listener?.onMyraText(message, error)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = true)
+        }
+        val accessibility = AccessibilityHelperService.instance
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            voiceLog("BROWSER_NAMED_LINK_REJECTED turnId=$userTurnId reason=accessibility_off")
+            report("Browser Accessibility available nahi hai; koi link tap nahi hua.", true)
+            return
+        }
+        accessibility.refreshScreenContext(force = true)
+        val current = accessibility.currentForegroundContext()
+        val now = android.os.SystemClock.elapsedRealtime()
+        val plan = RenderedBrowserNavigationPolicy.plan(
+            finalText, ActivityContextStore.snapshot(), current, now)
+        if (plan == null) {
+            voiceLog("BROWSER_NAMED_LINK_REJECTED turnId=$userTurnId reason=not_one_fresh_safe_named_link")
+            report("Ek unique safe link verify nahi hua. Link ka exact visible naam bolo.", true)
+            return
+        }
+        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(current)
+        if (scope == null) {
+            report("Browser window badal gayi; link tap nahi hua.", true)
+            return
+        }
+        val metrics = resources.displayMetrics
+        val result = accessibility.resolveAndTapVisibleTarget(
+            plan.label, null, null, scope
+        ) { candidate, confidence ->
+            RenderedBrowserNavigationPolicy.allowsResolvedTarget(
+                plan, candidate.label, candidate.role, confidence,
+                candidate.right - candidate.left, candidate.bottom - candidate.top,
+                metrics.widthPixels, metrics.heightPixels)
+        }
+        if (!result.accepted) {
+            voiceLog("BROWSER_NAMED_LINK_REJECTED turnId=$userTurnId reason=" +
+                result.resolution + " targetChars=" + plan.label.length)
+            report("Link par safe tap execute nahi hua (" + result.resolution + ").", true)
+            return
+        }
+        val dispatchedAt = android.os.SystemClock.elapsedRealtime()
+        val actionEpoch = browserLinkActionEpoch.get()
+        latestActionDispatchedAt = dispatchedAt
+        voiceLog("BROWSER_NAMED_LINK_DISPATCHED turnId=$userTurnId package=" +
+            plan.packageName + " windowId=" + plan.windowId +
+            " generation=" + plan.generation + " verifiedUrl=false")
+        mainHandler.postDelayed({
+            if (browserLinkActionEpoch.get() != actionEpoch ||
+                (activeTurnId != 0L && activeTurnId != userTurnId)) {
+                voiceLog("BROWSER_NAMED_LINK_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
+                return@postDelayed
+            }
+            accessibility.refreshScreenContext(force = true)
+            val fresh = accessibility.currentForegroundContext()
+            val verification = RenderedBrowserNavigationPolicy.verify(
+                plan, ActivityContextStore.snapshot(), fresh,
+                dispatchedAt, android.os.SystemClock.elapsedRealtime())
+            voiceLog("BROWSER_NAMED_LINK_VERIFIED turnId=$userTurnId result=" +
+                verification + " urlVerified=false")
+            when (verification) {
+                RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED ->
+                    report("Link tap ke baad browser par naya content dikh raha hai; destination URL verify nahi hui.", false)
+                RenderedBrowserNavigationPolicy.Verification.UNKNOWN ->
+                    report("Tap dispatch hua, lekin expected browser content change verify nahi hua.", true)
+            }
+        }, 650L)
     }
 
     /**
