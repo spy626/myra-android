@@ -47,6 +47,7 @@ import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenPrivacyPolicy
+import com.myra.assistant.screen.RenderedBrowserObservation
 import com.myra.assistant.screen.ScreenFramePrivacyFilter
 import com.myra.assistant.screen.ScreenPrivacyResult
 import com.myra.assistant.screen.ScreenQueryDispatchPolicy
@@ -2506,9 +2507,40 @@ class MyraVoiceService : Service() {
                 screenFreshFrameCapturedAt = screenshot.capturedAt
                 screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
                 fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.modelRequestAt = screenFrameSentAt
-                val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
-                    .joinToString("\n") { "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]" }
-                    .take(4_000)
+                // Browser pages have already executed their own JS in the user's foreground
+                // browser. Observe only what the existing Accessibility owner can actually see;
+                // URL/link destinations and hidden DOM are NOT verified by this screen route.
+                // An ACTION keeps its old executor path, never receiving browser navigation authority.
+                val renderedBrowserQuestion = visualRequest.kind == FastVisualKind.QUESTION &&
+                    RenderedBrowserObservation.isSupportedBrowser(current.packageName)
+                val renderedBrowser = if (renderedBrowserQuestion) {
+                    RenderedBrowserObservation.capture(
+                        observed = ActivityContextStore.snapshot(),
+                        actualPackage = current.packageName,
+                        actualWindowId = current.windowId,
+                        actualGeneration = current.generation,
+                        screenshotAt = screenshot.capturedAt,
+                        now = frameReadyAt,
+                    )
+                } else null
+                val ui = if (renderedBrowserQuestion) {
+                    renderedBrowser?.prompt() ?: "The current browser's Accessibility text was " +
+                        "not safely verified for this exact window and screenshot. Use only " +
+                        "the privacy-filtered screenshot; do not assert a verified URL, " +
+                        "hidden DOM, successful link navigation or unseen webpage content."
+                } else {
+                    elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
+                        .joinToString("\n") {
+                            "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]"
+                        }.take(4_000)
+                }
+                if (renderedBrowserQuestion) {
+                    voiceLog("RENDERED_BROWSER_OBSERVATION turnId=$userTurnId " +
+                        "matchedFreshWindow=${renderedBrowser != null} package=${current.packageName} " +
+                        "safeLines=${renderedBrowser?.textLines?.size ?: 0} " +
+                        "linkLabels=${renderedBrowser?.linkLabels?.size ?: 0} " +
+                        "urlVerified=false actionAuthorized=false")
+                }
                 voiceLog(
                     "agent_observation package=${current.packageName} windowGeneration=${current.generation} " +
                         "semanticElements=${ActivityContextStore.snapshot()?.visibleElements?.size ?: 0} screenshotUsed=true"
