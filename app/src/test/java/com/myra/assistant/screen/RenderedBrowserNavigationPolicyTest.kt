@@ -142,7 +142,7 @@ class RenderedBrowserNavigationPolicyTest {
         assertEquals(unknown, verify(stable.copy(generation = 4)))
         assertEquals(unknown, verify(stable.copy(timestamp = 1_600L)))
         assertEquals(unknown, verify(stable.copy(timestamp = 5_100L)))
-        assertEquals(unknown, verify(stable.copy(elements = listOf(
+        assertEquals(unknown, verify(stable.copy(visibleElements = listOf(
             el("Version 3 introduces security improvements and bug fixes", true,
                 SemanticRole.BUTTON, 1)))))
     }
@@ -158,7 +158,7 @@ class RenderedBrowserNavigationPolicyTest {
         assertEquals(unknown, RenderedBrowserNavigationPolicy.verifyStable(
             plan, first, foreground(), second, foreground(w = 10), 1_500L, 2_300L))
         assertEquals(unknown, RenderedBrowserNavigationPolicy.verifyStable(
-            plan, first, foreground(), second.copy(elements = second.visibleElements +
+            plan, first, foreground(), second.copy(visibleElements = second.visibleElements +
                 el("Enter password", role = SemanticRole.TEXT_INPUT, index = 1)),
             foreground(), 1_500L, 2_300L))
         assertEquals(unknown, RenderedBrowserNavigationPolicy.verifyStable(
