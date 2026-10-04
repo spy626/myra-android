@@ -35,6 +35,47 @@ class GeneralAgentRuntimeTest {
         assertEquals(ToolCapability.BROWSER_SEARCH, result.step.capability)
     }
 
+    @Test fun plannerAutomaticallyChoosesDeclaredAvailableEquivalentSearchTool() {
+        // A model/turn can propose both read-only search capabilities, but only the owner
+        // knows which adapter is actually available. No new tool or permission is invented.
+        val available = AgentToolRegistry(listOf(
+            ToolDefinition("web_only", ToolCapability.WEB_SEARCH,
+                verificationStrategy = "grounded_results_returned")
+        ))
+        val runtime = GeneralAgentRuntime(registry = available, now = { 1 })
+        val intent = intent(ToolCapability.BROWSER_SEARCH).copy(
+            requiredCapabilities = linkedSetOf(
+                ToolCapability.OBSERVE_SCREEN, ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH
+            ), textHint = "public research"
+        )
+        runtime.start(30, intent)
+        val next = runtime.next(null) as PlannerResult.Next
+        assertEquals(ToolCapability.WEB_SEARCH, next.step.capability)
+        assertEquals(ActionCategory.WEB_SEARCH, next.step.category)
+        assertEquals(ToolRisk.LOW, next.step.risk)
+    }
+
+    @Test fun plannerDoesNotInventAnUnrequestedToolOrSubstituteObservationForClick() {
+        val webOnly = GeneralAgentRuntime(registry = AgentToolRegistry(listOf(
+            ToolDefinition("web_only", ToolCapability.WEB_SEARCH,
+                verificationStrategy = "grounded_results_returned")
+        )), now = { 1 })
+        webOnly.start(31, intent(ToolCapability.BROWSER_SEARCH))
+        assertEquals(PlannerResult.Fail("no_safe_tool"), webOnly.next(null))
+
+        val observeOnly = GeneralAgentRuntime(registry = AgentToolRegistry(listOf(
+            ToolDefinition("observe_only", ToolCapability.OBSERVE_SCREEN,
+                verificationStrategy = "fresh_context")
+        )), now = { 1 })
+        observeOnly.start(32, intent(ToolCapability.ACCESSIBILITY_CLICK).copy(
+            requiredCapabilities = setOf(
+                ToolCapability.ACCESSIBILITY_CLICK, ToolCapability.OBSERVE_SCREEN
+            )
+        ))
+        assertEquals(PlannerResult.Fail("no_safe_tool"),
+            observeOnly.next(perception("task", scene("pkg", 1))))
+    }
+
     @Test fun planner_requests_observation_when_screen_capability_has_no_scene() {
         val runtime = GeneralAgentRuntime(now = { 1 })
         runtime.start(22, intent(ToolCapability.ACCESSIBILITY_SCROLL))

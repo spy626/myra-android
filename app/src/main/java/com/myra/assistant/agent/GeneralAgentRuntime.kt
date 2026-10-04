@@ -137,17 +137,31 @@ class GeneralAgentPlanner {
         task.currentStep?.takeIf { task.status == AgentRuntimeStatus.WAITING_FOR_RESULT }?.let {
             return PlannerResult.VerifyPrevious(it)
         }
-        if (perception == null && task.intent.requiredCapabilities.any { it.requiresScreen() }) {
-            return PlannerResult.NeedObservation(visual = task.intent.turnIntent == TurnIntent.SCREEN_QUESTION)
-        }
         if (perception?.scene?.modal != null && perception.scene.modal != ModalKind.NONE &&
             ModalSafetyPolicy.requiresAuthorization(perception.scene)
         ) {
             return PlannerResult.NeedClarification("Screen par protected dialog hai. Kya karun?")
         }
-        val capability = primaryCapability(task.intent.requiredCapabilities)
-            ?.takeIf { wanted -> relevantTools.any { it.capability == wanted } }
+        // Choose from the tools the existing execution owner actually supplied, not merely
+        // the first capability in a static wish list. Only same-purpose alternatives that
+        // were ALSO explicitly proposed by this intent may replace an unavailable tool.
+        // Observation cannot silently substitute for an unavailable click/send/write action.
+        val preferred = primaryCapability(task.intent.requiredCapabilities)
             ?: return PlannerResult.Fail("no_safe_tool")
+        val equivalent = when (preferred) {
+            ToolCapability.BROWSER_SEARCH -> ToolCapability.WEB_SEARCH
+            ToolCapability.WEB_SEARCH -> ToolCapability.BROWSER_SEARCH
+            ToolCapability.OBSERVE_SCREEN -> ToolCapability.VISUAL_CHECK
+            ToolCapability.VISUAL_CHECK -> ToolCapability.OBSERVE_SCREEN
+            else -> null
+        }?.takeIf { it in task.intent.requiredCapabilities }
+        val selected = relevantTools.firstOrNull { it.capability == preferred } ?:
+            relevantTools.firstOrNull { it.capability == equivalent }
+            ?: return PlannerResult.Fail("no_safe_tool")
+        val capability = selected.capability
+        if (perception == null && capability.requiresScreen()) {
+            return PlannerResult.NeedObservation(visual = task.intent.turnIntent == TurnIntent.SCREEN_QUESTION)
+        }
         val expected = expectedFor(capability, task.intent)
         return PlannerResult.Next(
             GeneralPlanStep(
@@ -161,7 +175,7 @@ class GeneralAgentPlanner {
                 expectedOutcome = expected,
                 requiresFreshPerception = capability.requiresScreen(),
                 requiresVerification = capability !in setOf(ToolCapability.OBSERVE_SCREEN, ToolCapability.VISUAL_CHECK),
-                risk = relevantTools.first { it.capability == capability }.risk
+                risk = selected.risk
             )
         ).let { if (task.status == AgentRuntimeStatus.RECOVERING) PlannerResult.Recover(it.step) else it }
     }
