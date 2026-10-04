@@ -89,6 +89,7 @@ import com.myra.assistant.agent.TaskCompletionState
 import com.myra.assistant.agent.AgentToolRegistry
 import com.myra.assistant.agent.GeneralActionResult
 import com.myra.assistant.agent.GeneralActionRouter
+import com.myra.assistant.agent.BrowserNavigationTaskEvidence
 import com.myra.assistant.agent.GeneralAgentRuntimeStore
 import com.myra.assistant.agent.GeneralRuntimeTask
 import com.myra.assistant.agent.GeneralToolAdapter
@@ -2064,7 +2065,19 @@ class MyraVoiceService : Service() {
         localCommandExecutedThisTurn = true
         output.clear()
         cancelSpeechForNewAction()
-        fun report(message: String, error: Boolean) {
+        val taskId = GeneralAgentRuntimeStore.runtime.activeTask()
+            ?.takeIf { it.turnId == userTurnId }?.id
+        fun report(
+            message: String,
+            error: Boolean,
+            evidence: BrowserNavigationTaskEvidence.Result = BrowserNavigationTaskEvidence.rejected(),
+        ) {
+            val accepted = BrowserNavigationTaskEvidence.completeOwned(
+                userTurnId, taskId, evidence,
+                GeneralAgentRuntimeStore.runtime, WorkingTaskRuntime.store)
+            voiceLog("BROWSER_NAMED_LINK_TASK_EVIDENCE turnId=$userTurnId " +
+                "taskRecorded=$accepted status=${evidence.generalStatus} " +
+                "destinationVerified=false autonomousContinuation=false")
             listener?.onMyraText(message, error)
             emitState(message)
             queueLocalSpeech(message, allowUntranscribedAudio = true)
@@ -2140,11 +2153,14 @@ class MyraVoiceService : Service() {
                 }
                 voiceLog("BROWSER_NAMED_LINK_VERIFIED turnId=$userTurnId result=" +
                     verification + " observations=2 urlVerified=false")
+                val evidence = BrowserNavigationTaskEvidence.afterTap(verification)
                 when (verification) {
                     RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED ->
-                        report("Browser mein naya page text do observations mein stable mila; destination URL verify nahi hui.", false)
+                        report("Browser mein naya page text do observations mein stable mila; destination URL verify nahi hui.",
+                            false, evidence)
                     RenderedBrowserNavigationPolicy.Verification.UNKNOWN ->
-                        report("Tap dispatch hua, lekin browser navigation ka stable content result verify nahi hua.", true)
+                        report("Tap dispatch hua, lekin browser navigation ka stable content result verify nahi hua.",
+                            true, evidence)
                 }
             }, 450L)
         }, 650L)
