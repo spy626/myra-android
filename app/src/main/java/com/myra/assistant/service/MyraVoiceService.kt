@@ -70,6 +70,7 @@ import com.myra.assistant.screen.VisualScreenshotTimeoutPolicy
 import com.myra.assistant.screen.SemanticScreenFallbackPolicy
 import com.myra.assistant.screen.VisibleScreenElement
 import com.myra.assistant.agent.ActivityContextStore
+import com.myra.assistant.agent.ModelResearchGoalProposal
 import com.myra.assistant.agent.UnifiedLyraAgentRuntime
 import com.myra.assistant.agent.TurnIntent
 import com.myra.assistant.agent.WorkingTaskRuntime
@@ -173,6 +174,9 @@ class MyraVoiceService : Service() {
     private val textComposeSession = TextComposeSession()
     private var lastUserIntentText = ""
     private val stagedMemorySemantics = java.util.concurrent.ConcurrentHashMap<Long, List<MemorySemanticFrame>>()
+    // One ephemeral model research suggestion per active voice turn; no execution authority.
+    private val stagedResearchGoals =
+        java.util.concurrent.ConcurrentHashMap<Long, ModelResearchGoalProposal>()
     private data class PendingMemoryRecall(
         val query: String,
         val type: MemoryRecallType
@@ -1164,10 +1168,21 @@ class MyraVoiceService : Service() {
                 )
                 latestActionDispatchedAt = 0L
                 val previousScrollContext = WorkingTaskRuntime.store.snapshot().lastCompletedTask
+                val proposedResearch = stagedResearchGoals.remove(activeTurnId)
                 val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
                     normalizedFinalUserText, activityContext, visualAwarenessPreferences.enabled, activeTurnId,
                     hasRecentVerifiedVisualContext()
                 )
+                val acceptedResearch = ModelResearchGoalProposal.accept(
+                    proposedResearch, normalizedFinalUserText, activeTurnId, turnDecision)
+                if (acceptedResearch != null) {
+                    GeneralAgentRuntimeStore.runtime.enrich(
+                        mapOf("query" to acceptedResearch.request.query))
+                    voiceLog("SEMANTIC_RESEARCH_GOAL_ACCEPTED turnId=$" + "activeTurnId " +
+                        "queryChars=$" + "{acceptedResearch.request.query.length} finalBound=true")
+                } else if (proposedResearch != null) {
+                    voiceLog("SEMANTIC_RESEARCH_GOAL_REJECTED turnId=$" + "activeTurnId reason=final_or_authority_mismatch")
+                }
                 latestIntentDecidedAt = android.os.SystemClock.elapsedRealtime()
                 scrollContinuationTelemetry.resolution(activeTurnId, normalizedFinalUserText, latestIntentDecidedAt,
                     activityContext?.packageName, activityContext?.windowId,
@@ -1249,7 +1264,7 @@ class MyraVoiceService : Service() {
                     return@turnComplete
                 }
                 if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
-                    executeUnifiedBrowserSearch(normalizedFinalUserText)
+                    executeUnifiedBrowserSearch(normalizedFinalUserText, acceptedResearch)
                 ) {
                     resetTurnBuffers("unified_browser_search")
                     waitingForFreshInputAfterCommand = true
@@ -1579,6 +1594,18 @@ class MyraVoiceService : Service() {
 
     private fun handleSemanticToolCall(id: String, functionName: String, args: org.json.JSONObject) {
         when (functionName) {
+            "propose_research_goal" -> {
+                val proposed = ModelResearchGoalProposal.fromTool(activeTurnId, args)
+                if (proposed == null || input.isBlank()) {
+                    live?.sendToolResponse(id, functionName, false, "No bounded active-turn research proposal")
+                } else {
+                    stagedResearchGoals[activeTurnId] = proposed
+                    voiceLog("SEMANTIC_RESEARCH_GOAL_STAGED turnId=$" + "activeTurnId " +
+                        "sourceChars=$" + "{proposed.sourceSpan.length} queryChars=$" + "{proposed.querySpan.length} executed=false")
+                    live?.sendToolHeld(id, functionName)
+                }
+                return
+            }
             "propose_user_memory" -> {
                 handleSemanticMemoryProposal(id, args)
                 return
@@ -3786,8 +3813,11 @@ class MyraVoiceService : Service() {
         return GeneralActionResult(dispatch.accepted, failureReason = dispatch.reason.takeIf { !dispatch.accepted })
     }
 
-    private fun executeUnifiedBrowserSearch(raw: String): Boolean {
-        val request = com.myra.assistant.agent.FinalSearchHandoff.parse(raw) ?: run {
+    private fun executeUnifiedBrowserSearch(
+        raw: String, modelGoal: ModelResearchGoalProposal.Accepted? = null
+    ): Boolean {
+        val request = modelGoal?.takeIf { it.turnId == activeTurnId }?.request
+            ?: com.myra.assistant.agent.FinalSearchHandoff.parse(raw) ?: run {
             val task = UnifiedLyraAgentRuntime.agent.currentTask()
             if (task?.interpretedGoal !in setOf(com.myra.assistant.agent.AgentGoalType.BROWSER_SEARCH,
                     com.myra.assistant.agent.AgentGoalType.WEB_SEARCH)) return false
@@ -4953,6 +4983,7 @@ class MyraVoiceService : Service() {
         mediaBlockedTurn = false
         ambiguousMessageTurn = false
         incompleteActionFragmentTurn = false
+        stagedResearchGoals.remove(activeTurnId)
         activeTurnId = 0L
         if (!screenResponseActive && !ordinaryModelAudioGate.isSpeechActive()) {
             speechTimingTurnId = 0L

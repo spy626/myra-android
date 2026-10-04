@@ -141,7 +141,7 @@ class GeminiLiveClient(
             .put("tools", JSONArray().put(JSONObject().put(
                 "functionDeclarations",
                 JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration()).put(memoryQueryDeclaration())
-                    .put(screenActionDeclaration()).put(screenMemoryProposalDeclaration())
+                    .put(screenActionDeclaration()).put(screenMemoryProposalDeclaration()).put(researchGoalDeclaration())
             )))
             .put("realtimeInputConfig", JSONObject()
                 .put("turnCoverage", "TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO"))
@@ -155,6 +155,18 @@ class GeminiLiveClient(
             } catch (_: InterruptedException) { }
         }.also { it.start() }
     }
+
+    /** Interpretation only; the final Android turn and user permissions remain authoritative. */
+    private fun researchGoalDeclaration() = JSONObject()
+        .put("name", "propose_research_goal")
+        .put("description", "Only propose READ_ONLY_RESEARCH when the user explicitly asks to search public information. This never performs an action. Copy the ENTIRE current user utterance into source_span; copy literal topic words into query_span, optionally excluding a response-format suffix such as 'and summarize it'. Never propose for private data, hypothetical or negated search. Android independently validates the final turn and controls tool execution.")
+        .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("kind", JSONObject().put("type", "STRING")
+                .put("enum", JSONArray().put("READ_ONLY_RESEARCH")))
+            .put("source_span", JSONObject().put("type", "STRING"))
+            .put("query_span", JSONObject().put("type", "STRING"))
+            .put("confidence", JSONObject().put("type", "NUMBER")))
+            .put("required", JSONArray(listOf("kind", "source_span", "query_span", "confidence")))
 
     private fun phoneActionDeclaration() = JSONObject()
         .put("name", "perform_phone_action")
