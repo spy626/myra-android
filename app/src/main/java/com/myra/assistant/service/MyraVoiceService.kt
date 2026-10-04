@@ -50,6 +50,7 @@ import com.myra.assistant.screen.ScreenPrivacyPolicy
 import com.myra.assistant.screen.RenderedBrowserObservation
 import com.myra.assistant.screen.RenderedBrowserNavigationPolicy
 import com.myra.assistant.screen.RenderedBrowserScrollPolicy
+import com.myra.assistant.screen.RenderedBrowserPageEvidence
 import com.myra.assistant.screen.ScreenFramePrivacyFilter
 import com.myra.assistant.screen.ScreenPrivacyResult
 import com.myra.assistant.screen.ScreenQueryDispatchPolicy
@@ -2079,14 +2080,26 @@ class MyraVoiceService : Service() {
         cancelSpeechForNewAction()
         val taskId = GeneralAgentRuntimeStore.runtime.activeTask()
             ?.takeIf { it.turnId == userTurnId }?.id
-        fun report(message: String, error: Boolean, evidence: BrowserNavigationTaskEvidence.Result) {
+        fun report(
+            message: String,
+            error: Boolean,
+            evidence: BrowserNavigationTaskEvidence.Result,
+            source: RenderedBrowserPageEvidence.Receipt? = null,
+        ) {
             val recorded = BrowserNavigationTaskEvidence.completeOwned(
                 userTurnId, taskId, evidence,
                 GeneralAgentRuntimeStore.runtime, WorkingTaskRuntime.store)
-            voiceLog("BROWSER_ONE_SCROLL_TASK_EVIDENCE turnId=$userTurnId " +
-                "taskRecorded=$recorded status=" + evidence.generalStatus +
+            voiceLog("BROWSER_ONE_SCROLL_TASK_EVIDENCE turnId=" + userTurnId +
+                " taskRecorded=" + recorded + " status=" + evidence.generalStatus +
+                " sourceSha256=" + (source?.contentSha256 ?: "none") +
                 " destinationUrlVerified=false autonomousContinuation=false")
-            listener?.onMyraText(message, error)
+            // Quote raw page data in local chat only; controlled speech receives status,
+            // never website text as instructions or an automatically shared provider prompt.
+            val localText = source?.let {
+                message + "\nObserved rendered text (untrusted): “" + it.localPreview() +
+                    "”\nVisible-text SHA-256: " + it.contentSha256
+            } ?: message
+            listener?.onMyraText(localText, error)
             emitState(message)
             queueLocalSpeech(message, allowUntranscribedAudio = true)
         }
@@ -2143,14 +2156,20 @@ class MyraVoiceService : Service() {
                         voiceLog("BROWSER_ONE_SCROLL_DROPPED turnId=$userTurnId reason=new_turn_after_second_read")
                         return@postDelayed
                     }
+                    val source = RenderedBrowserPageEvidence.afterOneScroll(
+                        plan, first, firstForeground, second, secondForeground,
+                        dispatchedAt, android.os.SystemClock.elapsedRealtime())
                     val verified = verification ==
-                        RenderedBrowserScrollPolicy.Verification.NEW_STABLE_VISIBLE_TEXT_URL_UNVERIFIED
-                    voiceLog("BROWSER_ONE_SCROLL_VERIFICATION turnId=$userTurnId " +
-                        "result=$verification observations=2 scrollCount=1 urlVerified=false")
+                        RenderedBrowserScrollPolicy.Verification.NEW_STABLE_VISIBLE_TEXT_URL_UNVERIFIED &&
+                        source != null
+                    voiceLog("BROWSER_ONE_SCROLL_VERIFICATION turnId=" + userTurnId +
+                        " result=" + verification + " observations=2 scrollCount=1 urlVerified=false" +
+                        " sourceReceipt=" + (source != null))
                     report(
                         if (verified) "Browser par ek scroll ke baad naya readable text do observations mein verify hua; poori website ya URL verify nahi hui."
-                        else "Scroll dispatch hua, lekin naya readable page text stable verify nahi hua.",
-                        !verified, BrowserNavigationTaskEvidence.afterScroll(verified))
+                        else "Scroll dispatch hua, lekin safe stable page evidence verify nahi hua.",
+                        !verified, BrowserNavigationTaskEvidence.afterScroll(verified),
+                        source.takeIf { verified })
                 }, 420L)
             }
         }
@@ -2187,14 +2206,20 @@ class MyraVoiceService : Service() {
             message: String,
             error: Boolean,
             evidence: BrowserNavigationTaskEvidence.Result = BrowserNavigationTaskEvidence.rejected(),
+            source: RenderedBrowserPageEvidence.Receipt? = null,
         ) {
             val accepted = BrowserNavigationTaskEvidence.completeOwned(
                 userTurnId, taskId, evidence,
                 GeneralAgentRuntimeStore.runtime, WorkingTaskRuntime.store)
-            voiceLog("BROWSER_NAMED_LINK_TASK_EVIDENCE turnId=$userTurnId " +
-                "taskRecorded=$accepted status=${evidence.generalStatus} " +
-                "destinationVerified=false autonomousContinuation=false")
-            listener?.onMyraText(message, error)
+            voiceLog("BROWSER_NAMED_LINK_TASK_EVIDENCE turnId=" + userTurnId +
+                " taskRecorded=" + accepted + " status=" + evidence.generalStatus +
+                " sourceSha256=" + (source?.contentSha256 ?: "none") +
+                " destinationVerified=false autonomousContinuation=false")
+            val localText = source?.let {
+                message + "\nObserved rendered text (untrusted): “" + it.localPreview() +
+                    "”\nVisible-text SHA-256: " + it.contentSha256
+            } ?: message
+            listener?.onMyraText(localText, error)
             emitState(message)
             queueLocalSpeech(message, allowUntranscribedAudio = true)
         }
@@ -2269,14 +2294,20 @@ class MyraVoiceService : Service() {
                 }
                 voiceLog("BROWSER_NAMED_LINK_VERIFIED turnId=$userTurnId result=" +
                     verification + " observations=2 urlVerified=false")
-                val evidence = BrowserNavigationTaskEvidence.afterTap(verification)
-                when (verification) {
-                    RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED ->
-                        report("Browser mein naya page text do observations mein stable mila; destination URL verify nahi hui.",
-                            false, evidence)
-                    RenderedBrowserNavigationPolicy.Verification.UNKNOWN ->
-                        report("Tap dispatch hua, lekin browser navigation ka stable content result verify nahi hua.",
-                            true, evidence)
+                val source = RenderedBrowserPageEvidence.afterNamedLink(
+                    plan, firstContext, firstForeground, secondContext, secondForeground,
+                    dispatchedAt, android.os.SystemClock.elapsedRealtime())
+                val accepted = verification ==
+                    RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED &&
+                    source != null
+                val evidence = BrowserNavigationTaskEvidence.afterTap(
+                    if (accepted) verification else RenderedBrowserNavigationPolicy.Verification.UNKNOWN)
+                if (accepted) {
+                    report("Browser mein naya page text do observations mein stable mila; destination URL verify nahi hui.",
+                        false, evidence, source)
+                } else {
+                    report("Tap dispatch hua, lekin safe stable browser source verify nahi hua.",
+                        true, evidence)
                 }
             }, 450L)
         }, 650L)
