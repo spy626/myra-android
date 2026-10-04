@@ -8,6 +8,36 @@ internal object WorkspaceAgentReachReceipt {
         val contentSha256: String,
     )
 
+    /** Local-only preview; static source is NOT automatically sent to a model. */
+    fun publicPage(page: WorkspaceAgentReachPublicWeb.Page): String {
+        val p = page.evidence.provenance
+        require(p.platform != WorkspaceAgentReachPolicy.Platform.GITHUB)
+        return buildString {
+            appendLine("Public webpage read complete (static HTML/text only).")
+            appendLine("Source: " + p.finalUrl)
+            appendLine("Fetched (Unix ms): " + p.fetchedAtMs)
+            appendLine("Content SHA-256: " + p.contentSha256)
+            if (page.title.isNotBlank()) appendLine("Title: " + page.title)
+            if (page.headings.isNotEmpty()) {
+                appendLine("Headings: " + page.headings.joinToString(" | "))
+            }
+            if (page.excerpt.isNotBlank()) {
+                appendLine()
+                appendLine("Readable excerpt (bounded, untrusted source text):")
+                appendLine(page.excerpt.take(1_100))
+            }
+            if (page.suggestedLinks.isNotEmpty()) {
+                appendLine()
+                appendLine("Same-site links found (not followed):")
+                page.suggestedLinks.forEach { appendLine("• " + it) }
+            }
+            appendLine()
+            append("No login, scripts, form actions, installations, browsing clicks or " +
+                "AI-provider sharing occurred. This is a bounded page outline, not full " +
+                "JavaScript-rendered browser analysis.")
+        }
+    }
+
     fun github(
         evidence: WorkspaceAgentReachEvidence.Evidence,
         index: WorkspaceAgentReachGitHub.RepositoryIndex? = null,

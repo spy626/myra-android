@@ -1,9 +1,9 @@
 package com.myra.assistant.ui.workspace
 
 /**
- * Conservative user-intent gate for read-only Agent Reach.
+ * Conservative user-intent gate for read-only Agent Reach: GitHub and public webpages.
  *
- * A GitHub URL is not automatically opened merely because it appears in conversation. The message
+ * A URL is not automatically opened merely because it appears in conversation. The message
  * must be primarily the link itself or explicitly ask LYRA to read/check/inspect it.
  */
 internal object WorkspaceAgentReachChatIntent {
@@ -36,12 +36,6 @@ internal object WorkspaceAgentReachChatIntent {
         if (blockedIntent.containsMatchIn(message)) return null
         val candidates = url.findAll(message)
             .map { cleanUrl(it.value) }
-            .filter {
-                runCatching {
-                    WorkspaceAgentReachPolicy.parse(it).platform ==
-                        WorkspaceAgentReachPolicy.Platform.GITHUB
-                }.getOrDefault(false)
-            }
             .distinct()
             .toList()
         if (candidates.isEmpty()) return null
@@ -52,20 +46,22 @@ internal object WorkspaceAgentReachChatIntent {
         if (!primarilyLink && !readIntent.containsMatchIn(message)) return null
         if (candidates.size != 1) {
             return Decision(localError =
-                "Agent Reach reads one GitHub link at a time. Nothing was opened.")
+                "Agent Reach reads one public HTTPS link at a time. Nothing was opened.")
         }
 
         val parsed = runCatching { WorkspaceAgentReachPolicy.parse(candidates.single()) }
             .getOrElse {
                 return Decision(localError =
-                    (it.message ?: "This GitHub URL is not accepted for read-only Agent Reach."))
+                    (it.message ?: "This URL is not accepted for read-only Agent Reach."))
             }
         return runCatching {
-            WorkspaceAgentReachGitHub.selection(parsed)
+            if (parsed.platform == WorkspaceAgentReachPolicy.Platform.GITHUB) {
+                WorkspaceAgentReachGitHub.selection(parsed)
+            }
             Decision(target = parsed)
         }.getOrElse {
             Decision(localError =
-                (it.message ?: "This GitHub link type is not supported by read-only Agent Reach yet."))
+                (it.message ?: "This link type is not supported by read-only Agent Reach yet."))
         }
     }
 }

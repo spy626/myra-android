@@ -41,11 +41,20 @@ class WorkspaceAgentReachChatIntentTest {
         val multiple = WorkspaceAgentReachChatIntent.decide(
             "compare and check https://github.com/a/b and https://github.com/c/d")
         assertNull(multiple?.target)
-        assertTrue(multiple?.localError.orEmpty().contains("one GitHub link"))
+        assertTrue(multiple?.localError.orEmpty().contains("one public HTTPS link"))
     }
 
-    @Test fun nonGithubUrlIsNotClaimedByGithubReach() {
+    @Test fun normalPublicWebpageGetsItsOwnReadOnlyRoute() {
+        val web = WorkspaceAgentReachChatIntent.decide("check https://example.com/docs")
+        assertEquals(WorkspaceAgentReachPolicy.Platform.WEB, web?.target?.platform)
+        assertNull(web?.localError)
         assertNull(WorkspaceAgentReachChatIntent.decide(
-            "check https://example.com/docs"))
+            "My friend sent https://example.com/docs yesterday"))
+        assertNull(WorkspaceAgentReachChatIntent.decide(
+            "Don't open https://example.com/docs"))
+        val two = WorkspaceAgentReachChatIntent.decide(
+            "read https://github.com/a/b and https://example.com/docs")
+        assertNull(two?.target)
+        assertTrue(two?.localError.orEmpty().contains("one public HTTPS link"))
     }
 }

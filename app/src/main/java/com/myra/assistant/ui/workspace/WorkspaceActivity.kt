@@ -104,6 +104,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private var agentReachUserRequest: String? = null
     private var agentReachBaseCompletion: WorkspaceAgentReachGitHubRunner.Completion? = null
     private var agentReachRunner: WorkspaceAgentReachGitHubRunner? = null
+    private var agentReachWebRunner: WorkspaceAgentReachPublicWebRunner? = null
     private var agentReachRelevantRunner: WorkspaceAgentReachGitHubRelevantRunner? = null
     private var connectedRunVerificationActive = false
     private var connectedRunVerificationProjectId: String? = null
@@ -1162,6 +1163,56 @@ class WorkspaceActivity : AppCompatActivity() {
             }
     }
 
+    private fun publicWebReachRunner(): WorkspaceAgentReachPublicWebRunner {
+        agentReachWebRunner?.let { return it }
+        return WorkspaceAgentReachPublicWebRunner(
+            currentTarget = { if (agentReachActive) agentReachTarget else null },
+            listener = object : WorkspaceAgentReachPublicWebRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase, label: String, detail: String?
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(page: WorkspaceAgentReachPublicWeb.Page) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        val id = agentReachProjectId
+                        val messageId = agentReachMessageId
+                        clearAgentReachState(cancel = false)
+                        if (id == null || messageId == null || selectedId != id) return@runOnUiThread
+                        runCatching {
+                            require(conversations.read(id).lastOrNull()?.id == messageId) {
+                                "Conversation changed; public page receipt was not saved"
+                            }
+                            conversations.append(id, "assistant",
+                                WorkspaceAgentReachReceipt.publicPage(page))
+                        }.onSuccess {
+                            statusMessage = ""
+                        }.onFailure {
+                            statusMessage = it.message ?: "Public page receipt could not be saved"
+                            recordWorkEvent(WorkspaceWorkPhase.ERROR,
+                                "Public page receipt not saved", statusMessage)
+                        }
+                        render()
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        clearAgentReachState(cancel = false)
+                        statusMessage = message
+                        render()
+                    }
+                }
+            },
+        ).also { agentReachWebRunner = it }
+    }
+
     private fun githubReachRunner(): WorkspaceAgentReachGitHubRunner {
         agentReachRunner?.let { return it }
         return WorkspaceAgentReachGitHubRunner(
@@ -1300,6 +1351,7 @@ class WorkspaceActivity : AppCompatActivity() {
         if (cancel) {
             agentReachRunner?.cancel()
             agentReachRelevantRunner?.cancel()
+            agentReachWebRunner?.cancel()
         }
         agentReachActive = false
         agentReachTarget = null
@@ -1307,6 +1359,21 @@ class WorkspaceActivity : AppCompatActivity() {
         agentReachMessageId = null
         agentReachUserRequest = null
         agentReachBaseCompletion = null
+    }
+
+    private fun startPublicWebReach(
+        id: String,
+        messageId: String,
+        target: WorkspaceAgentReachPolicy.Target,
+    ) {
+        clearAgentReachState()
+        agentReachActive = true
+        agentReachTarget = target
+        agentReachProjectId = id
+        agentReachMessageId = messageId
+        statusMessage = ""
+        render()
+        publicWebReachRunner().start(target)
     }
 
     private fun startGitHubReach(
@@ -4420,7 +4487,11 @@ class WorkspaceActivity : AppCompatActivity() {
                     return
                 }
                 decision.target?.let { target ->
-                    startGitHubReach(id, stored.id, target, text)
+                    if (target.platform == WorkspaceAgentReachPolicy.Platform.GITHUB) {
+                        startGitHubReach(id, stored.id, target, text)
+                    } else {
+                        startPublicWebReach(id, stored.id, target)
+                    }
                     return
                 }
             }
