@@ -2111,25 +2111,42 @@ class MyraVoiceService : Service() {
         voiceLog("BROWSER_NAMED_LINK_DISPATCHED turnId=$userTurnId package=" +
             plan.packageName + " windowId=" + plan.windowId +
             " generation=" + plan.generation + " verifiedUrl=false")
+        fun ownsResult(): Boolean = browserLinkActionEpoch.get() == actionEpoch &&
+            (activeTurnId == 0L || activeTurnId == userTurnId)
         mainHandler.postDelayed({
-            if (browserLinkActionEpoch.get() != actionEpoch ||
-                (activeTurnId != 0L && activeTurnId != userTurnId)) {
+            if (!ownsResult()) {
                 voiceLog("BROWSER_NAMED_LINK_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
                 return@postDelayed
             }
             accessibility.refreshScreenContext(force = true)
-            val fresh = accessibility.currentForegroundContext()
-            val verification = RenderedBrowserNavigationPolicy.verify(
-                plan, ActivityContextStore.snapshot(), fresh,
-                dispatchedAt, android.os.SystemClock.elapsedRealtime())
-            voiceLog("BROWSER_NAMED_LINK_VERIFIED turnId=$userTurnId result=" +
-                verification + " urlVerified=false")
-            when (verification) {
-                RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED ->
-                    report("Link tap ke baad browser par naya content dikh raha hai; destination URL verify nahi hui.", false)
-                RenderedBrowserNavigationPolicy.Verification.UNKNOWN ->
-                    report("Tap dispatch hua, lekin expected browser content change verify nahi hua.", true)
-            }
+            val firstContext = ActivityContextStore.snapshot()
+            val firstForeground = accessibility.currentForegroundContext()
+            // Never call the first screen change a success. Wait for a second distinct
+            // observation of the same post-action browser/window and stable new content.
+            mainHandler.postDelayed({
+                if (!ownsResult()) {
+                    voiceLog("BROWSER_NAMED_LINK_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn_before_second_observation")
+                    return@postDelayed
+                }
+                accessibility.refreshScreenContext(force = true)
+                val secondContext = ActivityContextStore.snapshot()
+                val secondForeground = accessibility.currentForegroundContext()
+                val verification = RenderedBrowserNavigationPolicy.verifyStable(
+                    plan, firstContext, firstForeground, secondContext, secondForeground,
+                    dispatchedAt, android.os.SystemClock.elapsedRealtime())
+                if (!ownsResult()) {
+                    voiceLog("BROWSER_NAMED_LINK_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn_after_second_observation")
+                    return@postDelayed
+                }
+                voiceLog("BROWSER_NAMED_LINK_VERIFIED turnId=$userTurnId result=" +
+                    verification + " observations=2 urlVerified=false")
+                when (verification) {
+                    RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED ->
+                        report("Browser mein naya page text do observations mein stable mila; destination URL verify nahi hui.", false)
+                    RenderedBrowserNavigationPolicy.Verification.UNKNOWN ->
+                        report("Tap dispatch hua, lekin browser navigation ka stable content result verify nahi hua.", true)
+                }
+            }, 450L)
         }, 650L)
     }
 

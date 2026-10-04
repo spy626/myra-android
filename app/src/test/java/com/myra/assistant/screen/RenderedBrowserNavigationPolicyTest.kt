@@ -108,4 +108,62 @@ class RenderedBrowserNavigationPolicyTest {
             RenderedBrowserNavigationPolicy.verify(p, next.copy(packageName = "com.other.app"),
                 foreground(), 1_500L, 1_900L))
     }
+
+    @Test fun twoStableNewRenderedContentObservationsAllowOnlyBoundedChangeClaim() {
+        val plan = requireNotNull(RenderedBrowserNavigationPolicy.plan(
+            "Click the Release notes link", scene(), foreground(), 1_050L))
+        val first = scene(timestamp = 1_800L, elements = listOf(
+            el("Release notes"),
+            el("Version 3 introduces security improvements and bug fixes", index = 1),
+            el("Loading content", index = 2)))
+        val second = scene(timestamp = 2_260L, elements = listOf(
+            el("Version 3 introduces security improvements and bug fixes", index = 0),
+            el("Here are the public product changes in this update", index = 1)))
+        val expected = RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED
+        assertEquals(expected, RenderedBrowserNavigationPolicy.verifyStable(
+            plan, first, foreground(), second, foreground(), 1_500L, 2_300L))
+    }
+
+    @Test fun oneTransientOrTwoDifferentChangesCannotProveNavigation() {
+        val plan = requireNotNull(RenderedBrowserNavigationPolicy.plan(
+            "Click the Release notes link", scene(), foreground(), 1_050L))
+        fun post(at: Long, label: String) = scene(timestamp = at, elements = listOf(
+            el("Release notes", index = 0), el(label, index = 1)))
+        val first = post(1_800L, "Version 3 introduces security improvements and bug fixes")
+        val stable = post(2_260L, "Version 3 introduces security improvements and bug fixes")
+        fun verify(second: CurrentActivityContext?) =
+            RenderedBrowserNavigationPolicy.verifyStable(
+                plan, first, foreground(), second, foreground(), 1_500L, 2_300L)
+        val unknown = RenderedBrowserNavigationPolicy.Verification.UNKNOWN
+        assertEquals(unknown, verify(post(2_260L, "Just another unrelated banner is displayed now")))
+        assertEquals(unknown, verify(post(2_260L, "Loading content please wait while redirecting")))
+        assertEquals(unknown, verify(post(1_850L, "Version 3 introduces security improvements and bug fixes")))
+        assertEquals(unknown, verify(stable.copy(windowId = 10)))
+        assertEquals(unknown, verify(stable.copy(generation = 4)))
+        assertEquals(unknown, verify(stable.copy(timestamp = 1_600L)))
+        assertEquals(unknown, verify(stable.copy(timestamp = 5_100L)))
+        assertEquals(unknown, verify(stable.copy(elements = listOf(
+            el("Version 3 introduces security improvements and bug fixes", true,
+                SemanticRole.BUTTON, 1)))))
+    }
+
+    @Test fun browserForegroundReplacementOrSensitiveSecondSampleFailsClosed() {
+        val plan = requireNotNull(RenderedBrowserNavigationPolicy.plan(
+            "Click the Release notes link", scene(), foreground(), 1_050L))
+        val first = scene(timestamp = 1_800L, elements = listOf(
+            el("Public release notes for version three", index = 0)))
+        val second = scene(timestamp = 2_200L, elements = listOf(
+            el("Public release notes for version three", index = 0)))
+        val unknown = RenderedBrowserNavigationPolicy.Verification.UNKNOWN
+        assertEquals(unknown, RenderedBrowserNavigationPolicy.verifyStable(
+            plan, first, foreground(), second, foreground(w = 10), 1_500L, 2_300L))
+        assertEquals(unknown, RenderedBrowserNavigationPolicy.verifyStable(
+            plan, first, foreground(), second.copy(elements = second.visibleElements +
+                el("Enter password", role = SemanticRole.TEXT_INPUT, index = 1)),
+            foreground(), 1_500L, 2_300L))
+        assertEquals(unknown, RenderedBrowserNavigationPolicy.verifyStable(
+            plan, first.copy(timestamp = 1_400L), foreground(), second,
+            foreground(), 1_500L, 2_300L))
+    }
+
 }

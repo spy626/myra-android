@@ -114,6 +114,60 @@ internal object RenderedBrowserNavigationPolicy {
             confidence >= .90 && width > 0 && height > 0 &&
             width < screenWidth * .90 && height < screenHeight * .80
 
+    /**
+     * A single changed snapshot is only a provisional observation. The final result
+     * needs two independent, time-separated accessibility reads with at least one
+     * meaningful, NEW, non-actionable text line stable in BOTH.
+     *
+     * Both reads must come from the same post-action browser/window/generation.
+     * This is not URL, DOM, HTTP-response or successful goal verification.
+     */
+    fun verifyStable(
+        plan: Plan,
+        first: CurrentActivityContext?,
+        firstForeground: ForegroundAppContext?,
+        second: CurrentActivityContext?,
+        secondForeground: ForegroundAppContext?,
+        dispatchedAt: Long,
+        now: Long,
+    ): Verification {
+        if (first == null || second == null || firstForeground == null ||
+            secondForeground == null || first.timestamp <= dispatchedAt ||
+            second.timestamp - first.timestamp < 180L ||
+            second.timestamp <= first.timestamp ||
+            second.timestamp > now ||
+            second.timestamp - dispatchedAt > 3_500L ||
+            first.packageName != second.packageName ||
+            first.windowId != second.windowId ||
+            first.generation != second.generation ||
+            firstForeground.packageName != secondForeground.packageName ||
+            firstForeground.windowId != secondForeground.windowId ||
+            firstForeground.generation != secondForeground.generation ||
+            verify(plan, first, firstForeground, dispatchedAt, now) !=
+                Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED ||
+            verify(plan, second, secondForeground, dispatchedAt, now) !=
+                Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED
+        ) return Verification.UNKNOWN
+        val initial = stableNovelLines(plan, first)
+        val final = stableNovelLines(plan, second)
+        return if (initial.any { it in final }) Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED
+        else Verification.UNKNOWN
+    }
+
+    private val transientPageText = Regex(
+        """(?iu)\b(?:loading|please\s*wait|redirecting|working|retry|refresh|failed\s*to\s*load|site\s*can.?t\s*be\s*reached|connection\s*error|connection\s*lost|cookie\s*consent|accept\s*cookies|advertisement|sponsored|notification|permission)\b"""
+    )
+
+    private fun stableNovelLines(plan: Plan, observed: CurrentActivityContext): Set<String> =
+        observed.visibleElements.asSequence().take(120)
+            .filter { it.role == SemanticRole.TEXT && !it.actionable }
+            .mapNotNull(::safeLine)
+            .filter {
+                it.length >= 20 && it !in plan.originalText &&
+                    it != normalize(plan.label) && !transientPageText.containsMatchIn(it)
+            }
+            .distinct().take(24).toSet()
+
     /** A content change proves only a changed observed browser screen, never the destination URL. */
     fun verify(
         plan: Plan, after: CurrentActivityContext?,
