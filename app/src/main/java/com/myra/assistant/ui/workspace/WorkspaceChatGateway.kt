@@ -87,8 +87,9 @@ internal object WorkspaceChatGateway {
             "Set a valid provider key in API & Cloud Settings"
         }
         require(messages.isNotEmpty() && messages.last().role == "user") { "A user message is required" }
+        val safeMessages = WorkspaceAgentReachReceipt.providerSafeHistory(messages)
         // Previous turns are dropped whole when needed; the latest pasted prompt is never sliced.
-        require(WorkspaceLongInputPolicy.requestFits(messages)) {
+        require(WorkspaceLongInputPolicy.requestFits(safeMessages)) {
             "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
         val media = listOfNotNull(image) + images
@@ -103,13 +104,13 @@ internal object WorkspaceChatGateway {
             require(media.isEmpty() && video == null && audio == null) {
                 "Groq Free Chat is text-only; media requires an approved OpenRouter Free route"
             }
-            return WorkspaceGroqFree.request(key, messages, null, extraSystemInstructions)
+            return WorkspaceGroqFree.request(key, safeMessages, null, extraSystemInstructions)
         }
         if (provider == Provider.LLM7_FREE) {
             require(media.isEmpty() && video == null && audio == null) {
                 "LLM7 Free Chat is text-only; media requires an approved OpenRouter Free route"
             }
-            return WorkspaceLlm7Free.request(key, messages, null, extraSystemInstructions)
+            return WorkspaceLlm7Free.request(key, safeMessages, null, extraSystemInstructions)
         }
         require(media.isEmpty() ||
             WorkspaceMediaLimits.imageEnvelopeSizes(media.map { it.base64.length })) {
@@ -137,7 +138,7 @@ internal object WorkspaceChatGateway {
             }
         }
         // Inspect earlier user intent locally when needed, but transmit only recent raw turns.
-        val body = openRouterBody(messages, image, extraSystemInstructions, images, video, audio)
+        val body = openRouterBody(safeMessages, image, extraSystemInstructions, images, video, audio)
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder()
             .url(WorkspaceFreeAiSuggestion.ENDPOINT)

@@ -4637,7 +4637,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val systemInstructions = runtimeSelfModelInstructions(id, skillProjection?.prompt)
         val outgoing = runCatching {
             WorkspaceCustomProviderChat.request(
-                profile, key, transcript,
+                profile, key, WorkspaceAgentReachReceipt.providerSafeHistory(transcript),
                 extraSystemInstructions = systemInstructions,
             )
         }.getOrElse {

@@ -8,6 +8,20 @@ internal object WorkspaceAgentReachReceipt {
         val contentSha256: String,
     )
 
+    private const val PUBLIC_PAGE_PREFIX =
+        "Public webpage read complete (static HTML/text only)."
+
+    /** Keep external source text OUT of future provider history unless a separate share is authorized. */
+    fun providerSafeHistory(
+        messages: List<WorkspaceConversationStore.Message>,
+    ): List<WorkspaceConversationStore.Message> = messages.map { message ->
+        if (message.role == "assistant" && message.text.startsWith(PUBLIC_PAGE_PREFIX)) {
+            message.copy(text = "LYRA read a public URL locally. The source text was NOT shared " +
+                "with this model. Do not claim you saw its contents; request separate approval " +
+                "before using fetched page evidence.")
+        } else message
+    }
+
     /** Local-only preview; static source is NOT automatically sent to a model. */
     fun publicPage(page: WorkspaceAgentReachPublicWeb.Page): String {
         val p = page.evidence.provenance
