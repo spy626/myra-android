@@ -1,6 +1,7 @@
 package com.myra.assistant.screen
 
 import com.myra.assistant.agent.BrowserResearchComparison
+import com.myra.assistant.agent.BrowserResearchContinuation
 import com.myra.assistant.agent.BrowserResearchGoalCompletion
 import com.myra.assistant.agent.BrowserResearchSourceHandoff
 import com.myra.assistant.ui.workspace.WorkspaceAgentReachGitHub
@@ -39,6 +40,14 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
         destination: RenderedBrowserPublicDestination.Receipt,
     ): Prepared? {
         if (destination.host.equals(session.first.host, ignoreCase = true)) return null
+        return prepareExact(session.taskId, session.query, destination)
+    }
+
+    fun prepareThird(
+        session: BrowserResearchContinuation.Session,
+        destination: RenderedBrowserPublicDestination.Receipt,
+    ): Prepared? {
+        if (session.hosts.any { destination.host.equals(it, ignoreCase = true) }) return null
         return prepareExact(session.taskId, session.query, destination)
     }
 
@@ -163,6 +172,15 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
     ): BrowserResearchGoalCompletion.Assessment =
         BrowserResearchGoalCompletion.assess(result)
 
+    fun resolveThird(
+        session: BrowserResearchContinuation.Session,
+        result: Result,
+        nowMs: Long = System.currentTimeMillis(),
+    ): BrowserResearchContinuation.Result? {
+        val third = sourceEvidence(result, nowMs) ?: return null
+        return BrowserResearchContinuation.resolve(session, third, nowMs)
+    }
+
     fun comparisonSummary(
         result: BrowserResearchComparison.Result,
         goal: BrowserResearchGoalCompletion.Assessment = goalAssessment(result),
@@ -211,6 +229,42 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
             "Two different public hosts supplied bounded goal-matched evidence. " +
                 "Factual truth, source-organization independence, paraphrase agreement, login state, " +
                 "hidden page content, provider sharing, memory writes, and autonomous continuation are not inferred."
+        )
+    }.take(3_200)
+
+    fun continuationSummary(result: BrowserResearchContinuation.Result): String = buildString {
+        appendLine("User-selected third public-source comparison complete.")
+        appendLine("Source A: " + result.first.finalUrl)
+        result.first.excerpts.firstOrNull()?.let { appendLine("A • " + it) }
+        appendLine("Source B: " + result.second.finalUrl)
+        result.second.excerpts.firstOrNull()?.let { appendLine("B • " + it) }
+        appendLine("Source C: " + result.third.finalUrl)
+        result.third.excerpts.firstOrNull()?.let { appendLine("C • " + it) }
+        appendLine(
+            "A↔C relation: " +
+                result.firstToThird.claimAssessment.relation.name.lowercase().replace('_', ' ')
+        )
+        appendLine(
+            "B↔C relation: " +
+                result.secondToThird.claimAssessment.relation.name.lowercase().replace('_', ' ')
+        )
+        when (result.disposition) {
+            BrowserResearchContinuation.Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD ->
+                appendLine(
+                    "Research goal status: bounded three-source summary is ready from exact safe statement support; factual truth is still unverified."
+                )
+            BrowserResearchContinuation.Disposition.CONFLICT_REMAINS_AFTER_THIRD ->
+                appendLine(
+                    "Research goal status: unresolved; a critical-literal conflict remains and no source is selected as correct."
+                )
+            BrowserResearchContinuation.Disposition.FINAL_UNRESOLVED_NO_ALIGNMENT ->
+                appendLine(
+                    "Research goal status: unresolved; no safe exact claim alignment was established after the bounded third source."
+                )
+        }
+        append(
+            "The third source was the final bounded continuation. No fourth source, crawl, login/session reuse, " +
+                "provider sharing, memory write, factual-truth claim, or autonomous continuation is authorized."
         )
     }.take(3_200)
 
