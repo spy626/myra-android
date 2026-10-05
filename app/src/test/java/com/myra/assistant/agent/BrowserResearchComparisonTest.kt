@@ -103,4 +103,78 @@ class BrowserResearchComparisonTest {
         store.clearTask()
         assertNull(store.pendingResearchComparison())
     }
+    @Test fun exactSafeStatementMatchIsObservedWithoutCallingItTruth() {
+        val first = source(
+            "https://one.example/security", "one.example", 'a',
+            terms = listOf("security", "updates"))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/security",
+            host = "two.example",
+            contentSha256 = "b".repeat(64),
+            excerpts = listOf(
+                "Security updates describe important validation improvements for public Android users."),
+            matchedTerms = listOf("security", "updates"),
+            capturedAt = 2_200L,
+        ))
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH,
+            result.claimAssessment.relation)
+        assertNotNull(result.claimAssessment.firstExcerpt)
+        assertNotNull(result.claimAssessment.secondExcerpt)
+    }
+
+    @Test fun sameStatementShapeWithDifferentCriticalLiteralIsConflictNotTruthSelection() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/release",
+            host = "one.example",
+            contentSha256 = "c".repeat(64),
+            excerpts = listOf(
+                "Security update version 4.2 shipped to supported Android devices in 2026."),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/release",
+            host = "two.example",
+            contentSha256 = "d".repeat(64),
+            excerpts = listOf(
+                "Security update version 4.3 shipped to supported Android devices in 2025."),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_200L,
+        ))
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT,
+            result.claimAssessment.relation)
+        assertEquals(listOf("4.2", "2026"), result.claimAssessment.firstLiterals)
+        assertEquals(listOf("4.3", "2025"), result.claimAssessment.secondLiterals)
+    }
+
+    @Test fun differentWordingDoesNotPretendToBeParaphraseAgreement() {
+        val first = source("https://one.example/security", "one.example", 'a')
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/bulletin",
+            host = "two.example",
+            contentSha256 = "e".repeat(64),
+            excerpts = listOf(
+                "Android patch bulletins cover platform hardening changes and remediation guidance."),
+            matchedTerms = listOf("android", "security"),
+            capturedAt = 2_200L,
+        ))
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT,
+            result.claimAssessment.relation)
+    }
+
 }
