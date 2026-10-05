@@ -2428,7 +2428,7 @@ class MyraVoiceService : Service() {
                                                                 BrowserResearchContinuation.Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD ->
                                                                     "Third source ke baad bounded research answer ready hai; screen par strict source-supported evidence hai. Factual truth ya paraphrase equivalence independently verify nahi hui."
                                                                 BrowserResearchContinuation.Disposition.CONFLICT_REMAINS_AFTER_THIRD ->
-                                                                    "Third source ke baad bhi critical-literal conflict unresolved hai; koi source automatically correct nahi maana gaya."
+                                                                    "Third source ke baad bhi bounded claim conflict unresolved hai; koi source automatically correct nahi maana gaya."
                                                                 BrowserResearchContinuation.Disposition.FINAL_UNRESOLVED_NO_ALIGNMENT ->
                                                                     "Third source ke baad bhi safe claim alignment nahi mila; bounded continuation yahin stop hoti hai."
                                                             }
@@ -2483,7 +2483,7 @@ class MyraVoiceService : Service() {
                                         researchComparison != null
                                     ) {
                                         report(
-                                            "Browser mein independent public destination verify hui; second research source ka one-page local read start hua.",
+                                            "Browser mein different-host public destination verify hui; second research source ka one-page local read start hua.",
                                             false, evidence, bound)
                                         serviceScope.launch {
                                             val analyzed = runCatching {
@@ -2534,9 +2534,9 @@ class MyraVoiceService : Service() {
                                                                 "Bounded research answer ready hai; screen par strict source-supported evidence hai. Factual truth ya paraphrase equivalence independently verify nahi hui."
                                                             BrowserResearchGoalCompletion.Disposition.UNRESOLVED_CRITICAL_LITERAL_CONFLICT ->
                                                                 if (continuation != null)
-                                                                    "Critical-literal conflict unresolved hai. Continue karna ho to different third public site ka named link explicitly open karo."
+                                                                    "Bounded claim conflict unresolved hai. Continue karna ho to different third public site ka named link explicitly open karo."
                                                                 else
-                                                                    "Critical-literal conflict unresolved hai; koi source automatically correct nahi maana gaya."
+                                                                    "Bounded claim conflict unresolved hai; koi source automatically correct nahi maana gaya."
                                                             BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED ->
                                                                 if (continuation != null)
                                                                     "Safe claim alignment nahi mila. Continue karna ho to different third public site ka named link explicitly open karo."
@@ -2629,12 +2629,12 @@ class MyraVoiceService : Service() {
                                                             RenderedBrowserVerifiedSourceAnalysis.localSummary(
                                                                 result) +
                                                                 if (comparisonPending)
-                                                                    "\nFor an independent comparison, return to the results and explicitly open a link from a different public site."
+                                                                    "\nFor a different-host comparison, return to the results and explicitly open a link from a different public site."
                                                                 else ""
                                                         listener?.onMyraText(summary)
                                                         emitState(
                                                             if (comparisonPending)
-                                                                "First public source ready; second independent source user selection ka wait hai."
+                                                                "First public source ready; second different-host source user selection ka wait hai."
                                                             else "Selected public source ka local analysis complete hua.")
                                                         queueLocalSpeech(
                                                             if (comparisonPending)
@@ -2684,7 +2684,7 @@ class MyraVoiceService : Service() {
                                                     ignoreCase = true)
                                             ) {
                                                 listener?.onMyraText(
-                                                    "Independent comparison ke liye pehle source se different public site ka named link choose karo.")
+                                                    "Different-host comparison ke liye pehle source se different public site ka named link choose karo.")
                                             }
                                         }
                                     }
