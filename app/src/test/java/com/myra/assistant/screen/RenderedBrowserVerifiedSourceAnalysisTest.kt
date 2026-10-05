@@ -202,8 +202,8 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         assertTrue(summary.contains("docs.example.org"))
         assertTrue(summary.contains("factual truth"))
         assertTrue(summary.contains("organizational independence"))
-        assertTrue(summary.contains("No AI-provider source sharing"))
-        assertTrue(summary.contains("no autonomous continuation"))
+        assertTrue(summary.contains(
+            "No AI-provider source sharing, memory write, or autonomous continuation."))
         assertFalse(answer.factualTruthVerified)
         assertFalse(answer.providerShared)
         assertFalse(answer.memoryWritten)
