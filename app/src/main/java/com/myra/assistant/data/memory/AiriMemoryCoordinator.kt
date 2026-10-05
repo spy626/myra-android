@@ -305,7 +305,46 @@ class MemoryBrainCoordinator(
             AiriMemoryRuntime.markConsolidated(turn.sessionId, turn.turnId)
         }
         AiriWorkingMemory.record(VerifiedMemoryTransaction(turn.turnId, plan.operations.last().intent, status, lastId))
+        if (status == MemoryTransactionStatus.SUCCEEDED) {
+            val diff = memoryDiff(turn.sessionId, turn.turnId)
+            log("MEMORY_DIFF turnId=${turn.turnId} items=${diff.items.size} verified=${diff.verified} " +
+                "new=${diff.adds} reinforce=${diff.reinforces} update=${diff.updates} invalidate=${diff.invalidates} " +
+                "buckets=${diff.items.joinToString(",") { it.bucket.name }}")
+        }
         return when { transient && lastId == null && !deleted -> MemoryBrainOutcome.Transient(); deleted -> MemoryBrainOutcome.Deleted(true); else -> MemoryBrainOutcome.Mutated(MemoryWriteResult.Saved(lastId!!)) }
+    }
+
+    /**
+     * OpenViking-style per-turn memory diff, derived from the existing durable
+     * consolidation journal. This is a read projection only; Room remains the
+     * single storage truth and MemoryBrainCoordinator remains the single owner.
+     */
+    suspend fun memoryDiff(conversationId: String, turnId: Long): MemoryDiffSnapshot {
+        val actions = store.consolidationActions(conversationId, turnId)
+        val items = actions.map { action ->
+            val row = action.memoryId?.let { store.semanticById(it) }
+            val category = row?.category ?: when {
+                action.semanticKey?.startsWith("relationship:") == true -> MemoryCategory.PERSON.name
+                action.semanticKey?.startsWith("goal:") == true -> MemoryCategory.GOAL.name
+                else -> null
+            }
+            val verified = when (action.action) {
+                SemanticConsolidationAction.INVALIDATE.name -> !action.semanticKey.isNullOrBlank()
+                else -> action.memoryId != null && row != null
+            }
+            MemoryDiffItem(
+                action = action.action,
+                bucket = MemoryOrganization.bucket(category),
+                category = category,
+                semanticKey = action.semanticKey,
+                memoryId = action.memoryId,
+                statement = row?.statement,
+                verified = verified,
+                episodeId = action.episodeId,
+                calibratedAt = action.calibratedAt
+            )
+        }
+        return MemoryDiffSnapshot(conversationId, turnId, items)
     }
 
     suspend fun recall(query: String, limit: Int = 8, type: MemoryRecallType = MemoryRecallType.GENERAL): MemoryBrainOutcome.Recalled {
