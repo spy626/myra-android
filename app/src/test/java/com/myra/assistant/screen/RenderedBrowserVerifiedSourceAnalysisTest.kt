@@ -117,4 +117,68 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
             it.excerpt.contains("IGNORE", ignoreCase = true)
         })
     }
+    @Test fun secondSourceMustBeDifferentPublicHostBeforeAnyStaticRequest() {
+        val firstPrepared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.prepare(handoff(), destination()))
+        val first = RenderedBrowserVerifiedSourceAnalysis.read(
+            firstPrepared,
+            response(firstPrepared.target.canonicalUrl,
+                "<p>Security updates describe important validation changes for public readers.</p>"),
+            3_000L,
+        )
+        val session = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.startComparison(handoff(), first, 3_100L))
+        assertNull(RenderedBrowserVerifiedSourceAnalysis.prepareSecond(
+            session, destination(url = "https://example.com/another-security-page")))
+
+        val other = destination(
+            url = "https://docs.example.org/security-bulletin",
+            host = "docs.example.org",
+        )
+        val secondPrepared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.prepareSecond(session, other))
+        val second = RenderedBrowserVerifiedSourceAnalysis.read(
+            secondPrepared,
+            response(secondPrepared.target.canonicalUrl,
+                "<p>Security updates explain additional validation fixes for public users.</p>"),
+            3_200L,
+        )
+        val compared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.compare(session, second, 3_300L))
+        assertEquals(
+            com.myra.assistant.agent.BrowserResearchComparison.Decision.TWO_INDEPENDENT_SOURCES_VERIFIED,
+            compared.decision)
+        assertNotEquals(compared.first.host, compared.second.host)
+        val summary = RenderedBrowserVerifiedSourceAnalysis.comparisonSummary(compared)
+        assertTrue(summary.contains("Independent public-source comparison complete"))
+        assertTrue(summary.contains("Two different public hosts"))
+        assertTrue(summary.contains("claim-level agreement"))
+    }
+
+    @Test fun irrelevantSecondSourceDoesNotFabricateComparisonEvidence() {
+        val firstPrepared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.prepare(handoff(), destination()))
+        val first = RenderedBrowserVerifiedSourceAnalysis.read(
+            firstPrepared,
+            response(firstPrepared.target.canonicalUrl,
+                "<p>Security updates describe important validation changes for public readers.</p>"),
+            3_000L,
+        )
+        val session = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.startComparison(handoff(), first, 3_100L))
+        val other = destination(
+            url = "https://docs.example.org/cooking",
+            host = "docs.example.org",
+        )
+        val secondPrepared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.prepareSecond(session, other))
+        val second = RenderedBrowserVerifiedSourceAnalysis.read(
+            secondPrepared,
+            response(secondPrepared.target.canonicalUrl,
+                "<p>This cooking article describes sourdough bread techniques for home bakers.</p>"),
+            3_200L,
+        )
+        assertNull(RenderedBrowserVerifiedSourceAnalysis.compare(session, second, 3_300L))
+    }
+
 }
