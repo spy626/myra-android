@@ -56,7 +56,7 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
      * Exactly-once claim for the existing unfinished research completion. Call only after
      * a user-selected public destination has independently passed browser verification.
      */
-    @Synchronized fun claimResearchSourceHandoff(
+    @Synchronized internal fun claimResearchSourceHandoff(
         pending: BrowserResearchSourceHandoff.Pending,
     ): Boolean {
         val current = BrowserResearchSourceHandoff.pending(value, now()) ?: return false
