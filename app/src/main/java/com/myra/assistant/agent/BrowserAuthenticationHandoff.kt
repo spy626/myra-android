@@ -10,7 +10,7 @@ import java.util.Locale
  * credential or identity strings enter the pause record, model prompt or task history.
  * This neither performs login nor claims a verified signed-in session.
  */
-internal object BrowserAuthenticationHandoff {
+object BrowserAuthenticationHandoff {
     const val MAX_WAIT_MS = 5L * 60_000L
     const val MIN_SAMPLE_GAP_MS = 250L
     data class Pause(
