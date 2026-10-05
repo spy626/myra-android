@@ -2426,7 +2426,7 @@ class MyraVoiceService : Service() {
                                                         val continuationMessage =
                                                             when (continued.disposition) {
                                                                 BrowserResearchContinuation.Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD ->
-                                                                    "Third source ke baad bounded research answer ready hai; screen par exact source-supported answer hai. Factual truth independently verify nahi hui."
+                                                                    "Third source ke baad bounded research answer ready hai; screen par strict source-supported evidence hai. Factual truth ya paraphrase equivalence independently verify nahi hui."
                                                                 BrowserResearchContinuation.Disposition.CONFLICT_REMAINS_AFTER_THIRD ->
                                                                     "Third source ke baad bhi critical-literal conflict unresolved hai; koi source automatically correct nahi maana gaya."
                                                                 BrowserResearchContinuation.Disposition.FINAL_UNRESOLVED_NO_ALIGNMENT ->
@@ -2531,7 +2531,7 @@ class MyraVoiceService : Service() {
                                                         listener?.onMyraText(summary)
                                                         val goalMessage = when (goal.disposition) {
                                                             BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY ->
-                                                                "Bounded research answer ready hai; screen par exact source-supported answer hai. Factual truth independently verify nahi hui."
+                                                                "Bounded research answer ready hai; screen par strict source-supported evidence hai. Factual truth ya paraphrase equivalence independently verify nahi hui."
                                                             BrowserResearchGoalCompletion.Disposition.UNRESOLVED_CRITICAL_LITERAL_CONFLICT ->
                                                                 if (continuation != null)
                                                                     "Critical-literal conflict unresolved hai. Continue karna ho to different third public site ka named link explicitly open karo."
