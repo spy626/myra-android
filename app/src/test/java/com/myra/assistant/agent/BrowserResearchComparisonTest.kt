@@ -45,7 +45,7 @@ class BrowserResearchComparisonTest {
         ))
     }
 
-    @Test fun onlyDifferentHostCanBecomeIndependentSecondSource() {
+    @Test fun onlyDifferentHostCanBecomeSecondSource() {
         val first = source("https://one.example/security", "one.example", 'a')
         val session = requireNotNull(
             BrowserResearchComparison.start(handoff(), first, 2_100L))
@@ -59,7 +59,7 @@ class BrowserResearchComparisonTest {
         val result = requireNotNull(
             BrowserResearchComparison.compare(session, second, 2_300L))
         assertEquals(
-            BrowserResearchComparison.Decision.TWO_INDEPENDENT_SOURCES_VERIFIED,
+            BrowserResearchComparison.Decision.TWO_DIFFERENT_PUBLIC_HOSTS_VERIFIED,
             result.decision)
         assertEquals(listOf("security"), result.sharedTerms)
         assertEquals(listOf("updates"), result.firstOnlyTerms)
@@ -293,9 +293,196 @@ class BrowserResearchComparisonTest {
         val result = requireNotNull(
             BrowserResearchComparison.compare(session, second, 2_300L))
         assertEquals(
-            BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT,
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_CLAIM_CONFLICT,
             result.claimAssessment.relation)
         assertFalse(BrowserResearchGoalCompletion.supportsBoundedSummary(result))
+    }
+
+    @Test fun oppositeActionsWithSameLiteralsNeverBecomeStructuredSupport() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/release",
+            host = "one.example",
+            contentSha256 = "8".repeat(64),
+            excerpts = listOf(
+                "Android security update 4.2 adds camera support to Pixel devices in 2026."),
+            matchedTerms = listOf("android", "security", "update"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/release",
+            host = "two.example",
+            contentSha256 = "9".repeat(64),
+            excerpts = listOf(
+                "Android security update 4.2 removes camera support from Pixel devices in 2026."),
+            matchedTerms = listOf("android", "security", "update"),
+            capturedAt = 2_200L,
+        ))
+
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_CLAIM_CONFLICT,
+            result.claimAssessment.relation)
+        assertFalse(BrowserResearchGoalCompletion.supportsBoundedSummary(result))
+    }
+
+    @Test fun exactDuplicateCannotMaskAnotherRelevantLiteralConflict() {
+        val shared =
+            "Security updates describe important validation improvements for public Android users."
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/release",
+            host = "one.example",
+            contentSha256 = "a".repeat(64),
+            excerpts = listOf(
+                shared,
+                "Security update version 4.2 shipped to supported Android devices in 2026.",
+            ),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/release",
+            host = "two.example",
+            contentSha256 = "b".repeat(64),
+            excerpts = listOf(
+                shared,
+                "Security update version 4.3 shipped to supported Android devices in 2025.",
+            ),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_200L,
+        ))
+
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT,
+            result.claimAssessment.relation)
+    }
+
+    @Test fun differentlyWordedVersionAndDateMismatchIsStillConflict() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/release",
+            host = "one.example",
+            contentSha256 = "c".repeat(64),
+            excerpts = listOf(
+                "Security update version 4.2 shipped to supported Android devices in 2026."),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/release",
+            host = "two.example",
+            contentSha256 = "d".repeat(64),
+            excerpts = listOf(
+                "Supported Android devices received security release 4.3 during 2025."),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_200L,
+        ))
+
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT,
+            result.claimAssessment.relation)
+    }
+
+    @Test fun quarterMonthAndUnitMismatchStayConflict() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/report",
+            host = "one.example",
+            contentSha256 = "e".repeat(64),
+            excerpts = listOf(
+                "Android security report for Q1 October 2026 lists package size 10 MB for supported devices."),
+            matchedTerms = listOf("android", "security", "report"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/report",
+            host = "two.example",
+            contentSha256 = "f".repeat(64),
+            excerpts = listOf(
+                "Android security report for Q2 November 2026 lists package size 10 GB for supported devices."),
+            matchedTerms = listOf("android", "security", "report"),
+            capturedAt = 2_200L,
+        ))
+
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT,
+            result.claimAssessment.relation)
+    }
+
+    @Test fun differentFinancialMetricsDoNotBecomeSupport() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/financial",
+            host = "one.example",
+            contentSha256 = "1".repeat(64),
+            excerpts = listOf(
+                "Company financial update reports revenue $100 million for Android business in 2026."),
+            matchedTerms = listOf("company", "financial", "android"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/financial",
+            host = "two.example",
+            contentSha256 = "2".repeat(64),
+            excerpts = listOf(
+                "Company financial update reports profit $100 million for Android business in 2026."),
+            matchedTerms = listOf("company", "financial", "android"),
+            capturedAt = 2_200L,
+        ))
+
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT,
+            result.claimAssessment.relation)
+    }
+
+    @Test fun differentNamedProductsDoNotBecomeSupport() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/device",
+            host = "one.example",
+            contentSha256 = "3".repeat(64),
+            excerpts = listOf(
+                "Android security update 4.2 shipped for Google Pixel devices in 2026."),
+            matchedTerms = listOf("android", "security", "update"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/device",
+            host = "two.example",
+            contentSha256 = "4".repeat(64),
+            excerpts = listOf(
+                "Android security update 4.2 shipped for Samsung Galaxy devices in 2026."),
+            matchedTerms = listOf("android", "security", "update"),
+            capturedAt = 2_200L,
+        ))
+
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT,
+            result.claimAssessment.relation)
     }
 
 }
