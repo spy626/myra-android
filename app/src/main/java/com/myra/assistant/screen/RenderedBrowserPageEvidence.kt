@@ -24,6 +24,7 @@ internal object RenderedBrowserPageEvidence {
         val stableVisibleLines: List<String>,
         val contentSha256: String,
         val destinationUrlVerified: Boolean = false,
+        val publicDestination: RenderedBrowserPublicDestination.Receipt? = null,
         val permitsNextAction: Boolean = false,
     ) {
         /** Human-readable preview is a quotation of untrusted screen data, not a direction. */
