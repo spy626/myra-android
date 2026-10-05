@@ -1495,7 +1495,19 @@ class MyraVoiceService : Service() {
                     val localRecallIntent = com.myra.assistant.data.memory.LocalMemoryRecallRouter
                         .classify(finalUtterance.memoryEvidence)
                     val memoryIntentResolvedAt = android.os.SystemClock.elapsedRealtime()
-                    val memoryOwned = staged.isNotEmpty() || pendingRecall != null || localRecallIntent != null
+                    // Plast-Mem-style final-turn fallback must own a likely durable turn
+                    // before the ordinary model reply is released. Otherwise the semantic
+                    // interpreter can write in the background after the user has already
+                    // asked the next recall question, creating a visible read-after-write race.
+                    val finalTurnFallbackEligible =
+                        staged.isEmpty() &&
+                            pendingRecall == null &&
+                            localRecallIntent == null &&
+                            com.myra.assistant.data.memory.FinalTurnSemanticCandidateGate
+                                .shouldInterpret(finalUtterance.memoryEvidence)
+                    val memoryOwned =
+                        staged.isNotEmpty() || pendingRecall != null || localRecallIntent != null ||
+                            finalTurnFallbackEligible
                     if (memoryOwned) {
                         suppressModelForTurn = true
                         localCommandExecutedThisTurn = true
