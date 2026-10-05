@@ -96,6 +96,7 @@ import com.myra.assistant.agent.GeneralActionResult
 import com.myra.assistant.agent.GeneralActionRouter
 import com.myra.assistant.agent.BrowserNavigationTaskEvidence
 import com.myra.assistant.agent.BrowserResearchComparison
+import com.myra.assistant.agent.BrowserResearchContinuation
 import com.myra.assistant.agent.BrowserResearchGoalCompletion
 import com.myra.assistant.agent.BrowserResearchSourceHandoff
 import com.myra.assistant.agent.GeneralAgentRuntimeStore
@@ -2233,6 +2234,7 @@ class MyraVoiceService : Service() {
         val researchHandoff = BrowserResearchSourceHandoff.pending(
             WorkingTaskRuntime.store.snapshot(), System.currentTimeMillis())
         val researchComparison = WorkingTaskRuntime.store.pendingResearchComparison()
+        val researchContinuation = WorkingTaskRuntime.store.pendingResearchContinuation()
         fun report(
             message: String,
             error: Boolean,
@@ -2365,6 +2367,16 @@ class MyraVoiceService : Service() {
                                     verification, bound.destinationUrlVerified)
                                 if (bound.destinationUrlVerified) {
                                     val verifiedDestination = bound.publicDestination
+                                    val preparedThird = if (researchContinuation != null &&
+                                        verifiedDestination != null
+                                    ) RenderedBrowserVerifiedSourceAnalysis.prepareThird(
+                                        researchContinuation, verifiedDestination)
+                                    else null
+                                    val thirdClaimed = preparedThird != null &&
+                                        researchContinuation != null &&
+                                        WorkingTaskRuntime.store.claimResearchContinuation(
+                                            researchContinuation)
+
                                     val preparedSecond = if (researchComparison != null &&
                                         verifiedDestination != null
                                     ) RenderedBrowserVerifiedSourceAnalysis.prepareSecond(
@@ -2375,7 +2387,93 @@ class MyraVoiceService : Service() {
                                         WorkingTaskRuntime.store.claimResearchComparison(
                                             researchComparison)
 
-                                    if (secondClaimed && preparedSecond != null &&
+                                    if (thirdClaimed && preparedThird != null &&
+                                        researchContinuation != null
+                                    ) {
+                                        report(
+                                            "Browser mein third public destination verify hui; final bounded research source ka one-page local read start hua.",
+                                            false, evidence, bound)
+                                        serviceScope.launch {
+                                            val analyzed = runCatching {
+                                                RenderedBrowserVerifiedSourceAnalysis.executeBlocking(
+                                                    preparedThird)
+                                            }
+                                            mainHandler.post {
+                                                if (!ownsResult()) {
+                                                    WorkingTaskRuntime.store.releaseResearchContinuation(
+                                                        researchContinuation)
+                                                    voiceLog(
+                                                        "BROWSER_RESEARCH_THIRD_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
+                                                    return@post
+                                                }
+                                                analyzed.onSuccess { result ->
+                                                    val continued =
+                                                        RenderedBrowserVerifiedSourceAnalysis.resolveThird(
+                                                            researchContinuation, result)
+                                                    if (continued != null &&
+                                                        WorkingTaskRuntime.store.completeResearchContinuation(
+                                                            researchContinuation)
+                                                    ) {
+                                                        val summary =
+                                                            RenderedBrowserVerifiedSourceAnalysis.continuationSummary(
+                                                                continued)
+                                                        listener?.onMyraText(summary)
+                                                        val continuationMessage =
+                                                            when (continued.disposition) {
+                                                                BrowserResearchContinuation.Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD ->
+                                                                    "Third source ke baad bounded summary ready hai; factual truth independently verify nahi hui."
+                                                                BrowserResearchContinuation.Disposition.CONFLICT_REMAINS_AFTER_THIRD ->
+                                                                    "Third source ke baad bhi critical-literal conflict unresolved hai; koi source automatically correct nahi maana gaya."
+                                                                BrowserResearchContinuation.Disposition.FINAL_UNRESOLVED_NO_ALIGNMENT ->
+                                                                    "Third source ke baad bhi safe claim alignment nahi mila; bounded continuation yahin stop hoti hai."
+                                                            }
+                                                        emitState(continuationMessage)
+                                                        queueLocalSpeech(
+                                                            continuationMessage,
+                                                            allowUntranscribedAudio = true)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_THIRD_COMPLETE turnId=$userTurnId " +
+                                                                "priorTaskId=${continued.taskId} " +
+                                                                "firstHost=${continued.first.host} secondHost=${continued.second.host} " +
+                                                                "thirdHost=${continued.third.host} disposition=${continued.disposition} " +
+                                                                "boundedSummaryReady=${continued.boundedSummaryReady} " +
+                                                                "truthVerified=${continued.factualTruthVerified} " +
+                                                                "autonomousContinuation=${continued.autonomousContinuationAllowed} " +
+                                                                "providerShared=false memoryWritten=false autonomousFourthSource=false")
+                                                    } else {
+                                                        val consumed =
+                                                            WorkingTaskRuntime.store.completeResearchContinuation(
+                                                                researchContinuation)
+                                                        val message =
+                                                            "Third selected public source se same research query ka safe matched evidence nahi mila. Bounded third-source continuation yahin stop hoti hai."
+                                                        listener?.onMyraText(message, true)
+                                                        emitState(message)
+                                                        queueLocalSpeech(
+                                                            "Third source se relevant evidence nahi mila; bounded continuation yahin stop hai.",
+                                                            allowUntranscribedAudio = false)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_THIRD_INSUFFICIENT turnId=$userTurnId " +
+                                                                "priorTaskId=${researchContinuation.taskId} consumed=$consumed " +
+                                                                "autonomousFourthSource=false")
+                                                    }
+                                                }.onFailure {
+                                                    WorkingTaskRuntime.store.releaseResearchContinuation(
+                                                        researchContinuation)
+                                                    val message =
+                                                        "Third verified source ka bounded static read available nahi tha; continuation pending hai aur koi fourth action auto-start nahi hua."
+                                                    listener?.onMyraText(message, true)
+                                                    emitState(message)
+                                                    queueLocalSpeech(
+                                                        "Third source ka static read available nahi tha; continuation pending hai.",
+                                                        allowUntranscribedAudio = false)
+                                                    voiceLog(
+                                                        "BROWSER_RESEARCH_THIRD_STOPPED turnId=$userTurnId " +
+                                                            "priorTaskId=${researchContinuation.taskId} " +
+                                                            "reason=${it.javaClass.simpleName} retryAllowed=true autonomousFourthSource=false")
+                                                }
+                                            }
+                                        }
+                                    } else if (secondClaimed && preparedSecond != null &&
                                         researchComparison != null
                                     ) {
                                         report(
