@@ -1,5 +1,6 @@
 package com.myra.assistant.screen
 
+import com.myra.assistant.agent.BrowserResearchAnswerSynthesis
 import com.myra.assistant.agent.BrowserResearchComparison
 import com.myra.assistant.agent.BrowserResearchContinuation
 import com.myra.assistant.agent.BrowserResearchGoalCompletion
@@ -180,6 +181,35 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
         val third = sourceEvidence(result, nowMs) ?: return null
         return BrowserResearchContinuation.resolve(session, third, nowMs)
     }
+
+    fun boundedAnswer(
+        result: BrowserResearchComparison.Result,
+        goal: BrowserResearchGoalCompletion.Assessment = goalAssessment(result),
+    ): BrowserResearchAnswerSynthesis.Answer? =
+        BrowserResearchAnswerSynthesis.fromTwo(result, goal)
+
+    fun boundedAnswer(
+        result: BrowserResearchContinuation.Result,
+    ): BrowserResearchAnswerSynthesis.Answer? =
+        BrowserResearchAnswerSynthesis.fromThree(result)
+
+    fun answerSummary(answer: BrowserResearchAnswerSynthesis.Answer): String = buildString {
+        appendLine("Bounded research answer")
+        appendLine("Question: " + answer.query)
+        appendLine("Answer evidence:")
+        appendLine(answer.evidenceStatement)
+        appendLine("Exact text support observed on: " + answer.supportingHosts.joinToString(", "))
+        appendLine("Supporting public sources:")
+        answer.supportingUrls.forEach { appendLine("• " + it) }
+        appendLine("Bounded sources observed: " + answer.evidenceSourceCount)
+        appendLine(
+            "Uncertainty: this is exact safe text-level support across different public hosts; " +
+                "factual truth and organizational independence are not verified."
+        )
+        append(
+            "Local-only synthesis. No AI-provider source sharing, memory write, or autonomous continuation."
+        )
+    }.take(2_400)
 
     fun comparisonSummary(
         result: BrowserResearchComparison.Result,
