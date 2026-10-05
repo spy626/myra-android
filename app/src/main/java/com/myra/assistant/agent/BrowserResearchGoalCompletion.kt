@@ -22,6 +22,19 @@ internal object BrowserResearchGoalCompletion {
         val observedOutcome: String,
     )
 
+    fun supportsBoundedSummary(result: BrowserResearchComparison.Result): Boolean =
+        when (result.claimAssessment.relation) {
+            BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH ->
+                result.sharedTerms.isNotEmpty()
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT ->
+                result.sharedTerms.size >= 2 &&
+                    result.claimAssessment.sharedAnchors.size >= 3 &&
+                    result.claimAssessment.firstLiterals.isNotEmpty() &&
+                    result.claimAssessment.firstLiterals ==
+                        result.claimAssessment.secondLiterals
+            else -> false
+        }
+
     fun assess(result: BrowserResearchComparison.Result): Assessment {
         val relation = result.claimAssessment.relation
         return when {
@@ -33,13 +46,18 @@ internal object BrowserResearchGoalCompletion {
                         "two_public_hosts_critical_literal_conflict_research_unresolved",
                 )
 
-            relation == BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH &&
-                result.sharedTerms.isNotEmpty() ->
+            supportsBoundedSummary(result) ->
                 Assessment(
                     disposition = Disposition.BOUNDED_SUMMARY_READY,
                     boundedSummaryReady = true,
                     observedOutcome =
-                        "two_public_hosts_exact_safe_statement_support_bounded_summary_ready_truth_unverified",
+                        if (relation ==
+                            BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH
+                        ) {
+                            "two_public_hosts_exact_safe_statement_support_bounded_summary_ready_truth_unverified"
+                        } else {
+                            "two_public_hosts_structured_literal_anchor_support_bounded_summary_ready_truth_unverified"
+                        },
                 )
 
             else ->
