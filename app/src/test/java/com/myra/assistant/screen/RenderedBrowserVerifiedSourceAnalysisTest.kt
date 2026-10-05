@@ -159,6 +159,56 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         assertTrue(summary.contains("not inferred"))
     }
 
+
+    @Test fun readyTwoSourceComparisonFormatsConciseBoundedAnswerWithUncertainty() {
+        val statement =
+            "Security updates describe important validation changes for public readers."
+        val firstPrepared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.prepare(handoff(), destination()))
+        val first = RenderedBrowserVerifiedSourceAnalysis.read(
+            firstPrepared,
+            response(firstPrepared.target.canonicalUrl,
+                "<p>$statement</p><p>Publisher one maintenance context for Android readers.</p>"),
+            3_000L,
+        )
+        val session = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.startComparison(handoff(), first, 3_100L))
+        val secondDestination = destination(
+            url = "https://docs.example.org/security",
+            host = "docs.example.org",
+        )
+        val secondPrepared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.prepareSecond(session, secondDestination))
+        val second = RenderedBrowserVerifiedSourceAnalysis.read(
+            secondPrepared,
+            response(secondPrepared.target.canonicalUrl,
+                "<p>$statement</p><p>Publisher two release context for supported devices.</p>"),
+            3_200L,
+        )
+        val compared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.compare(session, second, 3_300L))
+        val goal = RenderedBrowserVerifiedSourceAnalysis.goalAssessment(compared)
+        assertEquals(
+            com.myra.assistant.agent.BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY,
+            goal.disposition)
+
+        val answer = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.boundedAnswer(compared, goal))
+        val summary = RenderedBrowserVerifiedSourceAnalysis.answerSummary(answer)
+        assertTrue(summary.contains("Bounded research answer"))
+        assertTrue(summary.contains("Question: security updates"))
+        assertTrue(summary.contains(statement))
+        assertTrue(summary.contains("example.com"))
+        assertTrue(summary.contains("docs.example.org"))
+        assertTrue(summary.contains("factual truth"))
+        assertTrue(summary.contains("organizational independence"))
+        assertTrue(summary.contains("No AI-provider source sharing"))
+        assertTrue(summary.contains("no autonomous continuation"))
+        assertFalse(answer.factualTruthVerified)
+        assertFalse(answer.providerShared)
+        assertFalse(answer.memoryWritten)
+    }
+
     @Test fun irrelevantSecondSourceDoesNotFabricateComparisonEvidence() {
         val firstPrepared = requireNotNull(
             RenderedBrowserVerifiedSourceAnalysis.prepare(handoff(), destination()))
@@ -251,6 +301,17 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         assertTrue(summary.contains("final bounded continuation"))
         assertTrue(summary.contains("No fourth source"))
         assertTrue(summary.contains("factual-truth claim"))
+
+        val answer = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.boundedAnswer(resolved))
+        val answerSummary = RenderedBrowserVerifiedSourceAnalysis.answerSummary(answer)
+        assertTrue(answerSummary.contains("Bounded research answer"))
+        assertTrue(answerSummary.contains(
+            "Security updates describe important validation changes for public readers."))
+        assertEquals(3, answer.evidenceSourceCount)
+        assertEquals(2, answer.supportingHosts.size)
+        assertTrue(answerSummary.contains("factual truth"))
+        assertTrue(answerSummary.contains("No AI-provider source sharing"))
     }
 
 }
