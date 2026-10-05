@@ -318,6 +318,56 @@ class GeneralAgentRuntimeTest {
         assertTrue(runtime.next(before.copy(capturedAt = 2)) is PlannerResult.VerifyPrevious)
     }
 
+    @Test fun productionRegistersSecondNativeReadOnlyRouteOnlyWithRealExecutor() {
+        val registry = AgentToolRegistry()
+        var browserCalls = 0
+        var webCalls = 0
+        fun adapters(native: Boolean) = ProductionGeneralAdapters.create(registry,
+            ProductionAdapterExecutors(
+                scroll = { _, _ -> GeneralActionResult(false) },
+                browserSearch = { _, _ -> browserCalls++; GeneralActionResult(true) },
+                observeScreen = { _, _ -> GeneralActionResult(true) },
+                verifyScreen = { _, _ -> GeneralActionResult(true) },
+                back = { _, _ -> GeneralActionResult(false) },
+                webSearch = if (native) { { _, _ -> webCalls++; GeneralActionResult(true) } } else null
+            ))
+        assertFalse(ToolCapability.WEB_SEARCH in GeneralActionRouter(adapters(false))
+            .registeredCapabilities())
+        val router = GeneralActionRouter(adapters(true))
+        assertTrue(ToolCapability.WEB_SEARCH in router.registeredCapabilities())
+
+        val google = NativeReadOnlyWebSearchPolicy.GOOGLE_PACKAGE
+        val request = intent(ToolCapability.BROWSER_SEARCH).copy(
+            relevantApp = google, textHint = "android ai",
+            parameters = mapOf("query" to "android ai", "nativeWebSearchEligible" to "true",
+                "preferredSearchCapability" to ToolCapability.WEB_SEARCH.name),
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)
+        )
+        val runtime = GeneralAgentRuntime(now = { 9 })
+        val task = runtime.start(501L, request)!!
+        val before = perception(task.id, scene(google, 1))
+        val step = (runtime.next(before, router.registeredCapabilities())
+            as PlannerResult.Next).step
+        assertEquals(ToolCapability.WEB_SEARCH, step.capability)
+        assertEquals("NativeWebSearchAdapter", router.select(step, before)?.adapterId)
+        runtime.recordAction(step, router.select(step, before)!!.execute(step, before), before)
+        assertEquals(1, webCalls)
+        assertEquals(0, browserCalls)
+        val after = perception(task.id, scene(google, 2,
+            listOf(element("android ai search results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(after).first.status)
+        assertEquals(ToolCapability.WEB_SEARCH,
+            runtime.takeVerifiedSearchOutcomes().single().capability)
+        assertTrue(runtime.takeVerifiedSearchOutcomes().isEmpty())
+
+        val fallback = GeneralAgentRuntime(now = { 10 })
+        val next = fallback.start(502L, request)!!
+        val default = fallback.next(perception(next.id, scene(google, 1)),
+            GeneralActionRouter(adapters(false)).registeredCapabilities()) as PlannerResult.Next
+        assertEquals(ToolCapability.BROWSER_SEARCH, default.step.capability)
+        assertEquals(1, webCalls)
+    }
+
     @Test fun browser_search_routes_through_adapter_and_completes_from_general_verifier() {
         var searchCalls = 0
         val registry = AgentToolRegistry()

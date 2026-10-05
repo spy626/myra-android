@@ -197,17 +197,27 @@ class GeneralAgentPlanner {
             ToolCapability.VISUAL_CHECK -> ToolCapability.OBSERVE_SCREEN
             else -> null
         }?.takeIf { it in task.intent.requiredCapabilities }
-        val baseline = relevantTools.firstOrNull { it.capability == preferred } ?:
-            relevantTools.firstOrNull { it.capability == equivalent }
+        // Native search-app routing is only a hint from the verified final-turn /
+        // foreground eligibility gate. Availability still comes from actual adapters.
+        val preferredNative = task.intent.parameters["preferredSearchCapability"] ==
+            ToolCapability.WEB_SEARCH.name &&
+            preferred == ToolCapability.BROWSER_SEARCH &&
+            equivalent == ToolCapability.WEB_SEARCH
+        val baseline = if (preferredNative)
+            relevantTools.firstOrNull { it.capability == ToolCapability.WEB_SEARCH }
+                ?: relevantTools.firstOrNull { it.capability == preferred }
+        else relevantTools.firstOrNull { it.capability == preferred }
+            ?: relevantTools.firstOrNull { it.capability == equivalent }
             ?: return PlannerResult.Fail("no_safe_tool")
+        val availableBaseline = baseline ?: return PlannerResult.Fail("no_safe_tool")
         val recommendation = if (task.status != AgentRuntimeStatus.RECOVERING)
             verifiedFeedback?.recommend(
-                baseline.capability,
-                if (baseline.capability == preferred) equivalent else preferred,
+                availableBaseline.capability,
+                if (availableBaseline.capability == preferred) equivalent else preferred,
                 task.intent.requiredCapabilities, relevantTools.map { it.capability }.toSet(),
                 task.intent.relevantApp,
             ) else null
-        val selected = relevantTools.firstOrNull { it.capability == recommendation } ?: baseline
+        val selected = relevantTools.firstOrNull { it.capability == recommendation } ?: availableBaseline
         val capability = selected.capability
         if (perception == null && capability.requiresScreen()) {
             return PlannerResult.NeedObservation(visual = task.intent.turnIntent == TurnIntent.SCREEN_QUESTION)
@@ -223,7 +233,7 @@ class GeneralAgentPlanner {
                 parameters = task.intent.parameters,
                 strategy = when {
                     task.status == AgentRuntimeStatus.RECOVERING -> "safe_retry_${task.recoveryCount}"
-                    selected.capability != baseline.capability ->
+                    selected.capability != availableBaseline.capability ->
                         "verified_outcome_preferred_${selected.capability.name.lowercase()}"
                     else -> "primary"
                 },
@@ -301,17 +311,23 @@ data class ProductionAdapterExecutors(
     val browserSearch: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
     val observeScreen: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
     val verifyScreen: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
-    val back: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult
+    val back: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
+    // Installed only when the native Google search-app intent resolves on this device.
+    val webSearch: ((GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult)? = null,
 )
 
 object ProductionGeneralAdapters {
-    fun create(registry: AgentToolRegistry, executors: ProductionAdapterExecutors): List<GeneralToolAdapter> = listOf(
-        ProductionGeneralToolAdapter("GenericScrollAdapter", requireNotNull(registry.forCapability(ToolCapability.ACCESSIBILITY_SCROLL)), 650L, executors.scroll),
-        ProductionGeneralToolAdapter("BrowserSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.BROWSER_SEARCH)), 900L, executors.browserSearch),
-        ProductionGeneralToolAdapter("ObserveScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.OBSERVE_SCREEN)), 0L, executors.observeScreen),
-        ProductionGeneralToolAdapter("VerifyScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.VERIFY_SCREEN)), 0L, executors.verifyScreen),
-        ProductionGeneralToolAdapter("BackAdapter", requireNotNull(registry.forCapability(ToolCapability.BACK)), 400L, executors.back)
-    )
+    fun create(registry: AgentToolRegistry, executors: ProductionAdapterExecutors): List<GeneralToolAdapter> = buildList {
+        add(ProductionGeneralToolAdapter("GenericScrollAdapter", requireNotNull(registry.forCapability(ToolCapability.ACCESSIBILITY_SCROLL)), 650L, executors.scroll))
+        add(ProductionGeneralToolAdapter("BrowserSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.BROWSER_SEARCH)), 900L, executors.browserSearch))
+        // Never advertise WEB_SEARCH from the static tool list without a real executor.
+        executors.webSearch?.let { executor ->
+            add(ProductionGeneralToolAdapter("NativeWebSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.WEB_SEARCH)), 900L, executor))
+        }
+        add(ProductionGeneralToolAdapter("ObserveScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.OBSERVE_SCREEN)), 0L, executors.observeScreen))
+        add(ProductionGeneralToolAdapter("VerifyScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.VERIFY_SCREEN)), 0L, executors.verifyScreen))
+        add(ProductionGeneralToolAdapter("BackAdapter", requireNotNull(registry.forCapability(ToolCapability.BACK)), 400L, executors.back))
+    }
 }
 
 class GeneralActionRouter(adapters: List<GeneralToolAdapter>) {

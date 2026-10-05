@@ -326,12 +326,19 @@ class MyraVoiceService : Service() {
     }
     private val appActions by lazy { AppActionExecutor(this) }
     private val generalToolRegistry = AgentToolRegistry()
+    private val nativeWebSearchTool by lazy {
+        com.myra.assistant.agent.NativeReadOnlyWebSearchTool(this)
+    }
     private val generalActionRouter by lazy {
         GeneralActionRouter(ProductionGeneralAdapters.create(
             generalToolRegistry,
             ProductionAdapterExecutors(
                 scroll = { step, _ -> executeGeneralScrollAdapter(step.parameters) },
                 browserSearch = { step, _ -> executeGeneralBrowserSearchAdapter(step.parameters) },
+                webSearch = if (runCatching { nativeWebSearchTool.isAvailable() }
+                        .getOrDefault(false)) {
+                    { step, _ -> executeGeneralNativeWebSearchAdapter(step.parameters) }
+                } else null,
                 observeScreen = { _, _ -> GeneralActionResult(ActivityContextStore.snapshot() != null) },
                 verifyScreen = { _, _ -> GeneralActionResult(ActivityContextStore.snapshot() != null) },
                 back = { _, _ ->
@@ -3931,7 +3938,11 @@ class MyraVoiceService : Service() {
         }
         voiceLog("PLANNER_STARTED taskId=${task.id} turnId=${task.turnId} status=${task.status} recoveryCount=${task.recoveryCount}")
         // The actual router, not the registry wish-list, defines executable tools.
-        val planned = runtime.next(before, generalActionRouter.registeredCapabilities())
+        val executable = generalActionRouter.registeredCapabilities().filterNot {
+            it == ToolCapability.WEB_SEARCH &&
+                task.intent.parameters["nativeWebSearchEligible"] != "true"
+        }.toSet()
+        val planned = runtime.next(before, executable)
         runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, before?.scene) }
         voiceLog("PLANNER_RESULT taskId=${task.id} turnId=${task.turnId} result=${planned.javaClass.simpleName}")
         if (planned is PlannerResult.NeedObservation) {
@@ -3963,7 +3974,13 @@ class MyraVoiceService : Service() {
             else -> return false
         }
         val actionBefore = before
-        if (step.capability != expectedCapability || actionBefore == null) {
+        val permittedEquivalent = expectedCapability == ToolCapability.BROWSER_SEARCH &&
+            step.capability == ToolCapability.WEB_SEARCH &&
+            task.intent.requiredCapabilities.containsAll(setOf(
+                ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)) &&
+            task.intent.parameters["nativeWebSearchEligible"] == "true" &&
+            ToolCapability.WEB_SEARCH in executable
+        if ((step.capability != expectedCapability && !permittedEquivalent) || actionBefore == null) {
             runtime.completeFromAdapter(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
             onTerminal(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
             return true
@@ -4199,6 +4216,24 @@ class MyraVoiceService : Service() {
         return GeneralActionResult(dispatch.accepted, failureReason = dispatch.reason.takeIf { !dispatch.accepted })
     }
 
+    private fun executeGeneralNativeWebSearchAdapter(
+        parameters: Map<String, String>
+    ): GeneralActionResult {
+        val query = parameters["query"].orEmpty()
+        val request = com.myra.assistant.agent.BrowserSearchRequest(query)
+        val expected = com.myra.assistant.agent.NativeReadOnlyWebSearchPolicy.GOOGLE_PACKAGE
+        val resolution = com.myra.assistant.agent.SearchResolution(
+            SearchDestination.BROWSER, "native_google_app_only",
+            com.myra.assistant.agent.BrowserSearchExecutor.CURRENT_GOOGLE_APP, expected
+        )
+        val eligible = parameters["nativeWebSearchEligible"] == "true" &&
+            com.myra.assistant.agent.NativeReadOnlyWebSearchPolicy.eligible(
+                request, resolution,
+                AccessibilityHelperService.instance?.currentForegroundContext()?.packageName,
+                runCatching { nativeWebSearchTool.isAvailable() }.getOrDefault(false))
+        return nativeWebSearchTool.execute(query, eligible)
+    }
+
     private fun executeUnifiedBrowserSearch(
         raw: String, modelGoal: ModelResearchGoalProposal.Accepted? = null
     ): Boolean {
@@ -4228,6 +4263,13 @@ class MyraVoiceService : Service() {
             freshForeground?.packageName,
             working.activeExternalApp
         )
+        // Generic search may use the installed Google search app only while it is
+        // already foreground. Explicit Chrome/browser/YouTube remains unchanged.
+        val nativeEligible = ToolCapability.WEB_SEARCH in
+            authorizedTask.intent.requiredCapabilities &&
+            com.myra.assistant.agent.NativeReadOnlyWebSearchPolicy.eligible(
+                request, resolution, freshForeground?.packageName,
+                ToolCapability.WEB_SEARCH in generalActionRouter.registeredCapabilities())
         voiceLog(
             "search_intent_resolved turnId=$activeTurnId finalTranscript=${raw.take(160)} query=${request.query.take(120)} " +
                 "explicitDestination=${request.explicitDestination} workingContextDestination=${working.activeExternalApp} " +
@@ -4243,7 +4285,8 @@ class MyraVoiceService : Service() {
         val taskTurnId = activeTurnId
         val executorName = if (resolution.destination == SearchDestination.YOUTUBE) {
             "YOUTUBE"
-        } else resolution.selectedExecutor?.name ?: "GENERIC_WEB"
+        } else if (nativeEligible) "NATIVE_WEB_SEARCH_ELIGIBLE"
+        else resolution.selectedExecutor?.name ?: "GENERIC_WEB"
         WorkingTaskRuntime.store.beginSearch(
             request.query, resolution.destination, executorName, "search_results_visible"
         )
@@ -4285,7 +4328,9 @@ class MyraVoiceService : Service() {
                 "destination" to resolution.destination.name,
                 "executor" to resolution.selectedExecutor?.name.orEmpty(),
                 "reason" to resolution.reason,
-                "targetPackage" to expectedPackage.orEmpty()
+                "targetPackage" to expectedPackage.orEmpty(),
+                "nativeWebSearchEligible" to nativeEligible.toString(),
+                "preferredSearchCapability" to if (nativeEligible) ToolCapability.WEB_SEARCH.name else ""
             ),
             relevantApp = expectedPackage,
             textHint = request.query
