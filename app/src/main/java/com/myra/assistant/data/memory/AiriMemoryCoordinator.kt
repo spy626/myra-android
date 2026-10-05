@@ -125,6 +125,13 @@ class MemoryBrainCoordinator(
         }
     }
 
+    suspend fun projectFinalDisplay(evidence: AuthoritativeMemoryTurnEvidence): String? =
+        runCatching { reasoningProvider.interpretFinalTurn(evidence) }
+            .onFailure {
+                log("MEMORY_DISPLAY_PROJECTION_FAILED turnId=${evidence.turnId} reason=${it.javaClass.simpleName}")
+            }
+            .getOrNull()?.displayText?.let { FinalTurnDisplayProjectionPolicy.select(evidence, it) }
+
     suspend fun prepareFinalTurn(evidence: AuthoritativeMemoryTurnEvidence, staged: List<MemorySemanticFrame>, semanticConsistent: Boolean = true): FinalMemoryTurnPlan {
         if (ownedSessions.add(evidence.sessionId)) {
             AiriMemoryRuntime.beginSession(evidence.sessionId, evidence.turnId)
