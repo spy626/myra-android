@@ -1,6 +1,7 @@
 package com.myra.assistant.screen
 
 import com.myra.assistant.agent.BrowserResearchComparison
+import com.myra.assistant.agent.BrowserResearchGoalCompletion
 import com.myra.assistant.agent.BrowserResearchSourceHandoff
 import com.myra.assistant.ui.workspace.WorkspaceAgentReachGitHub
 import com.myra.assistant.ui.workspace.WorkspaceAgentReachPolicy
@@ -157,7 +158,15 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
         return BrowserResearchComparison.compare(session, second, nowMs)
     }
 
-    fun comparisonSummary(result: BrowserResearchComparison.Result): String = buildString {
+    fun goalAssessment(
+        result: BrowserResearchComparison.Result,
+    ): BrowserResearchGoalCompletion.Assessment =
+        BrowserResearchGoalCompletion.assess(result)
+
+    fun comparisonSummary(
+        result: BrowserResearchComparison.Result,
+        goal: BrowserResearchGoalCompletion.Assessment = goalAssessment(result),
+    ): String = buildString {
         appendLine("Independent public-source comparison complete.")
         appendLine("Source A: " + result.first.finalUrl)
         appendLine("A SHA-256: " + result.first.contentSha256)
@@ -190,10 +199,18 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
             BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT ->
                 appendLine("Claim relation: no exact statement alignment or direct critical-literal conflict was safely established.")
         }
+        when (goal.disposition) {
+            BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY ->
+                appendLine("Research goal status: bounded two-source summary is ready.")
+            BrowserResearchGoalCompletion.Disposition.UNRESOLVED_CRITICAL_LITERAL_CONFLICT ->
+                appendLine("Research goal status: unresolved because critical literals conflict.")
+            BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED ->
+                appendLine("Research goal status: unresolved; more relevant evidence is required.")
+        }
         append(
             "Two different public hosts supplied bounded goal-matched evidence. " +
-                "Evidence collection for this comparison is complete. Factual truth, paraphrase agreement, " +
-                "login state, hidden page content, provider sharing, and memory writes are not inferred."
+                "Factual truth, source-organization independence, paraphrase agreement, login state, " +
+                "hidden page content, provider sharing, memory writes, and autonomous continuation are not inferred."
         )
     }.take(3_200)
 
