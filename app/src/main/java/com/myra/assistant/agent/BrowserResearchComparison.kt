@@ -79,6 +79,10 @@ internal object BrowserResearchComparison {
         "their", "there", "these", "they", "this", "those", "under", "were", "what",
         "when", "where", "which", "while", "with", "would",
     )
+    private val polarityMarker = setOf(
+        "no", "not", "never", "without", "cannot", "can't", "didn't", "doesn't",
+        "isn't", "wasn't", "weren't", "won't",
+    )
 
     fun source(
         finalUrl: String,
@@ -151,8 +155,15 @@ internal object BrowserResearchComparison {
         Regex("""[\p{L}\p{M}][\p{L}\p{M}\p{N}_-]{3,39}""")
             .findAll(criticalLiteral.replace(text.lowercase(Locale.ROOT), " "))
             .map { it.value }
-            .filter { it !in genericAnchor && !sensitive.containsMatchIn(it) }
+            .filter {
+                it !in genericAnchor && it !in polarityMarker &&
+                    !sensitive.containsMatchIn(it)
+            }
             .toSet()
+
+    private fun polarity(text: String): Set<String> =
+        Regex("""[\p{L}']+""").findAll(text.lowercase(Locale.ROOT))
+            .map { it.value }.filter { it in polarityMarker }.toSet()
 
     fun supportsBoundedClaim(relation: ClaimRelation): Boolean =
         relation == ClaimRelation.EXACT_SAFE_STATEMENT_MATCH ||
@@ -201,7 +212,9 @@ internal object BrowserResearchComparison {
             val anchorsA = lexicalAnchors(a)
             for (b in second.excerpts) {
                 val secondValues = literals(b)
-                if (firstValues != secondValues || secondValues.isEmpty()) continue
+                if (firstValues != secondValues || secondValues.isEmpty() ||
+                    polarity(a) != polarity(b)
+                ) continue
                 val sharedAnchors = (anchorsA intersect lexicalAnchors(b)).sorted()
                 if (sharedAnchors.size >= 3) {
                     return ClaimAssessment(
