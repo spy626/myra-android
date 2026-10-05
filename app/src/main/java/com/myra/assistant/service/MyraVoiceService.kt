@@ -2496,24 +2496,39 @@ class MyraVoiceService : Service() {
                                                     val comparison =
                                                         RenderedBrowserVerifiedSourceAnalysis.compare(
                                                             researchComparison, result)
-                                                    if (comparison != null &&
+                                                    val goal = comparison?.let {
+                                                        RenderedBrowserVerifiedSourceAnalysis.goalAssessment(it)
+                                                    }
+                                                    val continuation =
+                                                        if (comparison != null && goal != null)
+                                                            BrowserResearchContinuation.start(
+                                                                comparison, goal,
+                                                                System.currentTimeMillis())
+                                                        else null
+                                                    if (comparison != null && goal != null &&
                                                         WorkingTaskRuntime.store.completeResearchComparison(
-                                                            researchComparison)
+                                                            researchComparison, continuation)
                                                     ) {
-                                                        val goal =
-                                                            RenderedBrowserVerifiedSourceAnalysis.goalAssessment(
-                                                                comparison)
                                                         val summary =
                                                             RenderedBrowserVerifiedSourceAnalysis.comparisonSummary(
-                                                                comparison, goal)
+                                                                comparison, goal) +
+                                                                if (continuation != null)
+                                                                    "\nResearch unresolved hai. Continue karna ho to results par pehle dono hosts se different third public site ka named link explicitly open karo."
+                                                                else ""
                                                         listener?.onMyraText(summary)
                                                         val goalMessage = when (goal.disposition) {
                                                             BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY ->
                                                                 "Bounded two-source summary ready hai; factual truth independently verify nahi hui."
                                                             BrowserResearchGoalCompletion.Disposition.UNRESOLVED_CRITICAL_LITERAL_CONFLICT ->
-                                                                "Do sources ke critical literals conflict karte hain; research unresolved hai aur koi source automatically correct nahi maana gaya."
+                                                                if (continuation != null)
+                                                                    "Critical-literal conflict unresolved hai. Continue karna ho to different third public site ka named link explicitly open karo."
+                                                                else
+                                                                    "Critical-literal conflict unresolved hai; koi source automatically correct nahi maana gaya."
                                                             BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED ->
-                                                                "Do sources compare ho gaye, lekin safe claim alignment nahi mila; research unresolved hai aur more evidence chahiye."
+                                                                if (continuation != null)
+                                                                    "Safe claim alignment nahi mila. Continue karna ho to different third public site ka named link explicitly open karo."
+                                                                else
+                                                                    "Safe claim alignment nahi mila; research unresolved hai."
                                                         }
                                                         emitState(goalMessage)
                                                         queueLocalSpeech(
@@ -2527,6 +2542,7 @@ class MyraVoiceService : Service() {
                                                                 "claimRelation=${comparison.claimAssessment.relation} " +
                                                                 "goalDisposition=${goal.disposition} boundedSummaryReady=${goal.boundedSummaryReady} " +
                                                                 "truthVerified=${goal.factualTruthVerified} autonomousContinuation=${goal.autonomousContinuationAllowed} " +
+                                                                "continuationPending=${continuation != null} " +
                                                                 "providerShared=false memoryWritten=false autonomousThirdSource=false")
                                                     } else {
                                                         WorkingTaskRuntime.store.releaseResearchComparison(
