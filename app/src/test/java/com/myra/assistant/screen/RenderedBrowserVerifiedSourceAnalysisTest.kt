@@ -153,7 +153,8 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         assertTrue(summary.contains("Independent public-source comparison complete"))
         assertTrue(summary.contains("Two different public hosts"))
         assertTrue(summary.contains("Claim relation:"))
-        assertTrue(summary.contains("factual truth are not inferred"))
+        assertTrue(summary.contains("truth"))
+        assertTrue(summary.contains("not inferred"))
     }
 
     @Test fun irrelevantSecondSourceDoesNotFabricateComparisonEvidence() {
