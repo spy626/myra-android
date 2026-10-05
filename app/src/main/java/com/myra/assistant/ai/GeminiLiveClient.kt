@@ -163,7 +163,7 @@ class GeminiLiveClient(
         .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
             .put("kind", JSONObject().put("type", "STRING")
                 .put("enum", JSONArray().put("READ_ONLY_RESEARCH")))
-            .put("source_span", JSONObject().put("type", "STRING"))
+            .put("source_span", JSONObject().put("type", "STRING").put("description", com.myra.assistant.data.memory.MemoryProposalUsagePolicy.SOURCE_SPAN_DESCRIPTION))
             .put("query_span", JSONObject().put("type", "STRING"))
             .put("confidence", JSONObject().put("type", "NUMBER")))
             .put("required", JSONArray(listOf("kind", "source_span", "query_span", "confidence"))))
@@ -200,12 +200,12 @@ class GeminiLiveClient(
                 .put("semantic_relationship", JSONObject().put("type", "STRING").put("description", "The single canonical relationship strength expressed by the authoritative current USER source_span. Required for ADD_RELATIONSHIP and REPLACE_RELATIONSHIP.").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
                 .put("temporal_scope", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("CURRENT", "HISTORICAL", "TEMPORARY", "RECURRING", "UNSPECIFIED"))))
                 .put("assertion_mode", JSONObject().put("type", "STRING").put("description", "Required semantic attribution: do not attribute hypothetical or reported speech to the user.").put("enum", JSONArray(listOf("USER_ASSERTED", "HYPOTHETICAL", "REPORTED_SPEECH", "QUESTION"))))
-                .put("fact", JSONObject().put("type", "STRING").put("description", "Required for fact/linked-fact operations and as the episode summary."))
+                .put("fact", JSONObject().put("type", "STRING").put("description", com.myra.assistant.data.memory.MemoryProposalUsagePolicy.FACT_DESCRIPTION))
                 .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "IDENTITY", "PREFERENCE", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
                     "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "IDEA", "SOLUTION"
                 ))))
-                .put("memory_key", JSONObject().put("type", "STRING"))
+                .put("memory_key", JSONObject().put("type", "STRING").put("description", com.myra.assistant.data.memory.MemoryProposalUsagePolicy.MEMORY_KEY_DESCRIPTION))
                 .put("source_span", JSONObject().put("type", "STRING"))
                 .put("critical_literals", JSONObject().put("type", "ARRAY").put("maxItems", 8).put("items", JSONObject().put("type", "STRING")))
                 .put("event_type", JSONObject().put("type", "STRING").put("description", "Required for ADD_EPISODE."))
@@ -221,7 +221,7 @@ class GeminiLiveClient(
             .put("required", JSONArray(listOf("intent", "source_span", "confidence", "assertion_mode")))
         return JSONObject()
             .put("name", "propose_user_memory")
-            .put("description", "Interpret the current completed user turn into bounded independent AIRI semantic actions. Required by intent: ADD_RELATIONSHIP and REPLACE_RELATIONSHIP need person+semantic_relationship; REMOVE_RELATIONSHIP needs person; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD/UPDATE_GOAL need goal_title. semantic_relationship is the single canonical strength expressed in source_span. REINFORCE/INVALIDATE target canonical facts and do not need a relationship enum. Every operation needs source_span+confidence+assertion_mode. source_span copies the shortest near-verbatim current-turn words; normalized fact meaning may be translated. Use USER_ASSERTED only for the user's own asserted proposition; hypothetical and reported speech must be marked. Put every critical literal in critical_literals. Questions are RECALL. Android validates structure, literals, attribution, lifecycle and safety and alone owns persistence.")
+            .put("description", com.myra.assistant.data.memory.MemoryProposalUsagePolicy.TOOL_DESCRIPTION)
             .put("parameters", JSONObject()
                 .put("type", "OBJECT")
                 .put("properties", JSONObject().put(
