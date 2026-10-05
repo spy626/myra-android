@@ -262,4 +262,63 @@ class BrowserResearchContinuationTest {
         assertFalse(result.autonomousContinuationAllowed)
     }
 
+    @Test fun paraphrasedLiteralConflictCannotBeOverruledByThirdSourceSupport() {
+        val compared = comparison(
+            source("https://one.example/release", "one.example", '1',
+                "Security update version 4.2 shipped to supported Android devices in 2026.",
+                listOf("security", "update", "android"), 2_000L),
+            source("https://two.example/release", "two.example", '2',
+                "Supported Android devices received security release 4.3 during 2025.",
+                listOf("security", "update", "android"), 2_200L),
+        )
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT,
+            compared.claimAssessment.relation)
+        val continuation = requireNotNull(BrowserResearchContinuation.start(
+            compared, BrowserResearchGoalCompletion.assess(compared), 2_400L))
+        val third = source(
+            "https://three.example/release", "three.example", '3',
+            "Security update version 4.2 shipped to supported Android devices in 2026.",
+            listOf("security", "update", "android"), 2_500L)
+
+        val result = requireNotNull(
+            BrowserResearchContinuation.resolve(continuation, third, 2_600L))
+
+        assertEquals(
+            BrowserResearchContinuation.Disposition.CONFLICT_REMAINS_AFTER_THIRD,
+            result.disposition)
+        assertFalse(result.boundedSummaryReady)
+    }
+
+    @Test fun oppositeActionConflictCannotBeOverruledByThirdSourceSupport() {
+        val compared = comparison(
+            source("https://one.example/release", "one.example", '4',
+                "Android security update 4.2 adds camera support to Pixel devices in 2026.",
+                listOf("security", "update", "android"), 2_000L),
+            source("https://two.example/release", "two.example", '5',
+                "Android security update 4.2 removes camera support from Pixel devices in 2026.",
+                listOf("security", "update", "android"), 2_200L),
+        )
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_CLAIM_CONFLICT,
+            compared.claimAssessment.relation)
+        val continuation = requireNotNull(BrowserResearchContinuation.start(
+            compared, BrowserResearchGoalCompletion.assess(compared), 2_400L))
+        assertEquals(
+            BrowserResearchContinuation.Reason.STRUCTURED_CLAIM_CONFLICT,
+            continuation.reason)
+        val third = source(
+            "https://three.example/release", "three.example", '6',
+            "Android security update 4.2 adds camera support to Pixel devices in 2026.",
+            listOf("security", "update", "android"), 2_500L)
+
+        val result = requireNotNull(
+            BrowserResearchContinuation.resolve(continuation, third, 2_600L))
+
+        assertEquals(
+            BrowserResearchContinuation.Disposition.CONFLICT_REMAINS_AFTER_THIRD,
+            result.disposition)
+        assertFalse(result.boundedSummaryReady)
+    }
+
 }
