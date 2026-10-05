@@ -209,6 +209,59 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         assertFalse(answer.memoryWritten)
     }
 
+
+    @Test fun structuredSupportSummaryShowsObservedStructureAndDeniesParaphraseEquivalence() {
+        val first = requireNotNull(
+            com.myra.assistant.agent.BrowserResearchComparison.source(
+                finalUrl = "https://one.example/release",
+                host = "one.example",
+                contentSha256 = "7".repeat(64),
+                excerpts = listOf(
+                    "Security update version 4.2 shipped to supported Android devices in 2026."),
+                matchedTerms = listOf("security", "update", "android"),
+                capturedAt = 2_000L,
+            )
+        )
+        val session = com.myra.assistant.agent.BrowserResearchComparison.Session(
+            taskId = "research-structured",
+            query = "android security update",
+            first = first,
+            createdAt = 2_100L,
+        )
+        val second = requireNotNull(
+            com.myra.assistant.agent.BrowserResearchComparison.source(
+                finalUrl = "https://two.example/release",
+                host = "two.example",
+                contentSha256 = "8".repeat(64),
+                excerpts = listOf(
+                    "Supported Android devices received security release 4.2 during 2026."),
+                matchedTerms = listOf("security", "update", "android"),
+                capturedAt = 2_200L,
+            )
+        )
+        val compared = requireNotNull(
+            com.myra.assistant.agent.BrowserResearchComparison.compare(
+                session, second, 2_300L))
+        val goal = RenderedBrowserVerifiedSourceAnalysis.goalAssessment(compared)
+        val answer = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.boundedAnswer(compared, goal))
+        val summary = RenderedBrowserVerifiedSourceAnalysis.answerSummary(answer)
+
+        assertEquals(
+            com.myra.assistant.agent.BrowserResearchAnswerSynthesis.SupportKind.STRUCTURED_LITERAL_ANCHOR,
+            answer.supportKind)
+        assertTrue(summary.contains("Structured bounded evidence"))
+        assertTrue(summary.contains("Shared lexical anchors:"))
+        assertTrue(summary.contains("Matching critical literals: 4.2, 2026"))
+        assertTrue(summary.contains("Observed source wording"))
+        assertTrue(summary.contains("Security update version 4.2"))
+        assertTrue(summary.contains("received security release 4.2"))
+        assertTrue(summary.contains("do not establish paraphrase equivalence"))
+        assertTrue(summary.contains("factual truth"))
+        assertTrue(summary.contains(
+            "No AI-provider source sharing, memory write, or autonomous continuation."))
+    }
+
     @Test fun irrelevantSecondSourceDoesNotFabricateComparisonEvidence() {
         val firstPrepared = requireNotNull(
             RenderedBrowserVerifiedSourceAnalysis.prepare(handoff(), destination()))
