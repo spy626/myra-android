@@ -4,8 +4,9 @@ package com.myra.assistant.agent
  * Deterministic local-only answer synthesis from already accepted bounded research evidence.
  *
  * This does not paraphrase, rank sources, infer truth, call a model/provider, write memory,
- * or grant further navigation. The answer statement must already be an exact safe statement
- * match accepted by BrowserResearchComparison.
+ * or grant further navigation. Support must already be accepted by the conservative
+ * BrowserResearchGoalCompletion policy: exact text, or identical critical literals plus
+ * strong lexical anchors and query overlap.
  */
 internal object BrowserResearchAnswerSynthesis {
     enum class SupportKind {
