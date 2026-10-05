@@ -65,7 +65,8 @@ object FinalTurnDisplayProjectionPolicy {
         val projectedTokens = projected.split(' ').filter { it.length >= 2 }
         if (sourceTokens.isEmpty() || projectedTokens.isEmpty()) return null
         val matched = sourceTokens.count { left -> projectedTokens.any { right -> close(left, right) } }
-        val required = maxOf(1, (minOf(sourceTokens.size, projectedTokens.size) + 1) / 2)
+        val comparable = minOf(sourceTokens.size, projectedTokens.size)
+        val required = maxOf(1, (comparable * 2 + 4) / 5)
         return display.takeIf { matched >= required }
     }
 
