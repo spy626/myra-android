@@ -177,4 +177,96 @@ class BrowserResearchComparisonTest {
             result.claimAssessment.relation)
     }
 
+    @Test fun differentWordingWithSameCriticalLiteralsAndThreeAnchorsGetsStructuredSupport() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/release",
+            host = "one.example",
+            contentSha256 = "f".repeat(64),
+            excerpts = listOf(
+                "Security update version 4.2 shipped to supported Android devices in 2026."),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/release",
+            host = "two.example",
+            contentSha256 = "1".repeat(64),
+            excerpts = listOf(
+                "Supported Android devices received security release 4.2 during 2026."),
+            matchedTerms = listOf("security", "android", "update"),
+            capturedAt = 2_200L,
+        ))
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT,
+            result.claimAssessment.relation)
+        assertEquals(listOf("4.2", "2026"), result.claimAssessment.firstLiterals)
+        assertEquals(listOf("4.2", "2026"), result.claimAssessment.secondLiterals)
+        assertTrue(result.claimAssessment.sharedAnchors.contains("security"))
+        assertTrue(result.claimAssessment.sharedAnchors.contains("android"))
+        assertTrue(result.claimAssessment.sharedAnchors.contains("supported"))
+        assertTrue(BrowserResearchComparison.supportsBoundedClaim(
+            result.claimAssessment.relation))
+    }
+
+    @Test fun sameLiteralsWithoutThreeSharedAnchorsDoNotPretendSemanticAgreement() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/release",
+            host = "one.example",
+            contentSha256 = "2".repeat(64),
+            excerpts = listOf(
+                "Security update version 4.2 shipped to supported Android devices in 2026."),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/report",
+            host = "two.example",
+            contentSha256 = "3".repeat(64),
+            excerpts = listOf(
+                "Financial forecast 4.2 was published for regional planning teams during 2026."),
+            matchedTerms = listOf("security", "android"),
+            capturedAt = 2_200L,
+        ))
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT,
+            result.claimAssessment.relation)
+    }
+
+    @Test fun differentWordingWithoutCriticalLiteralsStillNeedsMoreEvidence() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/security",
+            host = "one.example",
+            contentSha256 = "4".repeat(64),
+            excerpts = listOf(
+                "Security updates improve validation for supported Android devices and public users."),
+            matchedTerms = listOf("security", "updates", "android"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/security",
+            host = "two.example",
+            contentSha256 = "5".repeat(64),
+            excerpts = listOf(
+                "Supported Android devices receive stronger security validation through platform updates."),
+            matchedTerms = listOf("security", "updates", "android"),
+            capturedAt = 2_200L,
+        ))
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT,
+            result.claimAssessment.relation)
+    }
+
 }
