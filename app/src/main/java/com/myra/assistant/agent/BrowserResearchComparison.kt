@@ -284,7 +284,7 @@ internal object BrowserResearchComparison {
         if (opposingActionConflict(a, b)) return false
         if (first.isEmpty() && second.isEmpty()) return true
         if (first.isEmpty() || second.isEmpty()) return false
-        return (first intersect second).isNotEmpty()
+        return first == second
     }
 
     private fun measurementConcepts(text: String): Set<String> =
