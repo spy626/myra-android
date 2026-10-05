@@ -169,7 +169,8 @@ class MyraVoiceService : Service() {
         fun onReady()
         fun onAmplitude(value: Float)
         fun onSpeaking(speaking: Boolean)
-        fun onUserText(text: String)
+        fun onUserText(turnId: Long, text: String)
+        fun onUserTextCorrection(turnId: Long, text: String) {}
         fun onMyraText(text: String, error: Boolean = false)
     }
 
@@ -1532,6 +1533,12 @@ class MyraVoiceService : Service() {
                                 "operations=${plan.operations.size} clarification=${plan.requiresClarification} " +
                                 "rejectionReason=${plan.rejectionReason ?: "NONE"}"
                         )
+                        plan.displayProjection?.takeIf { it != displayedFinalUserText }?.let { corrected ->
+                            mainHandler.post { listener?.onUserTextCorrection(memoryTurnId, corrected) }
+                            voiceLog(
+                                "FINAL_USER_DISPLAY_PROJECTION turnId=$memoryTurnId corrected=true chars=${corrected.length}"
+                            )
+                        }
                         plan.operations.forEach { operation ->
                             voiceLog(
                                 "MEMORY_PLAN_OPERATION turnId=$memoryTurnId intent=${operation.intent} " +
@@ -5824,7 +5831,7 @@ class MyraVoiceService : Service() {
                     "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
                         "utteranceId=$utteranceId source=$source accepted=true messageId=${result.messageId}"
                 )
-                listener?.onUserText(result.message.display)
+                listener?.onUserText(turnId, result.message.display)
             }
             is UserMessageCommitResult.AlreadyCommitted -> voiceLog(
                 "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
