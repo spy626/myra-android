@@ -71,11 +71,11 @@ internal object BrowserResearchComparison {
     )
     private val criticalLiteral = Regex(
         """(?iu)(?:\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|""" +
-            """\bv?\d+(?:\.\d+){1,3}\b|\b\d+(?:\.\d+)?%\b|""" +
-            """(?:[$€£₹])\s*\d+(?:[.,]\d+)*(?:\s*[kmbt])?\b|""" +
             """\b\d+(?:\.\d+)?\s*(?:bytes?|kb|mb|gb|tb|ms|sec(?:ond)?s?|mins?|minutes?|""" +
-            """hours?|days?|weeks?|months?|years?)\b|\bq[1-4]\b|""" +
-            """\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|""" +
+            """hours?|days?|weeks?|months?|years?)\b|\bv?\d+(?:\.\d+){1,3}\b|""" +
+            """\b\d+(?:\.\d+)?%\b|(?:[$€£₹])\s*\d+(?:[.,]\d+)*(?:\s*[kmbt])?\b|""" +
+            """\bq[1-4]\b|""" +
+            """\b(?:january|february|march|april|june|july|august|september|october|november|december)\b|""" +
             """\b(?:19|20)\d{2}\b|\b\d+(?:[.,]\d+)*\b)"""
     )
     private val dateLiteral = Regex("""(?iu)^(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}/\d{1,2}/\d{2,4})$""")
@@ -88,7 +88,7 @@ internal object BrowserResearchComparison {
     )
     private val quarterLiteral = Regex("""(?iu)^q[1-4]$""")
     private val monthLiteral = Regex(
-        """(?iu)^(?:january|february|march|april|may|june|july|august|september|october|november|december)$"""
+        """(?iu)^(?:january|february|march|april|june|july|august|september|october|november|december)$"""
     )
     private val yearLiteral = Regex("""^(?:19|20)\d{2}$""")
     private val genericAnchor = setOf(
