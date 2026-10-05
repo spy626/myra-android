@@ -165,4 +165,70 @@ class BrowserResearchContinuationTest {
         assertFalse(result.boundedSummaryReady)
         assertFalse(result.autonomousContinuationAllowed)
     }
+    @Test fun workingTaskOwnerTransitionsComparisonIntoExactlyOnceThirdSourceClaim() {
+        var now = 2_400L
+        val store = WorkingTaskContextStore(now = { now })
+        val compared = comparison(
+            source("https://one.example/security", "one.example", 'c',
+                "Security updates describe important validation improvements for public Android users.",
+                listOf("security", "updates"), 2_000L),
+            source("https://two.example/bulletin", "two.example", 'd',
+                "Android patch bulletins cover platform hardening changes and remediation guidance.",
+                listOf("android", "security"), 2_200L),
+        )
+        val comparisonSession = BrowserResearchComparison.Session(
+            taskId = compared.taskId,
+            query = compared.query,
+            first = compared.first,
+            createdAt = 2_100L,
+        )
+        assertTrue(store.beginResearchComparison(comparisonSession))
+        assertTrue(store.claimResearchComparison(comparisonSession))
+        val continuation = requireNotNull(BrowserResearchContinuation.start(
+            compared, BrowserResearchGoalCompletion.assess(compared), now))
+        assertTrue(store.completeResearchComparison(comparisonSession, continuation))
+        assertEquals(continuation, store.pendingResearchContinuation())
+
+        assertTrue(store.claimResearchContinuation(continuation))
+        assertNull(store.pendingResearchContinuation())
+        assertFalse(store.claimResearchContinuation(continuation))
+        store.releaseResearchContinuation(continuation)
+        assertEquals(continuation, store.pendingResearchContinuation())
+        assertTrue(store.claimResearchContinuation(continuation))
+        assertTrue(store.completeResearchContinuation(continuation))
+        assertNull(store.pendingResearchContinuation())
+    }
+
+    @Test fun newSearchDropsPendingThirdSourceContinuation() {
+        val store = WorkingTaskContextStore(now = { 2_400L })
+        val compared = comparison(
+            source("https://one.example/security", "one.example", 'e',
+                "Security updates describe important validation improvements for public Android users.",
+                listOf("security", "updates"), 2_000L),
+            source("https://two.example/bulletin", "two.example", 'f',
+                "Android patch bulletins cover platform hardening changes and remediation guidance.",
+                listOf("android", "security"), 2_200L),
+        )
+        val comparisonSession = BrowserResearchComparison.Session(
+            taskId = compared.taskId,
+            query = compared.query,
+            first = compared.first,
+            createdAt = 2_100L,
+        )
+        assertTrue(store.beginResearchComparison(comparisonSession))
+        assertTrue(store.claimResearchComparison(comparisonSession))
+        val continuation = requireNotNull(BrowserResearchContinuation.start(
+            compared, BrowserResearchGoalCompletion.assess(compared), 2_400L))
+        assertTrue(store.completeResearchComparison(comparisonSession, continuation))
+        assertNotNull(store.pendingResearchContinuation())
+
+        store.beginSearch(
+            "different topic",
+            SearchDestination.BROWSER,
+            ToolCapability.BROWSER_SEARCH.name,
+            "results visible",
+        )
+        assertNull(store.pendingResearchContinuation())
+    }
+
 }
