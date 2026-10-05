@@ -53,6 +53,7 @@ import com.myra.assistant.screen.RenderedBrowserScrollPolicy
 import com.myra.assistant.screen.RenderedBrowserPageEvidence
 import com.myra.assistant.screen.RenderedBrowserPublicDestination
 import com.myra.assistant.screen.RenderedBrowserResearchContinuity
+import com.myra.assistant.screen.RenderedBrowserVerifiedSourceAnalysis
 import com.myra.assistant.screen.ScreenFramePrivacyFilter
 import com.myra.assistant.screen.ScreenPrivacyResult
 import com.myra.assistant.screen.ScreenQueryDispatchPolicy
@@ -94,6 +95,7 @@ import com.myra.assistant.agent.AgentToolRegistry
 import com.myra.assistant.agent.GeneralActionResult
 import com.myra.assistant.agent.GeneralActionRouter
 import com.myra.assistant.agent.BrowserNavigationTaskEvidence
+import com.myra.assistant.agent.BrowserResearchSourceHandoff
 import com.myra.assistant.agent.GeneralAgentRuntimeStore
 import com.myra.assistant.agent.GeneralRuntimeTask
 import com.myra.assistant.agent.GeneralToolAdapter
@@ -2224,6 +2226,10 @@ class MyraVoiceService : Service() {
         cancelSpeechForNewAction()
         val taskId = GeneralAgentRuntimeStore.runtime.activeTask()
             ?.takeIf { it.turnId == userTurnId }?.id
+        // The prior multi-step search can authorize exactly one user-selected source read.
+        // The current link turn keeps its own task identity; no previous runtime task is revived.
+        val researchHandoff = BrowserResearchSourceHandoff.pending(
+            WorkingTaskRuntime.store.snapshot(), System.currentTimeMillis())
         fun report(
             message: String,
             error: Boolean,
@@ -2355,8 +2361,68 @@ class MyraVoiceService : Service() {
                                 val evidence = BrowserNavigationTaskEvidence.afterTap(
                                     verification, bound.destinationUrlVerified)
                                 if (bound.destinationUrlVerified) {
-                                    report("Browser mein naya page text aur public HTTPS destination verify hui.",
-                                        false, evidence, bound)
+                                    val preparedResearch = researchHandoff?.let { pending ->
+                                        bound.publicDestination?.let { verifiedDestination ->
+                                            RenderedBrowserVerifiedSourceAnalysis.prepare(
+                                                pending, verifiedDestination)
+                                        }
+                                    }
+                                    val researchClaimed = preparedResearch != null &&
+                                        researchHandoff != null &&
+                                        WorkingTaskRuntime.store.claimResearchSourceHandoff(
+                                            researchHandoff)
+                                    if (researchClaimed && preparedResearch != null) {
+                                        report(
+                                            "Browser mein public HTTPS destination verify hui; selected research source ka one-page local read start hua.",
+                                            false, evidence, bound)
+                                        serviceScope.launch {
+                                            val analyzed = runCatching {
+                                                RenderedBrowserVerifiedSourceAnalysis.executeBlocking(
+                                                    preparedResearch)
+                                            }
+                                            mainHandler.post {
+                                                if (!ownsResult()) {
+                                                    voiceLog(
+                                                        "BROWSER_RESEARCH_SOURCE_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
+                                                    return@post
+                                                }
+                                                analyzed.onSuccess { result ->
+                                                    val summary =
+                                                        RenderedBrowserVerifiedSourceAnalysis.localSummary(
+                                                            result)
+                                                    listener?.onMyraText(summary)
+                                                    emitState(
+                                                        "Selected public source ka local analysis complete hua.")
+                                                    queueLocalSpeech(
+                                                        "Selected public source ka one-page analysis complete hua; full research goal abhi complete nahi hai.",
+                                                        allowUntranscribedAudio = true)
+                                                    voiceLog(
+                                                        "BROWSER_RESEARCH_SOURCE_ANALYZED turnId=$userTurnId " +
+                                                            "priorTaskId=${preparedResearch.handoff.taskId} " +
+                                                            "sourceSha256=${result.page.evidence.provenance.contentSha256} " +
+                                                            "findingCount=${result.report.findings.size} " +
+                                                            "verifiedPages=${result.report.verifiedPageCount} " +
+                                                            "secondLinkFollowed=false providerShared=false memoryWritten=false goalComplete=false")
+                                                }.onFailure {
+                                                    val message =
+                                                        "Verified browser source ka bounded static read available nahi tha; koi second link follow nahi hua."
+                                                    listener?.onMyraText(message, true)
+                                                    emitState(message)
+                                                    queueLocalSpeech(
+                                                        "Selected source ka static read available nahi tha; koi second link follow nahi hua.",
+                                                        allowUntranscribedAudio = false)
+                                                    voiceLog(
+                                                        "BROWSER_RESEARCH_SOURCE_ANALYSIS_STOPPED turnId=$userTurnId " +
+                                                            "priorTaskId=${preparedResearch.handoff.taskId} " +
+                                                            "reason=${it.javaClass.simpleName} secondLinkFollowed=false")
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        report(
+                                            "Browser mein naya page text aur public HTTPS destination verify hui.",
+                                            false, evidence, bound)
+                                    }
                                 } else {
                                     report("Browser mein naya page text stable mila; public destination independently verify nahi hui.",
                                         false, evidence, bound)
