@@ -134,14 +134,11 @@ internal object BrowserResearchContinuation {
                     it.claimAssessment.relation ==
                         BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT
                 }
-        val exactGoalMatchedSupport = pairs.any {
-            it.claimAssessment.relation ==
-                BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH &&
-                it.sharedTerms.isNotEmpty()
-        }
+        val boundedGoalMatchedSupport =
+            pairs.any(BrowserResearchGoalCompletion::supportsBoundedSummary)
         val disposition = when {
             conflictObserved -> Disposition.CONFLICT_REMAINS_AFTER_THIRD
-            exactGoalMatchedSupport -> Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD
+            boundedGoalMatchedSupport -> Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD
             else -> Disposition.FINAL_UNRESOLVED_NO_ALIGNMENT
         }
         return Result(
