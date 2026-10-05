@@ -153,7 +153,9 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         assertTrue(summary.contains("Independent public-source comparison complete"))
         assertTrue(summary.contains("Two different public hosts"))
         assertTrue(summary.contains("Claim relation:"))
-        assertTrue(summary.contains("truth"))
+        assertTrue(summary.contains("Research goal status: unresolved; more relevant evidence is required."))
+        assertTrue(summary.contains("Factual truth"))
+        assertTrue(summary.contains("autonomous continuation"))
         assertTrue(summary.contains("not inferred"))
     }
 
