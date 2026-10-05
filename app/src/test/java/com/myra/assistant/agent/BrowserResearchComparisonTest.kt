@@ -485,4 +485,34 @@ class BrowserResearchComparisonTest {
             result.claimAssessment.relation)
     }
 
+    @Test fun moneyMagnitudeMismatchStaysConflict() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/financial",
+            host = "one.example",
+            contentSha256 = "5".repeat(64),
+            excerpts = listOf(
+                "Company financial update reports revenue $100 million for Android business in 2026."),
+            matchedTerms = listOf("company", "financial", "android"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/financial",
+            host = "two.example",
+            contentSha256 = "6".repeat(64),
+            excerpts = listOf(
+                "Company financial update reports revenue $100 billion for Android business in 2026."),
+            matchedTerms = listOf("company", "financial", "android"),
+            capturedAt = 2_200L,
+        ))
+
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT,
+            result.claimAssessment.relation)
+    }
+
 }
