@@ -21,9 +21,18 @@ internal object BrowserNavigationTaskEvidence {
         observed = "named_browser_link_not_dispatched; destination_unverified; next_action_not_authorized",
     )
 
-    fun afterTap(verification: RenderedBrowserNavigationPolicy.Verification): Result = when (verification) {
+    fun afterTap(
+        verification: RenderedBrowserNavigationPolicy.Verification,
+        destinationVerified: Boolean = false,
+    ): Result = when (verification) {
         RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED ->
-            Result(
+            if (destinationVerified) Result(
+                generalStatus = GeneralVerificationStatus.SUCCESS,
+                taskState = TaskCompletionState.SUCCESS,
+                observed = "two_fresh_browser_observations_stable_new_visible_text;" +
+                    "public_https_destination_verified; next_action_not_authorized",
+                destinationVerified = true,
+            ) else Result(
                 generalStatus = GeneralVerificationStatus.UNKNOWN,
                 taskState = TaskCompletionState.UNKNOWN,
                 observed = "two_fresh_browser_observations_stable_new_visible_text;" +
