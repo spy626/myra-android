@@ -2654,7 +2654,16 @@ class MyraVoiceService : Service() {
                                             report(
                                                 "Browser mein naya page text aur public HTTPS destination verify hui.",
                                                 false, evidence, bound)
-                                            if (researchComparison != null &&
+                                            if (researchContinuation != null &&
+                                                verifiedDestination != null &&
+                                                researchContinuation.hosts.any {
+                                                    verifiedDestination.host.equals(
+                                                        it, ignoreCase = true)
+                                                }
+                                            ) {
+                                                listener?.onMyraText(
+                                                    "Final bounded third-source continuation ke liye pehle dono sources se different public site ka named link choose karo.")
+                                            } else if (researchComparison != null &&
                                                 verifiedDestination != null &&
                                                 verifiedDestination.host.equals(
                                                     researchComparison.first.host,
