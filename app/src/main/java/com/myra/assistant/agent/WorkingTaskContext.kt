@@ -50,7 +50,58 @@ enum class TaskCompletionState { EXECUTING, SUCCESS, FAILURE, UNKNOWN }
 class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeMillis) {
     @Volatile private var value = WorkingTaskContext()
     private val claimedResearchSourceHandoffs = LinkedHashSet<String>()
+    private var researchComparison: BrowserResearchComparison.Session? = null
+    private var researchComparisonClaimKey: String? = null
     fun snapshot(): WorkingTaskContext = value
+
+    @Synchronized internal fun beginResearchComparison(
+        session: BrowserResearchComparison.Session,
+    ): Boolean {
+        val fresh = BrowserResearchComparison.fresh(session, now()) ?: return false
+        researchComparison = fresh
+        researchComparisonClaimKey = null
+        return true
+    }
+
+    @Synchronized internal fun pendingResearchComparison(): BrowserResearchComparison.Session? {
+        val current = researchComparison ?: return null
+        val fresh = BrowserResearchComparison.fresh(current, now())
+        if (fresh == null) {
+            researchComparison = null
+            researchComparisonClaimKey = null
+            return null
+        }
+        if (researchComparisonClaimKey != null) return null
+        return fresh
+    }
+
+    @Synchronized internal fun claimResearchComparison(
+        session: BrowserResearchComparison.Session,
+    ): Boolean {
+        val current = pendingResearchComparison() ?: return false
+        if (current != session || researchComparisonClaimKey != null) return false
+        researchComparisonClaimKey = session.claimKey
+        return true
+    }
+
+    @Synchronized internal fun releaseResearchComparison(
+        session: BrowserResearchComparison.Session,
+    ) {
+        if (researchComparison == session &&
+            researchComparisonClaimKey == session.claimKey
+        ) researchComparisonClaimKey = null
+    }
+
+    @Synchronized internal fun completeResearchComparison(
+        session: BrowserResearchComparison.Session,
+    ): Boolean {
+        if (researchComparison != session ||
+            researchComparisonClaimKey != session.claimKey
+        ) return false
+        researchComparison = null
+        researchComparisonClaimKey = null
+        return true
+    }
 
     /**
      * Exactly-once claim for the existing unfinished research completion. Call only after
@@ -136,6 +187,8 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     }
 
     @Synchronized fun beginSearch(query: String, destination: SearchDestination, executor: String, expected: String) {
+        researchComparison = null
+        researchComparisonClaimKey = null
         value = value.copy(
             searchQuery = query, resolvedDestination = destination, selectedExecutor = executor,
             actionStartedAt = now(), expectedOutcome = expected, lastObservedOutcome = null,
@@ -204,6 +257,8 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     }
 
     @Synchronized fun clearTask() {
+        researchComparison = null
+        researchComparisonClaimKey = null
         value = WorkingTaskContext(
             conversationTopic = value.conversationTopic,
             activeExternalApp = value.activeExternalApp,
