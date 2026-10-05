@@ -1,5 +1,6 @@
 package com.myra.assistant.screen
 
+import com.myra.assistant.agent.BrowserResearchComparison
 import com.myra.assistant.agent.BrowserResearchSourceHandoff
 import com.myra.assistant.ui.workspace.WorkspaceAgentReachGitHub
 import com.myra.assistant.ui.workspace.WorkspaceAgentReachPolicy
@@ -15,7 +16,8 @@ import okhttp3.Response
  */
 internal object RenderedBrowserVerifiedSourceAnalysis {
     data class Prepared(
-        val handoff: BrowserResearchSourceHandoff.Pending,
+        val researchTaskId: String,
+        val query: String,
         val destination: RenderedBrowserPublicDestination.Receipt,
         val target: WorkspaceAgentReachPolicy.Target,
     )
@@ -29,8 +31,23 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
     fun prepare(
         handoff: BrowserResearchSourceHandoff.Pending,
         destination: RenderedBrowserPublicDestination.Receipt,
+    ): Prepared? = prepareExact(handoff.taskId, handoff.query, destination)
+
+    fun prepareSecond(
+        session: BrowserResearchComparison.Session,
+        destination: RenderedBrowserPublicDestination.Receipt,
     ): Prepared? {
-        if (!destination.publicDnsVerified || destination.permitsNextAction ||
+        if (destination.host.equals(session.first.host, ignoreCase = true)) return null
+        return prepareExact(session.taskId, session.query, destination)
+    }
+
+    private fun prepareExact(
+        researchTaskId: String,
+        query: String,
+        destination: RenderedBrowserPublicDestination.Receipt,
+    ): Prepared? {
+        if (researchTaskId.isBlank() || query.isBlank() ||
+            !destination.publicDnsVerified || destination.permitsNextAction ||
             destination.canonicalUrl.isBlank() || destination.host.isBlank()
         ) return null
         val target = runCatching {
@@ -42,7 +59,7 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
             target.host != destination.host ||
             !uri.rawQuery.isNullOrBlank()
         ) return null
-        return Prepared(handoff, destination, target)
+        return Prepared(researchTaskId, query, destination, target)
     }
 
     fun request(prepared: Prepared): Request =
@@ -77,7 +94,7 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
             followUpStatus = "User-selected verified browser source only; no second link followed",
         )
         val report = WorkspaceAgentReachSourceAnalysis.analyze(
-            prepared.handoff.query, journey)
+            prepared.query, journey)
         require(report.verifiedPageCount == 1) {
             "Selected-source analysis exceeded one verified page"
         }
@@ -105,6 +122,66 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
                 "no AI-provider sharing, no memory write, and the full research goal is not yet independently complete."
         )
     }.take(2_200)
+
+    fun sourceEvidence(
+        result: Result,
+        capturedAtMs: Long = System.currentTimeMillis(),
+    ): BrowserResearchComparison.SourceEvidence? {
+        val provenance = result.page.evidence.provenance
+        return BrowserResearchComparison.source(
+            finalUrl = provenance.finalUrl,
+            host = runCatching { java.net.URI(provenance.finalUrl).host.orEmpty() }
+                .getOrDefault(""),
+            contentSha256 = provenance.contentSha256,
+            excerpts = result.report.findings.map { it.excerpt },
+            matchedTerms = result.report.findings.flatMap { it.matchedTerms },
+            capturedAt = capturedAtMs,
+        )
+    }
+
+    fun startComparison(
+        handoff: BrowserResearchSourceHandoff.Pending,
+        result: Result,
+        nowMs: Long = System.currentTimeMillis(),
+    ): BrowserResearchComparison.Session? {
+        val first = sourceEvidence(result, nowMs) ?: return null
+        return BrowserResearchComparison.start(handoff, first, nowMs)
+    }
+
+    fun compare(
+        session: BrowserResearchComparison.Session,
+        result: Result,
+        nowMs: Long = System.currentTimeMillis(),
+    ): BrowserResearchComparison.Result? {
+        val second = sourceEvidence(result, nowMs) ?: return null
+        return BrowserResearchComparison.compare(session, second, nowMs)
+    }
+
+    fun comparisonSummary(result: BrowserResearchComparison.Result): String = buildString {
+        appendLine("Independent public-source comparison complete.")
+        appendLine("Source A: " + result.first.finalUrl)
+        appendLine("A SHA-256: " + result.first.contentSha256)
+        result.first.excerpts.take(2).forEach { appendLine("A • " + it) }
+        appendLine("Source B: " + result.second.finalUrl)
+        appendLine("B SHA-256: " + result.second.contentSha256)
+        result.second.excerpts.take(2).forEach { appendLine("B • " + it) }
+        if (result.sharedTerms.isNotEmpty()) {
+            appendLine("Shared goal terms: " + result.sharedTerms.joinToString(", "))
+        } else {
+            appendLine("Shared goal terms: none; the two sources cover different parts of the query.")
+        }
+        if (result.firstOnlyTerms.isNotEmpty()) {
+            appendLine("Only A matched: " + result.firstOnlyTerms.joinToString(", "))
+        }
+        if (result.secondOnlyTerms.isNotEmpty()) {
+            appendLine("Only B matched: " + result.secondOnlyTerms.joinToString(", "))
+        }
+        append(
+            "Two different public hosts supplied bounded goal-matched evidence. " +
+                "Evidence collection for this comparison is complete; no claim-level agreement, " +
+                "truth, login state, hidden page content, provider sharing or memory write is inferred."
+        )
+    }.take(3_200)
 
     fun executeBlocking(prepared: Prepared): Result {
         val call = WorkspaceAgentReachGitHub.client.newCall(request(prepared))
