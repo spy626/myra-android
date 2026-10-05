@@ -152,7 +152,8 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         val summary = RenderedBrowserVerifiedSourceAnalysis.comparisonSummary(compared)
         assertTrue(summary.contains("Independent public-source comparison complete"))
         assertTrue(summary.contains("Two different public hosts"))
-        assertTrue(summary.contains("claim-level agreement"))
+        assertTrue(summary.contains("Claim relation:"))
+        assertTrue(summary.contains("factual truth are not inferred"))
     }
 
     @Test fun irrelevantSecondSourceDoesNotFabricateComparisonEvidence() {
