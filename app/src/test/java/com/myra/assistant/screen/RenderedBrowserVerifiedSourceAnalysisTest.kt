@@ -233,7 +233,8 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         val third = RenderedBrowserVerifiedSourceAnalysis.read(
             thirdPrepared,
             response(thirdPrepared.target.canonicalUrl,
-                "<p>Security updates describe important validation changes for public readers.</p>"),
+                "<p>Security updates describe important validation changes for public readers.</p>" +
+                    "<p>Third publisher context documents release maintenance for device owners.</p>"),
             3_500L,
         )
         val resolved = requireNotNull(
