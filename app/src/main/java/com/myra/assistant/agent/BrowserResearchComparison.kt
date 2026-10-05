@@ -71,17 +71,25 @@ internal object BrowserResearchComparison {
     )
     private val criticalLiteral = Regex(
         """(?iu)(?:\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|""" +
+            """\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+""" +
+            """(?:(?:\d{1,2})(?:,\s*)?)?(?:19|20)\d{2}\b|""" +
             """\b\d+(?:\.\d+)?\s*(?:bytes?|kb|mb|gb|tb|ms|sec(?:ond)?s?|mins?|minutes?|""" +
             """hours?|days?|weeks?|months?|years?)\b|\bv?\d+(?:\.\d+){1,3}\b|""" +
-            """\b\d+(?:\.\d+)?%\b|(?:[$€£₹])\s*\d+(?:[.,]\d+)*(?:\s*[kmbt])?\b|""" +
+            """\b\d+(?:\.\d+)?%\b|(?:[$€£₹])\s*\d+(?:[.,]\d+)*(?:\s*(?:k|m|b|t|thousand|million|billion|trillion))?\b|""" +
             """\bq[1-4]\b|""" +
             """\b(?:january|february|march|april|june|july|august|september|october|november|december)\b|""" +
             """\b(?:19|20)\d{2}\b|\b\d+(?:[.,]\d+)*\b)"""
     )
-    private val dateLiteral = Regex("""(?iu)^(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}/\d{1,2}/\d{2,4})$""")
+    private val dateLiteral = Regex(
+        """(?iu)^(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}/\d{1,2}/\d{2,4}|""" +
+            """(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+""" +
+            """(?:(?:\d{1,2})(?:,\s*)?)?(?:19|20)\d{2})$"""
+    )
     private val versionLiteral = Regex("""(?iu)^v?\d+(?:\.\d+){1,3}$""")
     private val percentLiteral = Regex("""(?iu)^\d+(?:\.\d+)?%$""")
-    private val moneyLiteral = Regex("""(?iu)^(?:[$€£₹])\s*\d+(?:[.,]\d+)*(?:\s*[kmbt])?$""")
+    private val moneyLiteral = Regex(
+        """(?iu)^(?:[$€£₹])\s*\d+(?:[.,]\d+)*(?:\s*(?:k|m|b|t|thousand|million|billion|trillion))?$"""
+    )
     private val quantityLiteral = Regex(
         """(?iu)^\d+(?:\.\d+)?\s*(?:bytes?|kb|mb|gb|tb|ms|sec(?:ond)?s?|mins?|minutes?|""" +
             """hours?|days?|weeks?|months?|years?)$"""
