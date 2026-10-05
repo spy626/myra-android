@@ -108,4 +108,48 @@ class BrowserResearchGoalCompletionTest {
             assessment.disposition)
         assertFalse(assessment.boundedSummaryReady)
     }
+    @Test fun structuredLiteralAnchorSupportCanMakeBoundedSummaryReadyWithStrongQueryOverlap() {
+        val compared = result(
+            source("https://one.example/release", "one.example", '3',
+                "Security update version 4.2 shipped to supported Android devices in 2026.",
+                listOf("security", "update", "android"), 2_000L),
+            source("https://two.example/release", "two.example", '4',
+                "Supported Android devices received security release 4.2 during 2026.",
+                listOf("security", "update", "android"), 2_200L),
+        )
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT,
+            compared.claimAssessment.relation)
+        assertTrue(BrowserResearchGoalCompletion.supportsBoundedSummary(compared))
+        val assessment = BrowserResearchGoalCompletion.assess(compared)
+        assertEquals(
+            BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY,
+            assessment.disposition)
+        assertTrue(assessment.boundedSummaryReady)
+        assertTrue(assessment.observedOutcome.contains("structured_literal_anchor_support"))
+        assertFalse(assessment.factualTruthVerified)
+        assertFalse(assessment.autonomousContinuationAllowed)
+    }
+
+    @Test fun structuredSupportWithOnlyOneSharedQueryTermStillNeedsMoreEvidence() {
+        val compared = result(
+            source("https://one.example/release", "one.example", '5',
+                "Security update version 4.2 shipped to supported Android devices in 2026.",
+                listOf("security", "update", "android"), 2_000L),
+            source("https://two.example/release", "two.example", '6',
+                "Supported Android devices received security release 4.2 during 2026.",
+                listOf("security", "bulletin"), 2_200L),
+        )
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT,
+            compared.claimAssessment.relation)
+        assertEquals(listOf("security"), compared.sharedTerms)
+        assertFalse(BrowserResearchGoalCompletion.supportsBoundedSummary(compared))
+        val assessment = BrowserResearchGoalCompletion.assess(compared)
+        assertEquals(
+            BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED,
+            assessment.disposition)
+        assertFalse(assessment.boundedSummaryReady)
+    }
+
 }
