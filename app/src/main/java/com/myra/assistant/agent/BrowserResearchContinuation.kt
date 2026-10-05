@@ -12,6 +12,7 @@ internal object BrowserResearchContinuation {
 
     enum class Reason {
         CRITICAL_LITERAL_CONFLICT,
+        STRUCTURED_CLAIM_CONFLICT,
         NO_SAFE_CLAIM_ALIGNMENT,
     }
 
@@ -55,7 +56,10 @@ internal object BrowserResearchContinuation {
     ): Session? {
         val reason = when (goal.disposition) {
             BrowserResearchGoalCompletion.Disposition.UNRESOLVED_CRITICAL_LITERAL_CONFLICT ->
-                Reason.CRITICAL_LITERAL_CONFLICT
+                if (comparison.claimAssessment.relation ==
+                    BrowserResearchComparison.ClaimRelation.STRUCTURED_CLAIM_CONFLICT
+                ) Reason.STRUCTURED_CLAIM_CONFLICT
+                else Reason.CRITICAL_LITERAL_CONFLICT
             BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED ->
                 Reason.NO_SAFE_CLAIM_ALIGNMENT
             BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY -> return null
@@ -129,10 +133,12 @@ internal object BrowserResearchContinuation {
 
         val pairs = listOf(firstToThird, secondToThird)
         val conflictObserved =
-            session.reason == Reason.CRITICAL_LITERAL_CONFLICT ||
+            session.reason != Reason.NO_SAFE_CLAIM_ALIGNMENT ||
                 pairs.any {
                     it.claimAssessment.relation ==
-                        BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT
+                        BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT ||
+                        it.claimAssessment.relation ==
+                            BrowserResearchComparison.ClaimRelation.STRUCTURED_CLAIM_CONFLICT
                 }
         val boundedGoalMatchedSupport =
             pairs.any(BrowserResearchGoalCompletion::supportsBoundedSummary)
