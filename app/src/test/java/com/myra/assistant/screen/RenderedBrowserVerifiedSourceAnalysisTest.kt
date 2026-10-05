@@ -185,4 +185,71 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         assertNull(RenderedBrowserVerifiedSourceAnalysis.compare(session, second, 3_300L))
     }
 
+    @Test fun explicitThirdSourceMustUseNewHostAndThenHardStopsContinuation() {
+        val firstPrepared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.prepare(handoff(), destination()))
+        val first = RenderedBrowserVerifiedSourceAnalysis.read(
+            firstPrepared,
+            response(firstPrepared.target.canonicalUrl,
+                "<p>Security updates describe important validation changes for public readers.</p>"),
+            3_000L,
+        )
+        val session = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.startComparison(handoff(), first, 3_100L))
+        val secondDestination = destination(
+            url = "https://docs.example.org/security-bulletin",
+            host = "docs.example.org",
+        )
+        val secondPrepared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.prepareSecond(session, secondDestination))
+        val second = RenderedBrowserVerifiedSourceAnalysis.read(
+            secondPrepared,
+            response(secondPrepared.target.canonicalUrl,
+                "<p>Android patch bulletins cover platform hardening changes and remediation guidance.</p>"),
+            3_200L,
+        )
+        val compared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.compare(session, second, 3_300L))
+        val goal = RenderedBrowserVerifiedSourceAnalysis.goalAssessment(compared)
+        val continuation = requireNotNull(
+            com.myra.assistant.agent.BrowserResearchContinuation.start(
+                compared, goal, 3_400L))
+
+        assertNull(RenderedBrowserVerifiedSourceAnalysis.prepareThird(
+            continuation,
+            destination(
+                url = "https://docs.example.org/another-security-page",
+                host = "docs.example.org",
+            ),
+        ))
+
+        val thirdDestination = destination(
+            url = "https://third.example.net/security-advisory",
+            host = "third.example.net",
+        )
+        val thirdPrepared = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.prepareThird(
+                continuation, thirdDestination))
+        val third = RenderedBrowserVerifiedSourceAnalysis.read(
+            thirdPrepared,
+            response(thirdPrepared.target.canonicalUrl,
+                "<p>Security updates describe important validation changes for public readers.</p>"),
+            3_500L,
+        )
+        val resolved = requireNotNull(
+            RenderedBrowserVerifiedSourceAnalysis.resolveThird(
+                continuation, third, 3_600L))
+        assertEquals(
+            com.myra.assistant.agent.BrowserResearchContinuation.Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD,
+            resolved.disposition)
+        assertFalse(resolved.factualTruthVerified)
+        assertFalse(resolved.autonomousContinuationAllowed)
+        val summary = RenderedBrowserVerifiedSourceAnalysis.continuationSummary(resolved)
+        assertTrue(summary.contains("User-selected third public-source comparison complete"))
+        assertTrue(summary.contains("bounded three-source summary is ready"))
+        assertTrue(summary.contains("final bounded continuation"))
+        assertTrue(summary.contains("No fourth source"))
+        assertTrue(summary.contains("factual-truth claim"))
+    }
+
 }
