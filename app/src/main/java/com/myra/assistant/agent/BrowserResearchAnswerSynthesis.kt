@@ -108,7 +108,7 @@ internal object BrowserResearchAnswerSynthesis {
             claim.firstLiterals else emptyList()
         if (supportKind == SupportKind.STRUCTURED_LITERAL_ANCHOR &&
             (anchors.size < 3 || literals.isEmpty() ||
-                claim.firstLiterals != claim.secondLiterals)
+                claim.firstLiterals.toSet() != claim.secondLiterals.toSet())
         ) return null
         val evidenceStatement =
             if (supportKind == SupportKind.EXACT_TEXT) statement
