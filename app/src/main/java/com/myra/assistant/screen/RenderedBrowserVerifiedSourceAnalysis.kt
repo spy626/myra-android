@@ -238,7 +238,7 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
         result: BrowserResearchComparison.Result,
         goal: BrowserResearchGoalCompletion.Assessment = goalAssessment(result),
     ): String = buildString {
-        appendLine("Independent public-source comparison complete.")
+        appendLine("Different-host public-source comparison complete.")
         appendLine("Source A: " + result.first.finalUrl)
         appendLine("A SHA-256: " + result.first.contentSha256)
         result.first.excerpts.take(2).forEach { appendLine("A • " + it) }
@@ -277,8 +277,18 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
                     "This deterministic structure does not infer paraphrase equivalence, organizational independence, or factual truth."
                 )
             }
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_CLAIM_CONFLICT -> {
+                appendLine(
+                    "Claim relation: deterministic structured-claim conflict observed across different wording."
+                )
+                appendLine(
+                    "Shared anchors: " +
+                        result.claimAssessment.sharedAnchors.joinToString(", ")
+                )
+                appendLine("No source is selected as correct automatically.")
+            }
             BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT -> {
-                appendLine("Claim relation: critical literal conflict observed in otherwise matching statement shape.")
+                appendLine("Claim relation: critical literal conflict observed in matching bounded claim structure.")
                 appendLine("A literals: " + result.claimAssessment.firstLiterals.joinToString(", "))
                 appendLine("B literals: " + result.claimAssessment.secondLiterals.joinToString(", "))
                 appendLine("No source is selected as correct automatically.")
@@ -290,7 +300,7 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
             BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY ->
                 appendLine("Research goal status: bounded two-source summary is ready.")
             BrowserResearchGoalCompletion.Disposition.UNRESOLVED_CRITICAL_LITERAL_CONFLICT ->
-                appendLine("Research goal status: unresolved because critical literals conflict.")
+                appendLine("Research goal status: unresolved because bounded claim evidence conflicts.")
             BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED ->
                 appendLine("Research goal status: unresolved; more relevant evidence is required.")
         }
