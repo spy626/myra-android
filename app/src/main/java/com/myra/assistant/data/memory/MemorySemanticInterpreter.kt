@@ -49,7 +49,8 @@ data class FinalMemoryTurnPlan(
     val operations: List<MemorySemanticFrame> = emptyList(),
     val decision: MemoryDecision,
     val requiresClarification: Boolean = false,
-    val rejectionReason: String? = null
+    val rejectionReason: String? = null,
+    val displayProjection: String? = null
 )
 
 /** Shared key normalization only. Natural-language interpretation does not live here. */
