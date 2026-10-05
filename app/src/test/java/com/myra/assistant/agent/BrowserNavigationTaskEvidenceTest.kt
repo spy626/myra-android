@@ -24,6 +24,18 @@ class BrowserNavigationTaskEvidenceTest {
         assertFalse(e.observed.contains("Release notes"))
     }
 
+    @Test fun publicDestinationVerificationCompletesOnlyTheExplicitTapWithoutGrantingContinuation() {
+        val e = BrowserNavigationTaskEvidence.afterTap(
+            RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED,
+            destinationVerified = true)
+        assertEquals(GeneralVerificationStatus.SUCCESS, e.generalStatus)
+        assertEquals(TaskCompletionState.SUCCESS, e.taskState)
+        assertTrue(e.destinationVerified)
+        assertFalse(e.permitsAutonomousContinuation)
+        assertTrue(e.observed.contains("public_https_destination_verified"))
+        assertTrue(e.observed.contains("next_action_not_authorized"))
+    }
+
     @Test fun rejectedTapIsFailureUnknownPostTapRemainsNonSuccess() {
         val rejected = BrowserNavigationTaskEvidence.rejected()
         assertEquals(GeneralVerificationStatus.FAILURE, rejected.generalStatus)
