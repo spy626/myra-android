@@ -172,4 +172,44 @@ class BrowserResearchGoalCompletionTest {
         assertFalse(assessment.boundedSummaryReady)
     }
 
+    @Test fun exactTextMustMatchTheQueryInsideTheSupportingSentence() {
+        val shared =
+            "Security guidance remains identical across these public documentation pages."
+        val compared = result(
+            requireNotNull(BrowserResearchComparison.source(
+                finalUrl = "https://one.example/security",
+                host = "one.example",
+                contentSha256 = "9".repeat(64),
+                excerpts = listOf(
+                    shared,
+                    "Android updates include additional maintenance notes for supported devices.",
+                ),
+                matchedTerms = listOf("security", "android", "updates"),
+                capturedAt = 2_000L,
+            )),
+            requireNotNull(BrowserResearchComparison.source(
+                finalUrl = "https://two.example/security",
+                host = "two.example",
+                contentSha256 = "a".repeat(64),
+                excerpts = listOf(
+                    shared,
+                    "Android updates include separate release notes for supported devices.",
+                ),
+                matchedTerms = listOf("security", "android", "updates"),
+                capturedAt = 2_200L,
+            )),
+        )
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH,
+            compared.claimAssessment.relation)
+        assertTrue(compared.sharedTerms.size >= 2)
+
+        val assessment = BrowserResearchGoalCompletion.assess(compared)
+
+        assertEquals(
+            BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED,
+            assessment.disposition)
+        assertFalse(assessment.boundedSummaryReady)
+    }
+
 }
