@@ -196,20 +196,43 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
     fun answerSummary(answer: BrowserResearchAnswerSynthesis.Answer): String = buildString {
         appendLine("Bounded research answer")
         appendLine("Question: " + answer.query)
-        appendLine("Answer evidence:")
-        appendLine(answer.evidenceStatement)
-        appendLine("Exact text support observed on: " + answer.supportingHosts.joinToString(", "))
+        when (answer.supportKind) {
+            BrowserResearchAnswerSynthesis.SupportKind.EXACT_TEXT -> {
+                appendLine("Answer evidence:")
+                appendLine(answer.evidenceStatement)
+                appendLine(
+                    "Exact text support observed on: " +
+                        answer.supportingHosts.joinToString(", ")
+                )
+                appendLine(
+                    "Uncertainty: this is exact safe text-level support across different public hosts; " +
+                        "factual truth and organizational independence are not verified."
+                )
+            }
+            BrowserResearchAnswerSynthesis.SupportKind.STRUCTURED_LITERAL_ANCHOR -> {
+                appendLine("Structured bounded evidence:")
+                appendLine("Shared lexical anchors: " + answer.sharedAnchors.joinToString(", "))
+                appendLine(
+                    "Matching critical literals: " +
+                        answer.criticalLiterals.joinToString(", ")
+                )
+                appendLine("Observed source wording:")
+                answer.supportingExcerpts.forEachIndexed { index, excerpt ->
+                    appendLine("${index + 1} • " + excerpt)
+                }
+                appendLine(
+                    "Uncertainty: source wording differs. Matching literals and lexical anchors " +
+                        "do not establish paraphrase equivalence, factual truth, or organizational independence."
+                )
+            }
+        }
         appendLine("Supporting public sources:")
         answer.supportingUrls.forEach { appendLine("• " + it) }
         appendLine("Bounded sources observed: " + answer.evidenceSourceCount)
-        appendLine(
-            "Uncertainty: this is exact safe text-level support across different public hosts; " +
-                "factual truth and organizational independence are not verified."
-        )
         append(
             "Local-only synthesis. No AI-provider source sharing, memory write, or autonomous continuation."
         )
-    }.take(2_400)
+    }.take(2_800)
 
     fun comparisonSummary(
         result: BrowserResearchComparison.Result,
@@ -237,6 +260,22 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
             BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH -> {
                 appendLine("Claim relation: the same safe statement text was observed on both public hosts.")
                 appendLine("This is text-level support only; source independence by organization and factual truth are not inferred.")
+            }
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT -> {
+                appendLine(
+                    "Claim relation: matching critical literals plus at least three shared lexical anchors were observed across different wording."
+                )
+                appendLine(
+                    "Shared anchors: " +
+                        result.claimAssessment.sharedAnchors.joinToString(", ")
+                )
+                appendLine(
+                    "Matching literals: " +
+                        result.claimAssessment.firstLiterals.joinToString(", ")
+                )
+                appendLine(
+                    "This deterministic structure does not infer paraphrase equivalence, organizational independence, or factual truth."
+                )
             }
             BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT -> {
                 appendLine("Claim relation: critical literal conflict observed in otherwise matching statement shape.")
@@ -281,7 +320,7 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
         when (result.disposition) {
             BrowserResearchContinuation.Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD ->
                 appendLine(
-                    "Research goal status: bounded three-source summary is ready from exact safe statement support; factual truth is still unverified."
+                    "Research goal status: bounded three-source summary is ready from strict safe claim support; factual truth and paraphrase equivalence remain unverified."
                 )
             BrowserResearchContinuation.Disposition.CONFLICT_REMAINS_AFTER_THIRD ->
                 appendLine(
@@ -289,7 +328,7 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
                 )
             BrowserResearchContinuation.Disposition.FINAL_UNRESOLVED_NO_ALIGNMENT ->
                 appendLine(
-                    "Research goal status: unresolved; no safe exact claim alignment was established after the bounded third source."
+                    "Research goal status: unresolved; no safe bounded claim support was established after the bounded third source."
                 )
         }
         append(
