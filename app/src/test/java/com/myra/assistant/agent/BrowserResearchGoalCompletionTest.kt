@@ -152,4 +152,24 @@ class BrowserResearchGoalCompletionTest {
         assertFalse(assessment.boundedSummaryReady)
     }
 
+    @Test fun exactTextWithOnlyOneSharedQueryTermStillNeedsMoreEvidence() {
+        val sentence =
+            "Security updates describe important validation improvements for public Android users."
+        val compared = result(
+            source("https://one.example/security", "one.example", '7',
+                sentence, listOf("security", "updates"), 2_000L),
+            source("https://two.example/security", "two.example", '8',
+                sentence, listOf("security", "android"), 2_200L),
+        )
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH,
+            compared.claimAssessment.relation)
+        assertEquals(listOf("security"), compared.sharedTerms)
+        val assessment = BrowserResearchGoalCompletion.assess(compared)
+        assertEquals(
+            BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED,
+            assessment.disposition)
+        assertFalse(assessment.boundedSummaryReady)
+    }
+
 }
