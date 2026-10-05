@@ -4,7 +4,7 @@ import java.util.UUID
 
 enum class AgentRuntimeStatus {
     CREATED, UNDERSTANDING, OBSERVING, PLANNING, READY_TO_ACT, ACTING,
-    WAITING_FOR_RESULT, VERIFYING, RECOVERING, NEEDS_CLARIFICATION,
+    WAITING_FOR_RESULT, WAITING_FOR_USER_AUTH, VERIFYING, RECOVERING, NEEDS_CLARIFICATION,
     COMPLETED, FAILED, CANCELLED
 }
 
@@ -111,6 +111,8 @@ data class GeneralRuntimeTask(
     val recoveryCount: Int = 0,
     val planRevision: Int = 0,
     val verifiedGoalSubsteps: List<VerifiedGoalSubstep> = emptyList(),
+    val authPause: BrowserAuthenticationHandoff.Pause? = null,
+    val authHandoffAttempts: Int = 0,
     val createdAt: Long,
     val updatedAt: Long = createdAt
 )
@@ -543,6 +545,8 @@ class GeneralAgentRuntime(
         executableCapabilities: Set<ToolCapability>? = null,
     ): PlannerResult {
         val task = active ?: return PlannerResult.Fail("no_active_task")
+        if (task.status == AgentRuntimeStatus.WAITING_FOR_USER_AUTH)
+            return PlannerResult.NeedClarification("user_browser_authentication_pending")
         val tools = registry.relevant(task.intent.requiredCapabilities)
             .filter { executableCapabilities == null || it.capability in executableCapabilities }
         val result = planner.next(task, perception, tools, searchFeedback)
@@ -556,6 +560,36 @@ class GeneralAgentRuntime(
             else -> task.copy(status = AgentRuntimeStatus.OBSERVING, updatedAt = now())
         }
         return result
+    }
+
+    /**
+     * Existing task/step is paused BEFORE the general verifier could learn an
+     * auth challenge as a failed search. No login action or credential read.
+     */
+    @Synchronized fun pauseForBrowserAuthentication(
+        context: CurrentActivityContext?, observedAt: Long
+    ): BrowserAuthenticationHandoff.Pause? {
+        val task = active ?: return null
+        if (task.authHandoffAttempts != 0 || task.authPause != null) return null
+        val pause = BrowserAuthenticationHandoff.detect(task, context, observedAt) ?: return null
+        active = task.copy(status = AgentRuntimeStatus.WAITING_FOR_USER_AUTH,
+            authPause = pause, authHandoffAttempts = 1, updatedAt = now())
+        return pause
+    }
+
+    /** Fresh safe page merely reopens verification; it never confirms login success. */
+    @Synchronized fun resumeBrowserAuthentication(
+        first: CurrentActivityContext?, second: CurrentActivityContext?, observedAt: Long,
+    ): Boolean {
+        val task = active ?: return false
+        val pause = task.authPause ?: return false
+        if (task.status != AgentRuntimeStatus.WAITING_FOR_USER_AUTH ||
+            task.id != pause.taskId || task.turnId != pause.turnId ||
+            !BrowserAuthenticationHandoff.canReverify(pause, first, second, observedAt)
+        ) return false
+        active = task.copy(status = AgentRuntimeStatus.WAITING_FOR_RESULT,
+            authPause = null, updatedAt = now())
+        return true
     }
 
     @Synchronized fun enrich(parameters: Map<String, String>, relevantApp: String? = null, textHint: String? = null) {
@@ -581,6 +615,11 @@ class GeneralAgentRuntime(
     @Synchronized fun verify(after: PerceptionSnapshot): Pair<GeneralVerificationResult, RecoveryDecision?> {
         val task = requireNotNull(active) { "no active task" }
         val step = requireNotNull(task.currentStep) { "no active step" }
+        if (task.status == AgentRuntimeStatus.WAITING_FOR_USER_AUTH)
+            return GeneralVerificationResult(
+                GeneralVerificationStatus.UNKNOWN, step.expectedOutcome.summary,
+                "browser_authentication_pending", .0
+            ) to null
         val history = task.actionHistory.lastOrNull { it.stepId == step.id }
         val before = beforeByStep.remove(step.id) ?: after
         val actionAccepted = history?.accepted != false

@@ -4050,6 +4050,57 @@ class MyraVoiceService : Service() {
                     "foregroundPackage=${after.scene.externalForegroundPackage} screenGeneration=${after.scene.generation}"
             )
             turnLatency.record(task.turnId, Field.OBSERVATION_READY, android.os.SystemClock.elapsedRealtime())
+            // Credential/login screens are handled locally before verification or model
+            // projection. No password, OTP, account identifier or auth screenshot is read,
+            // persisted, logged or used as evidence of completed research.
+            val authPause = runtime.pauseForBrowserAuthentication(
+                ActivityContextStore.snapshot()?.takeIf { context ->
+                    context.packageName == after.scene.packageName &&
+                        context.windowId == after.scene.windowId &&
+                        context.generation == after.scene.generation
+                }, android.os.SystemClock.elapsedRealtime())
+            if (authPause != null) {
+                runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, after.scene) }
+                voiceLog("BROWSER_AUTH_HANDOFF taskId=${task.id} turnId=${task.turnId} " +
+                    "status=WAITING_FOR_USER_AUTH secretsCaptured=false")
+                val instruction = "Browser mein login ya passkey verification khud complete karo. " +
+                    "LYRA credentials nahi padhegi; safe browser screen wapas aane par research check resume hoga."
+                listener?.onMyraText(instruction)
+                queueLocalSpeech(instruction, allowUntranscribedAudio = false)
+                var firstSafeSample: com.myra.assistant.agent.CurrentActivityContext? = null
+                lateinit var checkAuth: () -> Unit
+                checkAuth = authCheck@ {
+                    val pending = runtime.activeTask()
+                    if (pending?.id != task.id || pending.turnId != task.turnId ||
+                        pending.authPause != authPause ||
+                        pending.status != com.myra.assistant.agent.AgentRuntimeStatus.WAITING_FOR_USER_AUTH
+                    ) return@authCheck
+                    val checkedAt = android.os.SystemClock.elapsedRealtime()
+                    if (checkedAt > authPause.deadlineAt) {
+                        runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN,
+                            "user_browser_authentication_wait_expired")
+                        onTerminal(GeneralVerificationStatus.UNKNOWN,
+                            "user_browser_authentication_wait_expired")
+                        return@authCheck
+                    }
+                    AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+                    val currentScreen = ActivityContextStore.snapshot()
+                    if (runtime.resumeBrowserAuthentication(firstSafeSample, currentScreen, checkedAt)) {
+                        voiceLog("BROWSER_AUTH_SAFE_VIEW_RETURNED taskId=${task.id} turnId=${task.turnId} " +
+                            "next=fresh_original_step_verification authenticationSuccessUnclaimed=true")
+                        mainHandler.postDelayed({ observeAndVerify(0) }, 450L)
+                        return@authCheck
+                    }
+                    // No auth page labels, field values, full pages or screenshots retained.
+                    firstSafeSample = currentScreen?.takeIf {
+                        it.packageName == authPause.browserPackage &&
+                            it.windowId == authPause.windowId
+                    }
+                    mainHandler.postDelayed({ checkAuth() }, 1_100L)
+                }
+                mainHandler.postDelayed({ checkAuth() }, 1_100L)
+                return@observe
+            }
             turnLatency.record(task.turnId, Field.VERIFICATION_STARTED, android.os.SystemClock.elapsedRealtime())
             voiceLog("VERIFICATION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} expected=${step.expectedOutcome.summary}")
             val scrollEvidence = if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
