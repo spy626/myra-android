@@ -18,6 +18,7 @@ internal object BrowserResearchComparison {
 
     enum class ClaimRelation {
         EXACT_SAFE_STATEMENT_MATCH,
+        STRUCTURED_LITERAL_ANCHOR_SUPPORT,
         CRITICAL_LITERAL_CONFLICT,
         NO_CLAIM_ALIGNMENT,
     }
@@ -28,6 +29,7 @@ internal object BrowserResearchComparison {
         val secondExcerpt: String? = null,
         val firstLiterals: List<String> = emptyList(),
         val secondLiterals: List<String> = emptyList(),
+        val sharedAnchors: List<String> = emptyList(),
     )
 
     data class SourceEvidence(
@@ -70,6 +72,12 @@ internal object BrowserResearchComparison {
         """(?iu)(?:\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|""" +
             """\bv?\d+(?:\.\d+){1,3}\b|\b\d+(?:\.\d+)?%\b|""" +
             """(?:[$€£₹])\s*\d+(?:[.,]\d+)*|\b\d+(?:[.,]\d+)*\b)"""
+    )
+    private val genericAnchor = setOf(
+        "about", "after", "also", "before", "being", "could", "during", "from",
+        "have", "into", "more", "most", "only", "other", "over", "than", "that",
+        "their", "there", "these", "they", "this", "those", "under", "were", "what",
+        "when", "where", "which", "while", "with", "would",
     )
 
     fun source(
@@ -139,6 +147,17 @@ internal object BrowserResearchComparison {
         normalizeStatement(text).replace(criticalLiteral, "{#}")
             .replace(Regex("""\s+"""), " ").trim()
 
+    private fun lexicalAnchors(text: String): Set<String> =
+        Regex("""[\p{L}\p{M}][\p{L}\p{M}\p{N}_-]{3,39}""")
+            .findAll(criticalLiteral.replace(text.lowercase(Locale.ROOT), " "))
+            .map { it.value }
+            .filter { it !in genericAnchor && !sensitive.containsMatchIn(it) }
+            .toSet()
+
+    fun supportsBoundedClaim(relation: ClaimRelation): Boolean =
+        relation == ClaimRelation.EXACT_SAFE_STATEMENT_MATCH ||
+            relation == ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT
+
     private fun assessClaims(
         first: SourceEvidence,
         second: SourceEvidence,
@@ -172,6 +191,26 @@ internal object BrowserResearchComparison {
                         secondExcerpt = b,
                         firstLiterals = firstValues,
                         secondLiterals = secondValues,
+                    )
+                }
+            }
+        }
+        for (a in first.excerpts) {
+            val firstValues = literals(a)
+            if (firstValues.isEmpty()) continue
+            val anchorsA = lexicalAnchors(a)
+            for (b in second.excerpts) {
+                val secondValues = literals(b)
+                if (firstValues != secondValues || secondValues.isEmpty()) continue
+                val sharedAnchors = (anchorsA intersect lexicalAnchors(b)).sorted()
+                if (sharedAnchors.size >= 3) {
+                    return ClaimAssessment(
+                        relation = ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT,
+                        firstExcerpt = a,
+                        secondExcerpt = b,
+                        firstLiterals = firstValues,
+                        secondLiterals = secondValues,
+                        sharedAnchors = sharedAnchors.take(8),
                     )
                 }
             }
