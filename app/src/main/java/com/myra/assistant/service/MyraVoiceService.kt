@@ -1532,6 +1532,15 @@ class MyraVoiceService : Service() {
                                     "resolved=${validation.authorized}"
                             )
                         }
+                        if (localRecallIntent != null) {
+                            serviceScope.launch {
+                                memoryBrain.projectFinalDisplay(finalUtterance.memoryEvidence)
+                                    ?.takeIf { it != displayedFinalUserText }
+                                    ?.let { corrected ->
+                                        mainHandler.post { listener?.onUserTextCorrection(memoryTurnId, corrected) }
+                                    }
+                            }
+                        }
                         val plan = if (localRecallIntent != null) {
                             com.myra.assistant.data.memory.FinalMemoryTurnPlan(
                                 displayedFinalUserText, decision = com.myra.assistant.data.memory.MemoryDecision.RECALL
