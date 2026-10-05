@@ -135,4 +135,34 @@ class BrowserResearchAnswerSynthesisTest {
             resolved.disposition)
         assertNull(BrowserResearchAnswerSynthesis.fromThree(resolved))
     }
+    @Test fun structuredTwoSourceAnswerReportsObservedStructureNotParaphraseTruth() {
+        val compared = comparison(
+            source("https://one.example/release", "one.example", '5',
+                "Security update version 4.2 shipped to supported Android devices in 2026.",
+                listOf("security", "update", "android"), 2_000L),
+            source("https://two.example/release", "two.example", '6',
+                "Supported Android devices received security release 4.2 during 2026.",
+                listOf("security", "update", "android"), 2_200L),
+        )
+        val goal = BrowserResearchGoalCompletion.assess(compared)
+        val answer = requireNotNull(BrowserResearchAnswerSynthesis.fromTwo(compared, goal))
+
+        assertEquals(
+            BrowserResearchAnswerSynthesis.SupportKind.STRUCTURED_LITERAL_ANCHOR,
+            answer.supportKind)
+        assertEquals(listOf("4.2", "2026"), answer.criticalLiterals)
+        assertTrue(answer.sharedAnchors.contains("security"))
+        assertTrue(answer.sharedAnchors.contains("android"))
+        assertTrue(answer.sharedAnchors.contains("supported"))
+        assertEquals(2, answer.supportingExcerpts.size)
+        assertTrue(answer.evidenceStatement.contains("Shared lexical anchors"))
+        assertTrue(answer.evidenceStatement.contains("Matching critical literals"))
+        assertFalse(answer.evidenceStatement.contains("same meaning", ignoreCase = true))
+        assertFalse(answer.factualTruthVerified)
+        assertFalse(answer.organizationalIndependenceVerified)
+        assertFalse(answer.providerShared)
+        assertFalse(answer.memoryWritten)
+        assertFalse(answer.autonomousContinuationAllowed)
+    }
+
 }
