@@ -96,6 +96,7 @@ import com.myra.assistant.agent.GeneralActionResult
 import com.myra.assistant.agent.GeneralActionRouter
 import com.myra.assistant.agent.BrowserNavigationTaskEvidence
 import com.myra.assistant.agent.BrowserResearchComparison
+import com.myra.assistant.agent.BrowserResearchGoalCompletion
 import com.myra.assistant.agent.BrowserResearchSourceHandoff
 import com.myra.assistant.agent.GeneralAgentRuntimeStore
 import com.myra.assistant.agent.GeneralRuntimeTask
@@ -2401,14 +2402,24 @@ class MyraVoiceService : Service() {
                                                         WorkingTaskRuntime.store.completeResearchComparison(
                                                             researchComparison)
                                                     ) {
+                                                        val goal =
+                                                            RenderedBrowserVerifiedSourceAnalysis.goalAssessment(
+                                                                comparison)
                                                         val summary =
                                                             RenderedBrowserVerifiedSourceAnalysis.comparisonSummary(
-                                                                comparison)
+                                                                comparison, goal)
                                                         listener?.onMyraText(summary)
-                                                        emitState(
-                                                            "Two independent public sources compare ho gaye.")
+                                                        val goalMessage = when (goal.disposition) {
+                                                            BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY ->
+                                                                "Bounded two-source summary ready hai; factual truth independently verify nahi hui."
+                                                            BrowserResearchGoalCompletion.Disposition.UNRESOLVED_CRITICAL_LITERAL_CONFLICT ->
+                                                                "Do sources ke critical literals conflict karte hain; research unresolved hai aur koi source automatically correct nahi maana gaya."
+                                                            BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED ->
+                                                                "Do sources compare ho gaye, lekin safe claim alignment nahi mila; research unresolved hai aur more evidence chahiye."
+                                                        }
+                                                        emitState(goalMessage)
                                                         queueLocalSpeech(
-                                                            "Do independent public sources verify aur compare ho gaye; claim-level truth automatically assume nahi ki gayi.",
+                                                            goalMessage,
                                                             allowUntranscribedAudio = true)
                                                         voiceLog(
                                                             "BROWSER_RESEARCH_COMPARISON_COMPLETE turnId=$userTurnId " +
@@ -2416,6 +2427,8 @@ class MyraVoiceService : Service() {
                                                                 "firstHost=${comparison.first.host} secondHost=${comparison.second.host} " +
                                                                 "sharedTerms=${comparison.sharedTerms.size} decision=${comparison.decision} " +
                                                                 "claimRelation=${comparison.claimAssessment.relation} " +
+                                                                "goalDisposition=${goal.disposition} boundedSummaryReady=${goal.boundedSummaryReady} " +
+                                                                "truthVerified=${goal.factualTruthVerified} autonomousContinuation=${goal.autonomousContinuationAllowed} " +
                                                                 "providerShared=false memoryWritten=false autonomousThirdSource=false")
                                                     } else {
                                                         WorkingTaskRuntime.store.releaseResearchComparison(
