@@ -2415,6 +2415,7 @@ class MyraVoiceService : Service() {
                                                                 "priorTaskId=${comparison.taskId} " +
                                                                 "firstHost=${comparison.first.host} secondHost=${comparison.second.host} " +
                                                                 "sharedTerms=${comparison.sharedTerms.size} decision=${comparison.decision} " +
+                                                                "claimRelation=${comparison.claimAssessment.relation} " +
                                                                 "providerShared=false memoryWritten=false autonomousThirdSource=false")
                                                     } else {
                                                         WorkingTaskRuntime.store.releaseResearchComparison(
