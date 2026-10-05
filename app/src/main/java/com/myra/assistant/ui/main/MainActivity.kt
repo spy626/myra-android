@@ -115,12 +115,20 @@ class MainActivity : AppCompatActivity() {
             showStatus("Screenshot attached — sawaal likho ya Send dabao")
         }
     }
+    private val userBubbleByTurn = LinkedHashMap<Long, TextView>()
+
     private val voiceListener = object : MyraVoiceService.Listener {
         override fun onState(text: String) = runOnUiThread { showStatus(text) }
         override fun onReady() = runOnUiThread { b.connectButton.setColorFilter(Color.WHITE); showStatus("Sun rahi hoon…") }
         override fun onAmplitude(value: Float) = runOnUiThread { b.orb.amplitude = value }
         override fun onSpeaking(speaking: Boolean) = runOnUiThread { b.orb.state = if (speaking) OrbAnimationView.State.SPEAKING else OrbAnimationView.State.LISTENING; showStatus(if (speaking) "Bol rahi hoon…" else "Sun rahi hoon…") }
-        override fun onUserText(text: String) = runOnUiThread { addBubble(text, true) }
+        override fun onUserText(turnId: Long, text: String) = runOnUiThread { addBubble(text, true, turnId = turnId) }
+        override fun onUserTextCorrection(turnId: Long, text: String) = runOnUiThread {
+            userBubbleByTurn[turnId]?.let { bubble ->
+                bubble.text = text
+                bubble.contentDescription = text
+            }
+        }
         override fun onMyraText(text: String, error: Boolean) = runOnUiThread { addBubble(text, false, error) }
     }
 
@@ -382,7 +390,7 @@ class MainActivity : AppCompatActivity() {
         }
         dialog.show()
     }
-    private fun addBubble(text: String, isUser: Boolean, isError: Boolean = false) {
+    private fun addBubble(text: String, isUser: Boolean, isError: Boolean = false, turnId: Long? = null) {
         val bubble = TextView(this).apply {
             this.text = text
             setTextColor(if (isError) Color.rgb(255, 110, 130) else Color.rgb(238, 238, 238))
@@ -394,7 +402,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundResource(if (isUser) com.myra.assistant.R.drawable.bg_chat_user else com.myra.assistant.R.drawable.bg_chat_myra)
             setOnLongClickListener {
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("LYRA chat message", text))
+                clipboard.setPrimaryClip(ClipData.newPlainText("LYRA chat message", this.text))
                 Toast.makeText(this@MainActivity, "Message copied", Toast.LENGTH_SHORT).show()
                 true
             }
@@ -421,6 +429,10 @@ class MainActivity : AppCompatActivity() {
             addView(bubble, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         b.chatContainer.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        if (isUser && turnId != null) {
+            userBubbleByTurn[turnId] = bubble
+            while (userBubbleByTurn.size > 20) userBubbleByTurn.remove(userBubbleByTurn.keys.first())
+        }
         while (b.chatContainer.childCount > 20) b.chatContainer.removeViewAt(0)
         b.chatScroll.post { b.chatScroll.fullScroll(android.view.View.FOCUS_DOWN) }
     }
