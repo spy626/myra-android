@@ -95,6 +95,7 @@ import com.myra.assistant.agent.AgentToolRegistry
 import com.myra.assistant.agent.GeneralActionResult
 import com.myra.assistant.agent.GeneralActionRouter
 import com.myra.assistant.agent.BrowserNavigationTaskEvidence
+import com.myra.assistant.agent.BrowserResearchComparison
 import com.myra.assistant.agent.BrowserResearchSourceHandoff
 import com.myra.assistant.agent.GeneralAgentRuntimeStore
 import com.myra.assistant.agent.GeneralRuntimeTask
@@ -2230,6 +2231,7 @@ class MyraVoiceService : Service() {
         // The current link turn keeps its own task identity; no previous runtime task is revived.
         val researchHandoff = BrowserResearchSourceHandoff.pending(
             WorkingTaskRuntime.store.snapshot(), System.currentTimeMillis())
+        val researchComparison = WorkingTaskRuntime.store.pendingResearchComparison()
         fun report(
             message: String,
             error: Boolean,
@@ -2361,67 +2363,179 @@ class MyraVoiceService : Service() {
                                 val evidence = BrowserNavigationTaskEvidence.afterTap(
                                     verification, bound.destinationUrlVerified)
                                 if (bound.destinationUrlVerified) {
-                                    val preparedResearch = researchHandoff?.let { pending ->
-                                        bound.publicDestination?.let { verifiedDestination ->
-                                            RenderedBrowserVerifiedSourceAnalysis.prepare(
-                                                pending, verifiedDestination)
-                                        }
-                                    }
-                                    val researchClaimed = preparedResearch != null &&
-                                        researchHandoff != null &&
-                                        WorkingTaskRuntime.store.claimResearchSourceHandoff(
-                                            researchHandoff)
-                                    if (researchClaimed && preparedResearch != null) {
+                                    val verifiedDestination = bound.publicDestination
+                                    val preparedSecond = if (researchComparison != null &&
+                                        verifiedDestination != null
+                                    ) RenderedBrowserVerifiedSourceAnalysis.prepareSecond(
+                                        researchComparison, verifiedDestination)
+                                    else null
+                                    val secondClaimed = preparedSecond != null &&
+                                        researchComparison != null &&
+                                        WorkingTaskRuntime.store.claimResearchComparison(
+                                            researchComparison)
+
+                                    if (secondClaimed && preparedSecond != null &&
+                                        researchComparison != null
+                                    ) {
                                         report(
-                                            "Browser mein public HTTPS destination verify hui; selected research source ka one-page local read start hua.",
+                                            "Browser mein independent public destination verify hui; second research source ka one-page local read start hua.",
                                             false, evidence, bound)
                                         serviceScope.launch {
                                             val analyzed = runCatching {
                                                 RenderedBrowserVerifiedSourceAnalysis.executeBlocking(
-                                                    preparedResearch)
+                                                    preparedSecond)
                                             }
                                             mainHandler.post {
                                                 if (!ownsResult()) {
+                                                    WorkingTaskRuntime.store.releaseResearchComparison(
+                                                        researchComparison)
                                                     voiceLog(
-                                                        "BROWSER_RESEARCH_SOURCE_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
+                                                        "BROWSER_RESEARCH_COMPARISON_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
                                                     return@post
                                                 }
                                                 analyzed.onSuccess { result ->
-                                                    val summary =
-                                                        RenderedBrowserVerifiedSourceAnalysis.localSummary(
-                                                            result)
-                                                    listener?.onMyraText(summary)
-                                                    emitState(
-                                                        "Selected public source ka local analysis complete hua.")
-                                                    queueLocalSpeech(
-                                                        "Selected public source ka one-page analysis complete hua; full research goal abhi complete nahi hai.",
-                                                        allowUntranscribedAudio = true)
-                                                    voiceLog(
-                                                        "BROWSER_RESEARCH_SOURCE_ANALYZED turnId=$userTurnId " +
-                                                            "priorTaskId=${preparedResearch.handoff.taskId} " +
-                                                            "sourceSha256=${result.page.evidence.provenance.contentSha256} " +
-                                                            "findingCount=${result.report.findings.size} " +
-                                                            "verifiedPages=${result.report.verifiedPageCount} " +
-                                                            "secondLinkFollowed=false providerShared=false memoryWritten=false goalComplete=false")
+                                                    val comparison =
+                                                        RenderedBrowserVerifiedSourceAnalysis.compare(
+                                                            researchComparison, result)
+                                                    if (comparison != null &&
+                                                        WorkingTaskRuntime.store.completeResearchComparison(
+                                                            researchComparison)
+                                                    ) {
+                                                        val summary =
+                                                            RenderedBrowserVerifiedSourceAnalysis.comparisonSummary(
+                                                                comparison)
+                                                        listener?.onMyraText(summary)
+                                                        emitState(
+                                                            "Two independent public sources compare ho gaye.")
+                                                        queueLocalSpeech(
+                                                            "Do independent public sources verify aur compare ho gaye; claim-level truth automatically assume nahi ki gayi.",
+                                                            allowUntranscribedAudio = true)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_COMPARISON_COMPLETE turnId=$userTurnId " +
+                                                                "priorTaskId=${comparison.taskId} " +
+                                                                "firstHost=${comparison.first.host} secondHost=${comparison.second.host} " +
+                                                                "sharedTerms=${comparison.sharedTerms.size} decision=${comparison.decision} " +
+                                                                "providerShared=false memoryWritten=false autonomousThirdSource=false")
+                                                    } else {
+                                                        WorkingTaskRuntime.store.releaseResearchComparison(
+                                                            researchComparison)
+                                                        val message =
+                                                            "Second public source read hua, lekin same research query ke liye safe matched evidence nahi mila. Different public source explicitly choose karo."
+                                                        listener?.onMyraText(message, true)
+                                                        emitState(message)
+                                                        queueLocalSpeech(
+                                                            "Second source se relevant evidence nahi mila; different public source choose karo.",
+                                                            allowUntranscribedAudio = false)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_COMPARISON_INSUFFICIENT turnId=$userTurnId " +
+                                                                "priorTaskId=${researchComparison.taskId} retryAllowed=true")
+                                                    }
                                                 }.onFailure {
+                                                    WorkingTaskRuntime.store.releaseResearchComparison(
+                                                        researchComparison)
                                                     val message =
-                                                        "Verified browser source ka bounded static read available nahi tha; koi second link follow nahi hua."
+                                                        "Second verified source ka bounded static read available nahi tha; comparison pending hai aur koi third action auto-start nahi hua."
                                                     listener?.onMyraText(message, true)
                                                     emitState(message)
                                                     queueLocalSpeech(
-                                                        "Selected source ka static read available nahi tha; koi second link follow nahi hua.",
+                                                        "Second source ka static read available nahi tha; comparison pending hai.",
                                                         allowUntranscribedAudio = false)
                                                     voiceLog(
-                                                        "BROWSER_RESEARCH_SOURCE_ANALYSIS_STOPPED turnId=$userTurnId " +
-                                                            "priorTaskId=${preparedResearch.handoff.taskId} " +
-                                                            "reason=${it.javaClass.simpleName} secondLinkFollowed=false")
+                                                        "BROWSER_RESEARCH_COMPARISON_STOPPED turnId=$userTurnId " +
+                                                            "priorTaskId=${researchComparison.taskId} " +
+                                                            "reason=${it.javaClass.simpleName} retryAllowed=true")
                                                 }
                                             }
                                         }
                                     } else {
-                                        report(
-                                            "Browser mein naya page text aur public HTTPS destination verify hui.",
-                                            false, evidence, bound)
+                                        val preparedResearch = researchHandoff?.let { pending ->
+                                            verifiedDestination?.let { destination ->
+                                                RenderedBrowserVerifiedSourceAnalysis.prepare(
+                                                    pending, destination)
+                                            }
+                                        }
+                                        val researchClaimed = preparedResearch != null &&
+                                            researchHandoff != null &&
+                                            WorkingTaskRuntime.store.claimResearchSourceHandoff(
+                                                researchHandoff)
+                                        if (researchClaimed && preparedResearch != null &&
+                                            researchHandoff != null
+                                        ) {
+                                            report(
+                                                "Browser mein public HTTPS destination verify hui; selected research source ka one-page local read start hua.",
+                                                false, evidence, bound)
+                                            serviceScope.launch {
+                                                val analyzed = runCatching {
+                                                    RenderedBrowserVerifiedSourceAnalysis.executeBlocking(
+                                                        preparedResearch)
+                                                }
+                                                mainHandler.post {
+                                                    if (!ownsResult()) {
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_SOURCE_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
+                                                        return@post
+                                                    }
+                                                    analyzed.onSuccess { result ->
+                                                        val comparisonSession =
+                                                            RenderedBrowserVerifiedSourceAnalysis.startComparison(
+                                                                researchHandoff, result)
+                                                        val comparisonPending =
+                                                            comparisonSession != null &&
+                                                                WorkingTaskRuntime.store.beginResearchComparison(
+                                                                    comparisonSession)
+                                                        val summary =
+                                                            RenderedBrowserVerifiedSourceAnalysis.localSummary(
+                                                                result) +
+                                                                if (comparisonPending)
+                                                                    "\nFor an independent comparison, return to the results and explicitly open a link from a different public site."
+                                                                else ""
+                                                        listener?.onMyraText(summary)
+                                                        emitState(
+                                                            if (comparisonPending)
+                                                                "First public source ready; second independent source user selection ka wait hai."
+                                                            else "Selected public source ka local analysis complete hua.")
+                                                        queueLocalSpeech(
+                                                            if (comparisonPending)
+                                                                "First source ready hai. Comparison ke liye results par jaakar different public site ka named link kholne ko bolo."
+                                                            else "Selected public source ka one-page analysis complete hua; full research goal abhi complete nahi hai.",
+                                                            allowUntranscribedAudio = true)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_SOURCE_ANALYZED turnId=$userTurnId " +
+                                                                "priorTaskId=${preparedResearch.researchTaskId} " +
+                                                                "sourceSha256=${result.page.evidence.provenance.contentSha256} " +
+                                                                "findingCount=${result.report.findings.size} " +
+                                                                "verifiedPages=${result.report.verifiedPageCount} " +
+                                                                "comparisonPending=$comparisonPending secondLinkFollowed=false " +
+                                                                "providerShared=false memoryWritten=false goalComplete=false")
+                                                    }.onFailure {
+                                                        val message =
+                                                            "Verified browser source ka bounded static read available nahi tha; koi second link follow nahi hua."
+                                                        listener?.onMyraText(message, true)
+                                                        emitState(message)
+                                                        queueLocalSpeech(
+                                                            "Selected source ka static read available nahi tha; koi second link follow nahi hua.",
+                                                            allowUntranscribedAudio = false)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_SOURCE_ANALYSIS_STOPPED turnId=$userTurnId " +
+                                                                "priorTaskId=${preparedResearch.researchTaskId} " +
+                                                                "reason=${it.javaClass.simpleName} secondLinkFollowed=false")
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            report(
+                                                "Browser mein naya page text aur public HTTPS destination verify hui.",
+                                                false, evidence, bound)
+                                            if (researchComparison != null &&
+                                                verifiedDestination != null &&
+                                                verifiedDestination.host.equals(
+                                                    researchComparison.first.host,
+                                                    ignoreCase = true)
+                                            ) {
+                                                listener?.onMyraText(
+                                                    "Independent comparison ke liye pehle source se different public site ka named link choose karo.")
+                                            }
+                                        }
                                     }
                                 } else {
                                     report("Browser mein naya page text stable mila; public destination independently verify nahi hui.",
