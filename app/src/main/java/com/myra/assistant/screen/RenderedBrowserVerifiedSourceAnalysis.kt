@@ -176,9 +176,23 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
         if (result.secondOnlyTerms.isNotEmpty()) {
             appendLine("Only B matched: " + result.secondOnlyTerms.joinToString(", "))
         }
+        when (result.claimAssessment.relation) {
+            BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH -> {
+                appendLine("Claim relation: the same safe statement text was observed on both public hosts.")
+                appendLine("This is text-level support only; source independence by organization and factual truth are not inferred.")
+            }
+            BrowserResearchComparison.ClaimRelation.CRITICAL_LITERAL_CONFLICT -> {
+                appendLine("Claim relation: critical literal conflict observed in otherwise matching statement shape.")
+                appendLine("A literals: " + result.claimAssessment.firstLiterals.joinToString(", "))
+                appendLine("B literals: " + result.claimAssessment.secondLiterals.joinToString(", "))
+                appendLine("No source is selected as correct automatically.")
+            }
+            BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT ->
+                appendLine("Claim relation: no exact statement alignment or direct critical-literal conflict was safely established.")
+        }
         append(
             "Two different public hosts supplied bounded goal-matched evidence. " +
-                "Evidence collection for this comparison is complete; no claim-level agreement, " +
+                "Evidence collection for this comparison is complete; no paraphrase agreement, " +
                 "truth, login state, hidden page content, provider sharing or memory write is inferred."
         )
     }.take(3_200)
