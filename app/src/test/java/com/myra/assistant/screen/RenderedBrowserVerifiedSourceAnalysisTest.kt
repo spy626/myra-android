@@ -146,11 +146,11 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         val compared = requireNotNull(
             RenderedBrowserVerifiedSourceAnalysis.compare(session, second, 3_300L))
         assertEquals(
-            com.myra.assistant.agent.BrowserResearchComparison.Decision.TWO_INDEPENDENT_SOURCES_VERIFIED,
+            com.myra.assistant.agent.BrowserResearchComparison.Decision.TWO_DIFFERENT_PUBLIC_HOSTS_VERIFIED,
             compared.decision)
         assertNotEquals(compared.first.host, compared.second.host)
         val summary = RenderedBrowserVerifiedSourceAnalysis.comparisonSummary(compared)
-        assertTrue(summary.contains("Independent public-source comparison complete"))
+        assertTrue(summary.contains("Different-host public-source comparison complete"))
         assertTrue(summary.contains("Two different public hosts"))
         assertTrue(summary.contains("Claim relation:"))
         assertTrue(summary.contains("Research goal status: unresolved; more relevant evidence is required."))
