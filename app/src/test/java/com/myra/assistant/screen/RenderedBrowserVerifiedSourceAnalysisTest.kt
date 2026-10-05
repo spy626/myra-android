@@ -205,7 +205,7 @@ class RenderedBrowserVerifiedSourceAnalysisTest {
         val second = RenderedBrowserVerifiedSourceAnalysis.read(
             secondPrepared,
             response(secondPrepared.target.canonicalUrl,
-                "<p>Android patch bulletins cover platform hardening changes and remediation guidance.</p>"),
+                "<p>Security bulletin updates cover platform hardening changes and remediation guidance for Android users.</p>"),
             3_200L,
         )
         val compared = requireNotNull(
