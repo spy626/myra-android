@@ -8,10 +8,19 @@ package com.myra.assistant.agent
  * match accepted by BrowserResearchComparison.
  */
 internal object BrowserResearchAnswerSynthesis {
+    enum class SupportKind {
+        EXACT_TEXT,
+        STRUCTURED_LITERAL_ANCHOR,
+    }
+
     data class Answer(
         val taskId: String,
         val query: String,
+        val supportKind: SupportKind,
         val evidenceStatement: String,
+        val supportingExcerpts: List<String>,
+        val sharedAnchors: List<String>,
+        val criticalLiterals: List<String>,
         val supportingUrls: List<String>,
         val supportingHosts: List<String>,
         val observedUrls: List<String>,
@@ -30,11 +39,9 @@ internal object BrowserResearchAnswerSynthesis {
         if (goal.disposition != BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY ||
             !goal.boundedSummaryReady || goal.factualTruthVerified ||
             goal.autonomousContinuationAllowed ||
-            result.claimAssessment.relation !=
-                BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH ||
-            result.sharedTerms.isEmpty()
+            !BrowserResearchGoalCompletion.supportsBoundedSummary(result)
         ) return null
-        return exactPairAnswer(
+        return supportedPairAnswer(
             taskId = result.taskId,
             query = result.query,
             pair = result,
@@ -53,13 +60,10 @@ internal object BrowserResearchAnswerSynthesis {
         ) return null
 
         val supportedPair = listOf(result.firstToThird, result.secondToThird)
-            .firstOrNull {
-                it.claimAssessment.relation ==
-                    BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH &&
-                    it.sharedTerms.isNotEmpty()
-            } ?: return null
+            .firstOrNull(BrowserResearchGoalCompletion::supportsBoundedSummary)
+            ?: return null
 
-        return exactPairAnswer(
+        return supportedPairAnswer(
             taskId = result.taskId,
             query = result.query,
             pair = supportedPair,
@@ -72,7 +76,7 @@ internal object BrowserResearchAnswerSynthesis {
         )
     }
 
-    private fun exactPairAnswer(
+    private fun supportedPairAnswer(
         taskId: String,
         query: String,
         pair: BrowserResearchComparison.Result,
@@ -80,9 +84,7 @@ internal object BrowserResearchAnswerSynthesis {
         evidenceSourceCount: Int,
     ): Answer? {
         val claim = pair.claimAssessment
-        if (claim.relation !=
-            BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH
-        ) return null
+        if (!BrowserResearchGoalCompletion.supportsBoundedSummary(pair)) return null
         val statement = claim.firstExcerpt?.trim().orEmpty()
         val matchingStatement = claim.secondExcerpt?.trim().orEmpty()
         if (taskId.isBlank() || query.isBlank() ||
@@ -92,6 +94,25 @@ internal object BrowserResearchAnswerSynthesis {
             evidenceSourceCount !in 2..3
         ) return null
 
+        val supportKind = when (claim.relation) {
+            BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH ->
+                SupportKind.EXACT_TEXT
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT ->
+                SupportKind.STRUCTURED_LITERAL_ANCHOR
+            else -> return null
+        }
+        val anchors = if (supportKind == SupportKind.STRUCTURED_LITERAL_ANCHOR)
+            claim.sharedAnchors else emptyList()
+        val literals = if (supportKind == SupportKind.STRUCTURED_LITERAL_ANCHOR)
+            claim.firstLiterals else emptyList()
+        if (supportKind == SupportKind.STRUCTURED_LITERAL_ANCHOR &&
+            (anchors.size < 3 || literals.isEmpty() ||
+                claim.firstLiterals != claim.secondLiterals)
+        ) return null
+        val evidenceStatement =
+            if (supportKind == SupportKind.EXACT_TEXT) statement
+            else "Shared lexical anchors: " + anchors.joinToString(", ") +
+                ". Matching critical literals: " + literals.joinToString(", ") + "."
         val supportingUrls = listOf(pair.first.finalUrl, pair.second.finalUrl).distinct()
         val supportingHosts = listOf(pair.first.host, pair.second.host).distinct()
         val observed = observedUrls.distinct()
@@ -103,7 +124,11 @@ internal object BrowserResearchAnswerSynthesis {
         return Answer(
             taskId = taskId,
             query = query,
-            evidenceStatement = statement,
+            supportKind = supportKind,
+            evidenceStatement = evidenceStatement,
+            supportingExcerpts = listOf(statement, matchingStatement).distinct(),
+            sharedAnchors = anchors,
+            criticalLiterals = literals,
             supportingUrls = supportingUrls,
             supportingHosts = supportingHosts,
             observedUrls = observed,
