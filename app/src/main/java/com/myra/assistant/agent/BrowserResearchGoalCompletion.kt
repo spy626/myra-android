@@ -1,5 +1,7 @@
 package com.myra.assistant.agent
 
+import java.util.Locale
+
 /**
  * Conservative completion semantics for one verified two-source browser comparison.
  *
@@ -30,7 +32,7 @@ internal object BrowserResearchGoalCompletion {
     )
 
     private fun words(text: String): Set<String> =
-        Regex("""[\p{L}\p{M}\p{N}]{4,}""").findAll(text.lowercase())
+        Regex("""[\p{L}\p{M}\p{N}]{4,}""").findAll(text.lowercase(Locale.ROOT))
             .map { it.value }.filterNot { it in queryIgnore }.toSet()
 
     private fun claimHasStrongQueryOverlap(
