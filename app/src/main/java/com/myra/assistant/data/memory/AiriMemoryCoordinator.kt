@@ -131,8 +131,18 @@ class MemoryBrainCoordinator(
         } else {
             AiriMemoryRuntime.claimTurn(evidence.sessionId, evidence.turnId)
         }
-        val bounded = staged.take(4)
-        if (bounded.isEmpty()) return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.IGNORE)
+        val fallback = if (staged.isEmpty() && FinalTurnSemanticCandidateGate.shouldInterpret(evidence)) {
+            runCatching { reasoningProvider.interpretFinalTurn(evidence) }
+                .onFailure {
+                    log("MEMORY_FINAL_TURN_FALLBACK_FAILED turnId=${evidence.turnId} reason=${it.javaClass.simpleName}")
+                }
+                .getOrDefault(FinalTurnSemanticInterpretation())
+        } else FinalTurnSemanticInterpretation()
+        val displayProjection = FinalTurnDisplayProjectionPolicy.select(evidence, fallback.displayText)
+        val bounded = (if (staged.isNotEmpty()) staged else fallback.operations).take(4)
+        if (bounded.isEmpty()) return FinalMemoryTurnPlan(
+            evidence.sourceText, decision = MemoryDecision.IGNORE, displayProjection = displayProjection
+        )
         if (!semanticConsistent) return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT, rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name)
         val isQuestion = bounded.any { it.intent == MemorySemanticIntent.RECALL }
         if (isQuestion && bounded.any { it.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY) })
@@ -188,7 +198,8 @@ class MemoryBrainCoordinator(
             else -> MemoryDecision.SAVE
         }
         return FinalMemoryTurnPlan(evidence.sourceText, resolved, decision, decision == MemoryDecision.NEEDS_CLARIFICATION,
-            MemoryFailureReason.AMBIGUOUS_ENTITY.name.takeIf { decision == MemoryDecision.NEEDS_CLARIFICATION })
+            MemoryFailureReason.AMBIGUOUS_ENTITY.name.takeIf { decision == MemoryDecision.NEEDS_CLARIFICATION },
+            displayProjection = displayProjection)
     }
 
     suspend fun executeFinalTurnPlan(plan: FinalMemoryTurnPlan, evidence: AuthoritativeMemoryTurnEvidence? = null): MemoryBrainOutcome {
