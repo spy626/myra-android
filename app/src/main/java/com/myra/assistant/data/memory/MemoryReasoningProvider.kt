@@ -14,6 +14,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import java.util.Locale
 
 data class ReviewedBoundary(val afterSequence: Long, val keep: Boolean, val confidence: Double, val reason: String)
 data class ConsolidationCandidate(val memoryId: String, val fact: String, val category: String)
@@ -25,7 +26,72 @@ data class EpisodeSemanticAction(val kind: SemanticConsolidationAction, val fact
     val goalStatus: String? = null,
     val sourceMessageSequences: List<Long> = emptyList(), val sourceSpans: List<String> = emptyList())
 
+data class FinalTurnSemanticInterpretation(
+    val displayText: String? = null,
+    val operations: List<MemorySemanticFrame> = emptyList()
+)
+
+object FinalTurnSemanticCandidateGate {
+    private val explicitMemory = Regex("\\b(?:remember|memory|save|yaad|yaad\\s+rakh)\\b", RegexOption.IGNORE_CASE)
+    private val selfReference = Regex("\\b(?:i|i'm|im|my|me|mujhe|mera|meri|mere|main|hum|ham|hamara|hamari|hamare)\\b", RegexOption.IGNORE_CASE)
+    private val questionCue = Regex("\\b(?:kya|kaun|kab|kahan|kahaan|kyun|kaise|what|who|when|where|why|how|which)\\b", RegexOption.IGNORE_CASE)
+
+    fun shouldInterpret(evidence: AuthoritativeMemoryTurnEvidence): Boolean {
+        val text = evidence.canonicalText.trim()
+        if (text.length !in 4..500) return false
+        if (explicitMemory.containsMatchIn(text)) return true
+        if (!selfReference.containsMatchIn(text)) return false
+        val normalized = text.lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}']+"), " ").trim()
+        val tokenCount = normalized.split(' ').count(String::isNotBlank)
+        if (tokenCount < 3) return false
+        if (text.contains('?') || questionCue.find(normalized)?.range?.first?.let { it < 18 } == true) return false
+        return true
+    }
+}
+
+object FinalTurnDisplayProjectionPolicy {
+    fun select(evidence: AuthoritativeMemoryTurnEvidence, proposed: String?): String? {
+        val display = proposed?.trim()?.replace(Regex("\\s+"), " ") ?: return null
+        if (display.length !in 2..500) return null
+        if (Regex("[\\u0900-\\u097F\\u3400-\\u4DBF\\u4E00-\\u9FFF]").containsMatchIn(display)) return null
+        val sourceNumbers = Regex("\\d+(?:[.,:/-]\\d+)*").findAll(evidence.canonicalText).map { it.value }.toList()
+        val displayNumbers = Regex("\\d+(?:[.,:/-]\\d+)*").findAll(display).map { it.value }.toList()
+        if (sourceNumbers != displayNumbers) return null
+        val protected = (evidence.protectedCanonicalNames + evidence.protectedDisplayNames)
+            .map(::normalize).filter(String::isNotBlank).distinct()
+        val projected = normalize(display)
+        if (protected.any { !projected.contains(it) }) return null
+        val sourceTokens = normalize(evidence.sourceText).split(' ').filter { it.length >= 2 }
+        val projectedTokens = projected.split(' ').filter { it.length >= 2 }
+        if (sourceTokens.isEmpty() || projectedTokens.isEmpty()) return null
+        val matched = sourceTokens.count { left -> projectedTokens.any { right -> close(left, right) } }
+        val required = maxOf(1, (minOf(sourceTokens.size, projectedTokens.size) + 1) / 2)
+        return display.takeIf { matched >= required }
+    }
+
+    private fun normalize(value: String) = value.lowercase(Locale.ROOT)
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ").replace(Regex("\\s+"), " ").trim()
+
+    private fun close(a: String, b: String): Boolean {
+        if (a == b) return true
+        if (a.length < 4 || b.length < 4) return false
+        val d = distance(a, b)
+        return d <= if (maxOf(a.length, b.length) >= 7) 2 else 1
+    }
+
+    private fun distance(a: String, b: String): Int {
+        var prev = IntArray(b.length + 1) { it }
+        for (i in a.indices) {
+            val cur = IntArray(b.length + 1); cur[0] = i + 1
+            for (j in b.indices) cur[j + 1] = minOf(cur[j] + 1, prev[j + 1] + 1, prev[j] + if (a[i] == b[j]) 0 else 1)
+            prev = cur
+        }
+        return prev[b.length]
+    }
+}
+
 interface MemoryReasoningProvider {
+    suspend fun interpretFinalTurn(evidence: AuthoritativeMemoryTurnEvidence): FinalTurnSemanticInterpretation = FinalTurnSemanticInterpretation()
     suspend fun classifyPrimitive(messages: List<ConversationTruthEntity>): SegmentClassification?
     suspend fun splitPrimitive(messages: List<ConversationTruthEntity>): List<Long>
     suspend fun resegmentInformative(messages: List<ConversationTruthEntity>, softBoundaries: List<Long>): List<Long>
@@ -53,6 +119,53 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
     private val gate = Mutex() // strict one-call-at-a-time back-pressure
     private val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS).callTimeout(90, TimeUnit.SECONDS).build()
+
+    override suspend fun interpretFinalTurn(evidence: AuthoritativeMemoryTurnEvidence): FinalTurnSemanticInterpretation {
+        val operation = JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("intent", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                "ADD_FACT", "ADD_RELATIONSHIP", "UPDATE_FACT", "SUPERSEDE_FACT",
+                "ADD_GOAL", "UPDATE_GOAL", "ADD_PROJECT", "ADD_IDEA", "ADD_SOLUTION",
+                "ADD_WORKFLOW", "TRANSIENT_CONTEXT", "NONE"
+            ))))
+            .put("person", JSONObject().put("type", "STRING"))
+            .put("semantic_relationship", JSONObject().put("type", "STRING")
+                .put("enum", JSONArray(listOf("", "FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
+            .put("temporal_scope", JSONObject().put("type", "STRING")
+                .put("enum", JSONArray(listOf("CURRENT", "HISTORICAL", "TEMPORARY", "RECURRING", "UNSPECIFIED"))))
+            .put("assertion_mode", JSONObject().put("type", "STRING")
+                .put("enum", JSONArray(listOf("USER_ASSERTED", "HYPOTHETICAL", "REPORTED_SPEECH", "QUESTION"))))
+            .put("fact", JSONObject().put("type", "STRING"))
+            .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
+                "IDENTITY", "PREFERENCE", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
+                "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "IDEA", "SOLUTION"
+            ))))
+            .put("memory_key", JSONObject().put("type", "STRING"))
+            .put("source_span", JSONObject().put("type", "STRING"))
+            .put("critical_literals", JSONObject().put("type", "ARRAY").put("maxItems", 8)
+                .put("items", JSONObject().put("type", "STRING")))
+            .put("goal_title", JSONObject().put("type", "STRING"))
+            .put("goal_status", JSONObject().put("type", "STRING"))
+            .put("confidence", JSONObject().put("type", "NUMBER")))
+            .put("required", JSONArray(listOf("intent", "source_span", "confidence", "assertion_mode")))
+        val schema = JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("display_text", JSONObject().put("type", "STRING"))
+            .put("operations", JSONObject().put("type", "ARRAY").put("maxItems", 4).put("items", operation)))
+            .put("required", JSONArray(listOf("display_text", "operations")))
+        val input = JSONObject()
+            .put("canonical_final_user_transcript", evidence.canonicalText)
+            .put("current_display_projection", evidence.displayText)
+        val prompt = "You are the final-turn semantic projection stage in a Plast-Mem-style memory pipeline. " +
+            "For display_text, render the SAME utterance as natural Roman Hinglish/English. Correct only clear ASR/transliteration spelling or grammar damage; preserve meaning, names, numbers, dates, amounts and uncertainty. If unsure, copy current_display_projection unchanged. Never add facts. " +
+            "For operations, extract only high-value durable user semantic facts useful in future turns. Stable preferences, communication style, identity, relationships, projects, goals, habits and workflows may be durable. Skip temporary chatter, acknowledgements, questions, hypotheticals, reported speech, guesses and secrets. " +
+            "Use normalized meaning in fact, but source_span MUST be an exact substring copied from canonical_final_user_transcript, including noisy ASR spelling. Use a stable semantic memory_key and put every critical literal in critical_literals. Android independently validates and authorizes every write."
+        val out = generate(prompt, input, schema)
+        return FinalTurnSemanticInterpretation(
+            displayText = out.optString("display_text").trim().takeIf(String::isNotEmpty),
+            operations = GeminiMemoryOperationParser.parse(out).map {
+                it.copy(sourceTurnId = evidence.turnId, sourceSessionId = evidence.sessionId)
+            }
+        )
+    }
 
     override suspend fun classifyPrimitive(messages: List<ConversationTruthEntity>): SegmentClassification? {
         val schema = JSONObject().put("type", "OBJECT").put("properties", JSONObject()
