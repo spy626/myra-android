@@ -51,6 +51,7 @@ import com.myra.assistant.screen.RenderedBrowserObservation
 import com.myra.assistant.screen.RenderedBrowserNavigationPolicy
 import com.myra.assistant.screen.RenderedBrowserScrollPolicy
 import com.myra.assistant.screen.RenderedBrowserPageEvidence
+import com.myra.assistant.screen.RenderedBrowserPublicDestination
 import com.myra.assistant.screen.RenderedBrowserResearchContinuity
 import com.myra.assistant.screen.ScreenFramePrivacyFilter
 import com.myra.assistant.screen.ScreenPrivacyResult
@@ -2235,11 +2236,17 @@ class MyraVoiceService : Service() {
             voiceLog("BROWSER_NAMED_LINK_TASK_EVIDENCE turnId=" + userTurnId +
                 " taskRecorded=" + accepted + " status=" + evidence.generalStatus +
                 " sourceSha256=" + (source?.contentSha256 ?: "none") +
-                " destinationVerified=false autonomousContinuation=false")
+                " destinationVerified=" + (source?.destinationUrlVerified == true) +
+                " destinationSha256=" + (source?.publicDestination?.urlSha256 ?: "none") +
+                " autonomousContinuation=false")
             if (source != null) lastBrowserPageEvidence = source
             val localText = source?.let {
+                val destination = it.publicDestination?.let { verified ->
+                    "\nVerified public destination: " + verified.canonicalUrl +
+                        "\nDestination URL SHA-256: " + verified.urlSha256
+                }.orEmpty()
                 message + "\nObserved rendered text (untrusted): “" + it.localPreview() +
-                    "”\nVisible-text SHA-256: " + it.contentSha256
+                    "”\nVisible-text SHA-256: " + it.contentSha256 + destination
             } ?: message
             listener?.onMyraText(localText, error)
             emitState(message)
@@ -2322,12 +2329,44 @@ class MyraVoiceService : Service() {
                 val accepted = verification ==
                     RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED &&
                     source != null
-                val evidence = BrowserNavigationTaskEvidence.afterTap(
-                    if (accepted) verification else RenderedBrowserNavigationPolicy.Verification.UNKNOWN)
-                if (accepted) {
-                    report("Browser mein naya page text do observations mein stable mila; destination URL verify nahi hui.",
-                        false, evidence, source)
+                val stableSource = source
+                if (accepted && stableSource != null) {
+                    val destinationCandidate = RenderedBrowserPublicDestination.candidate(
+                        secondContext, secondForeground, stableSource,
+                        android.os.SystemClock.elapsedRealtime())
+                    if (destinationCandidate == null) {
+                        val evidence = BrowserNavigationTaskEvidence.afterTap(verification)
+                        report("Browser mein naya page text do observations mein stable mila; destination URL verify nahi hui.",
+                            false, evidence, stableSource)
+                    } else {
+                        // DNS may block; keep it off the Accessibility/main path. A newer
+                        // user turn invalidates this attribution before any result is reported.
+                        serviceScope.launch {
+                            val destination = RenderedBrowserPublicDestination.verifyPublic(
+                                destinationCandidate)
+                            mainHandler.post {
+                                if (!ownsResult()) {
+                                    voiceLog("BROWSER_NAMED_LINK_DESTINATION_DROPPED turnId=$userTurnId reason=new_user_turn")
+                                    return@post
+                                }
+                                val bound = destination?.let {
+                                    RenderedBrowserPublicDestination.bind(stableSource, it)
+                                } ?: stableSource
+                                val evidence = BrowserNavigationTaskEvidence.afterTap(
+                                    verification, bound.destinationUrlVerified)
+                                if (bound.destinationUrlVerified) {
+                                    report("Browser mein naya page text aur public HTTPS destination verify hui.",
+                                        false, evidence, bound)
+                                } else {
+                                    report("Browser mein naya page text stable mila; public destination independently verify nahi hui.",
+                                        false, evidence, bound)
+                                }
+                            }
+                        }
+                    }
                 } else {
+                    val evidence = BrowserNavigationTaskEvidence.afterTap(
+                        RenderedBrowserNavigationPolicy.Verification.UNKNOWN)
                     report("Tap dispatch hua, lekin safe stable browser source verify nahi hua.",
                         true, evidence)
                 }
