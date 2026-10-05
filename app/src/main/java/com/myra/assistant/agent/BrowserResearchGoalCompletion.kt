@@ -22,12 +22,34 @@ internal object BrowserResearchGoalCompletion {
         val observedOutcome: String,
     )
 
+    private val queryIgnore = setOf(
+        "check", "read", "about", "site", "page", "website", "review", "analyse",
+        "analyze", "analysis", "study", "inspect", "research", "summarize", "summary",
+        "explain", "please", "this", "that", "with", "from", "source", "find",
+        "information", "details", "bro", "mujhe", "batao", "karo", "karna", "kro",
+    )
+
+    private fun words(text: String): Set<String> =
+        Regex("""[\p{L}\p{M}\p{N}]{4,}""").findAll(text.lowercase())
+            .map { it.value }.filterNot { it in queryIgnore }.toSet()
+
+    private fun claimHasStrongQueryOverlap(
+        result: BrowserResearchComparison.Result,
+    ): Boolean {
+        val terms = words(result.query)
+        if (terms.size < 2) return false
+        val first = result.claimAssessment.firstExcerpt ?: return false
+        val second = result.claimAssessment.secondExcerpt ?: return false
+        return (words(first) intersect terms).size >= 2 &&
+            (words(second) intersect terms).size >= 2
+    }
+
     fun supportsBoundedSummary(result: BrowserResearchComparison.Result): Boolean =
         when (result.claimAssessment.relation) {
             BrowserResearchComparison.ClaimRelation.EXACT_SAFE_STATEMENT_MATCH ->
-                result.sharedTerms.size >= 2
+                result.sharedTerms.size >= 2 && claimHasStrongQueryOverlap(result)
             BrowserResearchComparison.ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT ->
-                result.sharedTerms.size >= 2 &&
+                result.sharedTerms.size >= 2 && claimHasStrongQueryOverlap(result) &&
                     result.claimAssessment.sharedAnchors.size >= 3 &&
                     result.claimAssessment.firstLiterals.isNotEmpty() &&
                     result.claimAssessment.firstLiterals.toSet() ==
