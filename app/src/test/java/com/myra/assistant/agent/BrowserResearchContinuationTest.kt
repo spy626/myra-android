@@ -231,4 +231,35 @@ class BrowserResearchContinuationTest {
         assertNull(store.pendingResearchContinuation())
     }
 
+    @Test fun thirdStructuredLiteralAnchorSupportCanResolveNoAlignmentCase() {
+        val compared = comparison(
+            source("https://one.example/release", "one.example", 'c',
+                "Security update version 4.2 shipped to supported Android devices in 2026.",
+                listOf("security", "update", "android"), 2_000L),
+            source("https://two.example/bulletin", "two.example", 'd',
+                "Android patch bulletin explains remediation guidance for platform maintainers.",
+                listOf("android", "security"), 2_200L),
+        )
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT,
+            compared.claimAssessment.relation)
+        val continuation = requireNotNull(BrowserResearchContinuation.start(
+            compared, BrowserResearchGoalCompletion.assess(compared), 2_400L))
+        val third = source(
+            "https://three.example/release", "three.example", 'e',
+            "Supported Android devices received security release 4.2 during 2026.",
+            listOf("security", "update", "android"), 2_500L)
+        val result = requireNotNull(
+            BrowserResearchContinuation.resolve(continuation, third, 2_600L))
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.STRUCTURED_LITERAL_ANCHOR_SUPPORT,
+            result.firstToThird.claimAssessment.relation)
+        assertEquals(
+            BrowserResearchContinuation.Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD,
+            result.disposition)
+        assertTrue(result.boundedSummaryReady)
+        assertFalse(result.factualTruthVerified)
+        assertFalse(result.autonomousContinuationAllowed)
+    }
+
 }
