@@ -192,8 +192,8 @@ internal object RenderedBrowserVerifiedSourceAnalysis {
         }
         append(
             "Two different public hosts supplied bounded goal-matched evidence. " +
-                "Evidence collection for this comparison is complete; no paraphrase agreement, " +
-                "truth, login state, hidden page content, provider sharing or memory write is inferred."
+                "Evidence collection for this comparison is complete. Factual truth, paraphrase agreement, " +
+                "login state, hidden page content, provider sharing, and memory writes are not inferred."
         )
     }.take(3_200)
 
