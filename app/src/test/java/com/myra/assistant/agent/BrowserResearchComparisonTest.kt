@@ -269,4 +269,33 @@ class BrowserResearchComparisonTest {
             result.claimAssessment.relation)
     }
 
+    @Test fun polarityMismatchBlocksStructuredSupportEvenWithSameLiteralsAndAnchors() {
+        val first = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://one.example/release",
+            host = "one.example",
+            contentSha256 = "6".repeat(64),
+            excerpts = listOf(
+                "Security update version 4.2 shipped to supported Android devices in 2026."),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_000L,
+        ))
+        val session = requireNotNull(
+            BrowserResearchComparison.start(handoff(), first, 2_100L))
+        val second = requireNotNull(BrowserResearchComparison.source(
+            finalUrl = "https://two.example/release",
+            host = "two.example",
+            contentSha256 = "7".repeat(64),
+            excerpts = listOf(
+                "Security update version 4.2 was not shipped to supported Android devices in 2026."),
+            matchedTerms = listOf("security", "update", "android"),
+            capturedAt = 2_200L,
+        ))
+        val result = requireNotNull(
+            BrowserResearchComparison.compare(session, second, 2_300L))
+        assertEquals(
+            BrowserResearchComparison.ClaimRelation.NO_CLAIM_ALIGNMENT,
+            result.claimAssessment.relation)
+        assertFalse(BrowserResearchGoalCompletion.supportsBoundedSummary(result))
+    }
+
 }
