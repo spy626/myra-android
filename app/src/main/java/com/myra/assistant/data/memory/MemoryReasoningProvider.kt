@@ -160,11 +160,28 @@ class GeminiMemoryReasoningProvider(context: Context) : MemoryReasoningProvider 
             "For operations, extract only high-value durable user semantic facts useful in future turns. Stable preferences, communication style, identity, relationships, projects, goals, habits and workflows may be durable. Skip temporary chatter, acknowledgements, questions, hypotheticals, reported speech, guesses and secrets. " +
             "Use normalized meaning in fact, but source_span MUST be an exact substring copied from canonical_final_user_transcript, including noisy ASR spelling. Use a stable semantic memory_key and put every critical literal in critical_literals. Android independently validates and authorizes every write."
         val out = generate(prompt, input, schema)
+        val operations = GeminiMemoryOperationParser.parse(out).map {
+            it.copy(sourceTurnId = evidence.turnId, sourceSessionId = evidence.sessionId)
+        }.filter { it.intent != MemorySemanticIntent.NONE }.mapNotNull { frame ->
+            if (frame.stableKey != null) frame
+            else if (frame.intent in setOf(
+                    MemorySemanticIntent.ADD_FACT, MemorySemanticIntent.ADD_PROJECT,
+                    MemorySemanticIntent.ADD_IDEA, MemorySemanticIntent.ADD_SOLUTION,
+                    MemorySemanticIntent.ADD_WORKFLOW
+                ) && !frame.fact.isNullOrBlank() && frame.category != null
+            ) frame.copy(
+                stableKey = "final:${frame.category.name}:${AiriText.semanticKey(frame.fact).take(64)}"
+            )
+            else if (frame.intent in setOf(
+                    MemorySemanticIntent.ADD_RELATIONSHIP, MemorySemanticIntent.ADD_GOAL,
+                    MemorySemanticIntent.TRANSIENT_CONTEXT
+                )
+            ) frame
+            else null
+        }
         return FinalTurnSemanticInterpretation(
             displayText = out.optString("display_text").trim().takeIf(String::isNotEmpty),
-            operations = GeminiMemoryOperationParser.parse(out).map {
-                it.copy(sourceTurnId = evidence.turnId, sourceSessionId = evidence.sessionId)
-            }
+            operations = operations
         )
     }
 
