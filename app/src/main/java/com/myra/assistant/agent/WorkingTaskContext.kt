@@ -52,6 +52,8 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     private val claimedResearchSourceHandoffs = LinkedHashSet<String>()
     private var researchComparison: BrowserResearchComparison.Session? = null
     private var researchComparisonClaimKey: String? = null
+    private var researchContinuation: BrowserResearchContinuation.Session? = null
+    private var researchContinuationClaimKey: String? = null
     fun snapshot(): WorkingTaskContext = value
 
     @Synchronized internal fun beginResearchComparison(
@@ -60,6 +62,8 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
         val fresh = BrowserResearchComparison.fresh(session, now()) ?: return false
         researchComparison = fresh
         researchComparisonClaimKey = null
+        researchContinuation = null
+        researchContinuationClaimKey = null
         return true
     }
 
@@ -94,12 +98,59 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
 
     @Synchronized internal fun completeResearchComparison(
         session: BrowserResearchComparison.Session,
+        continuation: BrowserResearchContinuation.Session? = null,
     ): Boolean {
         if (researchComparison != session ||
             researchComparisonClaimKey != session.claimKey
         ) return false
+        val freshContinuation = continuation?.let {
+            BrowserResearchContinuation.fresh(it, now())
+        }
+        if (continuation != null && freshContinuation == null) return false
         researchComparison = null
         researchComparisonClaimKey = null
+        researchContinuation = freshContinuation
+        researchContinuationClaimKey = null
+        return true
+    }
+
+    @Synchronized internal fun pendingResearchContinuation(): BrowserResearchContinuation.Session? {
+        val current = researchContinuation ?: return null
+        val fresh = BrowserResearchContinuation.fresh(current, now())
+        if (fresh == null) {
+            researchContinuation = null
+            researchContinuationClaimKey = null
+            return null
+        }
+        if (researchContinuationClaimKey != null) return null
+        return fresh
+    }
+
+    @Synchronized internal fun claimResearchContinuation(
+        session: BrowserResearchContinuation.Session,
+    ): Boolean {
+        val current = pendingResearchContinuation() ?: return false
+        if (current != session || researchContinuationClaimKey != null) return false
+        researchContinuationClaimKey = session.claimKey
+        return true
+    }
+
+    @Synchronized internal fun releaseResearchContinuation(
+        session: BrowserResearchContinuation.Session,
+    ) {
+        if (researchContinuation == session &&
+            researchContinuationClaimKey == session.claimKey
+        ) researchContinuationClaimKey = null
+    }
+
+    @Synchronized internal fun completeResearchContinuation(
+        session: BrowserResearchContinuation.Session,
+    ): Boolean {
+        if (researchContinuation != session ||
+            researchContinuationClaimKey != session.claimKey
+        ) return false
+        researchContinuation = null
+        researchContinuationClaimKey = null
         return true
     }
 
@@ -189,6 +240,8 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     @Synchronized fun beginSearch(query: String, destination: SearchDestination, executor: String, expected: String) {
         researchComparison = null
         researchComparisonClaimKey = null
+        researchContinuation = null
+        researchContinuationClaimKey = null
         value = value.copy(
             searchQuery = query, resolvedDestination = destination, selectedExecutor = executor,
             actionStartedAt = now(), expectedOutcome = expected, lastObservedOutcome = null,
@@ -259,6 +312,8 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     @Synchronized fun clearTask() {
         researchComparison = null
         researchComparisonClaimKey = null
+        researchContinuation = null
+        researchContinuationClaimKey = null
         value = WorkingTaskContext(
             conversationTopic = value.conversationTopic,
             activeExternalApp = value.activeExternalApp,
