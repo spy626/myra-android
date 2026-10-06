@@ -3645,10 +3645,7 @@ class MyraVoiceService : Service() {
         is MemoryBrainOutcome.Rejected -> when {
             outcome.reason.contains("ambiguous", true) ->
                 "Kaunsi memory ya person ki baat hai? Naam clearly batao."
-            else -> modelText.takeIf {
-                it.isNotBlank() && !it.contains("memory operation was not authorized", true)
-            }?.let(::romanDisplayText)
-                ?: "Main is baat ko memory mein save nahi kar payi."
+            else -> MemoryCommandReplyFormatter.rememberRejected()
         }
         MemoryBrainOutcome.Ignored -> modelText.takeIf { it.isNotBlank() }?.let(::romanDisplayText)
             ?: "Acha, samajh gayi."

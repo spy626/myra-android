@@ -40,6 +40,32 @@ class AiriMemoryCompletionTest {
         assertEquals(MemoryFailureReason.AMBIGUOUS_ENTITY.name, plan.rejectionReason)
     }
 
+    @Test fun devanagariFinalAuthorizesNaturalRomanPreferenceSpanAndPersists() = runBlocking {
+        val e = evidence(
+            1035,
+            "मुझे शॉर्ट आंसर पसंद है।",
+            "Mujhe short answer pasand hai."
+        )
+        val frame = MemorySemanticFrame(
+            MemorySemanticIntent.ADD_FACT,
+            temporalScope = MemoryTemporalScope.CURRENT,
+            fact = "User prefers short answers",
+            category = MemoryCategory.PREFERENCE,
+            stableKey = "response_length",
+            sourceSpan = "Mujhe short answers pasand hain.",
+            sourceTurnId = e.turnId,
+            confidence = .97,
+            assertionMode = MemoryAssertionMode.USER_ASSERTED
+        )
+        val owner = MemoryBrainCoordinator(InMemoryAiriMemoryStore(), recoverOnInit = false)
+        val plan = owner.prepareFinalTurn(e, listOf(frame))
+        assertEquals(MemoryDecision.SAVE, plan.decision)
+        assertTrue(owner.executeFinalTurnPlan(plan, e) is MemoryBrainOutcome.Mutated)
+        assertTrue(owner.recall("", type = MemoryRecallType.PREFERENCES).rows.any {
+            it.statement.contains("short answers", ignoreCase = true)
+        })
+    }
+
     @Test fun operationSpecificRequiredFieldsAreRejectedBeforeAuthorization() {
         val e = evidence(104, "Ravi is my friend", "Ravi is my friend", listOf("Ravi"))
         fun reason(frame: MemorySemanticFrame) = MemoryOperationContractValidator.validateAndRecover(frame, e).reason

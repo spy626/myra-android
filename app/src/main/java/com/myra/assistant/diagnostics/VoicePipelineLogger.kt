@@ -69,16 +69,24 @@ object VoicePipelineLogger {
         }
     }
 
-    /** Memory diagnostics keep IDs/statuses, never a full remembered fact payload. */
+    /** Export/share diagnostics keep timings, IDs and decisions, never transcript or memory payloads. */
     internal fun sanitize(message: String): String {
-        val lower = message.lowercase(Locale.ROOT)
+        var safe = message.replace(
+            Regex(
+                "\\b(candidateTranscript|finalGeminiTranscript|accumulatorBeforeFinal|finalDisplayText|" +
+                    "rawGeminiTranscript|semanticText|raw|normalized|display)=.*?(?=\\s[A-Za-z][A-Za-z0-9_]*=|$)",
+                RegexOption.IGNORE_CASE
+            )
+        ) { match -> match.groupValues[1] + "=[redacted]" }
+        val lower = safe.lowercase(Locale.ROOT)
         val memoryRelated = lower.contains("memory") || lower.contains("correction_transaction") ||
             lower.contains("best_friend") || lower.contains("bestfriend")
-        if (!memoryRelated) return message
-        return message
+        if (!memoryRelated) return safe
+        safe = safe
             .replace(Regex("\\bfact=.*?(?=\\s(?:source|saved|status|key|id|active|$))", RegexOption.IGNORE_CASE), "fact=[redacted]")
             .replace(Regex("\\bfinalRows=.*$", RegexOption.IGNORE_CASE), "finalRows=[redacted]")
             .replace(Regex("\\brecords=\\[.*$", RegexOption.IGNORE_CASE), "records=[redacted]")
+        return safe
     }
 
     private fun rotateIfNeeded(file: File) {
