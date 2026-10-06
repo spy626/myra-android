@@ -48,7 +48,11 @@ object VoicePipelineLogger {
                     appendLine("Created: ${wallClock()}")
                     appendLine("No audio, transcripts, memories, or API keys are included.")
                     appendLine()
-                    if (source.exists()) append(source.readText()) else appendLine("No voice events recorded yet.")
+                    if (source.exists()) {
+                        source.useLines { lines ->
+                            lines.forEach { appendLine(sanitize(it)) }
+                        }
+                    } else appendLine("No voice events recorded yet.")
                 })
                 output
             }

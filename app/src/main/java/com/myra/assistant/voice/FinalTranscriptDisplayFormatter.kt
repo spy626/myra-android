@@ -33,7 +33,8 @@ object FinalTranscriptDisplayFormatter {
         "फ्रेंड" to "friend", "है" to "hai", "हैं" to "hain", "नहीं" to "nahi", "क्या" to "kya",
         "जानते" to "jaante", "हो" to "ho", "दोस्त" to "dost", "कौन" to "kaun",
         "शॉर्ट" to "short", "आंसर" to "answer", "पसंद" to "pasand",
-        "एक" to "ek", "एजेंट" to "agent", "वह" to "woh", "हर" to "har",
+        "एक" to "ek", "एजेंट" to "agent", "वह" to "woh", "ना" to "na",
+        "बनाना" to "banana", "हर" to "har",
         "काम" to "kaam", "कर" to "kar", "सके" to "sake", "ऐसा" to "aisa",
         "बना" to "bana", "सकते" to "sakte"
     )

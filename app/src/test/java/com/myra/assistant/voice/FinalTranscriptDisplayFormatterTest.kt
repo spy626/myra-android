@@ -23,8 +23,8 @@ class FinalTranscriptDisplayFormatterTest {
             display("मुझे शॉर्ट आंसर पसंद है।")
         )
         assertEquals(
-            "Mujhe ek agent bana na har kaam kar sake aisa agent bana sakte hain?",
-            display("मुझे एक एजेंट बना ना हर काम कर सके ऐसा एजेंट बना सकते हैं?")
+            "Mujhe ek agent banana hai. Woh na mera har kaam kar sake. Aisa agent bana sakte hain kya?",
+            display("मुझे एक एजेंट बनाना है। वह ना मेरा हर काम कर सके। ऐसा एजेंट बना सकते हैं क्या?")
         )
     }
 
