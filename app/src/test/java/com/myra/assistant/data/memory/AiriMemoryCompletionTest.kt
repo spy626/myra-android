@@ -62,7 +62,7 @@ class AiriMemoryCompletionTest {
         assertEquals(MemoryDecision.SAVE, plan.decision)
         assertTrue(owner.executeFinalTurnPlan(plan, e) is MemoryBrainOutcome.Mutated)
         assertTrue(owner.recall("", type = MemoryRecallType.PREFERENCES).rows.any {
-            it.statement.contains("short answers", ignoreCase = true)
+            it.fact.contains("short answers", ignoreCase = true)
         })
     }
 
