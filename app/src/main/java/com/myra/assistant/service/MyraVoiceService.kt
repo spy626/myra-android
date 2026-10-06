@@ -1494,6 +1494,16 @@ class MyraVoiceService : Service() {
                     val pendingRecall = stagedMemoryRecalls.remove(memoryTurnId)
                     val localRecallIntent = com.myra.assistant.data.memory.LocalMemoryRecallRouter
                         .classify(finalUtterance.memoryEvidence)
+                    val currentTurnMutationWins =
+                        com.myra.assistant.data.memory.FinalMemoryTurnArbiter.currentTurnMutationWins(staged)
+                    val effectivePendingRecall = pendingRecall.takeUnless { currentTurnMutationWins }
+                    val effectiveLocalRecallIntent = localRecallIntent.takeUnless { currentTurnMutationWins }
+                    if (currentTurnMutationWins && (pendingRecall != null || localRecallIntent != null)) {
+                        voiceLog(
+                            "MEMORY_RECALL_CONFLICT turnId=$memoryTurnId winner=CURRENT_TURN_MUTATION " +
+                                "pendingRecall=${pendingRecall != null} localRecall=${localRecallIntent != null}"
+                        )
+                    }
                     val memoryIntentResolvedAt = android.os.SystemClock.elapsedRealtime()
                     // Plast-Mem-style final-turn fallback must own a likely durable turn
                     // before the ordinary model reply is released. Otherwise the semantic
@@ -1501,12 +1511,12 @@ class MyraVoiceService : Service() {
                     // asked the next recall question, creating a visible read-after-write race.
                     val finalTurnFallbackEligible =
                         staged.isEmpty() &&
-                            pendingRecall == null &&
-                            localRecallIntent == null &&
+                            effectivePendingRecall == null &&
+                            effectiveLocalRecallIntent == null &&
                             com.myra.assistant.data.memory.FinalTurnSemanticCandidateGate
                                 .shouldInterpret(finalUtterance.memoryEvidence)
                     val memoryOwned =
-                        staged.isNotEmpty() || pendingRecall != null || localRecallIntent != null ||
+                        staged.isNotEmpty() || effectivePendingRecall != null || effectiveLocalRecallIntent != null ||
                             finalTurnFallbackEligible
                     if (memoryOwned) {
                         suppressModelForTurn = true
@@ -1532,7 +1542,7 @@ class MyraVoiceService : Service() {
                                     "resolved=${validation.authorized}"
                             )
                         }
-                        if (localRecallIntent != null) {
+                        if (effectiveLocalRecallIntent != null) {
                             serviceScope.launch {
                                 memoryBrain.projectFinalDisplay(finalUtterance.memoryEvidence)
                                     ?.takeIf { it != displayedFinalUserText }
@@ -1541,7 +1551,7 @@ class MyraVoiceService : Service() {
                                     }
                             }
                         }
-                        val plan = if (localRecallIntent != null) {
+                        val plan = if (effectiveLocalRecallIntent != null) {
                             com.myra.assistant.data.memory.FinalMemoryTurnPlan(
                                 displayedFinalUserText, decision = com.myra.assistant.data.memory.MemoryDecision.RECALL
                             )
@@ -1568,13 +1578,13 @@ class MyraVoiceService : Service() {
                             )
                         }
                         val retrievalStartedAt = android.os.SystemClock.elapsedRealtime()
-                        val localExecution = if (localRecallIntent != null) {
+                        val localExecution = if (effectiveLocalRecallIntent != null) {
                             fastMemoryLane.recall(finalUtterance.memoryEvidence)
                         } else null
                         val outcome = localExecution?.outcome
-                            ?: pendingRecall?.let { memoryBrain.recall(it.query, 8, it.type) }
+                            ?: effectivePendingRecall?.let { memoryBrain.recall(it.query, 8, it.type) }
                             ?: memoryBrain.executeFinalTurnPlan(plan, finalUtterance.memoryEvidence)
-                        val effectiveRecallType = localExecution?.intent?.type ?: pendingRecall?.type
+                        val effectiveRecallType = localExecution?.intent?.type ?: effectivePendingRecall?.type
                         logMemoryOutcome(memoryTurnId, plan, outcome, effectiveRecallType)
                         if (memoryOwned) {
                             val response = verifiedMemoryResponse(outcome, myraText)

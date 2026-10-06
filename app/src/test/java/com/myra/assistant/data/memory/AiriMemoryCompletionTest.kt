@@ -66,6 +66,23 @@ class AiriMemoryCompletionTest {
         })
     }
 
+    @Test fun currentTurnMutationWinsOverCompetingRecallToolButPureRecallStaysAllowed() {
+        val mutation = MemorySemanticFrame(
+            MemorySemanticIntent.ADD_FACT,
+            temporalScope = MemoryTemporalScope.CURRENT,
+            fact = "User prefers short answers",
+            category = MemoryCategory.COMMUNICATION_STYLE,
+            stableKey = "response_length",
+            sourceSpan = "Mujhe short answer pasand hai.",
+            confidence = .97
+        )
+        assertTrue(FinalMemoryTurnArbiter.currentTurnMutationWins(listOf(mutation)))
+        assertFalse(FinalMemoryTurnArbiter.currentTurnMutationWins(emptyList()))
+        assertFalse(FinalMemoryTurnArbiter.currentTurnMutationWins(listOf(
+            MemorySemanticFrame(MemorySemanticIntent.RECALL, fact = "preferences")
+        )))
+    }
+
     @Test fun operationSpecificRequiredFieldsAreRejectedBeforeAuthorization() {
         val e = evidence(104, "Ravi is my friend", "Ravi is my friend", listOf("Ravi"))
         fun reason(frame: MemorySemanticFrame) = MemoryOperationContractValidator.validateAndRecover(frame, e).reason

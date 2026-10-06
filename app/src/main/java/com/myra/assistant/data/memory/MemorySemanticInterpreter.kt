@@ -60,6 +60,22 @@ object MemorySemanticIdentity {
 }
 
 /**
+ * Final-turn response arbitration. A verified current-turn mutation must never be
+ * replaced by a speculative recall tool call from the same Live turn. Pure recall
+ * turns remain read-only and unchanged.
+ */
+object FinalMemoryTurnArbiter {
+    private val readOnlyIntents = setOf(
+        MemorySemanticIntent.RECALL,
+        MemorySemanticIntent.CLARIFY,
+        MemorySemanticIntent.NONE
+    )
+
+    fun currentTurnMutationWins(staged: List<MemorySemanticFrame>): Boolean =
+        staged.any { it.intent !in readOnlyIntents }
+}
+
+/**
  * Shared model->Android handoff contract for natural memory turns.
  *
  * The model proposes semantic meaning; Android still owns final-turn evidence,
