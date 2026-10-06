@@ -199,6 +199,9 @@ class MyraVoiceService : Service() {
         val type: MemoryRecallType
     )
     private val stagedMemoryRecalls = java.util.concurrent.ConcurrentHashMap<Long, PendingMemoryRecall>()
+    private val earlyMemoryRecallGate = EarlyMemoryRecallGate()
+    private val earlyMemoryRecallExecutions =
+        java.util.concurrent.ConcurrentHashMap<Long, com.myra.assistant.data.memory.LocalRecallExecution>()
     private var memoryResponsePendingTurnId = 0L
     private var suppressModelForTurn = false
     private var waitingForFreshInputAfterCommand = false
@@ -578,6 +581,14 @@ class MyraVoiceService : Service() {
                         )
                     }
                 }
+                else if (earlyMemoryRecallGate.captureAudio(activeTurnId, modelGenerationId, pcm)) {
+                    val recallTurnId = activeTurnId
+                    voiceLog(
+                        "MEMORY_EARLY_MODEL_AUDIO_BUFFERED turnId=$recallTurnId modelGenerationId=$modelGenerationId " +
+                            "bytes=${pcm.size} verifiedBeforeResponse=false"
+                    )
+                    mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(recallTurnId) }
+                }
                 else if (responseArbiter.acceptsOrdinaryModel() && LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
                         suppressed = suppressModelForTurn,
                         assistantAlreadySpeaking = localAudioSpeaking,
@@ -648,8 +659,12 @@ class MyraVoiceService : Service() {
             }
             client.onGenerationComplete = { modelGenerationId ->
                 val completedAt = android.os.SystemClock.elapsedRealtime()
-                turnLatency.record(activeTurnId, Field.MODEL_GENERATION_COMPLETED, completedAt, modelGenerationId)
-                voiceLog("model_generation_complete turnId=$activeTurnId modelGenerationId=$modelGenerationId at=$completedAt")
+                val completionTurnId = activeTurnId
+                turnLatency.record(completionTurnId, Field.MODEL_GENERATION_COMPLETED, completedAt, modelGenerationId)
+                voiceLog("model_generation_complete turnId=$completionTurnId modelGenerationId=$modelGenerationId at=$completedAt")
+                if (earlyMemoryRecallGate.markGenerationComplete(completionTurnId, modelGenerationId)) {
+                    mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(completionTurnId) }
+                }
             }
             client.onInputTranscript = inputTranscript@ { part, latestModelGenerationId ->
                 if (screenResponseActive) {
@@ -839,8 +854,11 @@ class MyraVoiceService : Service() {
                     // delete, command, or permission parsers.
                     return@inputTranscript
                 }
-                // Memory Brain V2 never mutates or interrupts from partial ASR. Natural
-                // facts are evaluated silently only at the authoritative final turn.
+                // Read-only indexed recall may prefetch after local VAD has ended. This only
+                // reserves/buffers a response; durable mutation remains FINAL-turn-only.
+                reconcileEarlyMemoryRecallPreview(currentTranscript)
+                // Memory Brain V2 never mutates from partial ASR. Natural facts are evaluated
+                // silently only at the authoritative final turn.
                 if (CommandParser.isLikelyIncompleteActionFragment(currentTranscript)) {
                     incompleteActionFragmentTurn = true
                     suppressModelForTurn = true
@@ -921,6 +939,11 @@ class MyraVoiceService : Service() {
                         appendTranscript(output, transcript)
                         voiceLog("screen_query_result_received screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId userTurnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId firstResponseTextAt=${android.os.SystemClock.elapsedRealtime()} screen_response_turn_consistency=true")
                     } else voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId reason=wrong_generation")
+                }
+                else if (earlyMemoryRecallGate.appendModelTranscript(activeTurnId, transcript)) {
+                    val recallTurnId = activeTurnId
+                    appendTranscript(output, transcript)
+                    mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(recallTurnId) }
                 }
                 else if (memoryResponsePendingTurnId == activeTurnId && !hideNextModelTranscript) {
                     // Keep one natural response candidate, but do not display it until the
@@ -1266,10 +1289,11 @@ class MyraVoiceService : Service() {
                     voiceLog("agent_plan_created taskId=${unifiedTask.id} steps=${unifiedTask.plan.joinToString(",") { it.id }}")
                 }
                 if (turnDecision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION)) {
-                    // A complete conversational turn hard-locks all phone executors. Partial
-                    // keyword guesses are discarded and Gemini retains the sole response.
+                    // A complete conversational turn hard-locks all phone executors. Keep a
+                    // read-only memory preview reserved until FINAL reconciliation.
                     probableActionTurn = false
-                    suppressModelForTurn = false
+                    suppressModelForTurn = earlyMemoryRecallGate.isCapturing(activeTurnId) ||
+                        memoryResponsePendingTurnId == activeTurnId
                     voiceLog("agent_phone_tools_locked turnId=$activeTurnId reason=${turnDecision.intent}")
                     pendingScrollCandidates.discardForTurn(activeTurnId)
                 }
@@ -1498,6 +1522,21 @@ class MyraVoiceService : Service() {
                         com.myra.assistant.data.memory.FinalMemoryTurnArbiter.currentTurnMutationWins(staged)
                     val effectivePendingRecall = pendingRecall.takeUnless { currentTurnMutationWins }
                     val effectiveLocalRecallIntent = localRecallIntent.takeUnless { currentTurnMutationWins }
+                    val finalRecallType = effectiveLocalRecallIntent?.type ?: effectivePendingRecall?.type
+                    val earlyPreview = earlyMemoryRecallGate.currentIntent(memoryTurnId)
+                    val earlyRecallMatchesFinal = earlyPreview != null && earlyPreview.type == finalRecallType
+                    val earlyRecallVoiceReleased = earlyRecallMatchesFinal &&
+                        earlyMemoryRecallGate.wasReleased(memoryTurnId)
+                    val prefetchedLocalExecution = earlyMemoryRecallExecutions.remove(memoryTurnId)
+                        ?.takeIf { earlyRecallMatchesFinal && it.intent.type == finalRecallType }
+                    if (earlyPreview != null) {
+                        voiceLog(
+                            "MEMORY_EARLY_RECALL_RECONCILE turnId=$memoryTurnId " +
+                                "result=${if (earlyRecallMatchesFinal) "MATCH" else "MATERIAL_CHANGE"} " +
+                                "previewType=${earlyPreview.type} finalType=${finalRecallType ?: "NONE"} " +
+                                "voiceReleased=$earlyRecallVoiceReleased"
+                        )
+                    }
                     if (currentTurnMutationWins && (pendingRecall != null || localRecallIntent != null)) {
                         voiceLog(
                             "MEMORY_RECALL_CONFLICT turnId=$memoryTurnId winner=CURRENT_TURN_MUTATION " +
@@ -1521,12 +1560,24 @@ class MyraVoiceService : Service() {
                     if (memoryOwned) {
                         suppressModelForTurn = true
                         localCommandExecutedThisTurn = true
-                        audio?.interrupt()
-                        responseArbiter.claimControlled(memoryTurnId)
-                        voiceLog(
-                            "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_PENDING " +
-                                "planDecision=PENDING verifiedBeforeResponse=false"
-                        )
+                        if (!earlyRecallVoiceReleased) {
+                            audio?.interrupt()
+                            responseArbiter.claimControlled(memoryTurnId)
+                            voiceLog(
+                                "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_PENDING " +
+                                    "planDecision=PENDING verifiedBeforeResponse=false"
+                            )
+                        } else {
+                            voiceLog(
+                                "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_VERIFIED_EARLY " +
+                                    "planDecision=RECALL verifiedBeforeResponse=true"
+                            )
+                        }
+                    } else if (earlyPreview != null) {
+                        earlyMemoryRecallExecutions.remove(memoryTurnId)
+                        earlyMemoryRecallGate.takeBufferedForOrdinary(memoryTurnId)?.let { buffered ->
+                            releaseBufferedEarlyMemoryAsOrdinary(memoryTurnId, buffered)
+                        }
                     }
                     serviceScope.launch {
                         staged.forEach { proposal ->
@@ -1578,7 +1629,7 @@ class MyraVoiceService : Service() {
                             )
                         }
                         val retrievalStartedAt = android.os.SystemClock.elapsedRealtime()
-                        val localExecution = if (effectiveLocalRecallIntent != null) {
+                        val localExecution = prefetchedLocalExecution ?: if (effectiveLocalRecallIntent != null) {
                             fastMemoryLane.recall(finalUtterance.memoryEvidence)
                         } else null
                         val outcome = localExecution?.outcome
@@ -1596,19 +1647,26 @@ class MyraVoiceService : Service() {
                                         "memoryIntentToRetrievalMs=${(retrievalStartedAt - memoryIntentResolvedAt).coerceAtLeast(0)} " +
                                         "retrievalDurationMs=${localExecution.outcome.durationMs} " +
                                         "retrievalToReplyQueuedMs=${(replyQueuedAt - retrievalStartedAt - localExecution.outcome.durationMs).coerceAtLeast(0)} " +
-                                        "networkCall=false"
+                                        "prefetched=${prefetchedLocalExecution != null} networkCall=false"
                                 )
                                 voiceLog(
                                     "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_VERIFIED " +
                                         "planDecision=${plan.decision} verifiedBeforeResponse=true"
                                 )
-                                listener?.onMyraText(response)
-                                emitState(response)
-                                queueLocalSpeech(
-                                    response,
-                                    allowUntranscribedAudio = true,
-                                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                                )
+                                if (earlyRecallVoiceReleased) {
+                                    voiceLog(
+                                        "MEMORY_RECALL_AUDIO_DEDUPED turnId=$memoryTurnId " +
+                                            "reason=verified_model_voice_already_released"
+                                    )
+                                } else {
+                                    listener?.onMyraText(response)
+                                    emitState(response)
+                                    queueLocalSpeech(
+                                        response,
+                                        allowUntranscribedAudio = true,
+                                        validationPolicy = LocalSpeechValidationPolicy.MEMORY
+                                    )
+                                }
                             }
                         }
                         memoryBrain.captureConversation(finalUtterance.memoryEvidence, verifiedMemoryResponse(outcome, myraText))
@@ -1713,8 +1771,15 @@ class MyraVoiceService : Service() {
                     PendingMemoryRecall(query, queryType).also { stagedMemoryRecalls[recallTurnId] = it }
                 } else null
                 if (pendingRecall != null) {
-                    reserveMemoryResponse(recallTurnId, "QUERY_USER_MEMORY")
-                    voiceLog("MEMORY_RETRIEVAL_STAGED turnId=$recallTurnId queryType=$queryType executed=false")
+                    if (earlyMemoryRecallGate.currentIntent(recallTurnId)?.type == queryType) {
+                        voiceLog(
+                            "MEMORY_RETRIEVAL_STAGED turnId=$recallTurnId queryType=$queryType " +
+                                "executed=false earlyLocalReadReserved=true"
+                        )
+                    } else {
+                        reserveMemoryResponse(recallTurnId, "QUERY_USER_MEMORY")
+                        voiceLog("MEMORY_RETRIEVAL_STAGED turnId=$recallTurnId queryType=$queryType executed=false")
+                    }
                     live?.sendToolHeld(id, "query_user_memory")
                 } else {
                     live?.sendToolResponse(id, "query_user_memory", false, "No active authoritative turn")
@@ -3630,6 +3695,91 @@ class MyraVoiceService : Service() {
                 "merged=${merged.size} decision=WAIT_FOR_FINAL executed=false"
         )
         live?.sendToolHeld(id, "propose_user_memory")
+    }
+
+    private fun reconcileEarlyMemoryRecallPreview(currentTranscript: String) {
+        val turnId = activeTurnId
+        if (turnId == 0L || ordinaryModelAudioGate.isSpeechActive() ||
+            validatingLocalSpeech != null || screenResponseActive
+        ) return
+        val preview = com.myra.assistant.data.memory.LocalMemoryRecallRouter
+            .classifyPreview(currentTranscript)
+        val existing = earlyMemoryRecallGate.currentIntent(turnId)
+        if (existing == null) {
+            if (preview == null) return
+            if (!earlyMemoryRecallGate.arm(turnId, preview)) return
+            suppressModelForTurn = true
+            output.clear()
+            audio?.interrupt()
+            voiceLog(
+                "MEMORY_EARLY_RECALL_RESERVED turnId=$turnId queryType=${preview.type} " +
+                    "source=READ_ONLY_PARTIAL verifiedBeforeResponse=false"
+            )
+            serviceScope.launch {
+                val execution = runCatching { fastMemoryLane.recall(preview) }.getOrNull()
+                    ?: return@launch
+                if (earlyMemoryRecallGate.currentIntent(turnId)?.type != preview.type) return@launch
+                earlyMemoryRecallExecutions[turnId] = execution
+                val response = verifiedMemoryResponse(execution.outcome, "")
+                if (earlyMemoryRecallGate.markVerified(turnId, response)) {
+                    val verifiedAt = android.os.SystemClock.elapsedRealtime()
+                    voiceLog(
+                        "MEMORY_EARLY_RECALL_VERIFIED turnId=$turnId queryType=${preview.type} " +
+                            "rowCount=${execution.outcome.rows.size} retrievalDurationMs=${execution.outcome.durationMs} " +
+                            "speechEndToVerifiedMs=${if (speechActivityEndedAt > 0L) (verifiedAt - speechActivityEndedAt).coerceAtLeast(0L) else -1L} " +
+                            "retrievalSource=LOCAL_ROOM networkCall=false"
+                    )
+                    mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(turnId) }
+                }
+            }
+            return
+        }
+        if (preview == null || preview.type != existing.type) {
+            earlyMemoryRecallGate.invalidatePreview(turnId)
+            earlyMemoryRecallExecutions.remove(turnId)
+            voiceLog(
+                "MEMORY_EARLY_RECALL_RECONCILE turnId=$turnId result=PARTIAL_REVISION " +
+                    "previewType=${existing.type}"
+            )
+        }
+    }
+
+    private fun maybeReleaseEarlyMemoryRecallVoice(turnId: Long) {
+        val buffered = earlyMemoryRecallGate.takeVerifiedRelease(turnId) ?: return
+        val response = earlyMemoryRecallGate.verifiedResponse(turnId) ?: return
+        mediaGuard.beginAssistantTurn()
+        audio?.setPlaybackContext(buffered.generationId, responseOwner = "MEMORY_VERIFIED")
+        audio?.setBargeInEnabled(true)
+        buffered.chunks.forEach { audio?.queueAudio(it, buffered.generationId, "MEMORY_VERIFIED") }
+        listener?.onMyraText(response)
+        emitState(response)
+        val releasedAt = android.os.SystemClock.elapsedRealtime()
+        voiceLog(
+            "MEMORY_EARLY_RECALL_RELEASED turnId=$turnId modelGenerationId=${buffered.generationId} " +
+                "chunks=${buffered.chunks.size} modelTranscriptChars=${buffered.modelTranscript.length} " +
+                "verifiedBeforeResponse=true speechEndToVerifiedPlaybackMs=" +
+                "${if (speechActivityEndedAt > 0L) (releasedAt - speechActivityEndedAt).coerceAtLeast(0L) else -1L}"
+        )
+    }
+
+    private fun releaseBufferedEarlyMemoryAsOrdinary(
+        turnId: Long,
+        buffered: EarlyMemoryBufferedAudio
+    ) {
+        suppressModelForTurn = false
+        if (buffered.modelTranscript.isNotBlank()) {
+            listener?.onMyraText(romanDisplayText(buffered.modelTranscript))
+        }
+        if (buffered.chunks.isEmpty() || buffered.generationId <= 0L) return
+        acceptedModelGenerationForTurn = buffered.generationId
+        mediaGuard.beginAssistantTurn()
+        audio?.setPlaybackContext(buffered.generationId, responseOwner = "MODEL")
+        audio?.setBargeInEnabled(true)
+        buffered.chunks.forEach { audio?.queueAudio(it, buffered.generationId, "MODEL") }
+        voiceLog(
+            "MEMORY_EARLY_RECALL_BUFFER_RELEASED_AS_ORDINARY turnId=$turnId " +
+                "modelGenerationId=${buffered.generationId} chunks=${buffered.chunks.size}"
+        )
     }
 
     private fun reserveMemoryResponse(turnId: Long, source: String) {
@@ -5883,6 +6033,8 @@ class MyraVoiceService : Service() {
         ambiguousMessageTurn = false
         incompleteActionFragmentTurn = false
         stagedResearchGoals.remove(activeTurnId)
+        earlyMemoryRecallExecutions.remove(activeTurnId)
+        earlyMemoryRecallGate.clear(activeTurnId)
         activeTurnId = 0L
         if (!screenResponseActive && !ordinaryModelAudioGate.isSpeechActive()) {
             speechTimingTurnId = 0L
