@@ -113,5 +113,7 @@ object FinalTranscriptDisplayFormatter {
     }.replace(Regex("\\s+"), " ").trim()
 
     private fun capitalizeSentence(value: String): String =
-        value.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        Regex("(^|[.!?]\\s+)([a-z])").replace(value) { match ->
+            match.groupValues[1] + match.groupValues[2].uppercase()
+        }
 }
