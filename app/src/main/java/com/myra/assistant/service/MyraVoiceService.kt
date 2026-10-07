@@ -3805,12 +3805,9 @@ class MyraVoiceService : Service() {
                         "speechEndToVerifiedMs=${if (speechActivityEndedAt > 0L) (verifiedAt - speechActivityEndedAt).coerceAtLeast(0L) else -1L} " +
                         "retrievalSource=LOCAL_ROOM networkCall=false source=INTERIM"
                 )
-                if (!ordinaryModelAudioGate.isSpeechActive()) {
-                    mainHandler.post {
-                        emitVerifiedRecallBubble(turnId, response)
-                        maybeReleaseEarlyMemoryRecallVoice(turnId)
-                    }
-                }
+                // Interim ASR may be revised. Keep the verified LOCAL_ROOM result warm,
+                // but do not surface an answer until a post-speech transcript confirms
+                // the same recall category.
             }
         }
     }
@@ -3861,6 +3858,15 @@ class MyraVoiceService : Service() {
                 "MEMORY_EARLY_RECALL_RECONCILE turnId=$turnId result=PARTIAL_REVISION " +
                     "previewType=${existing.type}"
             )
+        } else {
+            earlyMemoryRecallGate.verifiedResponse(turnId)?.let { verified ->
+                emitVerifiedRecallBubble(turnId, verified)
+                maybeReleaseEarlyMemoryRecallVoice(turnId)
+                voiceLog(
+                    "MEMORY_EARLY_RECALL_POST_SPEECH_CONFIRMED turnId=$turnId " +
+                        "queryType=${existing.type} source=INTERIM_PREFETCH"
+                )
+            }
         }
     }
 
@@ -3874,7 +3880,7 @@ class MyraVoiceService : Service() {
         audio?.setPlaybackContext(buffered.generationId, responseOwner = "MEMORY_VERIFIED")
         audio?.setBargeInEnabled(true)
         buffered.chunks.forEach { audio?.queueAudio(it, buffered.generationId, "MEMORY_VERIFIED") }
-        listener?.onMyraText(displayedResponse)
+        updateMemoryAssistantBubble(turnId, displayedResponse)
         emitState(displayedResponse)
         val releasedAt = android.os.SystemClock.elapsedRealtime()
         voiceLog(
@@ -3928,13 +3934,18 @@ class MyraVoiceService : Service() {
         )
     }
 
+    private fun updateMemoryAssistantBubble(turnId: Long, text: String) {
+        if (turnId <= 0L || text.isBlank()) return
+        if (provisionalMemoryAssistantTurns.add(turnId)) {
+            listener?.onMyraTextProvisional(turnId, text)
+        } else {
+            listener?.onMyraTextCorrection(turnId, text)
+        }
+    }
+
     private fun emitVerifiedRecallBubble(turnId: Long, response: String) {
         if (turnId <= 0L || response.isBlank()) return
-        if (provisionalMemoryAssistantTurns.add(turnId)) {
-            listener?.onMyraTextProvisional(turnId, response)
-        } else {
-            listener?.onMyraTextCorrection(turnId, response)
-        }
+        updateMemoryAssistantBubble(turnId, response)
         voiceLog(
             "MEMORY_CHAT_VERIFIED_EARLY turnId=$turnId chars=${response.length} " +
                 "verifiedBeforeResponse=true"
@@ -5820,12 +5831,6 @@ class MyraVoiceService : Service() {
                 "earlyModelAudioBufferedBytes=$earlyModelAudioBytes"
         )
         voiceLog("authoritativeTurnComplete turnId=$speechTimingTurnId at=$speechActivityEndedAt speechEndToAuthoritativeTurnMs=0")
-        earlyMemoryRecallGate.verifiedResponse(endingTurnId)?.let { verified ->
-            mainHandler.post {
-                emitVerifiedRecallBubble(endingTurnId, verified)
-                maybeReleaseEarlyMemoryRecallVoice(endingTurnId)
-            }
-        }
         if (earlyModelAudio.isEmpty()) return
         val generationId = earlyModelAudioGenerationId
         val chunks = earlyModelAudio.toList()
