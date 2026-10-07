@@ -75,6 +75,8 @@ object PersonalMemoryRecallFormatter {
             }
         Regex("^I (?:like|love|prefer) (.+)$", RegexOption.IGNORE_CASE)
             .matchEntire(clean)?.let { return "tumhe ${it.groupValues[1].trim()} pasand hain" }
+        Regex("^(?:The user )?prefers? (.+)$", RegexOption.IGNORE_CASE)
+            .matchEntire(clean)?.let { return "tumhe ${it.groupValues[1].trim()} pasand hain" }
         return clean.replace(Regex("^Zopy(?:'s)?\\s*", RegexOption.IGNORE_CASE), "Tumhara ")
     }
 }

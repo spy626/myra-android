@@ -3747,12 +3747,14 @@ class MyraVoiceService : Service() {
     private fun maybeReleaseEarlyMemoryRecallVoice(turnId: Long) {
         val buffered = earlyMemoryRecallGate.takeVerifiedRelease(turnId) ?: return
         val response = earlyMemoryRecallGate.verifiedResponse(turnId) ?: return
+        val naturalModelText = romanDisplayText(buffered.modelTranscript).trim()
+        val displayedResponse = naturalModelText.ifBlank { response }
         mediaGuard.beginAssistantTurn()
         audio?.setPlaybackContext(buffered.generationId, responseOwner = "MEMORY_VERIFIED")
         audio?.setBargeInEnabled(true)
         buffered.chunks.forEach { audio?.queueAudio(it, buffered.generationId, "MEMORY_VERIFIED") }
-        listener?.onMyraText(response)
-        emitState(response)
+        listener?.onMyraText(displayedResponse)
+        emitState(displayedResponse)
         val releasedAt = android.os.SystemClock.elapsedRealtime()
         voiceLog(
             "MEMORY_EARLY_RECALL_RELEASED turnId=$turnId modelGenerationId=${buffered.generationId} " +

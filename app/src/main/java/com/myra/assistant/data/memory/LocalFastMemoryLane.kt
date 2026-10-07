@@ -68,7 +68,7 @@ object LocalMemoryRecallRouter {
     }
 
     private fun normalize(value: String) = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)
-        .replace(Regex("[^\\p{L}\\p{N}?]+"), " ").replace(Regex("\\s+"), " ").trim()
+        .replace(Regex("[^\\p{L}\\p{M}\\p{N}?]+"), " ").replace(Regex("\\s+"), " ").trim()
 }
 
 /**
@@ -101,7 +101,7 @@ object VerifiedMemorySpeechEquivalence {
 
     internal fun canonicalTokens(value: String): List<String> {
         val normalized = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ")
             .replace(Regex("\\s+"), " ").trim()
         if (normalized.isBlank()) return emptyList()
         return normalized.split(' ').asSequence()

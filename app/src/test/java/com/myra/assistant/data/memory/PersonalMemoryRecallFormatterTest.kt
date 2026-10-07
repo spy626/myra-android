@@ -61,4 +61,15 @@ class PersonalMemoryRecallFormatterTest {
             )
         )
     }
+
+    @Test fun storedPreferenceIsRenderedAsNaturalHinglish() {
+        assertEquals(
+            "Tumhe short answers pasand hain.",
+            PersonalMemoryRecallFormatter.format(listOf("Prefers short answers."))
+        )
+        assertEquals(
+            "Tumhe long answers pasand hain.",
+            PersonalMemoryRecallFormatter.format(listOf("The user prefers long answers."))
+        )
+    }
 }
