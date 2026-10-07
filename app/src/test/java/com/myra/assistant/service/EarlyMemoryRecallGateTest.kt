@@ -26,6 +26,18 @@ class EarlyMemoryRecallGateTest {
         assertNull(gate.takeVerifiedRelease(7L))
     }
 
+    @Test fun toolGroundedAudioRejectsOldGenerationAndAcceptsNewGeneration() {
+        val gate = EarlyMemoryRecallGate()
+        val intent = LocalRecallIntent(MemoryRecallType.PREFERENCES, "My preference?", .99)
+        assertTrue(gate.arm(9L, intent))
+        assertTrue(gate.captureAudio(9L, 20L, byteArrayOf(1)))
+        assertTrue(gate.authorizeToolGrounded(9L, 20L))
+        assertFalse(gate.acceptToolGroundedAudio(9L, 20L))
+        assertTrue(gate.acceptToolGroundedAudio(9L, 21L))
+        assertTrue(gate.acceptToolGroundedAudio(9L, 21L))
+        assertTrue(gate.wasReleased(9L))
+    }
+
     @Test fun mismatchedOrInvalidatedSpeechIsNeverReleasedAsVerifiedMemory() {
         val gate = EarlyMemoryRecallGate()
         val intent = LocalRecallIntent(MemoryRecallType.PREFERENCES, "My preference?", .99)

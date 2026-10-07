@@ -232,13 +232,13 @@ class GeminiLiveClient(
 
     private fun memoryQueryDeclaration() = JSONObject()
         .put("name", "query_user_memory")
-            .put("description", "Read a small relevant set of active grounded memories, relationships, goals, projects, or episodes. This tool never mutates memory and never performs a phone action.")
+            .put("description", "Required for personal-memory recall questions. Read a small relevant set of active grounded memories, relationships, goals, projects, or episodes from Android local memory before answering. This tool never mutates memory and never performs a phone action.")
         .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
             .put("query", JSONObject().put("type", "STRING"))
             .put("query_type", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "GENERAL", "PREFERENCES", "FRIENDS", "BEST_FRIEND", "LAST_TRANSACTION", "EPISODES", "GOALS", "PROJECTS"
             )))))
-            .put("required", JSONArray().put("query")))
+            .put("required", JSONArray().put("query").put("query_type")))
 
     private fun screenActionDeclaration() = JSONObject()
         .put("name", "perform_screen_action")
@@ -309,6 +309,25 @@ class GeminiLiveClient(
                 JSONObject().put("functionResponses", JSONArray().put(functionResponse))
             ).toString()
         )
+    }
+
+    fun sendMemoryRecallResult(id: String, name: String, queryType: String, facts: List<String>) {
+        val factArray = JSONArray()
+        facts.asSequence()
+            .map { it.replace(Regex("[\\r\\n]+"), " ").trim().take(180) }
+            .filter(String::isNotBlank)
+            .distinct()
+            .take(8)
+            .forEach(factArray::put)
+        val response = JSONObject()
+            .put("result", "success")
+            .put("source", "LOCAL_ROOM")
+            .put("query_type", queryType)
+            .put("facts", factArray)
+            .put("empty", factArray.length() == 0)
+        val call = JSONObject().put("id", id).put("name", name).put("response", response)
+        sendWhenReady(JSONObject().put("toolResponse", JSONObject()
+            .put("functionResponses", JSONArray().put(call))).toString())
     }
 
     /** A held proposal is neither execution success nor failure. */

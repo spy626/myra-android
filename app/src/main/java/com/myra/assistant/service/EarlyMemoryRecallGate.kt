@@ -25,6 +25,8 @@ internal class EarlyMemoryRecallGate {
     private var verifiedResponse: String? = null
     private var generationComplete = false
     private var released = false
+    private var toolGrounded = false
+    private var toolGroundedAfterGenerationId = 0L
 
     fun arm(turnId: Long, intent: LocalRecallIntent): Boolean = synchronized(lock) {
         if (turnId <= 0L || this.turnId == turnId) return@synchronized false
@@ -48,15 +50,35 @@ internal class EarlyMemoryRecallGate {
     }
 
     fun captureAudio(turnId: Long, generationId: Long, pcm: ByteArray): Boolean = synchronized(lock) {
-        if (this.turnId != turnId || intent == null || released) return@synchronized false
+        if (this.turnId != turnId || intent == null || released || toolGrounded) return@synchronized false
         if (this.generationId == 0L) this.generationId = generationId
         if (this.generationId == generationId && pcm.isNotEmpty()) audio += pcm.copyOf()
         true
     }
 
     fun appendModelTranscript(turnId: Long, text: String): Boolean = synchronized(lock) {
-        if (this.turnId != turnId || intent == null || released) return@synchronized false
+        if (this.turnId != turnId || intent == null || released && !toolGrounded) return@synchronized false
         LiveTranscriptAssembler.append(modelTranscript, text)
+        true
+    }
+
+    fun authorizeToolGrounded(turnId: Long, afterGenerationId: Long): Boolean = synchronized(lock) {
+        if (this.turnId != turnId || intent == null || !validPreview) return@synchronized false
+        toolGrounded = true
+        toolGroundedAfterGenerationId = afterGenerationId
+        generationId = 0L
+        released = false
+        audio.clear()
+        modelTranscript.clear()
+        true
+    }
+
+    fun acceptToolGroundedAudio(turnId: Long, incomingGenerationId: Long): Boolean = synchronized(lock) {
+        if (this.turnId != turnId || intent == null || !validPreview || !toolGrounded) return@synchronized false
+        if (incomingGenerationId <= toolGroundedAfterGenerationId) return@synchronized false
+        if (generationId == 0L) generationId = incomingGenerationId
+        if (generationId != incomingGenerationId) return@synchronized false
+        released = true
         true
     }
 
@@ -118,5 +140,7 @@ internal class EarlyMemoryRecallGate {
         verifiedResponse = null
         generationComplete = false
         released = false
+        toolGrounded = false
+        toolGroundedAfterGenerationId = 0L
     }
 }

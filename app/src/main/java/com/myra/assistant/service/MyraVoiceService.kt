@@ -581,6 +581,16 @@ class MyraVoiceService : Service() {
                         )
                     }
                 }
+                else if (earlyMemoryRecallGate.acceptToolGroundedAudio(activeTurnId, modelGenerationId)) {
+                    mediaGuard.beginAssistantTurn()
+                    audio?.setPlaybackContext(modelGenerationId, responseOwner = "MEMORY_MODEL_GROUNDED")
+                    audio?.setBargeInEnabled(true)
+                    audio?.queueAudio(pcm, modelGenerationId, "MEMORY_MODEL_GROUNDED")
+                    voiceLog(
+                        "MEMORY_MODEL_GROUNDED_AUDIO turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
+                            "bytes=${pcm.size} verifiedBeforeResponse=true"
+                    )
+                }
                 else if (earlyMemoryRecallGate.acceptsReleasedAudio(activeTurnId, modelGenerationId)) {
                     mediaGuard.beginAssistantTurn()
                     audio?.setPlaybackContext(modelGenerationId, responseOwner = "MEMORY_VERIFIED")
@@ -1663,10 +1673,16 @@ class MyraVoiceService : Service() {
                                         "planDecision=${plan.decision} verifiedBeforeResponse=true"
                                 )
                                 if (earlyRecallVoiceReleased) {
+                                    val groundedModelText = romanDisplayText(output.toString()).trim()
+                                    val displayOnly = groundedModelText.ifBlank { response }
+                                    listener?.onMyraText(displayOnly)
+                                    emitState(displayOnly)
                                     voiceLog(
                                         "MEMORY_RECALL_AUDIO_DEDUPED turnId=$memoryTurnId " +
-                                            "reason=verified_model_voice_already_released"
+                                            "reason=verified_model_voice_already_released " +
+                                            "displaySource=${if (groundedModelText.isNotBlank()) "MODEL_TRANSCRIPT" else "VERIFIED_FALLBACK"}"
                                     )
+                                    earlyMemoryRecallGate.clear(memoryTurnId)
                                 } else {
                                     listener?.onMyraText(response)
                                     emitState(response)
@@ -1785,11 +1801,44 @@ class MyraVoiceService : Service() {
                             "MEMORY_RETRIEVAL_STAGED turnId=$recallTurnId queryType=$queryType " +
                                 "executed=false earlyLocalReadReserved=true"
                         )
+                        serviceScope.launch {
+                            val execution = earlyMemoryRecallExecutions[recallTurnId]
+                                ?: fastMemoryLane.recall(
+                                    com.myra.assistant.data.memory.LocalRecallIntent(
+                                        queryType,
+                                        query.ifBlank { earlyMemoryRecallGate.currentIntent(recallTurnId)?.query.orEmpty() },
+                                        .99
+                                    )
+                                )
+                            earlyMemoryRecallExecutions.putIfAbsent(recallTurnId, execution)
+                            val facts = execution.outcome.rows.map { it.fact }
+                            mainHandler.post {
+                                if (activeTurnId != recallTurnId ||
+                                    earlyMemoryRecallGate.currentIntent(recallTurnId)?.type != queryType
+                                ) {
+                                    live?.sendToolHeld(id, "query_user_memory")
+                                    voiceLog(
+                                        "MEMORY_TOOL_RESULT_HELD turnId=$recallTurnId queryType=$queryType " +
+                                            "reason=stale_or_revised_preview"
+                                    )
+                                } else {
+                                    output.clear()
+                                    val baselineGenerationId = latestObservedModelGenerationId
+                                    earlyMemoryRecallGate.authorizeToolGrounded(recallTurnId, baselineGenerationId)
+                                    live?.sendMemoryRecallResult(id, "query_user_memory", queryType.name, facts)
+                                    voiceLog(
+                                        "MEMORY_TOOL_RESULT_SENT turnId=$recallTurnId queryType=$queryType " +
+                                            "rowCount=${facts.size} retrievalDurationMs=${execution.outcome.durationMs} " +
+                                            "afterGenerationId=$baselineGenerationId source=LOCAL_ROOM"
+                                    )
+                                }
+                            }
+                        }
                     } else {
                         reserveMemoryResponse(recallTurnId, "QUERY_USER_MEMORY")
                         voiceLog("MEMORY_RETRIEVAL_STAGED turnId=$recallTurnId queryType=$queryType executed=false")
+                        live?.sendToolHeld(id, "query_user_memory")
                     }
-                    live?.sendToolHeld(id, "query_user_memory")
                 } else {
                     live?.sendToolResponse(id, "query_user_memory", false, "No active authoritative turn")
                 }
@@ -6045,7 +6094,7 @@ class MyraVoiceService : Service() {
         incompleteActionFragmentTurn = false
         stagedResearchGoals.remove(activeTurnId)
         earlyMemoryRecallExecutions.remove(activeTurnId)
-        earlyMemoryRecallGate.clear(activeTurnId)
+        if (!earlyMemoryRecallGate.wasReleased(activeTurnId)) earlyMemoryRecallGate.clear(activeTurnId)
         activeTurnId = 0L
         if (!screenResponseActive && !ordinaryModelAudioGate.isSpeechActive()) {
             speechTimingTurnId = 0L
@@ -6130,7 +6179,7 @@ class MyraVoiceService : Service() {
         } else {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
-        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} ${com.myra.assistant.data.memory.MemoryProposalUsagePolicy.SYSTEM_REQUIREMENT} Use ADD_FACT for durable non-person facts such as preferences, communication style, projects, goals, habits, workflows, app usage, and solutions. Use UPDATE_FACT or SUPERSEDE_FACT only with the same stable semantic dimension; never guess a target key. Return a bounded operations list and include independent clauses: a temporary event can be TRANSIENT_CONTEXT while a clearly stated durable relationship is ADD_RELATIONSHIP. Relationships are additive unless the user actually ends or replaces the same relationship. Distinguish relationship removal, relationship replacement, person rename, and whole-person delete. Questions are RECALL and never mutation. Personal-memory questions are owned by Android's local fast lane; do not call or wait for a memory-read model tool. FRIENDS includes the active friendship family; BEST_FRIEND never promotes an ordinary friend. Use the user's actual supporting words as evidence. Never propose guesses, secrets, or unsupported inference; never claim a write succeeded or ask routine permission because Android waits for the authoritative final transcript and owns persistence. The user may have multiple friends or best friends. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action. Android always tries Accessibility first. Only if the newest user-authorized action screenshot shows one uniquely clear target that Accessibility cannot represent may you include normalized visual coordinates for that target. Never guess coordinates and never use coordinate fallback for ambiguous, payment, permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. Android must revalidate the foreground and verify the result before success is reported. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
+        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} ${com.myra.assistant.data.memory.MemoryProposalUsagePolicy.SYSTEM_REQUIREMENT} Use ADD_FACT for durable non-person facts such as preferences, communication style, projects, goals, habits, workflows, app usage, and solutions. Use UPDATE_FACT or SUPERSEDE_FACT only with the same stable semantic dimension; never guess a target key. Return a bounded operations list and include independent clauses: a temporary event can be TRANSIENT_CONTEXT while a clearly stated durable relationship is ADD_RELATIONSHIP. Relationships are additive unless the user actually ends or replaces the same relationship. Distinguish relationship removal, relationship replacement, person rename, and whole-person delete. Questions are RECALL and never mutation. For every personal-memory recall question, call query_user_memory exactly once before answering. Android returns verified LOCAL_ROOM facts. Do not answer a personal-memory recall from conversational context or cached memory text alone. After the tool result, answer naturally in Roman Hinglish using only the returned facts, without mentioning tools, databases, or verification. If the facts list is empty, say naturally that you do not have that information saved. FRIENDS includes the active friendship family; BEST_FRIEND never promotes an ordinary friend. Use the user's actual supporting words as evidence. Never propose guesses, secrets, or unsupported inference; never claim a write succeeded or ask routine permission because Android waits for the authoritative final transcript and owns persistence. The user may have multiple friends or best friends. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action. Android always tries Accessibility first. Only if the newest user-authorized action screenshot shows one uniquely clear target that Accessibility cannot represent may you include normalized visual coordinates for that target. Never guess coordinates and never use coordinate fallback for ambiguous, payment, permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. Android must revalidate the foreground and verify the result before success is reported. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
         return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Express emotion through the natural voice, not by announcing emotion or writing stage directions. Match vocal delivery to both the user's mood and the meaning of the conversation: sound brighter, warmer, and slightly more energetic for happiness or exciting news; softer, slower, and gently reassuring for sadness, worry, or vulnerability; calm, steady, and patient for frustration or anger; lightly teasing and playful during mutual joking; naturally surprised when something is genuinely unexpected; and focused with less playfulness for serious topics. Emotional changes must be subtle and human, never theatrical. Never fake sobbing, crying sounds, panic, jealousy, guilt, or emotional dependence. Do not mirror intense anger back at the user. When uncertain about mood, use a warm neutral voice. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Remember, forget, and what-do-you-remember requests are memory intent, never phone actions. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }
