@@ -581,6 +581,16 @@ class MyraVoiceService : Service() {
                         )
                     }
                 }
+                else if (earlyMemoryRecallGate.acceptsReleasedAudio(activeTurnId, modelGenerationId)) {
+                    mediaGuard.beginAssistantTurn()
+                    audio?.setPlaybackContext(modelGenerationId, responseOwner = "MEMORY_VERIFIED")
+                    audio?.setBargeInEnabled(true)
+                    audio?.queueAudio(pcm, modelGenerationId, "MEMORY_VERIFIED")
+                    voiceLog(
+                        "MEMORY_EARLY_MODEL_AUDIO_STREAMED turnId=$activeTurnId " +
+                            "modelGenerationId=$modelGenerationId bytes=${pcm.size} verifiedBeforeResponse=true"
+                    )
+                }
                 else if (earlyMemoryRecallGate.captureAudio(activeTurnId, modelGenerationId, pcm)) {
                     val recallTurnId = activeTurnId
                     voiceLog(
@@ -662,9 +672,8 @@ class MyraVoiceService : Service() {
                 val completionTurnId = activeTurnId
                 turnLatency.record(completionTurnId, Field.MODEL_GENERATION_COMPLETED, completedAt, modelGenerationId)
                 voiceLog("model_generation_complete turnId=$completionTurnId modelGenerationId=$modelGenerationId at=$completedAt")
-                if (earlyMemoryRecallGate.markGenerationComplete(completionTurnId, modelGenerationId)) {
-                    mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(completionTurnId) }
-                }
+                earlyMemoryRecallGate.markGenerationComplete(completionTurnId, modelGenerationId)
+                mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(completionTurnId) }
             }
             client.onInputTranscript = inputTranscript@ { part, latestModelGenerationId ->
                 if (screenResponseActive) {

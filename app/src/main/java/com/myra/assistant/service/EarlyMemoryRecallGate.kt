@@ -75,14 +75,18 @@ internal class EarlyMemoryRecallGate {
     }
 
     fun takeVerifiedRelease(turnId: Long): EarlyMemoryBufferedAudio? = synchronized(lock) {
-        if (this.turnId != turnId || intent == null || !validPreview || released || !generationComplete) return@synchronized null
+        if (this.turnId != turnId || intent == null || !validPreview || released) return@synchronized null
         val verified = verifiedResponse ?: return@synchronized null
-        if (audio.isEmpty() || modelTranscript.isBlank()) return@synchronized null
+        if (audio.isEmpty() || modelTranscript.isBlank() || generationId == 0L) return@synchronized null
         if (!VerifiedMemorySpeechEquivalence.matches(modelTranscript.toString(), verified)) return@synchronized null
         released = true
         val result = EarlyMemoryBufferedAudio(generationId, audio.map(ByteArray::copyOf), modelTranscript.toString())
         audio.clear()
         result
+    }
+
+    fun acceptsReleasedAudio(turnId: Long, generationId: Long): Boolean = synchronized(lock) {
+        this.turnId == turnId && released && this.generationId == generationId && generationId != 0L
     }
 
     fun verifiedResponse(turnId: Long): String? = synchronized(lock) {
