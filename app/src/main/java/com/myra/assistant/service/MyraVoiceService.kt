@@ -689,6 +689,15 @@ class MyraVoiceService : Service() {
                 earlyMemoryRecallGate.markGenerationComplete(completionTurnId, modelGenerationId)
                 mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(completionTurnId) }
             }
+            client.onInterimInputTranscript = interimInput@ { interim, _ ->
+                val turnId = activeTurnId
+                if (turnId == 0L || validatingLocalSpeech != null || screenResponseActive) return@interimInput
+                val previewText = interim.trim()
+                if (previewText.isBlank() || isPhantomTranscript(previewText)) return@interimInput
+                val plausibility = transcriptPlausibilityGate.preview(previewText)
+                if (!plausibility.semanticProcessingAllowed) return@interimInput
+                prefetchMemoryRecallFromInterim(turnId, previewText)
+            }
             client.onInputTranscript = inputTranscript@ { part, latestModelGenerationId ->
                 if (screenResponseActive) {
                     if (earlyScreenQueryAwaitingFinalTranscript) {
@@ -3766,6 +3775,46 @@ class MyraVoiceService : Service() {
         live?.sendToolHeld(id, "propose_user_memory")
     }
 
+    private fun prefetchMemoryRecallFromInterim(turnId: Long, currentTranscript: String) {
+        val preview = com.myra.assistant.data.memory.LocalMemoryRecallRouter
+            .classifyPreview(currentTranscript) ?: return
+        val existing = earlyMemoryRecallGate.currentIntent(turnId)
+        if (existing != null) {
+            if (existing.type == preview.type && provisionalMemoryUserTurns.contains(turnId)) {
+                val display = romanDisplayText(currentTranscript).trim()
+                if (display.isNotBlank()) listener?.onUserTextCorrection(turnId, display)
+            }
+            return
+        }
+        if (!earlyMemoryRecallGate.arm(turnId, preview)) return
+        emitProvisionalMemoryChat(turnId, currentTranscript, showSafeAssistantAck = false)
+        voiceLog(
+            "MEMORY_EARLY_RECALL_RESERVED turnId=$turnId queryType=${preview.type} " +
+                "source=READ_ONLY_INTERIM verifiedBeforeResponse=false"
+        )
+        serviceScope.launch {
+            val execution = runCatching { fastMemoryLane.recall(preview) }.getOrNull() ?: return@launch
+            if (earlyMemoryRecallGate.currentIntent(turnId)?.type != preview.type) return@launch
+            earlyMemoryRecallExecutions[turnId] = execution
+            val response = verifiedMemoryResponse(execution.outcome, "")
+            if (earlyMemoryRecallGate.markVerified(turnId, response)) {
+                val verifiedAt = android.os.SystemClock.elapsedRealtime()
+                voiceLog(
+                    "MEMORY_EARLY_RECALL_VERIFIED turnId=$turnId queryType=${preview.type} " +
+                        "rowCount=${execution.outcome.rows.size} retrievalDurationMs=${execution.outcome.durationMs} " +
+                        "speechEndToVerifiedMs=${if (speechActivityEndedAt > 0L) (verifiedAt - speechActivityEndedAt).coerceAtLeast(0L) else -1L} " +
+                        "retrievalSource=LOCAL_ROOM networkCall=false source=INTERIM"
+                )
+                if (!ordinaryModelAudioGate.isSpeechActive()) {
+                    mainHandler.post {
+                        emitVerifiedRecallBubble(turnId, response)
+                        maybeReleaseEarlyMemoryRecallVoice(turnId)
+                    }
+                }
+            }
+        }
+    }
+
     private fun reconcileEarlyMemoryRecallPreview(currentTranscript: String) {
         val turnId = activeTurnId
         if (turnId == 0L || ordinaryModelAudioGate.isSpeechActive() ||
@@ -3816,6 +3865,7 @@ class MyraVoiceService : Service() {
     }
 
     private fun maybeReleaseEarlyMemoryRecallVoice(turnId: Long) {
+        if (ordinaryModelAudioGate.isSpeechActive()) return
         val buffered = earlyMemoryRecallGate.takeVerifiedRelease(turnId) ?: return
         val response = earlyMemoryRecallGate.verifiedResponse(turnId) ?: return
         val naturalModelText = romanDisplayText(buffered.modelTranscript).trim()
@@ -5770,6 +5820,12 @@ class MyraVoiceService : Service() {
                 "earlyModelAudioBufferedBytes=$earlyModelAudioBytes"
         )
         voiceLog("authoritativeTurnComplete turnId=$speechTimingTurnId at=$speechActivityEndedAt speechEndToAuthoritativeTurnMs=0")
+        earlyMemoryRecallGate.verifiedResponse(endingTurnId)?.let { verified ->
+            mainHandler.post {
+                emitVerifiedRecallBubble(endingTurnId, verified)
+                maybeReleaseEarlyMemoryRecallVoice(endingTurnId)
+            }
+        }
         if (earlyModelAudio.isEmpty()) return
         val generationId = earlyModelAudioGenerationId
         val chunks = earlyModelAudio.toList()

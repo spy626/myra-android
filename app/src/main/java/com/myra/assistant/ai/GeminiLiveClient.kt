@@ -22,6 +22,7 @@ class GeminiLiveClient(
 ) : WebSocketListener() {
     var onReady: (() -> Unit)? = null
     var onAudio: ((ByteArray, Long) -> Unit)? = null
+    var onInterimInputTranscript: ((String, Long) -> Unit)? = null
     var onInputTranscript: ((String, Long) -> Unit)? = null
     var onOutputTranscript: ((String, Long) -> Unit)? = null
     var onTurnComplete: (() -> Unit)? = null
@@ -426,6 +427,19 @@ class GeminiLiveClient(
                         )
                     }
                     onAudio?.invoke(pcm, generationId)
+                }
+            }
+            content.optJSONObject("interimInputTranscription")?.let { transcription ->
+                val text = transcription.optString("text")
+                if (text.isNotEmpty()) {
+                    if (TRANSCRIPT_DEBUG_LOGGING) {
+                        Log.d(
+                            TRANSCRIPT_LOG_TAG,
+                            "raw_interim_input tMs=${System.nanoTime() / 1_000_000} " +
+                                "turn=$inputTranscriptTurn text=${JSONObject.quote(text)}"
+                        )
+                    }
+                    onInterimInputTranscript?.invoke(text, modelGenerationId.get())
                 }
             }
             content.optJSONObject("inputTranscription")?.let { transcription ->
