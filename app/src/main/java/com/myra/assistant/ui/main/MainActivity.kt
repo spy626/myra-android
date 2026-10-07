@@ -116,6 +116,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private val userBubbleByTurn = LinkedHashMap<Long, TextView>()
+    private val myraBubbleByTurn = LinkedHashMap<Long, TextView>()
 
     private val voiceListener = object : MyraVoiceService.Listener {
         override fun onState(text: String) = runOnUiThread { showStatus(text) }
@@ -130,6 +131,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
         override fun onMyraText(text: String, error: Boolean) = runOnUiThread { addBubble(text, false, error) }
+        override fun onMyraTextProvisional(turnId: Long, text: String) = runOnUiThread {
+            addBubble(text, false, false, turnId = turnId)
+        }
+        override fun onMyraTextCorrection(turnId: Long, text: String, error: Boolean) = runOnUiThread {
+            val bubble = myraBubbleByTurn[turnId]
+            if (bubble != null) {
+                bubble.text = text
+                bubble.contentDescription = text
+                bubble.setTextColor(if (error) Color.rgb(255, 110, 130) else Color.rgb(238, 238, 238))
+            } else {
+                addBubble(text, false, error, turnId = turnId)
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -429,9 +443,14 @@ class MainActivity : AppCompatActivity() {
             addView(bubble, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         b.chatContainer.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        if (isUser && turnId != null) {
-            userBubbleByTurn[turnId] = bubble
-            while (userBubbleByTurn.size > 20) userBubbleByTurn.remove(userBubbleByTurn.keys.first())
+        if (turnId != null) {
+            if (isUser) {
+                userBubbleByTurn[turnId] = bubble
+                while (userBubbleByTurn.size > 20) userBubbleByTurn.remove(userBubbleByTurn.keys.first())
+            } else {
+                myraBubbleByTurn[turnId] = bubble
+                while (myraBubbleByTurn.size > 20) myraBubbleByTurn.remove(myraBubbleByTurn.keys.first())
+            }
         }
         while (b.chatContainer.childCount > 20) b.chatContainer.removeViewAt(0)
         b.chatScroll.post { b.chatScroll.fullScroll(android.view.View.FOCUS_DOWN) }

@@ -172,6 +172,8 @@ class MyraVoiceService : Service() {
         fun onUserText(turnId: Long, text: String)
         fun onUserTextCorrection(turnId: Long, text: String) {}
         fun onMyraText(text: String, error: Boolean = false)
+        fun onMyraTextProvisional(turnId: Long, text: String) { onMyraText(text) }
+        fun onMyraTextCorrection(turnId: Long, text: String, error: Boolean = false) {}
     }
 
     private var audio: AudioEngine? = null
@@ -202,6 +204,8 @@ class MyraVoiceService : Service() {
     private val earlyMemoryRecallGate = EarlyMemoryRecallGate()
     private val earlyMemoryRecallExecutions =
         java.util.concurrent.ConcurrentHashMap<Long, com.myra.assistant.data.memory.LocalRecallExecution>()
+    private val provisionalMemoryUserTurns = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+    private val provisionalMemoryAssistantTurns = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
     private var memoryResponsePendingTurnId = 0L
     private var suppressModelForTurn = false
     private var waitingForFreshInputAfterCommand = false
@@ -872,6 +876,12 @@ class MyraVoiceService : Service() {
                     // but do not let partial foreign-script text reach memory, correction,
                     // delete, command, or permission parsers.
                     return@inputTranscript
+                }
+                if (provisionalMemoryUserTurns.contains(activeTurnId)) {
+                    val provisionalDisplay = romanDisplayText(currentTranscript).trim()
+                    if (provisionalDisplay.isNotBlank()) {
+                        listener?.onUserTextCorrection(activeTurnId, provisionalDisplay)
+                    }
                 }
                 // Read-only indexed recall may prefetch after local VAD has ended. This only
                 // reserves/buffers a response; durable mutation remains FINAL-turn-only.
@@ -1675,7 +1685,7 @@ class MyraVoiceService : Service() {
                                 if (earlyRecallVoiceReleased) {
                                     val groundedModelText = romanDisplayText(output.toString()).trim()
                                     val displayOnly = groundedModelText.ifBlank { response }
-                                    listener?.onMyraText(displayOnly)
+                                    deliverMemoryAssistantText(memoryTurnId, displayOnly)
                                     emitState(displayOnly)
                                     voiceLog(
                                         "MEMORY_RECALL_AUDIO_DEDUPED turnId=$memoryTurnId " +
@@ -1684,7 +1694,7 @@ class MyraVoiceService : Service() {
                                     )
                                     earlyMemoryRecallGate.clear(memoryTurnId)
                                 } else {
-                                    listener?.onMyraText(response)
+                                    deliverMemoryAssistantText(memoryTurnId, response)
                                     emitState(response)
                                     queueLocalSpeech(
                                         response,
@@ -3748,6 +3758,7 @@ class MyraVoiceService : Service() {
         val merged = StagedMemoryProposalPolicy.merge(existing, operations)
         stagedMemorySemantics[proposalTurnId] = merged
         reserveMemoryResponse(proposalTurnId, "SEMANTIC_PROPOSAL")
+        emitProvisionalMemoryChat(proposalTurnId, input.toString(), showSafeAssistantAck = true)
         voiceLog(
             "MEMORY_SEMANTIC_PROPOSAL_STAGED turnId=$proposalTurnId received=${operations.size} " +
                 "merged=${merged.size} decision=WAIT_FOR_FINAL executed=false"
@@ -3769,6 +3780,7 @@ class MyraVoiceService : Service() {
             suppressModelForTurn = true
             output.clear()
             audio?.interrupt()
+            emitProvisionalMemoryChat(turnId, currentTranscript, showSafeAssistantAck = false)
             voiceLog(
                 "MEMORY_EARLY_RECALL_RESERVED turnId=$turnId queryType=${preview.type} " +
                     "source=READ_ONLY_PARTIAL verifiedBeforeResponse=false"
@@ -3781,6 +3793,7 @@ class MyraVoiceService : Service() {
                 val response = verifiedMemoryResponse(execution.outcome, "")
                 if (earlyMemoryRecallGate.markVerified(turnId, response)) {
                     val verifiedAt = android.os.SystemClock.elapsedRealtime()
+                    mainHandler.post { emitVerifiedRecallBubble(turnId, response) }
                     voiceLog(
                         "MEMORY_EARLY_RECALL_VERIFIED turnId=$turnId queryType=${preview.type} " +
                             "rowCount=${execution.outcome.rows.size} retrievalDurationMs=${execution.outcome.durationMs} " +
@@ -3842,6 +3855,51 @@ class MyraVoiceService : Service() {
         )
     }
 
+    private fun emitProvisionalMemoryChat(
+        turnId: Long,
+        rawText: String,
+        showSafeAssistantAck: Boolean
+    ) {
+        if (turnId <= 0L) return
+        val display = romanDisplayText(rawText).trim()
+        if (display.isNotBlank()) {
+            if (provisionalMemoryUserTurns.add(turnId)) {
+                listener?.onUserText(turnId, display)
+            } else {
+                listener?.onUserTextCorrection(turnId, display)
+            }
+        }
+        if (showSafeAssistantAck && provisionalMemoryAssistantTurns.add(turnId)) {
+            listener?.onMyraTextProvisional(turnId, "Acha…")
+        }
+        voiceLog(
+            "MEMORY_CHAT_PROVISIONAL turnId=$turnId userChars=${display.length} " +
+                "assistantAck=$showSafeAssistantAck verifiedBeforeResponse=false"
+        )
+    }
+
+    private fun emitVerifiedRecallBubble(turnId: Long, response: String) {
+        if (turnId <= 0L || response.isBlank()) return
+        if (provisionalMemoryAssistantTurns.add(turnId)) {
+            listener?.onMyraTextProvisional(turnId, response)
+        } else {
+            listener?.onMyraTextCorrection(turnId, response)
+        }
+        voiceLog(
+            "MEMORY_CHAT_VERIFIED_EARLY turnId=$turnId chars=${response.length} " +
+                "verifiedBeforeResponse=true"
+        )
+    }
+
+    private fun deliverMemoryAssistantText(turnId: Long, text: String, error: Boolean = false) {
+        if (provisionalMemoryAssistantTurns.remove(turnId)) {
+            listener?.onMyraTextCorrection(turnId, text, error)
+            voiceLog("MEMORY_ASSISTANT_BUBBLE_FINALIZED turnId=$turnId mode=CORRECTION chars=${text.length}")
+        } else {
+            listener?.onMyraText(text, error)
+        }
+    }
+
     private fun reserveMemoryResponse(turnId: Long, source: String) {
         memoryResponsePendingTurnId = turnId
         suppressModelForTurn = true
@@ -3865,6 +3923,8 @@ class MyraVoiceService : Service() {
         is MemoryBrainOutcome.Rejected -> when {
             outcome.reason.contains("ambiguous", true) ->
                 "Kaunsi memory ya person ki baat hai? Naam clearly batao."
+            outcome.reason.contains("SOURCE_SPAN_NOT_FINAL", true) ->
+                MemoryCommandReplyFormatter.rememberUnverified()
             else -> MemoryCommandReplyFormatter.rememberRejected()
         }
         MemoryBrainOutcome.Ignored -> modelText.takeIf { it.isNotBlank() }?.let(::romanDisplayText)
@@ -6069,7 +6129,12 @@ class MyraVoiceService : Service() {
                     "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
                         "utteranceId=$utteranceId source=$source accepted=true messageId=${result.messageId}"
                 )
-                listener?.onUserText(turnId, result.message.display)
+                if (provisionalMemoryUserTurns.remove(turnId)) {
+                    listener?.onUserTextCorrection(turnId, result.message.display)
+                    voiceLog("MEMORY_USER_BUBBLE_FINALIZED turnId=$turnId source=$source mode=CORRECTION")
+                } else {
+                    listener?.onUserText(turnId, result.message.display)
+                }
             }
             is UserMessageCommitResult.AlreadyCommitted -> voiceLog(
                 "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
