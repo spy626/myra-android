@@ -46,7 +46,7 @@ internal object WorkspaceSemanticTurnIntent {
             """(?:\b(?:do|de|dena|bhejo|bhej|send|share|show|dikhao|give)\b.{0,48}\b(?:link|url)\b)"""
     )
     private val linkMutationCue = Regex(
-        """(?iu)\b(?:add|change|fix|edit|modify|implement|create|make|build|remove|replace|redesign|code|update)\b"""
+        """(?iu)\b(?:add|change|fix|edit|modify|implement|create|remove|replace|redesign|code|update)\b"""
     )
     private val resultCue = Regex(
         """(?iu)\b(?:green|red|pass(?:ed)?|fail(?:ed)?|status|result|ci|build|workflow|run|commit|head|sha|branch|artifact|apk|release)\b|#\d+"""
