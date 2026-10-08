@@ -106,6 +106,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private var agentReachRunner: WorkspaceAgentReachGitHubRunner? = null
     private var agentReachWebRunner: WorkspaceAgentReachPublicWebRunner? = null
     private var agentReachRelevantRunner: WorkspaceAgentReachGitHubRelevantRunner? = null
+    private var exactLinkLookupActive = false
+    private var exactLinkLookupProjectId: String? = null
+    private var exactLinkLookupMessageId: String? = null
+    private var exactLinkLookupRunner: WorkspaceYouTubeChannelSearchRunner? = null
     private var connectedRunVerificationActive = false
     private var connectedRunVerificationProjectId: String? = null
     private var connectedRunVerificationMessageId: String? = null
@@ -1361,6 +1365,95 @@ class WorkspaceActivity : AppCompatActivity() {
         agentReachBaseCompletion = null
     }
 
+    private fun exactLinkRunner(): WorkspaceYouTubeChannelSearchRunner {
+        exactLinkLookupRunner?.let { return it }
+        return WorkspaceYouTubeChannelSearchRunner(
+            listener = object : WorkspaceYouTubeChannelSearchRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !exactLinkLookupActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(candidate: WorkspaceYouTubeChannelSearch.Candidate) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !exactLinkLookupActive) return@runOnUiThread
+                        finishExactLinkLookup(
+                            WorkspaceYouTubeChannelSearch.receipt(candidate),
+                            success = true,
+                        )
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !exactLinkLookupActive) return@runOnUiThread
+                        finishExactLinkLookup(
+                            "Bro, exact YouTube channel link verify nahi ho paya. " +
+                                "Search-results URL ko direct channel link bolkar nahi dungi. " + message,
+                            success = false,
+                        )
+                    }
+                }
+            },
+        ).also { exactLinkLookupRunner = it }
+    }
+
+    private fun clearExactLinkLookup(cancel: Boolean = true) {
+        if (cancel) exactLinkLookupRunner?.cancel()
+        exactLinkLookupActive = false
+        exactLinkLookupProjectId = null
+        exactLinkLookupMessageId = null
+    }
+
+    private fun finishExactLinkLookup(reply: String, success: Boolean) {
+        val id = exactLinkLookupProjectId
+        val userMessageId = exactLinkLookupMessageId
+        clearExactLinkLookup(cancel = false)
+        if (id == null || userMessageId == null || selectedId != id) return
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == userMessageId) {
+                "Conversation changed; exact link result not saved"
+            }
+            conversations.attachAssistantToTurn(
+                projectId = id,
+                expectedUserId = userMessageId,
+                assistantId = "exact-link-" + userMessageId,
+                text = reply,
+            )
+        }.onSuccess {
+            statusMessage = ""
+            if (success) workTrace.finishSuccess("Exact link ready")
+            else workTrace.finishError("Exact link not verified", reply.take(160))
+        }.onFailure {
+            statusMessage = it.message ?: "Exact link result could not be saved."
+            workTrace.finishError("Exact link not saved", statusMessage)
+        }
+        render()
+    }
+
+    private fun startExactLinkLookup(
+        id: String,
+        messageId: String,
+        request: WorkspaceExactLinkIntent.Request,
+    ) {
+        clearExactLinkLookup()
+        exactLinkLookupActive = true
+        exactLinkLookupProjectId = id
+        exactLinkLookupMessageId = messageId
+        statusMessage = ""
+        render()
+        when (request.platform) {
+            WorkspaceExactLinkIntent.Platform.YOUTUBE ->
+                exactLinkRunner().start(request.query)
+        }
+    }
+
     private fun startPublicWebReach(
         id: String,
         messageId: String,
@@ -1421,6 +1514,7 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest?.cancel()
         activeRequest = null
         clearAgentReachState()
+        clearExactLinkLookup()
         clearConnectedRunVerification()
         clearConnectedDownloadRead()
         clearConnectedHeadsRead()
@@ -1604,7 +1698,7 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun isForegroundBusy(): Boolean =
-        activeRequest != null || coding.isRunning || agentReachActive ||
+        activeRequest != null || coding.isRunning || agentReachActive || exactLinkLookupActive ||
             connectedRunVerificationActive || connectedDownloadReadActive ||
             connectedHeadsReadActive
 
@@ -1614,6 +1708,7 @@ class WorkspaceActivity : AppCompatActivity() {
         if (!isForegroundBusy()) return
         val normalChatWasRunning = activeRequest != null
         val githubReadWasRunning = agentReachActive
+        val exactLinkWasRunning = exactLinkLookupActive
         val connectedRunReadWasRunning = connectedRunVerificationActive
         val connectedDownloadWasRunning = connectedDownloadReadActive
         val connectedHeadsWasRunning = connectedHeadsReadActive
@@ -1628,6 +1723,12 @@ class WorkspaceActivity : AppCompatActivity() {
             workTrace.finishError(
                 "Stopped",
                 "GitHub read cancelled; no content was installed, executed, or sent to a provider.")
+        }
+        if (exactLinkWasRunning) {
+            clearExactLinkLookup()
+            workTrace.finishError(
+                "Stopped",
+                "Exact link lookup cancelled; no external action or write was performed.")
         }
         if (connectedRunReadWasRunning) {
             clearConnectedRunVerification()
@@ -4193,14 +4294,19 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
-        val connectedReadRoute = if (picked.isEmpty() && skillCommand == null) {
-            val prior = selectedId?.let {
+        val priorMessages = if (picked.isEmpty() && skillCommand == null) {
+            selectedId?.let {
                 runCatching { conversations.read(it) }.getOrDefault(emptyList())
             } ?: emptyList()
-            WorkspaceConnectedGitHubReadRouting.decide(text, prior)
+        } else emptyList()
+        val exactLinkLookup = if (picked.isEmpty() && skillCommand == null) {
+            WorkspaceExactLinkIntent.decide(text, priorMessages)
+        } else null
+        val connectedReadRoute = if (picked.isEmpty() && skillCommand == null) {
+            WorkspaceConnectedGitHubReadRouting.decide(text, priorMessages)
         } else null
         val githubSelfEditRequest =
-            picked.isEmpty() && connectedReadRoute == null &&
+            picked.isEmpty() && exactLinkLookup == null && connectedReadRoute == null &&
                 WorkspaceGitHubSelfEdit.isExplicitRequest(text)
         if (githubSelfEditRequest &&
             !WorkspaceChatConcurrencyPolicy.state(
@@ -4378,6 +4484,10 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         activateWorkTrace(stored.id)
+        if (exactLinkLookup != null && current.type == WorkspaceProjectType.CHAT) {
+            startExactLinkLookup(id, stored.id, exactLinkLookup)
+            return
+        }
         if (connectedReadRoute != null && current.type == WorkspaceProjectType.CHAT) {
             when (connectedReadRoute) {
                 is WorkspaceConnectedGitHubReadRouting.Route.Build -> {
