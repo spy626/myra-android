@@ -331,6 +331,24 @@ class GeminiLiveClient(
             .put("functionResponses", JSONArray().put(call))).toString())
     }
 
+    fun sendMemoryProposalHeld(id: String, name: String) {
+        val response = JSONObject()
+            .put("result", "pending_authorization")
+            .put("decision", "WAIT_FOR_FINAL")
+            .put("executed", false)
+            .put("language_policy", "mirror_current_user_utterance")
+            .put("script_policy", "roman_hinglish_for_hindi_hinglish_urdu")
+            .put(
+                "message",
+                "No action attempted. Wait for Android final-turn owner. Do not report success or failure. " +
+                    "If you produce a brief acknowledgement, mirror the current user utterance language and register. " +
+                    "For Hindi, Hinglish, or Urdu input, use natural Roman Hinglish and do not switch to English-only wording."
+            )
+        val call = JSONObject().put("id", id).put("name", name).put("response", response)
+        sendWhenReady(JSONObject().put("toolResponse", JSONObject()
+            .put("functionResponses", JSONArray().put(call))).toString())
+    }
+
     /** A held proposal is neither execution success nor failure. */
     fun sendToolHeld(id: String, name: String) {
         val response = JSONObject().put("result", "pending_authorization")
