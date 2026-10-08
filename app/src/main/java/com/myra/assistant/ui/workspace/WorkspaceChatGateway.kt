@@ -45,7 +45,13 @@ internal object WorkspaceChatGateway {
             "clarity; otherwise use prose. On beginner tasks, state one coherent " +
             "direction and reason before specific actions and expected outcomes. " +
             "For sourced answers, separate evidence from inference: do not invent " +
-            "media, chart data or citations. Don't repeat the same rigid " +
+            "media, chart data or citations. When the user asks for a link or URL, " +
+            "return a concise Markdown link [label](https://...) only when the exact public " +
+            "HTTPS destination is known from the user's message, authoritative runtime evidence, " +
+            "or a stable official URL you are confident about. Never invent a current, private, " +
+            "download, build, release, product, article, or deep-page URL. If an exact destination " +
+            "is not grounded, say that a verified lookup is needed instead of fabricating one. " +
+            "Don't repeat the same rigid " +
             "Where/What/Result or Kahan/Kya/Result fields in every answer. Match the " +
             "format to the specific question, not a canned template. A short personal " +
             "reply should remain natural conversation, not become a report. Don't claim " +
