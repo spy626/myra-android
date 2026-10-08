@@ -206,6 +206,7 @@ class MyraVoiceService : Service() {
         java.util.concurrent.ConcurrentHashMap<Long, com.myra.assistant.data.memory.LocalRecallExecution>()
     private val provisionalMemoryUserTurns = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
     private val provisionalMemoryAssistantTurns = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+    private val pendingMemorySaveAudioGate = PendingMemorySaveAudioGate()
     private var memoryResponsePendingTurnId = 0L
     private var suppressModelForTurn = false
     private var waitingForFreshInputAfterCommand = false
@@ -613,6 +614,12 @@ class MyraVoiceService : Service() {
                     )
                     mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(recallTurnId) }
                 }
+                else if (pendingMemorySaveAudioGate.capture(activeTurnId, modelGenerationId, pcm)) {
+                    voiceLog(
+                        "MEMORY_SAVE_MODEL_AUDIO_BUFFERED turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
+                            "bytes=${pcm.size} verifiedBeforeResponse=false"
+                    )
+                }
                 else if (responseArbiter.acceptsOrdinaryModel() && LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
                         suppressed = suppressModelForTurn,
                         assistantAlreadySpeaking = localAudioSpeaking,
@@ -977,6 +984,9 @@ class MyraVoiceService : Service() {
                         appendTranscript(output, transcript)
                         voiceLog("screen_query_result_received screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId userTurnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId firstResponseTextAt=${android.os.SystemClock.elapsedRealtime()} screen_response_turn_consistency=true")
                     } else voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId reason=wrong_generation")
+                }
+                else if (pendingMemorySaveAudioGate.appendTranscript(activeTurnId, modelGenerationId, transcript)) {
+                    appendTranscript(output, transcript)
                 }
                 else if (earlyMemoryRecallGate.appendModelTranscript(activeTurnId, transcript)) {
                     val recallTurnId = activeTurnId
@@ -1617,6 +1627,7 @@ class MyraVoiceService : Service() {
                             releaseBufferedEarlyMemoryAsOrdinary(memoryTurnId, buffered)
                         }
                     }
+                    val bufferedSaveModelAudio = pendingMemorySaveAudioGate.take(memoryTurnId)
                     serviceScope.launch {
                         staged.forEach { proposal ->
                             val validation = com.myra.assistant.data.memory.FinalTurnSourceSpanAuthorizer.authorize(
@@ -1702,6 +1713,16 @@ class MyraVoiceService : Service() {
                                             "displaySource=${if (groundedModelText.isNotBlank()) "MODEL_TRANSCRIPT" else "VERIFIED_FALLBACK"}"
                                     )
                                     earlyMemoryRecallGate.clear(memoryTurnId)
+                                } else if (
+                                    outcome is MemoryBrainOutcome.Mutated &&
+                                    outcome.result is MemoryWriteResult.Saved &&
+                                    bufferedSaveModelAudio != null
+                                ) {
+                                    val modelText = romanDisplayText(bufferedSaveModelAudio.transcript).trim()
+                                    val displayOnly = modelText.ifBlank { response }
+                                    deliverMemoryAssistantText(memoryTurnId, displayOnly)
+                                    emitState(displayOnly)
+                                    releaseVerifiedMemorySaveModelAudio(memoryTurnId, bufferedSaveModelAudio)
                                 } else {
                                     deliverMemoryAssistantText(memoryTurnId, response)
                                     emitState(response)
@@ -3767,6 +3788,7 @@ class MyraVoiceService : Service() {
         val merged = StagedMemoryProposalPolicy.merge(existing, operations)
         stagedMemorySemantics[proposalTurnId] = merged
         reserveMemoryResponse(proposalTurnId, "SEMANTIC_PROPOSAL")
+        pendingMemorySaveAudioGate.arm(proposalTurnId, latestObservedModelGenerationId)
         emitProvisionalMemoryChat(proposalTurnId, input.toString(), showSafeAssistantAck = true)
         voiceLog(
             "MEMORY_SEMANTIC_PROPOSAL_STAGED turnId=$proposalTurnId received=${operations.size} " +
@@ -3908,6 +3930,33 @@ class MyraVoiceService : Service() {
         voiceLog(
             "MEMORY_EARLY_RECALL_BUFFER_RELEASED_AS_ORDINARY turnId=$turnId " +
                 "modelGenerationId=${buffered.generationId} chunks=${buffered.chunks.size}"
+        )
+    }
+
+    private fun releaseVerifiedMemorySaveModelAudio(
+        turnId: Long,
+        buffered: BufferedMemorySaveAudio
+    ) {
+        if (turnId <= 0L || buffered.chunks.isEmpty()) return
+        controlledGenerationId++
+        localSpeechValidationPolicy = LocalSpeechValidationPolicy.MEMORY
+        localPlaybackActive = true
+        localSpeechStreamedDirectly = true
+        localSpeechGenerationComplete = true
+        allowUntranscribedLocalSpeech = false
+        responseArbiter.controlledGenerationComplete()
+        mediaGuard.beginAssistantTurn()
+        audio?.setPlaybackContext(controlledGenerationId, responseOwner = "MEMORY_SAVE_VERIFIED_MODEL")
+        audio?.setBargeInEnabled(true)
+        val releasedAt = android.os.SystemClock.elapsedRealtime()
+        buffered.chunks.forEach { chunk ->
+            audio?.queueAudio(chunk, controlledGenerationId, "MEMORY_SAVE_VERIFIED_MODEL")
+        }
+        voiceLog(
+            "MEMORY_SAVE_MODEL_AUDIO_RELEASED turnId=$turnId sourceGenerationId=${buffered.generationId} " +
+                "playbackGenerationId=$controlledGenerationId chunks=${buffered.chunks.size} " +
+                "verifiedBeforeResponse=true speechEndToPlaybackQueuedMs=" +
+                "${if (speechActivityEndedAt > 0L) (releasedAt - speechActivityEndedAt).coerceAtLeast(0L) else -1L}"
         )
     }
 
@@ -6220,6 +6269,7 @@ class MyraVoiceService : Service() {
         incompleteActionFragmentTurn = false
         stagedResearchGoals.remove(activeTurnId)
         earlyMemoryRecallExecutions.remove(activeTurnId)
+        pendingMemorySaveAudioGate.clear(activeTurnId)
         if (!earlyMemoryRecallGate.wasReleased(activeTurnId)) earlyMemoryRecallGate.clear(activeTurnId)
         activeTurnId = 0L
         if (!screenResponseActive && !ordinaryModelAudioGate.isSpeechActive()) {
