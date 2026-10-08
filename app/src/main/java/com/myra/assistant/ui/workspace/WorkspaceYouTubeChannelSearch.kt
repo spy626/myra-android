@@ -130,10 +130,10 @@ internal object WorkspaceYouTubeChannelSearch {
         require(response.isSuccessful) { "YouTube lookup failed (HTTP " + response.code + ")" }
         val type = response.header("Content-Type").orEmpty().lowercase(Locale.ROOT)
         require(type.startsWith("text/html")) { "YouTube lookup did not return HTML" }
-        val bytes = response.peekBody(MAX_HTML_BYTES + 1).bytes()
-        require(bytes.isNotEmpty() && bytes.size.toLong() <= MAX_HTML_BYTES) {
-            "YouTube search response was empty or too large"
-        }
+        // Parse only a bounded prefix. A normal YouTube results page can be larger than this,
+        // but page size alone must not turn a safe read into a false failure.
+        val bytes = response.peekBody(MAX_HTML_BYTES).bytes()
+        require(bytes.isNotEmpty()) { "YouTube search response was empty" }
         return requireNotNull(findCandidate(String(bytes, Charsets.UTF_8), query)) {
             "No confident direct YouTube channel match was found"
         }
