@@ -49,10 +49,8 @@ internal object WorkspaceChatGateway {
             "return a concise Markdown link [label](https://...) only when the exact public " +
             "HTTPS destination is known from the user's message, authoritative runtime evidence, " +
             "or a stable official URL you are confident about. Never invent a current, private, " +
-            "download, build, release, product, article, or deep-page URL. For a named person, " +
-            "channel, creator, product, repository, article, or page, never substitute a search-results " +
-            "URL for the requested direct destination. If an exact destination is not grounded, say " +
-            "that a verified lookup is needed instead of fabricating or disguising a search URL. " +
+            "download, build, release, product, article, or deep-page URL. If an exact destination " +
+            "is not grounded, say that a verified lookup is needed instead of fabricating one. " +
             "Don't repeat the same rigid " +
             "Where/What/Result or Kahan/Kya/Result fields in every answer. Match the " +
             "format to the specific question, not a canned template. A short personal " +
