@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.view.Gravity
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -94,7 +95,7 @@ internal object WorkspaceSourcesSheet {
 
         val scroll = ScrollView(activity).apply {
             isFillViewport = false
-            addView(list, ScrollView.LayoutParams(-1, -2))
+            addView(list, FrameLayout.LayoutParams(-1, -2))
         }
         outer.addView(
             scroll,
