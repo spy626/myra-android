@@ -307,26 +307,66 @@ internal class WorkspacePublicWebSearchRunner(
     @Synchronized fun start(request: WorkspaceWebLinkIntent.Request) {
         cancelLocked()
         val run = ++generation
-        listener.onEvent(WorkspaceWorkPhase.SEARCHING, "Searching the web", request.query.take(100))
+        if (WorkspaceGitHubRepositorySearch.supports(request)) {
+            listener.onEvent(
+                WorkspaceWorkPhase.SEARCHING,
+                "Searching GitHub repositories",
+                request.query.take(100),
+            )
+            // GitHub's public repository index is structured evidence. Profiles cannot be
+            // misread as repositories, and unavailable/rate-limited API reads fall back safely.
+            dispatch(
+                run,
+                WorkspaceGitHubRepositorySearch.searchRequest(request),
+                onSuccess = { response ->
+                    val candidates = response.use {
+                        runCatching {
+                            WorkspaceGitHubRepositorySearch.readSearch(it, request)
+                        }.getOrDefault(emptyList())
+                    }
+                    if (candidates.isEmpty()) startWebSearch(run, request)
+                    else startCandidateVerification(run, request, candidates)
+                },
+                onFailure = { startWebSearch(run, request) },
+            )
+        } else {
+            startWebSearch(run, request)
+        }
+    }
+
+    private fun startWebSearch(run: Long, request: WorkspaceWebLinkIntent.Request) {
+        synchronized(this) { if (run != generation) return }
+        listener.onEvent(
+            WorkspaceWorkPhase.SEARCHING,
+            "Searching the web",
+            request.query.take(100),
+        )
         dispatch(
             run,
             WorkspacePublicWebSearch.searchRequest(request),
             onSuccess = { response ->
-                val candidates = response.use {
-                    WorkspacePublicWebSearch.readSearch(it, request)
-                }
+                val candidates = response.use { WorkspacePublicWebSearch.readSearch(it, request) }
                 require(candidates.isNotEmpty()) {
                     "No confident public search result matched this link request"
                 }
-                listener.onEvent(
-                    WorkspaceWorkPhase.VERIFYING,
-                    "Verifying direct destination",
-                    candidates.first().title.take(100),
-                )
-                verifyCandidate(run, request, candidates, 0, null, 0)
+                startCandidateVerification(run, request, candidates)
             },
             onFailure = { fail(run, it) },
         )
+    }
+
+    private fun startCandidateVerification(
+        run: Long,
+        request: WorkspaceWebLinkIntent.Request,
+        candidates: List<WorkspacePublicWebSearch.Candidate>,
+    ) {
+        synchronized(this) { if (run != generation) return }
+        listener.onEvent(
+            WorkspaceWorkPhase.VERIFYING,
+            "Verifying direct destination",
+            candidates.first().title.take(100),
+        )
+        verifyCandidate(run, request, candidates, 0, null, 0)
     }
 
     @Synchronized fun cancel() {
@@ -451,7 +491,7 @@ internal class WorkspacePublicWebSearchRunner(
             active = null
             ++generation
         }
-        listener.onEvent(WorkspaceWorkPhase.ERROR, "Web link lookup stopped", message)
+        // finishWebLinkLookup records a single final failure; don't duplicate it in the trace.
         listener.onError(message)
     }
 }
