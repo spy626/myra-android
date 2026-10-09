@@ -3,6 +3,7 @@ package com.myra.assistant.ui.workspace
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
+import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -57,6 +58,26 @@ internal object WorkspaceGitHubRepositorySearch {
     private fun compact(value: String): String = value.lowercase(Locale.ROOT)
         .replace(Regex("""[^\p{L}\p{N}]"""), "")
 
+    private fun nameSegments(name: String): Set<String> =
+        name.replace(Regex("""(?<=[a-z0-9])(?=[A-Z])"""), " ")
+            .split(Regex("""[^\p{L}\p{N}]+"""))
+            .map { it.lowercase(Locale.ROOT) }.filter(String::isNotBlank).toSet()
+
+    /**
+     * A repository name should contain an actual project-name segment (or exact
+     * normalized full name), not merely its letters buried inside a longer word.
+     * Applied to both public GitHub API results and DuckDuckGo fallback results.
+     */
+    internal fun nameMatchesQuery(url: String, query: String): Boolean {
+        if (!WorkspacePublicWebSearch.isGitHubRepositoryUrl(url)) return false
+        val name = URI(url).path.trim('/').substringAfter('/')
+        val terms = projectTerms(query)
+        if (terms.isEmpty()) return false
+        val segments = nameSegments(name)
+        return compact(name) == compact(terms.joinToString("")) ||
+            terms.any { it in segments }
+    }
+
     /** Testable deterministic ranking of repository metadata returned by the real GitHub API. */
     internal fun parseJson(
         json: String,
@@ -81,13 +102,13 @@ internal object WorkspaceGitHubRepositorySearch {
                 // The exact GitHub API repository identity must match the browser URL.
                 if (!url.equals("https://github.com/" + fullName, ignoreCase = true)) continue
                 val normalName = compact(name)
-                val overlap = terms.count { normalName.contains(compact(it)) }
-                if (overlap == 0) continue
+                val segments = nameSegments(name)
+                val overlap = terms.count { it in segments }
+                if (!nameMatchesQuery(url, request.query)) continue
                 val nameRank = when {
                     normalName == soughtName -> 3000
-                    normalName.startsWith(soughtName) -> 1300
-                    normalName.contains(soughtName) -> 800
-                    else -> overlap * 200
+                    segments.containsAll(terms.toSet()) -> 1400
+                    else -> overlap * 250
                 }
                 val stars = item.optLong("stargazers_count", 0L).coerceAtLeast(0L)
                 val popularity = (log10(stars.toDouble() + 1.0) * 105)

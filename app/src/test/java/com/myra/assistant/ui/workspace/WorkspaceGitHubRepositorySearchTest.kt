@@ -45,6 +45,45 @@ class WorkspaceGitHubRepositorySearchTest {
         assertTrue(results.first().snippet.contains("Self-hosted AI companion"))
     }
 
+    @Test fun actualHinglishPromptProducesExactGitHubQueryAndRejectsSubstringTrap() {
+        val fullRequest = requireNotNull(
+            WorkspaceWebLinkIntent.decide("GitHub pe AIRI repo ka link do")
+        )
+        assertEquals("AIRI repo", fullRequest.query)
+        val built = WorkspaceGitHubRepositorySearch.searchRequest(fullRequest)
+        assertEquals("airi in:name fork:false", built.url.queryParameter("q"))
+        val apiResults = """
+            {"items":[
+               {"full_name":"Shottakon/AirialPerspectiveEffecter",
+                "name":"AirialPerspectiveEffecter",
+                "html_url":"https://github.com/Shottakon/AirialPerspectiveEffecter",
+                "stargazers_count":900000, "fork":false},
+               {"full_name":"moeru-ai/airi", "name":"airi",
+                "html_url":"https://github.com/moeru-ai/airi",
+                "description":"AI companion",
+                "stargazers_count":50000,"fork":false}
+            ]}
+        """.trimIndent()
+        val candidates = WorkspaceGitHubRepositorySearch.parseJson(apiResults, fullRequest)
+        assertEquals(listOf("https://github.com/moeru-ai/airi"),
+            candidates.map { it.url })
+    }
+
+    @Test fun similarButDifferentRepositoryNamesAreNotMistakenAsExact() {
+        assertFalse(WorkspaceGitHubRepositorySearch.nameMatchesQuery(
+            "https://github.com/Shottakon/AirialPerspectiveEffecter", "AIRI repo"
+        ))
+        assertTrue(WorkspaceGitHubRepositorySearch.nameMatchesQuery(
+            "https://github.com/moeru-ai/airi", "AIRI repo"
+        ))
+        assertTrue(WorkspaceGitHubRepositorySearch.nameMatchesQuery(
+            "https://github.com/team/airi-tools", "AIRI repo"
+        ))
+        assertTrue(WorkspaceGitHubRepositorySearch.nameMatchesQuery(
+            "https://github.com/team/super.pe", "super.pe repo"
+        ))
+    }
+
     @Test fun regularGithubProfileQueriesDoNotHijackRepoSearch() {
         assertFalse(WorkspaceGitHubRepositorySearch.supports(
             WorkspaceWebLinkIntent.Request("AIRI profile", "github.com")

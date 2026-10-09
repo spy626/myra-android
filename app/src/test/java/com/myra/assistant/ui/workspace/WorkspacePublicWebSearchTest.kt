@@ -26,6 +26,19 @@ class WorkspacePublicWebSearchTest {
         assertTrue(results.first().snippet.contains("AI companion"))
     }
 
+    @Test fun fallbackRejectsSubstringOnlyGithubMatches() {
+        val html = """
+            <a class="result__a" href="https://github.com/Shottakon/AirialPerspectiveEffecter">
+                AIRI perspective effect repo
+            </a>
+            <a class="result__a" href="https://github.com/moeru-ai/airi">
+                moeru-ai/airi · GitHub
+            </a>
+        """.trimIndent()
+        val candidates = WorkspacePublicWebSearch.parseHtml(html, "AIRI repo", "github.com")
+        assertEquals(listOf("https://github.com/moeru-ai/airi"), candidates.map { it.url })
+    }
+
     @Test fun unsafeAndCredentialDestinationsAreDropped() {
         val html = """
             <a class="result__a" href="http://example.com/test">Example test</a>

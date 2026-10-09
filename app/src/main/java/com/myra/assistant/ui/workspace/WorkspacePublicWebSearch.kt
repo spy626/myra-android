@@ -76,7 +76,10 @@ internal object WorkspacePublicWebSearch {
     ): Boolean {
         val isRepositoryRequest = preferredHost == "github.com" &&
             repositoryCue.containsMatchIn(query)
-        return !isRepositoryRequest || isGitHubRepositoryUrl(url)
+        return !isRepositoryRequest || (
+            isGitHubRepositoryUrl(url) &&
+                WorkspaceGitHubRepositorySearch.nameMatchesQuery(url, query)
+            )
     }
 
     private val ignore = setOf(

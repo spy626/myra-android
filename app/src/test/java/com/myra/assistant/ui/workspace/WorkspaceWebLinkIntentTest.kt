@@ -9,7 +9,7 @@ class WorkspaceWebLinkIntentTest {
     @Test fun broadLinkKindsBecomeReadOnlyWebDiscovery() {
         val github = WorkspaceWebLinkIntent.decide("GitHub pe AIRI repo ka link do")
         assertEquals("github.com", github?.preferredHost)
-        assertTrue(github?.query?.contains("AIRI", ignoreCase = true) == true)
+        assertEquals("AIRI repo", github?.query)
 
         val docs = WorkspaceWebLinkIntent.decide("OpenAI API docs ka exact link bhejo")
         assertEquals("openai.com", docs?.preferredHost)
@@ -21,7 +21,22 @@ class WorkspaceWebLinkIntentTest {
 
         val video = WorkspaceWebLinkIntent.decide("YouTube pe CarryMinati latest video link do")
         assertEquals("youtube.com", video?.preferredHost)
-        assertTrue(video?.query?.contains("CarryMinati", ignoreCase = true) == true)
+        assertEquals("CarryMinati latest video", video?.query)
+    }
+
+    @Test fun platformPostpositionsDoNotSwallowActualProjectNames() {
+        assertEquals("AIRI repo",
+            WorkspaceWebLinkIntent.decide("GitHub par AIRI repo ka link do")?.query)
+        assertEquals("AIRI repo",
+            WorkspaceWebLinkIntent.decide("GitHub per AIRI repo ka link do")?.query)
+        assertEquals("Pe repo",
+            WorkspaceWebLinkIntent.decide("GitHub pe Pe repo ka link do")?.query)
+        assertEquals("pe-audio repo",
+            WorkspaceWebLinkIntent.decide("GitHub pe pe-audio repo ka link do")?.query)
+        assertEquals("AIRI repo",
+            WorkspaceWebLinkIntent.decide("AIRI repo GitHub pe link bhejo")?.query)
+        assertEquals("API docs",
+            WorkspaceWebLinkIntent.decide("OpenAI pe API docs ka link bhejo")?.query)
     }
 
     @Test fun writesSecretsBarePlatformsAndDirectUrlsNeverSearch() {

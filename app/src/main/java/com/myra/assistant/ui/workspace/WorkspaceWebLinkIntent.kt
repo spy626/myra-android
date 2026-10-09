@@ -25,6 +25,10 @@ internal object WorkspaceWebLinkIntent {
             """private[ -]?key|secret|bank account|card number|recovery code|seed phrase)\b"""
     )
     private val token = Regex("""[\p{L}\p{N}_@.+-]+""")
+    // A platform + Hinglish postposition is grammar, not a search subject.
+    // Remove ONLY the immediate particle after a recognized platform mention.
+    // A real repository/project called "Pe" must still be searchable.
+    private val afterPlatform = Regex("""(?iu)^\s+(?:pe|par|per)\b""")
     private val filler = setOf(
         "link", "url", "ka", "ki", "ke", "ko", "mujhe", "please", "bro",
         "do", "de", "dena", "bhejo", "bhej", "send", "share", "show", "give",
@@ -63,7 +67,14 @@ internal object WorkspaceWebLinkIntent {
             protectedInput.containsMatchIn(text)) return null
 
         val hint = hints.firstOrNull { it.cue.containsMatchIn(text) }
-        val words = token.findAll(text).map { it.value }.filterNot { raw ->
+        val queryText = hint?.cue?.find(text)?.let { platform ->
+            val tailStart = platform.range.last + 1
+            val particle = afterPlatform.find(text.substring(tailStart))
+            if (particle != null) {
+                text.removeRange(tailStart, tailStart + particle.value.length)
+            } else text
+        } ?: text
+        val words = token.findAll(queryText).map { it.value }.filterNot { raw ->
             val lower = raw.lowercase()
             lower in filler || lower in (hint?.aliases ?: emptySet())
         }.toList()
