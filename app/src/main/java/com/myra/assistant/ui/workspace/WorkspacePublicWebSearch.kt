@@ -51,7 +51,7 @@ internal object WorkspacePublicWebSearch {
 
     private fun htmlDecode(raw: String): String = raw
         .replace("&amp;", "&", ignoreCase = true)
-        .replace("&quot;", """, ignoreCase = true)
+        .replace("&quot;", "\"", ignoreCase = true)
         .replace("&#39;", "'", ignoreCase = true)
         .replace("&#x27;", "'", ignoreCase = true)
         .replace("&lt;", "<", ignoreCase = true)
