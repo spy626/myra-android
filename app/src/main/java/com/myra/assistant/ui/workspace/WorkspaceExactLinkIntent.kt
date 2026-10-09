@@ -23,6 +23,10 @@ internal object WorkspaceExactLinkIntent {
     private val mutation = Regex(
         """(?iu)\b(?:add|change|fix|edit|modify|implement|create|remove|replace|redesign|code|update)\b"""
     )
+    private val nonChannelDestination = Regex(
+        """(?iu)\b(?:video|videos|short|shorts|clip|song|music|episode|playlist|watch|""" +
+            """livestream|live\s+stream|trailer|interview)\b"""
+    )
     private val videoRequest = Regex(
         """(?iu)\b(?:video|shorts?|watch|song|episode|trailer|latest\s+video|new\s+video)\b"""
     )
@@ -60,12 +64,16 @@ internal object WorkspaceExactLinkIntent {
             videoRequest.containsMatchIn(text)) return null
 
         if (isYouTubeLinkAsk(text)) {
+            // Deep/media destinations belong to the generic web-discovery route. This resolver
+            // owns channels/creators only; never turn a video request into a channel link.
+            if (nonChannelDestination.containsMatchIn(text)) return null
             return subject(text)?.let { Request(Platform.YOUTUBE, it) }
         }
 
         // A short answer such as "CarryMinati ka" can complete the immediately preceding
         // "YouTube ka link bhejo" request. Old conversations never grant action authority.
-        if (text.length > 100 || linkAsk.containsMatchIn(text) || youtube.containsMatchIn(text)) {
+        if (text.length > 100 || linkAsk.containsMatchIn(text) || youtube.containsMatchIn(text) ||
+            nonChannelDestination.containsMatchIn(text)) {
             return null
         }
         val recent = prior.takeLast(4)
