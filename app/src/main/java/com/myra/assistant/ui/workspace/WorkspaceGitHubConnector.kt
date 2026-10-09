@@ -548,6 +548,44 @@ internal object WorkspaceGitHubConnector {
         return matches.maxByOrNull { it.id }
     }
 
+    fun readLatestWorkflowRun(
+        response: Response,
+        expectedBranch: String,
+    ): WorkflowRun? {
+        val branch = WorkspaceConnectorPolicy.requireFeatureBranch(expectedBranch)
+        val root = parseJson(response, "GitHub Actions workflow runs")
+        val array = root.optJSONArray("workflow_runs") ?: JSONArray()
+        val matches = mutableListOf<WorkflowRun>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            if (item.optString("head_branch").trim() != branch) continue
+            if (item.optString("name").trim() != "Build Android APK") continue
+            val id = item.optLong("id", -1L)
+            val runNumber = item.optLong("run_number", -1L)
+            val status = item.optString("status").trim()
+            val head = requireSha(item.optString("head_sha"), "GitHub workflow commit")
+            val url = item.optString("html_url").trim()
+            require(id > 0L && runNumber > 0L && status.isNotBlank()) {
+                "GitHub Actions workflow run metadata is invalid"
+            }
+            require(url.startsWith("https://github.com/")) {
+                "GitHub Actions workflow URL is invalid"
+            }
+            val conclusion = item.optString("conclusion").trim()
+                .takeIf { it.isNotBlank() && it != "null" }
+            matches += WorkflowRun(
+                id = id,
+                runNumber = runNumber,
+                name = "Build Android APK",
+                headSha = head,
+                status = status,
+                conclusion = conclusion,
+                url = url,
+            )
+        }
+        return matches.maxByOrNull { it.id }
+    }
+
     fun readWorkflowRunByNumber(
         response: Response,
         expectedRunNumber: Long,

@@ -121,6 +121,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private var connectedRunVerificationProjectId: String? = null
     private var connectedRunVerificationMessageId: String? = null
     private var connectedRunVerificationNumber: Long? = null
+    private var connectedRunVerificationLatest = false
     private var connectedRunVerificationIncludeSha = false
     private var connectedRunVerificationRunner: WorkspaceConnectedGitHubRunRunner? = null
     private var connectedDownloadReadActive = false
@@ -1008,10 +1009,11 @@ class WorkspaceActivity : AppCompatActivity() {
                             return@runOnUiThread
                         }
                         finishConnectedRunVerification(
-                            WorkspaceConnectedGitHubRunIntent.receipt(
+                            reply = WorkspaceConnectedGitHubRunIntent.receipt(
                                 completion,
                                 includeCommitSha = connectedRunVerificationIncludeSha,
-                            )
+                            ),
+                            source = WorkspaceConnectedGitHubRunIntent.source(completion),
                         )
                     }
                 }
@@ -1022,7 +1024,8 @@ class WorkspaceActivity : AppCompatActivity() {
                             return@runOnUiThread
                         }
                         finishConnectedRunVerification(
-                            "I couldn't verify that connected GitHub build safely: " + message
+                            reply = "I couldn't verify that connected GitHub build safely: " + message,
+                            source = null,
                         )
                     }
                 }
@@ -1036,10 +1039,14 @@ class WorkspaceActivity : AppCompatActivity() {
         connectedRunVerificationProjectId = null
         connectedRunVerificationMessageId = null
         connectedRunVerificationNumber = null
+        connectedRunVerificationLatest = false
         connectedRunVerificationIncludeSha = false
     }
 
-    private fun finishConnectedRunVerification(reply: String) {
+    private fun finishConnectedRunVerification(
+        reply: String,
+        source: WorkspaceVerifiedSourceStore.Source?,
+    ) {
         val id = connectedRunVerificationProjectId
         val messageId = connectedRunVerificationMessageId
         clearConnectedRunVerification(cancel = false)
@@ -1048,7 +1055,13 @@ class WorkspaceActivity : AppCompatActivity() {
             require(conversations.read(id).lastOrNull()?.id == messageId) {
                 "Conversation changed; GitHub build verification was not saved"
             }
-            conversations.append(id, "assistant", reply)
+            val saved = conversations.attachAssistantToTurn(
+                projectId = id,
+                expectedUserId = messageId,
+                assistantId = "github-read-" + messageId,
+                text = reply,
+            )
+            if (source != null) verifiedSources.put(id, saved.id, listOf(source))
         }.onSuccess {
             statusMessage = ""
         }.onFailure {
@@ -1065,18 +1078,19 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun startConnectedRunVerification(
         id: String,
         messageId: String,
-        runNumber: Long,
-        includeCommitSha: Boolean,
+        decision: WorkspaceConnectedGitHubRunIntent.Decision,
     ) {
         clearConnectedRunVerification()
         connectedRunVerificationActive = true
         connectedRunVerificationProjectId = id
         connectedRunVerificationMessageId = messageId
-        connectedRunVerificationNumber = runNumber
-        connectedRunVerificationIncludeSha = includeCommitSha
+        connectedRunVerificationNumber = decision.runNumber
+        connectedRunVerificationLatest = decision.latest
+        connectedRunVerificationIncludeSha = decision.includeCommitSha
         statusMessage = ""
         render()
-        connectedRunVerifier().start(runNumber)
+        if (decision.latest) connectedRunVerifier().startLatest()
+        else connectedRunVerifier().start(requireNotNull(decision.runNumber))
     }
 
     private fun connectedDownloadRunner(): WorkspaceConnectedGitHubDownloadRunner {
@@ -4679,9 +4693,7 @@ class WorkspaceActivity : AppCompatActivity() {
                         }.onFailure { statusMessage = it.message ?: "Read clarification not saved." }
                         render()
                     } else {
-                        startConnectedRunVerification(
-                            id, stored.id, requireNotNull(choice.runNumber), choice.includeCommitSha
-                        )
+                        startConnectedRunVerification(id, stored.id, choice)
                     }
                 }
                 is WorkspaceConnectedGitHubReadRouting.Route.Download -> {

@@ -106,6 +106,26 @@ class WorkspaceGitHubConnectorTest {
         assertEquals(3L, run?.id)
     }
 
+    @Test fun latestRunReadUsesNewestMatchingConnectedBranchWorkflow() {
+        val sha1 = "1234567890abcdef1234567890abcdef12345678"
+        val sha2 = "abcdef1234567890abcdef1234567890abcdef12"
+        val run = WorkspaceGitHubConnector.readLatestWorkflowRun(
+            response(
+                """{"workflow_runs":[
+                    {"id":10,"run_number":3400,"name":"Other Workflow","head_branch":"agent/myra-phase-1","head_sha":"$sha1","status":"completed","conclusion":"success","html_url":"https://github.com/spy626/myra-android/actions/runs/10"},
+                    {"id":11,"run_number":3401,"name":"Build Android APK","head_branch":"other/branch","head_sha":"$sha1","status":"completed","conclusion":"success","html_url":"https://github.com/spy626/myra-android/actions/runs/11"},
+                    {"id":12,"run_number":3402,"name":"Build Android APK","head_branch":"agent/myra-phase-1","head_sha":"$sha1","status":"completed","conclusion":"success","html_url":"https://github.com/spy626/myra-android/actions/runs/12"},
+                    {"id":14,"run_number":3404,"name":"Build Android APK","head_branch":"agent/myra-phase-1","head_sha":"$sha2","status":"in_progress","conclusion":null,"html_url":"https://github.com/spy626/myra-android/actions/runs/14"}
+                ]}"""
+            ),
+            expectedBranch = "agent/myra-phase-1",
+        )
+        assertEquals(3404L, run?.runNumber)
+        assertEquals(14L, run?.id)
+        assertEquals("in_progress", run?.status)
+        assertEquals(sha2, run?.headSha)
+    }
+
     @Test fun boundedPagesExposeCountAndOnlyAcceptExactRunIdentity() {
         val sha = "1234567890abcdef1234567890abcdef12345678"
         val other = "abcdef1234567890abcdef1234567890abcdef12"
