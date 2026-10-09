@@ -27,14 +27,20 @@ internal object WorkspaceYouTubeChannelSearch {
     private val runTitle = Regex(
         """(?s)\"title\"\s*:\s*\{\s*\"runs\"\s*:\s*\[\s*\{\s*\"text\"\s*:\s*\"((?:\\.|[^\"])*)\""""
     )
+    private val canonicalHandle = Regex(
+        """\"canonicalBaseUrl\"\s*:\s*\"(/@[\p{L}\p{N}._-]{3,50})\""""
+    )
 
     data class Candidate(
         val channelId: String,
         val title: String,
         val verifiedBadge: Boolean,
         val resultIndex: Int,
+        val canonicalHandlePath: String? = null,
     ) {
-        val url: String get() = "https://www.youtube.com/channel/" + channelId
+        val url: String get() = canonicalHandlePath
+            ?.let { "https://www.youtube.com" + it }
+            ?: ("https://www.youtube.com/channel/" + channelId)
     }
 
     private fun decodeJsonString(raw: String): String = runCatching {
@@ -109,12 +115,20 @@ internal object WorkspaceYouTubeChannelSearch {
                 ?: return@mapIndexedNotNull null
             val title = decodeJsonString(rawTitle).trim().take(120)
             if (title.isBlank()) return@mapIndexedNotNull null
+            val handle = canonicalHandle.find(block)?.groupValues?.get(1)
+                ?.takeIf {
+                    runCatching {
+                        WorkspaceAgentReachPolicy.parse("https://www.youtube.com" + it)
+                            .platform == WorkspaceAgentReachPolicy.Platform.YOUTUBE
+                    }.getOrDefault(false)
+                }
             Candidate(
                 channelId = id,
                 title = title,
                 verifiedBadge = block.contains("BADGE_STYLE_TYPE_VERIFIED") ||
                     block.contains("Verified", ignoreCase = true),
                 resultIndex = index,
+                canonicalHandlePath = handle,
             )
         }.distinctBy { it.channelId }
 
@@ -173,7 +187,7 @@ internal class WorkspaceYouTubeChannelSearchRunner(
     @Synchronized fun start(query: String) {
         cancelLocked()
         val run = ++generation
-        listener.onEvent(WorkspaceWorkPhase.READING, "Searching YouTube channels", query.take(80))
+        listener.onEvent(WorkspaceWorkPhase.SEARCHING, "Searching YouTube", query.take(80))
         val request = runCatching { WorkspaceYouTubeChannelSearch.request(query) }
             .getOrElse {
                 listener.onError(it.message ?: "YouTube link lookup could not start")
@@ -201,8 +215,8 @@ internal class WorkspaceYouTubeChannelSearchRunner(
                 result.onSuccess {
                     listener.onEvent(
                         WorkspaceWorkPhase.VERIFYING,
-                        "Direct YouTube channel resolved",
-                        it.title.take(100),
+                        "Verifying official YouTube channel",
+                        it.url.take(140),
                     )
                     listener.onComplete(it)
                 }.onFailure {

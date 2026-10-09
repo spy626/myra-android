@@ -23,6 +23,9 @@ internal object WorkspaceExactLinkIntent {
     private val mutation = Regex(
         """(?iu)\b(?:add|change|fix|edit|modify|implement|create|remove|replace|redesign|code|update)\b"""
     )
+    private val videoRequest = Regex(
+        """(?iu)\b(?:video|shorts?|watch|song|episode|trailer|latest\s+video|new\s+video)\b"""
+    )
     private val token = Regex("""[\p{L}\p{N}_@.-]+""")
     private val filler = setOf(
         "youtube", "yt", "channel", "link", "url", "official",
@@ -53,7 +56,8 @@ internal object WorkspaceExactLinkIntent {
         prior: List<WorkspaceConversationStore.Message>,
     ): Request? {
         val text = current.trim().replace(Regex("""[\s\p{Z}]+"""), " ")
-        if (text.isBlank() || url.containsMatchIn(text) || mutation.containsMatchIn(text)) return null
+        if (text.isBlank() || url.containsMatchIn(text) || mutation.containsMatchIn(text) ||
+            videoRequest.containsMatchIn(text)) return null
 
         if (isYouTubeLinkAsk(text)) {
             return subject(text)?.let { Request(Platform.YOUTUBE, it) }

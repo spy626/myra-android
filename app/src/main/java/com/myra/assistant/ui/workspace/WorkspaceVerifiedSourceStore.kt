@@ -134,7 +134,8 @@ internal class WorkspaceVerifiedSourceStore(
                     url = item.getString("url"),
                     snippet = item.optString("snippet"),
                     observedAtMs = item.getLong("observedAtMs"),
-                    verifiedLabel = item.optString("verifiedLabel").takeIf { it.isNotBlank() },
+                    verifiedLabel = if (item.isNull("verifiedLabel")) null
+                        else item.optString("verifiedLabel").takeIf { it.isNotBlank() },
                 )
             )
         }

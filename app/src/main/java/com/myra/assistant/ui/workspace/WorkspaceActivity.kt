@@ -113,6 +113,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private var exactLinkLookupProjectId: String? = null
     private var exactLinkLookupMessageId: String? = null
     private var exactLinkLookupRunner: WorkspaceYouTubeChannelSearchRunner? = null
+    private var webLinkLookupActive = false
+    private var webLinkLookupProjectId: String? = null
+    private var webLinkLookupMessageId: String? = null
+    private var webLinkLookupRunner: WorkspacePublicWebSearchRunner? = null
     private var connectedRunVerificationActive = false
     private var connectedRunVerificationProjectId: String? = null
     private var connectedRunVerificationMessageId: String? = null
@@ -1465,6 +1469,121 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }
 
+    private fun webLinkRunner(): WorkspacePublicWebSearchRunner {
+        webLinkLookupRunner?.let { return it }
+        return WorkspacePublicWebSearchRunner(
+            listener = object : WorkspacePublicWebSearchRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(result: WorkspacePublicWebSearch.Verified) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
+                        finishWebLinkLookup(
+                            reply = WorkspacePublicWebSearch.receipt(result),
+                            source = WorkspacePublicWebSearch.source(result),
+                        )
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
+                        finishWebLinkLookup(
+                            reply = "Bro, exact public link verify nahi ho paya. " +
+                                "Search result ko direct link bolkar guess nahi karunga. " + message,
+                            source = null,
+                        )
+                    }
+                }
+            },
+        ).also { webLinkLookupRunner = it }
+    }
+
+    private fun clearWebLinkLookup(cancel: Boolean = true) {
+        if (cancel) webLinkLookupRunner?.cancel()
+        webLinkLookupActive = false
+        webLinkLookupProjectId = null
+        webLinkLookupMessageId = null
+    }
+
+    private fun finishWebLinkLookup(
+        reply: String,
+        source: WorkspaceVerifiedSourceStore.Source?,
+    ) {
+        val id = webLinkLookupProjectId
+        val userMessageId = webLinkLookupMessageId
+        clearWebLinkLookup(cancel = false)
+        if (id == null || userMessageId == null || selectedId != id) return
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == userMessageId) {
+                "Conversation changed; web link result not saved"
+            }
+            val saved = conversations.attachAssistantToTurn(
+                projectId = id,
+                expectedUserId = userMessageId,
+                assistantId = "web-link-" + userMessageId,
+                text = reply,
+            )
+            if (source != null) verifiedSources.put(id, saved.id, listOf(source))
+        }.onSuccess {
+            statusMessage = ""
+            if (source != null) workTrace.finishSuccess("Direct link ready")
+            else workTrace.finishError("Direct link not verified", reply.take(160))
+        }.onFailure {
+            statusMessage = it.message ?: "Web link result could not be saved."
+            workTrace.finishError("Web link not saved", statusMessage)
+        }
+        render()
+    }
+
+    private fun startWebLinkLookup(
+        id: String,
+        messageId: String,
+        request: WorkspaceWebLinkIntent.Request,
+    ) {
+        clearWebLinkLookup()
+        webLinkLookupActive = true
+        webLinkLookupProjectId = id
+        webLinkLookupMessageId = messageId
+        statusMessage = ""
+        render()
+        webLinkRunner().start(request)
+    }
+
+    private fun finishStablePlatformLink(
+        id: String,
+        messageId: String,
+        match: WorkspaceStablePlatformLink.Match,
+    ) {
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == messageId) {
+                "Conversation changed; platform link result not saved"
+            }
+            conversations.attachAssistantToTurn(
+                projectId = id,
+                expectedUserId = messageId,
+                assistantId = "platform-link-" + messageId,
+                text = WorkspaceStablePlatformLink.receipt(match),
+            )
+        }.onSuccess {
+            statusMessage = ""
+            workTrace.finishSuccess("Link ready")
+        }.onFailure {
+            statusMessage = it.message ?: "Platform link could not be saved."
+            workTrace.finishError("Link not saved", statusMessage)
+        }
+        render()
+    }
+
     private fun startPublicWebReach(
         id: String,
         messageId: String,
@@ -1526,6 +1645,7 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest = null
         clearAgentReachState()
         clearExactLinkLookup()
+        clearWebLinkLookup()
         clearConnectedRunVerification()
         clearConnectedDownloadRead()
         clearConnectedHeadsRead()
@@ -1710,7 +1830,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun isForegroundBusy(): Boolean =
         activeRequest != null || coding.isRunning || agentReachActive || exactLinkLookupActive ||
-            connectedRunVerificationActive || connectedDownloadReadActive ||
+            webLinkLookupActive || connectedRunVerificationActive || connectedDownloadReadActive ||
             connectedHeadsReadActive
 
     private fun isBusy(): Boolean = isForegroundBusy() || githubSelfEdit.isRunning
@@ -1720,6 +1840,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val normalChatWasRunning = activeRequest != null
         val githubReadWasRunning = agentReachActive
         val exactLinkWasRunning = exactLinkLookupActive
+        val webLinkWasRunning = webLinkLookupActive
         val connectedRunReadWasRunning = connectedRunVerificationActive
         val connectedDownloadWasRunning = connectedDownloadReadActive
         val connectedHeadsWasRunning = connectedHeadsReadActive
@@ -1740,6 +1861,12 @@ class WorkspaceActivity : AppCompatActivity() {
             workTrace.finishError(
                 "Stopped",
                 "Exact link lookup cancelled; no external action or write was performed.")
+        }
+        if (webLinkWasRunning) {
+            clearWebLinkLookup()
+            workTrace.finishError(
+                "Stopped",
+                "Web link lookup cancelled; no external action or write was performed.")
         }
         if (connectedRunReadWasRunning) {
             clearConnectedRunVerification()
@@ -4339,14 +4466,24 @@ class WorkspaceActivity : AppCompatActivity() {
                 runCatching { conversations.read(it) }.getOrDefault(emptyList())
             } ?: emptyList()
         } else emptyList()
-        val exactLinkLookup = if (picked.isEmpty() && skillCommand == null) {
-            WorkspaceExactLinkIntent.decide(text, priorMessages)
-        } else null
         val connectedReadRoute = if (picked.isEmpty() && skillCommand == null) {
             WorkspaceConnectedGitHubReadRouting.decide(text, priorMessages)
         } else null
+        val exactLinkLookup = if (picked.isEmpty() && skillCommand == null &&
+            connectedReadRoute == null) {
+            WorkspaceExactLinkIntent.decide(text, priorMessages)
+        } else null
+        val stablePlatformLink = if (picked.isEmpty() && skillCommand == null &&
+            connectedReadRoute == null && exactLinkLookup == null) {
+            WorkspaceStablePlatformLink.decide(text)
+        } else null
+        val webLinkLookup = if (picked.isEmpty() && skillCommand == null &&
+            connectedReadRoute == null && exactLinkLookup == null && stablePlatformLink == null) {
+            WorkspaceWebLinkIntent.decide(text)
+        } else null
         val githubSelfEditRequest =
             picked.isEmpty() && exactLinkLookup == null && connectedReadRoute == null &&
+                stablePlatformLink == null && webLinkLookup == null &&
                 WorkspaceGitHubSelfEdit.isExplicitRequest(text)
         if (githubSelfEditRequest &&
             !WorkspaceChatConcurrencyPolicy.state(
@@ -4358,7 +4495,9 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
-        val intent = if (githubSelfEditRequest) null
+        val readOnlyLookup = connectedReadRoute != null || exactLinkLookup != null ||
+            stablePlatformLink != null || webLinkLookup != null
+        val intent = if (githubSelfEditRequest || readOnlyLookup) null
             else WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
             val title = text.lineSequence().firstOrNull().orEmpty()
@@ -4524,10 +4663,6 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         activateWorkTrace(stored.id)
-        if (exactLinkLookup != null && current.type == WorkspaceProjectType.CHAT) {
-            startExactLinkLookup(id, stored.id, exactLinkLookup)
-            return
-        }
         if (connectedReadRoute != null && current.type == WorkspaceProjectType.CHAT) {
             when (connectedReadRoute) {
                 is WorkspaceConnectedGitHubReadRouting.Route.Build -> {
@@ -4572,6 +4707,18 @@ class WorkspaceActivity : AppCompatActivity() {
                 is WorkspaceConnectedGitHubReadRouting.Route.Heads ->
                     startConnectedHeadsRead(id, stored.id, connectedReadRoute.decision)
             }
+            return
+        }
+        if (exactLinkLookup != null && current.type == WorkspaceProjectType.CHAT) {
+            startExactLinkLookup(id, stored.id, exactLinkLookup)
+            return
+        }
+        if (stablePlatformLink != null && current.type == WorkspaceProjectType.CHAT) {
+            finishStablePlatformLink(id, stored.id, stablePlatformLink)
+            return
+        }
+        if (webLinkLookup != null && current.type == WorkspaceProjectType.CHAT) {
+            startWebLinkLookup(id, stored.id, webLinkLookup)
             return
         }
         if (githubSelfEditRequest) {
