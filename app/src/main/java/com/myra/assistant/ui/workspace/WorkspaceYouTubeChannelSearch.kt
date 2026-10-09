@@ -144,6 +144,18 @@ internal object WorkspaceYouTubeChannelSearch {
         return "Ye direct" + badge + " YouTube channel mila bro: [" +
             candidate.title + "](" + candidate.url + ")"
     }
+
+    fun source(
+        candidate: Candidate,
+        observedAtMs: Long = System.currentTimeMillis(),
+    ): WorkspaceVerifiedSourceStore.Source =
+        WorkspaceVerifiedSourceStore.Source(
+            title = candidate.title + " — YouTube channel",
+            url = candidate.url,
+            snippet = "Direct channel destination observed from a live public YouTube channel search.",
+            observedAtMs = observedAtMs,
+            verifiedLabel = if (candidate.verifiedBadge) "Verified channel" else "Live YouTube result",
+        )
 }
 
 internal class WorkspaceYouTubeChannelSearchRunner(

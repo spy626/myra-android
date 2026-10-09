@@ -69,6 +69,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private val conversations by lazy {
         WorkspaceConversationStore(projects, File(noBackupFilesDir, "workspace-conversations"))
     }
+    private val verifiedSources by lazy {
+        WorkspaceVerifiedSourceStore(File(noBackupFilesDir, "workspace-verified-sources"))
+    }
     private val tasks by lazy { WorkspaceTaskStore(projects) }
     private val suggestions by lazy {
         WorkspaceAiSuggestionDraftStore(File(noBackupFilesDir, "workspace-ai-drafts"))
@@ -1384,8 +1387,8 @@ class WorkspaceActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !exactLinkLookupActive) return@runOnUiThread
                         finishExactLinkLookup(
-                            WorkspaceYouTubeChannelSearch.receipt(candidate),
-                            success = true,
+                            reply = WorkspaceYouTubeChannelSearch.receipt(candidate),
+                            source = WorkspaceYouTubeChannelSearch.source(candidate),
                         )
                     }
                 }
@@ -1394,9 +1397,9 @@ class WorkspaceActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !exactLinkLookupActive) return@runOnUiThread
                         finishExactLinkLookup(
-                            "Bro, exact YouTube channel link verify nahi ho paya. " +
+                            reply = "Bro, exact YouTube channel link verify nahi ho paya. " +
                                 "Search-results URL ko direct channel link bolkar nahi dungi. " + message,
-                            success = false,
+                            source = null,
                         )
                     }
                 }
@@ -1411,7 +1414,10 @@ class WorkspaceActivity : AppCompatActivity() {
         exactLinkLookupMessageId = null
     }
 
-    private fun finishExactLinkLookup(reply: String, success: Boolean) {
+    private fun finishExactLinkLookup(
+        reply: String,
+        source: WorkspaceVerifiedSourceStore.Source?,
+    ) {
         val id = exactLinkLookupProjectId
         val userMessageId = exactLinkLookupMessageId
         clearExactLinkLookup(cancel = false)
@@ -1420,15 +1426,20 @@ class WorkspaceActivity : AppCompatActivity() {
             require(conversations.read(id).lastOrNull()?.id == userMessageId) {
                 "Conversation changed; exact link result not saved"
             }
-            conversations.attachAssistantToTurn(
+            val assistantId = "exact-link-" + userMessageId
+            val saved = conversations.attachAssistantToTurn(
                 projectId = id,
                 expectedUserId = userMessageId,
-                assistantId = "exact-link-" + userMessageId,
+                assistantId = assistantId,
                 text = reply,
             )
+            if (source != null) {
+                verifiedSources.put(id, saved.id, listOf(source))
+            }
+            saved
         }.onSuccess {
             statusMessage = ""
-            if (success) workTrace.finishSuccess("Exact link ready")
+            if (source != null) workTrace.finishSuccess("Exact link ready")
             else workTrace.finishError("Exact link not verified", reply.take(160))
         }.onFailure {
             statusMessage = it.message ?: "Exact link result could not be saved."
@@ -2922,6 +2933,34 @@ class WorkspaceActivity : AppCompatActivity() {
                     retryAssistant(current.projectId, message.id)
                 }, LinearLayout.LayoutParams(dp(40), dp(40)))
                 if (current.type == WorkspaceProjectType.CHAT) {
+                    val sources = runCatching {
+                        verifiedSources.get(current.projectId, message.id)
+                    }.getOrDefault(emptyList())
+                    if (sources.isNotEmpty()) {
+                        val sourcesButton = label(
+                            if (sources.size == 1) "Sources" else "Sources " + sources.size,
+                            12f,
+                        ).apply {
+                            gravity = Gravity.CENTER
+                            setTextColor(Color.rgb(195, 222, 205))
+                            background = rounded(Color.rgb(31, 38, 35), 16)
+                            contentDescription = "Open verified sources"
+                            isClickable = true
+                            isFocusable = true
+                            setPadding(dp(12), 0, dp(12), 0)
+                            setOnClickListener {
+                                WorkspaceSourcesSheet.show(this@WorkspaceActivity, sources)
+                            }
+                        }
+                        actionRow.addView(
+                            sourcesButton,
+                            LinearLayout.LayoutParams(-2, dp(34)).apply {
+                                leftMargin = dp(5)
+                                topMargin = dp(3)
+                                rightMargin = dp(5)
+                            },
+                        )
+                    }
                     val sourceTurnId = latestUserTurnId
                     val rawButton = label("RAW", 11f).apply {
                         gravity = Gravity.CENTER
@@ -3093,6 +3132,7 @@ class WorkspaceActivity : AppCompatActivity() {
                         }
                     }
                     conversations.deleteChat(id)
+                    verifiedSources.deleteProject(id)
                     if (chatOnly) check(projects.deleteProject(id)) { "Chat-only metadata could not be removed" }
                 }.onSuccess {
                     preferences.edit().remove("chat_pinned_$id").remove("chat_title_$id").apply()
