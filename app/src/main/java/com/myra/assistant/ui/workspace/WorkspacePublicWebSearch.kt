@@ -44,6 +44,41 @@ internal object WorkspacePublicWebSearch {
     private val challengeTitle = Regex(
         """(?iu)^(?:just a moment|access denied|attention required|checking your browser|sign in)\b"""
     )
+    private val repositoryCue = Regex("""(?iu)\b(?:repo|repos|repository|repositories)\b""")
+    private val githubOwnersNotRepositories = setOf(
+        "about", "apps", "collections", "customer-stories", "dashboard", "enterprise",
+        "explore", "features", "issues", "login", "marketplace", "new", "notifications",
+        "orgs", "organizations", "pricing", "pulls", "search", "security", "settings",
+        "site", "sponsors", "topics", "trending",
+    )
+
+    /** A reachable GitHub profile or GitHub feature page is NOT a repository. */
+    internal fun isGitHubRepositoryUrl(url: String): Boolean {
+        val target = runCatching { WorkspaceAgentReachPolicy.parse(url) }.getOrNull()
+            ?: return false
+        if (target.host != "github.com" && target.host != "www.github.com") return false
+        val path = runCatching { URI(target.canonicalUrl).path.orEmpty() }
+            .getOrDefault("").trim('/')
+        val segments = path.split('/')
+        if (segments.size != 2 || segments[0].lowercase(Locale.ROOT) in githubOwnersNotRepositories) {
+            return false
+        }
+        val owner = Regex("""[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})""")
+        val repository = Regex("""[A-Za-z0-9_.-]{1,100}""")
+        return owner.matches(segments[0]) && repository.matches(segments[1]) &&
+            segments[1] !in setOf(".", "..")
+    }
+
+    internal fun matchesRequestedDestination(
+        url: String,
+        query: String,
+        preferredHost: String?,
+    ): Boolean {
+        val isRepositoryRequest = preferredHost == "github.com" &&
+            repositoryCue.containsMatchIn(query)
+        return !isRepositoryRequest || isGitHubRepositoryUrl(url)
+    }
+
     private val ignore = setOf(
         "link", "url", "website", "site", "page", "official", "direct", "exact",
         "the", "a", "an", "ka", "ki", "ke", "ko", "bro", "mujhe",
@@ -128,6 +163,7 @@ internal object WorkspacePublicWebSearch {
         return anchor.findAll(html).mapIndexedNotNull { index, match ->
             if (index >= 20) return@mapIndexedNotNull null
             val url = resultUrl(match.groupValues[1]) ?: return@mapIndexedNotNull null
+            if (!matchesRequestedDestination(url, query, preferredHost)) return@mapIndexedNotNull null
             val target = WorkspaceAgentReachPolicy.parse(url)
             val title = stripHtml(match.groupValues[2]).take(180)
             if (title.length < 2) return@mapIndexedNotNull null
@@ -197,7 +233,11 @@ internal object WorkspacePublicWebSearch {
         response: Response,
         candidate: Candidate,
         final: WorkspaceAgentReachPolicy.Target,
+        request: WorkspaceWebLinkIntent.Request? = null,
     ): Verified {
+        require(request == null || matchesRequestedDestination(
+            final.canonicalUrl, request.query, request.preferredHost
+        )) { "Final destination is not the requested GitHub repository page" }
         require(response.code in 200..299) {
             "Candidate destination returned HTTP " + response.code
         }
@@ -223,8 +263,19 @@ internal object WorkspacePublicWebSearch {
         )
     }
 
-    fun receipt(result: Verified): String =
-        "Mila bro: [" + result.title + "](" + result.finalUrl + ")"
+    fun receipt(result: Verified): String {
+        val uri = URI(result.finalUrl)
+        val repoParts = uri.path.orEmpty().trim('/').split('/')
+        val title = if (isGitHubRepositoryUrl(result.finalUrl) && repoParts.size == 2) {
+            repoParts.joinToString("/") + " — GitHub repository"
+        } else result.title
+        return WorkspaceVerifiedLinkReply.format(
+            title = title,
+            url = result.finalUrl,
+            summary = result.snippet,
+            fallback = "Live web search se direct public page mila. Link kholkar details dekho.",
+        )
+    }
 
     fun source(
         result: Verified,
@@ -272,7 +323,7 @@ internal class WorkspacePublicWebSearchRunner(
                     "Verifying direct destination",
                     candidates.first().title.take(100),
                 )
-                verifyCandidate(run, candidates, 0, null, 0)
+                verifyCandidate(run, request, candidates, 0, null, 0)
             },
             onFailure = { fail(run, it) },
         )
@@ -290,6 +341,7 @@ internal class WorkspacePublicWebSearchRunner(
 
     private fun verifyCandidate(
         run: Long,
+        request: WorkspaceWebLinkIntent.Request,
         candidates: List<WorkspacePublicWebSearch.Candidate>,
         index: Int,
         redirected: WorkspaceAgentReachPolicy.Target?,
@@ -303,7 +355,7 @@ internal class WorkspacePublicWebSearchRunner(
         val target = redirected ?: runCatching {
             WorkspaceAgentReachPolicy.parse(candidate.url)
         }.getOrElse {
-            verifyCandidate(run, candidates, index + 1, null, 0)
+            verifyCandidate(run, request, candidates, index + 1, null, 0)
             return
         }
         dispatch(
@@ -313,7 +365,7 @@ internal class WorkspacePublicWebSearchRunner(
                 response.use { result ->
                     if (result.code in 300..399) {
                         if (depth >= 2) {
-                            verifyCandidate(run, candidates, index + 1, null, 0)
+                            verifyCandidate(run, request, candidates, index + 1, null, 0)
                             return@use
                         }
                         val next = runCatching {
@@ -322,15 +374,15 @@ internal class WorkspacePublicWebSearchRunner(
                                 result.header("Location").orEmpty(),
                             )
                         }.getOrElse {
-                            verifyCandidate(run, candidates, index + 1, null, 0)
+                            verifyCandidate(run, request, candidates, index + 1, null, 0)
                             return@use
                         }
-                        verifyCandidate(run, candidates, index, next, depth + 1)
+                        verifyCandidate(run, request, candidates, index, next, depth + 1)
                     } else {
                         val verified = runCatching {
-                            WorkspacePublicWebSearch.verify(result, candidate, target)
+                            WorkspacePublicWebSearch.verify(result, candidate, target, request)
                         }.getOrElse {
-                            verifyCandidate(run, candidates, index + 1, null, 0)
+                            verifyCandidate(run, request, candidates, index + 1, null, 0)
                             return@use
                         }
                         synchronized(this) {
@@ -348,7 +400,7 @@ internal class WorkspacePublicWebSearchRunner(
                 }
             },
             onFailure = {
-                verifyCandidate(run, candidates, index + 1, null, 0)
+                verifyCandidate(run, request, candidates, index + 1, null, 0)
             },
         )
     }

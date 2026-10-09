@@ -36,6 +36,42 @@ class WorkspacePublicWebSearchTest {
         assertTrue(WorkspacePublicWebSearch.parseHtml(html, "Example test", null).isEmpty())
     }
 
+    @Test fun repositoryRequestRejectsProfilesAndPicksRepoEvenWhenProfileIsFirst() {
+        val html = """
+            <a class="result__a" href="https://github.com/proj-airi">
+                Project AIRI · GitHub
+            </a>
+            <a class="result__snippet">The AIRI organization profile.</a>
+            <a class="result__a" href="https://github.com/moeru-ai/airi">
+                moeru-ai/airi: AI companion · GitHub
+            </a>
+            <a class="result__snippet">Source code for the AIRI project.</a>
+        """.trimIndent()
+        val candidates = WorkspacePublicWebSearch.parseHtml(html, "AIRI repo", "github.com")
+        assertEquals(1, candidates.size)
+        assertEquals("https://github.com/moeru-ai/airi", candidates.single().url)
+    }
+
+    @Test fun repositoryRequestFailsClosedOnProfilesAndOtherGithubPages() {
+        val html = """
+            <a class="result__a" href="https://github.com/proj-airi">AIRI profile</a>
+            <a class="result__a" href="https://github.com/features/copilot">AIRI repo docs</a>
+            <a class="result__a" href="https://github.com/moeru-ai/airi/issues">AIRI issues</a>
+        """.trimIndent()
+        assertTrue(WorkspacePublicWebSearch.parseHtml(html, "AIRI repo", "github.com").isEmpty())
+        assertTrue(!WorkspacePublicWebSearch.matchesRequestedDestination(
+            "https://github.com/proj-airi", "AIRI repository", "github.com"))
+        assertTrue(!WorkspacePublicWebSearch.matchesRequestedDestination(
+            "https://github.com/moeru-ai/airi/tree/main", "AIRI repo", "github.com"))
+    }
+
+    @Test fun githubProfileRequestStillAllowsProfiles() {
+        assertTrue(WorkspacePublicWebSearch.matchesRequestedDestination(
+            "https://github.com/proj-airi", "AIRI profile", "github.com"))
+        assertTrue(WorkspacePublicWebSearch.isGitHubRepositoryUrl(
+            "https://github.com/moeru-ai/airi"))
+    }
+
     @Test fun searchRequestIsGetOnlyWithoutCredentialHeaders() {
         val request = WorkspacePublicWebSearch.searchRequest(
             WorkspaceWebLinkIntent.Request("AIRI repo", "github.com")

@@ -67,6 +67,10 @@ internal object WorkspaceStablePlatformLink {
         return Match(entry.title, target.canonicalUrl)
     }
 
-    fun receipt(match: Match): String =
-        "[" + match.title + "](" + match.url + ")"
+    fun receipt(match: Match): String = WorkspaceVerifiedLinkReply.format(
+        title = match.title + " — Official website",
+        url = match.url,
+        summary = "Known homepage link. Is request ke liye live web search nahi kiya.",
+        fallback = "Platform homepage.",
+    )
 }

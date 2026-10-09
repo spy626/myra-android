@@ -153,11 +153,13 @@ internal object WorkspaceYouTubeChannelSearch {
         }
     }
 
-    fun receipt(candidate: Candidate): String {
-        val badge = if (candidate.verifiedBadge) " verified" else ""
-        return "Ye direct" + badge + " YouTube channel mila bro: [" +
-            candidate.title + "](" + candidate.url + ")"
-    }
+    fun receipt(candidate: Candidate): String = WorkspaceVerifiedLinkReply.format(
+        title = candidate.title + " — YouTube channel",
+        url = candidate.url,
+        summary = if (candidate.verifiedBadge) "YouTube search mein verified channel mila."
+            else "Public YouTube search se matching channel mila.",
+        fallback = "YouTube channel ka direct link.",
+    )
 
     fun source(
         candidate: Candidate,

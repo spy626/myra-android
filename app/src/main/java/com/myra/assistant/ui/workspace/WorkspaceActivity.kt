@@ -3070,9 +3070,26 @@ class WorkspaceActivity : AppCompatActivity() {
                 actionRow.addView(messageIcon(R.drawable.ic_workspace_copy, "Copy LYRA reply") {
                     copyMessage(assistantPresentation)
                 }, LinearLayout.LayoutParams(dp(40), dp(40)))
-                actionRow.addView(messageIcon(R.drawable.ic_workspace_retry, "Retry LYRA reply") {
+                val retryButton = messageIcon(R.drawable.ic_workspace_retry, "Retry LYRA reply") {
                     retryAssistant(current.projectId, message.id)
-                }, LinearLayout.LayoutParams(dp(40), dp(40)))
+                }
+                if (current.type == WorkspaceProjectType.CHAT) {
+                    // Keep developer diagnostics available without a persistent RAW button
+                    // occupying the normal chat action row. Long-press Retry to inspect.
+                    retryButton.setOnLongClickListener {
+                        val sourceTurnId = latestUserTurnId
+                        AlertDialog.Builder(this@WorkspaceActivity)
+                            .setTitle("LYRA raw reply and prompt trace")
+                            .setMessage(WorkspaceRichDiagnostics.show(
+                                this@WorkspaceActivity, sourceTurnId, message.text))
+                            .setNegativeButton("Close", null)
+                            .setPositiveButton("Copy raw") { _, _ -> copyMessage(message.text) }
+                            .show()
+                        true
+                    }
+                    retryButton.tooltipText = "Long-press for diagnostics"
+                }
+                actionRow.addView(retryButton, LinearLayout.LayoutParams(dp(40), dp(40)))
                 if (current.type == WorkspaceProjectType.CHAT) {
                     val sources = runCatching {
                         verifiedSources.get(current.projectId, message.id)
@@ -3102,26 +3119,6 @@ class WorkspaceActivity : AppCompatActivity() {
                             },
                         )
                     }
-                    val sourceTurnId = latestUserTurnId
-                    val rawButton = label("RAW", 11f).apply {
-                        gravity = Gravity.CENTER
-                        setTextColor(Color.rgb(156, 232, 188))
-                        contentDescription = "Inspect original LYRA reply and request format"
-                        isClickable = true
-                        isFocusable = true
-                        setOnClickListener {
-                            AlertDialog.Builder(this@WorkspaceActivity)
-                                .setTitle("LYRA raw reply and prompt trace")
-                                .setMessage(WorkspaceRichDiagnostics.show(
-                                    this@WorkspaceActivity, sourceTurnId, message.text))
-                                .setNegativeButton("Close", null)
-                                .setPositiveButton("Copy raw") { _, _ ->
-                                    copyMessage(message.text)
-                                }
-                                .show()
-                        }
-                    }
-                    actionRow.addView(rawButton, LinearLayout.LayoutParams(dp(50), dp(40)))
                 }
                 item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(40)))
             }
