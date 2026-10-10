@@ -39,6 +39,21 @@ class WorkspaceWebLinkIntentTest {
             WorkspaceWebLinkIntent.decide("OpenAI pe API docs ka link bhejo")?.query)
     }
 
+    @Test fun explicitPluralRequestsPreserveSingleLinkRouting() {
+        val multiple = WorkspaceWebLinkIntent.decide(
+            "Kotlin coroutines documentation ke 3 links bhejo"
+        )
+        assertEquals("Kotlin coroutines documentation", multiple?.query)
+        assertEquals(3, multiple?.maxResults)
+        val two = WorkspaceWebLinkIntent.decide("Give me 2 links for Android testing")
+        assertEquals(2, two?.maxResults)
+        assertEquals("Android testing", two?.query)
+        assertEquals(3, WorkspaceWebLinkIntent.decide(
+            "Share links for Kotlin Flow")?.maxResults)
+        assertEquals(1, WorkspaceWebLinkIntent.decide(
+            "GitHub pe AIRI repo ka link do")?.maxResults)
+    }
+
     @Test fun writesSecretsBarePlatformsAndDirectUrlsNeverSearch() {
         assertNull(WorkspaceWebLinkIntent.decide("YouTube ka link bhejo"))
         assertNull(WorkspaceWebLinkIntent.decide("GitHub link feature add karo"))

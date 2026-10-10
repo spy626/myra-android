@@ -76,6 +76,12 @@ internal object WorkspacePublicWebSearch {
     ): Boolean {
         val isRepositoryRequest = preferredHost == "github.com" &&
             repositoryCue.containsMatchIn(query)
+        val target = runCatching { WorkspaceAgentReachPolicy.parse(url) }.getOrNull()
+            ?: return false
+        if (preferredHost != null &&
+            target.host != preferredHost && !target.host.endsWith("." + preferredHost)) {
+            return false
+        }
         return !isRepositoryRequest || (
             isGitHubRepositoryUrl(url) &&
                 WorkspaceGitHubRepositorySearch.nameMatchesQuery(url, query)
@@ -159,6 +165,11 @@ internal object WorkspacePublicWebSearch {
     ): List<Candidate> {
         val queryTokens = tokens(query)
         if (queryTokens.isEmpty()) return emptyList()
+        val subjectTokens = (queryTokens - setOf(
+            "repo", "repos", "repository", "repositories", "docs", "documentation",
+            "article", "articles", "product", "products", "video", "videos",
+            "channel", "channels", "source", "sources", "page", "pages"
+        )).ifEmpty { queryTokens }
         val anchor = Regex(
             """(?is)<a\b(?=[^>]{0,1200}\bclass\s*=\s*["'][^"']*\bresult__a\b[^"']*["'])""" +
                 """[^>]{0,1600}\bhref\s*=\s*["']([^"']{1,3000})["'][^>]*>(.*?)</a\s*>"""
@@ -178,6 +189,10 @@ internal object WorkspacePublicWebSearch {
 
             val titleTokens = tokens(title)
             val urlTokens = tokens(target.host + " " + URI(url).path.orEmpty())
+            // Host match without topical evidence is not an appropriate result.
+            if (subjectTokens.none { it in titleTokens || it in urlTokens }) {
+                return@mapIndexedNotNull null
+            }
             val overlapTitle = queryTokens.count { it in titleTokens }
             val overlapUrl = queryTokens.count { it in urlTokens }
             val hostMatch = preferredHost?.let {
@@ -264,6 +279,39 @@ internal object WorkspacePublicWebSearch {
             snippet = candidate.snippet,
             contentType = type,
         )
+    }
+
+    /** Return only independent runtime-verified destinations. */
+    internal fun canAddResult(
+        request: WorkspaceWebLinkIntent.Request,
+        results: List<Verified>,
+        candidate: Verified,
+    ): Boolean {
+        if (!matchesRequestedDestination(
+                candidate.finalUrl, request.query, request.preferredHost
+            )) return false
+        if (results.any { it.finalUrl == candidate.finalUrl }) return false
+        if (request.maxResults == 1 || request.preferredHost != null) return true
+        val host = URI(candidate.finalUrl).host.removePrefix("www.").lowercase(Locale.ROOT)
+        return results.none {
+            URI(it.finalUrl).host.removePrefix("www.").lowercase(Locale.ROOT) == host
+        }
+    }
+
+    fun receiptAll(results: List<Verified>, requested: Int): String {
+        require(results.isNotEmpty() && requested in 1..3)
+        if (requested == 1) return receipt(results.first())
+        return buildString {
+            appendLine("**" + results.size + " reachable public links**")
+            if (results.size < requested) {
+                appendLine("Requested " + requested + "; only " + results.size + " could be verified.")
+            }
+            results.forEachIndexed { index, result ->
+                appendLine()
+                appendLine("**" + (index + 1) + ".**")
+                appendLine(receipt(result))
+            }
+        }.trim()
     }
 
     fun receipt(result: Verified): String {

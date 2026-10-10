@@ -10,12 +10,15 @@ internal object WorkspaceWebLinkIntent {
     data class Request(
         val query: String,
         val preferredHost: String? = null,
-    )
+        val maxResults: Int = 1,
+    ) {
+        init { require(maxResults in 1..3) }
+    }
 
     private val directUrl = Regex("""(?i)https?://""")
     private val linkAsk = Regex(
-        """(?iu)(?:\b(?:link|url)\b.{0,72}\b(?:do|de|dena|bhejo|bhej|send|share|show|give|chahiye|chaiye|find|dhundo|dhoondo|khojo)\b)|""" +
-            """(?:\b(?:do|de|dena|bhejo|bhej|send|share|show|give|find|dhundo|dhoondo|khojo)\b.{0,72}\b(?:link|url)\b)"""
+        """(?iu)(?:\b(?:links?|urls?|sources?|websites?)\b.{0,72}\b(?:do|de|dena|bhejo|bhej|send|share|show|give|chahiye|chaiye|find|dhundo|dhoondo|khojo)\b)|""" +
+            """(?:\b(?:do|de|dena|bhejo|bhej|send|share|show|give|find|dhundo|dhoondo|khojo)\b.{0,72}\b(?:links?|urls?|sources?|websites?)\b)"""
     )
     private val mutation = Regex(
         """(?iu)\b(?:add|change|fix|edit|modify|implement|create|remove|replace|redesign|code|update)\b"""
@@ -24,13 +27,16 @@ internal object WorkspaceWebLinkIntent {
         """(?iu)\b(?:password|passcode|otp|pin|cvv|api[ -]?key|access[ -]?token|""" +
             """private[ -]?key|secret|bank account|card number|recovery code|seed phrase)\b"""
     )
+    private val countAndType = Regex("""(?iu)\b([2-3])\s+(?:links?|urls?|sources?|websites?)\b""")
+    private val pluralLinkType = Regex("""(?iu)\b(?:links|urls|sources|websites)\b""")
     private val token = Regex("""[\p{L}\p{N}_@.+-]+""")
     // A platform + Hinglish postposition is grammar, not a search subject.
     // Remove ONLY the immediate particle after a recognized platform mention.
     // A real repository/project called "Pe" must still be searchable.
     private val afterPlatform = Regex("""(?iu)^\s+(?:pe|par|per)\b""")
     private val filler = setOf(
-        "link", "url", "ka", "ki", "ke", "ko", "mujhe", "please", "bro",
+        "link", "links", "url", "urls", "source", "sources", "website", "websites",
+        "ka", "ki", "ke", "ko", "mujhe", "please", "bro", "for", "me", "of",
         "do", "de", "dena", "bhejo", "bhej", "send", "share", "show", "give",
         "chahiye", "chaiye", "wala", "wali", "wale", "the", "a", "an",
         "find", "dhundo", "dhoondo", "khojo", "exact", "direct", "official",
@@ -74,7 +80,10 @@ internal object WorkspaceWebLinkIntent {
                 text.removeRange(tailStart, tailStart + particle.value.length)
             } else text
         } ?: text
-        val words = token.findAll(queryText).map { it.value }.filterNot { raw ->
+        val explicitCount = countAndType.find(queryText)?.groupValues?.get(1)?.toIntOrNull()
+        val maxResults = explicitCount ?: if (pluralLinkType.containsMatchIn(queryText)) 3 else 1
+        val queryWithoutCount = countAndType.replace(queryText, " ")
+        val words = token.findAll(queryWithoutCount).map { it.value }.filterNot { raw ->
             val lower = raw.lowercase()
             lower in filler || lower in (hint?.aliases ?: emptySet())
         }.toList()
@@ -82,6 +91,6 @@ internal object WorkspaceWebLinkIntent {
         if (query.length < 2) return null
         val meaningful = words.map { it.lowercase() }.filterNot { it in genericOnly }
         if (meaningful.isEmpty()) return null
-        return Request(query, hint?.host)
+        return Request(query, hint?.host, maxResults)
     }
 }

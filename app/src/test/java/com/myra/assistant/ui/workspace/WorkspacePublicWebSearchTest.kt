@@ -85,6 +85,31 @@ class WorkspacePublicWebSearchTest {
             "https://github.com/moeru-ai/airi"))
     }
 
+    @Test fun preferredHostIsNotSufficientWithoutMatchingTopic() {
+        val html = """
+            <a class="result__a" href="https://example.org/unrelated">Unrelated</a>
+            <a class="result__a" href="https://platform.openai.com/docs">OpenAI API documentation</a>
+            <a class="result__a" href="https://openai.com/about">Company</a>
+        """.trimIndent()
+        val results = WorkspacePublicWebSearch.parseHtml(html, "API docs", "openai.com")
+        assertEquals(listOf("https://platform.openai.com/docs"), results.map { it.url })
+    }
+
+    @Test fun multiSourceRequiresVerifiedDistinctSites() {
+        val request = WorkspaceWebLinkIntent.Request("Kotlin coroutines", maxResults = 3)
+        val first = WorkspacePublicWebSearch.Verified(
+            "Kotlin docs", "https://kotlinlang.org/docs/coroutines-overview.html",
+            "Kotlin", "text/html",
+        )
+        val sameSite = first.copy(finalUrl = "https://kotlinlang.org/docs/coroutines-guide.html")
+        val other = first.copy(finalUrl = "https://developer.android.com/kotlin/coroutines")
+        assertTrue(!WorkspacePublicWebSearch.canAddResult(request, listOf(first), sameSite))
+        assertTrue(!WorkspacePublicWebSearch.canAddResult(request, listOf(first), first))
+        assertTrue(WorkspacePublicWebSearch.canAddResult(request, listOf(first), other))
+        val result = WorkspacePublicWebSearch.receiptAll(listOf(first), 3)
+        assertTrue(result.contains("only 1 could be verified"))
+    }
+
     @Test fun searchRequestIsGetOnlyWithoutCredentialHeaders() {
         val request = WorkspacePublicWebSearch.searchRequest(
             WorkspaceWebLinkIntent.Request("AIRI repo", "github.com")
