@@ -49,7 +49,7 @@ class WorkspaceWebLinkIntentTest {
         assertEquals(2, two?.maxResults)
         assertEquals("Android testing", two?.query)
         assertNull(two?.preferredHost)
-        val developerDocs = WorkspaceWebLinkIntent.decide("Android Developers docs ka link do")
+        val developerDocs = WorkspaceWebLinkIntent.decide("Android Developers Jetpack docs ka link do")
         assertEquals("developer.android.com", developerDocs?.preferredHost)
         assertEquals(3, WorkspaceWebLinkIntent.decide(
             "Share links for Kotlin Flow")?.maxResults)
