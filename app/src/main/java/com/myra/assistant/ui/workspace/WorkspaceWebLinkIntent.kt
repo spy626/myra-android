@@ -60,7 +60,7 @@ internal object WorkspaceWebLinkIntent {
         Hint(Regex("""(?iu)\bchatgpt\b"""), "chatgpt.com", setOf("chatgpt")),
         Hint(Regex("""(?iu)\bopenai\b"""), "openai.com", setOf("openai")),
         Hint(
-            Regex("""(?iu)\bandroid(?:\s+developers?)?\b"""),
+            Regex("""(?iu)\bandroid\s+developers?\b"""),
             "developer.android.com",
             setOf("android", "developer", "developers"),
         ),
