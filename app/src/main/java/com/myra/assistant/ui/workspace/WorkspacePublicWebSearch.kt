@@ -348,7 +348,7 @@ internal class WorkspacePublicWebSearchRunner(
 ) {
     interface Listener {
         fun onEvent(phase: WorkspaceWorkPhase, label: String, detail: String? = null)
-        fun onComplete(result: WorkspacePublicWebSearch.Verified)
+        fun onComplete(results: List<WorkspacePublicWebSearch.Verified>)
         fun onError(message: String)
     }
 
@@ -417,7 +417,7 @@ internal class WorkspacePublicWebSearchRunner(
             "Verifying direct destination",
             candidates.first().title.take(100),
         )
-        verifyCandidate(run, request, candidates, 0, null, 0)
+        verifyCandidate(run, request, candidates, 0, null, 0, mutableListOf())
     }
 
     @Synchronized fun cancel() {
@@ -437,16 +437,24 @@ internal class WorkspacePublicWebSearchRunner(
         index: Int,
         redirected: WorkspaceAgentReachPolicy.Target?,
         depth: Int,
+        verifiedResults: MutableList<WorkspacePublicWebSearch.Verified>,
     ) {
-        if (index >= minOf(candidates.size, 5)) {
-            fail(run, "Search results were found, but no direct public destination could be verified")
+        // Keep the proven single-link path at 5 attempts. Plural requests can
+        // inspect up to 8 candidates and finish with fewer than requested.
+        val maxCandidates = if (request.maxResults == 1) 5 else 8
+        if (index >= minOf(candidates.size, maxCandidates) ||
+            verifiedResults.size >= request.maxResults) {
+            completeCandidates(run, verifiedResults)
             return
         }
         val candidate = candidates[index]
+        fun next() {
+            verifyCandidate(run, request, candidates, index + 1, null, 0, verifiedResults)
+        }
         val target = redirected ?: runCatching {
             WorkspaceAgentReachPolicy.parse(candidate.url)
         }.getOrElse {
-            verifyCandidate(run, request, candidates, index + 1, null, 0)
+            next()
             return
         }
         dispatch(
@@ -456,44 +464,57 @@ internal class WorkspacePublicWebSearchRunner(
                 response.use { result ->
                     if (result.code in 300..399) {
                         if (depth >= 2) {
-                            verifyCandidate(run, request, candidates, index + 1, null, 0)
+                            next()
                             return@use
                         }
-                        val next = runCatching {
+                        val redirect = runCatching {
                             WorkspacePublicWebSearch.redirect(
-                                target,
-                                result.header("Location").orEmpty(),
+                                target, result.header("Location").orEmpty()
                             )
                         }.getOrElse {
-                            verifyCandidate(run, request, candidates, index + 1, null, 0)
+                            next()
                             return@use
                         }
-                        verifyCandidate(run, request, candidates, index, next, depth + 1)
+                        verifyCandidate(
+                            run, request, candidates, index, redirect, depth + 1,
+                            verifiedResults,
+                        )
                     } else {
                         val verified = runCatching {
                             WorkspacePublicWebSearch.verify(result, candidate, target, request)
-                        }.getOrElse {
-                            verifyCandidate(run, request, candidates, index + 1, null, 0)
-                            return@use
+                        }.getOrNull()
+                        if (verified != null &&
+                            WorkspacePublicWebSearch.canAddResult(
+                                request, verifiedResults, verified
+                            )) {
+                            verifiedResults.add(verified)
                         }
-                        synchronized(this) {
-                            if (run != generation) return@use
-                            active = null
-                            ++generation
-                        }
-                        listener.onEvent(
-                            WorkspaceWorkPhase.DONE,
-                            "Direct link verified",
-                            runCatching { URI(verified.finalUrl).host }.getOrNull(),
-                        )
-                        listener.onComplete(verified)
+                        next()
                     }
                 }
             },
-            onFailure = {
-                verifyCandidate(run, request, candidates, index + 1, null, 0)
-            },
+            onFailure = { next() },
         )
+    }
+
+    private fun completeCandidates(
+        run: Long,
+        results: List<WorkspacePublicWebSearch.Verified>,
+    ) {
+        synchronized(this) {
+            if (run != generation) return
+            active = null
+            ++generation
+        }
+        if (results.isEmpty()) {
+            listener.onError("No direct public destination could be verified")
+            return
+        }
+        listener.onEvent(
+            WorkspaceWorkPhase.DONE,
+            results.size.toString() + " reachable public link(s)",
+        )
+        listener.onComplete(results.toList())
     }
 
     private fun dispatch(

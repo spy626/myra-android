@@ -114,6 +114,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private var exactLinkLookupMessageId: String? = null
     private var exactLinkLookupRunner: WorkspaceYouTubeChannelSearchRunner? = null
     private var webLinkLookupActive = false
+    private var webLinkLookupRequestedCount = 1
     private var webLinkLookupProjectId: String? = null
     private var webLinkLookupMessageId: String? = null
     private var webLinkLookupRunner: WorkspacePublicWebSearchRunner? = null
@@ -1498,12 +1499,14 @@ class WorkspaceActivity : AppCompatActivity() {
                     }
                 }
 
-                override fun onComplete(result: WorkspacePublicWebSearch.Verified) {
+                override fun onComplete(results: List<WorkspacePublicWebSearch.Verified>) {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
                         finishWebLinkLookup(
-                            reply = WorkspacePublicWebSearch.receipt(result),
-                            source = WorkspacePublicWebSearch.source(result),
+                            reply = WorkspacePublicWebSearch.receiptAll(
+                                results, webLinkLookupRequestedCount
+                            ),
+                            sources = results.map { WorkspacePublicWebSearch.source(it) },
                         )
                     }
                 }
@@ -1514,7 +1517,7 @@ class WorkspaceActivity : AppCompatActivity() {
                         finishWebLinkLookup(
                             reply = "Bro, exact public link verify nahi ho paya. " +
                                 "Search result ko direct link bolkar guess nahi karunga. " + message,
-                            source = null,
+                            sources = emptyList(),
                         )
                     }
                 }
@@ -1525,13 +1528,14 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun clearWebLinkLookup(cancel: Boolean = true) {
         if (cancel) webLinkLookupRunner?.cancel()
         webLinkLookupActive = false
+        webLinkLookupRequestedCount = 1
         webLinkLookupProjectId = null
         webLinkLookupMessageId = null
     }
 
     private fun finishWebLinkLookup(
         reply: String,
-        source: WorkspaceVerifiedSourceStore.Source?,
+        sources: List<WorkspaceVerifiedSourceStore.Source>,
     ) {
         val id = webLinkLookupProjectId
         val userMessageId = webLinkLookupMessageId
@@ -1547,10 +1551,10 @@ class WorkspaceActivity : AppCompatActivity() {
                 assistantId = "web-link-" + userMessageId,
                 text = reply,
             )
-            if (source != null) verifiedSources.put(id, saved.id, listOf(source))
+            if (sources.isNotEmpty()) verifiedSources.put(id, saved.id, sources)
         }.onSuccess {
             statusMessage = ""
-            if (source != null) workTrace.finishSuccess("Direct link ready")
+            if (sources.isNotEmpty()) workTrace.finishSuccess("Direct links ready")
             else workTrace.finishError("Direct link not verified", reply.take(160))
         }.onFailure {
             statusMessage = it.message ?: "Web link result could not be saved."
@@ -1566,6 +1570,7 @@ class WorkspaceActivity : AppCompatActivity() {
     ) {
         clearWebLinkLookup()
         webLinkLookupActive = true
+        webLinkLookupRequestedCount = request.maxResults
         webLinkLookupProjectId = id
         webLinkLookupMessageId = messageId
         statusMessage = ""
