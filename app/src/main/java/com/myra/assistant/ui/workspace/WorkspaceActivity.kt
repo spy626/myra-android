@@ -118,6 +118,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private var webLinkLookupProjectId: String? = null
     private var webLinkLookupMessageId: String? = null
     private var webLinkLookupRunner: WorkspacePublicWebSearchRunner? = null
+    private var appDownloadActive = false
+    private var appDownloadProjectId: String? = null
+    private var appDownloadMessageId: String? = null
+    private var appDownloadRunner: WorkspaceAppDownloadRunner? = null
     private var connectedRunVerificationActive = false
     private var connectedRunVerificationProjectId: String? = null
     private var connectedRunVerificationMessageId: String? = null
@@ -1525,6 +1529,92 @@ class WorkspaceActivity : AppCompatActivity() {
         ).also { webLinkLookupRunner = it }
     }
 
+    private fun appDownloadRunner(): WorkspaceAppDownloadRunner {
+        appDownloadRunner?.let { return it }
+        return WorkspaceAppDownloadRunner(
+            listener = object : WorkspaceAppDownloadRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !appDownloadActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(
+                    name: String,
+                    results: List<WorkspaceAppDownloadSearch.Result>,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !appDownloadActive) return@runOnUiThread
+                        finishAppDownloadLookup(
+                            reply = WorkspaceAppDownloadSearch.reply(name, results),
+                            sources = WorkspaceAppDownloadSearch.sources(results),
+                        )
+                    }
+                }
+            },
+        ).also { appDownloadRunner = it }
+    }
+
+    private fun clearAppDownloadLookup(cancel: Boolean = true) {
+        if (cancel) appDownloadRunner?.cancel()
+        appDownloadActive = false
+        appDownloadProjectId = null
+        appDownloadMessageId = null
+    }
+
+    private fun finishAppDownloadLookup(
+        reply: String,
+        sources: List<WorkspaceVerifiedSourceStore.Source>,
+    ) {
+        val projectId = appDownloadProjectId
+        val turnId = appDownloadMessageId
+        clearAppDownloadLookup(cancel = false)
+        if (projectId == null || turnId == null || selectedId != projectId) return
+        runCatching {
+            require(conversations.read(projectId).lastOrNull()?.id == turnId) {
+                "Conversation changed; app-download result not saved"
+            }
+            val saved = conversations.attachAssistantToTurn(
+                projectId = projectId,
+                expectedUserId = turnId,
+                assistantId = "app-download-" + turnId,
+                text = reply,
+            )
+            if (sources.isNotEmpty()) verifiedSources.put(projectId, saved.id, sources)
+        }.onSuccess {
+            statusMessage = ""
+            if (sources.isNotEmpty()) {
+                workTrace.finishSuccess("App download links verified")
+            } else {
+                workTrace.finishError("App download links unconfirmed",
+                    "No public store listing or publisher website passed checks")
+            }
+        }.onFailure {
+            statusMessage = it.message ?: "App download lookup could not be saved"
+            workTrace.finishError("App download lookup not saved", statusMessage)
+        }
+        render()
+    }
+
+    private fun startAppDownloadLookup(
+        projectId: String,
+        turnId: String,
+        request: WorkspaceAppDownloadIntent.Request,
+    ) {
+        clearAppDownloadLookup()
+        appDownloadActive = true
+        appDownloadProjectId = projectId
+        appDownloadMessageId = turnId
+        statusMessage = ""
+        render()
+        appDownloadRunner().start(request)
+    }
+
     private fun clearWebLinkLookup(cancel: Boolean = true) {
         if (cancel) webLinkLookupRunner?.cancel()
         webLinkLookupActive = false
@@ -1665,6 +1755,7 @@ class WorkspaceActivity : AppCompatActivity() {
         clearAgentReachState()
         clearExactLinkLookup()
         clearWebLinkLookup()
+        clearAppDownloadLookup()
         clearConnectedRunVerification()
         clearConnectedDownloadRead()
         clearConnectedHeadsRead()
@@ -1849,7 +1940,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun isForegroundBusy(): Boolean =
         activeRequest != null || coding.isRunning || agentReachActive || exactLinkLookupActive ||
-            webLinkLookupActive || connectedRunVerificationActive || connectedDownloadReadActive ||
+            webLinkLookupActive || appDownloadActive || connectedRunVerificationActive || connectedDownloadReadActive ||
             connectedHeadsReadActive
 
     private fun isBusy(): Boolean = isForegroundBusy() || githubSelfEdit.isRunning
@@ -1860,6 +1951,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val githubReadWasRunning = agentReachActive
         val exactLinkWasRunning = exactLinkLookupActive
         val webLinkWasRunning = webLinkLookupActive
+        val appDownloadWasRunning = appDownloadActive
         val connectedRunReadWasRunning = connectedRunVerificationActive
         val connectedDownloadWasRunning = connectedDownloadReadActive
         val connectedHeadsWasRunning = connectedHeadsReadActive
@@ -1886,6 +1978,13 @@ class WorkspaceActivity : AppCompatActivity() {
             workTrace.finishError(
                 "Stopped",
                 "Web link lookup cancelled; no external action or write was performed.")
+        }
+        if (appDownloadWasRunning) {
+            clearAppDownloadLookup()
+            workTrace.finishError(
+                "Stopped",
+                "Public app download lookup cancelled; no APK installed or executed."
+            )
         }
         if (connectedRunReadWasRunning) {
             clearConnectedRunVerification()
@@ -4482,7 +4581,11 @@ class WorkspaceActivity : AppCompatActivity() {
                 runCatching { conversations.read(it) }.getOrDefault(emptyList())
             } ?: emptyList()
         } else emptyList()
-        val connectedReadRoute = if (picked.isEmpty() && skillCommand == null) {
+        val appDownloadLookup = if (picked.isEmpty() && skillCommand == null) {
+            WorkspaceAppDownloadIntent.decide(text, priorMessages)
+        } else null
+        val connectedReadRoute = if (picked.isEmpty() && skillCommand == null &&
+            appDownloadLookup == null) {
             WorkspaceConnectedGitHubReadRouting.decide(text, priorMessages)
         } else null
         val exactLinkLookup = if (picked.isEmpty() && skillCommand == null &&
@@ -4499,7 +4602,7 @@ class WorkspaceActivity : AppCompatActivity() {
         } else null
         val githubSelfEditRequest =
             picked.isEmpty() && exactLinkLookup == null && connectedReadRoute == null &&
-                stablePlatformLink == null && webLinkLookup == null &&
+                appDownloadLookup == null && stablePlatformLink == null && webLinkLookup == null &&
                 WorkspaceGitHubSelfEdit.isExplicitRequest(text)
         if (githubSelfEditRequest &&
             !WorkspaceChatConcurrencyPolicy.state(
@@ -4511,8 +4614,8 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
-        val readOnlyLookup = connectedReadRoute != null || exactLinkLookup != null ||
-            stablePlatformLink != null || webLinkLookup != null
+        val readOnlyLookup = appDownloadLookup != null || connectedReadRoute != null ||
+            exactLinkLookup != null || stablePlatformLink != null || webLinkLookup != null
         val intent = if (githubSelfEditRequest || readOnlyLookup) null
             else WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
@@ -4679,6 +4782,10 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         activateWorkTrace(stored.id)
+        if (appDownloadLookup != null && current.type == WorkspaceProjectType.CHAT) {
+            startAppDownloadLookup(id, stored.id, appDownloadLookup)
+            return
+        }
         if (connectedReadRoute != null && current.type == WorkspaceProjectType.CHAT) {
             when (connectedReadRoute) {
                 is WorkspaceConnectedGitHubReadRouting.Route.Build -> {
