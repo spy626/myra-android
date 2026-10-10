@@ -133,6 +133,28 @@ internal object WorkspaceAppDownloadSearch {
         return parseGoogle(String(data, Charsets.UTF_8), name)
     }
 
+    /** Redirects can change locale, never the app/package or publisher identity. */
+    internal fun sameStoreIdentity(original: String, redirected: String, kind: Kind): Boolean {
+        if (kind == Kind.PUBLISHER) {
+            val from = safePublisherWebsite(original) ?: return false
+            val to = safePublisherWebsite(redirected) ?: return false
+            val oldHost = URI(from).host.removePrefix("www.")
+            val newHost = URI(to).host.removePrefix("www.")
+            return oldHost == newHost || newHost.endsWith("." + oldHost)
+        }
+        val a = URI(original)
+        val b = URI(redirected)
+        return when (kind) {
+            Kind.IPHONE -> appleUrl(original) && appleUrl(redirected) &&
+                Regex("""id\d{5,15}$""").find(a.path)?.value ==
+                    Regex("""id\d{5,15}$""").find(b.path)?.value
+            Kind.ANDROID -> playUrl(original) && playUrl(redirected) &&
+                a.rawQuery.orEmpty().split('&').firstOrNull { it.startsWith("id=") } ==
+                    b.rawQuery.orEmpty().split('&').firstOrNull { it.startsWith("id=") }
+            Kind.PUBLISHER -> false
+        }
+    }
+
     internal fun safePublisherWebsite(url: String?): String? {
         if (url == null) return null
         val target = runCatching { WorkspaceAgentReachPolicy.parse(url) }.getOrNull()
@@ -226,7 +248,9 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
                     runCatching { WorkspaceAppDownloadSearch.readApple(it, app) }.getOrNull()
                 }
                 if (found != null) {
-                    verify(run, found.storeUrl, { WorkspaceAppDownloadSearch.appleUrl(it) }) { target ->
+                    verify(run, found.storeUrl, { WorkspaceAppDownloadSearch.sameStoreIdentity(
+                        found.storeUrl, it, WorkspaceAppDownloadSearch.Kind.IPHONE
+                    ) }) { target ->
                         if (target != null) {
                             results.add(WorkspaceAppDownloadSearch.Result(
                                 WorkspaceAppDownloadSearch.Kind.IPHONE,
@@ -279,7 +303,9 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
             return
         }
         val choice = choices[index]
-        verify(run, choice.url, { WorkspaceAppDownloadSearch.playUrl(it) }) { target ->
+        verify(run, choice.url, { WorkspaceAppDownloadSearch.sameStoreIdentity(
+            choice.url, it, WorkspaceAppDownloadSearch.Kind.ANDROID
+        ) }) { target ->
             if (target != null) {
                 results.add(WorkspaceAppDownloadSearch.Result(
                     WorkspaceAppDownloadSearch.Kind.ANDROID, app, target,
@@ -300,7 +326,9 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
         val website = WorkspaceAppDownloadSearch.safePublisherWebsite(apple?.sellerUrl)
         if (website == null) { finish(run, app, results); return }
         listener.onEvent(WorkspaceWorkPhase.VERIFYING, "Verifying publisher-linked site", app)
-        verify(run, website, { WorkspaceAppDownloadSearch.safePublisherWebsite(it) != null }) {
+        verify(run, website, { WorkspaceAppDownloadSearch.sameStoreIdentity(
+            website, it, WorkspaceAppDownloadSearch.Kind.PUBLISHER
+        ) }) {
             if (it != null) {
                 results.add(WorkspaceAppDownloadSearch.Result(
                     WorkspaceAppDownloadSearch.Kind.PUBLISHER, app, it,

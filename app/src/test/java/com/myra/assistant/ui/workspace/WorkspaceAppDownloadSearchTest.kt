@@ -63,6 +63,34 @@ class WorkspaceAppDownloadSearchTest {
             results.map { it.url })
     }
 
+    @Test fun redirectsCannotChangeAppIdOrPublisherWebsite() {
+        assertTrue(WorkspaceAppDownloadSearch.sameStoreIdentity(
+            "https://apps.apple.com/us/app/cantina/id1234567890",
+            "https://apps.apple.com/in/app/cantina/id1234567890",
+            WorkspaceAppDownloadSearch.Kind.IPHONE
+        ))
+        assertFalse(WorkspaceAppDownloadSearch.sameStoreIdentity(
+            "https://apps.apple.com/us/app/cantina/id1234567890",
+            "https://apps.apple.com/in/app/clone/id2222222222",
+            WorkspaceAppDownloadSearch.Kind.IPHONE
+        ))
+        assertFalse(WorkspaceAppDownloadSearch.sameStoreIdentity(
+            "https://play.google.com/store/apps/details?id=com.signal.android",
+            "https://play.google.com/store/apps/details?id=com.clone.android",
+            WorkspaceAppDownloadSearch.Kind.ANDROID
+        ))
+        assertFalse(WorkspaceAppDownloadSearch.sameStoreIdentity(
+            "https://www.cantina.com/download",
+            "https://wrong.example.com/download",
+            WorkspaceAppDownloadSearch.Kind.PUBLISHER
+        ))
+        assertTrue(WorkspaceAppDownloadSearch.sameStoreIdentity(
+            "https://www.cantina.com/download",
+            "https://cantina.com/download",
+            WorkspaceAppDownloadSearch.Kind.PUBLISHER
+        ))
+    }
+
     @Test fun missingPlatformsRemainExplicitRatherThanInvented() {
         val iphone = WorkspaceAppDownloadSearch.Result(
             WorkspaceAppDownloadSearch.Kind.IPHONE, "Cantina",
