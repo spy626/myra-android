@@ -5,11 +5,11 @@ package com.myra.assistant.ui.workspace
  * authorizes links or upgrades model-generated URLs into verified sources.
  */
 internal object WorkspaceVerifiedLinkReply {
-    private fun plain(value: String, limit: Int): String = value
-        .replace(Regex("""[\r\n\t*_#\[\]<>]"""), " ")
-        .replace(Regex("""\s+"""), " ")
-        .trim()
-        .take(limit)
+    private fun plain(value: String, limit: Int): String =
+        WorkspaceSourcePresentation.shorten(
+            value.replace(Regex("""[\r\n\t*_#\[\]<>]"""), " "),
+            limit,
+        )
 
     fun format(title: String, url: String, summary: String, fallback: String): String {
         val target = WorkspaceAgentReachPolicy.parse(url)

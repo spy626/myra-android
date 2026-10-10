@@ -57,32 +57,48 @@ internal object WorkspaceSourcesSheet {
 
         val list = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         sources.forEachIndexed { index, source ->
-            val target = runCatching { WorkspaceAgentReachPolicy.parse(source.url) }.getOrNull()
+            val display = runCatching { WorkspaceSourcePresentation.display(source) }.getOrNull()
                 ?: return@forEachIndexed
             val card = LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(0, dp(activity, 12), 0, dp(activity, 14))
                 isClickable = true
                 isFocusable = true
-                contentDescription = "Open source " + (index + 1) + ": " + source.title
+                contentDescription = "Open source " + (index + 1) + ": " +
+                    display.title + ", " + display.url
                 setOnClickListener {
                     dialog.dismiss()
-                    open(activity, target.canonicalUrl)
+                    open(activity, display.url)
                 }
             }
-            val meta = buildString {
-                append(target.host.removePrefix("www."))
-                source.verifiedLabel?.let { append("  ·  "); append(it) }
-            }
-            card.addView(text(activity, meta, 12f, Color.rgb(170, 178, 181)))
+            card.addView(text(activity, display.domainAndStatus, 12f, Color.rgb(170, 178, 181)))
             card.addView(
-                text(activity, source.title, 16f, Color.WHITE, bold = true),
-                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(activity, 3) },
+                text(activity, display.title, 16f, Color.WHITE, bold = true),
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(activity, 4) },
             )
-            if (source.snippet.isNotBlank()) {
+
+            // Full, verified destination stays visible; the external icon cannot wrap
+            // onto a dangling line after a long URL.
+            val destinationRow = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+            }
+            destinationRow.addView(
+                text(activity, display.url, 13f, Color.rgb(164, 222, 190)),
+                LinearLayout.LayoutParams(0, -2, 1f),
+            )
+            destinationRow.addView(
+                text(activity, "↗", 17f, Color.rgb(164, 222, 190)),
+                LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(activity, 7) },
+            )
+            card.addView(
+                destinationRow,
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(activity, 7) },
+            )
+            if (display.description.isNotBlank()) {
                 card.addView(
-                    text(activity, source.snippet, 14f, Color.rgb(190, 196, 198)),
-                    LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(activity, 4) },
+                    text(activity, display.description, 14f, Color.rgb(190, 196, 198)),
+                    LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(activity, 6) },
                 )
             }
             list.addView(card, LinearLayout.LayoutParams(-1, -2))
@@ -93,16 +109,23 @@ internal object WorkspaceSourcesSheet {
             }
         }
 
-        val scroll = ScrollView(activity).apply {
+        val scroll = object : ScrollView(activity) {
+            // Measure against content height, capped for many sources: no empty 68%-tall
+            // bottom sheet when there is only one short source.
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val cap = WorkspaceSourcePresentation.maxScrollHeightPx(
+                    activity.resources.displayMetrics.heightPixels
+                )
+                super.onMeasure(
+                    widthMeasureSpec,
+                    View.MeasureSpec.makeMeasureSpec(cap, View.MeasureSpec.AT_MOST),
+                )
+            }
+        }.apply {
             isFillViewport = false
             addView(list, FrameLayout.LayoutParams(-1, -2))
         }
-        outer.addView(
-            scroll,
-            LinearLayout.LayoutParams(-1, 0, 1f).apply {
-                height = (activity.resources.displayMetrics.heightPixels * 0.68f).toInt()
-            },
-        )
+        outer.addView(scroll, LinearLayout.LayoutParams(-1, -2))
         dialog.setContentView(outer)
         dialog.show()
     }
