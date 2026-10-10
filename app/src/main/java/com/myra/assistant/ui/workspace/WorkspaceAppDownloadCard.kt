@@ -1,6 +1,7 @@
 package com.myra.assistant.ui.workspace
 
 import android.content.Context
+import com.myra.assistant.R
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -47,7 +48,7 @@ internal object WorkspaceAppDownloadCard {
     ): Content? {
         val requested = header.find(raw.trimStart())?.groupValues?.get(1)?.trim()
             ?: return null
-        val result = buildList {
+        val result = buildList<Destination> {
             sources.forEach { source ->
                 val category = when {
                     source.title.endsWith(" — Google Play Store") ->

@@ -1,6 +1,7 @@
 package com.myra.assistant.ui.workspace
 
 import android.app.Activity
+import com.myra.assistant.R
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
