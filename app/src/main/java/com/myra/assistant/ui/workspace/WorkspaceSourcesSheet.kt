@@ -42,7 +42,7 @@ internal object WorkspaceSourcesSheet {
         val outer = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(activity, 20), dp(activity, 12), dp(activity, 20), dp(activity, 22))
-            setBackgroundColor(Color.rgb(38, 40, 40))
+            setBackgroundColor(Color.rgb(9, 11, 10))
         }
         outer.addView(View(activity).apply {
             setBackgroundColor(Color.rgb(104, 108, 108))
@@ -50,10 +50,24 @@ internal object WorkspaceSourcesSheet {
             gravity = Gravity.CENTER_HORIZONTAL
             bottomMargin = dp(activity, 18)
         })
-        outer.addView(
-            text(activity, "Sources", 15f, Color.rgb(218, 222, 222), bold = true),
-            LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(activity, 12) },
+        val header = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(android.widget.ImageView(activity).apply {
+            setImageResource(R.drawable.ic_lyra_source_book)
+            contentDescription = null
+        }, LinearLayout.LayoutParams(dp(activity, 22), dp(activity, 22)).apply {
+            rightMargin = dp(activity, 9)
+        })
+        header.addView(
+            text(activity, "Sources · " + sources.size, 16f,
+                Color.rgb(243, 244, 242), bold = true),
+            LinearLayout.LayoutParams(-2, -2),
         )
+        outer.addView(header, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(activity, 12)
+        })
 
         val list = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         sources.forEachIndexed { index, source ->
@@ -68,10 +82,10 @@ internal object WorkspaceSourcesSheet {
                     display.title + ", " + display.url
                 setOnClickListener {
                     dialog.dismiss()
-                    open(activity, display.url)
+                    openVerified(activity, display.url)
                 }
             }
-            card.addView(text(activity, display.domainAndStatus, 12f, Color.rgb(170, 178, 181)))
+            card.addView(text(activity, display.domainAndStatus, 12f, Color.rgb(165, 172, 168)))
             card.addView(
                 text(activity, display.title, 16f, Color.WHITE, bold = true),
                 LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(activity, 4) },
@@ -84,11 +98,11 @@ internal object WorkspaceSourcesSheet {
                 gravity = Gravity.TOP
             }
             destinationRow.addView(
-                text(activity, display.url, 13f, Color.rgb(164, 222, 190)),
+                text(activity, display.url, 13f, Color.rgb(243, 244, 242)),
                 LinearLayout.LayoutParams(0, -2, 1f),
             )
             destinationRow.addView(
-                text(activity, "↗", 17f, Color.rgb(164, 222, 190)),
+                text(activity, "↗", 17f, Color.rgb(243, 244, 242)),
                 LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(activity, 7) },
             )
             card.addView(
@@ -104,7 +118,7 @@ internal object WorkspaceSourcesSheet {
             list.addView(card, LinearLayout.LayoutParams(-1, -2))
             if (index != sources.lastIndex) {
                 list.addView(View(activity).apply {
-                    setBackgroundColor(Color.rgb(72, 75, 75))
+                    setBackgroundColor(Color.rgb(41, 45, 43))
                 }, LinearLayout.LayoutParams(-1, dp(activity, 1)))
             }
         }
@@ -130,7 +144,7 @@ internal object WorkspaceSourcesSheet {
         dialog.show()
     }
 
-    private fun open(activity: Activity, url: String) {
+    fun openVerified(activity: Activity, url: String) {
         val target = runCatching { WorkspaceAgentReachPolicy.parse(url) }.getOrNull() ?: return
         val uri = Uri.parse(target.canonicalUrl)
         runCatching {
