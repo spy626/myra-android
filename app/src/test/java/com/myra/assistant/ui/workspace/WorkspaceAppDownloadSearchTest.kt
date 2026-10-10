@@ -100,6 +100,7 @@ class WorkspaceAppDownloadSearchTest {
         )
         val text = WorkspaceAppDownloadSearch.reply("Cantina", listOf(iphone))
         assertTrue(text.contains("Not confirmed: Android, publisher website"))
+        assertTrue(text.contains("[Download for iPhone ↗](https://apps.apple.com/"))
         val sources = WorkspaceAppDownloadSearch.sources(listOf(iphone))
         assertEquals(1, sources.size)
         assertEquals(iphone.url, sources.single().url)

@@ -10,6 +10,7 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /**
  * App download discovery is separate from connected GitHub build downloads.
@@ -181,7 +182,12 @@ internal object WorkspaceAppDownloadSearch {
                 Kind.PUBLISHER -> "🌐 **Publisher website**"
             }
             appendLine(title)
-            appendLine("[" + result.url + " ↗](" + result.url + ")")
+            val linkTitle = when (result.kind) {
+                Kind.ANDROID -> "Download for Android"
+                Kind.IPHONE -> "Download for iPhone"
+                Kind.PUBLISHER -> "Visit publisher website"
+            }
+            appendLine("[" + linkTitle + " ↗](" + result.url + ")")
             appendLine(result.detail)
             appendLine()
         }
@@ -221,6 +227,10 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
 
     private var generation = 0L
     private var active: Call? = null
+    // Preserve guarded DNS and no-redirect policy while bounding individual public reads.
+    private val client = WorkspaceAgentReachGitHub.client.newBuilder()
+        .callTimeout(12, TimeUnit.SECONDS)
+        .build()
 
     @Synchronized fun cancel() {
         generation++
@@ -397,7 +407,7 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
         failure: () -> Unit,
     ) {
         synchronized(this) { if (run != generation) return }
-        val call = WorkspaceAgentReachGitHub.client.newCall(request)
+        val call = client.newCall(request)
         synchronized(this) {
             if (run != generation) { call.cancel(); return }
             active = call
