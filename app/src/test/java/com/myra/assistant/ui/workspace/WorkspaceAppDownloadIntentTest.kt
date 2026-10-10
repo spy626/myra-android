@@ -43,5 +43,10 @@ class WorkspaceAppDownloadIntentTest {
             "Cantina", "My Cantina Wallpaper Collection"))
         assertEquals(false, WorkspaceAppDownloadIntent.nameMatches(
             "AIRI", "AirialPerspectiveEffecter"))
+        assertTrue(WorkspaceAppDownloadIntent.nameMatches("Telegram", "Telegram Messenger"))
+        assertEquals(false, WorkspaceAppDownloadIntent.nameMatches("Telegram", "Telegram X"))
+        assertEquals(false, WorkspaceAppDownloadIntent.nameMatches("Telegram", "Telegram Lite"))
+        assertEquals(false, WorkspaceAppDownloadIntent.nameMatches(
+            "Telegram", "Telegram wallpapers"))
     }
 }

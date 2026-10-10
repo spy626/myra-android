@@ -66,7 +66,16 @@ internal object WorkspaceAppDownloadIntent {
         val a = compact(requested)
         val b = compact(found)
         if (a.length < 2 || b.length < 2) return false
-        return a == b || (
+        // Specific, bounded canonical app-title extension. "Telegram Messenger" is
+        // legitimate, while "Telegram X", "Telegram Lite", wallpaper clones etc.
+        // remain different apps. The store URL still needs live verification.
+        val extended = found.trim().lowercase(Locale.ROOT)
+        val requestedClean = requested.trim().lowercase(Locale.ROOT)
+        val canonicalSuffixes = setOf(" messenger", ": messenger")
+        val canonicalExtension = canonicalSuffixes.any { suffix ->
+            extended == requestedClean + suffix
+        }
+        return a == b || canonicalExtension || (
             (a.startsWith(b) || b.startsWith(a)) &&
                 minOf(a.length, b.length) >= 4 &&
                 minOf(a.length, b.length) * 100 >= maxOf(a.length, b.length) * 65
