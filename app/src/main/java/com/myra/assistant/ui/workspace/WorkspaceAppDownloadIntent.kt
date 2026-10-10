@@ -75,8 +75,17 @@ internal object WorkspaceAppDownloadIntent {
         val canonicalExtension = canonicalSuffixes.any { suffix ->
             extended == requestedClean + suffix
         }
+        val nameBoundary = extended.startsWith(requestedClean + " ") ||
+            extended.startsWith(requestedClean + ":") ||
+            requestedClean.startsWith(extended + " ") ||
+            requestedClean.startsWith(extended + ":")
+        val distinctVariant = setOf(" x", " lite", " pro", " plus", " premium",
+            " beta", " clone", " wallpapers", " stickers", " mod", " unofficial")
+            .any { suffix ->
+                extended.startsWith(requestedClean + suffix)
+            }
         return a == b || canonicalExtension || (
-            (a.startsWith(b) || b.startsWith(a)) &&
+            nameBoundary && !distinctVariant &&
                 minOf(a.length, b.length) >= 4 &&
                 minOf(a.length, b.length) * 100 >= maxOf(a.length, b.length) * 65
             )
