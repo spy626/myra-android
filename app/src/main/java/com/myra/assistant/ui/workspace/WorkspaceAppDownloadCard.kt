@@ -137,7 +137,9 @@ internal object WorkspaceAppDownloadCard {
                     dp(context, 3).toFloat())
             }
         }
-        group.addView(underline, LinearLayout.LayoutParams(-1, dp(context, 1)).apply {
+        val captionWidth = link.paint.measureText(caption).toInt()
+            .coerceAtLeast(dp(context, 30))
+        group.addView(underline, LinearLayout.LayoutParams(captionWidth, dp(context, 1)).apply {
             topMargin = dp(context, 2)
         })
         return group

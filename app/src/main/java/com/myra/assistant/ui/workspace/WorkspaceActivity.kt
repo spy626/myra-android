@@ -2852,7 +2852,9 @@ class WorkspaceActivity : AppCompatActivity() {
             )
             background = rounded(Color.TRANSPARENT, 18)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(9), dp(9), dp(9), dp(9))
+            setPadding(dp(11), dp(11), dp(11), dp(11))
+            minimumWidth = dp(44)
+            minimumHeight = dp(44)
             contentDescription = description
             isClickable = true
             isFocusable = true
@@ -3200,7 +3202,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
                 actionRow.addView(messageIcon(R.drawable.ic_workspace_copy, "Copy LYRA reply") {
                     copyMessage(assistantPresentation)
-                }, LinearLayout.LayoutParams(dp(40), dp(40)))
+                }, LinearLayout.LayoutParams(dp(44), dp(44)))
                 val retryButton = messageIcon(R.drawable.ic_workspace_retry, "Retry LYRA reply") {
                     retryAssistant(current.projectId, message.id)
                 }
@@ -3220,7 +3222,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     }
                     retryButton.tooltipText = "Long-press for diagnostics"
                 }
-                actionRow.addView(retryButton, LinearLayout.LayoutParams(dp(40), dp(40)))
+                actionRow.addView(retryButton, LinearLayout.LayoutParams(dp(44), dp(44)))
                 if (current.type == WorkspaceProjectType.CHAT) {
                     if (sourceEvidence.isNotEmpty()) {
                         val sourcesButton = LinearLayout(this).apply {
