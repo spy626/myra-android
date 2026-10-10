@@ -342,7 +342,7 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
 
     private fun verify(
         run: Long, url: String, acceptable: (String) -> Boolean,
-        done: (String?) -> Unit, depth: Int = 0,
+        depth: Int = 0, done: (String?) -> Unit,
     ) {
         val target = runCatching { WorkspaceAgentReachPolicy.parse(url) }.getOrNull()
         if (target == null || !acceptable(target.canonicalUrl)) {
@@ -358,7 +358,7 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
                                 it.header("Location").orEmpty())
                         }.getOrNull()
                         if (next != null && acceptable(next.canonicalUrl)) {
-                            verify(run, next.canonicalUrl, acceptable, done, depth + 1)
+                            verify(run, next.canonicalUrl, acceptable, depth + 1, done)
                         } else done(null)
                     } else {
                         val acceptablePage = runCatching {
