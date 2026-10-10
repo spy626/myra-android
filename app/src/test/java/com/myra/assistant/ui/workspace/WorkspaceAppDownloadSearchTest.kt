@@ -107,6 +107,41 @@ class WorkspaceAppDownloadSearchTest {
         assertFalse(text.contains("com.signal.android"))
     }
 
+    @Test fun platformLinksAndSourcesUseAndroidThenIphoneThenPublisherOrder() {
+        val iphone = WorkspaceAppDownloadSearch.Result(
+            WorkspaceAppDownloadSearch.Kind.IPHONE, "Cantina",
+            "https://apps.apple.com/us/app/cantina/id1234567890", "Seller: Cantina",
+            "Apple catalog listing · reachable",
+        )
+        val android = WorkspaceAppDownloadSearch.Result(
+            WorkspaceAppDownloadSearch.Kind.ANDROID, "Cantina",
+            "https://play.google.com/store/apps/details?id=com.signal.android",
+            "Google Play listing", "Google Play listing · reachable",
+        )
+        val publisher = WorkspaceAppDownloadSearch.Result(
+            WorkspaceAppDownloadSearch.Kind.PUBLISHER, "Cantina",
+            "https://www.cantina.com/download", "Publisher website",
+            "Publisher-linked site · reachable",
+        )
+        val text = WorkspaceAppDownloadSearch.reply(
+            "Cantina", listOf(iphone, publisher, android)
+        )
+        assertTrue(text.indexOf("Download for Android") < text.indexOf("Download for iPhone"))
+        assertTrue(text.indexOf("Download for iPhone") < text.indexOf("Visit publisher website"))
+        assertEquals(listOf(
+            WorkspaceAppDownloadSearch.Kind.ANDROID,
+            WorkspaceAppDownloadSearch.Kind.IPHONE,
+            WorkspaceAppDownloadSearch.Kind.PUBLISHER,
+        ), WorkspaceAppDownloadSearch.sources(listOf(iphone, publisher, android))
+            .map { src ->
+                when {
+                    src.url.contains("play.google.com") -> WorkspaceAppDownloadSearch.Kind.ANDROID
+                    src.url.contains("apps.apple.com") -> WorkspaceAppDownloadSearch.Kind.IPHONE
+                    else -> WorkspaceAppDownloadSearch.Kind.PUBLISHER
+                }
+            })
+    }
+
     @Test fun publisherWebsiteMustBeAppleMetadataAndPublicHttps() {
         assertNull(WorkspaceAppDownloadSearch.safePublisherWebsite("http://localhost/"))
         assertNull(WorkspaceAppDownloadSearch.safePublisherWebsite(

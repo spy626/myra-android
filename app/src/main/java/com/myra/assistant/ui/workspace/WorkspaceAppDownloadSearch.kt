@@ -175,7 +175,7 @@ internal object WorkspaceAppDownloadSearch {
                 "Random APK ya guessed store links nahi dunga.")
             return@buildString
         }
-        for (result in results) {
+        for (result in results.sortedBy { it.kind.ordinal }) {
             val title = when (result.kind) {
                 Kind.ANDROID -> "📱 **Android · Google Play**"
                 Kind.IPHONE -> "🍎 **iPhone · App Store**"
@@ -204,7 +204,7 @@ internal object WorkspaceAppDownloadSearch {
     }.trim()
 
     fun sources(results: List<Result>): List<WorkspaceVerifiedSourceStore.Source> =
-        results.map {
+        results.sortedBy { it.kind.ordinal }.map {
             WorkspaceVerifiedSourceStore.Source(
                 title = it.appName + " — " + when(it.kind) {
                     Kind.ANDROID -> "Google Play Store"
