@@ -44,6 +44,30 @@ class WorkspaceVerifiedSourceStoreTest {
         }
     }
 
+    @Test fun retainsThreeDistinctSourcesAfterReloadAndDeduplicatesUrls() {
+        val base = temp.newFolder("multi-sources")
+        val store = WorkspaceVerifiedSourceStore(base)
+        val urls = listOf(
+            "https://kotlinlang.org/docs/coroutines-overview.html",
+            "https://developer.android.com/kotlin/coroutines",
+            "https://github.com/Kotlin/kotlinx.coroutines",
+        )
+        val three = urls.mapIndexed { index, url ->
+            WorkspaceVerifiedSourceStore.Source(
+                title = "Kotlin source " + index,
+                url = url,
+                snippet = "Public programming documentation",
+                observedAtMs = 100L + index,
+                verifiedLabel = "Live web result · reachable",
+            )
+        }
+        store.put("chat_multi", "reply_multi", three + three.first())
+        val restored = WorkspaceVerifiedSourceStore(base).get("chat_multi", "reply_multi")
+        assertEquals(urls, restored.map { it.url })
+        assertEquals(3, restored.size)
+        assertTrue(store.get("chat_multi", "other_reply").isEmpty())
+    }
+
     @Test fun deleteProjectRemovesSourceTrayMetadata() {
         val store = WorkspaceVerifiedSourceStore(temp.newFolder("sources"))
         store.put(
