@@ -61,6 +61,12 @@ class WorkspaceConnectedGitHubDownloadIntentTest {
         assertTrue(WorkspaceConnectedGitHubDownloadIntent.decide(
             "LYRA app ka APK download link bhejo", emptyList())?.localError
                 ?.contains("build") == true)
+        assertEquals(3374L, WorkspaceConnectedGitHubDownloadIntent.decide(
+            "achha bro iska APK download link bhi bhej do", preceding)?.runNumber)
+        assertEquals(3374L, WorkspaceConnectedGitHubDownloadIntent.decide(
+            "share its APK file link", preceding)?.runNumber)
+        assertEquals(3374L, WorkspaceConnectedGitHubDownloadIntent.decide(
+            "bro build #3374 ka APK download link bhejo", preceding)?.runNumber)
     }
 
     @Test fun unrelatedAndUnsafeTurnsNeverBecomeDownloadRead() {

@@ -42,7 +42,9 @@ internal object WorkspaceConnectedGitHubDownloadIntent {
         if (namedExternalApp.findAll(asked).any {
                 it.groupValues[1].lowercase() !in selfNames &&
                     it.groupValues[1].lowercase() !in setOf(
-                        "my", "our", "this", "the", "meri", "hamari", "apni"
+                        "my", "our", "this", "the", "meri", "hamari", "apni",
+                        "ka", "ki", "ke", "bhi", "its", "your", "his", "her",
+                        "iska", "uska", "isse", "uske"
                     )
             }) return null
         // Without a named LYRA/GitHub build, numeric run, or immediately verified
@@ -60,7 +62,7 @@ internal object WorkspaceConnectedGitHubDownloadIntent {
         }.orEmpty()
         val verifiedBuildFollowup = recentRunNumber != null &&
             lastReplyBuilds == listOf(recentRunNumber) &&
-            priorLink.containsMatchIn(recentAssistant.text)
+            priorLink.containsMatchIn(recentAssistant?.text.orEmpty())
         if (!ownBuildCue.containsMatchIn(asked) &&
             !number.containsMatchIn(asked) && !verifiedBuildFollowup) return null
 
