@@ -23,6 +23,12 @@ object LocalMemoryRecallRouter {
     private val transaction = setOf("saved", "save", "updated", "update", "deleted", "delete", "failed", "succeeded", "transaction", "operation", "सहेजा", "बदला", "हटाया")
     private val memory = setOf("memory", "remember", "yaad", "मेमोरी", "याद")
     private val mutation = setOf("save", "remember", "add", "change", "update", "delete", "remove", "forget", "rename", "rakh", "jodo", "badlo", "hata", "bhool", "सहेज", "जोड़", "बदल", "हटा", "भूल")
+    private val previewQuestion = question - setOf("remember", "yaad", "याद")
+    private val previewHardMutation = mutation - setOf("remember", "yaad", "याद")
+    private val previewSafeTypes = setOf(
+        MemoryRecallType.PREFERENCES, MemoryRecallType.FRIENDS, MemoryRecallType.BEST_FRIEND,
+        MemoryRecallType.GOALS, MemoryRecallType.PROJECTS, MemoryRecallType.LAST_TRANSACTION
+    )
 
     fun classify(evidence: AuthoritativeMemoryTurnEvidence): LocalRecallIntent? {
         val text = normalize(evidence.canonicalText + " " + evidence.displayText)
@@ -30,21 +36,81 @@ object LocalMemoryRecallRouter {
         val asks = evidence.variants.any { it.trim().endsWith('?') } || tokens.any(question::contains)
         if (!asks || tokens.none(possessive::contains)) return null
         if (tokens.any(mutation::contains) && tokens.none(question::contains)) return null
-        val type = when {
-            tokens.any(friend::contains) && tokens.any(best::contains) -> MemoryRecallType.BEST_FRIEND
-            tokens.any(friend::contains) -> MemoryRecallType.FRIENDS
-            tokens.any(goal::contains) -> MemoryRecallType.GOALS
-            tokens.any(project::contains) -> MemoryRecallType.PROJECTS
-            tokens.any(transaction::contains) && tokens.any(memory::contains) -> MemoryRecallType.LAST_TRANSACTION
-            tokens.any(episode::contains) -> MemoryRecallType.EPISODES
-            tokens.any(preference::contains) -> MemoryRecallType.PREFERENCES
-            else -> return null
-        }
+        val type = classifyType(tokens) ?: return null
         return LocalRecallIntent(type, evidence.sourceText, .95)
     }
 
+    /**
+     * Conservative read-only preview used only for response ownership and Room prefetch.
+     * It never creates a semantic frame and cannot authorize a durable write.
+     */
+    fun classifyPreview(value: String): LocalRecallIntent? {
+        val clean = normalize(value)
+        if (clean.isBlank()) return null
+        val tokens = clean.split(' ').filter(String::isNotBlank).toSet()
+        val asks = value.trim().endsWith('?') || tokens.any(previewQuestion::contains)
+        if (!asks || tokens.none(possessive::contains)) return null
+        if (tokens.any(previewHardMutation::contains)) return null
+        val type = classifyType(tokens) ?: return null
+        if (type !in previewSafeTypes) return null
+        return LocalRecallIntent(type, value.trim(), .99)
+    }
+
+    private fun classifyType(tokens: Set<String>): MemoryRecallType? = when {
+        tokens.any(friend::contains) && tokens.any(best::contains) -> MemoryRecallType.BEST_FRIEND
+        tokens.any(friend::contains) -> MemoryRecallType.FRIENDS
+        tokens.any(goal::contains) -> MemoryRecallType.GOALS
+        tokens.any(project::contains) -> MemoryRecallType.PROJECTS
+        tokens.any(transaction::contains) && tokens.any(memory::contains) -> MemoryRecallType.LAST_TRANSACTION
+        tokens.any(episode::contains) -> MemoryRecallType.EPISODES
+        tokens.any(preference::contains) -> MemoryRecallType.PREFERENCES
+        else -> null
+    }
+
     private fun normalize(value: String) = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)
-        .replace(Regex("[^\\p{L}\\p{N}?]+"), " ").replace(Regex("\\s+"), " ").trim()
+        .replace(Regex("[^\\p{L}\\p{M}\\p{N}?]+"), " ").replace(Regex("\\s+"), " ").trim()
+}
+
+/**
+ * Strict semantic gate for speculative recall voice. Content words, names, numbers and
+ * negation stay significant; only low-risk grammar/wrapper tokens are ignored.
+ */
+object VerifiedMemorySpeechEquivalence {
+    private val wrappers = setOf(
+        "you", "your", "yours", "user", "users", "the", "a", "an", "am", "are", "is", "was", "were",
+        "be", "been", "being", "do", "does", "did", "have", "has", "had", "that", "this", "it", "its",
+        "yes", "yeah", "yep", "okay", "ok", "right", "correct", "according", "to", "saved", "memory",
+        "says", "said", "i", "me", "my", "mine", "haan", "han", "acha", "accha", "achha", "bilkul",
+        "tum", "tumhe", "tumhara", "tumhari", "tumhare", "hai", "hain", "ho", "hoon", "main", "mujhe",
+        "mera", "mere", "meri", "ab"
+    )
+    private val aliases = mapOf(
+        "prefers" to "prefer", "preference" to "prefer", "preferences" to "prefer",
+        "like" to "prefer", "likes" to "prefer", "liked" to "prefer", "pasand" to "prefer",
+        "answers" to "answer", "reply" to "answer", "replies" to "answer", "jawab" to "answer",
+        "friends" to "friend", "dost" to "friend", "doston" to "friend", "mitr" to "friend",
+        "goals" to "goal", "aim" to "goal", "target" to "goal", "lakshya" to "goal",
+        "projects" to "project", "pariyojana" to "project", "shorter" to "short"
+    )
+
+    fun matches(spoken: String, verified: String): Boolean {
+        val spokenTokens = canonicalTokens(spoken)
+        val verifiedTokens = canonicalTokens(verified)
+        return spokenTokens.isNotEmpty() && spokenTokens == verifiedTokens
+    }
+
+    internal fun canonicalTokens(value: String): List<String> {
+        val normalized = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)
+            .replace(Regex("[^\\p{L}\\p{M}\\p{N}]+"), " ")
+            .replace(Regex("\\s+"), " ").trim()
+        if (normalized.isBlank()) return emptyList()
+        return normalized.split(' ').asSequence()
+            .filter(String::isNotBlank)
+            .filterNot(wrappers::contains)
+            .map { token -> aliases[token] ?: token }
+            .filterNot(wrappers::contains)
+            .toSet().sorted()
+    }
 }
 
 /** Service boundary for the no-network fast path. Its only dependency is the single memory owner. */
@@ -55,5 +121,11 @@ class LocalFastMemoryLane(private val owner: MemoryBrainCoordinator) {
         val intentDone = System.nanoTime()
         val outcome = owner.recall(intent.query, type = intent.type)
         return LocalRecallExecution(intent, outcome, (intentDone - intentStarted) / 1_000_000, 0)
+    }
+
+    suspend fun recall(intent: LocalRecallIntent): LocalRecallExecution {
+        val started = System.nanoTime()
+        val outcome = owner.recall(intent.query, type = intent.type)
+        return LocalRecallExecution(intent, outcome, 0, (System.nanoTime() - started) / 1_000_000)
     }
 }

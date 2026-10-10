@@ -41,6 +41,13 @@ internal object WorkspaceSemanticTurnIntent {
     private val readCue = Regex(
         """(?iu)\b(?:check|fetch|show|get|list|read|inspect|review|verify|status|dekh\p{L}*|dekho|analyse|analyze|explain|summari[sz]e)\b"""
     )
+    private val linkReadRequest = Regex(
+        """(?iu)(?:\b(?:link|url)\b.{0,48}\b(?:do|de|dena|bhejo|bhej|send|share|show|dikhao|give|bata\p{L}*)\b)|""" +
+            """(?:\b(?:do|de|dena|bhejo|bhej|send|share|show|dikhao|give|bata\p{L}*)\b.{0,48}\b(?:link|url)\b)"""
+    )
+    private val linkMutationCue = Regex(
+        """(?iu)\b(?:add|change|fix|edit|modify|implement|create|remove|replace|redesign|code|update)\b"""
+    )
     private val resultCue = Regex(
         """(?iu)\b(?:green|red|pass(?:ed)?|fail(?:ed)?|status|result|ci|build|workflow|run|commit|head|sha|branch|artifact|apk|release)\b|#\d+"""
     )
@@ -78,6 +85,13 @@ internal object WorkspaceSemanticTurnIntent {
                 hinglishAbilityQuestion.containsMatchIn(text)
         if (capabilityQuestion) {
             return Proposal(Kind.CAPABILITY_QUERY, Effect.NONE, 0.96)
+        }
+
+        // A request to receive/share a link is information retrieval, not mutation.
+        // Keep this ahead of the write scan so Hinglish "link do" cannot be mistaken
+        // for an execution verb. Explicit requests to add/change a link still remain writes.
+        if (linkReadRequest.containsMatchIn(text) && !linkMutationCue.containsMatchIn(text)) {
+            return Proposal(Kind.READ_ONLY_VERIFICATION, Effect.READ, 0.98)
         }
 
         // Read-focused requests with an explicit no-mutation boundary must be resolved

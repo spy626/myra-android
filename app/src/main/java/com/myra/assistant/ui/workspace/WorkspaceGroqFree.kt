@@ -21,8 +21,8 @@ internal object WorkspaceGroqFree {
 
     /**
      * One immutable projection for preflight and HTTP body. When a long chat
-     * exceeds Groq Free's conservative 12k-character local ceiling, first use
-     * the existing compact planning prompt (if applicable), then drop only
+     * exceeds Groq Free's conservative 12k-character local ceiling, first compact
+     * editorial planning/rich presentation instructions only, then drop only
      * whole OLD conversation turns in the outbound request copy. Never slice
      * the latest user turn, mutate the conversation store, omit approved
      * runtime instructions or invoke another provider.
@@ -39,11 +39,19 @@ internal object WorkspaceGroqFree {
             if (length(regular) <= MAX_PROMPT_CHARS) return regular
 
             val latest = window.last().text
-            val compact = if (WorkspacePracticalPlanningGuide.instructions(latest).isNotBlank())
-                WorkspaceChatGateway.openAiMessages(
-                    window, extraSystemInstructions = extraSystemInstructions,
-                    compactForGroq = true,
-                ) else null
+            // A full ten-type Rich Blocks contract grew beyond Groq's conservative
+            // local ceiling. Compact presentation prose/examples *only* when needed.
+            // Keep all runtime/skill/security instructions and the latest user turn.
+            val rich = WorkspaceRichBlocksContract.enabled(extraSystemInstructions)
+            val compact = if (rich ||
+                WorkspacePracticalPlanningGuide.instructions(latest).isNotBlank()
+            ) WorkspaceChatGateway.openAiMessages(
+                window,
+                extraSystemInstructions = if (rich)
+                    WorkspaceRichBlocksContract.compactForGroq(extraSystemInstructions)
+                else extraSystemInstructions,
+                compactForGroq = true,
+            ) else null
             val best = if (compact != null && length(compact) < length(regular))
                 compact else regular
             if (length(best) <= MAX_PROMPT_CHARS || window.size == 1) return best
@@ -86,7 +94,7 @@ internal object WorkspaceGroqFree {
         // Groq must never receive OpenRouter-only provider settings or paid fallback.
         return JSONObject()
             .put("model", MODEL)
-            .put("stream", false)
+            .put("stream", WorkspaceRichBlocksContract.enabled(extraSystemInstructions))
             .put("messages", entries)
             .put("max_completion_tokens", 2_048)
             .toString()

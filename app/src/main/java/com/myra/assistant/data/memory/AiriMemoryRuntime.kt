@@ -121,8 +121,14 @@ object FinalTurnSourceSpanAuthorizer {
         val normalized = normalize(span)
         return normalized.isNotBlank() && listOf(canonical, display).any { containsSpan(normalize(it), normalized) }
     }
+    private val auxiliaryEquivalence = listOf(
+        setOf("hai", "hain"),
+        setOf("hun", "hoon"),
+        setOf("mera", "meri", "mere")
+    )
     private fun lexicalEquivalent(a: String, b: String): Boolean {
         if (a == b) return true
+        if (auxiliaryEquivalence.any { a in it && b in it }) return true
         if (a.any(Char::isDigit) || b.any(Char::isDigit) || minOf(a.length, b.length) < 4) return false
         val left = phonetic(a); val right = phonetic(b); val distance = editDistance(left, right)
         return distance <= if (maxOf(left.length, right.length) >= 8) 2 else 1

@@ -17,6 +17,17 @@ class FinalTranscriptDisplayFormatterTest {
         assertEquals("Ruko, meri baat suno.", display("रुको, मेरी बात सुनो।"))
     }
 
+    @Test fun repairsObservedPreferenceAndAgentHinglishWithoutFuzzyNames() {
+        assertEquals(
+            "Mujhe short answer pasand hai.",
+            display("मुझे शॉर्ट आंसर पसंद है।")
+        )
+        assertEquals(
+            "Mujhe ek agent banana hai. Woh na mera har kaam kar sake. Aisa agent bana sakte hain kya?",
+            display("मुझे एक एजेंट बनाना है। वह ना मेरा हर काम कर सके। ऐसा एजेंट बना सकते हैं क्या?")
+        )
+    }
+
     @Test fun preservesDistinctNamesWithoutMemoryFuzzyMatching() {
         assertEquals("Mera best friend Karima hai.", display("मेरा बेस्ट फ्रेंड करीमा है।"))
         assertEquals("Karima nahi Kareem", display("करीमा नहीं करीम"))

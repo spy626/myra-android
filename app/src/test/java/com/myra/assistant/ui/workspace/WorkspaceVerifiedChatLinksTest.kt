@@ -14,52 +14,47 @@ class WorkspaceVerifiedChatLinksTest {
         assertEquals("https://github.com/spy626/myra-android/actions/runs/36841743155", links.single().url)
     }
 
-    @Test fun arrowLabelFromBuildReceiptIsStillOneVerifiedNativeLink() {
-        val original = "[↗ Open build #3380 on GitHub]" +
-            "(https://github.com/spy626/myra-android/actions/runs/36849363404)"
-        val links = WorkspaceVerifiedChatLinks.find(original)
-        assertEquals(1, links.size)
-        assertEquals("↗ Open build #3380 on GitHub", links.single().label)
-        assertEquals(
-            "https://github.com/spy626/myra-android/actions/runs/36849363404",
-            links.single().url,
+    @Test fun arbitrarySafePublicHttpsMarkdownLinksAreTappable() {
+        val cases = listOf(
+            "[OpenAI](https://openai.com/)" to "https://openai.com/",
+            "[YouTube](https://www.youtube.com/)" to "https://www.youtube.com/",
+            "[Android docs](https://developer.android.com/guide)" to
+                "https://developer.android.com/guide",
+            "[Example article](https://example.com/news?id=7#details)" to
+                "https://example.com/news?id=7#details",
         )
+        cases.forEach { (raw, expected) ->
+            val found = WorkspaceVerifiedChatLinks.find(raw)
+            assertEquals(raw, 1, found.size)
+            assertEquals(raw, expected, found.single().url)
+        }
     }
 
-    @Test fun conciseLinkWithChainIconAndExternalArrowRetainsVerifiedDestination() {
-        val original = "[🔗 GitHub Build #3382 ↗]" +
-            "(https://github.com/spy626/myra-android/actions/runs/36852520030)"
-        val links = WorkspaceVerifiedChatLinks.find(original)
-        assertEquals(1, links.size)
-        assertEquals("🔗 GitHub Build #3382 ↗", links.single().label)
-        assertEquals(
-            "https://github.com/spy626/myra-android/actions/runs/36852520030",
-            links.single().url,
-        )
-    }
-
-    @Test fun verifiedDirectApkReleaseLinkIsTappable() {
-        val raw = "[⬇ Download LYRA Test APK #3374]" +
-            "(https://github.com/spy626/myra-android/releases/download/" +
-            "airi-memory-b6bdd82a97a5/lyra-phone-test.apk)"
+    @Test fun bareSafeHttpsUrlIsAlsoTappable() {
+        val raw = "Official site: https://openai.com/."
         val found = WorkspaceVerifiedChatLinks.find(raw)
         assertEquals(1, found.size)
-        assertEquals("⬇ Download LYRA Test APK #3374", found.single().label)
-        assertEquals(
-            "https://github.com/spy626/myra-android/releases/download/" +
-                "airi-memory-b6bdd82a97a5/lyra-phone-test.apk", found.single().url
-        )
+        assertEquals("https://openai.com/", found.single().label)
+        assertEquals("https://openai.com/", found.single().url)
     }
 
-    @Test fun unsafeOrUnrelatedLinksNeverGetNativeClickableSpan() {
+    @Test fun unsafeUrlsNeverGetNativeClickableSpan() {
         listOf(
             "[Open](javascript:alert(1))",
-            "[Fake](https://github.com.evil.org/spy626/myra-android/actions/runs/3)",
-            "[Other](http://github.com/spy626/myra-android/actions/runs/3)",
-            "[Repo](https://github.com/spy626/myra-android)",
-            "[Invalid](https://github.com/spy626/myra-android/actions/runs/abc)",
-            "[Fake](https://github.com/spy626/myra-android/releases/download/evil-tag/lyra-phone-test.apk)",
-            "[Fake](https://github.com/spy626/myra-android/releases/download/airi-memory-b6bdd82a97a5/not-apk.exe)",
+            "[HTTP](http://example.com/)",
+            "[Local](https://localhost/admin)",
+            "[Private](https://127.0.0.1/admin)",
+            "[Metadata](https://169.254.169.254/latest)",
+            "[Credential](https://example.com/?token=secret)",
+            "http://example.com/",
         ).forEach { assertTrue(it, WorkspaceVerifiedChatLinks.find(it).isEmpty()) }
+    }
+
+    @Test fun markdownDestinationIsNotDuplicatedAsBareLink() {
+        val raw = "[OpenAI](https://openai.com/) and https://example.com/docs"
+        val found = WorkspaceVerifiedChatLinks.find(raw)
+        assertEquals(2, found.size)
+        assertEquals("OpenAI", found[0].label)
+        assertEquals("https://example.com/docs", found[1].label)
     }
 }

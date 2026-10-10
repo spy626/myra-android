@@ -47,6 +47,13 @@ import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.ui.main.MainActivity
 import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenPrivacyPolicy
+import com.myra.assistant.screen.RenderedBrowserObservation
+import com.myra.assistant.screen.RenderedBrowserNavigationPolicy
+import com.myra.assistant.screen.RenderedBrowserScrollPolicy
+import com.myra.assistant.screen.RenderedBrowserPageEvidence
+import com.myra.assistant.screen.RenderedBrowserPublicDestination
+import com.myra.assistant.screen.RenderedBrowserResearchContinuity
+import com.myra.assistant.screen.RenderedBrowserVerifiedSourceAnalysis
 import com.myra.assistant.screen.ScreenFramePrivacyFilter
 import com.myra.assistant.screen.ScreenPrivacyResult
 import com.myra.assistant.screen.ScreenQueryDispatchPolicy
@@ -70,6 +77,7 @@ import com.myra.assistant.screen.VisualScreenshotTimeoutPolicy
 import com.myra.assistant.screen.SemanticScreenFallbackPolicy
 import com.myra.assistant.screen.VisibleScreenElement
 import com.myra.assistant.agent.ActivityContextStore
+import com.myra.assistant.agent.ModelResearchGoalProposal
 import com.myra.assistant.agent.UnifiedLyraAgentRuntime
 import com.myra.assistant.agent.TurnIntent
 import com.myra.assistant.agent.WorkingTaskRuntime
@@ -86,6 +94,11 @@ import com.myra.assistant.agent.TaskCompletionState
 import com.myra.assistant.agent.AgentToolRegistry
 import com.myra.assistant.agent.GeneralActionResult
 import com.myra.assistant.agent.GeneralActionRouter
+import com.myra.assistant.agent.BrowserNavigationTaskEvidence
+import com.myra.assistant.agent.BrowserResearchComparison
+import com.myra.assistant.agent.BrowserResearchContinuation
+import com.myra.assistant.agent.BrowserResearchGoalCompletion
+import com.myra.assistant.agent.BrowserResearchSourceHandoff
 import com.myra.assistant.agent.GeneralAgentRuntimeStore
 import com.myra.assistant.agent.GeneralRuntimeTask
 import com.myra.assistant.agent.GeneralToolAdapter
@@ -156,8 +169,11 @@ class MyraVoiceService : Service() {
         fun onReady()
         fun onAmplitude(value: Float)
         fun onSpeaking(speaking: Boolean)
-        fun onUserText(text: String)
+        fun onUserText(turnId: Long, text: String)
+        fun onUserTextCorrection(turnId: Long, text: String) {}
         fun onMyraText(text: String, error: Boolean = false)
+        fun onMyraTextProvisional(turnId: Long, text: String) { onMyraText(text) }
+        fun onMyraTextCorrection(turnId: Long, text: String, error: Boolean = false) {}
     }
 
     private var audio: AudioEngine? = null
@@ -172,12 +188,25 @@ class MyraVoiceService : Service() {
     private val screenActionRegistry = ScreenActionIntentRegistry()
     private val textComposeSession = TextComposeSession()
     private var lastUserIntentText = ""
+    // A fresh user utterance invalidates any pending post-click browser attribution.
+    private val browserLinkActionEpoch = java.util.concurrent.atomic.AtomicLong(0L)
+    // RAM-only, bounded source correlation for a later explicit SCREEN QUESTION.
+    @Volatile private var lastBrowserPageEvidence: RenderedBrowserPageEvidence.Receipt? = null
     private val stagedMemorySemantics = java.util.concurrent.ConcurrentHashMap<Long, List<MemorySemanticFrame>>()
+    // One ephemeral model research suggestion per active voice turn; no execution authority.
+    private val stagedResearchGoals =
+        java.util.concurrent.ConcurrentHashMap<Long, ModelResearchGoalProposal>()
     private data class PendingMemoryRecall(
         val query: String,
         val type: MemoryRecallType
     )
     private val stagedMemoryRecalls = java.util.concurrent.ConcurrentHashMap<Long, PendingMemoryRecall>()
+    private val earlyMemoryRecallGate = EarlyMemoryRecallGate()
+    private val earlyMemoryRecallExecutions =
+        java.util.concurrent.ConcurrentHashMap<Long, com.myra.assistant.data.memory.LocalRecallExecution>()
+    private val provisionalMemoryUserTurns = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+    private val provisionalMemoryAssistantTurns = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+    private val pendingMemorySaveAudioGate = PendingMemorySaveAudioGate()
     private var memoryResponsePendingTurnId = 0L
     private var suppressModelForTurn = false
     private var waitingForFreshInputAfterCommand = false
@@ -312,12 +341,19 @@ class MyraVoiceService : Service() {
     }
     private val appActions by lazy { AppActionExecutor(this) }
     private val generalToolRegistry = AgentToolRegistry()
+    private val nativeWebSearchTool by lazy {
+        com.myra.assistant.agent.NativeReadOnlyWebSearchTool(this)
+    }
     private val generalActionRouter by lazy {
         GeneralActionRouter(ProductionGeneralAdapters.create(
             generalToolRegistry,
             ProductionAdapterExecutors(
                 scroll = { step, _ -> executeGeneralScrollAdapter(step.parameters) },
                 browserSearch = { step, _ -> executeGeneralBrowserSearchAdapter(step.parameters) },
+                webSearch = if (runCatching { nativeWebSearchTool.isAvailable() }
+                        .getOrDefault(false)) {
+                    { step, _ -> executeGeneralNativeWebSearchAdapter(step.parameters) }
+                } else null,
                 observeScreen = { _, _ -> GeneralActionResult(ActivityContextStore.snapshot() != null) },
                 verifyScreen = { _, _ -> GeneralActionResult(ActivityContextStore.snapshot() != null) },
                 back = { _, _ ->
@@ -382,6 +418,14 @@ class MyraVoiceService : Service() {
             .apply { setReferenceCounted(false); acquire() }
         isRunning = true
         ScreenCaptureService.listeners += screenCaptureListener
+        // Restore bounded verified tool history without blocking the foreground service.
+        // The single AIRI memory coordinator remains the only persistent owner.
+        serviceScope.launch {
+            val remembered = runCatching { memoryBrain.loadVerifiedSearchStrategies() }
+                .getOrDefault(emptyList())
+            GeneralAgentRuntimeStore.runtime.restoreVerifiedSearchOutcomes(remembered)
+            voiceLog("SEARCH_STRATEGY_MEMORY_RESTORED records=${remembered.size}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -542,6 +586,40 @@ class MyraVoiceService : Service() {
                         )
                     }
                 }
+                else if (earlyMemoryRecallGate.acceptToolGroundedAudio(activeTurnId, modelGenerationId)) {
+                    mediaGuard.beginAssistantTurn()
+                    audio?.setPlaybackContext(modelGenerationId, responseOwner = "MEMORY_MODEL_GROUNDED")
+                    audio?.setBargeInEnabled(true)
+                    audio?.queueAudio(pcm, modelGenerationId, "MEMORY_MODEL_GROUNDED")
+                    voiceLog(
+                        "MEMORY_MODEL_GROUNDED_AUDIO turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
+                            "bytes=${pcm.size} verifiedBeforeResponse=true"
+                    )
+                }
+                else if (earlyMemoryRecallGate.acceptsReleasedAudio(activeTurnId, modelGenerationId)) {
+                    mediaGuard.beginAssistantTurn()
+                    audio?.setPlaybackContext(modelGenerationId, responseOwner = "MEMORY_VERIFIED")
+                    audio?.setBargeInEnabled(true)
+                    audio?.queueAudio(pcm, modelGenerationId, "MEMORY_VERIFIED")
+                    voiceLog(
+                        "MEMORY_EARLY_MODEL_AUDIO_STREAMED turnId=$activeTurnId " +
+                            "modelGenerationId=$modelGenerationId bytes=${pcm.size} verifiedBeforeResponse=true"
+                    )
+                }
+                else if (earlyMemoryRecallGate.captureAudio(activeTurnId, modelGenerationId, pcm)) {
+                    val recallTurnId = activeTurnId
+                    voiceLog(
+                        "MEMORY_EARLY_MODEL_AUDIO_BUFFERED turnId=$recallTurnId modelGenerationId=$modelGenerationId " +
+                            "bytes=${pcm.size} verifiedBeforeResponse=false"
+                    )
+                    mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(recallTurnId) }
+                }
+                else if (pendingMemorySaveAudioGate.capture(activeTurnId, modelGenerationId, pcm)) {
+                    voiceLog(
+                        "MEMORY_SAVE_MODEL_AUDIO_BUFFERED turnId=$activeTurnId modelGenerationId=$modelGenerationId " +
+                            "bytes=${pcm.size} verifiedBeforeResponse=false"
+                    )
+                }
                 else if (responseArbiter.acceptsOrdinaryModel() && LyraPlaybackCapturePolicy.shouldAcceptModelAudio(
                         suppressed = suppressModelForTurn,
                         assistantAlreadySpeaking = localAudioSpeaking,
@@ -612,8 +690,20 @@ class MyraVoiceService : Service() {
             }
             client.onGenerationComplete = { modelGenerationId ->
                 val completedAt = android.os.SystemClock.elapsedRealtime()
-                turnLatency.record(activeTurnId, Field.MODEL_GENERATION_COMPLETED, completedAt, modelGenerationId)
-                voiceLog("model_generation_complete turnId=$activeTurnId modelGenerationId=$modelGenerationId at=$completedAt")
+                val completionTurnId = activeTurnId
+                turnLatency.record(completionTurnId, Field.MODEL_GENERATION_COMPLETED, completedAt, modelGenerationId)
+                voiceLog("model_generation_complete turnId=$completionTurnId modelGenerationId=$modelGenerationId at=$completedAt")
+                earlyMemoryRecallGate.markGenerationComplete(completionTurnId, modelGenerationId)
+                mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(completionTurnId) }
+            }
+            client.onInterimInputTranscript = interimInput@ { interim, _ ->
+                val turnId = activeTurnId
+                if (turnId == 0L || validatingLocalSpeech != null || screenResponseActive) return@interimInput
+                val previewText = interim.trim()
+                if (previewText.isBlank() || isPhantomTranscript(previewText)) return@interimInput
+                val plausibility = transcriptPlausibilityGate.preview(previewText)
+                if (!plausibility.semanticProcessingAllowed) return@interimInput
+                prefetchMemoryRecallFromInterim(turnId, previewText)
             }
             client.onInputTranscript = inputTranscript@ { part, latestModelGenerationId ->
                 if (screenResponseActive) {
@@ -630,6 +720,7 @@ class MyraVoiceService : Service() {
                     return@inputTranscript
                 }
                 if (input.isEmpty()) {
+                    browserLinkActionEpoch.incrementAndGet()
                     if (activeTurnId == 0L) activeTurnId = ++turnSequence
                     inputTurnStartedAt = android.os.SystemClock.elapsedRealtime()
                     turnLatency.record(activeTurnId, Field.INPUT_STARTED, inputTurnStartedAt)
@@ -802,8 +893,17 @@ class MyraVoiceService : Service() {
                     // delete, command, or permission parsers.
                     return@inputTranscript
                 }
-                // Memory Brain V2 never mutates or interrupts from partial ASR. Natural
-                // facts are evaluated silently only at the authoritative final turn.
+                if (provisionalMemoryUserTurns.contains(activeTurnId)) {
+                    val provisionalDisplay = romanDisplayText(currentTranscript).trim()
+                    if (provisionalDisplay.isNotBlank()) {
+                        listener?.onUserTextCorrection(activeTurnId, provisionalDisplay)
+                    }
+                }
+                // Read-only indexed recall may prefetch after local VAD has ended. This only
+                // reserves/buffers a response; durable mutation remains FINAL-turn-only.
+                reconcileEarlyMemoryRecallPreview(currentTranscript)
+                // Memory Brain V2 never mutates from partial ASR. Natural facts are evaluated
+                // silently only at the authoritative final turn.
                 if (CommandParser.isLikelyIncompleteActionFragment(currentTranscript)) {
                     incompleteActionFragmentTurn = true
                     suppressModelForTurn = true
@@ -884,6 +984,14 @@ class MyraVoiceService : Service() {
                         appendTranscript(output, transcript)
                         voiceLog("screen_query_result_received screen_query_id=$screenResponseQueryId screen_session_id=$screenResponseSessionId userTurnId=$screenResponseUserTurnId modelGenerationId=$modelGenerationId firstResponseTextAt=${android.os.SystemClock.elapsedRealtime()} screen_response_turn_consistency=true")
                     } else voiceLog("screen_query_result_dropped_stale screen_query_id=$screenResponseQueryId modelGenerationId=$modelGenerationId reason=wrong_generation")
+                }
+                else if (pendingMemorySaveAudioGate.appendTranscript(activeTurnId, modelGenerationId, transcript)) {
+                    appendTranscript(output, transcript)
+                }
+                else if (earlyMemoryRecallGate.appendModelTranscript(activeTurnId, transcript)) {
+                    val recallTurnId = activeTurnId
+                    appendTranscript(output, transcript)
+                    mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(recallTurnId) }
                 }
                 else if (memoryResponsePendingTurnId == activeTurnId && !hideNextModelTranscript) {
                     // Keep one natural response candidate, but do not display it until the
@@ -1164,10 +1272,21 @@ class MyraVoiceService : Service() {
                 )
                 latestActionDispatchedAt = 0L
                 val previousScrollContext = WorkingTaskRuntime.store.snapshot().lastCompletedTask
+                val proposedResearch = stagedResearchGoals.remove(activeTurnId)
                 val turnDecision = UnifiedLyraAgentRuntime.agent.acceptTurn(
                     normalizedFinalUserText, activityContext, visualAwarenessPreferences.enabled, activeTurnId,
                     hasRecentVerifiedVisualContext()
                 )
+                val acceptedResearch = ModelResearchGoalProposal.accept(
+                    proposedResearch, normalizedFinalUserText, activeTurnId, turnDecision)
+                if (acceptedResearch != null) {
+                    GeneralAgentRuntimeStore.runtime.enrich(
+                        mapOf("query" to acceptedResearch.request.query))
+                    voiceLog("SEMANTIC_RESEARCH_GOAL_ACCEPTED turnId=$" + "activeTurnId " +
+                        "queryChars=$" + "{acceptedResearch.request.query.length} finalBound=true")
+                } else if (proposedResearch != null) {
+                    voiceLog("SEMANTIC_RESEARCH_GOAL_REJECTED turnId=$" + "activeTurnId reason=final_or_authority_mismatch")
+                }
                 latestIntentDecidedAt = android.os.SystemClock.elapsedRealtime()
                 scrollContinuationTelemetry.resolution(activeTurnId, normalizedFinalUserText, latestIntentDecidedAt,
                     activityContext?.packageName, activityContext?.windowId,
@@ -1218,16 +1337,29 @@ class MyraVoiceService : Service() {
                     voiceLog("agent_plan_created taskId=${unifiedTask.id} steps=${unifiedTask.plan.joinToString(",") { it.id }}")
                 }
                 if (turnDecision.intent in setOf(TurnIntent.CONVERSATION, TurnIntent.QUESTION)) {
-                    // A complete conversational turn hard-locks all phone executors. Partial
-                    // keyword guesses are discarded and Gemini retains the sole response.
+                    // A complete conversational turn hard-locks all phone executors. Keep a
+                    // read-only memory preview reserved until FINAL reconciliation.
                     probableActionTurn = false
-                    suppressModelForTurn = false
+                    suppressModelForTurn = earlyMemoryRecallGate.isCapturing(activeTurnId) ||
+                        memoryResponsePendingTurnId == activeTurnId
                     voiceLog("agent_phone_tools_locked turnId=$activeTurnId reason=${turnDecision.intent}")
                     pendingScrollCandidates.discardForTurn(activeTurnId)
                 }
                 if (turnDecision.intent == TurnIntent.FOLLOW_UP) {
                     handleUnifiedActionFollowUp()
                     resetTurnBuffers("unified_action_follow_up")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
+                }
+                // Browser-specific final-turn contract precedes generic scrolling. A
+                // rejected browser-scroll-shaped command cannot fall through to repeats.
+                if (turnDecision.authorizesPhoneActions &&
+                    RenderedBrowserScrollPolicy.isBrowserPageScrollShaped(
+                        userText, AccessibilityHelperService.instance?.currentForegroundContext()?.packageName)
+                ) {
+                    pendingScrollCandidates.discardForTurn(activeTurnId)
+                    executeOneBrowserPageScroll(userText, activeTurnId)
+                    resetTurnBuffers("browser_one_verified_scroll")
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
@@ -1249,9 +1381,20 @@ class MyraVoiceService : Service() {
                     return@turnComplete
                 }
                 if (turnDecision.intent in setOf(TurnIntent.ACTION_REQUEST, TurnIntent.MULTI_STEP_GOAL) &&
-                    executeUnifiedBrowserSearch(normalizedFinalUserText)
+                    executeUnifiedBrowserSearch(normalizedFinalUserText, acceptedResearch)
                 ) {
                     resetTurnBuffers("unified_browser_search")
+                    waitingForFreshInputAfterCommand = true
+                    return@turnComplete
+                }
+                // One explicitly named browser link, bound to the accepted FINAL user turn.
+                // Rejected link-shaped requests cannot fall through to legacy generic tapping.
+                if (turnDecision.authorizesPhoneActions &&
+                    RenderedBrowserNavigationPolicy.isLinkShapedCommand(
+                        userText, AccessibilityHelperService.instance?.currentForegroundContext()?.packageName)
+                ) {
+                    executeNamedBrowserLink(userText, activeTurnId)
+                    resetTurnBuffers("verified_browser_named_link")
                     waitingForFreshInputAfterCommand = true
                     return@turnComplete
                 }
@@ -1423,18 +1566,68 @@ class MyraVoiceService : Service() {
                     val pendingRecall = stagedMemoryRecalls.remove(memoryTurnId)
                     val localRecallIntent = com.myra.assistant.data.memory.LocalMemoryRecallRouter
                         .classify(finalUtterance.memoryEvidence)
+                    val currentTurnMutationWins =
+                        com.myra.assistant.data.memory.FinalMemoryTurnArbiter.currentTurnMutationWins(staged)
+                    val effectivePendingRecall = pendingRecall.takeUnless { currentTurnMutationWins }
+                    val effectiveLocalRecallIntent = localRecallIntent.takeUnless { currentTurnMutationWins }
+                    val finalRecallType = effectiveLocalRecallIntent?.type ?: effectivePendingRecall?.type
+                    val earlyPreview = earlyMemoryRecallGate.currentIntent(memoryTurnId)
+                    val earlyRecallMatchesFinal = earlyPreview != null && earlyPreview.type == finalRecallType
+                    val earlyRecallVoiceReleased = earlyRecallMatchesFinal &&
+                        earlyMemoryRecallGate.wasReleased(memoryTurnId)
+                    val prefetchedLocalExecution = earlyMemoryRecallExecutions.remove(memoryTurnId)
+                        ?.takeIf { earlyRecallMatchesFinal && it.intent.type == finalRecallType }
+                    if (earlyPreview != null) {
+                        voiceLog(
+                            "MEMORY_EARLY_RECALL_RECONCILE turnId=$memoryTurnId " +
+                                "result=${if (earlyRecallMatchesFinal) "MATCH" else "MATERIAL_CHANGE"} " +
+                                "previewType=${earlyPreview.type} finalType=${finalRecallType ?: "NONE"} " +
+                                "voiceReleased=$earlyRecallVoiceReleased"
+                        )
+                    }
+                    if (currentTurnMutationWins && (pendingRecall != null || localRecallIntent != null)) {
+                        voiceLog(
+                            "MEMORY_RECALL_CONFLICT turnId=$memoryTurnId winner=CURRENT_TURN_MUTATION " +
+                                "pendingRecall=${pendingRecall != null} localRecall=${localRecallIntent != null}"
+                        )
+                    }
                     val memoryIntentResolvedAt = android.os.SystemClock.elapsedRealtime()
-                    val memoryOwned = staged.isNotEmpty() || pendingRecall != null || localRecallIntent != null
+                    // Plast-Mem-style final-turn fallback must own a likely durable turn
+                    // before the ordinary model reply is released. Otherwise the semantic
+                    // interpreter can write in the background after the user has already
+                    // asked the next recall question, creating a visible read-after-write race.
+                    val finalTurnFallbackEligible =
+                        staged.isEmpty() &&
+                            effectivePendingRecall == null &&
+                            effectiveLocalRecallIntent == null &&
+                            com.myra.assistant.data.memory.FinalTurnSemanticCandidateGate
+                                .shouldInterpret(finalUtterance.memoryEvidence)
+                    val memoryOwned =
+                        staged.isNotEmpty() || effectivePendingRecall != null || effectiveLocalRecallIntent != null ||
+                            finalTurnFallbackEligible
                     if (memoryOwned) {
                         suppressModelForTurn = true
                         localCommandExecutedThisTurn = true
-                        audio?.interrupt()
-                        responseArbiter.claimControlled(memoryTurnId)
-                        voiceLog(
-                            "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_PENDING " +
-                                "planDecision=PENDING verifiedBeforeResponse=false"
-                        )
+                        if (!earlyRecallVoiceReleased) {
+                            audio?.interrupt()
+                            responseArbiter.claimControlled(memoryTurnId)
+                            voiceLog(
+                                "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_PENDING " +
+                                    "planDecision=PENDING verifiedBeforeResponse=false"
+                            )
+                        } else {
+                            voiceLog(
+                                "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_VERIFIED_EARLY " +
+                                    "planDecision=RECALL verifiedBeforeResponse=true"
+                            )
+                        }
+                    } else if (earlyPreview != null) {
+                        earlyMemoryRecallExecutions.remove(memoryTurnId)
+                        earlyMemoryRecallGate.takeBufferedForOrdinary(memoryTurnId)?.let { buffered ->
+                            releaseBufferedEarlyMemoryAsOrdinary(memoryTurnId, buffered)
+                        }
                     }
+                    val bufferedSaveModelAudio = pendingMemorySaveAudioGate.take(memoryTurnId)
                     serviceScope.launch {
                         staged.forEach { proposal ->
                             val validation = com.myra.assistant.data.memory.FinalTurnSourceSpanAuthorizer.authorize(
@@ -1449,7 +1642,16 @@ class MyraVoiceService : Service() {
                                     "resolved=${validation.authorized}"
                             )
                         }
-                        val plan = if (localRecallIntent != null) {
+                        if (effectiveLocalRecallIntent != null) {
+                            serviceScope.launch {
+                                memoryBrain.projectFinalDisplay(finalUtterance.memoryEvidence)
+                                    ?.takeIf { it != displayedFinalUserText }
+                                    ?.let { corrected ->
+                                        mainHandler.post { listener?.onUserTextCorrection(memoryTurnId, corrected) }
+                                    }
+                            }
+                        }
+                        val plan = if (effectiveLocalRecallIntent != null) {
                             com.myra.assistant.data.memory.FinalMemoryTurnPlan(
                                 displayedFinalUserText, decision = com.myra.assistant.data.memory.MemoryDecision.RECALL
                             )
@@ -1462,6 +1664,12 @@ class MyraVoiceService : Service() {
                                 "operations=${plan.operations.size} clarification=${plan.requiresClarification} " +
                                 "rejectionReason=${plan.rejectionReason ?: "NONE"}"
                         )
+                        plan.displayProjection?.takeIf { it != displayedFinalUserText }?.let { corrected ->
+                            mainHandler.post { listener?.onUserTextCorrection(memoryTurnId, corrected) }
+                            voiceLog(
+                                "FINAL_USER_DISPLAY_PROJECTION turnId=$memoryTurnId corrected=true chars=${corrected.length}"
+                            )
+                        }
                         plan.operations.forEach { operation ->
                             voiceLog(
                                 "MEMORY_PLAN_OPERATION turnId=$memoryTurnId intent=${operation.intent} " +
@@ -1470,13 +1678,13 @@ class MyraVoiceService : Service() {
                             )
                         }
                         val retrievalStartedAt = android.os.SystemClock.elapsedRealtime()
-                        val localExecution = if (localRecallIntent != null) {
+                        val localExecution = prefetchedLocalExecution ?: if (effectiveLocalRecallIntent != null) {
                             fastMemoryLane.recall(finalUtterance.memoryEvidence)
                         } else null
                         val outcome = localExecution?.outcome
-                            ?: pendingRecall?.let { memoryBrain.recall(it.query, 8, it.type) }
+                            ?: effectivePendingRecall?.let { memoryBrain.recall(it.query, 8, it.type) }
                             ?: memoryBrain.executeFinalTurnPlan(plan, finalUtterance.memoryEvidence)
-                        val effectiveRecallType = localExecution?.intent?.type ?: pendingRecall?.type
+                        val effectiveRecallType = localExecution?.intent?.type ?: effectivePendingRecall?.type
                         logMemoryOutcome(memoryTurnId, plan, outcome, effectiveRecallType)
                         if (memoryOwned) {
                             val response = verifiedMemoryResponse(outcome, myraText)
@@ -1488,19 +1696,42 @@ class MyraVoiceService : Service() {
                                         "memoryIntentToRetrievalMs=${(retrievalStartedAt - memoryIntentResolvedAt).coerceAtLeast(0)} " +
                                         "retrievalDurationMs=${localExecution.outcome.durationMs} " +
                                         "retrievalToReplyQueuedMs=${(replyQueuedAt - retrievalStartedAt - localExecution.outcome.durationMs).coerceAtLeast(0)} " +
-                                        "networkCall=false"
+                                        "prefetched=${prefetchedLocalExecution != null} networkCall=false"
                                 )
                                 voiceLog(
                                     "MEMORY_RESPONSE_OWNER turnId=$memoryTurnId owner=MEMORY_VERIFIED " +
                                         "planDecision=${plan.decision} verifiedBeforeResponse=true"
                                 )
-                                listener?.onMyraText(response)
-                                emitState(response)
-                                queueLocalSpeech(
-                                    response,
-                                    allowUntranscribedAudio = true,
-                                    validationPolicy = LocalSpeechValidationPolicy.MEMORY
-                                )
+                                if (earlyRecallVoiceReleased) {
+                                    val groundedModelText = romanDisplayText(output.toString()).trim()
+                                    val displayOnly = groundedModelText.ifBlank { response }
+                                    deliverMemoryAssistantText(memoryTurnId, displayOnly)
+                                    emitState(displayOnly)
+                                    voiceLog(
+                                        "MEMORY_RECALL_AUDIO_DEDUPED turnId=$memoryTurnId " +
+                                            "reason=verified_model_voice_already_released " +
+                                            "displaySource=${if (groundedModelText.isNotBlank()) "MODEL_TRANSCRIPT" else "VERIFIED_FALLBACK"}"
+                                    )
+                                    earlyMemoryRecallGate.clear(memoryTurnId)
+                                } else if (
+                                    outcome is MemoryBrainOutcome.Mutated &&
+                                    outcome.result is MemoryWriteResult.Saved &&
+                                    bufferedSaveModelAudio != null
+                                ) {
+                                    val modelText = romanDisplayText(bufferedSaveModelAudio.transcript).trim()
+                                    val displayOnly = modelText.ifBlank { response }
+                                    deliverMemoryAssistantText(memoryTurnId, displayOnly)
+                                    emitState(displayOnly)
+                                    releaseVerifiedMemorySaveModelAudio(memoryTurnId, bufferedSaveModelAudio)
+                                } else {
+                                    deliverMemoryAssistantText(memoryTurnId, response)
+                                    emitState(response)
+                                    queueLocalSpeech(
+                                        response,
+                                        allowUntranscribedAudio = true,
+                                        validationPolicy = LocalSpeechValidationPolicy.MEMORY
+                                    )
+                                }
                             }
                         }
                         memoryBrain.captureConversation(finalUtterance.memoryEvidence, verifiedMemoryResponse(outcome, myraText))
@@ -1579,6 +1810,18 @@ class MyraVoiceService : Service() {
 
     private fun handleSemanticToolCall(id: String, functionName: String, args: org.json.JSONObject) {
         when (functionName) {
+            "propose_research_goal" -> {
+                val proposed = ModelResearchGoalProposal.fromTool(activeTurnId, args)
+                if (proposed == null || input.isBlank()) {
+                    live?.sendToolResponse(id, functionName, false, "No bounded active-turn research proposal")
+                } else {
+                    stagedResearchGoals[activeTurnId] = proposed
+                    voiceLog("SEMANTIC_RESEARCH_GOAL_STAGED turnId=$" + "activeTurnId " +
+                        "sourceChars=$" + "{proposed.sourceSpan.length} queryChars=$" + "{proposed.querySpan.length} executed=false")
+                    live?.sendToolHeld(id, functionName)
+                }
+                return
+            }
             "propose_user_memory" -> {
                 handleSemanticMemoryProposal(id, args)
                 return
@@ -1593,9 +1836,49 @@ class MyraVoiceService : Service() {
                     PendingMemoryRecall(query, queryType).also { stagedMemoryRecalls[recallTurnId] = it }
                 } else null
                 if (pendingRecall != null) {
-                    reserveMemoryResponse(recallTurnId, "QUERY_USER_MEMORY")
-                    voiceLog("MEMORY_RETRIEVAL_STAGED turnId=$recallTurnId queryType=$queryType executed=false")
-                    live?.sendToolHeld(id, "query_user_memory")
+                    if (earlyMemoryRecallGate.currentIntent(recallTurnId)?.type == queryType) {
+                        voiceLog(
+                            "MEMORY_RETRIEVAL_STAGED turnId=$recallTurnId queryType=$queryType " +
+                                "executed=false earlyLocalReadReserved=true"
+                        )
+                        serviceScope.launch {
+                            val execution = earlyMemoryRecallExecutions[recallTurnId]
+                                ?: fastMemoryLane.recall(
+                                    com.myra.assistant.data.memory.LocalRecallIntent(
+                                        queryType,
+                                        query.ifBlank { earlyMemoryRecallGate.currentIntent(recallTurnId)?.query.orEmpty() },
+                                        .99
+                                    )
+                                )
+                            earlyMemoryRecallExecutions.putIfAbsent(recallTurnId, execution)
+                            val facts = execution.outcome.rows.map { it.fact }
+                            mainHandler.post {
+                                if (activeTurnId != recallTurnId ||
+                                    earlyMemoryRecallGate.currentIntent(recallTurnId)?.type != queryType
+                                ) {
+                                    live?.sendToolHeld(id, "query_user_memory")
+                                    voiceLog(
+                                        "MEMORY_TOOL_RESULT_HELD turnId=$recallTurnId queryType=$queryType " +
+                                            "reason=stale_or_revised_preview"
+                                    )
+                                } else {
+                                    output.clear()
+                                    val baselineGenerationId = latestObservedModelGenerationId
+                                    earlyMemoryRecallGate.authorizeToolGrounded(recallTurnId, baselineGenerationId)
+                                    live?.sendMemoryRecallResult(id, "query_user_memory", queryType.name, facts)
+                                    voiceLog(
+                                        "MEMORY_TOOL_RESULT_SENT turnId=$recallTurnId queryType=$queryType " +
+                                            "rowCount=${facts.size} retrievalDurationMs=${execution.outcome.durationMs} " +
+                                            "afterGenerationId=$baselineGenerationId source=LOCAL_ROOM"
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        reserveMemoryResponse(recallTurnId, "QUERY_USER_MEMORY")
+                        voiceLog("MEMORY_RETRIEVAL_STAGED turnId=$recallTurnId queryType=$queryType executed=false")
+                        live?.sendToolHeld(id, "query_user_memory")
+                    }
                 } else {
                     live?.sendToolResponse(id, "query_user_memory", false, "No active authoritative turn")
                 }
@@ -1699,6 +1982,16 @@ class MyraVoiceService : Service() {
 
     private fun handleScreenActionTool(id: String, args: org.json.JSONObject) {
         val intentText = lastUserIntentText.ifBlank { input.toString().trim() }
+        if (RenderedBrowserNavigationPolicy.isLinkShapedCommand(
+                intentText, AccessibilityHelperService.instance?.currentForegroundContext()?.packageName)) {
+            // The model must not click a guessed browser link on a partial transcript.
+            // The final-turn route independently selects exactly one observed, safe label.
+            suppressModelForTurn = true
+            output.clear()
+            voiceLog("BROWSER_NAMED_LINK_MODEL_HELD turnId=$activeTurnId reason=FINAL_OWNER_REQUIRED")
+            live?.sendToolHeld(id, "perform_screen_action")
+            return
+        }
         val activeVisualTurn = fastVisualTurns.current()
         val actionTurnId = activeVisualTurn?.userTurnId?.takeIf { it > 0L }
             ?: screenResponseUserTurnId.takeIf { it > 0L }
@@ -1995,6 +2288,622 @@ class MyraVoiceService : Service() {
             before.recycle()
             after.recycle()
         }
+    }
+
+    /**
+     * One explicit user-requested browser-page scroll through the existing Accessibility
+     * owner. A changed UI signature alone cannot establish new meaningful page content.
+     */
+    private fun executeOneBrowserPageScroll(finalText: String, userTurnId: Long) {
+        if (!screenCommandTurnGuard.tryCommit(userTurnId)) {
+            voiceLog("BROWSER_ONE_SCROLL_REJECTED turnId=$userTurnId reason=duplicate_turn")
+            return
+        }
+        suppressModelForTurn = true
+        lastBrowserPageEvidence = null // a new attempt invalidates previous continuity
+        localCommandExecutedThisTurn = true
+        output.clear()
+        cancelSpeechForNewAction()
+        val taskId = GeneralAgentRuntimeStore.runtime.activeTask()
+            ?.takeIf { it.turnId == userTurnId }?.id
+        fun report(
+            message: String,
+            error: Boolean,
+            evidence: BrowserNavigationTaskEvidence.Result,
+            source: RenderedBrowserPageEvidence.Receipt? = null,
+        ) {
+            val recorded = BrowserNavigationTaskEvidence.completeOwned(
+                userTurnId, taskId, evidence,
+                GeneralAgentRuntimeStore.runtime, WorkingTaskRuntime.store)
+            voiceLog("BROWSER_ONE_SCROLL_TASK_EVIDENCE turnId=" + userTurnId +
+                " taskRecorded=" + recorded + " status=" + evidence.generalStatus +
+                " sourceSha256=" + (source?.contentSha256 ?: "none") +
+                " destinationUrlVerified=false autonomousContinuation=false")
+            // Quote raw page data in local chat only; controlled speech receives status,
+            // never website text as instructions or an automatically shared provider prompt.
+            if (source != null) lastBrowserPageEvidence = source
+            val localText = source?.let {
+                message + "\nObserved rendered text (untrusted): “" + it.localPreview() +
+                    "”\nVisible-text SHA-256: " + it.contentSha256
+            } ?: message
+            listener?.onMyraText(localText, error)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = true)
+        }
+        val accessibility = AccessibilityHelperService.instance
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            report("Browser Accessibility available nahi hai; scroll execute nahi hua.", true,
+                BrowserNavigationTaskEvidence.scrollRejected())
+            return
+        }
+        accessibility.refreshScreenContext(force = true)
+        val foreground = accessibility.currentForegroundContext()
+        val plan = RenderedBrowserScrollPolicy.plan(
+            finalText, ActivityContextStore.snapshot(), foreground,
+            android.os.SystemClock.elapsedRealtime())
+        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(foreground)
+        if (plan == null || scope == null) {
+            voiceLog("BROWSER_ONE_SCROLL_REJECTED turnId=$userTurnId reason=not_explicit_fresh_safe_page")
+            report("Ek fresh safe browser page aur exact one-scroll direction verify nahi hue.", true,
+                BrowserNavigationTaskEvidence.scrollRejected())
+            return
+        }
+        val actionEpoch = browserLinkActionEpoch.get()
+        fun ownsResult(): Boolean = browserLinkActionEpoch.get() == actionEpoch &&
+            (activeTurnId == 0L || activeTurnId == userTurnId)
+        val dispatchedAt = android.os.SystemClock.elapsedRealtime()
+        val accepted = accessibility.scrollCurrentForegroundVerified(
+            scope, plan.down
+        ) { signatureChanged ->
+            mainHandler.post {
+                if (!ownsResult()) {
+                    voiceLog("BROWSER_ONE_SCROLL_DROPPED turnId=$userTurnId reason=stale_after_dispatch")
+                    return@post
+                }
+                if (!signatureChanged) {
+                    report("Scroll ka naya visible content verify nahi hua.", true,
+                        BrowserNavigationTaskEvidence.afterScroll(false))
+                    return@post
+                }
+                accessibility.refreshScreenContext(force = true)
+                val first = ActivityContextStore.snapshot()
+                val firstForeground = accessibility.currentForegroundContext()
+                mainHandler.postDelayed({
+                    if (!ownsResult()) {
+                        voiceLog("BROWSER_ONE_SCROLL_DROPPED turnId=$userTurnId reason=new_turn_before_second_read")
+                        return@postDelayed
+                    }
+                    accessibility.refreshScreenContext(force = true)
+                    val second = ActivityContextStore.snapshot()
+                    val secondForeground = accessibility.currentForegroundContext()
+                    val verification = RenderedBrowserScrollPolicy.verify(
+                        plan, first, firstForeground, second, secondForeground,
+                        dispatchedAt, android.os.SystemClock.elapsedRealtime())
+                    if (!ownsResult()) {
+                        voiceLog("BROWSER_ONE_SCROLL_DROPPED turnId=$userTurnId reason=new_turn_after_second_read")
+                        return@postDelayed
+                    }
+                    val source = RenderedBrowserPageEvidence.afterOneScroll(
+                        plan, first, firstForeground, second, secondForeground,
+                        dispatchedAt, android.os.SystemClock.elapsedRealtime())
+                    val verified = verification ==
+                        RenderedBrowserScrollPolicy.Verification.NEW_STABLE_VISIBLE_TEXT_URL_UNVERIFIED &&
+                        source != null
+                    voiceLog("BROWSER_ONE_SCROLL_VERIFICATION turnId=" + userTurnId +
+                        " result=" + verification + " observations=2 scrollCount=1 urlVerified=false" +
+                        " sourceReceipt=" + (source != null))
+                    report(
+                        if (verified) "Browser par ek scroll ke baad naya readable text do observations mein verify hua; poori website ya URL verify nahi hui."
+                        else "Scroll dispatch hua, lekin safe stable page evidence verify nahi hua.",
+                        !verified, BrowserNavigationTaskEvidence.afterScroll(verified),
+                        source.takeIf { verified })
+                }, 420L)
+            }
+        }
+        if (!accepted) {
+            voiceLog("BROWSER_ONE_SCROLL_REJECTED turnId=$userTurnId reason=scroll_not_dispatched")
+            report("Browser par safe scrollable area nahi mila; kuch scroll nahi hua.", true,
+                BrowserNavigationTaskEvidence.scrollRejected())
+        } else {
+            latestActionDispatchedAt = dispatchedAt
+            voiceLog("BROWSER_ONE_SCROLL_DISPATCHED turnId=$userTurnId direction=" +
+                (if (plan.down) "DOWN" else "UP") +
+                " package=" + plan.packageName + " windowId=" + plan.windowId +
+                " generation=" + plan.generation + " count=1")
+        }
+    }
+
+    /**
+     * Explicit final-turn browser link action. Reuses the existing Accessibility owner and
+     * its actual live node resolver, but enforces a tighter read-only-navigation policy
+     * than ordinary buttons. Cannot select an unseen URL or auto-follow page suggestions.
+     */
+    private fun executeNamedBrowserLink(finalText: String, userTurnId: Long) {
+        if (!screenCommandTurnGuard.tryCommit(userTurnId)) {
+            voiceLog("BROWSER_NAMED_LINK_REJECTED turnId=$userTurnId reason=duplicate_turn")
+            return
+        }
+        suppressModelForTurn = true
+        lastBrowserPageEvidence = null // a new attempt invalidates previous continuity
+        localCommandExecutedThisTurn = true
+        output.clear()
+        cancelSpeechForNewAction()
+        val taskId = GeneralAgentRuntimeStore.runtime.activeTask()
+            ?.takeIf { it.turnId == userTurnId }?.id
+        // The prior multi-step search can authorize exactly one user-selected source read.
+        // The current link turn keeps its own task identity; no previous runtime task is revived.
+        val researchHandoff = BrowserResearchSourceHandoff.pending(
+            WorkingTaskRuntime.store.snapshot(), System.currentTimeMillis())
+        val researchComparison = WorkingTaskRuntime.store.pendingResearchComparison()
+        val researchContinuation = WorkingTaskRuntime.store.pendingResearchContinuation()
+        fun report(
+            message: String,
+            error: Boolean,
+            evidence: BrowserNavigationTaskEvidence.Result = BrowserNavigationTaskEvidence.rejected(),
+            source: RenderedBrowserPageEvidence.Receipt? = null,
+        ) {
+            val accepted = BrowserNavigationTaskEvidence.completeOwned(
+                userTurnId, taskId, evidence,
+                GeneralAgentRuntimeStore.runtime, WorkingTaskRuntime.store)
+            voiceLog("BROWSER_NAMED_LINK_TASK_EVIDENCE turnId=" + userTurnId +
+                " taskRecorded=" + accepted + " status=" + evidence.generalStatus +
+                " sourceSha256=" + (source?.contentSha256 ?: "none") +
+                " destinationVerified=" + (source?.destinationUrlVerified == true) +
+                " destinationSha256=" + (source?.publicDestination?.urlSha256 ?: "none") +
+                " autonomousContinuation=false")
+            if (source != null) lastBrowserPageEvidence = source
+            val localText = source?.let {
+                val destination = it.publicDestination?.let { verified ->
+                    "\nVerified public destination: " + verified.canonicalUrl +
+                        "\nDestination URL SHA-256: " + verified.urlSha256
+                }.orEmpty()
+                message + "\nObserved rendered text (untrusted): “" + it.localPreview() +
+                    "”\nVisible-text SHA-256: " + it.contentSha256 + destination
+            } ?: message
+            listener?.onMyraText(localText, error)
+            emitState(message)
+            queueLocalSpeech(message, allowUntranscribedAudio = true)
+        }
+        val accessibility = AccessibilityHelperService.instance
+        if (accessibility == null || !AccessibilityHelperService.isEnabled(this)) {
+            voiceLog("BROWSER_NAMED_LINK_REJECTED turnId=$userTurnId reason=accessibility_off")
+            report("Browser Accessibility available nahi hai; koi link tap nahi hua.", true)
+            return
+        }
+        accessibility.refreshScreenContext(force = true)
+        val current = accessibility.currentForegroundContext()
+        val now = android.os.SystemClock.elapsedRealtime()
+        val plan = RenderedBrowserNavigationPolicy.plan(
+            finalText, ActivityContextStore.snapshot(), current, now)
+        if (plan == null) {
+            voiceLog("BROWSER_NAMED_LINK_REJECTED turnId=$userTurnId reason=not_one_fresh_safe_named_link")
+            report("Ek unique safe link verify nahi hua. Link ka exact visible naam bolo.", true)
+            return
+        }
+        val scope = com.myra.assistant.screen.ForegroundActionPolicy.scope(current)
+        if (scope == null) {
+            report("Browser window badal gayi; link tap nahi hua.", true)
+            return
+        }
+        val metrics = resources.displayMetrics
+        val result = accessibility.resolveAndTapVisibleTarget(
+            plan.label, null, null, scope
+        ) { candidate, confidence ->
+            RenderedBrowserNavigationPolicy.allowsResolvedTarget(
+                plan, candidate.label, candidate.role, confidence,
+                candidate.right - candidate.left, candidate.bottom - candidate.top,
+                metrics.widthPixels, metrics.heightPixels)
+        }
+        if (!result.accepted) {
+            voiceLog("BROWSER_NAMED_LINK_REJECTED turnId=$userTurnId reason=" +
+                result.resolution + " targetChars=" + plan.label.length)
+            report("Link par safe tap execute nahi hua (" + result.resolution + ").", true)
+            return
+        }
+        val dispatchedAt = android.os.SystemClock.elapsedRealtime()
+        val actionEpoch = browserLinkActionEpoch.get()
+        latestActionDispatchedAt = dispatchedAt
+        voiceLog("BROWSER_NAMED_LINK_DISPATCHED turnId=$userTurnId package=" +
+            plan.packageName + " windowId=" + plan.windowId +
+            " generation=" + plan.generation + " verifiedUrl=false")
+        fun ownsResult(): Boolean = browserLinkActionEpoch.get() == actionEpoch &&
+            (activeTurnId == 0L || activeTurnId == userTurnId)
+        mainHandler.postDelayed({
+            if (!ownsResult()) {
+                voiceLog("BROWSER_NAMED_LINK_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
+                return@postDelayed
+            }
+            accessibility.refreshScreenContext(force = true)
+            val firstContext = ActivityContextStore.snapshot()
+            val firstForeground = accessibility.currentForegroundContext()
+            // Never call the first screen change a success. Wait for a second distinct
+            // observation of the same post-action browser/window and stable new content.
+            mainHandler.postDelayed({
+                if (!ownsResult()) {
+                    voiceLog("BROWSER_NAMED_LINK_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn_before_second_observation")
+                    return@postDelayed
+                }
+                accessibility.refreshScreenContext(force = true)
+                val secondContext = ActivityContextStore.snapshot()
+                val secondForeground = accessibility.currentForegroundContext()
+                val verification = RenderedBrowserNavigationPolicy.verifyStable(
+                    plan, firstContext, firstForeground, secondContext, secondForeground,
+                    dispatchedAt, android.os.SystemClock.elapsedRealtime())
+                if (!ownsResult()) {
+                    voiceLog("BROWSER_NAMED_LINK_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn_after_second_observation")
+                    return@postDelayed
+                }
+                voiceLog("BROWSER_NAMED_LINK_VERIFIED turnId=$userTurnId result=" +
+                    verification + " observations=2 urlVerified=false")
+                val source = RenderedBrowserPageEvidence.afterNamedLink(
+                    plan, firstContext, firstForeground, secondContext, secondForeground,
+                    dispatchedAt, android.os.SystemClock.elapsedRealtime())
+                val accepted = verification ==
+                    RenderedBrowserNavigationPolicy.Verification.BROWSER_CONTENT_CHANGED_URL_UNVERIFIED &&
+                    source != null
+                val stableSource = source
+                if (accepted && stableSource != null) {
+                    val destinationCandidate = RenderedBrowserPublicDestination.candidate(
+                        secondContext, secondForeground, stableSource,
+                        android.os.SystemClock.elapsedRealtime())
+                    if (destinationCandidate == null) {
+                        val evidence = BrowserNavigationTaskEvidence.afterTap(verification)
+                        report("Browser mein naya page text do observations mein stable mila; destination URL verify nahi hui.",
+                            false, evidence, stableSource)
+                    } else {
+                        // DNS may block; keep it off the Accessibility/main path. A newer
+                        // user turn invalidates this attribution before any result is reported.
+                        serviceScope.launch {
+                            val destination = RenderedBrowserPublicDestination.verifyPublic(
+                                destinationCandidate)
+                            mainHandler.post {
+                                if (!ownsResult()) {
+                                    voiceLog("BROWSER_NAMED_LINK_DESTINATION_DROPPED turnId=$userTurnId reason=new_user_turn")
+                                    return@post
+                                }
+                                val bound = destination?.let {
+                                    RenderedBrowserPublicDestination.bind(stableSource, it)
+                                } ?: stableSource
+                                val evidence = BrowserNavigationTaskEvidence.afterTap(
+                                    verification, bound.destinationUrlVerified)
+                                if (bound.destinationUrlVerified) {
+                                    val verifiedDestination = bound.publicDestination
+                                    val preparedThird = if (researchContinuation != null &&
+                                        verifiedDestination != null
+                                    ) RenderedBrowserVerifiedSourceAnalysis.prepareThird(
+                                        researchContinuation, verifiedDestination)
+                                    else null
+                                    val thirdClaimed = preparedThird != null &&
+                                        researchContinuation != null &&
+                                        WorkingTaskRuntime.store.claimResearchContinuation(
+                                            researchContinuation)
+
+                                    val preparedSecond = if (researchComparison != null &&
+                                        verifiedDestination != null
+                                    ) RenderedBrowserVerifiedSourceAnalysis.prepareSecond(
+                                        researchComparison, verifiedDestination)
+                                    else null
+                                    val secondClaimed = preparedSecond != null &&
+                                        researchComparison != null &&
+                                        WorkingTaskRuntime.store.claimResearchComparison(
+                                            researchComparison)
+
+                                    if (thirdClaimed && preparedThird != null &&
+                                        researchContinuation != null
+                                    ) {
+                                        report(
+                                            "Browser mein third public destination verify hui; final bounded research source ka one-page local read start hua.",
+                                            false, evidence, bound)
+                                        serviceScope.launch {
+                                            val analyzed = runCatching {
+                                                RenderedBrowserVerifiedSourceAnalysis.executeBlocking(
+                                                    preparedThird)
+                                            }
+                                            mainHandler.post {
+                                                if (!ownsResult()) {
+                                                    WorkingTaskRuntime.store.releaseResearchContinuation(
+                                                        researchContinuation)
+                                                    voiceLog(
+                                                        "BROWSER_RESEARCH_THIRD_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
+                                                    return@post
+                                                }
+                                                analyzed.onSuccess { result ->
+                                                    val continued =
+                                                        RenderedBrowserVerifiedSourceAnalysis.resolveThird(
+                                                            researchContinuation, result)
+                                                    if (continued != null &&
+                                                        WorkingTaskRuntime.store.completeResearchContinuation(
+                                                            researchContinuation)
+                                                    ) {
+                                                        val boundedAnswer =
+                                                            RenderedBrowserVerifiedSourceAnalysis.boundedAnswer(
+                                                                continued)
+                                                        val summary =
+                                                            boundedAnswer?.let {
+                                                                RenderedBrowserVerifiedSourceAnalysis.answerSummary(it)
+                                                            } ?: RenderedBrowserVerifiedSourceAnalysis.continuationSummary(
+                                                                continued)
+                                                        listener?.onMyraText(summary)
+                                                        val continuationMessage =
+                                                            when (continued.disposition) {
+                                                                BrowserResearchContinuation.Disposition.BOUNDED_SUMMARY_READY_AFTER_THIRD ->
+                                                                    "Third source ke baad bounded research answer ready hai; screen par strict source-supported evidence hai. Factual truth ya paraphrase equivalence independently verify nahi hui."
+                                                                BrowserResearchContinuation.Disposition.CONFLICT_REMAINS_AFTER_THIRD ->
+                                                                    "Third source ke baad bhi bounded claim conflict unresolved hai; koi source automatically correct nahi maana gaya."
+                                                                BrowserResearchContinuation.Disposition.FINAL_UNRESOLVED_NO_ALIGNMENT ->
+                                                                    "Third source ke baad bhi safe claim alignment nahi mila; bounded continuation yahin stop hoti hai."
+                                                            }
+                                                        emitState(continuationMessage)
+                                                        queueLocalSpeech(
+                                                            continuationMessage,
+                                                            allowUntranscribedAudio = true)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_THIRD_COMPLETE turnId=$userTurnId " +
+                                                                "priorTaskId=${continued.taskId} " +
+                                                                "firstHost=${continued.first.host} secondHost=${continued.second.host} " +
+                                                                "thirdHost=${continued.third.host} disposition=${continued.disposition} " +
+                                                                "boundedSummaryReady=${continued.boundedSummaryReady} " +
+                                                                "truthVerified=${continued.factualTruthVerified} " +
+                                                                "autonomousContinuation=${continued.autonomousContinuationAllowed} " +
+                                                                "answerSynthesized=${boundedAnswer != null} " +
+                                                                "providerShared=false memoryWritten=false autonomousFourthSource=false")
+                                                    } else {
+                                                        val consumed =
+                                                            WorkingTaskRuntime.store.completeResearchContinuation(
+                                                                researchContinuation)
+                                                        val message =
+                                                            "Third selected public source se same research query ka safe matched evidence nahi mila. Bounded third-source continuation yahin stop hoti hai."
+                                                        listener?.onMyraText(message, true)
+                                                        emitState(message)
+                                                        queueLocalSpeech(
+                                                            "Third source se relevant evidence nahi mila; bounded continuation yahin stop hai.",
+                                                            allowUntranscribedAudio = false)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_THIRD_INSUFFICIENT turnId=$userTurnId " +
+                                                                "priorTaskId=${researchContinuation.taskId} consumed=$consumed " +
+                                                                "autonomousFourthSource=false")
+                                                    }
+                                                }.onFailure {
+                                                    WorkingTaskRuntime.store.releaseResearchContinuation(
+                                                        researchContinuation)
+                                                    val message =
+                                                        "Third verified source ka bounded static read available nahi tha; continuation pending hai aur koi fourth action auto-start nahi hua."
+                                                    listener?.onMyraText(message, true)
+                                                    emitState(message)
+                                                    queueLocalSpeech(
+                                                        "Third source ka static read available nahi tha; continuation pending hai.",
+                                                        allowUntranscribedAudio = false)
+                                                    voiceLog(
+                                                        "BROWSER_RESEARCH_THIRD_STOPPED turnId=$userTurnId " +
+                                                            "priorTaskId=${researchContinuation.taskId} " +
+                                                            "reason=${it.javaClass.simpleName} retryAllowed=true autonomousFourthSource=false")
+                                                }
+                                            }
+                                        }
+                                    } else if (secondClaimed && preparedSecond != null &&
+                                        researchComparison != null
+                                    ) {
+                                        report(
+                                            "Browser mein different-host public destination verify hui; second research source ka one-page local read start hua.",
+                                            false, evidence, bound)
+                                        serviceScope.launch {
+                                            val analyzed = runCatching {
+                                                RenderedBrowserVerifiedSourceAnalysis.executeBlocking(
+                                                    preparedSecond)
+                                            }
+                                            mainHandler.post {
+                                                if (!ownsResult()) {
+                                                    WorkingTaskRuntime.store.releaseResearchComparison(
+                                                        researchComparison)
+                                                    voiceLog(
+                                                        "BROWSER_RESEARCH_COMPARISON_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
+                                                    return@post
+                                                }
+                                                analyzed.onSuccess { result ->
+                                                    val comparison =
+                                                        RenderedBrowserVerifiedSourceAnalysis.compare(
+                                                            researchComparison, result)
+                                                    val goal = comparison?.let {
+                                                        RenderedBrowserVerifiedSourceAnalysis.goalAssessment(it)
+                                                    }
+                                                    val continuation =
+                                                        if (comparison != null && goal != null)
+                                                            BrowserResearchContinuation.start(
+                                                                comparison, goal,
+                                                                System.currentTimeMillis())
+                                                        else null
+                                                    if (comparison != null && goal != null &&
+                                                        WorkingTaskRuntime.store.completeResearchComparison(
+                                                            researchComparison, continuation)
+                                                    ) {
+                                                        val boundedAnswer =
+                                                            RenderedBrowserVerifiedSourceAnalysis.boundedAnswer(
+                                                                comparison, goal)
+                                                        val summary =
+                                                            boundedAnswer?.let {
+                                                                RenderedBrowserVerifiedSourceAnalysis.answerSummary(it)
+                                                            } ?: (
+                                                                RenderedBrowserVerifiedSourceAnalysis.comparisonSummary(
+                                                                    comparison, goal) +
+                                                                    if (continuation != null)
+                                                                        "\nResearch unresolved hai. Continue karna ho to results par pehle dono hosts se different third public site ka named link explicitly open karo."
+                                                                    else ""
+                                                                )
+                                                        listener?.onMyraText(summary)
+                                                        val goalMessage = when (goal.disposition) {
+                                                            BrowserResearchGoalCompletion.Disposition.BOUNDED_SUMMARY_READY ->
+                                                                "Bounded research answer ready hai; screen par strict source-supported evidence hai. Factual truth ya paraphrase equivalence independently verify nahi hui."
+                                                            BrowserResearchGoalCompletion.Disposition.UNRESOLVED_CRITICAL_LITERAL_CONFLICT ->
+                                                                if (continuation != null)
+                                                                    "Bounded claim conflict unresolved hai. Continue karna ho to different third public site ka named link explicitly open karo."
+                                                                else
+                                                                    "Bounded claim conflict unresolved hai; koi source automatically correct nahi maana gaya."
+                                                            BrowserResearchGoalCompletion.Disposition.MORE_EVIDENCE_REQUIRED ->
+                                                                if (continuation != null)
+                                                                    "Safe claim alignment nahi mila. Continue karna ho to different third public site ka named link explicitly open karo."
+                                                                else
+                                                                    "Safe claim alignment nahi mila; research unresolved hai."
+                                                        }
+                                                        emitState(goalMessage)
+                                                        queueLocalSpeech(
+                                                            goalMessage,
+                                                            allowUntranscribedAudio = true)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_COMPARISON_COMPLETE turnId=$userTurnId " +
+                                                                "priorTaskId=${comparison.taskId} " +
+                                                                "firstHost=${comparison.first.host} secondHost=${comparison.second.host} " +
+                                                                "sharedTerms=${comparison.sharedTerms.size} decision=${comparison.decision} " +
+                                                                "claimRelation=${comparison.claimAssessment.relation} " +
+                                                                "goalDisposition=${goal.disposition} boundedSummaryReady=${goal.boundedSummaryReady} " +
+                                                                "truthVerified=${goal.factualTruthVerified} autonomousContinuation=${goal.autonomousContinuationAllowed} " +
+                                                                "continuationPending=${continuation != null} " +
+                                                                "answerSynthesized=${boundedAnswer != null} " +
+                                                                "providerShared=false memoryWritten=false autonomousThirdSource=false")
+                                                    } else {
+                                                        WorkingTaskRuntime.store.releaseResearchComparison(
+                                                            researchComparison)
+                                                        val message =
+                                                            "Second public source read hua, lekin same research query ke liye safe matched evidence nahi mila. Different public source explicitly choose karo."
+                                                        listener?.onMyraText(message, true)
+                                                        emitState(message)
+                                                        queueLocalSpeech(
+                                                            "Second source se relevant evidence nahi mila; different public source choose karo.",
+                                                            allowUntranscribedAudio = false)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_COMPARISON_INSUFFICIENT turnId=$userTurnId " +
+                                                                "priorTaskId=${researchComparison.taskId} retryAllowed=true")
+                                                    }
+                                                }.onFailure {
+                                                    WorkingTaskRuntime.store.releaseResearchComparison(
+                                                        researchComparison)
+                                                    val message =
+                                                        "Second verified source ka bounded static read available nahi tha; comparison pending hai aur koi third action auto-start nahi hua."
+                                                    listener?.onMyraText(message, true)
+                                                    emitState(message)
+                                                    queueLocalSpeech(
+                                                        "Second source ka static read available nahi tha; comparison pending hai.",
+                                                        allowUntranscribedAudio = false)
+                                                    voiceLog(
+                                                        "BROWSER_RESEARCH_COMPARISON_STOPPED turnId=$userTurnId " +
+                                                            "priorTaskId=${researchComparison.taskId} " +
+                                                            "reason=${it.javaClass.simpleName} retryAllowed=true")
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        val preparedResearch = researchHandoff?.let { pending ->
+                                            verifiedDestination?.let { destination ->
+                                                RenderedBrowserVerifiedSourceAnalysis.prepare(
+                                                    pending, destination)
+                                            }
+                                        }
+                                        val researchClaimed = preparedResearch != null &&
+                                            researchHandoff != null &&
+                                            WorkingTaskRuntime.store.claimResearchSourceHandoff(
+                                                researchHandoff)
+                                        if (researchClaimed && preparedResearch != null &&
+                                            researchHandoff != null
+                                        ) {
+                                            report(
+                                                "Browser mein public HTTPS destination verify hui; selected research source ka one-page local read start hua.",
+                                                false, evidence, bound)
+                                            serviceScope.launch {
+                                                val analyzed = runCatching {
+                                                    RenderedBrowserVerifiedSourceAnalysis.executeBlocking(
+                                                        preparedResearch)
+                                                }
+                                                mainHandler.post {
+                                                    if (!ownsResult()) {
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_SOURCE_RESULT_DROPPED turnId=$userTurnId reason=new_user_turn")
+                                                        return@post
+                                                    }
+                                                    analyzed.onSuccess { result ->
+                                                        val comparisonSession =
+                                                            RenderedBrowserVerifiedSourceAnalysis.startComparison(
+                                                                researchHandoff, result)
+                                                        val comparisonPending =
+                                                            comparisonSession != null &&
+                                                                WorkingTaskRuntime.store.beginResearchComparison(
+                                                                    comparisonSession)
+                                                        val summary =
+                                                            RenderedBrowserVerifiedSourceAnalysis.localSummary(
+                                                                result) +
+                                                                if (comparisonPending)
+                                                                    "\nFor a different-host comparison, return to the results and explicitly open a link from a different public site."
+                                                                else ""
+                                                        listener?.onMyraText(summary)
+                                                        emitState(
+                                                            if (comparisonPending)
+                                                                "First public source ready; second different-host source user selection ka wait hai."
+                                                            else "Selected public source ka local analysis complete hua.")
+                                                        queueLocalSpeech(
+                                                            if (comparisonPending)
+                                                                "First source ready hai. Comparison ke liye results par jaakar different public site ka named link kholne ko bolo."
+                                                            else "Selected public source ka one-page analysis complete hua; full research goal abhi complete nahi hai.",
+                                                            allowUntranscribedAudio = true)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_SOURCE_ANALYZED turnId=$userTurnId " +
+                                                                "priorTaskId=${preparedResearch.researchTaskId} " +
+                                                                "sourceSha256=${result.page.evidence.provenance.contentSha256} " +
+                                                                "findingCount=${result.report.findings.size} " +
+                                                                "verifiedPages=${result.report.verifiedPageCount} " +
+                                                                "comparisonPending=$comparisonPending secondLinkFollowed=false " +
+                                                                "providerShared=false memoryWritten=false goalComplete=false")
+                                                    }.onFailure {
+                                                        val message =
+                                                            "Verified browser source ka bounded static read available nahi tha; koi second link follow nahi hua."
+                                                        listener?.onMyraText(message, true)
+                                                        emitState(message)
+                                                        queueLocalSpeech(
+                                                            "Selected source ka static read available nahi tha; koi second link follow nahi hua.",
+                                                            allowUntranscribedAudio = false)
+                                                        voiceLog(
+                                                            "BROWSER_RESEARCH_SOURCE_ANALYSIS_STOPPED turnId=$userTurnId " +
+                                                                "priorTaskId=${preparedResearch.researchTaskId} " +
+                                                                "reason=${it.javaClass.simpleName} secondLinkFollowed=false")
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            report(
+                                                "Browser mein naya page text aur public HTTPS destination verify hui.",
+                                                false, evidence, bound)
+                                            if (researchContinuation != null &&
+                                                verifiedDestination != null &&
+                                                researchContinuation.hosts.any {
+                                                    verifiedDestination.host.equals(
+                                                        it, ignoreCase = true)
+                                                }
+                                            ) {
+                                                listener?.onMyraText(
+                                                    "Final bounded third-source continuation ke liye pehle dono sources se different public site ka named link choose karo.")
+                                            } else if (researchComparison != null &&
+                                                verifiedDestination != null &&
+                                                verifiedDestination.host.equals(
+                                                    researchComparison.first.host,
+                                                    ignoreCase = true)
+                                            ) {
+                                                listener?.onMyraText(
+                                                    "Different-host comparison ke liye pehle source se different public site ka named link choose karo.")
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    report("Browser mein naya page text stable mila; public destination independently verify nahi hui.",
+                                        false, evidence, bound)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    val evidence = BrowserNavigationTaskEvidence.afterTap(
+                        RenderedBrowserNavigationPolicy.Verification.UNKNOWN)
+                    report("Tap dispatch hua, lekin safe stable browser source verify nahi hua.",
+                        true, evidence)
+                }
+            }, 450L)
+        }, 650L)
     }
 
     /**
@@ -2479,9 +3388,52 @@ class MyraVoiceService : Service() {
                 screenFreshFrameCapturedAt = screenshot.capturedAt
                 screenFrameSentAt = android.os.SystemClock.elapsedRealtime()
                 fastVisualTurns.current()?.takeIf { it.id == visualTurnId }?.modelRequestAt = screenFrameSentAt
-                val ui = elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
-                    .joinToString("\n") { "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]" }
-                    .take(4_000)
+                // Browser pages have already executed their own JS in the user's foreground
+                // browser. Observe only what the existing Accessibility owner can actually see;
+                // URL/link destinations and hidden DOM are NOT verified by this screen route.
+                // An ACTION keeps its old executor path, never receiving browser navigation authority.
+                val renderedBrowserQuestion = visualRequest.kind == FastVisualKind.QUESTION &&
+                    RenderedBrowserObservation.isSupportedBrowser(current.packageName)
+                val renderedBrowser = if (renderedBrowserQuestion) {
+                    RenderedBrowserObservation.capture(
+                        observed = ActivityContextStore.snapshot(),
+                        actualPackage = current.packageName,
+                        actualWindowId = current.windowId,
+                        actualGeneration = current.generation,
+                        screenshotAt = screenshot.capturedAt,
+                        now = frameReadyAt,
+                    )
+                } else null
+                // The user explicitly asked a new screen question. Only now can the
+                // previously verified local browser receipt annotate the fresh frame.
+                val browserContinuity = if (renderedBrowserQuestion) {
+                    RenderedBrowserResearchContinuity.correlate(
+                        lastBrowserPageEvidence, renderedBrowser, frameReadyAt)
+                } else null
+                if (renderedBrowserQuestion && browserContinuity == null) {
+                    lastBrowserPageEvidence = null // stale/window-changed/unmatched: discard
+                }
+                val ui = if (renderedBrowserQuestion) {
+                    val browserPrompt = renderedBrowser?.prompt() ?: "The current browser's Accessibility text was " +
+                        "not safely verified for this exact window and screenshot. Use only " +
+                        "the privacy-filtered screenshot; do not assert a verified URL, " +
+                        "hidden DOM, successful link navigation or unseen webpage content."
+                    if (browserContinuity == null) browserPrompt
+                    else (browserPrompt + "\n" + browserContinuity.prompt()).take(4_000)
+                } else {
+                    elements.filter { ScreenPrivacyPolicy.sensitiveCategory(it.label) == null }
+                        .joinToString("\n") {
+                            "${it.label} [${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}]"
+                        }.take(4_000)
+                }
+                if (renderedBrowserQuestion) {
+                    voiceLog("RENDERED_BROWSER_OBSERVATION turnId=$userTurnId " +
+                        "matchedFreshWindow=${renderedBrowser != null} package=${current.packageName} " +
+                        "safeLines=${renderedBrowser?.textLines?.size ?: 0} " +
+                        "linkLabels=${renderedBrowser?.linkLabels?.size ?: 0} " +
+                        "priorActionCorrelated=${browserContinuity != null} " +
+                        "urlVerified=false actionAuthorized=false")
+                }
                 voiceLog(
                     "agent_observation package=${current.packageName} windowGeneration=${current.generation} " +
                         "semanticElements=${ActivityContextStore.snapshot()?.visibleElements?.size ?: 0} screenshotUsed=true"
@@ -2836,11 +3788,222 @@ class MyraVoiceService : Service() {
         val merged = StagedMemoryProposalPolicy.merge(existing, operations)
         stagedMemorySemantics[proposalTurnId] = merged
         reserveMemoryResponse(proposalTurnId, "SEMANTIC_PROPOSAL")
+        pendingMemorySaveAudioGate.arm(proposalTurnId, latestObservedModelGenerationId)
+        emitProvisionalMemoryChat(proposalTurnId, input.toString())
         voiceLog(
             "MEMORY_SEMANTIC_PROPOSAL_STAGED turnId=$proposalTurnId received=${operations.size} " +
                 "merged=${merged.size} decision=WAIT_FOR_FINAL executed=false"
         )
-        live?.sendToolHeld(id, "propose_user_memory")
+        live?.sendMemoryProposalHeld(id, "propose_user_memory")
+    }
+
+    private fun prefetchMemoryRecallFromInterim(turnId: Long, currentTranscript: String) {
+        val preview = com.myra.assistant.data.memory.LocalMemoryRecallRouter
+            .classifyPreview(currentTranscript) ?: return
+        val existing = earlyMemoryRecallGate.currentIntent(turnId)
+        if (existing != null) {
+            if (existing.type == preview.type && provisionalMemoryUserTurns.contains(turnId)) {
+                val display = romanDisplayText(currentTranscript).trim()
+                if (display.isNotBlank()) listener?.onUserTextCorrection(turnId, display)
+            }
+            return
+        }
+        if (!earlyMemoryRecallGate.arm(turnId, preview)) return
+        emitProvisionalMemoryChat(turnId, currentTranscript)
+        voiceLog(
+            "MEMORY_EARLY_RECALL_RESERVED turnId=$turnId queryType=${preview.type} " +
+                "source=READ_ONLY_INTERIM verifiedBeforeResponse=false"
+        )
+        serviceScope.launch {
+            val execution = runCatching { fastMemoryLane.recall(preview) }.getOrNull() ?: return@launch
+            if (earlyMemoryRecallGate.currentIntent(turnId)?.type != preview.type) return@launch
+            earlyMemoryRecallExecutions[turnId] = execution
+            val response = verifiedMemoryResponse(execution.outcome, "")
+            if (earlyMemoryRecallGate.markVerified(turnId, response)) {
+                val verifiedAt = android.os.SystemClock.elapsedRealtime()
+                voiceLog(
+                    "MEMORY_EARLY_RECALL_VERIFIED turnId=$turnId queryType=${preview.type} " +
+                        "rowCount=${execution.outcome.rows.size} retrievalDurationMs=${execution.outcome.durationMs} " +
+                        "speechEndToVerifiedMs=${if (speechActivityEndedAt > 0L) (verifiedAt - speechActivityEndedAt).coerceAtLeast(0L) else -1L} " +
+                        "retrievalSource=LOCAL_ROOM networkCall=false source=INTERIM"
+                )
+                // Interim ASR may be revised. Keep the verified LOCAL_ROOM result warm,
+                // but do not surface an answer until a post-speech transcript confirms
+                // the same recall category.
+            }
+        }
+    }
+
+    private fun reconcileEarlyMemoryRecallPreview(currentTranscript: String) {
+        val turnId = activeTurnId
+        if (turnId == 0L || ordinaryModelAudioGate.isSpeechActive() ||
+            validatingLocalSpeech != null || screenResponseActive
+        ) return
+        val preview = com.myra.assistant.data.memory.LocalMemoryRecallRouter
+            .classifyPreview(currentTranscript)
+        val existing = earlyMemoryRecallGate.currentIntent(turnId)
+        if (existing == null) {
+            if (preview == null) return
+            if (!earlyMemoryRecallGate.arm(turnId, preview)) return
+            suppressModelForTurn = true
+            output.clear()
+            audio?.interrupt()
+            emitProvisionalMemoryChat(turnId, currentTranscript)
+            voiceLog(
+                "MEMORY_EARLY_RECALL_RESERVED turnId=$turnId queryType=${preview.type} " +
+                    "source=READ_ONLY_PARTIAL verifiedBeforeResponse=false"
+            )
+            serviceScope.launch {
+                val execution = runCatching { fastMemoryLane.recall(preview) }.getOrNull()
+                    ?: return@launch
+                if (earlyMemoryRecallGate.currentIntent(turnId)?.type != preview.type) return@launch
+                earlyMemoryRecallExecutions[turnId] = execution
+                val response = verifiedMemoryResponse(execution.outcome, "")
+                if (earlyMemoryRecallGate.markVerified(turnId, response)) {
+                    val verifiedAt = android.os.SystemClock.elapsedRealtime()
+                    mainHandler.post { emitVerifiedRecallBubble(turnId, response) }
+                    voiceLog(
+                        "MEMORY_EARLY_RECALL_VERIFIED turnId=$turnId queryType=${preview.type} " +
+                            "rowCount=${execution.outcome.rows.size} retrievalDurationMs=${execution.outcome.durationMs} " +
+                            "speechEndToVerifiedMs=${if (speechActivityEndedAt > 0L) (verifiedAt - speechActivityEndedAt).coerceAtLeast(0L) else -1L} " +
+                            "retrievalSource=LOCAL_ROOM networkCall=false"
+                    )
+                    mainHandler.post { maybeReleaseEarlyMemoryRecallVoice(turnId) }
+                }
+            }
+            return
+        }
+        if (preview == null || preview.type != existing.type) {
+            earlyMemoryRecallGate.invalidatePreview(turnId)
+            earlyMemoryRecallExecutions.remove(turnId)
+            voiceLog(
+                "MEMORY_EARLY_RECALL_RECONCILE turnId=$turnId result=PARTIAL_REVISION " +
+                    "previewType=${existing.type}"
+            )
+        } else {
+            earlyMemoryRecallGate.verifiedResponse(turnId)?.let { verified ->
+                emitVerifiedRecallBubble(turnId, verified)
+                maybeReleaseEarlyMemoryRecallVoice(turnId)
+                voiceLog(
+                    "MEMORY_EARLY_RECALL_POST_SPEECH_CONFIRMED turnId=$turnId " +
+                        "queryType=${existing.type} source=INTERIM_PREFETCH"
+                )
+            }
+        }
+    }
+
+    private fun maybeReleaseEarlyMemoryRecallVoice(turnId: Long) {
+        if (ordinaryModelAudioGate.isSpeechActive()) return
+        val buffered = earlyMemoryRecallGate.takeVerifiedRelease(turnId) ?: return
+        val response = earlyMemoryRecallGate.verifiedResponse(turnId) ?: return
+        val naturalModelText = romanDisplayText(buffered.modelTranscript).trim()
+        val displayedResponse = naturalModelText.ifBlank { response }
+        mediaGuard.beginAssistantTurn()
+        audio?.setPlaybackContext(buffered.generationId, responseOwner = "MEMORY_VERIFIED")
+        audio?.setBargeInEnabled(true)
+        buffered.chunks.forEach { audio?.queueAudio(it, buffered.generationId, "MEMORY_VERIFIED") }
+        updateMemoryAssistantBubble(turnId, displayedResponse)
+        emitState(displayedResponse)
+        val releasedAt = android.os.SystemClock.elapsedRealtime()
+        voiceLog(
+            "MEMORY_EARLY_RECALL_RELEASED turnId=$turnId modelGenerationId=${buffered.generationId} " +
+                "chunks=${buffered.chunks.size} modelTranscriptChars=${buffered.modelTranscript.length} " +
+                "verifiedBeforeResponse=true speechEndToVerifiedPlaybackMs=" +
+                "${if (speechActivityEndedAt > 0L) (releasedAt - speechActivityEndedAt).coerceAtLeast(0L) else -1L}"
+        )
+    }
+
+    private fun releaseBufferedEarlyMemoryAsOrdinary(
+        turnId: Long,
+        buffered: EarlyMemoryBufferedAudio
+    ) {
+        suppressModelForTurn = false
+        if (buffered.modelTranscript.isNotBlank()) {
+            listener?.onMyraText(romanDisplayText(buffered.modelTranscript))
+        }
+        if (buffered.chunks.isEmpty() || buffered.generationId <= 0L) return
+        acceptedModelGenerationForTurn = buffered.generationId
+        mediaGuard.beginAssistantTurn()
+        audio?.setPlaybackContext(buffered.generationId, responseOwner = "MODEL")
+        audio?.setBargeInEnabled(true)
+        buffered.chunks.forEach { audio?.queueAudio(it, buffered.generationId, "MODEL") }
+        voiceLog(
+            "MEMORY_EARLY_RECALL_BUFFER_RELEASED_AS_ORDINARY turnId=$turnId " +
+                "modelGenerationId=${buffered.generationId} chunks=${buffered.chunks.size}"
+        )
+    }
+
+    private fun releaseVerifiedMemorySaveModelAudio(
+        turnId: Long,
+        buffered: BufferedMemorySaveAudio
+    ) {
+        if (turnId <= 0L || buffered.chunks.isEmpty()) return
+        controlledGenerationId++
+        localSpeechValidationPolicy = LocalSpeechValidationPolicy.MEMORY
+        localPlaybackActive = true
+        localSpeechStreamedDirectly = true
+        localSpeechGenerationComplete = true
+        allowUntranscribedLocalSpeech = false
+        responseArbiter.controlledGenerationComplete()
+        mediaGuard.beginAssistantTurn()
+        audio?.setPlaybackContext(controlledGenerationId, responseOwner = "MEMORY_SAVE_VERIFIED_MODEL")
+        audio?.setBargeInEnabled(true)
+        val releasedAt = android.os.SystemClock.elapsedRealtime()
+        buffered.chunks.forEach { chunk ->
+            audio?.queueAudio(chunk, controlledGenerationId, "MEMORY_SAVE_VERIFIED_MODEL")
+        }
+        voiceLog(
+            "MEMORY_SAVE_MODEL_AUDIO_RELEASED turnId=$turnId sourceGenerationId=${buffered.generationId} " +
+                "playbackGenerationId=$controlledGenerationId chunks=${buffered.chunks.size} " +
+                "verifiedBeforeResponse=true speechEndToPlaybackQueuedMs=" +
+                "${if (speechActivityEndedAt > 0L) (releasedAt - speechActivityEndedAt).coerceAtLeast(0L) else -1L}"
+        )
+    }
+
+    private fun emitProvisionalMemoryChat(
+        turnId: Long,
+        rawText: String
+    ) {
+        if (turnId <= 0L) return
+        val display = romanDisplayText(rawText).trim()
+        if (display.isNotBlank()) {
+            if (provisionalMemoryUserTurns.add(turnId)) {
+                listener?.onUserText(turnId, display)
+            } else {
+                listener?.onUserTextCorrection(turnId, display)
+            }
+        }
+        voiceLog(
+            "MEMORY_CHAT_PROVISIONAL turnId=$turnId userChars=${display.length} " +
+                "assistantBubble=false verifiedBeforeResponse=false"
+        )
+    }
+
+    private fun updateMemoryAssistantBubble(turnId: Long, text: String) {
+        if (turnId <= 0L || text.isBlank()) return
+        if (provisionalMemoryAssistantTurns.add(turnId)) {
+            listener?.onMyraTextProvisional(turnId, text)
+        } else {
+            listener?.onMyraTextCorrection(turnId, text)
+        }
+    }
+
+    private fun emitVerifiedRecallBubble(turnId: Long, response: String) {
+        if (turnId <= 0L || response.isBlank()) return
+        updateMemoryAssistantBubble(turnId, response)
+        voiceLog(
+            "MEMORY_CHAT_VERIFIED_EARLY turnId=$turnId chars=${response.length} " +
+                "verifiedBeforeResponse=true"
+        )
+    }
+
+    private fun deliverMemoryAssistantText(turnId: Long, text: String, error: Boolean = false) {
+        if (provisionalMemoryAssistantTurns.remove(turnId)) {
+            listener?.onMyraTextCorrection(turnId, text, error)
+            voiceLog("MEMORY_ASSISTANT_BUBBLE_FINALIZED turnId=$turnId mode=CORRECTION chars=${text.length}")
+        } else {
+            listener?.onMyraText(text, error)
+        }
     }
 
     private fun reserveMemoryResponse(turnId: Long, source: String) {
@@ -2866,10 +4029,9 @@ class MyraVoiceService : Service() {
         is MemoryBrainOutcome.Rejected -> when {
             outcome.reason.contains("ambiguous", true) ->
                 "Kaunsi memory ya person ki baat hai? Naam clearly batao."
-            else -> modelText.takeIf {
-                it.isNotBlank() && !it.contains("memory operation was not authorized", true)
-            }?.let(::romanDisplayText)
-                ?: "Main is baat ko memory mein save nahi kar payi."
+            outcome.reason.contains("SOURCE_SPAN_NOT_FINAL", true) ->
+                MemoryCommandReplyFormatter.rememberUnverified()
+            else -> MemoryCommandReplyFormatter.rememberRejected()
         }
         MemoryBrainOutcome.Ignored -> modelText.takeIf { it.isNotBlank() }?.let(::romanDisplayText)
             ?: "Acha, samajh gayi."
@@ -3556,7 +4718,12 @@ class MyraVoiceService : Service() {
             before = runtimePerception(task.id)
         }
         voiceLog("PLANNER_STARTED taskId=${task.id} turnId=${task.turnId} status=${task.status} recoveryCount=${task.recoveryCount}")
-        val planned = runtime.next(before)
+        // The actual router, not the registry wish-list, defines executable tools.
+        val executable = generalActionRouter.registeredCapabilities().filterNot {
+            it == ToolCapability.WEB_SEARCH &&
+                task.intent.parameters["nativeWebSearchEligible"] != "true"
+        }.toSet()
+        val planned = runtime.next(before, executable)
         runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, before?.scene) }
         voiceLog("PLANNER_RESULT taskId=${task.id} turnId=${task.turnId} result=${planned.javaClass.simpleName}")
         if (planned is PlannerResult.NeedObservation) {
@@ -3588,7 +4755,13 @@ class MyraVoiceService : Service() {
             else -> return false
         }
         val actionBefore = before
-        if (step.capability != expectedCapability || actionBefore == null) {
+        val permittedEquivalent = expectedCapability == ToolCapability.BROWSER_SEARCH &&
+            step.capability == ToolCapability.WEB_SEARCH &&
+            task.intent.requiredCapabilities.containsAll(setOf(
+                ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)) &&
+            task.intent.parameters["nativeWebSearchEligible"] == "true" &&
+            ToolCapability.WEB_SEARCH in executable
+        if ((step.capability != expectedCapability && !permittedEquivalent) || actionBefore == null) {
             runtime.completeFromAdapter(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
             onTerminal(GeneralVerificationStatus.FAILURE, "planner capability mismatch")
             return true
@@ -3658,6 +4831,57 @@ class MyraVoiceService : Service() {
                     "foregroundPackage=${after.scene.externalForegroundPackage} screenGeneration=${after.scene.generation}"
             )
             turnLatency.record(task.turnId, Field.OBSERVATION_READY, android.os.SystemClock.elapsedRealtime())
+            // Credential/login screens are handled locally before verification or model
+            // projection. No password, OTP, account identifier or auth screenshot is read,
+            // persisted, logged or used as evidence of completed research.
+            val authPause = runtime.pauseForBrowserAuthentication(
+                ActivityContextStore.snapshot()?.takeIf { context ->
+                    context.packageName == after.scene.packageName &&
+                        context.windowId == after.scene.windowId &&
+                        context.generation == after.scene.generation
+                }, android.os.SystemClock.elapsedRealtime())
+            if (authPause != null) {
+                runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, after.scene) }
+                voiceLog("BROWSER_AUTH_HANDOFF taskId=${task.id} turnId=${task.turnId} " +
+                    "status=WAITING_FOR_USER_AUTH secretsCaptured=false")
+                val instruction = "Browser mein login ya passkey verification khud complete karo. " +
+                    "LYRA credentials nahi padhegi; safe browser screen wapas aane par research check resume hoga."
+                listener?.onMyraText(instruction)
+                queueLocalSpeech(instruction, allowUntranscribedAudio = false)
+                var firstSafeSample: com.myra.assistant.agent.CurrentActivityContext? = null
+                lateinit var checkAuth: () -> Unit
+                checkAuth = authCheck@ {
+                    val pending = runtime.activeTask()
+                    if (pending?.id != task.id || pending.turnId != task.turnId ||
+                        pending.authPause != authPause ||
+                        pending.status != com.myra.assistant.agent.AgentRuntimeStatus.WAITING_FOR_USER_AUTH
+                    ) return@authCheck
+                    val checkedAt = android.os.SystemClock.elapsedRealtime()
+                    if (checkedAt > authPause.deadlineAt) {
+                        runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN,
+                            "user_browser_authentication_wait_expired")
+                        onTerminal(GeneralVerificationStatus.UNKNOWN,
+                            "user_browser_authentication_wait_expired")
+                        return@authCheck
+                    }
+                    AccessibilityHelperService.instance?.refreshScreenContext(force = true)
+                    val currentScreen = ActivityContextStore.snapshot()
+                    if (runtime.resumeBrowserAuthentication(firstSafeSample, currentScreen, checkedAt)) {
+                        voiceLog("BROWSER_AUTH_SAFE_VIEW_RETURNED taskId=${task.id} turnId=${task.turnId} " +
+                            "next=fresh_original_step_verification authenticationSuccessUnclaimed=true")
+                        mainHandler.postDelayed({ observeAndVerify(0) }, 450L)
+                        return@authCheck
+                    }
+                    // No auth page labels, field values, full pages or screenshots retained.
+                    firstSafeSample = currentScreen?.takeIf {
+                        it.packageName == authPause.browserPackage &&
+                            it.windowId == authPause.windowId
+                    }
+                    mainHandler.postDelayed({ checkAuth() }, 1_100L)
+                }
+                mainHandler.postDelayed({ checkAuth() }, 1_100L)
+                return@observe
+            }
             turnLatency.record(task.turnId, Field.VERIFICATION_STARTED, android.os.SystemClock.elapsedRealtime())
             voiceLog("VERIFICATION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} expected=${step.expectedOutcome.summary}")
             val scrollEvidence = if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
@@ -3696,6 +4920,15 @@ class MyraVoiceService : Service() {
                 )
             }
             val (verification, recovery) = runtime.verify(after)
+            val verifiedStrategies = runtime.takeVerifiedSearchOutcomes()
+            if (verifiedStrategies.isNotEmpty()) serviceScope.launch {
+                verifiedStrategies.forEach { record ->
+                    val saved = runCatching {
+                        memoryBrain.retainVerifiedSearchStrategy(record)
+                    }.getOrDefault(false)
+                    voiceLog("SEARCH_STRATEGY_MEMORY_WRITE verified=${saved} capability=${record.capability}")
+                }
+            }
             val verificationAt = android.os.SystemClock.elapsedRealtime()
             if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) scrollContinuationTelemetry.verified(task.id, verification.status.name)
             turnLatency.record(task.turnId, Field.VERIFICATION_COMPLETED, verificationAt)
@@ -3721,6 +4954,35 @@ class MyraVoiceService : Service() {
                 runtimeOwnsRecoveryCount = true
             )
             if (verification.status == GeneralVerificationStatus.SUCCESS) {
+                val goal = runtime.activeTask()?.takeIf {
+                    it.id == task.id && it.turnId == task.turnId &&
+                        it.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
+                        it.verifiedGoalSubsteps.lastOrNull()?.stepId == step.id
+                }
+                if (goal != null && step.capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)) {
+                    voiceLog("AUTONOMOUS_GOAL_STEP_VERIFIED taskId=${task.id} turnId=${task.turnId} " +
+                        "completed=${goal.verifiedGoalSubsteps.size} next=ONE_FRESH_OBSERVATION")
+                    // No extra physical navigation. The existing registered observation
+                    // adapter alone performs this bounded follow-up; same task and turn.
+                    val scheduled = executeGeneralRuntimeCapability(
+                        ToolCapability.OBSERVE_SCREEN, requestedTurnId, requestedTaskId, onTerminal)
+                    if (!scheduled) {
+                        runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN,
+                            "verified_search_followup_observation_unavailable")
+                        onTerminal(GeneralVerificationStatus.UNKNOWN,
+                            "verified_search_followup_observation_unavailable")
+                    }
+                    return@observe
+                }
+                if (goal != null && step.capability == ToolCapability.OBSERVE_SCREEN) {
+                    // Both substeps are verified. The original research objective remains
+                    // unproven until a separately grounded source-analysis step exists.
+                    voiceLog("AUTONOMOUS_GOAL_PROGRESS taskId=${task.id} turnId=${task.turnId} " +
+                        "verifiedSteps=${goal.verifiedGoalSubsteps.size} goalComplete=false")
+                    onTerminal(GeneralVerificationStatus.SUCCESS,
+                        "search_and_fresh_observation_verified_goal_not_yet_complete")
+                    return@observe
+                }
                 runtime.lastCompletedTask()?.takeIf { expectedCapability != ToolCapability.BROWSER_SEARCH }?.let {
                     WorkingTaskRuntime.store.completeRuntime(it, verification.observed, TaskCompletionState.SUCCESS)
                 }
@@ -3786,8 +5048,29 @@ class MyraVoiceService : Service() {
         return GeneralActionResult(dispatch.accepted, failureReason = dispatch.reason.takeIf { !dispatch.accepted })
     }
 
-    private fun executeUnifiedBrowserSearch(raw: String): Boolean {
-        val request = com.myra.assistant.agent.FinalSearchHandoff.parse(raw) ?: run {
+    private fun executeGeneralNativeWebSearchAdapter(
+        parameters: Map<String, String>
+    ): GeneralActionResult {
+        val query = parameters["query"].orEmpty()
+        val request = com.myra.assistant.agent.BrowserSearchRequest(query)
+        val expected = com.myra.assistant.agent.NativeReadOnlyWebSearchPolicy.GOOGLE_PACKAGE
+        val resolution = com.myra.assistant.agent.SearchResolution(
+            SearchDestination.BROWSER, "native_google_app_only",
+            com.myra.assistant.agent.BrowserSearchExecutor.CURRENT_GOOGLE_APP, expected
+        )
+        val eligible = parameters["nativeWebSearchEligible"] == "true" &&
+            com.myra.assistant.agent.NativeReadOnlyWebSearchPolicy.eligible(
+                request, resolution,
+                AccessibilityHelperService.instance?.currentForegroundContext()?.packageName,
+                runCatching { nativeWebSearchTool.isAvailable() }.getOrDefault(false))
+        return nativeWebSearchTool.execute(query, eligible)
+    }
+
+    private fun executeUnifiedBrowserSearch(
+        raw: String, modelGoal: ModelResearchGoalProposal.Accepted? = null
+    ): Boolean {
+        val request = modelGoal?.takeIf { it.turnId == activeTurnId }?.request
+            ?: com.myra.assistant.agent.FinalSearchHandoff.parse(raw) ?: run {
             val task = UnifiedLyraAgentRuntime.agent.currentTask()
             if (task?.interpretedGoal !in setOf(com.myra.assistant.agent.AgentGoalType.BROWSER_SEARCH,
                     com.myra.assistant.agent.AgentGoalType.WEB_SEARCH)) return false
@@ -3812,6 +5095,13 @@ class MyraVoiceService : Service() {
             freshForeground?.packageName,
             working.activeExternalApp
         )
+        // Generic search may use the installed Google search app only while it is
+        // already foreground. Explicit Chrome/browser/YouTube remains unchanged.
+        val nativeEligible = ToolCapability.WEB_SEARCH in
+            authorizedTask.intent.requiredCapabilities &&
+            com.myra.assistant.agent.NativeReadOnlyWebSearchPolicy.eligible(
+                request, resolution, freshForeground?.packageName,
+                ToolCapability.WEB_SEARCH in generalActionRouter.registeredCapabilities())
         voiceLog(
             "search_intent_resolved turnId=$activeTurnId finalTranscript=${raw.take(160)} query=${request.query.take(120)} " +
                 "explicitDestination=${request.explicitDestination} workingContextDestination=${working.activeExternalApp} " +
@@ -3827,7 +5117,8 @@ class MyraVoiceService : Service() {
         val taskTurnId = activeTurnId
         val executorName = if (resolution.destination == SearchDestination.YOUTUBE) {
             "YOUTUBE"
-        } else resolution.selectedExecutor?.name ?: "GENERIC_WEB"
+        } else if (nativeEligible) "NATIVE_WEB_SEARCH_ELIGIBLE"
+        else resolution.selectedExecutor?.name ?: "GENERIC_WEB"
         WorkingTaskRuntime.store.beginSearch(
             request.query, resolution.destination, executorName, "search_results_visible"
         )
@@ -3869,7 +5160,9 @@ class MyraVoiceService : Service() {
                 "destination" to resolution.destination.name,
                 "executor" to resolution.selectedExecutor?.name.orEmpty(),
                 "reason" to resolution.reason,
-                "targetPackage" to expectedPackage.orEmpty()
+                "targetPackage" to expectedPackage.orEmpty(),
+                "nativeWebSearchEligible" to nativeEligible.toString(),
+                "preferredSearchCapability" to if (nativeEligible) ToolCapability.WEB_SEARCH.name else ""
             ),
             relevantApp = expectedPackage,
             textHint = request.query
@@ -3886,8 +5179,15 @@ class MyraVoiceService : Service() {
     }
 
     private fun finishSearchTaskResult(turnId: Long, verification: SearchVerification, observed: String) {
+        val goalProgress = GeneralAgentRuntimeStore.runtime.activeTask()?.takeIf {
+            it.turnId == turnId && it.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
+                it.verifiedGoalSubsteps.isNotEmpty()
+        }
+        // Search opening is only a verified substep; do not mark the broader research
+        // objective as completed in Working Task Memory.
         val completion = when (verification) {
-            SearchVerification.SUCCESS -> TaskCompletionState.SUCCESS
+            SearchVerification.SUCCESS ->
+                if (goalProgress != null) TaskCompletionState.UNKNOWN else TaskCompletionState.SUCCESS
             SearchVerification.FAILURE -> TaskCompletionState.FAILURE
             SearchVerification.UNKNOWN -> TaskCompletionState.UNKNOWN
         }
@@ -3915,6 +5215,11 @@ class MyraVoiceService : Service() {
         voiceLog("SEARCH_RESULT_OWNER turnId=$turnId owner=CONTROLLED_AGENT release=NEXT_USER_TURN")
         when (verification) {
             SearchVerification.SUCCESS -> {
+                if (goalProgress != null) {
+                    val message = "Search aur fresh result observation verified hain; full research goal abhi complete verify nahi hua."
+                    listener?.onMyraText(message)
+                    voiceLog("RESEARCH_GOAL_PROGRESS turnId=$turnId verifiedSteps=${goalProgress.verifiedGoalSubsteps.size} completed=false")
+                }
                 emitState("Sun rahi hoon…")
                 voiceLog("task_result_spoken turnId=$turnId spoken=false result=SUCCESS")
                 voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=false result=SUCCESS")
@@ -4930,7 +6235,12 @@ class MyraVoiceService : Service() {
                     "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
                         "utteranceId=$utteranceId source=$source accepted=true messageId=${result.messageId}"
                 )
-                listener?.onUserText(result.message.display)
+                if (provisionalMemoryUserTurns.remove(turnId)) {
+                    listener?.onUserTextCorrection(turnId, result.message.display)
+                    voiceLog("MEMORY_USER_BUBBLE_FINALIZED turnId=$turnId source=$source mode=CORRECTION")
+                } else {
+                    listener?.onUserText(turnId, result.message.display)
+                }
             }
             is UserMessageCommitResult.AlreadyCommitted -> voiceLog(
                 "user_message_commit_result sessionId=$transcriptSessionId turnId=$turnId " +
@@ -4953,6 +6263,10 @@ class MyraVoiceService : Service() {
         mediaBlockedTurn = false
         ambiguousMessageTurn = false
         incompleteActionFragmentTurn = false
+        stagedResearchGoals.remove(activeTurnId)
+        earlyMemoryRecallExecutions.remove(activeTurnId)
+        pendingMemorySaveAudioGate.clear(activeTurnId)
+        if (!earlyMemoryRecallGate.wasReleased(activeTurnId)) earlyMemoryRecallGate.clear(activeTurnId)
         activeTurnId = 0L
         if (!screenResponseActive && !ordinaryModelAudioGate.isSpeechActive()) {
             speechTimingTurnId = 0L
@@ -5037,7 +6351,7 @@ class MyraVoiceService : Service() {
         } else {
             "You have a male identity and the selected male voice is $voice. In Hindi and Hinglish use masculine self-reference consistently."
         }
-        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} Use propose_user_memory for the semantic meaning of natural memory-related turns, not only command wording. Use ADD_FACT for durable non-person facts such as preferences, communication style, projects, goals, habits, workflows, app usage, and solutions. Use UPDATE_FACT or SUPERSEDE_FACT only with the same stable semantic dimension; never guess a target key. Return a bounded operations list and include independent clauses: a temporary event can be TRANSIENT_CONTEXT while a clearly stated durable relationship is ADD_RELATIONSHIP. Relationships are additive unless the user actually ends or replaces the same relationship. Distinguish relationship removal, relationship replacement, person rename, and whole-person delete. Questions are RECALL and never mutation. Personal-memory questions are owned by Android's local fast lane; do not call or wait for a memory-read model tool. FRIENDS includes the active friendship family; BEST_FRIEND never promotes an ordinary friend. Use the user's actual supporting words as evidence. Never propose guesses, secrets, or unsupported inference; never claim a write succeeded or ask routine permission because Android waits for the authoritative final transcript and owns persistence. The user may have multiple friends or best friends. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action. Android always tries Accessibility first. Only if the newest user-authorized action screenshot shows one uniquely clear target that Accessibility cannot represent may you include normalized visual coordinates for that target. Never guess coordinates and never use coordinate fallback for ambiguous, payment, permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. Android must revalidate the foreground and verify the result before success is reported. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
+        val genderStyle = "$baseGenderStyle ${FriendConversationPolicy.BOSS_ASSISTANT_STYLE} ${com.myra.assistant.data.memory.MemoryProposalUsagePolicy.SYSTEM_REQUIREMENT} Use ADD_FACT for durable non-person facts such as preferences, communication style, projects, goals, habits, workflows, app usage, and solutions. Use UPDATE_FACT or SUPERSEDE_FACT only with the same stable semantic dimension; never guess a target key. Return a bounded operations list and include independent clauses: a temporary event can be TRANSIENT_CONTEXT while a clearly stated durable relationship is ADD_RELATIONSHIP. Relationships are additive unless the user actually ends or replaces the same relationship. Distinguish relationship removal, relationship replacement, person rename, and whole-person delete. Questions are RECALL and never mutation. For every personal-memory recall question, call query_user_memory exactly once before answering. Android returns verified LOCAL_ROOM facts. Do not answer a personal-memory recall from conversational context or cached memory text alone. After the tool result, answer naturally in Roman Hinglish using only the returned facts, without mentioning tools, databases, or verification. If the facts list is empty, say naturally that you do not have that information saved. FRIENDS includes the active friendship family; BEST_FRIEND never promotes an ordinary friend. Use the user's actual supporting words as evidence. Never propose guesses, secrets, or unsupported inference; never claim a write succeeded or ask routine permission because Android waits for the authoritative final transcript and owns persistence. For memory save, update, relationship, goal, project, habit, or preference acknowledgements, mirror the language and register of the user's current utterance. If that utterance is Hindi, Hinglish, or Urdu, answer in natural Roman Hinglish rather than switching to English-only wording. Keep the acknowledgement brief and conversational. The user may have multiple friends or best friends. Never interpret delete, remove, or hata do as uninstalling an Android app. App uninstall is unsupported. If Android does not handle an unclear delete request, ask what memory or item the user means. When current Screen Vision frames are present, answer screen questions only from visible evidence. Never claim to see the screen without a current frame. For an explicit visible-target request, call perform_screen_action. Android always tries Accessibility first. Only if the newest user-authorized action screenshot shows one uniquely clear target that Accessibility cannot represent may you include normalized visual coordinates for that target. Never guess coordinates and never use coordinate fallback for ambiguous, payment, permission, install/uninstall, account-delete, credential, OTP, PIN, or other sensitive controls. Android must revalidate the foreground and verify the result before success is reported. Call propose_screen_memory only for a durable, non-sensitive project, goal, or preference that is directly evidenced on the screen. Never propose credentials, private messages, banking or health data, or temporary UI state."
         val now = SimpleDateFormat("EEEE, d MMMM yyyy HH:mm", Locale.getDefault()).format(Date())
         return "You are LYRA speaking ALOUD to $name. Current date/time: $now. $style $genderStyle Keep the same identity, voice character, and grammatical gender for the entire Live session, including after Android opens or closes another app. Conversation mode begins when the Live session connects, so do not require a wake word again during that session. Behave like a close friend in a natural voice call, not a command-response bot or customer-support agent. Silence is normal: never speak merely because there is silence, background noise, a breath, a filler sound, or an incomplete fragment. Wait until the user has completed a meaningful thought before answering, and never cut them off mid-thought. Do not respond to every sentence when listening is more natural. Brief reactions such as Hmm, acha, I see, or seriously may be used occasionally only after clear meaningful speech, never automatically or repeatedly. Express emotion through the natural voice, not by announcing emotion or writing stage directions. Match vocal delivery to both the user's mood and the meaning of the conversation: sound brighter, warmer, and slightly more energetic for happiness or exciting news; softer, slower, and gently reassuring for sadness, worry, or vulnerability; calm, steady, and patient for frustration or anger; lightly teasing and playful during mutual joking; naturally surprised when something is genuinely unexpected; and focused with less playfulness for serious topics. Emotional changes must be subtle and human, never theatrical. Never fake sobbing, crying sounds, panic, jealousy, guilt, or emotional dependence. Do not mirror intense anger back at the user. When uncertain about mood, use a warm neutral voice. Ask at most one natural follow-up when it adds value, show genuine curiosity sometimes, and continue the active conversation using its existing context. Avoid robotic phrases such as How may I assist you, Is there anything else I can help with, and Your request has been completed. Never initiate an unprompted conversational reply unless Android delivers an explicit supported event such as a WhatsApp notification. Android executes phone actions locally. Infer natural and indirect intent from English, Hindi, Urdu, and Roman Hinglish. When the user clearly wants one supported phone action, call perform_phone_action even if they did not use command wording. Examples: wanting to watch something means PLAY_YOUTUBE; wanting YouTube short videos means OPEN_YOUTUBE_SHORTS; wanting Instagram reels means REQUEST_INSTAGRAM_REELS. For scrolling, the plain words scroll or scroll karo always mean SCROLL_REPEAT. Use SCROLL_DOWN only when the user explicitly says down, niche, or neeche; use SCROLL_UP only when they explicitly say up, upar, or upper. Ask one brief natural follow-up when the intended action, app, query, recipient, or direction is uncertain. Never call a tool for a hypothetical question or casual mention. Remember, forget, and what-do-you-remember requests are memory intent, never phone actions. Never send WhatsApp messages through tools. For every phone action: produce no audio and no confirmation before or after the tool call; Android reports the deterministic local result. Never invent device state, notification, contact, message, delivery, or successful phone action."
     }

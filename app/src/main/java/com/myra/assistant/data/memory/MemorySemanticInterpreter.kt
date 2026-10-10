@@ -49,13 +49,53 @@ data class FinalMemoryTurnPlan(
     val operations: List<MemorySemanticFrame> = emptyList(),
     val decision: MemoryDecision,
     val requiresClarification: Boolean = false,
-    val rejectionReason: String? = null
+    val rejectionReason: String? = null,
+    val displayProjection: String? = null
 )
 
 /** Shared key normalization only. Natural-language interpretation does not live here. */
 object MemorySemanticIdentity {
     fun token(value: String): String = value.lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}]+"), "_").trim('_').take(48)
+}
+
+/**
+ * Final-turn response arbitration. A verified current-turn mutation must never be
+ * replaced by a speculative recall tool call from the same Live turn. Pure recall
+ * turns remain read-only and unchanged.
+ */
+object FinalMemoryTurnArbiter {
+    private val readOnlyIntents = setOf(
+        MemorySemanticIntent.RECALL,
+        MemorySemanticIntent.CLARIFY,
+        MemorySemanticIntent.NONE
+    )
+
+    fun currentTurnMutationWins(staged: List<MemorySemanticFrame>): Boolean =
+        staged.any { it.intent !in readOnlyIntents }
+}
+
+/**
+ * Shared model->Android handoff contract for natural memory turns.
+ *
+ * The model proposes semantic meaning; Android still owns final-turn evidence,
+ * safety, authorization, Room persistence and post-write verification.
+ */
+object MemoryProposalUsagePolicy {
+    const val SYSTEM_REQUIREMENT =
+        "When the current USER turn clearly expresses a stable, reusable user fact such as a preference, communication style, project, goal, habit, workflow, app-usage pattern, solution, or relationship, you MUST call propose_user_memory before speaking any acknowledgement, even when the user did not say remember. If ASR or transliteration spelling is noisy but the intended meaning is clear enough that you would verbally acknowledge the fact, still call propose_user_memory. Do not call it for questions, hypotheticals, reported speech, temporary context, guesses, or sensitive credentials. Android alone decides whether anything is persisted."
+
+    const val TOOL_DESCRIPTION =
+        "MUST be called before speaking whenever the current completed USER turn clearly asserts a stable, reusable personal fact that should survive future turns, including natural preferences and communication style even without remember/save wording. If ASR or transliteration spelling is noisy but the intended meaning is clear enough to acknowledge, still propose the semantic meaning. Never invent meaning: source_span must stay near-verbatim current-turn evidence while fact may normalize or translate that same meaning. Do not propose questions, hypotheticals, reported speech, temporary context, guesses, secrets, or unsupported inference. Return bounded independent AIRI semantic actions. Android validates final-turn structure, literals, attribution, lifecycle and safety and alone owns persistence."
+
+    const val SOURCE_SPAN_DESCRIPTION =
+        "Copy the shortest near-verbatim supporting words from the CURRENT USER transcript. Preserve ASR/transliteration spelling and noise; do not translate or normalize this field."
+
+    const val FACT_DESCRIPTION =
+        "Normalized semantic meaning for fact/linked-fact operations and episode summary. You may correct ASR spelling or translate only when preserving the clearly expressed current-turn meaning; never invent content."
+
+    const val MEMORY_KEY_DESCRIPTION =
+        "Stable semantic dimension for the normalized fact, such as response_length or preferred_language. Do not encode transient wording, timestamps, or unsupported details."
 }
 
 /** Bounded same-turn accumulation; repeated Live tool calls cannot overwrite or double-run meaning. */

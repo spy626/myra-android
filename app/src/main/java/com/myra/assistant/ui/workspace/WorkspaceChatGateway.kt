@@ -45,7 +45,13 @@ internal object WorkspaceChatGateway {
             "clarity; otherwise use prose. On beginner tasks, state one coherent " +
             "direction and reason before specific actions and expected outcomes. " +
             "For sourced answers, separate evidence from inference: do not invent " +
-            "media, chart data or citations. Don't repeat the same rigid " +
+            "media, chart data or citations. When the user asks for a link or URL, " +
+            "return a concise Markdown link [label](https://...) only when the exact public " +
+            "HTTPS destination is known from the user's message, authoritative runtime evidence, " +
+            "or a stable official URL you are confident about. Never invent a current, private, " +
+            "download, build, release, product, article, or deep-page URL. If an exact destination " +
+            "is not grounded, say that a verified lookup is needed instead of fabricating one. " +
+            "Don't repeat the same rigid " +
             "Where/What/Result or Kahan/Kya/Result fields in every answer. Match the " +
             "format to the specific question, not a canned template. A short personal " +
             "reply should remain natural conversation, not become a report. Don't claim " +
@@ -53,12 +59,24 @@ internal object WorkspaceChatGateway {
             "were never actually supplied. Never claim phone testing."
     enum class Provider { OPENROUTER_FREE, GROQ_FREE, LLM7_FREE }
     data class Image(val mime: String, val base64: String)
+    data class NativeVideo(val mime: String, val base64: String)
+    data class Audio(val mime: String, val base64: String)
     // One extra try only after specific upstream HTTP rejections. Connection failures and
     // ambiguous timeouts are NOT retried. Retain the existing 35-second total call timeout.
     val client: OkHttpClient = WorkspaceFreeAiSuggestion.client.newBuilder()
-        .addInterceptor(WorkspaceMemoryInterceptor()) // only the approved OpenRouter endpoint
+        .addInterceptor(WorkspaceMemoryInterceptor()) // existing opt-in OpenRouter projection
+        .addInterceptor(WorkspaceRichUserContextInterceptor()) // same opt-in, rich Chat only
         .addInterceptor(WorkspaceFreeRouteRetry())
         .build()
+
+    // Bounded whole-file media uploads need a longer request window than everyday text.
+    // Same provider, zero-price, ZDR interceptors and no new fallback; voice engine unchanged.
+    val mediaClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .callTimeout(110, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
 
     /** Each request includes only bounded messages from the explicitly selected project. */
     fun request(
@@ -67,30 +85,66 @@ internal object WorkspaceChatGateway {
         messages: List<WorkspaceConversationStore.Message>,
         image: Image? = null,
         extraSystemInstructions: String? = null,
+        images: List<Image> = emptyList(),
+        video: NativeVideo? = null,
+        audio: Audio? = null,
     ): Request {
         require(key.isNotBlank() && key.length <= 256 && key.none(Char::isWhitespace)) {
             "Set a valid provider key in API & Cloud Settings"
         }
         require(messages.isNotEmpty() && messages.last().role == "user") { "A user message is required" }
+        val safeMessages = WorkspaceAgentReachReceipt.providerSafeHistory(messages)
         // Previous turns are dropped whole when needed; the latest pasted prompt is never sliced.
-        require(WorkspaceLongInputPolicy.requestFits(messages)) {
+        require(WorkspaceLongInputPolicy.requestFits(safeMessages)) {
             "Full message exceeds LYRA's 64000-character local message cap; saved locally, nothing sent"
         }
+        val media = listOfNotNull(image) + images
+        require(media.size <= WorkspaceMediaLimits.MAX_PHOTOS) {
+            "At most ten photos per request"
+        }
+        require((if (media.isNotEmpty()) 1 else 0) +
+            (if (video != null) 1 else 0) + (if (audio != null) 1 else 0) <= 1) {
+            "Choose up to ten photos OR one original video OR one audio file"
+        }
         if (provider == Provider.GROQ_FREE) {
-            return WorkspaceGroqFree.request(key, messages, image, extraSystemInstructions)
+            require(media.isEmpty() && video == null && audio == null) {
+                "Groq Free Chat is text-only; media requires an approved OpenRouter Free route"
+            }
+            return WorkspaceGroqFree.request(key, safeMessages, null, extraSystemInstructions)
         }
         if (provider == Provider.LLM7_FREE) {
-            return WorkspaceLlm7Free.request(key, messages, image, extraSystemInstructions)
+            require(media.isEmpty() && video == null && audio == null) {
+                "LLM7 Free Chat is text-only; media requires an approved OpenRouter Free route"
+            }
+            return WorkspaceLlm7Free.request(key, safeMessages, null, extraSystemInstructions)
         }
-        image?.let {
-            require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported photo format" }
-            require(it.base64.length in 1..2_700_000 &&
-                it.base64.all { char -> char.isLetterOrDigit() || char == '+' || char == '/' || char == '=' }) {
-                "Photo is invalid or exceeds the request limit"
+        require(media.isEmpty() ||
+            WorkspaceMediaLimits.imageEnvelopeSizes(media.map { it.base64.length })) {
+            "The selected photos exceed the bounded ten-photo Free request budget"
+        }
+        media.forEach {
+            require(it.mime == "image/jpeg" || it.mime == "image/png") { "Unsupported image format" }
+            require(it.base64.all { ch -> ch.isLetterOrDigit() || ch == '+' || ch == '/' || ch == '=' }) {
+                "Invalid photo bytes"
+            }
+        }
+        video?.let {
+            require(it.mime == "video/mp4" || it.mime == "video/webm") { "Unsupported video type" }
+            require(it.base64.length in 1..WorkspaceMediaLimits.MAX_NATIVE_VIDEO_BASE64 &&
+                it.base64.all { ch -> ch.isLetterOrDigit() || ch == '+' || ch == '/' || ch == '=' }) {
+                "Original video exceeds LYRA's safe full-file Free upload budget"
+            }
+        }
+        audio?.let {
+            require(it.mime == "audio/mpeg" || it.mime == "audio/mp3" ||
+                it.mime == "audio/wav" || it.mime == "audio/x-wav") { "Only MP3 and WAV audio are supported" }
+            require(it.base64.length in 1..WorkspaceMediaLimits.MAX_AUDIO_BASE64 &&
+                it.base64.all { ch -> ch.isLetterOrDigit() || ch == '+' || ch == '/' || ch == '=' }) {
+                "Audio exceeds LYRA's safe Free upload budget"
             }
         }
         // Inspect earlier user intent locally when needed, but transmit only recent raw turns.
-        val body = openRouterBody(messages, image, extraSystemInstructions)
+        val body = openRouterBody(safeMessages, image, extraSystemInstructions, images, video, audio)
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder()
             .url(WorkspaceFreeAiSuggestion.ENDPOINT)
@@ -105,6 +159,9 @@ internal object WorkspaceChatGateway {
         image: Image? = null,
         extraSystemInstructions: String? = null,
         compactForGroq: Boolean = false,
+        images: List<Image> = emptyList(),
+        video: NativeVideo? = null,
+        audio: Audio? = null,
     ): JSONArray {
         val entries = JSONArray()
         val recent = WorkspaceLongInputPolicy.outbound(messages)
@@ -150,12 +207,17 @@ internal object WorkspaceChatGateway {
             if (compactForGroq) WorkspacePracticalPlanningGuide.compactInstructions(latest)
             else WorkspacePracticalPlanningGuide.instructions(latest)
         } else ""
+        // Scoped facts explicitly supplied by the user for app planning. This is NOT
+        // AIRI memory access and it must not leak into casual chat or task execution.
+        val shortProjectContext = if (WorkspaceRichBlocksContract.enabled(extra))
+            WorkspaceRichBlocksContract.shortProjectContext(latest) else ""
         // One planning contract owns CURRENT-turn requirements in both normal
         // and Groq-compact projections; no second competing AnswerBoundary prompt.
         val instructions = (if (compactForGroq) listOf(
             CHAT_REPLY_DISCIPLINE,
             WorkspaceHinglishReply.PROMPT_RULE,
             extra,
+            shortProjectContext,
             writingInstructions,
             codeInstructions,
             practicalPlanning,
@@ -163,6 +225,7 @@ internal object WorkspaceChatGateway {
             CHAT_REPLY_DISCIPLINE,
             WorkspaceHinglishReply.PROMPT_RULE,
             extra,
+            shortProjectContext,
             semanticTurnIntent,
             semanticTaskFrame,
             turnFrame,
@@ -171,16 +234,35 @@ internal object WorkspaceChatGateway {
             codeInstructions,
             // Shared planning contract appears once, after generic reply guidance.
             practicalPlanning,
-        )).filter(String::isNotBlank).joinToString("\n\n")
+        )).filter(String::isNotBlank).joinToString("\n\n") +
+            if (WorkspaceRichBlocksContract.enabled(extra))
+                "\n\nFINAL RESPONSE FORMAT: Follow LYRA_RICH_BLOCKS_V1 JSON ONLY, overriding earlier Markdown formatting suggestions." else ""
         if (instructions.isNotBlank()) entries.put(JSONObject().put("role", "system")
             .put("content", instructions))
         recent.forEachIndexed { index, message ->
             require(message.role == "user" || message.role == "assistant") { "Invalid chat role" }
             require(message.text.length in 1..WorkspaceConversationStore.MAX_MESSAGE_LENGTH) { "Invalid message size" }
-            val content: Any = if (image != null && index == recent.lastIndex) {
-                JSONArray().put(JSONObject().put("type", "text").put("text", message.text))
-                    .put(JSONObject().put("type", "image_url")
-                        .put("image_url", JSONObject().put("url", "data:${image.mime};base64,${image.base64}")))
+            val media = listOfNotNull(image) + images
+            val content: Any = if ((media.isNotEmpty() || video != null || audio != null) &&
+                index == recent.lastIndex) {
+                JSONArray().put(JSONObject().put("type", "text").put("text", message.text)).apply {
+                    media.forEach { frame ->
+                        put(JSONObject().put("type", "image_url")
+                            .put("image_url", JSONObject()
+                                .put("url", "data:${frame.mime};base64,${frame.base64}")))
+                    }
+                    video?.let { original ->
+                        put(JSONObject().put("type", "video_url")
+                            .put("video_url", JSONObject()
+                                .put("url", "data:${original.mime};base64,${original.base64}")))
+                    }
+                    audio?.let { sample ->
+                        put(JSONObject().put("type", "input_audio")
+                            .put("input_audio", JSONObject()
+                                .put("data", sample.base64)
+                                .put("format", if (sample.mime.contains("wav")) "wav" else "mp3")))
+                    }
+                }
             } else message.text
             entries.put(JSONObject().put("role", message.role).put("content", content))
         }
@@ -191,10 +273,14 @@ internal object WorkspaceChatGateway {
         messages: List<WorkspaceConversationStore.Message>,
         image: Image? = null,
         extraSystemInstructions: String? = null,
+        images: List<Image> = emptyList(),
+        video: NativeVideo? = null,
+        audio: Audio? = null,
     ): String {
-        val entries = openAiMessages(messages, image, extraSystemInstructions)
+        val entries = openAiMessages(messages, image, extraSystemInstructions,
+            images = images, video = video, audio = audio)
         return JSONObject().put("model", WorkspaceFreeAiSuggestion.MODEL)
-            .put("stream", false).put("max_tokens", 2_048)
+            .put("stream", WorkspaceRichBlocksContract.enabled(extraSystemInstructions)).put("max_tokens", 2_048)
             // A free label alone is insufficient: reject every endpoint with a nonzero
             // prompt, completion, per-request or image price. Never upgrade silently.
             .put("provider", JSONObject().put("zdr", true).put("data_collection", "deny")

@@ -23,10 +23,14 @@ class WorkspaceAttachmentPolicyTest {
             WorkspaceAttachmentPolicy.kind("application/zip"))
     }
 
-    @Test fun audioAndVideoStayLocalUntilExplicitProviderSupportExists() {
+    @Test fun mediaCanUseExplicitlyConsentedZeroPriceProviderOnly() {
         assertTrue(WorkspaceAttachmentPolicy.sendableNow(WorkspaceAttachmentPolicy.Kind.IMAGE))
         assertTrue(WorkspaceAttachmentPolicy.sendableNow(WorkspaceAttachmentPolicy.Kind.TEXT))
-        assertFalse(WorkspaceAttachmentPolicy.sendableNow(WorkspaceAttachmentPolicy.Kind.AUDIO))
-        assertFalse(WorkspaceAttachmentPolicy.sendableNow(WorkspaceAttachmentPolicy.Kind.VIDEO))
+        assertTrue(WorkspaceAttachmentPolicy.sendableNow(WorkspaceAttachmentPolicy.Kind.AUDIO))
+        assertTrue(WorkspaceAttachmentPolicy.sendableNow(WorkspaceAttachmentPolicy.Kind.VIDEO))
+        assertEquals(WorkspaceMediaLimits.MAX_AUDIO_BYTES.toLong(),
+            WorkspaceAttachmentPolicy.maxBytes(WorkspaceAttachmentPolicy.Kind.AUDIO))
+        assertEquals(WorkspaceMediaLimits.MAX_NATIVE_VIDEO_BYTES.toLong(),
+            WorkspaceAttachmentPolicy.maxBytes(WorkspaceAttachmentPolicy.Kind.VIDEO))
     }
 }

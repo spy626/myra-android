@@ -35,6 +35,7 @@ internal object WorkspaceLlm7Free {
         .readTimeout(30, TimeUnit.SECONDS)
         .callTimeout(35, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
+        .addInterceptor(WorkspaceRichUserContextInterceptor())
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
@@ -77,7 +78,7 @@ internal object WorkspaceLlm7Free {
             "LLM7 Free request exceeds LYRA's conservative free-route budget; full message saved locally, nothing sent"
         }
         json.put("model", MODEL)
-        json.put("stream", false)
+        json.put("stream", WorkspaceRichBlocksContract.enabled(extraSystemInstructions))
         json.put("max_tokens", 2_048)
         json.remove("provider")
         json.remove("plugins")

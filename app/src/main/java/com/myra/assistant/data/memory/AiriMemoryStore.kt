@@ -58,6 +58,7 @@ interface AiriMemoryStore {
     suspend fun ensureEpisodeForSpan(span: EpisodeSpanEntity, messages: List<ConversationTruthEntity>): String? = null
     suspend fun linkEpisodeProvenance(episodeId: String, conversationId: String, start: Long, end: Long): Int = 0
     suspend fun recordConsolidationAction(frame: MemorySemanticFrame, evidence: AuthoritativeMemoryTurnEvidence, memoryId: String?) = Unit
+    suspend fun consolidationActions(conversationId: String, turnId: Long): List<ConsolidationActionEntity> = emptyList()
     suspend fun markEpisodeConsolidated(id: String, at: Long): Boolean = false
     suspend fun episodeSpans(conversationId: String): List<EpisodeSpanEntity> = emptyList()
     suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int = 0
@@ -363,6 +364,8 @@ class RoomAiriMemoryStore(
             createdAt = clock()
         ))
     }
+    override suspend fun consolidationActions(conversationId: String, turnId: Long) =
+        dao.consolidationActionsForTurn(conversationId, turnId)
     override suspend fun markEpisodeConsolidated(id: String, at: Long) = dao.markEpisodeConsolidated(id, at) > 0
     override suspend fun episodeSpans(conversationId: String) = dao.episodeSpans(conversationId)
     override suspend fun reviewEpisodes(conversationId: String, ratings: Map<String, EpisodeReviewRating>, reviewedAt: Long): Int {

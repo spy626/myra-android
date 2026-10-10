@@ -102,7 +102,13 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
             AgentGoalType.SEND -> setOf(ToolCapability.FIND_ELEMENT, ToolCapability.ACCESSIBILITY_CLICK)
             AgentGoalType.OPEN_APP -> setOf(ToolCapability.OPEN_APP)
             AgentGoalType.NAVIGATE -> setOf(ToolCapability.BACK)
-            AgentGoalType.BROWSER_SEARCH -> setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN, ToolCapability.VERIFY_SCREEN)
+            AgentGoalType.BROWSER_SEARCH ->
+                if (FinalSearchHandoff.parse(request)?.explicitDestination == null &&
+                    FinalSearchHandoff.parse(request) != null
+                ) setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH,
+                    ToolCapability.OBSERVE_SCREEN, ToolCapability.VERIFY_SCREEN)
+                else setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN,
+                    ToolCapability.VERIFY_SCREEN)
             AgentGoalType.WEB_SEARCH -> setOf(ToolCapability.WEB_SEARCH, ToolCapability.OBSERVE_SCREEN, ToolCapability.VERIFY_SCREEN)
             AgentGoalType.ANSWER_SCREEN -> setOf(ToolCapability.OBSERVE_SCREEN)
             AgentGoalType.UNKNOWN -> emptySet()

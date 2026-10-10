@@ -14,6 +14,22 @@ class WorkspaceConnectedGitHubRunIntentTest {
         assertNull(decision?.localError)
     }
 
+    @Test fun latestBuildLinkRoutesToConnectedLatestReadWithoutMutation() {
+        val decision = WorkspaceConnectedGitHubRunIntent.decide(
+            "Latest GitHub build ka link do"
+        )
+        assertTrue(decision?.latest == true)
+        assertNull(decision?.runNumber)
+        assertNull(decision?.localError)
+        assertTrue(!WorkspaceGitHubSelfEdit.isExplicitRequest("Latest GitHub build ka link do"))
+
+        val withSha = WorkspaceConnectedGitHubRunIntent.decide(
+            "Current GitHub build ka link aur commit SHA bhi batao"
+        )
+        assertTrue(withSha?.latest == true)
+        assertTrue(withSha?.includeCommitSha == true)
+    }
+
     @Test fun multipleRunNumbersAreRejectedWithoutGuessing() {
         val decision = WorkspaceConnectedGitHubRunIntent.decide(
             "Build #3324 aur #3328 check karo, no changes."

@@ -13,9 +13,14 @@ internal object WorkspaceFreeProviderSelection {
                groqFreeZdrApproved: Boolean, groqWithinBudget: Boolean,
                hasAttachments: Boolean,
                llm7Available: Boolean = false, llm7Approved: Boolean = false,
-               llm7WithinBudget: Boolean = false): WorkspaceChatGateway.Provider? = when {
+               llm7WithinBudget: Boolean = false,
+               attachmentKind: WorkspaceProviderRegistry.AttachmentKind =
+                   WorkspaceProviderRegistry.AttachmentKind.PHOTO,
+               experimentalAttachmentApproved: Boolean = false): WorkspaceChatGateway.Provider? = when {
         hasAttachments -> if (openRouterAvailable &&
-            usable(WorkspaceChatGateway.Provider.OPENROUTER_FREE, attachments = true))
+            WorkspaceProviderRegistry.supportsAttachment(
+                WorkspaceProviderRegistry.Id.OPENROUTER_FREE, attachmentKind,
+                experimentalAttachmentApproved))
             WorkspaceChatGateway.Provider.OPENROUTER_FREE else null
         llm7Approved -> if (llm7Available && llm7WithinBudget &&
             usable(WorkspaceChatGateway.Provider.LLM7_FREE, attachments = false))

@@ -35,6 +35,47 @@ class GeneralAgentRuntimeTest {
         assertEquals(ToolCapability.BROWSER_SEARCH, result.step.capability)
     }
 
+    @Test fun plannerAutomaticallyChoosesDeclaredAvailableEquivalentSearchTool() {
+        // A model/turn can propose both read-only search capabilities, but only the owner
+        // knows which adapter is actually available. No new tool or permission is invented.
+        val available = AgentToolRegistry(listOf(
+            ToolDefinition("web_only", ToolCapability.WEB_SEARCH,
+                verificationStrategy = "grounded_results_returned")
+        ))
+        val runtime = GeneralAgentRuntime(registry = available, now = { 1 })
+        val intent = intent(ToolCapability.BROWSER_SEARCH).copy(
+            requiredCapabilities = linkedSetOf(
+                ToolCapability.OBSERVE_SCREEN, ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH
+            ), textHint = "public research"
+        )
+        runtime.start(30, intent)
+        val next = runtime.next(null) as PlannerResult.Next
+        assertEquals(ToolCapability.WEB_SEARCH, next.step.capability)
+        assertEquals(ActionCategory.WEB_SEARCH, next.step.category)
+        assertEquals(ToolRisk.LOW, next.step.risk)
+    }
+
+    @Test fun plannerDoesNotInventAnUnrequestedToolOrSubstituteObservationForClick() {
+        val webOnly = GeneralAgentRuntime(registry = AgentToolRegistry(listOf(
+            ToolDefinition("web_only", ToolCapability.WEB_SEARCH,
+                verificationStrategy = "grounded_results_returned")
+        )), now = { 1 })
+        webOnly.start(31, intent(ToolCapability.BROWSER_SEARCH))
+        assertEquals(PlannerResult.Fail("no_safe_tool"), webOnly.next(null))
+
+        val observeOnly = GeneralAgentRuntime(registry = AgentToolRegistry(listOf(
+            ToolDefinition("observe_only", ToolCapability.OBSERVE_SCREEN,
+                verificationStrategy = "fresh_context")
+        )), now = { 1 })
+        observeOnly.start(32, intent(ToolCapability.ACCESSIBILITY_CLICK).copy(
+            requiredCapabilities = setOf(
+                ToolCapability.ACCESSIBILITY_CLICK, ToolCapability.OBSERVE_SCREEN
+            )
+        ))
+        assertEquals(PlannerResult.Fail("no_safe_tool"),
+            observeOnly.next(perception("task", scene("pkg", 1))))
+    }
+
     @Test fun planner_requests_observation_when_screen_capability_has_no_scene() {
         val runtime = GeneralAgentRuntime(now = { 1 })
         runtime.start(22, intent(ToolCapability.ACCESSIBILITY_SCROLL))
@@ -102,6 +143,116 @@ class GeneralAgentRuntimeTest {
         assertFalse(ScrollVerificationResamplePolicy.shouldResample(false, false, 0))
     }
 
+    @Test fun autonomousMultiGoalPerformsOneReadOnlyFollowupWithoutRedispatchingSearch() {
+        var searchCount = 0
+        var observationCount = 0
+        val adapters = ProductionGeneralAdapters.create(AgentToolRegistry(), ProductionAdapterExecutors(
+            scroll = { _, _ -> GeneralActionResult(false) },
+            browserSearch = { _, _ -> searchCount++; GeneralActionResult(true) },
+            observeScreen = { _, _ -> observationCount++; GeneralActionResult(true) },
+            verifyScreen = { _, _ -> GeneralActionResult(false) },
+            back = { _, _ -> GeneralActionResult(false) }
+        ))
+        val runtime = GeneralAgentRuntime(now = { 8 })
+        val goal = intent(ToolCapability.BROWSER_SEARCH).copy(
+            turnIntent = TurnIntent.MULTI_STEP_GOAL,
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN),
+            relevantApp = "com.android.chrome", textHint = "new ai")
+        val task = runtime.start(60, goal)!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val first = (runtime.next(before) as PlannerResult.Next).step
+        runtime.recordAction(first, GeneralActionRouter(adapters).select(first, before)!!.execute(first, before), before)
+        val searched = perception(task.id, scene("com.android.chrome", 2,
+            listOf(element("new ai results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(searched).first.status)
+        assertNull(runtime.lastCompletedTask())
+        assertEquals(AgentRuntimeStatus.OBSERVING, runtime.activeTask()?.status)
+        val second = (runtime.next(searched) as PlannerResult.Next).step
+        assertEquals(ToolCapability.OBSERVE_SCREEN, second.capability)
+        assertEquals("verified_search_followup_observation", second.strategy)
+        runtime.recordAction(second,
+            GeneralActionRouter(adapters).select(second, searched)!!.execute(second, searched),
+            searched)
+        val fresh = perception(task.id, scene("com.android.chrome", 3,
+            listOf(element("new ai independent results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(fresh).first.status)
+        assertEquals(1, searchCount)
+        assertEquals(1, observationCount)
+        assertEquals(2, runtime.activeTask()!!.verifiedGoalSubsteps.size)
+        assertEquals(AgentRuntimeStatus.PLANNING, runtime.activeTask()!!.status)
+        assertNull(runtime.lastCompletedTask())
+        assertTrue(runtime.next(fresh) is PlannerResult.NeedClarification)
+        assertEquals(1, searchCount) // no unverified third action
+    }
+
+    @Test fun failedOrUnknownGoalSubstepNeverBecomesLearningEvidence() {
+        val runtime = GeneralAgentRuntime(now = { 8 })
+        val task = runtime.start(61, intent(ToolCapability.BROWSER_SEARCH).copy(
+            turnIntent = TurnIntent.MULTI_STEP_GOAL,
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN),
+            relevantApp = "com.android.chrome", textHint = "new ai"))!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        runtime.recordAction(step, GeneralActionResult(true), before)
+        val irrelevant = perception(task.id, scene("com.android.chrome", 2,
+            listOf(element("unrelated result"))))
+        assertEquals(GeneralVerificationStatus.UNKNOWN, runtime.verify(irrelevant).first.status)
+        assertTrue(runtime.activeTask()?.verifiedGoalSubsteps.orEmpty().isEmpty())
+        assertTrue(runtime.next(irrelevant) !is PlannerResult.Next ||
+            runtime.activeTask()?.verifiedGoalSubsteps.orEmpty().isEmpty())
+    }
+
+    @Test fun plainSingleStepSearchRetainsExistingTerminalSuccessSemantics() {
+        val runtime = GeneralAgentRuntime(now = { 1 })
+        val task = runtime.start(62, intent(ToolCapability.BROWSER_SEARCH).copy(
+            relevantApp = "com.android.chrome", textHint = "new ai"))!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        runtime.recordAction(step, GeneralActionResult(true), before)
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(perception(
+            task.id, scene("com.android.chrome", 2, listOf(element("new ai results"))))).first.status)
+        assertNull(runtime.activeTask())
+        assertEquals(AgentRuntimeStatus.COMPLETED, runtime.lastCompletedTask()?.status)
+    }
+
+    @Test fun verifiedSearchOutcomesChangeNextGoalPlanOnlyWhenBothExecutorsExist() {
+        val runtime = GeneralAgentRuntime(now = { 8 })
+        fun verifiedWeb(turn: Long) {
+            val task = runtime.start(turn, intent(ToolCapability.WEB_SEARCH).copy(
+                relevantApp = "com.android.chrome", textHint = "ai"))!!
+            val before = perception(task.id, scene("com.android.chrome", turn * 10))
+            val step = (runtime.next(before) as PlannerResult.Next).step
+            assertEquals(ToolCapability.WEB_SEARCH, step.capability)
+            runtime.recordAction(step, GeneralActionResult(true), before)
+            val after = perception(task.id, scene("com.android.chrome", turn * 10 + 1,
+                listOf(element("ai search results"))))
+            assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(after).first.status)
+        }
+        verifiedWeb(80L)
+        val insufficient = runtime.start(81L, intent(ToolCapability.BROWSER_SEARCH).copy(
+            relevantApp = "com.android.chrome", textHint = "ai",
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)))!!
+        assertEquals(ToolCapability.BROWSER_SEARCH, (runtime.next(perception(
+            insufficient.id, scene("com.android.chrome", 810L))) as PlannerResult.Next).step.capability)
+        verifiedWeb(82L)
+        val learned = runtime.start(83L, intent(ToolCapability.BROWSER_SEARCH).copy(
+            relevantApp = "com.android.chrome", textHint = "ai",
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)))!!
+        val choice = runtime.next(perception(learned.id,
+            scene("com.android.chrome", 830L))) as PlannerResult.Next
+        assertEquals(ToolCapability.WEB_SEARCH, choice.step.capability)
+        assertEquals("verified_outcome_preferred_web_search", choice.step.strategy)
+
+        val constrained = runtime.start(84L, intent(ToolCapability.BROWSER_SEARCH).copy(
+            relevantApp = "com.android.chrome", textHint = "ai",
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)))!!
+        val safe = runtime.next(perception(constrained.id,
+            scene("com.android.chrome", 840L)),
+            setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN)) as PlannerResult.Next
+        assertEquals(ToolCapability.BROWSER_SEARCH, safe.step.capability)
+        assertEquals("primary", safe.step.strategy)
+    }
+
     @Test fun validated_adapter_outcome_completes_same_general_task_owner() {
         val runtime = GeneralAgentRuntime(now = { 7 })
         val task = runtime.start(44, intent(ToolCapability.BROWSER_SEARCH))!!
@@ -165,6 +316,56 @@ class GeneralAgentRuntimeTest {
         assertEquals("GenericScrollAdapter", adapter.adapterId)
         assertEquals(1, scrollCalls)
         assertTrue(runtime.next(before.copy(capturedAt = 2)) is PlannerResult.VerifyPrevious)
+    }
+
+    @Test fun productionRegistersSecondNativeReadOnlyRouteOnlyWithRealExecutor() {
+        val registry = AgentToolRegistry()
+        var browserCalls = 0
+        var webCalls = 0
+        fun adapters(native: Boolean) = ProductionGeneralAdapters.create(registry,
+            ProductionAdapterExecutors(
+                scroll = { _, _ -> GeneralActionResult(false) },
+                browserSearch = { _, _ -> browserCalls++; GeneralActionResult(true) },
+                observeScreen = { _, _ -> GeneralActionResult(true) },
+                verifyScreen = { _, _ -> GeneralActionResult(true) },
+                back = { _, _ -> GeneralActionResult(false) },
+                webSearch = if (native) { { _, _ -> webCalls++; GeneralActionResult(true) } } else null
+            ))
+        assertFalse(ToolCapability.WEB_SEARCH in GeneralActionRouter(adapters(false))
+            .registeredCapabilities())
+        val router = GeneralActionRouter(adapters(true))
+        assertTrue(ToolCapability.WEB_SEARCH in router.registeredCapabilities())
+
+        val google = NativeReadOnlyWebSearchPolicy.GOOGLE_PACKAGE
+        val request = intent(ToolCapability.BROWSER_SEARCH).copy(
+            relevantApp = google, textHint = "android ai",
+            parameters = mapOf("query" to "android ai", "nativeWebSearchEligible" to "true",
+                "preferredSearchCapability" to ToolCapability.WEB_SEARCH.name),
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)
+        )
+        val runtime = GeneralAgentRuntime(now = { 9 })
+        val task = runtime.start(501L, request)!!
+        val before = perception(task.id, scene(google, 1))
+        val step = (runtime.next(before, router.registeredCapabilities())
+            as PlannerResult.Next).step
+        assertEquals(ToolCapability.WEB_SEARCH, step.capability)
+        assertEquals("NativeWebSearchAdapter", router.select(step, before)?.adapterId)
+        runtime.recordAction(step, router.select(step, before)!!.execute(step, before), before)
+        assertEquals(1, webCalls)
+        assertEquals(0, browserCalls)
+        val after = perception(task.id, scene(google, 2,
+            listOf(element("android ai search results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(after).first.status)
+        assertEquals(ToolCapability.WEB_SEARCH,
+            runtime.takeVerifiedSearchOutcomes().single().capability)
+        assertTrue(runtime.takeVerifiedSearchOutcomes().isEmpty())
+
+        val fallback = GeneralAgentRuntime(now = { 10 })
+        val next = fallback.start(502L, request)!!
+        val default = fallback.next(perception(next.id, scene(google, 1)),
+            GeneralActionRouter(adapters(false)).registeredCapabilities()) as PlannerResult.Next
+        assertEquals(ToolCapability.BROWSER_SEARCH, default.step.capability)
+        assertEquals(1, webCalls)
     }
 
     @Test fun browser_search_routes_through_adapter_and_completes_from_general_verifier() {
