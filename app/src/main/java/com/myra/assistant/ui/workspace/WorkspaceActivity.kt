@@ -2847,6 +2847,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun messageIcon(resource: Int, description: String, action: () -> Unit): ImageButton =
         ImageButton(this).apply {
             setImageResource(resource)
+            imageTintList = android.content.res.ColorStateList.valueOf(
+                Color.rgb(170, 180, 174)
+            )
             background = rounded(Color.TRANSPARENT, 18)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             setPadding(dp(9), dp(9), dp(9), dp(9))
@@ -3051,12 +3054,36 @@ class WorkspaceActivity : AppCompatActivity() {
             val assistantPresentation = if (!mine && parsedRich == null &&
                 current.type == WorkspaceProjectType.CHAT)
                 WorkspaceHinglishReply.normalize(message.text) else message.text
-            val item = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val sourceEvidence = if (!mine && current.type == WorkspaceProjectType.CHAT) {
+                runCatching { verifiedSources.get(current.projectId, message.id) }
+                    .getOrDefault(emptyList())
+            } else emptyList()
+            val appCard = if (!mine && current.type == WorkspaceProjectType.CHAT) {
+                WorkspaceAppDownloadCard.parse(message.text, sourceEvidence)
+            } else null
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                if (appCard != null) {
+                    setPadding(dp(15), dp(14), dp(15), dp(10))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(Color.rgb(9, 11, 10))
+                        cornerRadius = dp(18).toFloat()
+                        setStroke(dp(1), Color.rgb(41, 45, 43))
+                    }
+                }
+            }
             val story = if (!mine && current.type == WorkspaceProjectType.CHAT)
                 WorkspaceStoryScript.card(latestUserPrompt, assistantPresentation) else null
             val codeParts = if (!mine && story == null) WorkspaceCodeBlocks.parse(assistantPresentation)
                 else emptyList()
-            if (parsedRich != null) {
+            if (appCard != null) {
+                item.addView(
+                    WorkspaceAppDownloadCard.create(this, appCard) { verifiedUrl ->
+                        WorkspaceSourcesSheet.openVerified(this@WorkspaceActivity, verifiedUrl)
+                    },
+                    LinearLayout.LayoutParams(-1, -2),
+                )
+            } else if (parsedRich != null) {
                 item.addView(
                     WorkspaceRichAnswerView.createBlocks(this, parsedRich) { choice ->
                         if (selectedId == current.projectId && !isForegroundBusy() && !workTab) {
@@ -3195,36 +3222,41 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
                 actionRow.addView(retryButton, LinearLayout.LayoutParams(dp(40), dp(40)))
                 if (current.type == WorkspaceProjectType.CHAT) {
-                    val sources = runCatching {
-                        verifiedSources.get(current.projectId, message.id)
-                    }.getOrDefault(emptyList())
-                    if (sources.isNotEmpty()) {
-                        val sourcesButton = label(
-                            if (sources.size == 1) "Sources" else "Sources " + sources.size,
-                            12f,
-                        ).apply {
-                            gravity = Gravity.CENTER
-                            setTextColor(Color.rgb(195, 222, 205))
-                            background = rounded(Color.rgb(31, 38, 35), 16)
-                            contentDescription = "Open verified sources"
+                    if (sourceEvidence.isNotEmpty()) {
+                        val sourcesButton = LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            background = rounded(Color.rgb(36, 39, 37), 23)
+                            setPadding(dp(12), 0, dp(13), 0)
+                            minimumHeight = dp(44)
+                            contentDescription = "Open Sources, " +
+                                sourceEvidence.size + " verified links"
                             isClickable = true
                             isFocusable = true
-                            setPadding(dp(12), 0, dp(12), 0)
+                            addView(android.widget.ImageView(this@WorkspaceActivity).apply {
+                                setImageResource(R.drawable.ic_lyra_source_book)
+                                contentDescription = null
+                            }, LinearLayout.LayoutParams(dp(21), dp(21)))
+                            addView(label("Sources · " + sourceEvidence.size, 13f).apply {
+                                setTextColor(Color.rgb(243, 244, 242))
+                            }, LinearLayout.LayoutParams(-2, -2).apply {
+                                leftMargin = dp(8)
+                            })
                             setOnClickListener {
-                                WorkspaceSourcesSheet.show(this@WorkspaceActivity, sources)
+                                WorkspaceSourcesSheet.show(this@WorkspaceActivity, sourceEvidence)
                             }
                         }
                         actionRow.addView(
                             sourcesButton,
-                            LinearLayout.LayoutParams(-2, dp(34)).apply {
-                                leftMargin = dp(5)
-                                topMargin = dp(3)
-                                rightMargin = dp(5)
+                            LinearLayout.LayoutParams(-2, dp(44)).apply {
+                                leftMargin = dp(6)
                             },
                         )
                     }
                 }
-                item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(40)))
+                item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(44)).apply {
+                    topMargin = if (appCard != null) dp(7) else 0
+                })
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
             if (mine && activeRequest != null && liveRichTurnId == message.id &&
