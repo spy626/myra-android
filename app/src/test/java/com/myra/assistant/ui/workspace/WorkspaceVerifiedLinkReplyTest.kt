@@ -24,9 +24,9 @@ class WorkspaceVerifiedLinkReplyTest {
             verbose.repeat(5), "Fallback",
         )
         assertTrue(reply.endsWith("…"))
-        assertTrue(reply.substringAfterLast("\\n\\n").length <= 190)
+        assertTrue(reply.substringAfterLast("\n\n").length <= 190)
         assertTrue(verbose.repeat(5).contains(
-            reply.substringAfterLast("\\n\\n").dropLast(1) + " "
+            reply.substringAfterLast("\n\n").dropLast(1) + " "
         ))
     }
 
