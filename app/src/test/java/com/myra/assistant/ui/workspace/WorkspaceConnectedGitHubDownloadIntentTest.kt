@@ -42,6 +42,27 @@ class WorkspaceConnectedGitHubDownloadIntentTest {
         assertTrue(multiple?.localError?.contains("kaunse build") == true)
     }
 
+    @Test fun externalAppDownloadsNeverBecomeLyraApkBuildRequests() {
+        val thirdParty = listOf(
+            "Cantina app ka download links do bro",
+            "Cantina AI App download link bhejo",
+            "Telegram APK download link do",
+            "WhatsApp app ka download link bhejo",
+            "Give me the Cantina app download links"
+        )
+        thirdParty.forEach { message ->
+            assertNull(message, WorkspaceConnectedGitHubDownloadIntent.decide(
+                message, emptyList()))
+            assertNull(message, WorkspaceConnectedGitHubDownloadIntent.decide(
+                message, preceding))
+        }
+        assertNull(WorkspaceConnectedGitHubDownloadIntent.decide(
+            "Generic app download link bhejo", emptyList()))
+        assertTrue(WorkspaceConnectedGitHubDownloadIntent.decide(
+            "LYRA app ka APK download link bhejo", emptyList())?.localError
+                ?.contains("build") == true)
+    }
+
     @Test fun unrelatedAndUnsafeTurnsNeverBecomeDownloadRead() {
         assertNull(WorkspaceConnectedGitHubDownloadIntent.decide("hi bro", preceding))
         assertNull(WorkspaceConnectedGitHubDownloadIntent.decide(

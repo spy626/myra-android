@@ -65,6 +65,14 @@ class WorkspaceConnectedGitHubReadRoutingTest {
         ))
     }
 
+    @Test fun cantinaDownloadLinkUsesPublicSearchNotConnectedGitHub() {
+        val message = "Cantina app ka download links do bro"
+        assertNull(WorkspaceConnectedGitHubReadRouting.decide(message))
+        val public = WorkspaceWebLinkIntent.decide(message)
+        assertEquals("Cantina app download", public?.query)
+        assertEquals(3, public?.maxResults)
+    }
+
     @Test fun ambiguousRunsFailClosedAndWritesAreNotDispatchedAsReads() {
         val ambiguous = WorkspaceConnectedGitHubReadRouting.decide(
             "Check build #3372 and build #3370 status, no changes."

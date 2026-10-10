@@ -23,6 +23,15 @@ internal object WorkspaceConnectedGitHubDownloadIntent {
     private val boundary = Regex(
         """(?iu)\b(?:do\s+not|don't|dont|never|without|kuch\s+change\s+mat)\b"""
     )
+    // Connected GitHub artifacts are LYRA's own CI outputs, NOT download links for
+    // third-party apps. Never hijack "Cantina app download links" into a build lookup.
+    private val namedExternalApp = Regex(
+        """(?iu)\b([\p{L}][\p{L}\p{N}_.-]{1,59})(?:\s+ai)?\s+(?:app|apk)\b"""
+    )
+    private val selfNames = setOf("lyra", "myra", "myra-android")
+    private val ownBuildCue = Regex(
+        """(?iu)\b(?:lyra|myra|myra-android|github\s+actions|workflow|build|artifact)\b"""
+    )
 
     fun decide(raw: String, preceding: List<WorkspaceConversationStore.Message>): Decision? {
         val text = raw.trim()
@@ -30,6 +39,31 @@ internal object WorkspaceConnectedGitHubDownloadIntent {
             WorkspaceSourceContext.containsPossibleSecret(text)) return null
         val asked = boundary.find(text)?.let { text.substring(0, it.range.first) } ?: text
         if (!artifact.containsMatchIn(asked) || !request.containsMatchIn(asked)) return null
+        if (namedExternalApp.findAll(asked).any {
+                it.groupValues[1].lowercase() !in selfNames &&
+                    it.groupValues[1].lowercase() !in setOf(
+                        "my", "our", "this", "the", "meri", "hamari", "apni"
+                    )
+            }) return null
+        // Without a named LYRA/GitHub build, numeric run, or immediately verified
+        // build follow-up, this is an ordinary public download-link request.
+        val recentAssistant = preceding.lastOrNull()
+        val recentUser = preceding.getOrNull(preceding.lastIndex - 1)
+        val recentRunNumber = if (recentAssistant?.role == "assistant" &&
+            recentUser?.role == "user") {
+            WorkspaceConnectedGitHubRunIntent.decide(recentUser.text)?.runNumber
+        } else null
+        val lastReplyBuilds = recentAssistant?.text?.let { reply ->
+            receiptNumber.findAll(reply).mapNotNull {
+                it.groupValues[1].toLongOrNull()
+            }.distinct().toList()
+        }.orEmpty()
+        val verifiedBuildFollowup = recentRunNumber != null &&
+            lastReplyBuilds == listOf(recentRunNumber) &&
+            priorLink.containsMatchIn(recentAssistant.text)
+        if (!ownBuildCue.containsMatchIn(asked) &&
+            !number.containsMatchIn(asked) && !verifiedBuildFollowup) return null
+
         // In "build #3374 ka APK", build names an EXISTING run, not permission
         // to create a build. Mask only number-bound nouns during the mutation scan.
         // All independent edit/create/build imperatives still reach the authority gate.

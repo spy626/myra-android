@@ -57,6 +57,13 @@ class WorkspaceWebLinkIntentTest {
             "GitHub pe AIRI repo ka link do")?.maxResults)
     }
 
+    @Test fun thirdPartyAppDownloadsRemainPublicLinkSearches() {
+        val request = WorkspaceWebLinkIntent.decide("Cantina app ka download links do bro")
+        assertEquals("Cantina app download", request?.query)
+        assertEquals(3, request?.maxResults)
+        assertNull(request?.preferredHost)
+    }
+
     @Test fun writesSecretsBarePlatformsAndDirectUrlsNeverSearch() {
         assertNull(WorkspaceWebLinkIntent.decide("YouTube ka link bhejo"))
         assertNull(WorkspaceWebLinkIntent.decide("GitHub link feature add karo"))
