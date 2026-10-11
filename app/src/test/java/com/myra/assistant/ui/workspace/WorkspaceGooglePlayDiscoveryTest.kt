@@ -37,8 +37,12 @@ class WorkspaceGooglePlayDiscoveryTest {
             </a>
         """.trimIndent()
         val candidates = WorkspaceGooglePlayDiscovery.parseHtml(html, "Telegram")
-        assertEquals(listOf("https://play.google.com/store/apps/details?id=org.telegram.messenger"),
-            candidates.map { it.url })
+        // Exact named card ranks first; other store search links are candidates
+        // until the real app-page title is independently checked.
+        assertEquals("https://play.google.com/store/apps/details?id=org.telegram.messenger",
+            candidates.first().url)
+        assertTrue(candidates.all { WorkspaceAppDownloadSearch.playUrl(it.url) })
+        assertTrue(candidates.none { it.url.contains("evil.example.com") })
         // Unmatched first-party links remain candidates, never verified Sources.
         assertTrue(WorkspaceGooglePlayDiscovery.parseHtml(html, "Signal").all {
             WorkspaceAppDownloadSearch.playUrl(it.url)
