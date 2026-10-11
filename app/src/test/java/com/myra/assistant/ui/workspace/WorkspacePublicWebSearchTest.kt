@@ -26,6 +26,25 @@ class WorkspacePublicWebSearchTest {
         assertTrue(results.first().snippet.contains("AI companion"))
     }
 
+    @Test fun htmlSearchSupportsReorderedAttributesAndResultsWithNestedMarkup() {
+        val html = """
+            <a href="https://kotlinlang.org/docs/coroutines-overview.html"
+               class="result__a"><span>Kotlin Coroutines overview</span></a>
+            <a class="result-link" data-pos="2"
+               href="https://developer.android.com/kotlin/coroutines">
+               Kotlin coroutines on Android
+            </a>
+            <a class="other" href="https://irrelevant.example.com/coroutines">
+               Fake result not in search
+            </a>
+        """.trimIndent()
+        val results = WorkspacePublicWebSearch.parseHtml(
+            html, "Kotlin coroutines documentation", null)
+        assertEquals(2, results.size)
+        assertEquals("https://kotlinlang.org/docs/coroutines-overview.html", results[0].url)
+        assertTrue(results.any { it.url.startsWith("https://developer.android.com/") })
+    }
+
     @Test fun fallbackRejectsSubstringOnlyGithubMatches() {
         val html = """
             <a class="result__a" href="https://github.com/Shottakon/AirialPerspectiveEffecter">

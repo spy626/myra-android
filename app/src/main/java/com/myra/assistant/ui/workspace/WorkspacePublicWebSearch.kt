@@ -170,13 +170,19 @@ internal object WorkspacePublicWebSearch {
             "article", "articles", "product", "products", "video", "videos",
             "channel", "channels", "source", "sources", "page", "pages"
         )).ifEmpty { queryTokens }
-        val anchor = Regex(
-            """(?is)<a\b(?=[^>]{0,1200}\bclass\s*=\s*["'][^"']*\bresult__a\b[^"']*["'])""" +
-                """[^>]{0,1600}\bhref\s*=\s*["']([^"']{1,3000})["'][^>]*>(.*?)</a\s*>"""
+        // DuckDuckGo has at least two public HTML variants and attribute order varies.
+        // Never trust a random anchor: require the search-result class and a safe HTTPS target.
+        val anchor = Regex("""(?is)<a\b([^>]{0,2200})>(.*?)</a\s*>""")
+        val href = Regex("""(?is)\bhref\s*=\s*["']([^"']{1,3000})["']""")
+        val resultClass = Regex(
+            """(?is)\bclass\s*=\s*["'][^"']*\b(?:result__a|result-link)\b[^"']*["']"""
         )
-        return anchor.findAll(html).mapIndexedNotNull { index, match ->
-            if (index >= 20) return@mapIndexedNotNull null
-            val url = resultUrl(match.groupValues[1]) ?: return@mapIndexedNotNull null
+        return anchor.findAll(html).take(150).mapIndexedNotNull { index, match ->
+            val attributes = match.groupValues[1]
+            if (!resultClass.containsMatchIn(attributes)) return@mapIndexedNotNull null
+            val rawUrl = href.find(attributes)?.groupValues?.get(1)
+                ?: return@mapIndexedNotNull null
+            val url = resultUrl(rawUrl) ?: return@mapIndexedNotNull null
             if (!matchesRequestedDestination(url, query, preferredHost)) return@mapIndexedNotNull null
             val target = WorkspaceAgentReachPolicy.parse(url)
             val title = stripHtml(match.groupValues[2]).take(180)
@@ -441,7 +447,7 @@ internal class WorkspacePublicWebSearchRunner(
     ) {
         // Keep the proven single-link path at 5 attempts. Plural requests can
         // inspect up to 8 candidates and finish with fewer than requested.
-        val maxCandidates = if (request.maxResults == 1) 5 else 8
+        val maxCandidates = if (request.maxResults == 1) 5 else 12
         if (index >= minOf(candidates.size, maxCandidates) ||
             verifiedResults.size >= request.maxResults) {
             completeCandidates(run, verifiedResults)
