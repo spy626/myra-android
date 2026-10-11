@@ -302,7 +302,26 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
                     runCatching { WorkspaceAppDownloadSearch.readGoogle(it, app) }
                         .getOrDefault(emptyList())
                 }
-                verifyGoogle(run, app, choices, 0, results, apple)
+                verifyGoogle(run, app, choices, 0, results, apple, nativeAttempt = false)
+            },
+            failure = { searchGooglePlayDirect(run, app, results, apple) })
+    }
+
+    /** Query the real Google Play catalog when DuckDuckGo is empty or unavailable. */
+    private fun searchGooglePlayDirect(
+        run: Long,
+        app: String,
+        results: MutableList<WorkspaceAppDownloadSearch.Result>,
+        apple: WorkspaceAppDownloadSearch.AppleListing?,
+    ) {
+        listener.onEvent(WorkspaceWorkPhase.SEARCHING, "Checking Google Play catalog", app)
+        dispatch(run, WorkspaceGooglePlayDiscovery.searchRequest(app),
+            success = { response ->
+                val choices = response.use {
+                    runCatching { WorkspaceGooglePlayDiscovery.readSearch(it, app) }
+                        .getOrDefault(emptyList())
+                }
+                verifyGoogle(run, app, choices, 0, results, apple, nativeAttempt = true)
             },
             failure = { searchPublisher(run, app, results, apple) })
     }
@@ -312,23 +331,25 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
         choices: List<WorkspacePublicWebSearch.Candidate>, index: Int,
         results: MutableList<WorkspaceAppDownloadSearch.Result>,
         apple: WorkspaceAppDownloadSearch.AppleListing?,
+        nativeAttempt: Boolean,
     ) {
         if (index >= choices.size) {
-            searchPublisher(run, app, results, apple)
+            if (nativeAttempt) searchPublisher(run, app, results, apple)
+            else searchGooglePlayDirect(run, app, results, apple)
             return
         }
         val choice = choices[index]
         verify(run, choice.url, { WorkspaceAppDownloadSearch.sameStoreIdentity(
             choice.url, it, WorkspaceAppDownloadSearch.Kind.ANDROID
-        ) }) { target ->
+        ) }, requiredGoogleTitle = app) { target ->
             if (target != null) {
                 results.add(WorkspaceAppDownloadSearch.Result(
                     WorkspaceAppDownloadSearch.Kind.ANDROID, app, target,
-                    "Google Play listing · matched app name and package URL",
+                    "Google Play listing · app name and package verified on store",
                     "Google Play listing · reachable",
                 ))
                 searchPublisher(run, app, results, apple)
-            } else verifyGoogle(run, app, choices, index + 1, results, apple)
+            } else verifyGoogle(run, app, choices, index + 1, results, apple, nativeAttempt)
         }
     }
 
@@ -485,7 +506,8 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
 
     private fun verify(
         run: Long, url: String, acceptable: (String) -> Boolean,
-        depth: Int = 0, done: (String?) -> Unit,
+        depth: Int = 0, requiredGoogleTitle: String? = null,
+        done: (String?) -> Unit,
     ) {
         val target = runCatching { WorkspaceAgentReachPolicy.parse(url) }.getOrNull()
         if (target == null || !acceptable(target.canonicalUrl)) {
@@ -501,16 +523,21 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
                                 it.header("Location").orEmpty())
                         }.getOrNull()
                         if (next != null && acceptable(next.canonicalUrl)) {
-                            verify(run, next.canonicalUrl, acceptable, depth + 1, done)
+                            verify(run, next.canonicalUrl, acceptable,
+                                depth + 1, requiredGoogleTitle, done)
                         } else done(null)
                     } else {
                         val acceptablePage = runCatching {
-                            WorkspacePublicWebSearch.verify(
+                            val verified = WorkspacePublicWebSearch.verify(
                                 it, WorkspacePublicWebSearch.Candidate(
                                     "Public app listing", target.canonicalUrl, "", 1,
                                 ), target,
                             )
-                        }.isSuccess
+                            requiredGoogleTitle == null ||
+                                WorkspaceGooglePlayDiscovery.pageTitleMatches(
+                                    requiredGoogleTitle, verified
+                                )
+                        }.getOrDefault(false)
                         done(if (acceptablePage) target.canonicalUrl else null)
                     }
                 }

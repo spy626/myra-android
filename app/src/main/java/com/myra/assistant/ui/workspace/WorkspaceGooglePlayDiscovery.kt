@@ -18,7 +18,7 @@ internal object WorkspaceGooglePlayDiscovery {
     private val anchors = Regex("""(?is)<a\b([^>]{0,2500})>(.{0,9000}?)</a\s*>""")
     private val href = Regex("""(?is)\bhref\s*=\s*["']([^"']{1,2000})["']""")
     private val tag = Regex("""(?is)<[^>]{0,1200}>""")
-    private val title = Regex("""(?is)<title\b[^>]*>(.*?)</title\s*>""")
+    private val innerLabels = Regex("""(?is)<(?:span|div)[^>]{0,800}>([^<]{1,150})</(?:span|div)>""")
 
     fun searchRequest(app: String): Request {
         require(app.length in 2..90 && app.none(Char::isISOControl))
@@ -66,12 +66,14 @@ internal object WorkspaceGooglePlayDiscovery {
             val attributes = decode(match.groupValues[1])
             val candidateTitles = buildList {
                 add(text.substringBefore(" • ").substringBefore("·").trim())
+                innerLabels.findAll(match.groupValues[2]).take(12).forEach {
+                    add(decode(it.groupValues[1]).trim())
+                }
                 Regex("""(?is)\b(?:aria-label|title)\s*=\s*["']([^"']{1,150})["']""")
                     .findAll(attributes).forEach { add(it.groupValues[1].trim()) }
             }
             val matched = candidateTitles.firstOrNull {
-                WorkspaceAppDownloadSearch.storeNameMatches(name, it) ||
-                    it.lowercase(Locale.ROOT).startsWith(name.lowercase(Locale.ROOT) + " ")
+                WorkspaceAppDownloadSearch.storeNameMatches(name, it)
             } ?: return@mapNotNull null
             WorkspacePublicWebSearch.Candidate(matched.take(180), link, "", 80)
         }.distinctBy {
