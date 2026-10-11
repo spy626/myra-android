@@ -58,11 +58,11 @@ internal object WorkspaceSourcesSheet {
         header.addView(android.widget.ImageView(activity).apply {
             setImageResource(R.drawable.ic_lyra_source_book)
             contentDescription = null
-        }, LinearLayout.LayoutParams(dp(activity, 22), dp(activity, 22)).apply {
-            rightMargin = dp(activity, 9)
+        }, LinearLayout.LayoutParams(dp(activity, 18), dp(activity, 18)).apply {
+            rightMargin = dp(activity, 7)
         })
         header.addView(
-            text(activity, "Sources · " + sources.size, 16f,
+            text(activity, "Sources · " + sources.size, 15f,
                 Color.rgb(243, 244, 242), bold = true),
             LinearLayout.LayoutParams(-2, -2),
         )
