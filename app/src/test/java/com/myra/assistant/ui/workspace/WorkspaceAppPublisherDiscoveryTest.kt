@@ -45,6 +45,7 @@ class WorkspaceAppPublisherDiscoveryTest {
             "https://telegram.org/apps", html, "Telegram", listOf(google, apple)
         )
         assertEquals("https://telegram.org/apps", matched?.siteUrl)
+        assertTrue(matched?.androidPages.orEmpty().none { it.endsWith(".apk") })
         assertTrue(matched?.androidPages.orEmpty().contains("https://telegram.org/android"))
         assertNull(WorkspaceAppPublisherDiscovery.inspect(
             "https://telegram.org/apps",

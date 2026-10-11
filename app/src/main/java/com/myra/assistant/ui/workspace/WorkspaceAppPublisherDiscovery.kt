@@ -36,7 +36,8 @@ internal object WorkspaceAppPublisherDiscovery {
         WorkspacePublicWebSearch.parseHtml(html,
             "$name official app website download", null)
             .filter { brandHost(it.url, name) }
-            .distinctBy { URI(it.url).host.removePrefix("www.") }
+            .sortedByDescending { if (URI(it.url).path.trimEnd('/').endsWith("/apps")) 1 else 0 }
+            .distinctBy { it.url }
             .take(4)
 
     fun readSearch(response: Response, name: String): List<WorkspacePublicWebSearch.Candidate> {
@@ -75,6 +76,16 @@ internal object WorkspaceAppPublisherDiscovery {
 
     private fun title(html: String): String = titleTag.find(html)?.groupValues?.get(1)
         ?.replace(tag, " ")?.replace(Regex("""\s+"""), " ")?.trim().orEmpty()
+
+    private fun siteTitleMatches(name: String, title: String): Boolean {
+        if (WorkspaceAppDownloadSearch.storeNameMatches(name, title)) return true
+        val first = title.lowercase(Locale.ROOT).substringBefore(" — ")
+            .substringBefore(" - ").substringBefore(':')
+        val nameLower = name.lowercase(Locale.ROOT).trim()
+        val suffix = first.removePrefix(nameLower).trim()
+        return first.startsWith(nameLower + " ") &&
+            suffix in setOf("apps", "applications", "downloads", "for android", "messenger")
+    }
 
     private fun storeIdentityPresent(html: String, storeUrls: List<String>): Boolean {
         if (storeUrls.isEmpty()) return false
@@ -119,7 +130,7 @@ internal object WorkspaceAppPublisherDiscovery {
     ): Page? {
         if (html.length !in 150..MAX_HTML_BYTES || !brandHost(url, name)) return null
         val observedTitle = title(html)
-        if (!WorkspaceAppDownloadSearch.storeNameMatches(name, observedTitle)) return null
+        if (!siteTitleMatches(name, observedTitle)) return null
         if (!storeIdentityPresent(html, storeUrls)) return null
         return Page(url, androidPages(url, html))
     }
