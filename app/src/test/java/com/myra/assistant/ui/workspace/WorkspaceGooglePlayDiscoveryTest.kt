@@ -63,6 +63,14 @@ class WorkspaceGooglePlayDiscoveryTest {
         assertEquals("Google Play candidate", items[0].title)
     }
 
+    @Test fun embeddedEscapedStoreLinksAreCandidatesNotFabricatedIds() {
+        val escaped = """<script>["\u002Fstore\u002Fapps\u002Fdetails\u003fid\u003dorg.telegram.messenger"]</script>"""
+        val parsed = WorkspaceGooglePlayDiscovery.parseHtml(escaped, "Telegram")
+        assertEquals(1, parsed.size)
+        assertEquals("https://play.google.com/store/apps/details?id=org.telegram.messenger",
+            parsed.single().url)
+    }
+
     @Test fun actualGooglePlayTitleIsRequiredForVerifiedListing() {
         val target = WorkspacePublicWebSearch.Verified(
             "Telegram - Apps on Google Play",

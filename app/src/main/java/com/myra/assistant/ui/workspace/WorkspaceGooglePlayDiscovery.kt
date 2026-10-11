@@ -43,6 +43,9 @@ internal object WorkspaceGooglePlayDiscovery {
         .replace("&#61;", "=")
         .replace("\\u003d", "=", ignoreCase = true)
         .replace("\\u0026", "&", ignoreCase = true)
+        .replace("\\u002f", "/", ignoreCase = true)
+        .replace("\\u003f", "?", ignoreCase = true)
+        .replace("\\/", "/")
         .replace("&quot;", "\"", ignoreCase = true)
         .replace("&nbsp;", " ", ignoreCase = true)
 
