@@ -137,6 +137,19 @@ internal object WorkspacePublicWebSearch {
         return target.canonicalUrl
     }
 
+    /** One conservative query relaxation for normal documentation searches only. */
+    internal fun broaderDocumentationRequest(
+        request: WorkspaceWebLinkIntent.Request,
+    ): WorkspaceWebLinkIntent.Request? {
+        if (request.preferredHost != null) return null
+        val shorter = request.query.trim().replace(
+            Regex("""(?iu)\s+(?:documentation|docs|guide|tutorial)$"""), ""
+        ).trim()
+        if (shorter == request.query.trim() ||
+            shorter.length < 6 || shorter.split(Regex("""\s+""")).size < 2) return null
+        return request.copy(query = shorter)
+    }
+
     fun searchRequest(request: WorkspaceWebLinkIntent.Request): Request {
         val query = request.query.trim()
         require(query.length in 2..180 && query.none(Char::isISOControl)) {
@@ -391,7 +404,9 @@ internal class WorkspacePublicWebSearchRunner(
         }
     }
 
-    private fun startWebSearch(run: Long, request: WorkspaceWebLinkIntent.Request) {
+    private fun startWebSearch(
+        run: Long, request: WorkspaceWebLinkIntent.Request, broadened: Boolean = false,
+    ) {
         synchronized(this) { if (run != generation) return }
         listener.onEvent(
             WorkspaceWorkPhase.SEARCHING,
@@ -403,12 +418,26 @@ internal class WorkspacePublicWebSearchRunner(
             WorkspacePublicWebSearch.searchRequest(request),
             onSuccess = { response ->
                 val candidates = response.use { WorkspacePublicWebSearch.readSearch(it, request) }
+                if (candidates.isEmpty() && !broadened) {
+                    val retry = WorkspacePublicWebSearch.broaderDocumentationRequest(request)
+                    if (retry != null) {
+                        startWebSearch(run, retry, broadened = true)
+                        return@dispatch
+                    }
+                }
                 require(candidates.isNotEmpty()) {
                     "No confident public search result matched this link request"
                 }
+                // Keep the original requested result count; only the SEARCH words broaden.
                 startCandidateVerification(run, request, candidates)
             },
-            onFailure = { fail(run, it) },
+            onFailure = {
+                if (!broadened) {
+                    val retry = WorkspacePublicWebSearch.broaderDocumentationRequest(request)
+                    if (retry != null) startWebSearch(run, retry, broadened = true)
+                    else fail(run, it)
+                } else fail(run, it)
+            },
         )
     }
 

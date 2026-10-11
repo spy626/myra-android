@@ -114,6 +114,18 @@ class WorkspacePublicWebSearchTest {
         assertEquals(listOf("https://platform.openai.com/docs"), results.map { it.url })
     }
 
+    @Test fun docsDiscoveryCanRetryOnceWithoutModifyingRequestedCount() {
+        val req = WorkspaceWebLinkIntent.Request(
+            "Kotlin coroutines documentation", maxResults = 3)
+        val broader = WorkspacePublicWebSearch.broaderDocumentationRequest(req)
+        assertEquals("Kotlin coroutines", broader?.query)
+        assertEquals(3, broader?.maxResults)
+        assertNull(WorkspacePublicWebSearch.broaderDocumentationRequest(
+            WorkspaceWebLinkIntent.Request("AIRI repo", "github.com")))
+        assertNull(WorkspacePublicWebSearch.broaderDocumentationRequest(
+            WorkspaceWebLinkIntent.Request("Kotlin coroutines")))
+    }
+
     @Test fun multiSourceRequiresVerifiedDistinctSites() {
         val request = WorkspaceWebLinkIntent.Request("Kotlin coroutines", maxResults = 3)
         val first = WorkspacePublicWebSearch.Verified(
