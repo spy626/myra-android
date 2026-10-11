@@ -38,10 +38,13 @@ internal object WorkspaceAppDownloadSearch {
 
     private fun appTitle(value: String): String = value
         .substringBefore(" - Apps on Google Play")
+        .substringBefore(" – Apps on Google Play")
+        .substringBefore(" — Apps on Google Play")
         .substringBefore(" on the App Store")
         .substringBefore(" - App Store")
         .substringBefore(':')
         .substringBefore(" — ")
+        .substringBefore(" – ")
         .substringBefore(" - ")
         .trim()
 

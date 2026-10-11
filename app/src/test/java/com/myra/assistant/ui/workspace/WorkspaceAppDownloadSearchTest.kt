@@ -35,6 +35,15 @@ class WorkspaceAppDownloadSearchTest {
         assertFalse(WorkspaceAppDownloadSearch.appleUrl("https://evil.example.com/app/id1234567890"))
     }
 
+    @Test fun googlePlayListingTitleVariantsAreVerifiedWithoutAcceptingTelegramX() {
+        assertTrue(WorkspaceAppDownloadSearch.storeNameMatches(
+            "Telegram", "Telegram – Apps on Google Play"))
+        assertTrue(WorkspaceAppDownloadSearch.storeNameMatches(
+            "Telegram", "Telegram - Apps on Google Play"))
+        assertFalse(WorkspaceAppDownloadSearch.storeNameMatches(
+            "Telegram", "Telegram X – Apps on Google Play"))
+    }
+
     @Test fun storeLinksRequireRealTypedPathsAndIdentifiers() {
         assertTrue(WorkspaceAppDownloadSearch.playUrl(
             "https://play.google.com/store/apps/details?id=com.signal.android"))
