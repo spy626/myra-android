@@ -33,6 +33,7 @@ internal object WorkspaceAppDownloadCard {
         val developer: String?,
         val destinations: List<Destination>,
         val missing: String?,
+        val playSearchUrl: String? = null,
     )
 
     // Only the app-search-produced reply format may use this verified-source projection.
@@ -85,7 +86,22 @@ internal object WorkspaceAppDownloadCard {
             ?.trim()?.take(90)?.takeIf(String::isNotBlank)
         val missing = raw.substringAfter("Not confirmed:", "")
             .lineSequence().firstOrNull()?.trim()?.take(140)?.takeIf(String::isNotBlank)
-        return Content(requested, developer, result, missing)
+        // When exact Android listing is unconfirmed, show a distinctly labeled
+        // FIRST-PARTY Google Play search action rather than hiding Android entirely.
+        // This is NOT a verified app listing and is never persisted in Sources.
+        val trustedApple = sources.any { source ->
+            source.title.endsWith(" — Apple App Store") &&
+                source.verifiedLabel.orEmpty().contains("Apple catalog listing") &&
+                WorkspaceAppDownloadIntent.nameMatches(
+                    requested, source.title.substringBefore(" — ")
+                )
+        }
+        val playSearch = if (trustedApple &&
+            result.none { it.platform == Platform.ANDROID }) {
+            runCatching { WorkspaceGooglePlayDiscovery.searchRequest(requested).url.toString() }
+                .getOrNull()
+        } else null
+        return Content(requested, developer, result, missing, playSearch)
     }
 
     internal fun heading(platform: Platform): String = when (platform) {
@@ -172,6 +188,38 @@ internal object WorkspaceAppDownloadCard {
                 topMargin = dp(context, 11)
                 bottomMargin = dp(context, 2)
             })
+
+        content.playSearchUrl?.let { storeSearchUrl ->
+            // Never label a search-results page as an exact app listing.
+            val line = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(context, 9), 0, 0)
+            }
+            line.addView(icon(context, R.drawable.ic_lyra_phone, "Google Play search"),
+                LinearLayout.LayoutParams(dp(context, 20), dp(context, 20)).apply {
+                    rightMargin = dp(context, 8)
+                })
+            val details = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            details.addView(text(context, "Android (Google Play search)", 15.5f,
+                bold = true), LinearLayout.LayoutParams(-1, -2))
+            details.addView(WorkspaceDottedLinkText(context).apply {
+                bind("Search " + content.appName + " on Google Play")
+                textSize = 15.5f
+                setTextColor(PRIMARY)
+                contentDescription = "Search Google Play for " + content.appName +
+                    ", exact app listing not verified"
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { open(storeSearchUrl) }
+            }, LinearLayout.LayoutParams(-1, -2).apply {
+                topMargin = dp(context, 2)
+            })
+            line.addView(details, LinearLayout.LayoutParams(0, -2, 1f))
+            root.addView(line, LinearLayout.LayoutParams(-1, -2))
+        }
 
         content.destinations.forEach { destination ->
             val line = LinearLayout(context).apply {
