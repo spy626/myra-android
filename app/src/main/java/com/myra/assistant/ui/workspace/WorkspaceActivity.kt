@@ -3063,16 +3063,10 @@ class WorkspaceActivity : AppCompatActivity() {
             val appCard = if (!mine && current.type == WorkspaceProjectType.CHAT) {
                 WorkspaceAppDownloadCard.parse(message.text, sourceEvidence)
             } else null
+            // Compact verified app links live on the normal chat surface:
+            // no nested card, border, or oversized per-message padding.
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                if (appCard != null) {
-                    setPadding(dp(15), dp(14), dp(15), dp(10))
-                    background = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(Color.rgb(9, 11, 10))
-                        cornerRadius = dp(18).toFloat()
-                        setStroke(dp(1), Color.rgb(41, 45, 43))
-                    }
-                }
             }
             val story = if (!mine && current.type == WorkspaceProjectType.CHAT)
                 WorkspaceStoryScript.card(latestUserPrompt, assistantPresentation) else null
@@ -3198,7 +3192,7 @@ class WorkspaceActivity : AppCompatActivity() {
             if (!mine) {
                 val actionRow = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.START
+                    gravity = Gravity.START or Gravity.CENTER_VERTICAL
                 }
                 actionRow.addView(messageIcon(R.drawable.ic_workspace_copy, "Copy LYRA reply") {
                     copyMessage(assistantPresentation)
@@ -3225,25 +3219,31 @@ class WorkspaceActivity : AppCompatActivity() {
                 actionRow.addView(retryButton, LinearLayout.LayoutParams(dp(44), dp(44)))
                 if (current.type == WorkspaceProjectType.CHAT) {
                     if (sourceEvidence.isNotEmpty()) {
-                        val sourcesButton = LinearLayout(this).apply {
-                            orientation = LinearLayout.HORIZONTAL
-                            gravity = Gravity.CENTER_VERTICAL
-                            background = rounded(Color.rgb(36, 39, 37), 23)
-                            setPadding(dp(12), 0, dp(13), 0)
-                            minimumHeight = dp(44)
-                            contentDescription = "Open Sources, " +
-                                sourceEvidence.size + " verified links"
+                        // 32dp visual pill inside a full 44dp accessible touch target.
+                        // Preserve the user's preferred outlined open-book icon.
+                        val sourcesButton = FrameLayout(this).apply {
                             isClickable = true
                             isFocusable = true
-                            addView(android.widget.ImageView(this@WorkspaceActivity).apply {
-                                setImageResource(R.drawable.ic_lyra_source_book)
-                                contentDescription = null
-                            }, LinearLayout.LayoutParams(dp(21), dp(21)))
-                            addView(label("Sources · " + sourceEvidence.size, 13f).apply {
-                                setTextColor(Color.rgb(243, 244, 242))
-                            }, LinearLayout.LayoutParams(-2, -2).apply {
-                                leftMargin = dp(8)
-                            })
+                            contentDescription = "Open Sources, " +
+                                sourceEvidence.size + " verified links"
+                            val compactPill = LinearLayout(this@WorkspaceActivity).apply {
+                                orientation = LinearLayout.HORIZONTAL
+                                gravity = Gravity.CENTER_VERTICAL
+                                background = rounded(Color.rgb(36, 39, 37), 16)
+                                setPadding(dp(9), 0, dp(11), 0)
+                                addView(ImageView(this@WorkspaceActivity).apply {
+                                    setImageResource(R.drawable.ic_lyra_source_book)
+                                    contentDescription = null
+                                }, LinearLayout.LayoutParams(dp(17), dp(17)))
+                                addView(label("Sources · " + sourceEvidence.size, 12.5f).apply {
+                                    setTextColor(Color.rgb(243, 244, 242))
+                                }, LinearLayout.LayoutParams(-2, -2).apply {
+                                    leftMargin = dp(6)
+                                })
+                            }
+                            addView(compactPill, FrameLayout.LayoutParams(
+                                -2, dp(32), Gravity.CENTER_VERTICAL
+                            ))
                             setOnClickListener {
                                 WorkspaceSourcesSheet.show(this@WorkspaceActivity, sourceEvidence)
                             }
@@ -3251,13 +3251,13 @@ class WorkspaceActivity : AppCompatActivity() {
                         actionRow.addView(
                             sourcesButton,
                             LinearLayout.LayoutParams(-2, dp(44)).apply {
-                                leftMargin = dp(6)
+                                leftMargin = dp(3)
                             },
                         )
                     }
                 }
                 item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(44)).apply {
-                    topMargin = if (appCard != null) dp(7) else 0
+                    topMargin = if (appCard != null) dp(3) else 0
                 })
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
