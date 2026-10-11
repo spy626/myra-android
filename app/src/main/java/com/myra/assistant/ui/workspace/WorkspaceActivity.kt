@@ -2852,7 +2852,8 @@ class WorkspaceActivity : AppCompatActivity() {
             )
             background = rounded(Color.TRANSPARENT, 18)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(11), dp(11), dp(11), dp(11))
+            // Smaller visible icon, unchanged accessible 44dp hit area.
+            setPadding(dp(13), dp(13), dp(13), dp(13))
             minimumWidth = dp(44)
             minimumHeight = dp(44)
             contentDescription = description
@@ -3219,31 +3220,29 @@ class WorkspaceActivity : AppCompatActivity() {
                 actionRow.addView(retryButton, LinearLayout.LayoutParams(dp(44), dp(44)))
                 if (current.type == WorkspaceProjectType.CHAT) {
                     if (sourceEvidence.isNotEmpty()) {
-                        // 32dp visual pill inside a full 44dp accessible touch target.
-                        // Preserve the user's preferred outlined open-book icon.
-                        val sourcesButton = FrameLayout(this).apply {
+                        // Tiny, distinct website badges + plain text. No Sources
+                        // pill, border, or background; 44dp tappable row retained.
+                        val sourcesButton = LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
                             isClickable = true
                             isFocusable = true
                             contentDescription = "Open Sources, " +
-                                sourceEvidence.size + " verified links"
-                            val compactPill = LinearLayout(this@WorkspaceActivity).apply {
-                                orientation = LinearLayout.HORIZONTAL
+                                sourceEvidence.size + " verified links from " +
+                                WorkspaceSourceBadgeView.preview(sourceEvidence)
+                                    .joinToString(", ") { it.host }
+                            addView(
+                                WorkspaceSourceBadgeView.create(
+                                    this@WorkspaceActivity, sourceEvidence
+                                ),
+                                LinearLayout.LayoutParams(-2, dp(18)),
+                            )
+                            addView(label("Sources · " + sourceEvidence.size, 11.5f).apply {
+                                setTextColor(Color.rgb(170, 180, 174))
                                 gravity = Gravity.CENTER_VERTICAL
-                                background = rounded(Color.rgb(36, 39, 37), 16)
-                                setPadding(dp(9), 0, dp(11), 0)
-                                addView(ImageView(this@WorkspaceActivity).apply {
-                                    setImageResource(R.drawable.ic_lyra_source_book)
-                                    contentDescription = null
-                                }, LinearLayout.LayoutParams(dp(17), dp(17)))
-                                addView(label("Sources · " + sourceEvidence.size, 12.5f).apply {
-                                    setTextColor(Color.rgb(243, 244, 242))
-                                }, LinearLayout.LayoutParams(-2, -2).apply {
-                                    leftMargin = dp(6)
-                                })
-                            }
-                            addView(compactPill, FrameLayout.LayoutParams(
-                                -2, dp(32), Gravity.CENTER_VERTICAL
-                            ))
+                            }, LinearLayout.LayoutParams(-2, -2).apply {
+                                leftMargin = dp(6)
+                            })
                             setOnClickListener {
                                 WorkspaceSourcesSheet.show(this@WorkspaceActivity, sourceEvidence)
                             }
@@ -3251,7 +3250,8 @@ class WorkspaceActivity : AppCompatActivity() {
                         actionRow.addView(
                             sourcesButton,
                             LinearLayout.LayoutParams(-2, dp(44)).apply {
-                                leftMargin = dp(3)
+                                leftMargin = dp(5)
+                                rightMargin = dp(3)
                             },
                         )
                     }
