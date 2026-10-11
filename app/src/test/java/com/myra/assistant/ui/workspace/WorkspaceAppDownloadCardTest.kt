@@ -76,53 +76,6 @@ class WorkspaceAppDownloadCardTest {
         assertTrue(WorkspaceAppDownloadCard.linkCaption("Cantina", website).none { it == '↗' })
     }
 
-    @Test fun independentWebsiteAndAndroidPageRequireSavedCrossLinkEvidence() {
-        val android = src("Google Play Store",
-            "https://play.google.com/store/apps/details?id=org.telegram.messenger",
-            "Verified", "Google Play listing · reachable")
-        val website = src("Publisher website", "https://telegram.org/apps",
-            "App website cross-links verified store", "Store-linked app website · reachable")
-        val download = src("Publisher Android page", "https://telegram.org/android",
-            "Publisher landing", "Store-linked Android page · reachable")
-        val reply = "**Cantina — app download links**"
-        val accepted = requireNotNull(WorkspaceAppDownloadCard.parse(
-            reply, listOf(android, website, download)
-        ))
-        assertEquals(listOf(
-            WorkspaceAppDownloadCard.Platform.ANDROID,
-            WorkspaceAppDownloadCard.Platform.WEBSITE,
-            WorkspaceAppDownloadCard.Platform.ANDROID_PUBLISHER,
-        ), accepted.destinations.map { it.platform })
-        assertEquals("Android download from publisher site",
-            WorkspaceAppDownloadCard.linkCaption(
-                "Cantina", accepted.destinations.last()))
-        assertEquals(null, WorkspaceAppDownloadCard.parse(
-            reply, listOf(download)))
-        val attacker = download.copy(url = "https://telegram.org.evil.example/android")
-        val withoutBadLink = WorkspaceAppDownloadCard.parse(
-            reply, listOf(website, attacker))
-        assertEquals(1, withoutBadLink?.destinations?.size)
-    }
-
-    @Test fun missingAndroidGetsHonestPlaySearchActionNotFakeVerifiedSource() {
-        val iphone = src("Apple App Store",
-            "https://apps.apple.com/us/app/cantina/id1234567890",
-            "Seller: Cantina, Inc", "Apple catalog listing · reachable")
-        val reply = "**Cantina — app download links**"
-        val oneStore = requireNotNull(WorkspaceAppDownloadCard.parse(reply, listOf(iphone)))
-        assertEquals(1, oneStore.destinations.size)
-        assertTrue(oneStore.playSearchUrl.orEmpty().startsWith(
-            "https://play.google.com/store/search?"))
-        assertTrue(oneStore.playSearchUrl.orEmpty().contains("q=Cantina"))
-        val fakeApple = iphone.copy(verifiedLabel = "unknown")
-        assertNull(WorkspaceAppDownloadCard.parse(reply, listOf(fakeApple))?.playSearchUrl)
-        val play = src("Google Play Store",
-            "https://play.google.com/store/apps/details?id=com.cantina.android",
-            "Verified", "Google Play listing · reachable")
-        assertNull(WorkspaceAppDownloadCard.parse(reply, listOf(iphone, play))
-            ?.playSearchUrl)
-    }
-
     @Test fun publisherCardRequiresEvidenceLabelAndNeverInventsWebsite() {
         val raw = "**Cantina — app download links**"
         val publisher = src("Publisher website", "https://www.cantina.com/download",

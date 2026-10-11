@@ -35,15 +35,6 @@ class WorkspaceAppDownloadSearchTest {
         assertFalse(WorkspaceAppDownloadSearch.appleUrl("https://evil.example.com/app/id1234567890"))
     }
 
-    @Test fun googlePlayListingTitleVariantsAreVerifiedWithoutAcceptingTelegramX() {
-        assertTrue(WorkspaceAppDownloadSearch.storeNameMatches(
-            "Telegram", "Telegram – Apps on Google Play"))
-        assertTrue(WorkspaceAppDownloadSearch.storeNameMatches(
-            "Telegram", "Telegram - Apps on Google Play"))
-        assertFalse(WorkspaceAppDownloadSearch.storeNameMatches(
-            "Telegram", "Telegram X – Apps on Google Play"))
-    }
-
     @Test fun storeLinksRequireRealTypedPathsAndIdentifiers() {
         assertTrue(WorkspaceAppDownloadSearch.playUrl(
             "https://play.google.com/store/apps/details?id=com.signal.android"))
@@ -98,25 +89,6 @@ class WorkspaceAppDownloadSearchTest {
             "https://cantina.com/download",
             WorkspaceAppDownloadSearch.Kind.PUBLISHER
         ))
-    }
-
-    @Test fun optionalPublisherAndroidLandingDoesNotClaimDownloadedApk() {
-        val site = WorkspaceAppDownloadSearch.Result(
-            WorkspaceAppDownloadSearch.Kind.PUBLISHER, "Telegram",
-            "https://telegram.org/apps", "App site cross-links a verified store",
-            "Store-linked app website · reachable"
-        )
-        val androidPage = WorkspaceAppDownloadSearch.Result(
-            WorkspaceAppDownloadSearch.Kind.PUBLISHER_ANDROID, "Telegram",
-            "https://telegram.org/android", "Android landing page on publisher site",
-            "Store-linked Android page · reachable"
-        )
-        val reply = WorkspaceAppDownloadSearch.reply("Telegram", listOf(site, androidPage))
-        assertTrue(reply.contains("Open publisher Android download page"))
-        assertFalse(reply.contains("APK installed"))
-        assertEquals(2, WorkspaceAppDownloadSearch.sources(listOf(site, androidPage)).size)
-        assertTrue(WorkspaceAppDownloadSearch.sources(listOf(site, androidPage))
-            .last().title.endsWith(" — Publisher Android page"))
     }
 
     @Test fun missingPlatformsRemainExplicitRatherThanInvented() {
