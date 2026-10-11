@@ -54,7 +54,9 @@ internal object WorkspaceAppPublisherDiscovery {
             ?: return false
         val components = host.removePrefix("www.").split('.')
         if (components.size < 2) return false
-        val label = components.first().lowercase(Locale.ROOT)
+        // Compare the registrable-looking label, never the first subdomain.
+        // E.g. telegram.org.evil.com must resolve to "evil", not "telegram".
+        val label = components[components.size - 2].lowercase(Locale.ROOT)
         val expected = WorkspaceAppDownloadIntent.compact(name)
         if (expected.length < 4 || expected.length > 42) return false
         return label == expected || (
