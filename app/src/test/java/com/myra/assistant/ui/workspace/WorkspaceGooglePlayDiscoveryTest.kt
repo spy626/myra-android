@@ -39,7 +39,24 @@ class WorkspaceGooglePlayDiscoveryTest {
         val candidates = WorkspaceGooglePlayDiscovery.parseHtml(html, "Telegram")
         assertEquals(listOf("https://play.google.com/store/apps/details?id=org.telegram.messenger"),
             candidates.map { it.url })
-        assertTrue(WorkspaceGooglePlayDiscovery.parseHtml(html, "Signal").isEmpty())
+        // Unmatched first-party links remain candidates, never verified Sources.
+        assertTrue(WorkspaceGooglePlayDiscovery.parseHtml(html, "Signal").all {
+            WorkspaceAppDownloadSearch.playUrl(it.url)
+        })
+    }
+
+    @Test fun embeddedPlaySearchDataFindsPackagesWithoutAnchorCards() {
+        val embedded = """
+            <html><script>AF_initDataCallback({data:
+                [["/store/apps/details?id=org.telegram.messenger", "Telegram"],
+                 ["/store/apps/details?id=org.telegram.messenger.web", "Telegram X"]]
+            });</script></html>
+        """.trimIndent()
+        val items = WorkspaceGooglePlayDiscovery.parseHtml(embedded, "Telegram")
+        assertEquals(2, items.size)
+        assertEquals("https://play.google.com/store/apps/details?id=org.telegram.messenger",
+            items[0].url)
+        assertEquals("Google Play candidate", items[0].title)
     }
 
     @Test fun actualGooglePlayTitleIsRequiredForVerifiedListing() {
@@ -62,9 +79,15 @@ class WorkspaceGooglePlayDiscoveryTest {
             "<a href='https://evil.example.com/telegram.apk'>Telegram</a>",
             "Telegram"
         ).isEmpty())
-        assertTrue(WorkspaceGooglePlayDiscovery.parseHtml(
+        val unknown = WorkspaceGooglePlayDiscovery.parseHtml(
             "<a href='/store/apps/details?id=com.unrelated'>Different app</a>",
             "Telegram"
-        ).isEmpty())
+        )
+        assertEquals(1, unknown.size)
+        assertFalse(WorkspaceGooglePlayDiscovery.pageTitleMatches(
+            "Telegram", WorkspacePublicWebSearch.Verified(
+                "Different app - Apps on Google Play", unknown[0].url, "", "text/html"
+            )
+        ))
     }
 }

@@ -344,7 +344,7 @@ internal class WorkspaceAppDownloadRunner(private val listener: Listener) {
         val choice = choices[index]
         verify(run, choice.url, { WorkspaceAppDownloadSearch.sameStoreIdentity(
             choice.url, it, WorkspaceAppDownloadSearch.Kind.ANDROID
-        ) }, requiredGoogleTitle = app) { target ->
+        ) }, requiredGoogleTitle = if (nativeAttempt) app else null) { target ->
             if (target != null) {
                 results.add(WorkspaceAppDownloadSearch.Result(
                     WorkspaceAppDownloadSearch.Kind.ANDROID, app, target,

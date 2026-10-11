@@ -14,11 +14,15 @@ import java.util.Locale
  */
 internal object WorkspaceGooglePlayDiscovery {
     private const val ORIGIN = "https://play.google.com"
-    private const val MAX_BYTES = 768_000
+    private const val MAX_BYTES = 3_000_000
     private val anchors = Regex("""(?is)<a\b([^>]{0,2500})>(.{0,9000}?)</a\s*>""")
     private val href = Regex("""(?is)\bhref\s*=\s*["']([^"']{1,2000})["']""")
     private val tag = Regex("""(?is)<[^>]{0,1200}>""")
     private val innerLabels = Regex("""(?is)<(?:span|div)[^>]{0,800}>([^<]{1,150})</(?:span|div)>""")
+    private val embeddedStoreRefs = Regex(
+        """(?i)(?:https://play\.google\.com)?/store/apps/details\?id=""" +
+            """([A-Za-z][\w]*(?:\.[A-Za-z][\w]*){1,9})"""
+    )
 
     fun searchRequest(app: String): Request {
         require(app.length in 2..90 && app.none(Char::isISOControl))
@@ -54,17 +58,19 @@ internal object WorkspaceGooglePlayDiscovery {
         return target.canonicalUrl.takeIf { WorkspaceAppDownloadSearch.playUrl(it) }
     }
 
-    /** Evidence must include the requested name inside the same store result anchor. */
+    /**
+     * Google Play search HTML may contain app cards or embedded result data.
+     * Either yields candidates only; destination title must be verified later.
+     */
     internal fun parseHtml(html: String, name: String): List<WorkspacePublicWebSearch.Candidate> {
         if (html.isBlank() || html.length > MAX_BYTES) return emptyList()
-        return anchors.findAll(html).take(100).mapNotNull { match ->
+        val cards = anchors.findAll(html).take(150).mapNotNull { match ->
             val link = href.find(match.groupValues[1])?.groupValues?.get(1)
                 ?.let(::absolute) ?: return@mapNotNull null
             val text = decode(match.groupValues[2])
                 .replace(tag, " ").replace(Regex("""\s+"""), " ").trim()
-            // A card can also use a title/aria-label on its anchor element.
             val attributes = decode(match.groupValues[1])
-            val candidateTitles = buildList {
+            val titles = buildList {
                 add(text.substringBefore(" • ").substringBefore("·").trim())
                 innerLabels.findAll(match.groupValues[2]).take(12).forEach {
                     add(decode(it.groupValues[1]).trim())
@@ -72,14 +78,22 @@ internal object WorkspaceGooglePlayDiscovery {
                 Regex("""(?is)\b(?:aria-label|title)\s*=\s*["']([^"']{1,150})["']""")
                     .findAll(attributes).forEach { add(it.groupValues[1].trim()) }
             }
-            val matched = candidateTitles.firstOrNull {
+            val exact = titles.firstOrNull {
                 WorkspaceAppDownloadSearch.storeNameMatches(name, it)
             } ?: return@mapNotNull null
-            WorkspacePublicWebSearch.Candidate(matched.take(180), link, "", 80)
-        }.distinctBy {
-            // Never claim different search cards for the same package as independent apps.
-            URI(it.url).rawQuery.orEmpty().split('&').firstOrNull { p -> p.startsWith("id=") }
-        }.take(5).toList()
+            WorkspacePublicWebSearch.Candidate(exact.take(180), link, "", 100)
+        }.toList()
+
+        // Observe real package IDs in Google's page, don't derive IDs from app names.
+        val embedded = embeddedStoreRefs.findAll(decode(html)).take(200).mapNotNull { match ->
+            val url = ORIGIN + "/store/apps/details?id=" + match.groupValues[1]
+            val safe = absolute(url) ?: return@mapNotNull null
+            WorkspacePublicWebSearch.Candidate("Google Play candidate", safe, "", 1)
+        }.toList()
+        return (cards + embedded).distinctBy {
+            URI(it.url).rawQuery.orEmpty().split('&')
+                .firstOrNull { part -> part.startsWith("id=") }
+        }.take(12)
     }
 
     fun readSearch(response: Response, name: String): List<WorkspacePublicWebSearch.Candidate> {
