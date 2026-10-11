@@ -76,6 +76,34 @@ class WorkspaceAppDownloadCardTest {
         assertTrue(WorkspaceAppDownloadCard.linkCaption("Cantina", website).none { it == '↗' })
     }
 
+    @Test fun independentWebsiteAndAndroidPageRequireSavedCrossLinkEvidence() {
+        val android = src("Google Play Store",
+            "https://play.google.com/store/apps/details?id=org.telegram.messenger",
+            "Verified", "Google Play listing · reachable")
+        val website = src("Publisher website", "https://telegram.org/apps",
+            "App website cross-links verified store", "Store-linked app website · reachable")
+        val download = src("Publisher Android page", "https://telegram.org/android",
+            "Publisher landing", "Store-linked Android page · reachable")
+        val reply = "**Cantina — app download links**"
+        val accepted = requireNotNull(WorkspaceAppDownloadCard.parse(
+            reply, listOf(android, website, download)
+        ))
+        assertEquals(listOf(
+            WorkspaceAppDownloadCard.Platform.ANDROID,
+            WorkspaceAppDownloadCard.Platform.WEBSITE,
+            WorkspaceAppDownloadCard.Platform.ANDROID_PUBLISHER,
+        ), accepted.destinations.map { it.platform })
+        assertEquals("Android download from publisher site",
+            WorkspaceAppDownloadCard.linkCaption(
+                "Cantina", accepted.destinations.last()))
+        assertEquals(null, WorkspaceAppDownloadCard.parse(
+            reply, listOf(download)))
+        val attacker = download.copy(url = "https://telegram.org.evil.example/android")
+        val withoutBadLink = WorkspaceAppDownloadCard.parse(
+            reply, listOf(website, attacker))
+        assertEquals(1, withoutBadLink?.destinations?.size)
+    }
+
     @Test fun publisherCardRequiresEvidenceLabelAndNeverInventsWebsite() {
         val raw = "**Cantina — app download links**"
         val publisher = src("Publisher website", "https://www.cantina.com/download",

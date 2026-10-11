@@ -91,6 +91,25 @@ class WorkspaceAppDownloadSearchTest {
         ))
     }
 
+    @Test fun optionalPublisherAndroidLandingDoesNotClaimDownloadedApk() {
+        val site = WorkspaceAppDownloadSearch.Result(
+            WorkspaceAppDownloadSearch.Kind.PUBLISHER, "Telegram",
+            "https://telegram.org/apps", "App site cross-links a verified store",
+            "Store-linked app website · reachable"
+        )
+        val androidPage = WorkspaceAppDownloadSearch.Result(
+            WorkspaceAppDownloadSearch.Kind.PUBLISHER_ANDROID, "Telegram",
+            "https://telegram.org/android", "Android landing page on publisher site",
+            "Store-linked Android page · reachable"
+        )
+        val reply = WorkspaceAppDownloadSearch.reply("Telegram", listOf(site, androidPage))
+        assertTrue(reply.contains("Open publisher Android download page"))
+        assertFalse(reply.contains("APK installed"))
+        assertEquals(2, WorkspaceAppDownloadSearch.sources(listOf(site, androidPage)).size)
+        assertTrue(WorkspaceAppDownloadSearch.sources(listOf(site, androidPage))
+            .last().title.endsWith(" — Publisher Android page"))
+    }
+
     @Test fun missingPlatformsRemainExplicitRatherThanInvented() {
         val iphone = WorkspaceAppDownloadSearch.Result(
             WorkspaceAppDownloadSearch.Kind.IPHONE, "Cantina",

@@ -20,7 +20,7 @@ internal object WorkspaceAppDownloadCard {
     private const val SECONDARY = 0xFFA5ACA8.toInt()
     private const val BORDER = 0xFF292D2B.toInt()
 
-    enum class Platform { ANDROID, IPHONE, WEBSITE }
+    enum class Platform { ANDROID, IPHONE, WEBSITE, ANDROID_PUBLISHER }
 
     data class Destination(
         val platform: Platform,
@@ -53,6 +53,8 @@ internal object WorkspaceAppDownloadCard {
                         Platform.IPHONE
                     source.title.endsWith(" — Publisher website") ->
                         Platform.WEBSITE
+                    source.title.endsWith(" — Publisher Android page") ->
+                        Platform.ANDROID_PUBLISHER
                     else -> null
                 } ?: return@forEach
                 val url = runCatching {
@@ -62,7 +64,16 @@ internal object WorkspaceAppDownloadCard {
                     Platform.ANDROID -> WorkspaceAppDownloadSearch.playUrl(url)
                     Platform.IPHONE -> WorkspaceAppDownloadSearch.appleUrl(url)
                     Platform.WEBSITE -> WorkspaceAppDownloadSearch.safePublisherWebsite(url) != null &&
-                        source.verifiedLabel.orEmpty().contains("Publisher-linked")
+                        (source.verifiedLabel.orEmpty().contains("Publisher-linked") ||
+                            source.verifiedLabel.orEmpty().contains("Store-linked"))
+                    Platform.ANDROID_PUBLISHER -> {
+                        val web = sources.firstOrNull { it.title.endsWith(
+                            " — Publisher website"
+                        ) }?.url
+                        web != null && WorkspaceAppPublisherDiscovery.acceptsRedirect(web, url) &&
+                            java.net.URI(url).path.contains("android", ignoreCase = true) &&
+                            source.verifiedLabel.orEmpty().contains("Store-linked Android")
+                    }
                 }
                 if (!valid || any { it.platform == category }) return@forEach
                 add(Destination(category, url, source.snippet.take(190)))
@@ -83,12 +94,14 @@ internal object WorkspaceAppDownloadCard {
         // No unsupported "Official" ownership claim: Apple metadata only
         // established a publisher-linked page, not a dedicated download site.
         Platform.WEBSITE -> "Publisher website"
+        Platform.ANDROID_PUBLISHER -> "Android (publisher download)"
     }
 
     internal fun linkCaption(appName: String, destination: Destination): String =
         when (destination.platform) {
             Platform.ANDROID -> "Download $appName for Android"
             Platform.IPHONE -> "Download $appName for iPhone"
+            Platform.ANDROID_PUBLISHER -> "Android download from publisher site"
             Platform.WEBSITE -> {
                 val parsed = runCatching { java.net.URI(destination.url) }.getOrNull()
                 val domain = parsed?.host.orEmpty().removePrefix("www.")
@@ -170,6 +183,7 @@ internal object WorkspaceAppDownloadCard {
                 Platform.ANDROID -> R.drawable.ic_lyra_phone
                 Platform.IPHONE -> R.drawable.ic_lyra_apple_style
                 Platform.WEBSITE -> R.drawable.ic_lyra_globe
+                Platform.ANDROID_PUBLISHER -> R.drawable.ic_lyra_phone
             }
             line.addView(icon(context, imageId, heading(destination.platform) + " icon"),
                 LinearLayout.LayoutParams(dp(context, 20), dp(context, 20)).apply {
