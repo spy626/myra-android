@@ -48,6 +48,34 @@ class WorkspaceAppDownloadCardTest {
         assertEquals("publisher website.", data.missing)
     }
 
+    @Test fun compactV2HeadingsAndLabelsAreEvidenceBoundAndArrowFree() {
+        assertEquals("Android (Google Play Store)",
+            WorkspaceAppDownloadCard.heading(WorkspaceAppDownloadCard.Platform.ANDROID))
+        assertEquals("iPhone (App Store)",
+            WorkspaceAppDownloadCard.heading(WorkspaceAppDownloadCard.Platform.IPHONE))
+        assertEquals("Publisher website",
+            WorkspaceAppDownloadCard.heading(WorkspaceAppDownloadCard.Platform.WEBSITE))
+        val android = WorkspaceAppDownloadCard.Destination(
+            WorkspaceAppDownloadCard.Platform.ANDROID,
+            "https://play.google.com/store/apps/details?id=com.signal.android", ""
+        )
+        val iphone = WorkspaceAppDownloadCard.Destination(
+            WorkspaceAppDownloadCard.Platform.IPHONE,
+            "https://apps.apple.com/us/app/cantina/id1234567890", ""
+        )
+        val website = WorkspaceAppDownloadCard.Destination(
+            WorkspaceAppDownloadCard.Platform.WEBSITE,
+            "https://www.cantina.com/download", ""
+        )
+        assertEquals("Download Cantina for Android",
+            WorkspaceAppDownloadCard.linkCaption("Cantina", android))
+        assertEquals("Download Cantina for iPhone",
+            WorkspaceAppDownloadCard.linkCaption("Cantina", iphone))
+        assertEquals("cantina.com/download",
+            WorkspaceAppDownloadCard.linkCaption("Cantina", website))
+        assertTrue(WorkspaceAppDownloadCard.linkCaption("Cantina", website).none { it == '↗' })
+    }
+
     @Test fun publisherCardRequiresEvidenceLabelAndNeverInventsWebsite() {
         val raw = "**Cantina — app download links**"
         val publisher = src("Publisher website", "https://www.cantina.com/download",
