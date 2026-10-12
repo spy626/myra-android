@@ -2,6 +2,7 @@ package com.myra.assistant.agent
 
 import java.net.URI
 import java.util.Locale
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * Read-only multi-step goal source evidence. Does not authorize phone navigation,
@@ -26,15 +27,18 @@ object AutonomousSourceAnalysisPolicy {
     }
 
     fun independentEvidence(sources: List<VerifiedResearchSource>): Int {
-        val hosts = sources.asSequence().filter { it.factualPassages > 0 }
+        // Subdomains of a registrable domain are not independent publishers.
+        // Use OkHttp's public-suffix database (including multi-label suffixes).
+        val domains = sources.asSequence().filter { it.factualPassages > 0 }
             .mapNotNull { evidence ->
                 runCatching {
                     val parsed = URI(evidence.url)
-                    if (parsed.scheme?.lowercase(Locale.ROOT) != "https" ||
+                    if (!parsed.scheme.equals("https", ignoreCase = true) ||
                         parsed.userInfo != null || parsed.host.isNullOrBlank()) null
-                    else parsed.host.lowercase(Locale.ROOT).removePrefix("www.")
+                    else evidence.url.toHttpUrlOrNull()?.topPrivateDomain()
+                        ?.lowercase(Locale.ROOT)
                 }.getOrNull()
             }.distinct().take(3).toList()
-        return hosts.size
+        return domains.size
     }
 }
