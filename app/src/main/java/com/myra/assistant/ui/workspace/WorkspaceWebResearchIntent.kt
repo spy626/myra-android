@@ -28,12 +28,14 @@ internal object WorkspaceWebResearchIntent {
     private val url = Regex("""(?i)https?://""")
     private val words = Regex("""[\p{L}\p{N}+#._-]{2,}""")
     private val filler = setOf(
-        "android", "mein", "me", "mai", "kya", "hai", "ka", "ki", "ke", "ko",
+        "lyra", "mein", "me", "mai", "kya", "hai", "ka", "ki", "ke", "ko",
         "aur", "with", "the", "a", "an", "is", "are", "how", "what", "why",
         "between", "vs", "difference", "compare", "comparison", "explain",
         "reliable", "sources", "source", "citations", "references",
         "documentation", "official", "saath", "bro", "please", "batao",
         "samjhao", "about", "do", "kar", "karo", "mujhe", "can", "you",
+        "multiple", "many", "websites", "website", "information", "info",
+        "lekar", "liya", "answer", "reply", "provide", "bhi", "tell", "comparison",
     )
 
     fun decide(text: String): Request? {
