@@ -487,7 +487,7 @@ class GeneralAgentRuntimeTest {
         assertNull(runtime.completeSourceAnalysisIfCurrent(task.id, 401, listOf(
             VerifiedResearchSource("https://example.com", 1)),
             "Cannot insert a result into the new turn"))
-        assertEquals(402, runtime.activeTask()?.turnId)
+        assertEquals(402L, runtime.activeTask()?.turnId)
     }
 
     @Test fun failed_action_enters_real_recovery_and_planner_returns_recover_step() {
