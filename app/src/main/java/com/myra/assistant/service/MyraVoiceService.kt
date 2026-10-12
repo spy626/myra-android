@@ -5075,13 +5075,42 @@ class MyraVoiceService : Service() {
 
         fun finish(
             evidence: List<com.myra.assistant.ui.workspace.WorkspacePublicResearch.Extract>,
-            answer: String,
+            reachable: Int,
         ) {
             if (!ownsTask()) return
             val receipts = evidence.map { hit ->
                 com.myra.assistant.agent.VerifiedResearchSource(
-                    hit.source.finalUrl, hit.passages.size)
+                    hit.source.finalUrl, hit.passages.size, hit.passages)
             }
+            val audit = com.myra.assistant.agent.AutonomousSourceAnalysisPolicy.assess(receipts)
+            // A successful answer includes only paragraphs that the cross-site audit
+            // actually matched. Other source extracts remain attributed but unconfirmed.
+            val displayed = if (audit.status ==
+                com.myra.assistant.agent.ResearchEvidenceStatus.CORROBORATED) {
+                val matched = audit.agreements.flatMap { listOf(
+                    it.firstUrl to it.firstPassage, it.secondUrl to it.secondPassage
+                ) }.toSet()
+                evidence.mapNotNull { hit ->
+                    val passages = hit.passages.filter {
+                        (hit.source.finalUrl to it) in matched
+                    }
+                    if (passages.isEmpty()) null else hit.copy(passages = passages)
+                }
+            } else evidence
+            val label = when (audit.status) {
+                com.myra.assistant.agent.ResearchEvidenceStatus.CORROBORATED ->
+                    "**Cross-site passage agreement:** Matching factual wording and numeric " +
+                        "anchors were observed on independent sites; this is not proof of truth."
+                com.myra.assistant.agent.ResearchEvidenceStatus.CONFLICT ->
+                    "**Conflicting evidence — research NOT complete.** Closely matching " +
+                        "passages disagree on numeric details or negation. Verify manually."
+                com.myra.assistant.agent.ResearchEvidenceStatus.INSUFFICIENT ->
+                    "**Insufficient corroboration — research NOT complete.** " +
+                        "The excerpts below are individually sourced, not cross-verified."
+            }
+            val answer = (label + "\n\n" +
+                com.myra.assistant.ui.workspace.WorkspacePublicResearch.render(
+                    query, displayed, reachable)).take(4_900)
             val completed = runtime.completeSourceAnalysisIfCurrent(
                 taskId, turnId, receipts, answer) ?: return
             goalSourceSearch = null
@@ -5090,7 +5119,8 @@ class MyraVoiceService : Service() {
                 com.myra.assistant.agent.AgentRuntimeStatus.COMPLETED)
                 GeneralVerificationStatus.SUCCESS else GeneralVerificationStatus.UNKNOWN
             voiceLog("AUTONOMOUS_SOURCE_ANALYSIS taskId=$taskId turnId=$turnId " +
-                "independentSources=${completed.verifiedResearchSourceCount} result=$status")
+                "independentSources=${completed.verifiedResearchSourceCount} " +
+                "crossSiteStatus=${audit.status} conflictCount=${audit.conflictCount} result=$status")
             onTerminal(status, answer)
         }
 
@@ -5120,9 +5150,7 @@ class MyraVoiceService : Service() {
                                 ) {
                                     mainHandler.post {
                                         if (!ownsTask()) return@post
-                                        finish(evidence,
-                                            com.myra.assistant.ui.workspace.WorkspacePublicResearch.render(
-                                                query, evidence, bounded.size))
+                                        finish(evidence, bounded.size)
                                     }
                                 }
                             })
@@ -5134,8 +5162,7 @@ class MyraVoiceService : Service() {
                 override fun onError(message: String) {
                     mainHandler.post {
                         if (!ownsTask()) return@post
-                        finish(emptyList(),
-                            "Search verified, but independent public sources could not be read.")
+                        finish(emptyList(), 0)
                     }
                 }
             })
