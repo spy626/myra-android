@@ -31,7 +31,12 @@ object ReadOnlyObservationRetryPolicy {
         // A wrong app or an unrelated changing page is a failure, not a reason to
         // blindly poll or dispatch another command.
         val result = GeneralVerifier().verify(step, before, after)
-        return result.status == GeneralVerificationStatus.UNKNOWN &&
-            result.mismatchReason in setOf("stale_observation", "insufficient_evidence")
+        return result.status == GeneralVerificationStatus.UNKNOWN && (
+            result.mismatchReason in setOf("stale_observation", "insufficient_evidence") ||
+            // Navigation may have begun but an otherwise safe public page is still blank.
+            (result.mismatchReason == "expected_state_missing" &&
+                after.scene.semanticElements.isEmpty() &&
+                after.scene.externalForegroundPackage == before.scene.externalForegroundPackage)
+        )
     }
 }
