@@ -4882,14 +4882,14 @@ class WorkspaceActivity : AppCompatActivity() {
             connectedReadRoute == null && exactLinkLookup == null) {
             WorkspaceStablePlatformLink.decide(text)
         } else null
-        val webResearchRequest = if (picked.isEmpty() && skillCommand == null &&
-            appDownloadLookup == null && connectedReadRoute == null &&
-            exactLinkLookup == null && stablePlatformLink == null) {
-            WorkspaceWebResearchIntent.decide(text)
-        } else null
+        // Keyword-based research detection must NOT decide whether the question
+        // deserves web research. It only keeps explanation requests from being
+        // mistaken for a bare "send links" command; the Free model plans the route.
+        val explanatoryQuestion = if (picked.isEmpty() && skillCommand == null)
+            WorkspaceWebResearchIntent.decide(text) != null else false
         val webLinkLookup = if (picked.isEmpty() && skillCommand == null &&
             connectedReadRoute == null && exactLinkLookup == null && stablePlatformLink == null) {
-            WorkspaceWebLinkIntent.decide(text) ?: webResearchRequest?.search
+            if (explanatoryQuestion) null else WorkspaceWebLinkIntent.decide(text)
         } else null
         val githubSelfEditRequest =
             picked.isEmpty() && exactLinkLookup == null && connectedReadRoute == null &&
@@ -5130,8 +5130,7 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         if (webLinkLookup != null && current.type == WorkspaceProjectType.CHAT) {
-            startWebLinkLookup(id, stored.id, webLinkLookup,
-                researchQuestion = webResearchRequest?.question)
+            startWebLinkLookup(id, stored.id, webLinkLookup)
             return
         }
         if (githubSelfEditRequest) {
@@ -5288,11 +5287,99 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         statusMessage = ""
         render()
+        // Existing Free model makes the semantic public-research decision;
+        // local keyword recognition never authorizes the research path.
+        if (skillProjection == null && picked.isEmpty() &&
+            projects.getProject(id)?.type == WorkspaceProjectType.CHAT &&
+            WorkspaceIntelligentUnderstanding.shouldPlan(text)) {
+            startIntelligentUnderstanding(id, stored.id, provider)
+            return
+        }
         requestReply(
             id, stored.id, provider, picked,
             skillProjection = skillProjection,
             frameOnlyVideo = videoFramesOnly,
         )
+    }
+
+    /**
+     * Single-turn model-based route choice for ordinary Chat.
+     * No secondary memory brain, no new provider, no tools or write authority.
+     * The activeRequest and requestGeneration leases provide Stop / onStop /
+     * chat-switch cancellation just like an ordinary Free Chat request.
+     */
+    private fun startIntelligentUnderstanding(
+        id: String,
+        turnId: String,
+        provider: WorkspaceChatGateway.Provider,
+    ) {
+        if (selectedId != id || isForegroundBusy() || workTab) return
+        val history = runCatching { conversations.read(id) }.getOrNull()
+        if (history?.lastOrNull()?.id != turnId ||
+            history.lastOrNull()?.role != "user") return
+        val request = runCatching {
+            WorkspaceChatGateway.request(
+                provider = provider,
+                key = keyFor(provider),
+                messages = history.takeLast(5),
+                extraSystemInstructions = WorkspaceIntelligentUnderstanding.SYSTEM_INSTRUCTIONS,
+            )
+        }.getOrNull()
+        if (request == null) {
+            requestReply(id, turnId, provider, emptyList())
+            return
+        }
+        val serial = ++requestGeneration
+        val call = WorkspaceChatGateway.client(provider).newCall(request)
+        activeRequest = call
+        workTrace.begin(
+            WorkspaceWorkPhase.THINKING, "Understanding your question",
+            providerLabel(provider))
+        statusMessage = ""
+        render()
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                completeIntelligentUnderstanding(call, serial, id, turnId, provider, null)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                val decision = runCatching {
+                    WorkspaceIntelligentUnderstanding.parse(
+                        WorkspaceChatGateway.read(provider, response))
+                }.getOrNull()
+                completeIntelligentUnderstanding(call, serial, id, turnId, provider, decision)
+            }
+        })
+    }
+
+    private fun completeIntelligentUnderstanding(
+        call: Call,
+        serial: Long,
+        id: String,
+        turnId: String,
+        provider: WorkspaceChatGateway.Provider,
+        decision: WorkspaceIntelligentUnderstanding.Decision?,
+    ) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed || activeRequest !== call ||
+                serial != requestGeneration || selectedId != id ||
+                workTab || runCatching {
+                    conversations.read(id).lastOrNull()?.id
+                }.getOrNull() != turnId) return@runOnUiThread
+            activeRequest = null
+            when (decision?.route) {
+                WorkspaceIntelligentUnderstanding.Route.PUBLIC_RESEARCH -> {
+                    val question = conversations.read(id).last().text
+                    startWebLinkLookup(
+                        id, turnId,
+                        WorkspaceWebLinkIntent.Request(
+                            query = decision.query, maxResults = 3),
+                        researchQuestion = question)
+                }
+                else -> requestReply(id, turnId, provider, emptyList())
+            }
+        }
     }
 
     private fun requestCustomReply(
