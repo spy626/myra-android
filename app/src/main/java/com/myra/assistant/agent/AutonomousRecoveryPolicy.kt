@@ -40,13 +40,15 @@ object AutonomousRecoveryPolicy {
             } || !readOnly.containsAll(intent.requiredCapabilities)) return null
         val parsed = FinalSearchHandoff.parse(intent.originalUtterance) ?: return null
         if (parsed.explicitDestination != null) return null
-        val original = sanitizePublicQuery(parsed.query) ?: return null
-        val bound = sanitizePublicQuery(intent.parameters["query"]) ?: return null
+        // Compare canonical topics to tolerate legacy "search X karo" parsing.
+        // The complete final user turn and bound runtime query must still agree.
+        val imperative = Regex("""(?iu)\s+(?:karo|kar do)$""")
+        val original = sanitizePublicQuery(parsed.query)
+            ?.replace(imperative, "") ?: return null
+        val bound = sanitizePublicQuery(intent.parameters["query"])
+            ?.replace(imperative, "") ?: return null
         if (!original.equals(bound, ignoreCase = true)) return null
-        // Older parser recognizes both "search karo X" and "search X karo".
-        // Strip only the final imperative before replaying a NEW safe search turn.
-        val topic = original.replace(Regex("""(?iu)\s+(?:karo|kar do)$"""), "")
-        return PublicSearch(sanitizePublicQuery(topic) ?: return null)
+        return PublicSearch(sanitizePublicQuery(original) ?: return null)
     }
 
     fun autoResumeAllowed(
