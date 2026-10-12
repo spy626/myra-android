@@ -126,7 +126,7 @@ internal object WorkspacePublicResearch {
                     appendLine("**Side-by-side evidence**")
                     lines.forEach { (subject, passage, url) ->
                         appendLine("**" + subject + ":** " +
-                            passage.replace(Regex("""[\\[\\]*]"""), "").take(190) +
+                            passage.replace(Regex("""[\[\]*]"""), "").take(190) +
                             " ([Source](" + url + "))")
                     }
                 }
