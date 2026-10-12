@@ -21,9 +21,11 @@ internal object WorkspaceResearchQueryPlan {
             original.preferredHost != null) return listOf(original)
         val subjects = WorkspacePublicResearch.comparisonSubjects(question)
         if (subjects.size != 2) return listOf(original)
-        val context = Regex("""[\p{L}\p{N}]{3,}""")
-            .findAll(question.lowercase(Locale.ROOT))
-            .map { it.value }.firstOrNull { it in background }.orEmpty()
+        val focus = WorkspaceResearchQuestionFocus.inspect(question)
+        val context = focus.topicWords.take(3).joinToString(" ").ifBlank {
+            Regex("""[\p{L}\p{N}]{3,}""").findAll(question.lowercase(Locale.ROOT))
+                .map { it.value }.firstOrNull { it in background }.orEmpty()
+        }
         return (listOf(original) + subjects.map { subject ->
             original.copy(query = (subject + " " + context).trim().take(180),
                 maxResults = 2)
@@ -35,22 +37,21 @@ internal object WorkspaceResearchQueryPlan {
         original: WorkspaceWebLinkIntent.Request,
         results: List<WorkspacePublicWebSearch.Verified>,
     ): List<WorkspacePublicWebSearch.Verified> {
+        val relevant = WorkspaceResearchQuestionFocus.relevant(question, results)
+        val focus = WorkspaceResearchQuestionFocus.inspect(question)
         val ranked = WorkspacePublicWebSearch.selectResults(
-            original.copy(maxResults = 3), results.distinctBy { it.finalUrl })
-        val subjects = WorkspacePublicResearch.comparisonSubjects(question)
-        if (subjects.size != 2) return ranked
-        val all = results.distinctBy { it.finalUrl }
-        fun topicHit(topic: String): WorkspacePublicWebSearch.Verified? {
-            val tokens = topic.lowercase(Locale.ROOT).split(" ").filter { it.length > 2 }
-            return all.firstOrNull { hit ->
-                val uri = runCatching { URI(hit.finalUrl) }.getOrNull()
-                val haystack = (hit.title + " " + uri?.path.orEmpty() + " " +
-                    hit.snippet).lowercase(Locale.ROOT)
-                tokens.all { it in haystack }
+            original.copy(maxResults = 3), relevant)
+        if (focus.subjects.size != 2) return ranked
+
+        // When both sides exist, reserve a slot for each before adding the top
+        // remaining result. Never fill the shortlist with only one platform
+        // merely because its publisher ranks higher.
+        val covered = focus.subjects.mapNotNull { subject ->
+            relevant.firstOrNull {
+                WorkspaceResearchQuestionFocus.sourceMentionsSubject(it, subject)
             }
-        }
-        val covered = subjects.mapNotNull(::topicHit).distinctBy { it.finalUrl }
-        return (covered + ranked + all).distinctBy { it.finalUrl }
+        }.distinctBy { it.finalUrl }
+        return (covered + ranked + relevant).distinctBy { it.finalUrl }
             .take(original.maxResults)
     }
 }
