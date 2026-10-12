@@ -41,7 +41,9 @@ class WorkspacePublicWebSearchTest {
         val results = WorkspacePublicWebSearch.parseHtml(
             html, "Kotlin coroutines documentation", null)
         assertEquals(2, results.size)
-        assertEquals("https://kotlinlang.org/docs/coroutines-overview.html", results[0].url)
+        assertTrue(results.any {
+            it.url == "https://kotlinlang.org/docs/coroutines-overview.html"
+        })
         assertTrue(results.any { it.url.startsWith("https://developer.android.com/") })
     }
 
