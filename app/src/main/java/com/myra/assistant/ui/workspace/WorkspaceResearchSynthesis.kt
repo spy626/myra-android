@@ -48,7 +48,9 @@ internal object WorkspaceResearchSynthesis {
         verifiedSources: List<WorkspacePublicWebSearch.Verified> = extracts.map { it.source },
     ): Bundle? {
         if (question.isBlank() || question.length > 300) return null
-        val records = extracts.take(3).flatMap { extract ->
+        val topicEvidence = WorkspaceResearchQuestionFocus.relevantExtracts(
+            question, extracts)
+        val records = topicEvidence.take(3).flatMap { extract ->
             val sourceIndex = verifiedSources.indexOfFirst {
                 it.finalUrl == extract.source.finalUrl
             }
@@ -57,7 +59,7 @@ internal object WorkspaceResearchSynthesis {
             }
         }.take(MAX_EVIDENCE)
         if (!WorkspaceResearchQuestionFocus.coversQuestion(
-                question, extracts.map { it.source })) return null
+                question, topicEvidence.map { it.source })) return null
         if (records.isEmpty()) return null
         val evidence = records.mapIndexed { index, (sourceNumber, pair) ->
             Evidence(
