@@ -72,7 +72,6 @@ class GeneralTaskCheckpointStore(
             .put("needsFreshObservation", receipt.needsFreshObservation)
             .put("verifiedComplete", receipt.verifiedComplete)
             .put("savedAtMs", now())
-            .toString()
         val eligible = if (receipt.needsFreshObservation && !receipt.waitingForApproval)
             AutonomousRecoveryPolicy.sanitizePublicQuery(safeQuery) else null
         if (eligible != null) snapshot.put("safeSearchQuery", eligible)
