@@ -1279,6 +1279,21 @@ class MyraVoiceService : Service() {
                     normalizedFinalUserText, activityContext, visualAwarenessPreferences.enabled, activeTurnId,
                     hasRecentVerifiedVisualContext()
                 )
+                // A newly finalized user turn cancels any older public research
+                // network work. The runtime lease is already revoked by acceptTurn;
+                // this also avoids wasting requests after a follow-up/correction.
+                val sourceStillOwned = GeneralAgentRuntimeStore.runtime.activeTask()?.let {
+                    it.turnId == activeTurnId &&
+                        it.status == com.myra.assistant.agent.AgentRuntimeStatus.VERIFYING &&
+                        it.verifiedGoalSubsteps.size == 2
+                } == true
+                if (!sourceStillOwned && (goalSourceSearch != null || goalSourceReader != null)) {
+                    goalSourceSearch?.cancel()
+                    goalSourceReader?.cancel()
+                    goalSourceSearch = null
+                    goalSourceReader = null
+                    voiceLog("STALE_SOURCE_RESEARCH_CANCELLED turnId=$activeTurnId reason=new_final_user_turn")
+                }
                 val acceptedResearch = ModelResearchGoalProposal.accept(
                     proposedResearch, normalizedFinalUserText, activeTurnId, turnDecision)
                 if (acceptedResearch != null) {
