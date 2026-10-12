@@ -489,11 +489,13 @@ class GeneralAgentRuntimeTest {
         assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(observed).first.status)
         assertEquals("android kotlin", runtime.claimSourceAnalysis(task.id, 301))
         assertNull(runtime.claimSourceAnalysis(task.id, 301))
+        val matchingEvidence = "Android Kotlin coroutines provide structured asynchronous concurrency in modern mobile application development and support scheduled background work across independent coroutine scopes."
         val result = runtime.completeSourceAnalysisIfCurrent(
             task.id, 301, listOf(
-                VerifiedResearchSource("https://example.org/page", 2),
-                VerifiedResearchSource("https://other.example.net/page", 1)),
-            "Verified source passages and citations available")
+                VerifiedResearchSource("https://example.org/page", 2, listOf(matchingEvidence)),
+                VerifiedResearchSource("https://other.example.net/page", 1,
+                    listOf(matchingEvidence))),
+            "Verified matching passages and citations available")
         assertEquals(AgentRuntimeStatus.COMPLETED, result?.status)
         assertEquals(2, result?.verifiedResearchSourceCount)
         assertNull(runtime.completeSourceAnalysisIfCurrent(task.id, 301,
