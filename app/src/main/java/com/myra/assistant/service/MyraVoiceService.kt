@@ -5074,10 +5074,13 @@ class MyraVoiceService : Service() {
         // the final authorized search topic. Generic research stays at one query.
         val queries = com.myra.assistant.ui.workspace.WorkspaceResearchQueryPlan.queries(
             query, original).take(3)
-        fun ownsTask() = runtime.activeTask()?.let {
-            it.id == taskId && it.turnId == turnId &&
-                it.status == com.myra.assistant.agent.AgentRuntimeStatus.VERIFYING
-        } == true
+        fun ownsTask() =
+            com.myra.assistant.agent.AutonomousSourceAnalysisPolicy.mayDeliverToVoiceTurn(
+                turnId, responseArbiter.turnId, activeTurnId
+            ) && runtime.activeTask()?.let {
+                it.id == taskId && it.turnId == turnId &&
+                    it.status == com.myra.assistant.agent.AgentRuntimeStatus.VERIFYING
+            } == true
 
         fun finish(
             evidence: List<com.myra.assistant.ui.workspace.WorkspacePublicResearch.Extract>,
