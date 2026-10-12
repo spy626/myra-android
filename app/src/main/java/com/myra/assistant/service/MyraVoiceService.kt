@@ -5068,6 +5068,12 @@ class MyraVoiceService : Service() {
         val query = runtime.claimSourceAnalysis(taskId, turnId) ?: return false
         goalSourceSearch?.cancel()
         goalSourceReader?.cancel()
+        val original = com.myra.assistant.ui.workspace.WorkspaceWebLinkIntent.Request(
+            query = query, maxResults = 3)
+        // Existing comparison planner derives bounded read-only subqueries only from
+        // the final authorized search topic. Generic research stays at one query.
+        val queries = com.myra.assistant.ui.workspace.WorkspaceResearchQueryPlan.queries(
+            query, original).take(3)
         fun ownsTask() = runtime.activeTask()?.let {
             it.id == taskId && it.turnId == turnId &&
                 it.status == com.myra.assistant.agent.AgentRuntimeStatus.VERIFYING
@@ -5083,8 +5089,8 @@ class MyraVoiceService : Service() {
                     hit.source.finalUrl, hit.passages.size, hit.passages)
             }
             val audit = com.myra.assistant.agent.AutonomousSourceAnalysisPolicy.assess(receipts)
-            // A successful answer includes only paragraphs that the cross-site audit
-            // actually matched. Other source extracts remain attributed but unconfirmed.
+            // A successful answer includes only passages actually matched by two
+            // independent sites. Other excerpts remain explicitly unconfirmed.
             val displayed = if (audit.status ==
                 com.myra.assistant.agent.ResearchEvidenceStatus.CORROBORATED) {
                 val matched = audit.agreements.flatMap { listOf(
@@ -5124,51 +5130,93 @@ class MyraVoiceService : Service() {
             onTerminal(status, answer)
         }
 
-        goalSourceSearch = com.myra.assistant.ui.workspace.WorkspacePublicWebSearchRunner(
-            object : com.myra.assistant.ui.workspace.WorkspacePublicWebSearchRunner.Listener {
-                override fun onEvent(
-                    phase: com.myra.assistant.ui.workspace.WorkspaceWorkPhase,
-                    label: String, detail: String?,
-                ) {
-                    voiceLog("AUTONOMOUS_PUBLIC_RESEARCH_PHASE taskId=$taskId phase=$phase")
-                }
-
-                override fun onComplete(
-                    results: List<com.myra.assistant.ui.workspace.WorkspacePublicWebSearch.Verified>,
-                ) {
-                    mainHandler.post {
-                        if (!ownsTask()) return@post
-                        val bounded = results.take(3)
-                        val reader = com.myra.assistant.ui.workspace.WorkspacePublicResearchRunner(
-                            object : com.myra.assistant.ui.workspace.WorkspacePublicResearchRunner.Listener {
-                                override fun onEvent(label: String) {
-                                    voiceLog("AUTONOMOUS_PUBLIC_SOURCE_READING taskId=$taskId")
-                                }
-
-                                override fun onComplete(
-                                    evidence: List<com.myra.assistant.ui.workspace.WorkspacePublicResearch.Extract>,
-                                ) {
-                                    mainHandler.post {
-                                        if (!ownsTask()) return@post
-                                        finish(evidence, bounded.size)
-                                    }
-                                }
-                            })
-                        goalSourceReader = reader
-                        reader.start(query, bounded)
+        // Search + read continuation is bounded by the same turn lease and the
+        // existing planner's <=3 derived queries. Never repeats a phone dispatch.
+        fun searchAt(
+            index: Int,
+            prior: List<com.myra.assistant.ui.workspace.WorkspacePublicResearch.Extract>,
+            priorReachable: Int,
+        ) {
+            if (!ownsTask()) return
+            goalSourceSearch?.cancel()
+            val runner = com.myra.assistant.ui.workspace.WorkspacePublicWebSearchRunner(
+                object : com.myra.assistant.ui.workspace.WorkspacePublicWebSearchRunner.Listener {
+                    override fun onEvent(
+                        phase: com.myra.assistant.ui.workspace.WorkspaceWorkPhase,
+                        label: String, detail: String?,
+                    ) {
+                        voiceLog("AUTONOMOUS_PUBLIC_RESEARCH_PHASE taskId=$taskId phase=$phase")
                     }
-                }
 
-                override fun onError(message: String) {
-                    mainHandler.post {
-                        if (!ownsTask()) return@post
-                        finish(emptyList(), 0)
+                    override fun onComplete(
+                        results: List<com.myra.assistant.ui.workspace.WorkspacePublicWebSearch.Verified>,
+                    ) {
+                        mainHandler.post {
+                            if (!ownsTask()) return@post
+                            val bounded = results.take(3)
+                            goalSourceReader?.cancel()
+                            val reader =
+                                com.myra.assistant.ui.workspace.WorkspacePublicResearchRunner(
+                                    object : com.myra.assistant.ui.workspace.WorkspacePublicResearchRunner.Listener {
+                                        override fun onEvent(label: String) {
+                                            voiceLog("AUTONOMOUS_PUBLIC_SOURCE_READING taskId=$taskId")
+                                        }
+
+                                        override fun onComplete(
+                                            evidence: List<com.myra.assistant.ui.workspace.WorkspacePublicResearch.Extract>,
+                                        ) {
+                                            mainHandler.post {
+                                                if (!ownsTask()) return@post
+                                                val combined = (prior + evidence)
+                                                    .distinctBy { it.source.finalUrl }.take(6)
+                                                val audit =
+                                                    com.myra.assistant.agent.AutonomousSourceAnalysisPolicy.assess(
+                                                        combined.map { hit ->
+                                                            com.myra.assistant.agent.VerifiedResearchSource(
+                                                                hit.source.finalUrl,
+                                                                hit.passages.size, hit.passages)
+                                                        })
+                                                val mayContinue =
+                                                    com.myra.assistant.agent.AutonomousSourceAnalysisPolicy
+                                                        .mayContinueReadOnlyResearch(
+                                                            index, queries.size, audit.status)
+                                                if (mayContinue) {
+                                                    voiceLog("AUTONOMOUS_RESEARCH_READ_ONLY_RECOVERY " +
+                                                        "taskId=$taskId turnId=$turnId " +
+                                                        "nextQuery=${index + 2} total=${queries.size}")
+                                                    searchAt(index + 1, combined,
+                                                        priorReachable + bounded.size)
+                                                } else finish(combined,
+                                                    priorReachable + bounded.size)
+                                            }
+                                        }
+                                    })
+                            goalSourceReader = reader
+                            reader.start(query, bounded)
+                        }
                     }
-                }
-            })
-        goalSourceSearch?.start(
-            com.myra.assistant.ui.workspace.WorkspaceWebLinkIntent.Request(
-                query = query, maxResults = 3))
+
+                    override fun onError(message: String) {
+                        mainHandler.post {
+                            if (!ownsTask()) return@post
+                            val audit =
+                                com.myra.assistant.agent.AutonomousSourceAnalysisPolicy.assess(
+                                    prior.map { hit ->
+                                        com.myra.assistant.agent.VerifiedResearchSource(
+                                            hit.source.finalUrl, hit.passages.size, hit.passages)
+                                    })
+                            if (com.myra.assistant.agent.AutonomousSourceAnalysisPolicy
+                                    .mayContinueReadOnlyResearch(
+                                        index, queries.size, audit.status)) {
+                                searchAt(index + 1, prior, priorReachable)
+                            } else finish(prior, priorReachable)
+                        }
+                    }
+                })
+            goalSourceSearch = runner
+            runner.start(queries[index])
+        }
+        searchAt(0, emptyList(), 0)
         return true
     }
 
