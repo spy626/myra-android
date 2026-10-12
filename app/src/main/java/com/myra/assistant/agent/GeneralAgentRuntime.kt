@@ -836,8 +836,15 @@ class GeneralAgentRuntime(
         val updatedHistory = task.actionHistory.map {
             if (step != null && it.stepId == step.id) it.copy(verification = status) else it
         }
+        // A generic adapter receipt cannot complete a research task after its
+        // search and observation substeps. Only audited public-source evidence
+        // may authorize COMPLETED via completeSourceAnalysisIfCurrent().
+        val needsSourceAudit = task.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
+            task.verifiedGoalSubsteps.size == 2 && task.currentStep == null
         val terminal = when (status) {
-            GeneralVerificationStatus.SUCCESS -> AgentRuntimeStatus.COMPLETED
+            GeneralVerificationStatus.SUCCESS ->
+                if (needsSourceAudit) AgentRuntimeStatus.NEEDS_CLARIFICATION
+                else AgentRuntimeStatus.COMPLETED
             GeneralVerificationStatus.FAILURE -> AgentRuntimeStatus.FAILED
             GeneralVerificationStatus.UNKNOWN -> AgentRuntimeStatus.NEEDS_CLARIFICATION
         }
