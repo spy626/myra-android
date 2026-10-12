@@ -1715,11 +1715,35 @@ class WorkspaceActivity : AppCompatActivity() {
         val projectId = webLinkLookupProjectId ?: return
         val turnId = webLinkLookupMessageId ?: return
         if (!webLinkLookupActive || selectedId != projectId) return
-        val sourceReceipts = sources.map { WorkspacePublicWebSearch.source(it) }
-        val fallback = WorkspacePublicResearch.render(question, evidence, sources.size)
-        val bundle = WorkspaceResearchSynthesis.bundle(question, evidence, sources)
+        // Keep the original question authoritative at every stage. A live,
+        // reachable page is NOT relevant just because its title says Android.
+        val relatedSources = WorkspaceResearchQuestionFocus.relevant(question, sources)
+        val relatedUrls = relatedSources.map { it.finalUrl }.toSet()
+        val relatedEvidence = evidence.filter { it.source.finalUrl in relatedUrls }
+        val sourceReceipts = relatedSources.map { WorkspacePublicWebSearch.source(it) }
+        val fallback = WorkspacePublicResearch.render(
+            question, relatedEvidence, relatedSources.size)
+        if (!WorkspaceResearchQuestionFocus.coversQuestion(
+                question, relatedEvidence.map { it.source })) {
+            val focus = WorkspaceResearchQuestionFocus.inspect(question)
+            val missing = focus.subjects.filterNot { subject ->
+                relatedEvidence.any {
+                    WorkspaceResearchQuestionFocus.sourceMentionsSubject(it.source, subject)
+                }
+            }
+            val message = if (missing.isNotEmpty())
+                "Bro, ${missing.joinToString(" aur ")} ke liye is topic par " +
+                    "relevant page evidence abhi nahi mili. Main one-sided research " +
+                    "ko complete comparison bolkar nahi dungi."
+            else "Bro, is question ke liye relevant readable webpage evidence " +
+                "verify nahi hui. Kisi unrelated source se answer nahi banaungi."
+            finishWebLinkLookup(message, sourceReceipts, researchAnswerComplete = false)
+            return
+        }
+        val bundle = WorkspaceResearchSynthesis.bundle(
+            question, relatedEvidence, relatedSources)
         if (bundle == null) {
-            finishWebLinkLookup(fallback, sourceReceipts)
+            finishWebLinkLookup(fallback, sourceReceipts, researchAnswerComplete = false)
             return
         }
         val currentTurn = runCatching { conversations.read(projectId).lastOrNull() }.getOrNull()
@@ -1736,7 +1760,7 @@ class WorkspaceActivity : AppCompatActivity() {
         }.getOrNull()
         if (provider == null || WorkspaceProviderSessionHealth.cooldownMessage(
                 WorkspaceProviderRegistry.id(provider)).isNotBlank()) {
-            finishWebLinkLookup(fallback, sourceReceipts)
+            finishWebLinkLookup(fallback, sourceReceipts, researchAnswerComplete = false)
             return
         }
         val request = runCatching {
@@ -1749,7 +1773,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 extraSystemInstructions = WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS,
             ).newBuilder().header("X-Lyra-Public-Research", "1").build()
         }.getOrElse {
-            finishWebLinkLookup(fallback, sourceReceipts)
+            finishWebLinkLookup(fallback, sourceReceipts, researchAnswerComplete = false)
             return
         }
         recordWorkEvent(WorkspaceWorkPhase.THINKING,
@@ -1790,7 +1814,10 @@ class WorkspaceActivity : AppCompatActivity() {
                 runCatching { conversations.read(projectId).lastOrNull()?.id }
                     .getOrNull() != turnId) return@runOnUiThread
             webResearchSynthesisCall = null
-            finishWebLinkLookup(result ?: fallback, sources)
+            finishWebLinkLookup(
+                result ?: ("Bro, source-backed comparison ka complete answer " +
+                    "verify nahi ho paya. Jo page evidence available hai:\n\n" + fallback),
+                sources, researchAnswerComplete = result != null)
         }
     }
 
@@ -1829,6 +1856,7 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun finishWebLinkLookup(
         reply: String,
         sources: List<WorkspaceVerifiedSourceStore.Source>,
+        researchAnswerComplete: Boolean = true,
     ) {
         val id = webLinkLookupProjectId
         val userMessageId = webLinkLookupMessageId
@@ -1847,7 +1875,9 @@ class WorkspaceActivity : AppCompatActivity() {
             if (sources.isNotEmpty()) verifiedSources.put(id, saved.id, sources)
         }.onSuccess {
             statusMessage = ""
-            if (sources.isNotEmpty()) workTrace.finishSuccess("Direct links ready")
+            if (!researchAnswerComplete)
+                workTrace.finishError("Research needs more evidence", reply.take(160))
+            else if (sources.isNotEmpty()) workTrace.finishSuccess("Direct links ready")
             else workTrace.finishError("Direct link not verified", reply.take(160))
         }.onFailure {
             statusMessage = it.message ?: "Web link result could not be saved."
