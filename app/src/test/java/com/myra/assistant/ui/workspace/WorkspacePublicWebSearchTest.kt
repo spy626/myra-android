@@ -144,6 +144,19 @@ class WorkspacePublicWebSearchTest {
     }
 
 
+    @Test fun htmlEntitiesInTitlesAreDecodedBeforeDisplay() {
+        val html = """
+            <a class="result__a"
+              href="https://kotlinlang.org/docs/coroutines-overview.html">
+              Kotlin Coroutines &minus; Overview
+            </a>
+        """.trimIndent()
+        val results = WorkspacePublicWebSearch.parseHtml(html, "Kotlin coroutines", null)
+        assertEquals(1, results.size)
+        assertTrue(results.first().title.contains("−"))
+        assertTrue(!results.first().title.contains("&minus;"))
+    }
+
     @Test fun officialDocumentationBeatsBlogAndCanFillAllRequestedSlots() {
         val request = WorkspaceWebLinkIntent.Request("Kotlin coroutines documentation", maxResults = 3)
         val blog = WorkspacePublicWebSearch.Verified("Kotlin coroutines blog",

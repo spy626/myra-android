@@ -101,6 +101,10 @@ internal object WorkspacePublicWebSearch {
         .replace("&lt;", "<", ignoreCase = true)
         .replace("&gt;", ">", ignoreCase = true)
         .replace("&nbsp;", " ", ignoreCase = true)
+        .replace("&minus;", "−", ignoreCase = true)
+        .replace("&ndash;", "–", ignoreCase = true)
+        .replace("&mdash;", "—", ignoreCase = true)
+        .replace("&rsquo;", "'", ignoreCase = true)
 
     private fun stripHtml(raw: String): String = htmlDecode(raw)
         .replace(Regex("""(?s)<[^>]{0,1000}>"""), " ")
