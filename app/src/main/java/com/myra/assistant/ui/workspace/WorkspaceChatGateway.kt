@@ -191,6 +191,8 @@ internal object WorkspaceChatGateway {
         // Dedicated writing, follow-up, coding and task prompts are never replaced.
         val normalConversation = revisionKind == null && contextDecision == null &&
             writingInstructions.isBlank() && codeInstructions.isBlank()
+        val companionTurn = if (normalConversation && latest != null)
+            WorkspaceCompanionTurnPolicy.instructions(latest) else ""
         val semanticTurnIntent = if (normalConversation && latest != null)
             WorkspaceSemanticTurnIntent.instructions(
                 WorkspaceSemanticTurnIntent.propose(latest)
@@ -218,6 +220,7 @@ internal object WorkspaceChatGateway {
             WorkspaceHinglishReply.PROMPT_RULE,
             extra,
             shortProjectContext,
+            companionTurn,
             writingInstructions,
             codeInstructions,
             practicalPlanning,
@@ -227,6 +230,7 @@ internal object WorkspaceChatGateway {
             extra,
             shortProjectContext,
             semanticTurnIntent,
+            companionTurn,
             semanticTaskFrame,
             turnFrame,
             writingInstructions,
