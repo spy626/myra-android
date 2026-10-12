@@ -5355,7 +5355,7 @@ class MyraVoiceService : Service() {
         voiceLog("SEARCH_RESULT_OWNER turnId=$turnId owner=CONTROLLED_AGENT release=NEXT_USER_TURN")
         when (verification) {
             SearchVerification.SUCCESS -> {
-                if (sourceGoal?.verifiedResearchSourceCount ?: 0 >= 2) {
+                if ((sourceGoal?.verifiedResearchSourceCount ?: 0) >= 2) {
                     // The answer is extractive and cited from pages actually read,
                     // not an LLM success claim or a bare search-results screen.
                     listener?.onMyraText(observed)
