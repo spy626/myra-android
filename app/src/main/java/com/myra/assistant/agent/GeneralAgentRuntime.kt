@@ -519,6 +519,18 @@ class GeneralAgentRuntime(
     private val beforeByStep = mutableMapOf<String, PerceptionSnapshot>()
     private val pendingSearchOutcomes =
         ArrayDeque<VerifiedSearchStrategyFeedback.Record>()
+    @Volatile private var checkpointSink: ((UnifiedTaskReceipt) -> Unit)? = null
+
+    /** Receipt callback is optional and never replaces the existing execution owner. */
+    @Synchronized fun setCheckpointSink(sink: (UnifiedTaskReceipt) -> Unit) {
+        checkpointSink = sink
+        publishCheckpoint()
+    }
+
+    private fun publishCheckpoint() {
+        val task = active ?: lastCompleted ?: return
+        runCatching { checkpointSink?.invoke(UnifiedTaskReceiptPolicy.from(task)) }
+    }
 
     /** Restore only from the existing memory owner's validated behavior rows. */
     @Synchronized fun restoreVerifiedSearchOutcomes(
@@ -530,11 +542,15 @@ class GeneralAgentRuntime(
         pendingSearchOutcomes.toList().also { pendingSearchOutcomes.clear() }
 
     @Synchronized fun start(turnId: Long, intent: StructuredAgentIntent, taskId: String? = null): GeneralRuntimeTask? {
-        active = active?.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now())
+        active?.let { lastCompleted = it.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now()) }
+        active = null
         beforeByStep.clear()
-        if (!intent.requiresAction) { active = null; return null }
+        if (!intent.requiresAction) { publishCheckpoint(); return null }
         return GeneralRuntimeTask(id = taskId ?: UUID.randomUUID().toString(), turnId = turnId, intent = intent,
-            status = AgentRuntimeStatus.OBSERVING, createdAt = now()).also { active = it }
+            status = AgentRuntimeStatus.OBSERVING, createdAt = now()).also {
+                active = it
+                publishCheckpoint()
+            }
     }
 
     fun activeTask(): GeneralRuntimeTask? = active
@@ -565,6 +581,7 @@ class GeneralAgentRuntime(
             is PlannerResult.Fail -> task.copy(status = AgentRuntimeStatus.FAILED, updatedAt = now()).also { lastCompleted = it }
             else -> task.copy(status = AgentRuntimeStatus.OBSERVING, updatedAt = now())
         }
+        publishCheckpoint()
         return result
     }
 
@@ -580,6 +597,7 @@ class GeneralAgentRuntime(
         val pause = BrowserAuthenticationHandoff.detect(task, context, observedAt) ?: return null
         active = task.copy(status = AgentRuntimeStatus.WAITING_FOR_USER_AUTH,
             authPause = pause, authHandoffAttempts = 1, updatedAt = now())
+        publishCheckpoint()
         return pause
     }
 
@@ -595,6 +613,7 @@ class GeneralAgentRuntime(
         ) return false
         active = task.copy(status = AgentRuntimeStatus.WAITING_FOR_RESULT,
             authPause = null, updatedAt = now())
+        publishCheckpoint()
         return true
     }
 
@@ -615,7 +634,10 @@ class GeneralAgentRuntime(
             before.scene.generation, null, result.accepted, null, task.recoveryCount, result.failureReason, now())
         beforeByStep[step.id] = before
         return task.copy(status = if (result.accepted) AgentRuntimeStatus.WAITING_FOR_RESULT else AgentRuntimeStatus.RECOVERING,
-            previousSteps = task.previousSteps + step, actionHistory = task.actionHistory + history, updatedAt = now()).also { active = it }
+            previousSteps = task.previousSteps + step, actionHistory = task.actionHistory + history, updatedAt = now()).also {
+                active = it
+                publishCheckpoint()
+            }
     }
 
     @Synchronized fun verify(after: PerceptionSnapshot): Pair<GeneralVerificationResult, RecoveryDecision?> {
@@ -657,10 +679,12 @@ class GeneralAgentRuntime(
                     verifiedGoalSubsteps = (task.verifiedGoalSubsteps + proof).take(2),
                     updatedAt = now(),
                 )
+                publishCheckpoint()
                 return result to null
             }
             val completed = task.copy(status = AgentRuntimeStatus.COMPLETED, actionHistory = updatedHistory, updatedAt = now())
             active = null; lastCompleted = completed
+            publishCheckpoint()
             return result to null
         }
         val decision = recovery.decide(task, result, after.scene, history?.targetId)
@@ -672,6 +696,7 @@ class GeneralAgentRuntime(
             is RecoveryDecision.Clarify -> task.copy(status = AgentRuntimeStatus.NEEDS_CLARIFICATION, actionHistory = updatedHistory, updatedAt = now())
             is RecoveryDecision.Fail -> task.copy(status = AgentRuntimeStatus.FAILED, actionHistory = updatedHistory, updatedAt = now())
         }
+        publishCheckpoint()
         return result to decision
     }
 
@@ -697,10 +722,29 @@ class GeneralAgentRuntime(
         active = null
         lastCompleted = completed
         beforeByStep.clear()
+        publishCheckpoint()
         return completed
     }
 
-    @Synchronized fun cancel() { active = active?.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now()); active = null; beforeByStep.clear() }
+    @Synchronized fun cancel() {
+        active?.let { lastCompleted = it.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now()) }
+        active = null
+        beforeByStep.clear()
+        publishCheckpoint()
+    }
 }
 
-object GeneralAgentRuntimeStore { val runtime = GeneralAgentRuntime() }
+object GeneralAgentRuntimeStore {
+    val runtime = GeneralAgentRuntime()
+    @Volatile private var checkpoint: GeneralTaskCheckpointStore? = null
+
+    /** One private sanitized status file; never restores executable Android actions. */
+    @Synchronized fun enableDurableReceipts(root: java.io.File) {
+        val store = GeneralTaskCheckpointStore(root)
+        checkpoint = store
+        runtime.setCheckpointSink(store::save)
+    }
+
+    fun interruptedTaskReview(): GeneralTaskCheckpointStore.Checkpoint? =
+        checkpoint?.read()?.takeIf { it.requiresReview }
+}

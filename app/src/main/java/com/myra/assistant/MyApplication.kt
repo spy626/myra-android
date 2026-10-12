@@ -11,6 +11,10 @@ class MyApplication : Application() {
         super.onCreate()
         application = this
         VoicePipelineLogger.initialize(this)
+        // Durable task progress only. Process restarts never auto-replay tools or approvals.
+        com.myra.assistant.agent.GeneralAgentRuntimeStore.enableDurableReceipts(
+            java.io.File(noBackupFilesDir, "lyra-general-agent-status")
+        )
     }
 
     companion object {
