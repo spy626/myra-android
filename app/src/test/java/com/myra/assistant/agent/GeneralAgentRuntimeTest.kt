@@ -309,6 +309,29 @@ class GeneralAgentRuntimeTest {
         assertTrue(recovery is RecoveryDecision.Clarify)
     }
 
+    @Test fun acceptedClickWithUnverifiedOutcomeDoesNotGetAutoReplayed() {
+        val runtime = GeneralAgentRuntime(now = { 5L })
+        val task = runtime.start(29L, intent(ToolCapability.ACCESSIBILITY_CLICK)
+            .copy(roleHint = SemanticRole.VIDEO))!!
+        val before = perception(task.id, scene("pkg", 1, listOf(element("video"))))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        runtime.recordAction(step, GeneralActionResult(true, "video"), before)
+        val wrong = perception(task.id, scene("pkg", 2, listOf(element("unrelated"))))
+        val (_, recovery) = runtime.verify(wrong)
+        assertTrue(recovery is RecoveryDecision.Clarify)
+        assertEquals(0, runtime.activeTask()?.recoveryCount)
+    }
+
+    @Test fun rejectedHighRiskTypingIsNotAutomaticallyRetried() {
+        val runtime = GeneralAgentRuntime(now = { 5L })
+        val task = runtime.start(30L, intent(ToolCapability.ACCESSIBILITY_TYPE))!!
+        val before = perception(task.id, scene("pkg", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        runtime.recordAction(step, GeneralActionResult(false, failureReason = "rejected"), before)
+        val (_, decision) = runtime.verify(before.copy(capturedAt = 3L))
+        assertTrue(decision is RecoveryDecision.Clarify)
+    }
+
     @Test fun failed_action_enters_real_recovery_and_planner_returns_recover_step() {
         val runtime = GeneralAgentRuntime(now = { 5 })
         val task = runtime.start(24, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!

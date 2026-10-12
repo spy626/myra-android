@@ -494,6 +494,17 @@ class GeneralRecoveryEngine(private val maxRetries: Int = 1) {
             return RecoveryDecision.Clarify("Screen movement reliably verify nahi hua.")
         }
         if (task.recoveryCount >= maxRetries) return RecoveryDecision.Clarify("Target verify nahi hua. Kaunsa wala?")
+        // Autonomy must not silently replay an accepted side effect. Retry only an
+        // explicitly REJECTED dispatch for a low-risk, bounded capability.
+        val step = task.currentStep ?: return RecoveryDecision.Clarify("safe_retry_requires_current_step")
+        val attempted = task.actionHistory.lastOrNull { it.stepId == step.id }
+            ?: return RecoveryDecision.Clarify("safe_retry_requires_dispatch_receipt")
+        val replaySafe = step.risk == ToolRisk.LOW && step.capability in setOf(
+            ToolCapability.ACCESSIBILITY_SCROLL, ToolCapability.BROWSER_SEARCH,
+            ToolCapability.WEB_SEARCH, ToolCapability.OPEN_APP,
+        )
+        if (attempted.accepted || !replaySafe)
+            return RecoveryDecision.Clarify("accepted_or_sensitive_action_not_replayed")
         return RecoveryDecision.Retry(targetId)
     }
 }
