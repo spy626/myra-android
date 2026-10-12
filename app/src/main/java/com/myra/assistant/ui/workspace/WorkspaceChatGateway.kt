@@ -220,7 +220,9 @@ internal object WorkspaceChatGateway {
             WorkspaceHinglishReply.PROMPT_RULE,
             extra,
             shortProjectContext,
-            companionTurn,
+            // Groq's 12k-character Free cap: compact one-turn guidance must stay within
+            // budget. Core chat discipline already covers task/casual tone; keep the
+            // optional companion overlay only in the regular provider projection.
             writingInstructions,
             codeInstructions,
             practicalPlanning,
