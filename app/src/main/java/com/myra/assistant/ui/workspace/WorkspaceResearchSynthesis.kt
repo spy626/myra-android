@@ -125,7 +125,8 @@ internal object WorkspaceResearchSynthesis {
                 it in setOf("android", "ios", "kotlin", "java", "python", "linux",
                     "windows", "technology", "technologies")
             }
-            if (topicAnchor != null && topicAnchor !in claimTerms) continue
+            if (topicAnchor != null && (topicAnchor !in claimTerms ||
+                    supporting.none { topicAnchor in terms(it.passage) })) continue
             val observedTerms = supporting.flatMap { terms(it.passage) }.toSet()
             val overlap = claimTerms.count { it in observedTerms }
             // Conservative lexical audit: not a semantic truth guarantee.
