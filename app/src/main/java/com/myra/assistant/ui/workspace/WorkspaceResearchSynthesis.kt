@@ -45,10 +45,14 @@ internal object WorkspaceResearchSynthesis {
     fun bundle(
         question: String,
         extracts: List<WorkspacePublicResearch.Extract>,
+        verifiedSources: List<WorkspacePublicWebSearch.Verified> = extracts.map { it.source },
     ): Bundle? {
         if (question.isBlank() || question.length > 300) return null
-        val records = extracts.take(3).flatMapIndexed { sourceIndex, extract ->
-            extract.passages.take(3).map { passage ->
+        val records = extracts.take(3).flatMap { extract ->
+            val sourceIndex = verifiedSources.indexOfFirst {
+                it.finalUrl == extract.source.finalUrl
+            }
+            if (sourceIndex < 0) emptyList() else extract.passages.take(3).map { passage ->
                 (sourceIndex + 1) to (extract.source to passage)
             }
         }.take(MAX_EVIDENCE)

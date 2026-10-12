@@ -1664,7 +1664,7 @@ class WorkspaceActivity : AppCompatActivity() {
         if (!webLinkLookupActive || selectedId != projectId) return
         val sourceReceipts = sources.map { WorkspacePublicWebSearch.source(it) }
         val fallback = WorkspacePublicResearch.render(question, evidence, sources.size)
-        val bundle = WorkspaceResearchSynthesis.bundle(question, evidence)
+        val bundle = WorkspaceResearchSynthesis.bundle(question, evidence, sources)
         if (bundle == null) {
             finishWebLinkLookup(fallback, sourceReceipts)
             return
