@@ -56,6 +56,8 @@ internal object WorkspaceResearchSynthesis {
                 (sourceIndex + 1) to (extract.source to passage)
             }
         }.take(MAX_EVIDENCE)
+        if (!WorkspaceResearchQuestionFocus.coversQuestion(
+                question, extracts.map { it.source })) return null
         if (records.isEmpty()) return null
         val evidence = records.mapIndexed { index, (sourceNumber, pair) ->
             Evidence(
@@ -115,6 +117,15 @@ internal object WorkspaceResearchSynthesis {
             if (supporting.size != ids.size) continue
             val claimTerms = terms(statement)
             if (claimTerms.size < 3) continue
+            // Matching a cited passage is not enough if the proposed answer
+            // ignores the user's central topic (e.g. Android app optimization
+            // instead of Android vs iOS BATTERY optimization).
+            val focus = WorkspaceResearchQuestionFocus.inspect(bundle.question)
+            val topicAnchor = focus.topicAnchor?.takeUnless {
+                it in setOf("android", "ios", "kotlin", "java", "python", "linux",
+                    "windows", "technology", "technologies")
+            }
+            if (topicAnchor != null && topicAnchor !in claimTerms) continue
             val observedTerms = supporting.flatMap { terms(it.passage) }.toSet()
             val overlap = claimTerms.count { it in observedTerms }
             // Conservative lexical audit: not a semantic truth guarantee.
@@ -131,7 +142,12 @@ internal object WorkspaceResearchSynthesis {
         // A one-sided or thin model response must not pretend to be a full comparison.
         val comparisons = WorkspacePublicResearch.comparisonSubjects(bundle.question)
         if (comparisons.size == 2 && comparisons.any { subject ->
-                accepted.none { (statement, _) -> statement.contains(subject, ignoreCase = true) }
+                accepted.none { (statement, evidence) ->
+                    WorkspaceResearchQuestionFocus.mentionsSubject(statement, subject) &&
+                        evidence.any {
+                            WorkspaceResearchQuestionFocus.sourceMentionsSubject(it.source, subject)
+                        }
+                }
             }) return null
         return buildString {
             appendLine("**Source-backed answer**")
@@ -143,8 +159,8 @@ internal object WorkspaceResearchSynthesis {
                 }
                 appendLine("• " + statement.trimEnd('.') + ". " + references.joinToString(" "))
             }
-            appendLine()
-            append("Evidence-linked findings only; source reachability does not prove every claim true.")
+            // Links are derived from actually verified sources; avoid a robotic
+            // boilerplate warning on every ordinary answer.
         }.trim()
     }
 }
