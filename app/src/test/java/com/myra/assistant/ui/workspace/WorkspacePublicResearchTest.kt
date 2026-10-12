@@ -43,6 +43,13 @@ class WorkspacePublicResearchTest {
         assertTrue(answer.contains("foreground service"))
         assertFalse(answer.contains("ignore previous"))
     }
+    @Test fun explicitComparisonPairsGetSourceBoundSideBySideFindings() {
+        val topics = WorkspacePublicResearch.comparisonSubjects(
+            "Android mein WorkManager aur Foreground Service mein kya difference hai?")
+        assertEquals(listOf("WorkManager", "Foreground Service"), topics)
+        assertTrue(WorkspacePublicResearch.comparisonSubjects(
+            "Tell me about WorkManager").isEmpty())
+    }
     @Test fun noReadableEvidenceCannotBeClaimedAsGroundedExplanation() {
         val result = response("<html><p>hello world</p></html>").use {
             WorkspacePublicResearch.extract(it, source,

@@ -81,6 +81,22 @@ internal object WorkspacePublicResearch {
         return if (selected.isEmpty()) null else Extract(source, selected)
     }
 
+    /** Bounded comparison formatting, using *only* page passages for both sides. */
+    internal fun comparisonSubjects(question: String): List<String> {
+        if (!Regex("""(?iu)\b(?:difference|compare|versus|vs|farq)\b""")
+                .containsMatchIn(question)) return emptyList()
+        val pair = Regex(
+            """(?iu)\b([\p{L}][\p{L}\p{N}+#-]{2,}(?:\s+[\p{L}][\p{L}\p{N}+#-]{2,})?)""" +
+                """\s+(?:aur|and|vs|versus)\s+""" +
+                """([\p{L}][\p{L}\p{N}+#-]{2,}(?:\s+[\p{L}][\p{L}\p{N}+#-]{2,})?)"""
+        ).find(question) ?: return emptyList()
+        return listOf(pair.groupValues[1], pair.groupValues[2]).map { part ->
+            part.split(' ').filterNot {
+                it.lowercase(Locale.ROOT) in setOf("mein", "android", "the", "and", "aur")
+            }.joinToString(" ")
+        }.takeIf { it.all { x -> x.length in 3..50 } } ?: emptyList()
+    }
+
     /** Every factual passage has its own observed, verified destination URL. */
     fun render(
         question: String, evidence: List<Extract>, reachable: Int,
@@ -95,6 +111,26 @@ internal object WorkspacePublicResearch {
             appendLine()
             appendLine("Neeche direct page text se relevant points hain; ye AI-generated " +
                 "full comparison nahi, aur sources ka reachable hona unki correctness guarantee nahi karta.")
+            val subjects = comparisonSubjects(question)
+            if (subjects.size == 2) {
+                val observed = evidence.flatMap { hit ->
+                    hit.passages.map { it to hit.source.finalUrl }
+                }
+                val lines = subjects.mapNotNull { subject ->
+                    observed.firstOrNull { (passage, _) ->
+                        passage.contains(subject, ignoreCase = true)
+                    }?.let { (passage, url) -> Triple(subject, passage, url) }
+                }
+                if (lines.size == 2) {
+                    appendLine()
+                    appendLine("**Side-by-side evidence**")
+                    lines.forEach { (subject, passage, url) ->
+                        appendLine("**" + subject + ":** " +
+                            passage.replace(Regex("""[\\[\\]*]"""), "").take(190) +
+                            " ([Source](" + url + "))")
+                    }
+                }
+            }
             evidence.forEachIndexed { index, hit ->
                 appendLine()
                 appendLine("**Source " + (index + 1) + " · " +
