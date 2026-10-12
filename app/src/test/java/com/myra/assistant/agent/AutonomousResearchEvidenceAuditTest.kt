@@ -90,6 +90,15 @@ class AutonomousResearchEvidenceAuditTest {
             )).status)
     }
 
+    @Test fun oldResearchCannotDeliverIntoNewOrUnownedVoiceTurn() {
+        val policy = AutonomousSourceAnalysisPolicy
+        assertTrue(policy.mayDeliverToVoiceTurn(401L, 401L, 0L))
+        assertTrue(policy.mayDeliverToVoiceTurn(401L, 401L, 401L))
+        assertEquals(false, policy.mayDeliverToVoiceTurn(401L, 402L, 0L))
+        assertEquals(false, policy.mayDeliverToVoiceTurn(401L, 401L, 402L))
+        assertEquals(false, policy.mayDeliverToVoiceTurn(0L, 0L, 0L))
+    }
+
     @Test fun readOnlyRecoveryIsBoundedAndNeverRetriesOnConflict() {
         val policy = AutonomousSourceAnalysisPolicy
         assertTrue(policy.mayContinueReadOnlyResearch(
