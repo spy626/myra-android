@@ -136,11 +136,50 @@ class WorkspacePublicWebSearchTest {
         )
         val sameSite = first.copy(finalUrl = "https://kotlinlang.org/docs/coroutines-guide.html")
         val other = first.copy(finalUrl = "https://developer.android.com/kotlin/coroutines")
-        assertTrue(!WorkspacePublicWebSearch.canAddResult(request, listOf(first), sameSite))
+        assertTrue(WorkspacePublicWebSearch.canAddResult(request, listOf(first), sameSite))
         assertTrue(!WorkspacePublicWebSearch.canAddResult(request, listOf(first), first))
         assertTrue(WorkspacePublicWebSearch.canAddResult(request, listOf(first), other))
         val result = WorkspacePublicWebSearch.receiptAll(listOf(first), 3)
         assertTrue(result.contains("only 1 could be verified"))
+    }
+
+
+    @Test fun officialDocumentationBeatsBlogAndCanFillAllRequestedSlots() {
+        val request = WorkspaceWebLinkIntent.Request("Kotlin coroutines documentation", maxResults = 3)
+        val blog = WorkspacePublicWebSearch.Verified("Kotlin coroutines blog",
+            "https://example.org/coroutines", "", "text/html")
+        val official1 = blog.copy(title = "Coroutines basics",
+            finalUrl = "https://kotlinlang.org/docs/coroutines-basics.html")
+        val official2 = blog.copy(title = "Coroutines overview",
+            finalUrl = "https://kotlinlang.org/docs/coroutines-overview.html")
+        val official3 = blog.copy(title = "Coroutines guide",
+            finalUrl = "https://kotlinlang.org/docs/coroutines-guide.html")
+        assertTrue(WorkspacePublicWebSearch.canAddResult(request, listOf(official1), official2))
+        val followUp = WorkspacePublicWebSearch.followUpRequest(request, listOf(blog))
+        assertEquals("kotlinlang.org", followUp?.preferredHost)
+        assertEquals(listOf(official1, official2, official3),
+            WorkspacePublicWebSearch.selectResults(request,
+                listOf(blog, official1, official2, official3)))
+        assertNull(WorkspacePublicWebSearch.followUpRequest(
+            WorkspaceWebLinkIntent.Request("Telegram links", maxResults = 1), emptyList()))
+    }
+
+    @Test fun workManagerTechnicalQuestionPrioritizesCanonicalPublisher() {
+        val request = WorkspaceWebLinkIntent.Request(
+            "WorkManager Foreground Service", maxResults = 3)
+        assertEquals("developer.android.com",
+            WorkspacePublicWebSearch.followUpRequest(request, emptyList())?.preferredHost)
+        val html = """
+            <a class="result__a" href="https://example.org/workmanager-vs-service">
+                WorkManager Foreground Service explained
+            </a>
+            <a class="result__a"
+              href="https://developer.android.com/develop/background-work/background-tasks/persistent">
+              WorkManager Android background tasks
+            </a>
+        """.trimIndent()
+        val results = WorkspacePublicWebSearch.parseHtml(html, request.query, null)
+        assertEquals("developer.android.com", java.net.URI(results.first().url).host)
     }
 
     @Test fun searchRequestIsGetOnlyWithoutCredentialHeaders() {

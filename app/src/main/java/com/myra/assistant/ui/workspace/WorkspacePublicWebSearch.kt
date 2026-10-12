@@ -21,7 +21,7 @@ internal object WorkspacePublicWebSearch {
     private const val SEARCH_ORIGIN = "https://html.duckduckgo.com/html/"
     private const val MAX_SEARCH_BYTES = 768_000L
     private const val MAX_VERIFY_PREFIX = 64_000L
-    private const val MAX_RESULTS = 8
+    private const val MAX_RESULTS = 16
 
     data class Candidate(
         val title: String,
@@ -150,6 +150,51 @@ internal object WorkspacePublicWebSearch {
         return request.copy(query = shorter)
     }
 
+
+    /** Canonical publisher documentation hosts; never fabricate a result URL from this table. */
+    internal fun officialDocumentationHost(query: String): String? {
+        val words = tokens(query)
+        return when {
+            "kotlin" in words -> "kotlinlang.org"
+            "android" in words || "workmanager" in words ||
+                ("foreground" in words && "service" in words) -> "developer.android.com"
+            "python" in words -> "docs.python.org"
+            "javascript" in words || "mozilla" in words -> "developer.mozilla.org"
+            "rust" in words -> "doc.rust-lang.org"
+            else -> null
+        }
+    }
+
+    private fun isOfficialDocumentation(url: String, query: String): Boolean {
+        val expected = officialDocumentationHost(query) ?: return false
+        val parsed = runCatching { URI(url) }.getOrNull() ?: return false
+        val host = parsed.host.orEmpty().lowercase(Locale.ROOT)
+        return (host == expected || host.endsWith("." + expected)) &&
+            parsed.path.orEmpty().trim('/').isNotEmpty()
+    }
+
+    /** One bounded site-specific follow-up; keeps the existing single-link path untouched. */
+    internal fun followUpRequest(
+        request: WorkspaceWebLinkIntent.Request, previous: List<Verified>,
+    ): WorkspaceWebLinkIntent.Request? {
+        if (request.maxResults == 1 || request.preferredHost != null) return null
+        val official = officialDocumentationHost(request.query)
+        if (official != null &&
+            previous.count { isOfficialDocumentation(it.finalUrl, request.query) } <
+                request.maxResults) return request.copy(preferredHost = official)
+        if (previous.size < request.maxResults) return broaderDocumentationRequest(request)
+        return null
+    }
+
+    internal fun selectResults(
+        request: WorkspaceWebLinkIntent.Request, results: List<Verified>,
+    ): List<Verified> = results.distinctBy { it.finalUrl }
+        .sortedWith(compareByDescending<Verified> {
+            if (isOfficialDocumentation(it.finalUrl, request.query)) 1 else 0
+        }.thenByDescending {
+            tokens(request.query).count { term -> term in tokens(it.title) }
+        }).take(request.maxResults)
+
     fun searchRequest(request: WorkspaceWebLinkIntent.Request): Request {
         val query = request.query.trim()
         require(query.length in 2..180 && query.none(Char::isISOControl)) {
@@ -218,7 +263,8 @@ internal object WorkspacePublicWebSearch {
                 target.host == it || target.host.endsWith("." + it)
             } == true
             val score = overlapTitle * 8 + overlapUrl * 3 +
-                (if (hostMatch) 50 else 0) - index
+                (if (hostMatch) 50 else 0) +
+                (if (isOfficialDocumentation(url, query)) 45 else 0) - index
             val minimum = if (hostMatch) 50 else 8
             Candidate(title, url, snippet, score).takeIf { score >= minimum }
         }.distinctBy { it.url }
@@ -314,7 +360,7 @@ internal object WorkspacePublicWebSearch {
         val host = URI(candidate.finalUrl).host.removePrefix("www.").lowercase(Locale.ROOT)
         return results.none {
             URI(it.finalUrl).host.removePrefix("www.").lowercase(Locale.ROOT) == host
-        }
+        } || isOfficialDocumentation(candidate.finalUrl, request.query)
     }
 
     fun receiptAll(results: List<Verified>, requested: Int): String {
@@ -406,6 +452,8 @@ internal class WorkspacePublicWebSearchRunner(
 
     private fun startWebSearch(
         run: Long, request: WorkspaceWebLinkIntent.Request, broadened: Boolean = false,
+        previous: List<WorkspacePublicWebSearch.Verified> = emptyList(),
+        original: WorkspaceWebLinkIntent.Request = request,
     ) {
         synchronized(this) { if (run != generation) return }
         listener.onEvent(
@@ -418,24 +466,31 @@ internal class WorkspacePublicWebSearchRunner(
             WorkspacePublicWebSearch.searchRequest(request),
             onSuccess = { response ->
                 val candidates = response.use { WorkspacePublicWebSearch.readSearch(it, request) }
-                if (candidates.isEmpty() && !broadened) {
-                    val retry = WorkspacePublicWebSearch.broaderDocumentationRequest(request)
-                    if (retry != null) {
-                        startWebSearch(run, retry, broadened = true)
+                if (candidates.isEmpty()) {
+                    if (!broadened) {
+                        val retry = WorkspacePublicWebSearch.followUpRequest(original, previous)
+                        if (retry != null) {
+                            startWebSearch(run, retry, true, previous, original)
+                            return@dispatch
+                        }
+                    }
+                    if (previous.isNotEmpty()) {
+                        completeCandidates(run, original, previous, true)
                         return@dispatch
                     }
                 }
                 require(candidates.isNotEmpty()) {
                     "No confident public search result matched this link request"
                 }
-                // Keep the original requested result count; only the SEARCH words broaden.
-                startCandidateVerification(run, request, candidates)
+                startCandidateVerification(run, request, candidates, broadened, previous, original)
             },
             onFailure = {
                 if (!broadened) {
-                    val retry = WorkspacePublicWebSearch.broaderDocumentationRequest(request)
-                    if (retry != null) startWebSearch(run, retry, broadened = true)
+                    val retry = WorkspacePublicWebSearch.followUpRequest(original, previous)
+                    if (retry != null) startWebSearch(run, retry, true, previous, original)
                     else fail(run, it)
+                } else if (previous.isNotEmpty()) {
+                    completeCandidates(run, original, previous, true)
                 } else fail(run, it)
             },
         )
@@ -445,6 +500,9 @@ internal class WorkspacePublicWebSearchRunner(
         run: Long,
         request: WorkspaceWebLinkIntent.Request,
         candidates: List<WorkspacePublicWebSearch.Candidate>,
+        broadened: Boolean = false,
+        previous: List<WorkspacePublicWebSearch.Verified> = emptyList(),
+        original: WorkspaceWebLinkIntent.Request = request,
     ) {
         synchronized(this) { if (run != generation) return }
         listener.onEvent(
@@ -452,7 +510,8 @@ internal class WorkspacePublicWebSearchRunner(
             "Verifying direct destination",
             candidates.first().title.take(100),
         )
-        verifyCandidate(run, request, candidates, 0, null, 0, mutableListOf())
+        verifyCandidate(run, request, candidates, 0, null, 0, previous.toMutableList(),
+            broadened, original)
     }
 
     @Synchronized fun cancel() {
@@ -473,18 +532,23 @@ internal class WorkspacePublicWebSearchRunner(
         redirected: WorkspaceAgentReachPolicy.Target?,
         depth: Int,
         verifiedResults: MutableList<WorkspacePublicWebSearch.Verified>,
+        broadened: Boolean,
+        original: WorkspaceWebLinkIntent.Request,
     ) {
         // Keep the proven single-link path at 5 attempts. Plural requests can
         // inspect up to 8 candidates and finish with fewer than requested.
         val maxCandidates = if (request.maxResults == 1) 5 else 12
+        val targetCount = if (broadened) minOf(6, original.maxResults + 3)
+            else original.maxResults
         if (index >= minOf(candidates.size, maxCandidates) ||
-            verifiedResults.size >= request.maxResults) {
-            completeCandidates(run, verifiedResults)
+            verifiedResults.size >= targetCount) {
+            completeCandidates(run, original, verifiedResults, broadened)
             return
         }
         val candidate = candidates[index]
         fun next() {
-            verifyCandidate(run, request, candidates, index + 1, null, 0, verifiedResults)
+            verifyCandidate(run, request, candidates, index + 1, null, 0, verifiedResults,
+                broadened, original)
         }
         val target = redirected ?: runCatching {
             WorkspaceAgentReachPolicy.parse(candidate.url)
@@ -512,7 +576,7 @@ internal class WorkspacePublicWebSearchRunner(
                         }
                         verifyCandidate(
                             run, request, candidates, index, redirect, depth + 1,
-                            verifiedResults,
+                            verifiedResults, broadened, original,
                         )
                     } else {
                         val verified = runCatching {
@@ -520,7 +584,7 @@ internal class WorkspacePublicWebSearchRunner(
                         }.getOrNull()
                         if (verified != null &&
                             WorkspacePublicWebSearch.canAddResult(
-                                request, verifiedResults, verified
+                                original, verifiedResults, verified
                             )) {
                             verifiedResults.add(verified)
                         }
@@ -534,22 +598,32 @@ internal class WorkspacePublicWebSearchRunner(
 
     private fun completeCandidates(
         run: Long,
+        original: WorkspaceWebLinkIntent.Request,
         results: List<WorkspacePublicWebSearch.Verified>,
+        broadened: Boolean,
     ) {
+        if (!broadened) {
+            val followUp = WorkspacePublicWebSearch.followUpRequest(original, results)
+            if (followUp != null) {
+                startWebSearch(run, followUp, true, results, original)
+                return
+            }
+        }
         synchronized(this) {
             if (run != generation) return
             active = null
             ++generation
         }
-        if (results.isEmpty()) {
+        val selected = WorkspacePublicWebSearch.selectResults(original, results)
+        if (selected.isEmpty()) {
             listener.onError("No direct public destination could be verified")
             return
         }
         listener.onEvent(
             WorkspaceWorkPhase.DONE,
-            results.size.toString() + " reachable public link(s)",
+            selected.size.toString() + " reachable public link(s)",
         )
-        listener.onComplete(results.toList())
+        listener.onComplete(selected)
     }
 
     private fun dispatch(
