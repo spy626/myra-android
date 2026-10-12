@@ -158,6 +158,12 @@ internal object WorkspacePublicWebSearch {
     /** Canonical publisher documentation hosts; never fabricate a result URL from this table. */
     internal fun officialDocumentationHost(query: String): String? {
         val words = tokens(query)
+        // Mixed-platform research must not be silently redirected to Android
+        // developer documentation. Official docs are a hint for a single
+        // ecosystem, not evidence about the comparison's other side.
+        if ("android" in words && words.any {
+                it in setOf("ios", "iphone", "ipad", "apple")
+            }) return null
         return when {
             "kotlin" in words -> "kotlinlang.org"
             "android" in words || "workmanager" in words ||
