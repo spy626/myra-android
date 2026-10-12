@@ -28,10 +28,42 @@ class LyraContextRegistry(private val perBucketLimit: Int = 8, private val histo
     }
     @Synchronized fun bucket(source: String): List<ContextEntry> { expire(); return buckets[source].orEmpty().toList() }
     @Synchronized fun snapshot(): Map<String, List<ContextEntry>> { expire(); return buckets.mapValues { it.value.toList() } }
+    /**
+     * OpenViking-style progressive READ views of this same source-owned registry.
+     * Never adds another memory store, invokes a provider or authorizes a write.
+     */
+    @Synchronized fun readScoped(
+        source: String,
+        depth: ScopedContextDepth,
+        minGeneration: Long = 0L,
+    ): List<ScopedContextView> {
+        if (source.isBlank() || source.length > 100) return emptyList()
+        expire()
+        return buckets[source].orEmpty().filter { it.generation >= minGeneration }
+            .takeLast(4).map { entry ->
+                val clean = entry.value.replace(Regex("""\s+"""), " ").trim()
+                val limit = when (depth) {
+                    ScopedContextDepth.L0 -> 80
+                    ScopedContextDepth.L1 -> 320
+                    ScopedContextDepth.L2 -> 1800
+                }
+                ScopedContextView(entry.source, entry.turnId, entry.generation,
+                    clean.take(limit), entry.expiresAt)
+            }
+    }
     @Synchronized fun history(): List<ContextEntry> = history.toList()
     @Synchronized fun clear() { buckets.clear(); history.clear() }
     private fun expire() { val now = clock(); buckets.values.forEach { it.removeAll { e -> e.expiresAt?.let { x -> x <= now } == true } }; buckets.entries.removeAll { it.value.isEmpty() } }
 }
+
+enum class ScopedContextDepth { L0, L1, L2 }
+data class ScopedContextView(
+    val source: String,
+    val turnId: Long,
+    val generation: Long,
+    val text: String,
+    val expiresAt: Long?,
+)
 
 enum class TaskMemoryStatus { ACTIVE, BLOCKED, DONE }
 data class TaskMemoryArtifact(val label: String, val value: String, val kind: String)

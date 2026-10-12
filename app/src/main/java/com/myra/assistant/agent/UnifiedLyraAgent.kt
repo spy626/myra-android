@@ -33,6 +33,18 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
 
     fun currentTask(): AgentTask? = active
 
+    /** Single-agent read-only context API; no new memory or model coordinator. */
+    fun contextView(
+        source: String,
+        depth: com.myra.assistant.data.memory.ScopedContextDepth,
+        minGeneration: Long = 0L,
+    ): List<com.myra.assistant.data.memory.ScopedContextView> =
+        AiriMemoryRuntime.contexts.readScoped(source, depth, minGeneration)
+
+    fun generalTaskReceipt(): UnifiedTaskReceipt? =
+        GeneralAgentRuntimeStore.runtime.activeTaskReceipt()
+
+
     /** First and authoritative owner of every completed user turn. */
     @Synchronized fun acceptTurn(
         request: String,

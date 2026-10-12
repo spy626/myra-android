@@ -540,6 +540,12 @@ class GeneralAgentRuntime(
     fun activeTask(): GeneralRuntimeTask? = active
     fun lastCompletedTask(): GeneralRuntimeTask? = lastCompleted
 
+    /** Pizza-style task receipt view. Actual task/execution owner is unchanged. */
+    fun activeTaskReceipt(): UnifiedTaskReceipt? =
+        active?.let(UnifiedTaskReceiptPolicy::from)
+    fun lastTaskReceipt(): UnifiedTaskReceipt? =
+        lastCompleted?.let(UnifiedTaskReceiptPolicy::from)
+
     @Synchronized fun next(
         perception: PerceptionSnapshot?,
         executableCapabilities: Set<ToolCapability>? = null,
