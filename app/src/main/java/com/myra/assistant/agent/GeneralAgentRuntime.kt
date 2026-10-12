@@ -810,11 +810,14 @@ class GeneralAgentRuntime(
             task.status != AgentRuntimeStatus.VERIFYING ||
             task.currentStep != null || task.verifiedGoalSubsteps.size != 2 ||
             answer.isBlank() || answer.length > 5_000) return null
-        val count = AutonomousSourceAnalysisPolicy.independentEvidence(sources)
+        // Independent websites alone do not prove that the returned facts agree.
+        // Re-evaluate the page passages in the authoritative task owner; an adapter
+        // cannot turn a claimed source count into successful task completion.
+        val assessment = AutonomousSourceAnalysisPolicy.assess(sources)
         val done = task.copy(
-            status = if (count >= 2) AgentRuntimeStatus.COMPLETED
-                else AgentRuntimeStatus.NEEDS_CLARIFICATION,
-            verifiedResearchSourceCount = count,
+            status = if (assessment.status == ResearchEvidenceStatus.CORROBORATED)
+                AgentRuntimeStatus.COMPLETED else AgentRuntimeStatus.NEEDS_CLARIFICATION,
+            verifiedResearchSourceCount = assessment.independentSources,
             intent = task.intent.copy(desiredEndState = answer),
             updatedAt = now(),
         )
