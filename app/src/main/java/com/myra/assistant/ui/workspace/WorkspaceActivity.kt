@@ -120,6 +120,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private var webLinkLookupRunner: WorkspacePublicWebSearchRunner? = null
     private var webResearchQuestion: String? = null
     private var webResearchRunner: WorkspacePublicResearchRunner? = null
+    // Same selected Free provider, single bounded call; no parallel research model owner.
+    private var webResearchSynthesisCall: Call? = null
     private var appDownloadActive = false
     private var appDownloadProjectId: String? = null
     private var appDownloadMessageId: String? = null
@@ -1529,15 +1531,8 @@ class WorkspaceActivity : AppCompatActivity() {
                                         runOnUiThread {
                                             if (!webLinkLookupActive ||
                                                 webLinkLookupMessageId != capturedId) return@runOnUiThread
-                                            finishWebLinkLookup(
-                                                reply = WorkspacePublicResearch.render(
-                                                    researchQuestion, evidence, results.size),
-                                                // Reachability sources remain visible even when
-                                                // static page evidence is incomplete. Only passages
-                                                // actually read are quoted in the answer.
-                                                sources = results.map {
-                                                    WorkspacePublicWebSearch.source(it)
-                                                },
+                                            finishResearchWithEvidence(
+                                                researchQuestion, results, evidence,
                                             )
                                         }
                                     }
@@ -1654,11 +1649,105 @@ class WorkspaceActivity : AppCompatActivity() {
         appDownloadRunner().start(request)
     }
 
+    /**
+     * Phase 1/2 research integration. Reuses the selected existing Free chat provider;
+     * verified web text is not personal memory, no tool execution or arbitrary URLs are
+     * accepted from a model. Every result is tied to this exact newest user turn.
+     */
+    private fun finishResearchWithEvidence(
+        question: String,
+        sources: List<WorkspacePublicWebSearch.Verified>,
+        evidence: List<WorkspacePublicResearch.Extract>,
+    ) {
+        val projectId = webLinkLookupProjectId ?: return
+        val turnId = webLinkLookupMessageId ?: return
+        if (!webLinkLookupActive || selectedId != projectId) return
+        val sourceReceipts = sources.map(WorkspacePublicWebSearch::source)
+        val fallback = WorkspacePublicResearch.render(question, evidence, sources.size)
+        val bundle = WorkspaceResearchSynthesis.bundle(question, evidence)
+        if (bundle == null) {
+            finishWebLinkLookup(fallback, sourceReceipts)
+            return
+        }
+        val currentTurn = runCatching { conversations.read(projectId).lastOrNull() }.getOrNull()
+        if (currentTurn?.id != turnId || currentTurn.role != "user") {
+            clearWebLinkLookup()
+            return
+        }
+        val provider = runCatching {
+            selectedProvider(
+                hasAttachments = false,
+                extraSystemInstructions = WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS,
+                attachmentKind = WorkspaceProviderRegistry.AttachmentKind.DOCUMENT_TEXT,
+            )
+        }.getOrNull()
+        if (provider == null || WorkspaceProviderSessionHealth.cooldownMessage(
+                WorkspaceProviderRegistry.id(provider)).isNotBlank()) {
+            finishWebLinkLookup(fallback, sourceReceipts)
+            return
+        }
+        val request = runCatching {
+            // Only this user turn and bounded PUBLIC source evidence are sent.
+            // Do not include earlier private chat history in the research model request.
+            WorkspaceChatGateway.request(
+                provider = provider,
+                key = keyFor(provider),
+                messages = listOf(currentTurn.copy(text = WorkspaceResearchSynthesis.prompt(bundle))),
+                extraSystemInstructions = WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS,
+            )
+        }.getOrElse {
+            finishWebLinkLookup(fallback, sourceReceipts)
+            return
+        }
+        recordWorkEvent(WorkspaceWorkPhase.THINKING,
+            "Synthesizing verified source evidence", providerLabel(provider))
+        val call = WorkspaceChatGateway.client(provider).newCall(request)
+        webResearchSynthesisCall = call
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
+                    WorkspaceProviderRegistry.id(provider))
+                completeResearchSynthesis(call, projectId, turnId, bundle, fallback,
+                    sourceReceipts, null)
+            }
+            override fun onResponse(call: Call, response: Response) {
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                val answer = runCatching {
+                    WorkspaceResearchSynthesis.auditedAnswer(
+                        WorkspaceChatGateway.read(provider, response), bundle)
+                }.getOrNull()
+                completeResearchSynthesis(call, projectId, turnId, bundle, fallback,
+                    sourceReceipts, answer)
+            }
+        })
+    }
+
+    private fun completeResearchSynthesis(
+        call: Call,
+        projectId: String,
+        turnId: String,
+        bundle: WorkspaceResearchSynthesis.Bundle,
+        fallback: String,
+        sources: List<WorkspaceVerifiedSourceStore.Source>,
+        result: String?,
+    ) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed || !webLinkLookupActive ||
+                webResearchSynthesisCall !== call || selectedId != projectId ||
+                webLinkLookupMessageId != turnId ||
+                conversations.read(projectId).lastOrNull()?.id != turnId) return@runOnUiThread
+            webResearchSynthesisCall = null
+            finishWebLinkLookup(result ?: fallback, sources)
+        }
+    }
+
     private fun clearWebLinkLookup(cancel: Boolean = true) {
         if (cancel) {
             webLinkLookupRunner?.cancel()
             webResearchRunner?.cancel()
+            webResearchSynthesisCall?.cancel()
         }
+        webResearchSynthesisCall = null
         webResearchRunner = null
         webResearchQuestion = null
         webLinkLookupActive = false
