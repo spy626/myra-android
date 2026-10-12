@@ -1662,7 +1662,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val projectId = webLinkLookupProjectId ?: return
         val turnId = webLinkLookupMessageId ?: return
         if (!webLinkLookupActive || selectedId != projectId) return
-        val sourceReceipts = sources.map(WorkspacePublicWebSearch::source)
+        val sourceReceipts = sources.map { WorkspacePublicWebSearch.source(it) }
         val fallback = WorkspacePublicResearch.render(question, evidence, sources.size)
         val bundle = WorkspaceResearchSynthesis.bundle(question, evidence)
         if (bundle == null) {
@@ -1694,7 +1694,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 key = keyFor(provider),
                 messages = listOf(currentTurn.copy(text = WorkspaceResearchSynthesis.prompt(bundle))),
                 extraSystemInstructions = WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS,
-            )
+            ).newBuilder().header("X-Lyra-Public-Research", "1").build()
         }.getOrElse {
             finishWebLinkLookup(fallback, sourceReceipts)
             return
@@ -1707,7 +1707,7 @@ class WorkspaceActivity : AppCompatActivity() {
             override fun onFailure(call: Call, error: IOException) {
                 WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
                     WorkspaceProviderRegistry.id(provider))
-                completeResearchSynthesis(call, projectId, turnId, bundle, fallback,
+                completeResearchSynthesis(call, projectId, turnId, fallback,
                     sourceReceipts, null)
             }
             override fun onResponse(call: Call, response: Response) {
@@ -1716,7 +1716,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     WorkspaceResearchSynthesis.auditedAnswer(
                         WorkspaceChatGateway.read(provider, response), bundle)
                 }.getOrNull()
-                completeResearchSynthesis(call, projectId, turnId, bundle, fallback,
+                completeResearchSynthesis(call, projectId, turnId, fallback,
                     sourceReceipts, answer)
             }
         })
@@ -1726,7 +1726,6 @@ class WorkspaceActivity : AppCompatActivity() {
         call: Call,
         projectId: String,
         turnId: String,
-        bundle: WorkspaceResearchSynthesis.Bundle,
         fallback: String,
         sources: List<WorkspaceVerifiedSourceStore.Source>,
         result: String?,
@@ -1735,7 +1734,8 @@ class WorkspaceActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed || !webLinkLookupActive ||
                 webResearchSynthesisCall !== call || selectedId != projectId ||
                 webLinkLookupMessageId != turnId ||
-                conversations.read(projectId).lastOrNull()?.id != turnId) return@runOnUiThread
+                runCatching { conversations.read(projectId).lastOrNull()?.id }
+                    .getOrNull() != turnId) return@runOnUiThread
             webResearchSynthesisCall = null
             finishWebLinkLookup(result ?: fallback, sources)
         }

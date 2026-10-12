@@ -40,7 +40,9 @@ internal class WorkspaceRichUserContextInterceptor(
     override fun intercept(chain: Interceptor.Chain): Response {
         val original = chain.request()
         val context = contextProvider()
-        if (context == null || original.method != "POST" || chain.call().isCanceled() ||
+        if (context == null || original.method != "POST" ||
+            original.header("X-Lyra-Public-Research") == "1" ||
+            chain.call().isCanceled() ||
             !context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getBoolean(WorkspaceMemoryInterceptor.PREFERENCE_KEY, false)) {
             return chain.proceed(original)
