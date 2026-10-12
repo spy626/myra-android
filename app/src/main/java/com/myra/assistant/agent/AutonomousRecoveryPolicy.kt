@@ -43,7 +43,10 @@ object AutonomousRecoveryPolicy {
         val original = sanitizePublicQuery(parsed.query) ?: return null
         val bound = sanitizePublicQuery(intent.parameters["query"]) ?: return null
         if (!original.equals(bound, ignoreCase = true)) return null
-        return PublicSearch(original)
+        // Older parser recognizes both "search karo X" and "search X karo".
+        // Strip only the final imperative before replaying a NEW safe search turn.
+        val topic = original.replace(Regex("""(?iu)\s+(?:karo|kar do)$"""), "")
+        return PublicSearch(sanitizePublicQuery(topic) ?: return null)
     }
 
     fun autoResumeAllowed(

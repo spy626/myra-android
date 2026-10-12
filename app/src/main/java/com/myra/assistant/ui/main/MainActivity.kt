@@ -228,7 +228,7 @@ class MainActivity : AppCompatActivity() {
             ?: return false
         showStatus("Resuming previously authorized public research")
         addBubble("LYRA is continuing your public research: $query", false)
-        MyraVoiceService.sendText("search $query karo")
+        MyraVoiceService.sendText("search karo $query")
         return true
     }
 
