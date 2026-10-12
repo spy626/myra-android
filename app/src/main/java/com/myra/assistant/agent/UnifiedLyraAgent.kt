@@ -53,6 +53,10 @@ class UnifiedLyraAgent(private val tools: AgentToolRegistry = AgentToolRegistry(
         turnId: Long = 0L,
         verifiedVisualContext: Boolean = false
     ): AgentTurnDecision {
+        // A new finalized user turn revokes any pending research-only lease,
+        // including FOLLOW_UP and CLARIFICATION turns that intentionally reuse
+        // Working Task context. No stale source callback can complete it later.
+        GeneralAgentRuntimeStore.runtime.cancelStaleSourceAnalysis(turnId)
         val working = WorkingTaskRuntime.store.snapshot()
         val decision = UnifiedTurnInterpreter.interpret(request, working, verifiedVisualContext)
         val scene = context?.let { ScreenSceneFactory.from(it, working.activeExternalApp) }
