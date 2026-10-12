@@ -73,8 +73,10 @@ internal object WorkspaceResearchQuestionFocus {
         source: WorkspacePublicWebSearch.Verified, subject: String,
     ): Boolean = mentionsSubject(textFor(source), subject)
 
-    fun mentionsTopic(text: String, focus: Focus): Boolean =
-        focus.topicAnchor == null || includesToken(text.lowercase(Locale.ROOT), focus.topicAnchor)
+    fun mentionsTopic(text: String, focus: Focus): Boolean {
+        val anchor = focus.topicAnchor ?: return true
+        return includesToken(text.lowercase(Locale.ROOT), anchor)
+    }
 
     /**
      * A source can be about battery while an unrelated paragraph discusses R8.
