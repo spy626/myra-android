@@ -1532,8 +1532,11 @@ class WorkspaceActivity : AppCompatActivity() {
                                             finishWebLinkLookup(
                                                 reply = WorkspacePublicResearch.render(
                                                     researchQuestion, evidence, results.size),
-                                                sources = evidence.map {
-                                                    WorkspacePublicWebSearch.source(it.source)
+                                                // Reachability sources remain visible even when
+                                                // static page evidence is incomplete. Only passages
+                                                // actually read are quoted in the answer.
+                                                sources = results.map {
+                                                    WorkspacePublicWebSearch.source(it)
                                                 },
                                             )
                                         }
