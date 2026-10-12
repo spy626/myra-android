@@ -119,6 +119,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private var webLinkLookupMessageId: String? = null
     private var webLinkLookupRunner: WorkspacePublicWebSearchRunner? = null
     private var webResearchQuestion: String? = null
+    private var webResearchQueries = emptyList<WorkspaceWebLinkIntent.Request>()
+    private var webResearchQueryIndex = 0
+    private val webResearchCollected = mutableListOf<WorkspacePublicWebSearch.Verified>()
+    private var webResearchOriginal: WorkspaceWebLinkIntent.Request? = null
     private var webResearchRunner: WorkspacePublicResearchRunner? = null
     // Same selected Free provider, single bounded call; no parallel research model owner.
     private var webResearchSynthesisCall: Call? = null
@@ -1511,6 +1515,14 @@ class WorkspaceActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
                         val researchQuestion = webResearchQuestion
+                        if (researchQuestion != null &&
+                            advanceResearchSearch(results)) return@runOnUiThread
+                        val finalResults = if (researchQuestion != null)
+                            WorkspaceResearchQueryPlan.choose(
+                                researchQuestion,
+                                requireNotNull(webResearchOriginal),
+                                webResearchCollected,
+                            ) else results
                         if (researchQuestion != null) {
                             val capturedId = webLinkLookupMessageId
                             webResearchRunner?.cancel()
@@ -1532,12 +1544,12 @@ class WorkspaceActivity : AppCompatActivity() {
                                             if (!webLinkLookupActive ||
                                                 webLinkLookupMessageId != capturedId) return@runOnUiThread
                                             finishResearchWithEvidence(
-                                                researchQuestion, results, evidence,
+                                                researchQuestion, finalResults, evidence,
                                             )
                                         }
                                     }
                                 },
-                            ).also { it.start(researchQuestion, results) }
+                            ).also { it.start(researchQuestion, finalResults) }
                         } else {
                             finishWebLinkLookup(
                                 reply = WorkspacePublicWebSearch.receiptAll(
@@ -1552,6 +1564,21 @@ class WorkspaceActivity : AppCompatActivity() {
                 override fun onError(message: String) {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
+                        if (webResearchQuestion != null && webResearchQueryIndex + 1 <
+                            webResearchQueries.size) {
+                            webResearchQueryIndex++
+                            webLinkRunner().start(webResearchQueries[webResearchQueryIndex])
+                            return@runOnUiThread
+                        }
+                        if (webResearchQuestion != null && webResearchCollected.isNotEmpty()) {
+                            val finalResults = WorkspaceResearchQueryPlan.choose(
+                                requireNotNull(webResearchQuestion),
+                                requireNotNull(webResearchOriginal), webResearchCollected)
+                            // Some searches failed; keep only actually verified destinations.
+                            finishResearchWithEvidence(requireNotNull(webResearchQuestion),
+                                finalResults, emptyList())
+                            return@runOnUiThread
+                        }
                         finishWebLinkLookup(
                             reply = "Bro, exact public link verify nahi ho paya. " +
                                 "Search result ko direct link bolkar guess nahi karunga. " + message,
@@ -1741,6 +1768,19 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }
 
+    private fun advanceResearchSearch(
+        next: List<WorkspacePublicWebSearch.Verified>,
+    ): Boolean {
+        webResearchCollected.addAll(next.filter { result ->
+            webResearchCollected.none { it.finalUrl == result.finalUrl }
+        })
+        val nextIndex = webResearchQueryIndex + 1
+        if (nextIndex >= webResearchQueries.size) return false
+        webResearchQueryIndex = nextIndex
+        webLinkRunner().start(webResearchQueries[nextIndex])
+        return true
+    }
+
     private fun clearWebLinkLookup(cancel: Boolean = true) {
         if (cancel) {
             webLinkLookupRunner?.cancel()
@@ -1750,6 +1790,10 @@ class WorkspaceActivity : AppCompatActivity() {
         webResearchSynthesisCall = null
         webResearchRunner = null
         webResearchQuestion = null
+        webResearchQueries = emptyList()
+        webResearchCollected.clear()
+        webResearchOriginal = null
+        webResearchQueryIndex = 0
         webLinkLookupActive = false
         webLinkLookupRequestedCount = 1
         webLinkLookupProjectId = null
@@ -1794,13 +1838,19 @@ class WorkspaceActivity : AppCompatActivity() {
     ) {
         clearWebLinkLookup()
         webResearchQuestion = researchQuestion
+        webResearchOriginal = request
+        webResearchQueries = if (researchQuestion != null)
+            WorkspaceResearchQueryPlan.queries(researchQuestion, request)
+        else listOf(request)
+        webResearchQueryIndex = 0
+        webResearchCollected.clear()
         webLinkLookupActive = true
         webLinkLookupRequestedCount = request.maxResults
         webLinkLookupProjectId = id
         webLinkLookupMessageId = messageId
         statusMessage = ""
         render()
-        webLinkRunner().start(request)
+        webLinkRunner().start(webResearchQueries.first())
     }
 
     private fun finishStablePlatformLink(
