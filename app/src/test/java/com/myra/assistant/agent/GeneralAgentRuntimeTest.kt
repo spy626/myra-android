@@ -423,6 +423,73 @@ class GeneralAgentRuntimeTest {
         assertFalse(runtime.claimStepExecution(step, 82))
     }
 
+
+    @Test fun autonomousSourceGoalCannotStartWithoutFinalBoundSearchAndObservation() {
+        val runtime = GeneralAgentRuntime(now = { 23 })
+        val single = runtime.start(300, intent(ToolCapability.BROWSER_SEARCH))!!
+        assertNull(runtime.claimSourceAnalysis(single.id, 300))
+        assertNull(runtime.claimSourceAnalysis(single.id, 301))
+    }
+
+    @Test fun researchRequiresTwoIndependentReadPublicDomains() {
+        val evidence = listOf(
+            VerifiedResearchSource("https://docs.example.org/a", 2),
+            VerifiedResearchSource("https://www.example.org/b", 1),
+            VerifiedResearchSource("https://other.example.net/article", 1),
+            VerifiedResearchSource("http://insecure.example.net/x", 4),
+            VerifiedResearchSource("https://missing.example.edu/a", 0),
+        )
+        assertEquals(2, AutonomousSourceAnalysisPolicy.independentEvidence(evidence))
+        assertEquals(1, AutonomousSourceAnalysisPolicy.independentEvidence(evidence.take(2)))
+        assertEquals(0, AutonomousSourceAnalysisPolicy.independentEvidence(emptyList()))
+    }
+
+    @Test fun researchSourceCallbacksAreSingleUseAndCannotFinishNewTurn() {
+        val runtime = GeneralAgentRuntime(now = { 40 })
+        val intent = intent(ToolCapability.BROWSER_SEARCH).copy(
+            turnIntent = TurnIntent.MULTI_STEP_GOAL,
+            originalUtterance = "search android kotlin karo",
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN),
+            relevantApp = "com.android.chrome", textHint = "android kotlin",
+            parameters = mapOf("query" to "android kotlin"))
+        val task = runtime.start(301, intent)!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val search = (runtime.next(before) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(search, 301))
+        runtime.recordAction(search, GeneralActionResult(true), before)
+        val searched = perception(task.id, scene("com.android.chrome", 2,
+            listOf(element("android kotlin results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(searched).first.status)
+        val observation = (runtime.next(searched) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(observation, 301))
+        runtime.recordAction(observation, GeneralActionResult(true), searched)
+        val observed = perception(task.id, scene("com.android.chrome", 3,
+            listOf(element("android kotlin independent results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(observed).first.status)
+        assertEquals("android kotlin", runtime.claimSourceAnalysis(task.id, 301))
+        assertNull(runtime.claimSourceAnalysis(task.id, 301))
+        val result = runtime.completeSourceAnalysisIfCurrent(
+            task.id, 301, listOf(
+                VerifiedResearchSource("https://example.org/page", 2),
+                VerifiedResearchSource("https://other.example.net/page", 1)),
+            "Verified source passages and citations available")
+        assertEquals(AgentRuntimeStatus.COMPLETED, result?.status)
+        assertEquals(2, result?.verifiedResearchSourceCount)
+        assertNull(runtime.completeSourceAnalysisIfCurrent(task.id, 301,
+            emptyList(), "stale"))
+        assertEquals(task.id, runtime.lastCompletedTask()?.id)
+    }
+
+    @Test fun interruptedResearchEvidenceCannotCompleteNewUserTurn() {
+        val runtime = GeneralAgentRuntime(now = { 50 })
+        val task = runtime.start(401, intent(ToolCapability.BROWSER_SEARCH))!!
+        runtime.start(402, intent(ToolCapability.BROWSER_SEARCH))
+        assertNull(runtime.completeSourceAnalysisIfCurrent(task.id, 401, listOf(
+            VerifiedResearchSource("https://example.com", 1)),
+            "Cannot insert a result into the new turn"))
+        assertEquals(402, runtime.activeTask()?.turnId)
+    }
+
     @Test fun failed_action_enters_real_recovery_and_planner_returns_recover_step() {
         val runtime = GeneralAgentRuntime(now = { 5 })
         val task = runtime.start(24, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!

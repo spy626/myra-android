@@ -249,9 +249,12 @@ internal class WorkspacePublicResearchRunner(
                     }
                     active = null
                 }
+                // Source URL must still be the actual final destination at read time.
+                // HTTP redirects after discovery cannot relabel unrelated page text.
                 val hit = response.use { fetched ->
                     runCatching {
-                        WorkspacePublicResearch.extract(fetched, source, question)
+                        if (fetched.request.url.toString() != target.canonicalUrl) null
+                        else WorkspacePublicResearch.extract(fetched, source, question)
                     }.getOrNull()
                 }
                 inspect(run, question, sources, index + 1,

@@ -365,6 +365,8 @@ class MyraVoiceService : Service() {
             )
         ))
     }
+    private var goalSourceSearch: com.myra.assistant.ui.workspace.WorkspacePublicWebSearchRunner? = null
+    private var goalSourceReader: com.myra.assistant.ui.workspace.WorkspacePublicResearchRunner? = null
     private val memoryBrain by lazy { MemoryBrainCoordinator.get(this) }
     private val fastMemoryLane by lazy { com.myra.assistant.data.memory.LocalFastMemoryLane(memoryBrain) }
     private val assistantController by lazy { (application as MyApplication).assistantController }
@@ -5014,12 +5016,16 @@ class MyraVoiceService : Service() {
                     return@observe
                 }
                 if (goal != null && step.capability == ToolCapability.OBSERVE_SCREEN) {
-                    // Both substeps are verified. The original research objective remains
-                    // unproven until a separately grounded source-analysis step exists.
                     voiceLog("AUTONOMOUS_GOAL_PROGRESS taskId=${task.id} turnId=${task.turnId} " +
-                        "verifiedSteps=${goal.verifiedGoalSubsteps.size} goalComplete=false")
-                    onTerminal(GeneralVerificationStatus.SUCCESS,
-                        "search_and_fresh_observation_verified_goal_not_yet_complete")
+                        "verifiedSteps=${goal.verifiedGoalSubsteps.size} next=READ_VERIFIED_PUBLIC_SOURCES")
+                    if (!executeAutonomousSourceAnalysis(task.id, task.turnId, onTerminal)) {
+                        // No source read without final-turn query binding and exactly
+                        // two verified, task-owned prerequisites.
+                        runtime.completeFromAdapter(GeneralVerificationStatus.UNKNOWN,
+                            "verified_search_done_source_analysis_not_authorized")
+                        onTerminal(GeneralVerificationStatus.UNKNOWN,
+                            "Search verified; additional public source analysis not authorized.")
+                    }
                     return@observe
                 }
                 runtime.lastCompletedTask()?.takeIf { expectedCapability != ToolCapability.BROWSER_SEARCH }?.let {
@@ -5045,6 +5051,97 @@ class MyraVoiceService : Service() {
             }
         }
         mainHandler.postDelayed({ observeAndVerify(0) }, adapter.observationDelayMs)
+        return true
+    }
+
+
+    /**
+     * Continue the existing task through independent read-only source discovery,
+     * webpage extraction, and a source-cited extractive answer. No second agent.
+     * Every network callback must still belong to the same active task and turn.
+     */
+    private fun executeAutonomousSourceAnalysis(
+        taskId: String, turnId: Long,
+        onTerminal: (GeneralVerificationStatus, String) -> Unit,
+    ): Boolean {
+        val runtime = GeneralAgentRuntimeStore.runtime
+        val query = runtime.claimSourceAnalysis(taskId, turnId) ?: return false
+        goalSourceSearch?.cancel()
+        goalSourceReader?.cancel()
+        fun ownsTask() = runtime.activeTask()?.let {
+            it.id == taskId && it.turnId == turnId &&
+                it.status == com.myra.assistant.agent.AgentRuntimeStatus.VERIFYING
+        } == true
+
+        fun finish(
+            evidence: List<com.myra.assistant.ui.workspace.WorkspacePublicResearch.Extract>,
+            answer: String,
+        ) {
+            if (!ownsTask()) return
+            val receipts = evidence.map { hit ->
+                com.myra.assistant.agent.VerifiedResearchSource(
+                    hit.source.finalUrl, hit.passages.size)
+            }
+            val completed = runtime.completeSourceAnalysisIfCurrent(
+                taskId, turnId, receipts, answer) ?: return
+            goalSourceSearch = null
+            goalSourceReader = null
+            val status = if (completed.status ==
+                com.myra.assistant.agent.AgentRuntimeStatus.COMPLETED)
+                GeneralVerificationStatus.SUCCESS else GeneralVerificationStatus.UNKNOWN
+            voiceLog("AUTONOMOUS_SOURCE_ANALYSIS taskId=$taskId turnId=$turnId " +
+                "independentSources=${completed.verifiedResearchSourceCount} result=$status")
+            onTerminal(status, answer)
+        }
+
+        goalSourceSearch = com.myra.assistant.ui.workspace.WorkspacePublicWebSearchRunner(
+            object : com.myra.assistant.ui.workspace.WorkspacePublicWebSearchRunner.Listener {
+                override fun onEvent(
+                    phase: com.myra.assistant.ui.workspace.WorkspaceWorkPhase,
+                    label: String, detail: String?,
+                ) {
+                    voiceLog("AUTONOMOUS_PUBLIC_RESEARCH_PHASE taskId=$taskId phase=$phase")
+                }
+
+                override fun onComplete(
+                    results: List<com.myra.assistant.ui.workspace.WorkspacePublicWebSearch.Verified>,
+                ) {
+                    mainHandler.post {
+                        if (!ownsTask()) return@post
+                        val bounded = results.take(3)
+                        val reader = com.myra.assistant.ui.workspace.WorkspacePublicResearchRunner(
+                            object : com.myra.assistant.ui.workspace.WorkspacePublicResearchRunner.Listener {
+                                override fun onEvent(label: String) {
+                                    voiceLog("AUTONOMOUS_PUBLIC_SOURCE_READING taskId=$taskId")
+                                }
+
+                                override fun onComplete(
+                                    evidence: List<com.myra.assistant.ui.workspace.WorkspacePublicResearch.Extract>,
+                                ) {
+                                    mainHandler.post {
+                                        if (!ownsTask()) return@post
+                                        finish(evidence,
+                                            com.myra.assistant.ui.workspace.WorkspacePublicResearch.render(
+                                                query, evidence, bounded.size))
+                                    }
+                                }
+                            })
+                        goalSourceReader = reader
+                        reader.start(query, bounded)
+                    }
+                }
+
+                override fun onError(message: String) {
+                    mainHandler.post {
+                        if (!ownsTask()) return@post
+                        finish(emptyList(),
+                            "Search verified, but independent public sources could not be read.")
+                    }
+                }
+            })
+        goalSourceSearch?.start(
+            com.myra.assistant.ui.workspace.WorkspaceWebLinkIntent.Request(
+                query = query, maxResults = 3))
         return true
     }
 
@@ -5224,6 +5321,10 @@ class MyraVoiceService : Service() {
         }
         // Search opening is only a verified substep; do not mark the broader research
         // objective as completed in Working Task Memory.
+        val sourceGoal = GeneralAgentRuntimeStore.runtime.lastCompletedTask()?.takeIf {
+            it.turnId == turnId && it.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
+                it.verifiedGoalSubsteps.size == 2
+        }
         val completion = when (verification) {
             SearchVerification.SUCCESS ->
                 if (goalProgress != null) TaskCompletionState.UNKNOWN else TaskCompletionState.SUCCESS
@@ -5254,6 +5355,16 @@ class MyraVoiceService : Service() {
         voiceLog("SEARCH_RESULT_OWNER turnId=$turnId owner=CONTROLLED_AGENT release=NEXT_USER_TURN")
         when (verification) {
             SearchVerification.SUCCESS -> {
+                if (sourceGoal?.verifiedResearchSourceCount ?: 0 >= 2) {
+                    // The answer is extractive and cited from pages actually read,
+                    // not an LLM success claim or a bare search-results screen.
+                    listener?.onMyraText(observed)
+                    val spoken = observed.replace(Regex("""\[[^]]+\]\(https?://[^)]+\)"""), "")
+                        .replace("*", "").take(900)
+                    queueLocalSpeech(spoken, allowUntranscribedAudio = false)
+                    voiceLog("AUTONOMOUS_GOAL_ANSWER_DELIVERED turnId=$turnId " +
+                        "independentSources=${sourceGoal?.verifiedResearchSourceCount}")
+                }
                 if (goalProgress != null) {
                     val message = "Search aur fresh result observation verified hain; full research goal abhi complete verify nahi hua."
                     listener?.onMyraText(message)
@@ -5264,7 +5375,8 @@ class MyraVoiceService : Service() {
                 voiceLog("SEARCH_RESULT_PLAYBACK turnId=$turnId spoken=false result=SUCCESS")
             }
             SearchVerification.UNKNOWN -> {
-                val message = "Search open hui, lekin results verify nahi hue."
+                val message = if (sourceGoal != null)
+                    observed.take(1_600) else "Search open hui, lekin results verify nahi hue."
                 listener?.onMyraText(message, true)
                 queueLocalSpeech(message, allowUntranscribedAudio = false)
                 voiceLog("task_result_spoken turnId=$turnId spoken=true result=UNKNOWN destination=${completed.destination}")
@@ -6492,6 +6604,8 @@ class MyraVoiceService : Service() {
     private fun updateNotification(text: String) { (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text)) }
     private fun stopSession() { memoryBrain.closeConversation(transcriptSessionId, "VOICE_SESSION_STOP"); isNaturalVoiceReady = false; connectionPreparing = false; pendingActionAfterLocalSpeech = null; readingTracker.stop(); screenCommandTurnGuard.clear(); mainHandler.removeCallbacks(idleNudgeRunnable); serviceScope.cancel(); mediaGuard.release(); live?.disconnect(); audio?.release(); wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null; live = null; audio = null; isRunning = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     override fun onDestroy() {
+        goalSourceSearch?.cancel()
+        goalSourceReader?.cancel()
         ScreenCaptureService.listeners -= screenCaptureListener
         fastVisualTurns.cancel()
         visualDeadlineExecutor.shutdownNow()

@@ -111,6 +111,7 @@ data class GeneralRuntimeTask(
     val recoveryCount: Int = 0,
     val planRevision: Int = 0,
     val verifiedGoalSubsteps: List<VerifiedGoalSubstep> = emptyList(),
+    val verifiedResearchSourceCount: Int = 0,
     val authPause: BrowserAuthenticationHandoff.Pause? = null,
     val authHandoffAttempts: Int = 0,
     val createdAt: Long,
@@ -785,6 +786,43 @@ class GeneralAgentRuntime(
         }
         publishCheckpoint()
         return result to decision
+    }
+
+    /** Lease for independently verified public source reading after the two approved
+     * search/observation steps. No new phone adapter or authorization is created. */
+    @Synchronized fun claimSourceAnalysis(taskId: String, turnId: Long): String? {
+        val task = active ?: return null
+        if (task.id != taskId || task.turnId != turnId) return null
+        val query = AutonomousSourceAnalysisPolicy.boundQuery(task) ?: return null
+        active = task.copy(status = AgentRuntimeStatus.VERIFYING, updatedAt = now())
+        publishCheckpoint()
+        return query
+    }
+
+    /** Atomic completion, fenced against cancellation/new user turns.
+     * A source is evidence only if readable factual passages were actually extracted. */
+    @Synchronized fun completeSourceAnalysisIfCurrent(
+        taskId: String, turnId: Long,
+        sources: List<VerifiedResearchSource>, answer: String,
+    ): GeneralRuntimeTask? {
+        val task = active ?: return null
+        if (task.id != taskId || task.turnId != turnId ||
+            task.status != AgentRuntimeStatus.VERIFYING ||
+            task.currentStep != null || task.verifiedGoalSubsteps.size != 2 ||
+            answer.isBlank() || answer.length > 5_000) return null
+        val count = AutonomousSourceAnalysisPolicy.independentEvidence(sources)
+        val done = task.copy(
+            status = if (count >= 2) AgentRuntimeStatus.COMPLETED
+                else AgentRuntimeStatus.NEEDS_CLARIFICATION,
+            verifiedResearchSourceCount = count,
+            intent = task.intent.copy(desiredEndState = answer),
+            updatedAt = now(),
+        )
+        active = null
+        lastCompleted = done
+        beforeByStep.clear()
+        publishCheckpoint()
+        return done
     }
 
     /** Allows a validated platform adapter to feed its stronger domain evidence back into the
