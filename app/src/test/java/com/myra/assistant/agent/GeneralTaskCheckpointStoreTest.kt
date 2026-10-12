@@ -68,6 +68,25 @@ class GeneralTaskCheckpointStoreTest {
         assertFalse(store.closeForFreshRequest(expected))
     }
 
+    @Test fun autonomousPublicSearchIsBoundedAndConsumedOnce() {
+        val root = temporary.newFolder()
+        val store = GeneralTaskCheckpointStore(root, now = { 10_000L })
+        store.saveWithSafeSearch(receipt(), "Kotlin coroutines")
+        val pending = store.read()!!
+        assertEquals("Kotlin coroutines", pending.safeSearchQuery)
+        assertTrue(pending.requiresReview)
+        assertTrue(store.closeForFreshRequest(pending))
+        assertNull(store.read()!!.safeSearchQuery)
+        assertFalse(store.closeForFreshRequest(pending))
+    }
+
+    @Test fun unsafeOrCredentialQueryNeverGetsSaved() {
+        val root = temporary.newFolder()
+        val store = GeneralTaskCheckpointStore(root, now = { 10_000L })
+        store.saveWithSafeSearch(receipt(), "my secret account")
+        assertNull(store.read()!!.safeSearchQuery)
+    }
+
     @Test fun completionFlagRequiresBothTerminalStatusAndVerifiedStep() {
         val root = temporary.newFolder()
         val store = GeneralTaskCheckpointStore(root, now = { 10_000L })

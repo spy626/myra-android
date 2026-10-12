@@ -625,6 +625,7 @@ class GeneralAgentRuntime(
                 textHint = textHint ?: task.intent.textHint
             ), updatedAt = now())
         }
+        publishCheckpoint()
     }
 
     @Synchronized fun recordAction(step: GeneralPlanStep, result: GeneralActionResult, before: PerceptionSnapshot): GeneralRuntimeTask {
@@ -742,11 +743,31 @@ object GeneralAgentRuntimeStore {
     @Synchronized fun enableDurableReceipts(root: java.io.File) {
         val store = GeneralTaskCheckpointStore(root)
         checkpoint = store
-        runtime.setCheckpointSink(store::save)
+        runtime.setCheckpointSink { receipt ->
+            val task = runtime.activeTask()?.takeIf { it.id == receipt.taskId }
+                ?: runtime.lastCompletedTask()?.takeIf { it.id == receipt.taskId }
+            val query = task?.let { AutonomousRecoveryPolicy.safeSearch(it)?.query }
+            store.saveWithSafeSearch(receipt, query)
+        }
     }
 
     fun interruptedTaskReview(): GeneralTaskCheckpointStore.Checkpoint? =
         checkpoint?.read()?.takeIf { it.requiresReview }
+
+    /** Atomic consume-before-dispatch. Never run a stale task twice. */
+    @Synchronized fun claimAutonomousPublicSearch(
+        expected: GeneralTaskCheckpointStore.Checkpoint,
+    ): String? {
+        val store = checkpoint ?: return null
+        return runCatching {
+            val current = store.read() ?: return null
+            if (current != expected ||
+                !AutonomousRecoveryPolicy.autoResumeAllowed(
+                    current, System.currentTimeMillis())) return null
+            val query = current.safeSearchQuery ?: return null
+            if (store.closeForFreshRequest(current)) query else null
+        }.getOrNull()
+    }
 
     /** User review only; no executable task or new authorization is restored. */
     fun closeInterruptedReview(expected: GeneralTaskCheckpointStore.Checkpoint): Boolean =

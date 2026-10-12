@@ -28,6 +28,7 @@ class GeneralTaskCheckpointStore(
         val needsFreshObservation: Boolean,
         val verifiedComplete: Boolean,
         val savedAtMs: Long,
+        val safeSearchQuery: String? = null,
     ) {
         val requiresReview: Boolean get() =
             status !in setOf(AgentRuntimeStatus.COMPLETED, AgentRuntimeStatus.FAILED,
@@ -52,7 +53,11 @@ class GeneralTaskCheckpointStore(
         return target
     }
 
-    @Synchronized fun save(receipt: UnifiedTaskReceipt) {
+    @Synchronized fun save(receipt: UnifiedTaskReceipt) =
+        saveWithSafeSearch(receipt, null)
+
+    /** Public research query only, never full transcript, plan, or tool arguments. */
+    @Synchronized fun saveWithSafeSearch(receipt: UnifiedTaskReceipt, safeQuery: String?) {
         require(validId.matches(receipt.taskId) && receipt.sourceTurnId >= 0 &&
             receipt.planRevision in 0..1_000_000) { "Invalid task identity" }
         val stepIds = receipt.lastVerifiedStepIds.distinct().takeLast(12)
@@ -68,12 +73,16 @@ class GeneralTaskCheckpointStore(
             .put("verifiedComplete", receipt.verifiedComplete)
             .put("savedAtMs", now())
             .toString()
-        require(snapshot.toByteArray(Charsets.UTF_8).size <= MAX_BYTES)
+        val eligible = if (receipt.needsFreshObservation && !receipt.waitingForApproval)
+            AutonomousRecoveryPolicy.sanitizePublicQuery(safeQuery) else null
+        if (eligible != null) snapshot.put("safeSearchQuery", eligible)
+        val serialized = snapshot.toString()
+        require(serialized.toByteArray(Charsets.UTF_8).size <= MAX_BYTES)
         val destination = path()
         val temp = File(destination.parentFile, "general-task-checkpoint.tmp")
         require(!Files.isSymbolicLink(temp.toPath()) &&
             temp.canonicalFile.parentFile == destination.parentFile) { "Unsafe temp path" }
-        temp.writeText(snapshot, Charsets.UTF_8)
+        temp.writeText(serialized, Charsets.UTF_8)
         try {
             Files.move(temp.toPath(), destination.toPath(),
                 StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
@@ -98,6 +107,7 @@ class GeneralTaskCheckpointStore(
             .put("needsFreshObservation", false)
             .put("verifiedComplete", false)
             .put("savedAtMs", now())
+        json.remove("safeSearchQuery")
         val tmp = File(original.parentFile, "general-task-checkpoint.tmp")
         require(!Files.isSymbolicLink(tmp.toPath()) &&
             tmp.canonicalFile.parentFile == original.parentFile) { "Unsafe temp path" }
@@ -133,7 +143,10 @@ class GeneralTaskCheckpointStore(
         // plus a terminal status is eligible to be reported.
         val trustworthyCompletion = verified &&
             status == AgentRuntimeStatus.COMPLETED && steps.isNotEmpty()
+        val safeQuery = AutonomousRecoveryPolicy.sanitizePublicQuery(
+            json.optString("safeSearchQuery"))
         Checkpoint(id, turnId, revision, status, steps,
-            json.getBoolean("needsFreshObservation"), trustworthyCompletion, savedAt)
+            json.getBoolean("needsFreshObservation"), trustworthyCompletion,
+            savedAt, safeQuery)
     }.getOrNull()
 }
