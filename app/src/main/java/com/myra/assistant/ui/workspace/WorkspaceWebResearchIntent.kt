@@ -19,6 +19,12 @@ internal object WorkspaceWebResearchIntent {
         """(?iu)\b(?:password|otp|passcode|api[ -]?key|secret|token|""" +
             """delete|modify|edit|fix|implement|install|upload|commit|push)\b"""
     )
+    private val comparisonCue = Regex(
+        """(?iu)\b(?:difference|different|compare|comparison|versus|vs|farq)\b"""
+    )
+    private val freshnessCue = Regex(
+        """(?iu)\b(?:latest|recent|today|current|newest|news|update|updates)\b"""
+    )
     private val url = Regex("""(?i)https?://""")
     private val words = Regex("""[\p{L}\p{N}+#._-]{2,}""")
     private val filler = setOf(
@@ -33,8 +39,15 @@ internal object WorkspaceWebResearchIntent {
     fun decide(text: String): Request? {
         val message = text.trim().replace(Regex("""\s+"""), " ")
         if (message.length !in 12..300 || url.containsMatchIn(message) ||
-            deny.containsMatchIn(message) || !citationCue.containsMatchIn(message) ||
-            !explainCue.containsMatchIn(message)) return null
+            deny.containsMatchIn(message)) return null
+        // ChatGPT-like auto research for explicit comparisons and fresh-fact questions.
+        // Casual chat and direct download/link intents keep their existing owners.
+        val explicitSources = citationCue.containsMatchIn(message) &&
+            explainCue.containsMatchIn(message)
+        val comparison = comparisonCue.containsMatchIn(message)
+        val freshQuestion = freshnessCue.containsMatchIn(message) &&
+            (explainCue.containsMatchIn(message) || message.contains('?'))
+        if (!explicitSources && !comparison && !freshQuestion) return null
         val terms = words.findAll(message).map { it.value }.filter {
             it.lowercase() !in filler
         }.distinctBy { it.lowercase() }.take(9).toList()

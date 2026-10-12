@@ -22,7 +22,11 @@ class WorkspaceWebResearchIntentTest {
         assertTrue(research?.search?.query?.contains("change", true) == true)
     }
     @Test fun normalChatDownloadsLinksAndSensitiveOrWriteTasksAreNotHijacked() {
-        assertNull(WorkspaceWebResearchIntent.decide("How is WorkManager different from Foreground Service?"))
+        assertTrue(WorkspaceWebResearchIntent.decide(
+            "How is WorkManager different from Foreground Service?") != null)
+        assertTrue(WorkspaceWebResearchIntent.decide(
+            "What are the latest Kotlin coroutine changes?") != null)
+        assertNull(WorkspaceWebResearchIntent.decide("Bro mai sad hoon baat karo"))
         assertNull(WorkspaceWebResearchIntent.decide("Telegram app ka download links do"))
         assertNull(WorkspaceWebResearchIntent.decide("Kotlin coroutines documentation ke 3 links do"))
         assertNull(WorkspaceWebResearchIntent.decide("Please fix app search and explain sources"))
