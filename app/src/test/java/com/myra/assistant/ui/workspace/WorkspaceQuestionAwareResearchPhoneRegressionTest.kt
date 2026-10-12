@@ -119,6 +119,21 @@ class WorkspaceQuestionAwareResearchPhoneRegressionTest {
         assertFalse(answer.contains("Evidence-linked findings only"))
     }
 
+    @Test fun batteryPageTitleCannotTurnUnrelatedAppCodeIntoBatteryEvidence() {
+        val irrelevantParagraph =
+            "Android application optimization uses R8 compilation and code minification " +
+                "when building Jetpack Compose interfaces for production applications."
+        val extracted = WorkspaceResearchQuestionFocus.relevantExtracts(question, listOf(
+            WorkspacePublicResearch.Extract(android, listOf(irrelevantParagraph)),
+            WorkspacePublicResearch.Extract(ios, listOf(
+                "iOS battery optimization reduces background power use and improves battery life."
+            )),
+        ))
+        assertEquals(1, extracted.size)
+        assertEquals(ios.finalUrl, extracted.first().source.finalUrl)
+        assertNull(WorkspaceResearchSynthesis.bundle(question, extracted))
+    }
+
     @Test fun singlePlatformCannotSupplyFakeTwoSidedModelComparison() {
         assertNull(WorkspaceResearchSynthesis.bundle(question, listOf(
             WorkspacePublicResearch.Extract(android, listOf(
