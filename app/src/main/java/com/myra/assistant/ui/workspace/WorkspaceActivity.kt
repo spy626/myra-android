@@ -1574,9 +1574,35 @@ class WorkspaceActivity : AppCompatActivity() {
                             val finalResults = WorkspaceResearchQueryPlan.choose(
                                 requireNotNull(webResearchQuestion),
                                 requireNotNull(webResearchOriginal), webResearchCollected)
-                            // Some searches failed; keep only actually verified destinations.
-                            finishResearchWithEvidence(requireNotNull(webResearchQuestion),
-                                finalResults, emptyList())
+                            // Other queries failed; read surviving verified destinations.
+                            // An HTTP 200 alone never proves there is factual page evidence.
+                            val question = requireNotNull(webResearchQuestion)
+                            val capturedId = webLinkLookupMessageId
+                            webResearchRunner?.cancel()
+                            webResearchRunner = WorkspacePublicResearchRunner(
+                                listener = object : WorkspacePublicResearchRunner.Listener {
+                                    override fun onEvent(label: String) {
+                                        runOnUiThread {
+                                            if (webLinkLookupActive &&
+                                                webLinkLookupMessageId == capturedId) {
+                                                recordWorkEvent(
+                                                    WorkspaceWorkPhase.VERIFYING, label, null)
+                                            }
+                                        }
+                                    }
+                                    override fun onComplete(
+                                        evidence: List<WorkspacePublicResearch.Extract>,
+                                    ) {
+                                        runOnUiThread {
+                                            if (webLinkLookupActive &&
+                                                webLinkLookupMessageId == capturedId) {
+                                                finishResearchWithEvidence(
+                                                    question, finalResults, evidence)
+                                            }
+                                        }
+                                    }
+                                }
+                            ).also { it.start(question, finalResults) }
                             return@runOnUiThread
                         }
                         finishWebLinkLookup(
