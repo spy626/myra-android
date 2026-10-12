@@ -79,6 +79,13 @@ object AutonomousSourceAnalysisPolicy {
         sources.asSequence().filter { it.factualPassages > 0 }
             .mapNotNull { domainOf(it.url) }.distinct().take(3).count()
 
+    /** Only retry the already-authorized read-only comparison plan, never a failed
+     * physical phone action. The plan contains at most three distinct queries. */
+    fun mayContinueReadOnlyResearch(
+        currentQueryIndex: Int, queryCount: Int, status: ResearchEvidenceStatus,
+    ): Boolean = status == ResearchEvidenceStatus.INSUFFICIENT &&
+        queryCount in 2..3 && currentQueryIndex in 0 until queryCount - 1
+
     /**
      * Match only bounded, substantial near-identical statements from two sites.
      * Contradictory numeric anchors or negation within the same strongly matching
@@ -88,7 +95,7 @@ object AutonomousSourceAnalysisPolicy {
     fun assess(sources: List<VerifiedResearchSource>): ResearchEvidenceAssessment {
         val count = independentEvidence(sources)
         if (count < 2) return ResearchEvidenceAssessment(ResearchEvidenceStatus.INSUFFICIENT, count)
-        val lines = sources.take(3).flatMap { source ->
+        val lines = sources.take(6).flatMap { source ->
             val domain = domainOf(source.url) ?: return@flatMap emptyList()
             source.passages.take(minOf(source.factualPassages.coerceAtLeast(0), 3))
                 .mapNotNull { text ->
