@@ -55,6 +55,16 @@ object AutonomousSourceAnalysisPolicy {
         val hasNegation: Boolean,
     )
 
+    /**
+     * A source callback can outlive its runtime task's speech ownership.
+     * Bind delivery to the currently displayed voice turn as well as the
+     * underlying runtime task; a newer user turn invalidates older output.
+     */
+    fun mayDeliverToVoiceTurn(
+        taskTurnId: Long, responseTurnId: Long, activeUserTurnId: Long,
+    ): Boolean = taskTurnId > 0L && responseTurnId == taskTurnId &&
+        (activeUserTurnId == 0L || activeUserTurnId == taskTurnId)
+
     fun boundQuery(task: GeneralRuntimeTask): String? {
         if (task.status != AgentRuntimeStatus.PLANNING ||
             task.intent.turnIntent != TurnIntent.MULTI_STEP_GOAL ||
