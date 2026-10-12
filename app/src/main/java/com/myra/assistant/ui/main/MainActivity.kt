@@ -41,6 +41,7 @@ import com.myra.assistant.model.AppCommand
 import com.myra.assistant.MyApplication
 import com.myra.assistant.agent.GeneralAgentRuntimeStore
 import com.myra.assistant.agent.GeneralTaskRecoveryReview
+import com.myra.assistant.agent.AutonomousRecoveryPolicy
 import com.myra.assistant.commands.CommandType
 import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.core.AssistantController
@@ -124,7 +125,11 @@ class MainActivity : AppCompatActivity() {
 
     private val voiceListener = object : MyraVoiceService.Listener {
         override fun onState(text: String) = runOnUiThread { showStatus(text) }
-        override fun onReady() = runOnUiThread { b.connectButton.setColorFilter(Color.WHITE); showStatus("Sun rahi hoon…") }
+        override fun onReady() = runOnUiThread {
+            b.connectButton.setColorFilter(Color.WHITE)
+            showStatus("Sun rahi hoon…")
+            tryAutonomousPublicResearch()
+        }
         override fun onAmplitude(value: Float) = runOnUiThread { b.orb.amplitude = value }
         override fun onSpeaking(speaking: Boolean) = runOnUiThread { b.orb.state = if (speaking) OrbAnimationView.State.SPEAKING else OrbAnimationView.State.LISTENING; showStatus(if (speaking) "Bol rahi hoon…" else "Sun rahi hoon…") }
         override fun onUserText(turnId: Long, text: String) = runOnUiThread { addBubble(text, true, turnId = turnId) }
@@ -207,12 +212,39 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) b.root.post { showInterruptedTaskReview() }
     }
 
+    /**
+     * Continue a previously authorized public-search goal automatically once the normal
+     * voice/agent runtime is ready. This sends a NEW safe research turn through existing
+     * final-turn planning; it never executes a stored Android action or bypasses verification.
+     */
+    private fun tryAutonomousPublicResearch(): Boolean {
+        if (isFinishing || isDestroyed || !MyraVoiceService.isRunning ||
+            !MyraVoiceService.isNaturalVoiceReady ||
+            GeneralAgentRuntimeStore.runtime.activeTask() != null) return false
+        val pending = GeneralAgentRuntimeStore.interruptedTaskReview() ?: return false
+        if (!AutonomousRecoveryPolicy.autoResumeAllowed(pending, System.currentTimeMillis()))
+            return false
+        val query = GeneralAgentRuntimeStore.claimAutonomousPublicSearch(pending)
+            ?: return false
+        showStatus("Resuming previously authorized public research")
+        addBubble("LYRA is continuing your public research: $query", false)
+        MyraVoiceService.sendText("search $query karo")
+        return true
+    }
+
     /** A checkpoint is a progress receipt, never a saved command to replay. */
     private fun showInterruptedTaskReview() {
         // An already running task cannot be replaced by an old recovery prompt.
         if (isFinishing || isDestroyed ||
             GeneralAgentRuntimeStore.runtime.activeTask() != null) return
         val pending = GeneralAgentRuntimeStore.interruptedTaskReview() ?: return
+        // Low-risk, previously authorized public research is autonomous, not a manual
+        // "Resume" dialog. It will re-enter when the normal session is connected.
+        if (AutonomousRecoveryPolicy.autoResumeAllowed(pending, System.currentTimeMillis())) {
+            if (!tryAutonomousPublicResearch())
+                showStatus("Previous public research will resume when LYRA connects")
+            return
+        }
         AlertDialog.Builder(this)
             .setTitle("LYRA interrupted task")
             .setMessage("A previous task was interrupted. For privacy, LYRA saved only task " +
@@ -592,7 +624,13 @@ class MainActivity : AppCompatActivity() {
     }
     private fun showStatus(text: String) { b.statusText.text = text }
     private fun disconnect() { startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_STOP)); b.connectButton.clearColorFilter(); b.orb.state = OrbAnimationView.State.IDLE; showStatus("Tap the mic to wake LYRA") }
-    override fun onResume() { super.onResume(); MyraVoiceService.listener = voiceListener; MyraVoiceService.setUiVisible(true); if (MyraVoiceService.isRunning) b.connectButton.setColorFilter(Color.WHITE) }
+    override fun onResume() {
+        super.onResume()
+        MyraVoiceService.listener = voiceListener
+        MyraVoiceService.setUiVisible(true)
+        if (MyraVoiceService.isRunning) b.connectButton.setColorFilter(Color.WHITE)
+        tryAutonomousPublicResearch()
+    }
     override fun onPause() { MyraVoiceService.setUiVisible(false); super.onPause() }
     override fun onDestroy() { assistantController.removeListener(controllerListener); if (MyraVoiceService.listener === voiceListener) MyraVoiceService.listener = null; super.onDestroy() }
 }
