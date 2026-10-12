@@ -1719,10 +1719,13 @@ class WorkspaceActivity : AppCompatActivity() {
         // reachable page is NOT relevant just because its title says Android.
         val relatedSources = WorkspaceResearchQuestionFocus.relevant(question, sources)
         val relatedUrls = relatedSources.map { it.finalUrl }.toSet()
-        val relatedEvidence = evidence.filter { it.source.finalUrl in relatedUrls }
-        val sourceReceipts = relatedSources.map { WorkspacePublicWebSearch.source(it) }
+        val relatedEvidence = WorkspaceResearchQuestionFocus.relevantExtracts(
+            question, evidence.filter { it.source.finalUrl in relatedUrls })
+        val sourceReceipts = relatedEvidence.map {
+            WorkspacePublicWebSearch.source(it.source)
+        }
         val fallback = WorkspacePublicResearch.render(
-            question, relatedEvidence, relatedSources.size)
+            question, relatedEvidence, relatedEvidence.size)
         if (!WorkspaceResearchQuestionFocus.coversQuestion(
                 question, relatedEvidence.map { it.source })) {
             val focus = WorkspaceResearchQuestionFocus.inspect(question)
@@ -1737,7 +1740,15 @@ class WorkspaceActivity : AppCompatActivity() {
                     "ko complete comparison bolkar nahi dungi."
             else "Bro, is question ke liye relevant readable webpage evidence " +
                 "verify nahi hui. Kisi unrelated source se answer nahi banaungi."
-            finishWebLinkLookup(message, sourceReceipts, researchAnswerComplete = false)
+            val partial = relatedEvidence.take(2).mapNotNull { hit ->
+                hit.passages.firstOrNull()?.let { passage ->
+                    "• " + passage.take(280).replace(Regex("""[\[\]*]"""), "") +
+                        " ([Source](" + hit.source.finalUrl + "))"
+                }
+            }.joinToString("\n")
+            val reply = if (partial.isBlank()) message else message +
+                "\n\nAbhi jo related information verify hui:\n" + partial
+            finishWebLinkLookup(reply, sourceReceipts, researchAnswerComplete = false)
             return
         }
         val bundle = WorkspaceResearchSynthesis.bundle(
