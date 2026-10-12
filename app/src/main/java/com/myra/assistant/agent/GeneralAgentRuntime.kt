@@ -747,4 +747,8 @@ object GeneralAgentRuntimeStore {
 
     fun interruptedTaskReview(): GeneralTaskCheckpointStore.Checkpoint? =
         checkpoint?.read()?.takeIf { it.requiresReview }
+
+    /** User review only; no executable task or new authorization is restored. */
+    fun closeInterruptedReview(expected: GeneralTaskCheckpointStore.Checkpoint): Boolean =
+        checkpoint?.closeForFreshRequest(expected) == true
 }

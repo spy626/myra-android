@@ -55,6 +55,19 @@ class GeneralTaskCheckpointStoreTest {
         assertFalse(terminal.requiresReview)
     }
 
+    @Test fun reviewedCheckpointClosesOnlyExpectedIdentityWithoutReplayingTask() {
+        val root = temporary.newFolder()
+        val store = GeneralTaskCheckpointStore(root, now = { 10_000L })
+        store.save(receipt())
+        val expected = store.read()!!
+        assertFalse(store.closeForFreshRequest(expected.copy(taskId = "wrong")))
+        assertTrue(store.read()!!.requiresReview)
+        assertTrue(store.closeForFreshRequest(expected))
+        assertFalse(store.read()!!.requiresReview)
+        assertEquals(AgentRuntimeStatus.CANCELLED, store.read()!!.status)
+        assertFalse(store.closeForFreshRequest(expected))
+    }
+
     @Test fun completionFlagRequiresBothTerminalStatusAndVerifiedStep() {
         val root = temporary.newFolder()
         val store = GeneralTaskCheckpointStore(root, now = { 10_000L })

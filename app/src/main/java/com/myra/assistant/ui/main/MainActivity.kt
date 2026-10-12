@@ -20,6 +20,8 @@ import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.text.util.Linkify
 import android.text.method.LinkMovementMethod
+import android.widget.EditText
+import android.text.InputType
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -37,6 +39,8 @@ import com.myra.assistant.service.AccessibilityHelperService
 import com.myra.assistant.service.MyraVoiceService
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.MyApplication
+import com.myra.assistant.agent.GeneralAgentRuntimeStore
+import com.myra.assistant.agent.GeneralTaskRecoveryReview
 import com.myra.assistant.commands.CommandType
 import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.core.AssistantController
@@ -200,6 +204,73 @@ class MainActivity : AppCompatActivity() {
         b.stopButton.setOnClickListener { MyraVoiceService.interrupt(); assistantController.stop(); showStatus("Stopped") }
         b.muteButton.setOnClickListener { muted = !muted; startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_MUTE).putExtra(MyraVoiceService.EXTRA_MUTED, muted)); b.muteButton.alpha = if (muted) 1f else .6f; showStatus(if (muted) "Microphone muted" else "Sun rahi hoon…") }
         handleVoiceScreenPermissionIntent(intent)
+        if (savedInstanceState == null) b.root.post { showInterruptedTaskReview() }
+    }
+
+    /** A checkpoint is a progress receipt, never a saved command to replay. */
+    private fun showInterruptedTaskReview() {
+        // An already running task cannot be replaced by an old recovery prompt.
+        if (isFinishing || isDestroyed ||
+            GeneralAgentRuntimeStore.runtime.activeTask() != null) return
+        val pending = GeneralAgentRuntimeStore.interruptedTaskReview() ?: return
+        AlertDialog.Builder(this)
+            .setTitle("LYRA interrupted task")
+            .setMessage("A previous task was interrupted. For privacy, LYRA saved only task " +
+                "progress—not the original instruction or screen. No action resumed. " +
+                "You can dismiss it, or restate the task as a NEW request.")
+            .setNegativeButton("Later", null)
+            .setNeutralButton("Dismiss task") { _, _ ->
+                if (GeneralAgentRuntimeStore.closeInterruptedReview(pending)) {
+                    showStatus("Old interrupted task dismissed")
+                }
+            }
+            .setPositiveButton("Review") { _, _ ->
+                showRestatedTaskDraft(pending)
+            }
+            .show()
+    }
+
+    private fun showRestatedTaskDraft(
+        pending: com.myra.assistant.agent.GeneralTaskCheckpointStore.Checkpoint
+    ) {
+        val input = EditText(this).apply {
+            hint = "Enter the full original goal again"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            maxLines = 3
+            filters = arrayOf(android.text.InputFilter.LengthFilter(700))
+            setSingleLine(true)
+            setPadding(24, 14, 24, 14)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Start as a fresh request")
+            .setMessage("Review the goal before sending it. This only prepares the chat " +
+                "composer: no screen tap, message or browser action runs from this dialog. " +
+                "LYRA will use the normal fresh-screen and action permission checks when sent.")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Prepare request", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                when (val parsed = GeneralTaskRecoveryReview.prepare(
+                    input.text.toString(), pending)) {
+                    is GeneralTaskRecoveryReview.Draft.Rejected ->
+                        input.error = parsed.reason
+                    is GeneralTaskRecoveryReview.Draft.Ready -> {
+                        if (!GeneralAgentRuntimeStore.closeInterruptedReview(pending)) {
+                            input.error = "Task changed. Please review it again."
+                            return@setOnClickListener
+                        }
+                        dialog.dismiss()
+                        b.textInput.setText(parsed.freshInstruction)
+                        b.textInput.setSelection(b.textInput.text.length)
+                        expandComposer()
+                        showStatus("Fresh request ready. Review and tap Send to authorize.")
+                    }
+                }
+            }
+        }
+        dialog.show()
     }
 
     override fun onNewIntent(intent: Intent) {

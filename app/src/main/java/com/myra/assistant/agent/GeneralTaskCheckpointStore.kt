@@ -82,6 +82,35 @@ class GeneralTaskCheckpointStore(
         }
     }
 
+    /**
+     * Explicit user acknowledgement retires the OLD interrupted task only.
+     * CAS prevents dismissing a different or newer task; never grants any tool action.
+     */
+    @Synchronized fun closeForFreshRequest(expected: Checkpoint): Boolean {
+        val existing = read() ?: return false
+        if (!existing.requiresReview || existing.taskId != expected.taskId ||
+            existing.sourceTurnId != expected.sourceTurnId ||
+            existing.planRevision != expected.planRevision ||
+            existing.savedAtMs != expected.savedAtMs) return false
+        val original = path()
+        val json = JSONObject(original.readText(Charsets.UTF_8))
+            .put("status", AgentRuntimeStatus.CANCELLED.name)
+            .put("needsFreshObservation", false)
+            .put("verifiedComplete", false)
+            .put("savedAtMs", now())
+        val tmp = File(original.parentFile, "general-task-checkpoint.tmp")
+        require(!Files.isSymbolicLink(tmp.toPath()) &&
+            tmp.canonicalFile.parentFile == original.parentFile) { "Unsafe temp path" }
+        tmp.writeText(json.toString(), Charsets.UTF_8)
+        try {
+            Files.move(tmp.toPath(), original.toPath(),
+                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(tmp.toPath(), original.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+        return true
+    }
+
     @Synchronized fun read(): Checkpoint? = runCatching {
         val file = path()
         if (!file.isFile || file.length() !in 1..MAX_BYTES) return null
