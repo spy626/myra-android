@@ -444,6 +444,27 @@ class GeneralAgentRuntimeTest {
         assertEquals(0, AutonomousSourceAnalysisPolicy.independentEvidence(emptyList()))
     }
 
+    @Test fun multiLabelPublicSuffixSubdomainsAreOneIndependentPublisher() {
+        val evidence = listOf(
+            VerifiedResearchSource("https://docs.example.co.uk/a", 2),
+            VerifiedResearchSource("https://www.example.co.uk/b", 1),
+            VerifiedResearchSource("https://other.co.uk/article", 1),
+        )
+        assertEquals(1, AutonomousSourceAnalysisPolicy.independentEvidence(evidence.take(2)))
+        assertEquals(2, AutonomousSourceAnalysisPolicy.independentEvidence(evidence))
+    }
+
+    @Test fun unsafeUrlsOrUnreadPagesCannotProveIndependentResearch() {
+        val evidence = listOf(
+            VerifiedResearchSource("http://untrusted.example.com/a", 2),
+            VerifiedResearchSource("https://127.0.0.1/local", 1),
+            VerifiedResearchSource("https://localhost/private", 1),
+            VerifiedResearchSource("https://user:pass@example.org/a", 1),
+            VerifiedResearchSource("https://real.example.net/a", 0),
+        )
+        assertEquals(0, AutonomousSourceAnalysisPolicy.independentEvidence(evidence))
+    }
+
     @Test fun researchSourceCallbacksAreSingleUseAndCannotFinishNewTurn() {
         val runtime = GeneralAgentRuntime(now = { 40 })
         val intent = intent(ToolCapability.BROWSER_SEARCH).copy(
