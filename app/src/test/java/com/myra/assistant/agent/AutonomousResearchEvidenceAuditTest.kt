@@ -90,6 +90,24 @@ class AutonomousResearchEvidenceAuditTest {
             )).status)
     }
 
+    @Test fun readOnlyRecoveryIsBoundedAndNeverRetriesOnConflict() {
+        val policy = AutonomousSourceAnalysisPolicy
+        assertTrue(policy.mayContinueReadOnlyResearch(
+            0, 3, ResearchEvidenceStatus.INSUFFICIENT))
+        assertTrue(policy.mayContinueReadOnlyResearch(
+            1, 3, ResearchEvidenceStatus.INSUFFICIENT))
+        assertEquals(false, policy.mayContinueReadOnlyResearch(
+            2, 3, ResearchEvidenceStatus.INSUFFICIENT))
+        assertEquals(false, policy.mayContinueReadOnlyResearch(
+            0, 1, ResearchEvidenceStatus.INSUFFICIENT))
+        assertEquals(false, policy.mayContinueReadOnlyResearch(
+            0, 4, ResearchEvidenceStatus.INSUFFICIENT))
+        assertEquals(false, policy.mayContinueReadOnlyResearch(
+            0, 3, ResearchEvidenceStatus.CONFLICT))
+        assertEquals(false, policy.mayContinueReadOnlyResearch(
+            0, 3, ResearchEvidenceStatus.CORROBORATED))
+    }
+
     @Test fun conflictBeatsIndependentAgreement() {
         val result = AutonomousSourceAnalysisPolicy.assess(listOf(
             VerifiedResearchSource("https://docs.example.org/a", 2, listOf(stable, affirm)),
