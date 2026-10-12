@@ -118,6 +118,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private var webLinkLookupProjectId: String? = null
     private var webLinkLookupMessageId: String? = null
     private var webLinkLookupRunner: WorkspacePublicWebSearchRunner? = null
+    private var webResearchQuestion: String? = null
+    private var webResearchRunner: WorkspacePublicResearchRunner? = null
     private var appDownloadActive = false
     private var appDownloadProjectId: String? = null
     private var appDownloadMessageId: String? = null
@@ -1506,12 +1508,46 @@ class WorkspaceActivity : AppCompatActivity() {
                 override fun onComplete(results: List<WorkspacePublicWebSearch.Verified>) {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
-                        finishWebLinkLookup(
-                            reply = WorkspacePublicWebSearch.receiptAll(
-                                results, webLinkLookupRequestedCount
-                            ),
-                            sources = results.map { WorkspacePublicWebSearch.source(it) },
-                        )
+                        val researchQuestion = webResearchQuestion
+                        if (researchQuestion != null) {
+                            val capturedId = webLinkLookupMessageId
+                            webResearchRunner?.cancel()
+                            webResearchRunner = WorkspacePublicResearchRunner(
+                                listener = object : WorkspacePublicResearchRunner.Listener {
+                                    override fun onEvent(label: String) {
+                                        runOnUiThread {
+                                            if (webLinkLookupActive &&
+                                                webLinkLookupMessageId == capturedId) {
+                                                recordWorkEvent(
+                                                    WorkspaceWorkPhase.VERIFYING, label, null)
+                                            }
+                                        }
+                                    }
+                                    override fun onComplete(
+                                        evidence: List<WorkspacePublicResearch.Extract>,
+                                    ) {
+                                        runOnUiThread {
+                                            if (!webLinkLookupActive ||
+                                                webLinkLookupMessageId != capturedId) return@runOnUiThread
+                                            finishWebLinkLookup(
+                                                reply = WorkspacePublicResearch.render(
+                                                    researchQuestion, evidence, results.size),
+                                                sources = evidence.map {
+                                                    WorkspacePublicWebSearch.source(it.source)
+                                                },
+                                            )
+                                        }
+                                    }
+                                },
+                            ).also { it.start(researchQuestion, results) }
+                        } else {
+                            finishWebLinkLookup(
+                                reply = WorkspacePublicWebSearch.receiptAll(
+                                    results, webLinkLookupRequestedCount
+                                ),
+                                sources = results.map { WorkspacePublicWebSearch.source(it) },
+                            )
+                        }
                     }
                 }
 
@@ -1616,7 +1652,12 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun clearWebLinkLookup(cancel: Boolean = true) {
-        if (cancel) webLinkLookupRunner?.cancel()
+        if (cancel) {
+            webLinkLookupRunner?.cancel()
+            webResearchRunner?.cancel()
+        }
+        webResearchRunner = null
+        webResearchQuestion = null
         webLinkLookupActive = false
         webLinkLookupRequestedCount = 1
         webLinkLookupProjectId = null
@@ -1657,8 +1698,10 @@ class WorkspaceActivity : AppCompatActivity() {
         id: String,
         messageId: String,
         request: WorkspaceWebLinkIntent.Request,
+        researchQuestion: String? = null,
     ) {
         clearWebLinkLookup()
+        webResearchQuestion = researchQuestion
         webLinkLookupActive = true
         webLinkLookupRequestedCount = request.maxResults
         webLinkLookupProjectId = id
@@ -4630,9 +4673,14 @@ class WorkspaceActivity : AppCompatActivity() {
             connectedReadRoute == null && exactLinkLookup == null) {
             WorkspaceStablePlatformLink.decide(text)
         } else null
+        val webResearchRequest = if (picked.isEmpty() && skillCommand == null &&
+            appDownloadLookup == null && connectedReadRoute == null &&
+            exactLinkLookup == null && stablePlatformLink == null) {
+            WorkspaceWebResearchIntent.decide(text)
+        } else null
         val webLinkLookup = if (picked.isEmpty() && skillCommand == null &&
             connectedReadRoute == null && exactLinkLookup == null && stablePlatformLink == null) {
-            WorkspaceWebLinkIntent.decide(text)
+            WorkspaceWebLinkIntent.decide(text) ?: webResearchRequest?.search
         } else null
         val githubSelfEditRequest =
             picked.isEmpty() && exactLinkLookup == null && connectedReadRoute == null &&
@@ -4873,7 +4921,8 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         if (webLinkLookup != null && current.type == WorkspaceProjectType.CHAT) {
-            startWebLinkLookup(id, stored.id, webLinkLookup)
+            startWebLinkLookup(id, stored.id, webLinkLookup,
+                researchQuestion = webResearchRequest?.question)
             return
         }
         if (githubSelfEditRequest) {
