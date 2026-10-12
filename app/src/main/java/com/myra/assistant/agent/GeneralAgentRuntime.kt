@@ -503,7 +503,8 @@ class GeneralRecoveryEngine(private val maxRetries: Int = 1) {
             ToolCapability.ACCESSIBILITY_SCROLL, ToolCapability.BROWSER_SEARCH,
             ToolCapability.WEB_SEARCH, ToolCapability.OPEN_APP,
         )
-        if (attempted.accepted || !replaySafe)
+        if (attempted.accepted || !replaySafe ||
+            attempted.failureReason == "adapter_exception")
             return RecoveryDecision.Clarify("accepted_or_sensitive_action_not_replayed")
         return RecoveryDecision.Retry(targetId)
     }

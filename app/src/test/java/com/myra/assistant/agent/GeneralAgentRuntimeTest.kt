@@ -332,6 +332,18 @@ class GeneralAgentRuntimeTest {
         assertTrue(decision is RecoveryDecision.Clarify)
     }
 
+    @Test fun uncertainAdapterExceptionMustNotSilentlyReplayEvenSafeSearch() {
+        val runtime = GeneralAgentRuntime(now = { 5L })
+        val task = runtime.start(31L, intent(ToolCapability.BROWSER_SEARCH))!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(step, 31L))
+        runtime.recordAction(step, GeneralActionResult(false,
+            failureReason = "adapter_exception"), before)
+        val (_, recovery) = runtime.verify(before.copy(capturedAt = 2))
+        assertTrue(recovery is RecoveryDecision.Clarify)
+    }
+
     @Test fun failed_action_enters_real_recovery_and_planner_returns_recover_step() {
         val runtime = GeneralAgentRuntime(now = { 5 })
         val task = runtime.start(24, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!

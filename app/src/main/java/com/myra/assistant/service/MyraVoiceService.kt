@@ -4791,7 +4791,14 @@ class MyraVoiceService : Service() {
         voiceLog("ACTION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability}")
         val actionStartedAt = android.os.SystemClock.elapsedRealtime()
         turnLatency.record(task.turnId, Field.ACTION_STARTED, actionStartedAt)
-        val result = adapter.execute(step, actionBefore)
+        // A provider or Android adapter can throw after the OS accepted a side effect.
+        // Capture an uncertain failure rather than crash or blindly replay the action.
+        val result = runCatching { adapter.execute(step, actionBefore) }
+            .getOrElse {
+                voiceLog("ACTION_ADAPTER_EXCEPTION taskId=${task.id} turnId=${task.turnId} " +
+                    "stepId=${step.id} capability=${step.capability} autoRetry=false")
+                GeneralActionResult(false, failureReason = "adapter_exception")
+            }
         val actionReturnedAt = android.os.SystemClock.elapsedRealtime()
         if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL) {
             scrollContinuationTelemetry.dispatched(task.turnId, task.id, task.intent.parameters["direction"],
