@@ -503,6 +503,36 @@ class GeneralAgentRuntimeTest {
         assertEquals(task.id, runtime.lastCompletedTask()?.id)
     }
 
+    @Test fun genericAdapterSuccessCannotFinishResearchWithoutSourceAudit() {
+        val runtime = GeneralAgentRuntime(now = { 40 })
+        val approved = intent(ToolCapability.BROWSER_SEARCH).copy(
+            turnIntent = TurnIntent.MULTI_STEP_GOAL,
+            originalUtterance = "search android kotlin karo",
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN),
+            relevantApp = "com.android.chrome", textHint = "android kotlin",
+            parameters = mapOf("query" to "android kotlin"))
+        val task = runtime.start(501, approved)!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val search = (runtime.next(before) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(search, 501))
+        runtime.recordAction(search, GeneralActionResult(true), before)
+        val searched = perception(task.id, scene("com.android.chrome", 2,
+            listOf(element("android kotlin results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(searched).first.status)
+        val observation = (runtime.next(searched) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(observation, 501))
+        runtime.recordAction(observation, GeneralActionResult(true), searched)
+        val observed = perception(task.id, scene("com.android.chrome", 3,
+            listOf(element("android kotlin independent results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(observed).first.status)
+        assertEquals("android kotlin", runtime.claimSourceAnalysis(task.id, 501))
+        val result = runtime.completeFromAdapter(
+            GeneralVerificationStatus.SUCCESS, "Generic adapter claimed success")
+        assertEquals(AgentRuntimeStatus.NEEDS_CLARIFICATION, result?.status)
+        assertNull(runtime.activeTask())
+        assertEquals(0, result?.verifiedResearchSourceCount)
+    }
+
     @Test fun interruptedResearchEvidenceCannotCompleteNewUserTurn() {
         val runtime = GeneralAgentRuntime(now = { 50 })
         val task = runtime.start(401, intent(ToolCapability.BROWSER_SEARCH))!!
