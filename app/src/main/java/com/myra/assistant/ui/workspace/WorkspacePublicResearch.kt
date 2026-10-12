@@ -27,7 +27,14 @@ internal object WorkspacePublicResearch {
     )
     private val stripTags = Regex("""(?is)<[^>]{0,1400}>""")
     private val paragraphs = Regex(
-        """(?is)<(?:p|li|h[1-4])\b[^>]{0,1200}>(.*?)</(?:p|li|h[1-4])\s*>"""
+        """(?is)<(?:p|li)\b[^>]{0,1200}>(.*?)</(?:p|li)\s*>"""
+    )
+    // A heading that repeats the question is not a grounded finding.
+    private val factualCue = Regex(
+        """(?iu)\b(?:is|are|was|were|can|may|must|should|provides?|allows?|""" +
+            """uses?|runs?|handles?|executes?|schedules?|supports?|requires?|""" +
+            """starts?|stops?|ensures?|designed|intended|perform|performed|""" +
+            """continue|continues|persist|needs?|display|displays)\b"""
     )
     private val ignored = setOf(
         "with", "which", "what", "when", "from", "have", "does", "how", "why",
@@ -39,6 +46,13 @@ internal object WorkspacePublicResearch {
         .replace("&nbsp;", " ", true).replace("&amp;", "&", true)
         .replace("&lt;", "<", true).replace("&gt;", ">", true)
         .replace("&quot;", "\"", true).replace("&#39;", "'", true)
+        .replace("&minus;", "−", true).replace("&ndash;", "–", true)
+        .replace("&mdash;", "—", true).replace("&rsquo;", "'", true)
+        .replace(Regex("""&#(\d{1,6});""")) {
+            it.groupValues[1].toIntOrNull()?.takeIf { n ->
+                n in 32..0x10ffff && n !in 0xd800..0xdfff
+            }?.let { n -> String(Character.toChars(n)) } ?: " "
+        }
         .replace(Regex("""\s+"""), " ").trim()
 
     private fun terms(question: String): Set<String> =
@@ -64,9 +78,12 @@ internal object WorkspacePublicResearch {
         val candidates = if (type.startsWith("text/plain")) cleaned.split('\n')
             else paragraphs.findAll(cleaned).take(320).map { it.groupValues[1] }.toList()
         val topic = terms(question)
-        val selected = candidates.asSequence()
+        val subjects = comparisonSubjects(question)
+        val candidatesWithScores = candidates.asSequence()
             .map { normalize(it.replace(stripTags, " ")) }
-            .filter { it.length in 55..550 && it.count(Char::isLetter) >= 35 &&
+            .filter { it.length in 65..550 && it.count(Char::isLetter) >= 40 &&
+                it.split(Regex("""\s+""")).size >= 10 &&
+                factualCue.containsMatchIn(it) &&
                 !unsafeText.containsMatchIn(it) &&
                 !WorkspaceSourceContext.containsPossibleSecret(it) }
             .map { line ->
@@ -76,8 +93,20 @@ internal object WorkspacePublicResearch {
             }
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
-            .map { (text, _) -> text.take(220).trimEnd(' ', ',', ';', ':') }
-            .distinct().take(2).toList()
+            .toList()
+        // For comparison questions, prefer one distinct factual passage per subject.
+        // A common heading mentioning both subjects must not become both sides.
+        val focused = if (subjects.size == 2) subjects.mapNotNull { subject ->
+            candidatesWithScores.firstOrNull { (line, _) ->
+                line.contains(subject, ignoreCase = true) &&
+                    subjects.filterNot { it == subject }.none {
+                        line.contains(it, ignoreCase = true)
+                    }
+            }?.first
+        } else emptyList()
+        val selected = (focused + candidatesWithScores.map { it.first })
+            .distinct().take(if (subjects.size == 2) 3 else 2)
+            .map { it.take(320).trimEnd(' ', ',', ';', ':') }
         return if (selected.isEmpty()) null else Extract(source, selected)
     }
 
@@ -118,15 +147,18 @@ internal object WorkspacePublicResearch {
                 }
                 val lines = subjects.mapNotNull { subject ->
                     observed.firstOrNull { (passage, _) ->
-                        passage.contains(subject, ignoreCase = true)
+                        passage.contains(subject, ignoreCase = true) &&
+                            subjects.filterNot { it == subject }.none {
+                                passage.contains(it, ignoreCase = true)
+                            } && factualCue.containsMatchIn(passage)
                     }?.let { (passage, url) -> Triple(subject, passage, url) }
                 }
-                if (lines.size == 2) {
+                if (lines.size == 2 && lines[0].second != lines[1].second) {
                     appendLine()
                     appendLine("**Side-by-side evidence**")
                     lines.forEach { (subject, passage, url) ->
                         appendLine("**" + subject + ":** " +
-                            passage.replace(Regex("""[\[\]*]"""), "").take(190) +
+                            passage.replace(Regex("""[\[\]*]"""), "").take(320) +
                             " ([Source](" + url + "))")
                     }
                 }

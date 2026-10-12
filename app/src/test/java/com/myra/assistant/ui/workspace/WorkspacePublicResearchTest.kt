@@ -50,6 +50,40 @@ class WorkspacePublicResearchTest {
         assertTrue(WorkspacePublicResearch.comparisonSubjects(
             "Tell me about WorkManager").isEmpty())
     }
+
+    @Test fun headingsAndEchoedComparisonTitlesCannotMasqueradeAsEvidence() {
+        val html = """
+            <html><h2>WorkManager vs Foreground Service — Which one is better?</h2>
+            <p>WorkManager and Foreground Service are two Android technologies that
+               developers may use for background tasks but they have different purposes.</p>
+            <p>WorkManager is designed for persistent work that should be scheduled
+               after constraints are satisfied, including when the application exits.</p>
+            <p>A foreground service runs user-visible work and requires a notification
+               so the user knows an ongoing operation is active.</p></html>
+        """.trimIndent()
+        val question = "Android mein WorkManager aur Foreground Service mein kya difference hai?"
+        val found = requireNotNull(response(html).use {
+            WorkspacePublicResearch.extract(it, source, question)
+        })
+        assertTrue(found.passages.any { it.contains("persistent work") })
+        assertTrue(found.passages.any { it.contains("notification") })
+        val answer = WorkspacePublicResearch.render(question, listOf(found), 1)
+        assertTrue(answer.contains("Side-by-side evidence"))
+        assertTrue(answer.contains("persistent work"))
+        assertTrue(answer.contains("notification"))
+        assertFalse(answer.contains("Which one is better"))
+    }
+
+    @Test fun genericTitleMentioningBothSubjectsDoesNotProduceFakeComparison() {
+        val question = "Compare WorkManager and Foreground Service with sources"
+        val found = WorkspacePublicResearch.Extract(source, listOf(
+            "WorkManager and Foreground Service are technologies that can be used for " +
+                "different Android background jobs, depending on the developer's needs."
+        ))
+        val answer = WorkspacePublicResearch.render(question, listOf(found), 1)
+        assertFalse(answer.contains("Side-by-side evidence"))
+    }
+
     @Test fun noReadableEvidenceCannotBeClaimedAsGroundedExplanation() {
         val result = response("<html><p>hello world</p></html>").use {
             WorkspacePublicResearch.extract(it, source,
