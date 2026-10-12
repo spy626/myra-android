@@ -69,6 +69,10 @@ internal object WorkspaceResearchQuestionFocus {
             else includesToken(text.lowercase(Locale.ROOT), alias)
         }
 
+    fun sourceMentionsSubject(
+        source: WorkspacePublicWebSearch.Verified, subject: String,
+    ): Boolean = mentionsSubject(textFor(source), subject)
+
     fun mentionsTopic(text: String, focus: Focus): Boolean =
         focus.topicAnchor == null || includesToken(text.lowercase(Locale.ROOT), focus.topicAnchor)
 
