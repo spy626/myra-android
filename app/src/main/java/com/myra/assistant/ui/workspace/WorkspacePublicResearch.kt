@@ -112,7 +112,7 @@ internal object WorkspacePublicResearch {
 
     /** Bounded comparison formatting, using *only* page passages for both sides. */
     internal fun comparisonSubjects(question: String): List<String> {
-        if (!Regex("""(?iu)\b(?:difference|compare|versus|vs|farq)\b""")
+        if (!Regex("""(?iu)\b(?:difference|different|compare|comparison|versus|vs|farq)\b""")
                 .containsMatchIn(question)) return emptyList()
         val pair = Regex(
             """(?iu)\b([\p{L}][\p{L}\p{N}+#-]{2,}(?:\s+[\p{L}][\p{L}\p{N}+#-]{2,})?)""" +
@@ -122,9 +122,9 @@ internal object WorkspacePublicResearch {
         return listOf(pair.groupValues[1], pair.groupValues[2]).map { part ->
             part.split(' ').filterNot {
                 it.lowercase(Locale.ROOT) in setOf(
-                    "mein", "android", "the", "and", "aur", "compare",
+                    "mein", "main", "the", "and", "aur", "compare",
                     "comparison", "difference", "between", "vs", "versus",
-                    "explain", "farq",
+                    "explain", "farq", "ki", "ka", "ke", "ko", "karo",
                 )
             }.joinToString(" ")
         }.takeIf { it.all { x -> x.length in 3..50 } } ?: emptyList()
