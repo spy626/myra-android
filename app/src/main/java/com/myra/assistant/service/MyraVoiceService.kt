@@ -4726,6 +4726,12 @@ class MyraVoiceService : Service() {
         val planned = runtime.next(before, executable)
         runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, before?.scene) }
         voiceLog("PLANNER_RESULT taskId=${task.id} turnId=${task.turnId} result=${planned.javaClass.simpleName}")
+        if (planned is PlannerResult.InFlight || planned is PlannerResult.VerifyPrevious) {
+            // The original callback owns post-dispatch observation. Never dispatch a
+            // second click, scroll or search while that result is pending.
+            voiceLog("AUTONOMOUS_STEP_ALREADY_IN_FLIGHT taskId=${task.id} turnId=${task.turnId} result=${planned.javaClass.simpleName}")
+            return true
+        }
         if (planned is PlannerResult.NeedObservation) {
             AccessibilityHelperService.instance?.refreshScreenContext(force = true)
             val observed = runtimePerception(task.id)
@@ -4778,6 +4784,10 @@ class MyraVoiceService : Service() {
                 "adapter=${adapter.adapterId} foregroundPackage=${actionBefore.scene.externalForegroundPackage} screenGeneration=${actionBefore.scene.generation}"
         )
         voiceLog("ACTION_ADAPTER_ENTER taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} adapter=${adapter.adapterId}")
+        if (!runtime.claimStepExecution(step, task.turnId)) {
+            voiceLog("ACTION_DUPLICATE_BLOCKED taskId=${task.id} turnId=${task.turnId} stepId=${step.id}")
+            return true
+        }
         voiceLog("ACTION_STARTED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability}")
         val actionStartedAt = android.os.SystemClock.elapsedRealtime()
         turnLatency.record(task.turnId, Field.ACTION_STARTED, actionStartedAt)
@@ -4809,6 +4819,12 @@ class MyraVoiceService : Service() {
             AccessibilityHelperService.instance?.refreshScreenContext(force = true)
             val after = runtimePerception(task.id)
             if (after == null) {
+                if (com.myra.assistant.agent.ReadOnlyObservationRetryPolicy.shouldResample(
+                        step, result.accepted, actionBefore, null, resampleCount)) {
+                    mainHandler.postDelayed({ observeAndVerify(resampleCount + 1) },
+                        com.myra.assistant.agent.ReadOnlyObservationRetryPolicy.DELAY_MS)
+                    return@observe
+                }
                 if (step.capability == ToolCapability.ACCESSIBILITY_SCROLL &&
                     ScrollVerificationResamplePolicy.shouldResample(result.accepted, false, resampleCount)
                 ) {
@@ -4909,6 +4925,14 @@ class MyraVoiceService : Service() {
                     voiceLog("SCROLL_VERIFY_RESAMPLE_READY taskId=${task.id} turnId=${task.turnId} resample=${resampleCount + 1}")
                     observeAndVerify(resampleCount + 1)
                 }, ScrollVerificationResamplePolicy.DELAY_MS)
+                return@observe
+            }
+            if (com.myra.assistant.agent.ReadOnlyObservationRetryPolicy.shouldResample(
+                    step, result.accepted, actionBefore, after, resampleCount)) {
+                voiceLog("AUTONOMOUS_EVIDENCE_RESAMPLE taskId=${task.id} turnId=${task.turnId} " +
+                    "stepId=${step.id} extraSample=${resampleCount + 1} dispatchRepeated=false")
+                mainHandler.postDelayed({ observeAndVerify(resampleCount + 1) },
+                    com.myra.assistant.agent.ReadOnlyObservationRetryPolicy.DELAY_MS)
                 return@observe
             }
             if (scrollEvidence != null) {

@@ -135,6 +135,8 @@ sealed interface PlannerResult {
     data class Next(val step: GeneralPlanStep) : PlannerResult
     data class NeedObservation(val visual: Boolean) : PlannerResult
     data class VerifyPrevious(val step: GeneralPlanStep) : PlannerResult
+    /** An action is executing or a previous dispatch already has an observation owner. */
+    data class InFlight(val stepId: String) : PlannerResult
     data class Recover(val step: GeneralPlanStep) : PlannerResult
     data class NeedClarification(val message: String) : PlannerResult
     data class Complete(val reason: String) : PlannerResult
@@ -567,6 +569,10 @@ class GeneralAgentRuntime(
         executableCapabilities: Set<ToolCapability>? = null,
     ): PlannerResult {
         val task = active ?: return PlannerResult.Fail("no_active_task")
+        if (task.status == AgentRuntimeStatus.ACTING ||
+            task.status == AgentRuntimeStatus.VERIFYING) {
+            return PlannerResult.InFlight(task.currentStep?.id.orEmpty())
+        }
         if (task.status == AgentRuntimeStatus.WAITING_FOR_USER_AUTH)
             return PlannerResult.NeedClarification("user_browser_authentication_pending")
         val tools = registry.relevant(task.intent.requiredCapabilities)
@@ -628,9 +634,26 @@ class GeneralAgentRuntime(
         publishCheckpoint()
     }
 
+    /**
+     * Atomic dispatch lease for a single final-turn step. Concurrent callbacks cannot
+     * execute the same action twice; a fresh observation still belongs to the owner.
+     */
+    @Synchronized fun claimStepExecution(step: GeneralPlanStep, turnId: Long): Boolean {
+        val task = active ?: return false
+        if (task.turnId != turnId || task.id != step.taskId ||
+            task.currentStep?.id != step.id ||
+            task.status != AgentRuntimeStatus.READY_TO_ACT) return false
+        active = task.copy(status = AgentRuntimeStatus.ACTING, updatedAt = now())
+        publishCheckpoint()
+        return true
+    }
+
     @Synchronized fun recordAction(step: GeneralPlanStep, result: GeneralActionResult, before: PerceptionSnapshot): GeneralRuntimeTask {
         val task = requireNotNull(active) { "no active task" }
-        require(step.taskId == task.id) { "step belongs to another task" }
+        require(step.taskId == task.id && task.currentStep?.id == step.id &&
+            task.status in setOf(AgentRuntimeStatus.ACTING, AgentRuntimeStatus.READY_TO_ACT)) {
+            "stale or duplicate action step"
+        }
         val history = GeneralActionHistory(step.id, step.capability, result.targetId, before.scene.externalForegroundPackage,
             before.scene.generation, null, result.accepted, null, task.recoveryCount, result.failureReason, now())
         beforeByStep[step.id] = before

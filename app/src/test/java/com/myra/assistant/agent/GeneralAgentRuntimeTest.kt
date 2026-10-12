@@ -7,6 +7,36 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GeneralAgentRuntimeTest {
+    @Test fun inFlightStepCannotBeRedispatchedOrReplaced() {
+        val runtime = GeneralAgentRuntime(now = { 10 })
+        val task = runtime.start(400L, intent(ToolCapability.BROWSER_SEARCH))!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(step, 400L))
+        assertFalse(runtime.claimStepExecution(step, 400L))
+        assertTrue(runtime.next(before) is PlannerResult.InFlight)
+        runtime.recordAction(step, GeneralActionResult(true), before)
+        assertTrue(runtime.next(before.copy(capturedAt = 2)) is PlannerResult.VerifyPrevious)
+        assertFalse(runtime.claimStepExecution(step, 400L))
+    }
+
+    @Test fun staleStepCannotRecordIntoSameTaskOrDifferentTurn() {
+        val runtime = GeneralAgentRuntime(now = { 10 })
+        val task = runtime.start(401L, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!
+        val before = perception(task.id, scene("pkg", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        assertFalse(runtime.claimStepExecution(step, 400L))
+        assertFalse(runtime.claimStepExecution(step.copy(id = "wrong"), 401L))
+        var rejected = false
+        try {
+            runtime.recordAction(step.copy(id = "wrong"), GeneralActionResult(true), before)
+        } catch (_: IllegalArgumentException) {
+            rejected = true
+        }
+        assertTrue(rejected)
+        assertTrue(runtime.claimStepExecution(step, 401L))
+    }
+
     @Test fun conversation_never_creates_runtime_task_or_tool_step() {
         val runtime = GeneralAgentRuntime()
         val intent = StructuredAgentIntent(TurnIntent.CONVERSATION,
