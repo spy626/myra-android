@@ -861,6 +861,20 @@ class GeneralAgentRuntime(
         return completed
     }
 
+    /** A genuinely newer final user turn invalidates pending source reading.
+     * Follow-up turns retain Working Task context, but cannot inherit an older
+     * source-analysis execution lease or deliver its late callback. */
+    @Synchronized fun cancelStaleSourceAnalysis(newTurnId: Long): Boolean {
+        val task = active ?: return false
+        if (newTurnId <= 0L || task.turnId == newTurnId ||
+            task.intent.turnIntent != TurnIntent.MULTI_STEP_GOAL ||
+            task.verifiedGoalSubsteps.size != 2 ||
+            task.currentStep != null ||
+            task.status != AgentRuntimeStatus.VERIFYING) return false
+        cancel()
+        return true
+    }
+
     @Synchronized fun cancel() {
         active?.let { lastCompleted = it.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now()) }
         active = null
