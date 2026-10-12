@@ -76,6 +76,28 @@ internal object WorkspaceResearchQuestionFocus {
     fun mentionsTopic(text: String, focus: Focus): Boolean =
         focus.topicAnchor == null || includesToken(text.lowercase(Locale.ROOT), focus.topicAnchor)
 
+    /**
+     * A source can be about battery while an unrelated paragraph discusses R8.
+     * Extract-level topic checking prevents that paragraph from turning into
+     * a battery claim. Generic platform contexts are allowed as page metadata.
+     */
+    fun relevantExtracts(
+        question: String,
+        extracts: List<WorkspacePublicResearch.Extract>,
+    ): List<WorkspacePublicResearch.Extract> {
+        val focus = inspect(question)
+        val anchor = focus.topicAnchor?.takeUnless {
+            it in setOf("android", "ios", "kotlin", "java", "python",
+                "linux", "windows", "development", "technology")
+        }
+        return extracts.mapNotNull { extract ->
+            if (sourceScore(extract.source, focus) <= 0) return@mapNotNull null
+            val passages = if (anchor == null) extract.passages
+                else extract.passages.filter { includesToken(it.lowercase(Locale.ROOT), anchor) }
+            if (passages.isEmpty()) null else extract.copy(passages = passages)
+        }
+    }
+
     /** Topic overlap is mandatory for a source; platform/name overlap alone is not. */
     fun sourceScore(source: WorkspacePublicWebSearch.Verified, focus: Focus): Int {
         val text = textFor(source)
