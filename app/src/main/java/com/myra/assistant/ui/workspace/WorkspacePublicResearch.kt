@@ -121,7 +121,11 @@ internal object WorkspacePublicResearch {
         ).find(question) ?: return emptyList()
         return listOf(pair.groupValues[1], pair.groupValues[2]).map { part ->
             part.split(' ').filterNot {
-                it.lowercase(Locale.ROOT) in setOf("mein", "android", "the", "and", "aur")
+                it.lowercase(Locale.ROOT) in setOf(
+                    "mein", "android", "the", "and", "aur", "compare",
+                    "comparison", "difference", "between", "vs", "versus",
+                    "explain", "farq",
+                )
             }.joinToString(" ")
         }.takeIf { it.all { x -> x.length in 3..50 } } ?: emptyList()
     }
