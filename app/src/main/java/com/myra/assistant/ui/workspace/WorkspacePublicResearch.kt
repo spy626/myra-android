@@ -118,15 +118,27 @@ internal object WorkspacePublicResearch {
             """(?iu)\b([\p{L}][\p{L}\p{N}+#-]{2,}(?:\s+[\p{L}][\p{L}\p{N}+#-]{2,})?)""" +
                 """\s+(?:aur|and|vs|versus)\s+""" +
                 """([\p{L}][\p{L}\p{N}+#-]{2,}(?:\s+[\p{L}][\p{L}\p{N}+#-]{2,})?)"""
-        ).find(question) ?: return emptyList()
-        return listOf(pair.groupValues[1], pair.groupValues[2]).map { part ->
+        ).find(question)
+        val contrasted = if (pair == null) Regex(
+            """(?iu)\b([\p{L}][\p{L}\p{N}+#-]{2,})\s+""" +
+                """(?:different\s+from|differs\s+from)\s+""" +
+                """([\p{L}][\p{L}\p{N}+#-]{2,}(?:\s+[\p{L}][\p{L}\p{N}+#-]{2,})?)"""
+        ).find(question) else null
+        val found = pair ?: contrasted ?: return emptyList()
+        return listOf(found.groupValues[1], found.groupValues[2]).map { part ->
             part.split(' ').filterNot {
                 it.lowercase(Locale.ROOT) in setOf(
                     "mein", "main", "the", "and", "aur", "compare",
                     "comparison", "difference", "between", "vs", "versus",
                     "explain", "farq", "ki", "ka", "ke", "ko", "karo",
                 )
-            }.joinToString(" ")
+            }.joinToString(" ").let { cleaned ->
+                val pieces = cleaned.split(' ')
+                if (pieces.size == 2 && pieces[1].lowercase(Locale.ROOT) in setOf(
+                        "battery", "optimization", "development", "performance",
+                        "camera", "privacy", "security", "charging", "usage"
+                    )) pieces.first() else cleaned
+            }
         }.takeIf { it.all { x -> x.length in 3..50 } } ?: emptyList()
     }
 
