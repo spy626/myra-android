@@ -15,6 +15,12 @@ class WorkspaceWebResearchIntentTest {
         assertTrue(result.search.query.contains("Foreground"))
         assertTrue(result.search.query.contains("Service"))
     }
+    @Test fun topicWordsLikeClimateChangeAreNotMistakenForWriteCommands() {
+        val research = WorkspaceWebResearchIntent.decide(
+            "Explain climate change with reliable sources")
+        assertTrue(research?.search?.query?.contains("climate", true) == true)
+        assertTrue(research?.search?.query?.contains("change", true) == true)
+    }
     @Test fun normalChatDownloadsLinksAndSensitiveOrWriteTasksAreNotHijacked() {
         assertNull(WorkspaceWebResearchIntent.decide("How is WorkManager different from Foreground Service?"))
         assertNull(WorkspaceWebResearchIntent.decide("Telegram app ka download links do"))

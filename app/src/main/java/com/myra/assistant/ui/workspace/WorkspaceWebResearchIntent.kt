@@ -17,7 +17,7 @@ internal object WorkspaceWebResearchIntent {
     )
     private val deny = Regex(
         """(?iu)\b(?:password|otp|passcode|api[ -]?key|secret|token|""" +
-            """delete|modify|edit|change|fix|implement|create|install|upload|commit|push)\b"""
+            """delete|modify|edit|fix|implement|install|upload|commit|push)\b"""
     )
     private val url = Regex("""(?i)https?://""")
     private val words = Regex("""[\p{L}\p{N}+#._-]{2,}""")
