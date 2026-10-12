@@ -221,7 +221,27 @@ class GeneralAgentPlanner {
                 task.intent.requiredCapabilities, relevantTools.map { it.capability }.toSet(),
                 task.intent.relevantApp,
             ) else null
-        val selected = relevantTools.firstOrNull { it.capability == recommendation } ?: availableBaseline
+        // A rejected low-risk public search can switch to the other *declared and
+        // actually executable* search route. Accepted, unknown and exception cases
+        // never reach this fallback, preventing duplicate side effects.
+        val rejectedSearch = task.actionHistory.lastOrNull()?.takeIf {
+            task.status == AgentRuntimeStatus.RECOVERING && !it.accepted &&
+                it.failureReason != "adapter_exception" &&
+                it.capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)
+        }
+        val alternateSearch = when (rejectedSearch?.capability) {
+            ToolCapability.BROWSER_SEARCH -> ToolCapability.WEB_SEARCH
+            ToolCapability.WEB_SEARCH -> ToolCapability.BROWSER_SEARCH
+            else -> null
+        }
+        val safeFallback = relevantTools.firstOrNull {
+            it.capability == alternateSearch &&
+                it.capability in task.intent.requiredCapabilities &&
+                it.risk == ToolRisk.LOW
+        }
+        val selected = safeFallback
+            ?: relevantTools.firstOrNull { it.capability == recommendation }
+            ?: availableBaseline
         val capability = selected.capability
         if (perception == null && capability.requiresScreen()) {
             return PlannerResult.NeedObservation(visual = task.intent.turnIntent == TurnIntent.SCREEN_QUESTION)
@@ -236,6 +256,7 @@ class GeneralAgentPlanner {
                 textPayload = task.intent.textHint,
                 parameters = task.intent.parameters,
                 strategy = when {
+                    safeFallback != null -> "rejected_search_fallback_${capability.name.lowercase()}"
                     task.status == AgentRuntimeStatus.RECOVERING -> "safe_retry_${task.recoveryCount}"
                     selected.capability != availableBaseline.capability ->
                         "verified_outcome_preferred_${selected.capability.name.lowercase()}"
@@ -581,6 +602,12 @@ class GeneralAgentRuntime(
         executableCapabilities: Set<ToolCapability>? = null,
     ): PlannerResult {
         val task = active ?: return PlannerResult.Fail("no_active_task")
+        // A late callback must never turn a resolved/paused task into a new action.
+        if (task.status in setOf(AgentRuntimeStatus.COMPLETED,
+                AgentRuntimeStatus.FAILED, AgentRuntimeStatus.CANCELLED))
+            return PlannerResult.Fail("task_already_terminal")
+        if (task.status == AgentRuntimeStatus.NEEDS_CLARIFICATION)
+            return PlannerResult.NeedClarification("prior_step_requires_clarification")
         if (task.status == AgentRuntimeStatus.ACTING ||
             task.status == AgentRuntimeStatus.VERIFYING) {
             return PlannerResult.InFlight(task.currentStep?.id.orEmpty())
@@ -674,6 +701,30 @@ class GeneralAgentRuntime(
                 active = it
                 publishCheckpoint()
             }
+    }
+
+    /** Bind asynchronous dispatch receipts to the same task, turn and claimed step. */
+    @Synchronized fun recordActionIfCurrent(
+        step: GeneralPlanStep, turnId: Long, result: GeneralActionResult,
+        before: PerceptionSnapshot,
+    ): GeneralRuntimeTask? {
+        val task = active ?: return null
+        if (task.id != step.taskId || task.turnId != turnId ||
+            task.currentStep?.id != step.id || task.status != AgentRuntimeStatus.ACTING ||
+            before.taskId != task.id) return null
+        return recordAction(step, result, before)
+    }
+
+    /** A delayed verification may never consume the next user's active task. */
+    @Synchronized fun verifyIfCurrent(
+        taskId: String, turnId: Long, stepId: String, after: PerceptionSnapshot,
+    ): Pair<GeneralVerificationResult, RecoveryDecision?>? {
+        val task = active ?: return null
+        if (task.id != taskId || task.turnId != turnId ||
+            task.currentStep?.id != stepId || after.taskId != taskId ||
+            task.status !in setOf(AgentRuntimeStatus.WAITING_FOR_RESULT,
+                AgentRuntimeStatus.RECOVERING, AgentRuntimeStatus.VERIFYING)) return null
+        return verify(after)
     }
 
     @Synchronized fun verify(after: PerceptionSnapshot): Pair<GeneralVerificationResult, RecoveryDecision?> {

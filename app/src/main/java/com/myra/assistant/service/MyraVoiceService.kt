@@ -4807,7 +4807,10 @@ class MyraVoiceService : Service() {
         }
         turnLatency.record(task.turnId, Field.ACTION_RETURNED, actionReturnedAt)
         turnLatency.record(task.turnId, Field.OBSERVATION_SCHEDULED, actionReturnedAt)
-        runtime.recordAction(step, result, actionBefore)
+        if (runtime.recordActionIfCurrent(step, task.turnId, result, actionBefore) == null) {
+            voiceLog("STALE_RUNTIME_ACTION_RESULT_IGNORED taskId=${task.id} turnId=${task.turnId} stepId=${step.id}")
+            return true
+        }
         runtime.activeTask()?.let { WorkingTaskRuntime.store.syncRuntime(it, actionBefore.scene) }
         voiceLog(
             "ACTION_RETURNED taskId=${task.id} turnId=${task.turnId} stepId=${step.id} capability=${step.capability} " +
@@ -4950,7 +4953,12 @@ class MyraVoiceService : Service() {
                         "lostVisibleElements=${scrollEvidence.lostVisibleElements} decision=${if (scrollEvidence.proven) "SUCCESS" else "UNKNOWN"}"
                 )
             }
-            val (verification, recovery) = runtime.verify(after)
+            val verifiedResult = runtime.verifyIfCurrent(task.id, task.turnId, step.id, after)
+                ?: run {
+                    voiceLog("STALE_RUNTIME_VERIFICATION_IGNORED taskId=${task.id} turnId=${task.turnId} stepId=${step.id}")
+                    return@observe
+                }
+            val (verification, recovery) = verifiedResult
             val verifiedStrategies = runtime.takeVerifiedSearchOutcomes()
             if (verifiedStrategies.isNotEmpty()) serviceScope.launch {
                 verifiedStrategies.forEach { record ->

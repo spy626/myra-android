@@ -344,6 +344,85 @@ class GeneralAgentRuntimeTest {
         assertTrue(recovery is RecoveryDecision.Clarify)
     }
 
+
+    @Test fun rejectedBrowserSearchFallsBackOnlyToDeclaredRegisteredNativeSearch() {
+        val runtime = GeneralAgentRuntime(now = { 20 })
+        val allowed = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)
+        val task = runtime.start(70, intent(ToolCapability.BROWSER_SEARCH).copy(
+            requiredCapabilities = allowed))!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val first = (runtime.next(before, allowed) as PlannerResult.Next).step
+        assertEquals(ToolCapability.BROWSER_SEARCH, first.capability)
+        assertTrue(runtime.claimStepExecution(first, 70))
+        runtime.recordAction(first, GeneralActionResult(false,
+            failureReason = "browser_dispatch_rejected"), before)
+        assertTrue(runtime.verify(before.copy(capturedAt = 2)).second is RecoveryDecision.Retry)
+        val fallback = (runtime.next(before.copy(capturedAt = 3), allowed) as PlannerResult.Recover).step
+        assertEquals(ToolCapability.WEB_SEARCH, fallback.capability)
+        assertEquals("rejected_search_fallback_web_search", fallback.strategy)
+        assertFalse(runtime.claimStepExecution(first, 70))
+        assertTrue(runtime.claimStepExecution(fallback, 70))
+    }
+
+    @Test fun rejectedNativeSearchFallsBackToExistingBrowserOnly() {
+        val runtime = GeneralAgentRuntime(now = { 20 })
+        val allowed = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)
+        val task = runtime.start(71, intent(ToolCapability.BROWSER_SEARCH).copy(
+            requiredCapabilities = allowed,
+            parameters = mapOf("preferredSearchCapability" to ToolCapability.WEB_SEARCH.name)))!!
+        val before = perception(task.id, scene("com.google.android.googlequicksearchbox", 1))
+        val first = (runtime.next(before, allowed) as PlannerResult.Next).step
+        assertEquals(ToolCapability.WEB_SEARCH, first.capability)
+        assertTrue(runtime.claimStepExecution(first, 71))
+        runtime.recordAction(first, GeneralActionResult(false,
+            failureReason = "native_search_rejected"), before)
+        assertTrue(runtime.verify(before.copy(capturedAt = 2)).second is RecoveryDecision.Retry)
+        val alternate = (runtime.next(before.copy(capturedAt = 3), allowed) as PlannerResult.Recover).step
+        assertEquals(ToolCapability.BROWSER_SEARCH, alternate.capability)
+    }
+
+    @Test fun rejectedSearchCannotInventUnavailableOrUnapprovedFallback() {
+        val runtime = GeneralAgentRuntime(now = { 20 })
+        val task = runtime.start(72, intent(ToolCapability.BROWSER_SEARCH).copy(
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)))!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val onlyBrowser = setOf(ToolCapability.BROWSER_SEARCH)
+        val step = (runtime.next(before, onlyBrowser) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(step, 72))
+        runtime.recordAction(step, GeneralActionResult(false, failureReason = "rejected"), before)
+        assertTrue(runtime.verify(before.copy(capturedAt = 2)).second is RecoveryDecision.Retry)
+        assertEquals(ToolCapability.BROWSER_SEARCH,
+            (runtime.next(before.copy(capturedAt = 3), onlyBrowser) as PlannerResult.Recover).step.capability)
+    }
+
+    @Test fun lateActionAndObservationCannotMutateNewerTurn() {
+        val runtime = GeneralAgentRuntime(now = { 30 })
+        val firstTask = runtime.start(80, intent(ToolCapability.BROWSER_SEARCH))!!
+        val before = perception(firstTask.id, scene("com.android.chrome", 1))
+        val first = (runtime.next(before) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(first, 80))
+        val newer = runtime.start(81, intent(ToolCapability.BROWSER_SEARCH))!!
+        assertNull(runtime.recordActionIfCurrent(first, 80, GeneralActionResult(true), before))
+        assertNull(runtime.verifyIfCurrent(firstTask.id, 80, first.id,
+            perception(firstTask.id, scene("com.android.chrome", 2))))
+        assertEquals(newer.id, runtime.activeTask()?.id)
+        assertTrue(runtime.activeTask()?.actionHistory.orEmpty().isEmpty())
+    }
+
+    @Test fun afterClarificationRuntimeWillNotDispatchAnotherStep() {
+        val runtime = GeneralAgentRuntime(now = { 40 })
+        val task = runtime.start(82, intent(ToolCapability.BROWSER_SEARCH))!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val step = (runtime.next(before) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(step, 82))
+        runtime.recordAction(step, GeneralActionResult(true), before)
+        val after = perception(task.id, scene("com.android.chrome", 2))
+        assertEquals(GeneralVerificationStatus.UNKNOWN,
+            runtime.verify(after).first.status)
+        assertTrue(runtime.next(after) is PlannerResult.NeedClarification)
+        assertFalse(runtime.claimStepExecution(step, 82))
+    }
+
     @Test fun failed_action_enters_real_recovery_and_planner_returns_recover_step() {
         val runtime = GeneralAgentRuntime(now = { 5 })
         val task = runtime.start(24, intent(ToolCapability.ACCESSIBILITY_SCROLL))!!
