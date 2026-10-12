@@ -750,5 +750,7 @@ object GeneralAgentRuntimeStore {
 
     /** User review only; no executable task or new authorization is restored. */
     fun closeInterruptedReview(expected: GeneralTaskCheckpointStore.Checkpoint): Boolean =
-        checkpoint?.closeForFreshRequest(expected) == true
+        checkpoint?.let { store ->
+            runCatching { store.closeForFreshRequest(expected) }.getOrDefault(false)
+        } ?: false
 }
