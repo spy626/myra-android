@@ -533,6 +533,42 @@ class GeneralAgentRuntimeTest {
         assertEquals(0, result?.verifiedResearchSourceCount)
     }
 
+    @Test fun newFinalTurnRevokesPendingSourceAnalysisAndLateReceipts() {
+        val runtime = GeneralAgentRuntime(now = { 60 })
+        val approved = intent(ToolCapability.BROWSER_SEARCH).copy(
+            turnIntent = TurnIntent.MULTI_STEP_GOAL,
+            originalUtterance = "search android kotlin karo",
+            requiredCapabilities = setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.OBSERVE_SCREEN),
+            relevantApp = "com.android.chrome", textHint = "android kotlin",
+            parameters = mapOf("query" to "android kotlin"))
+        val task = runtime.start(601, approved)!!
+        val before = perception(task.id, scene("com.android.chrome", 1))
+        val search = (runtime.next(before) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(search, 601))
+        runtime.recordAction(search, GeneralActionResult(true), before)
+        val searched = perception(task.id, scene("com.android.chrome", 2,
+            listOf(element("android kotlin results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(searched).first.status)
+        val observation = (runtime.next(searched) as PlannerResult.Next).step
+        assertTrue(runtime.claimStepExecution(observation, 601))
+        runtime.recordAction(observation, GeneralActionResult(true), searched)
+        val observed = perception(task.id, scene("com.android.chrome", 3,
+            listOf(element("android kotlin independent results"))))
+        assertEquals(GeneralVerificationStatus.SUCCESS, runtime.verify(observed).first.status)
+        assertEquals("android kotlin", runtime.claimSourceAnalysis(task.id, 601))
+        assertFalse(runtime.cancelStaleSourceAnalysis(601))
+        assertFalse(runtime.cancelStaleSourceAnalysis(0))
+        assertTrue(runtime.cancelStaleSourceAnalysis(602))
+        assertNull(runtime.activeTask())
+        assertEquals(AgentRuntimeStatus.CANCELLED, runtime.lastCompletedTask()?.status)
+        assertNull(runtime.completeSourceAnalysisIfCurrent(task.id, 601, listOf(
+            VerifiedResearchSource("https://one.example.org/a", 1, listOf(
+                "An independent website reported a verified factual statement about the topic.")),
+            VerifiedResearchSource("https://other.example.net/a", 1, listOf(
+                "An independent website reported a verified factual statement about the topic."))),
+            "A stale research answer must be rejected"))
+    }
+
     @Test fun interruptedResearchEvidenceCannotCompleteNewUserTurn() {
         val runtime = GeneralAgentRuntime(now = { 50 })
         val task = runtime.start(401, intent(ToolCapability.BROWSER_SEARCH))!!
