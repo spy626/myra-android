@@ -18,6 +18,20 @@ internal object WorkspaceResearchRecovery {
     ): List<WorkspacePublicResearch.Extract> =
         WorkspaceResearchQuestionFocus.relevantExtracts(question, extracts)
 
+    private fun hasPrimaryEvidence(
+        subject: String, context: String,
+        readable: List<WorkspacePublicResearch.Extract>,
+    ): Boolean {
+        val preferred = WorkspacePublicWebSearch.officialDocumentationHost(
+            (subject + " " + context).trim()) ?: return true
+        val publisher = WorkspaceResearchEvidenceQuality.publisher("https://" + preferred)
+        return readable.any { extract ->
+            WorkspaceResearchQuestionFocus.sourceMentionsSubject(extract.source, subject) &&
+                WorkspaceResearchEvidenceQuality.publisher(
+                    extract.source.finalUrl) == publisher
+        }
+    }
+
     /** Both subjects, independent publishers when requested, and primary docs if reachable. */
     fun needsRecovery(
         question: String, extracts: List<WorkspacePublicResearch.Extract>,
@@ -27,12 +41,10 @@ internal object WorkspaceResearchRecovery {
                 question, readable.map { it.source })) return true
         if (WorkspaceResearchEvidenceQuality.requestsMultiplePublishers(question) &&
             WorkspaceResearchEvidenceQuality.publisherCount(readable) < 2) return true
-        val subjects = WorkspaceResearchQuestionFocus.inspect(question).subjects
-        return subjects.any { subject ->
-            readable.none {
-                WorkspaceResearchQuestionFocus.sourceMentionsSubject(it.source, subject) &&
-                    WorkspaceResearchEvidenceQuality.primaryFor(it.source, subject)
-            }
+        val focus = WorkspaceResearchQuestionFocus.inspect(question)
+        val context = focus.topicWords.take(3).joinToString(" ")
+        return focus.subjects.any { subject ->
+            !hasPrimaryEvidence(subject, context, readable)
         }
     }
 
@@ -55,10 +67,7 @@ internal object WorkspaceResearchRecovery {
             }
         }
         val missingPrimary = focus.subjects.filter { subject ->
-            readable.none {
-                WorkspaceResearchQuestionFocus.sourceMentionsSubject(it.source, subject) &&
-                    WorkspaceResearchEvidenceQuality.primaryFor(it.source, subject)
-            }
+            !hasPrimaryEvidence(subject, context, readable)
         }
         val priority = (missing + missingPrimary + focus.subjects).distinct()
         val candidates = buildList {
