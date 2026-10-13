@@ -92,9 +92,13 @@ internal object WorkspaceFreeSearxSearch {
             val titleWords = tokens(title)
             val pathWords = tokens(target.host + " " +
                 URI(target.canonicalUrl).path.orEmpty().replace('-', ' '))
-            val topicHits = expected.count { it in titleWords || it in pathWords }
-            // Relevance is an admission gate; 'site:' match alone isn't
-            // evidence that the page answers the actual question.
+            val snippetWords = tokens(snippet)
+            val topicHits = expected.count {
+                it in titleWords || it in pathWords || it in snippetWords
+            }
+            // A snippet may supply the specific query subject absent from an
+            // official page's short title. These are still UNTRUSTED candidates,
+            // never answer evidence until the original page is verified and read.
             if (topicHits == 0) continue
             val score = topicHits * 8 + expected.count { it in titleWords } * 4 - index
             candidates += WorkspacePublicWebSearch.Candidate(
