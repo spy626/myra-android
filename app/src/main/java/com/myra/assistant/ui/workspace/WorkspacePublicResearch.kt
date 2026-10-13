@@ -130,7 +130,7 @@ internal object WorkspacePublicResearch {
         }
         // Some static pages use article DIVs rather than paragraph elements.
         if (blocks.isEmpty()) {
-            root.select("div, section").filter {
+            root.select("div, section").toList().filter {
                 it.children().none { child -> child.tagName() in setOf("div", "section", "p", "li") }
             }.take(100).forEach { node ->
                 val prose = normalize(node.text())
