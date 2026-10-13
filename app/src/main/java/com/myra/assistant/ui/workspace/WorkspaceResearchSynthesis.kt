@@ -50,13 +50,25 @@ internal object WorkspaceResearchSynthesis {
         if (question.isBlank() || question.length > 300) return null
         val topicEvidence = WorkspaceResearchQuestionFocus.relevantExtracts(
             question, extracts)
-        val records = topicEvidence.take(3).flatMap { extract ->
+        // A recovery round can produce more than three readable publishers.
+        // Reserve places for each comparison subject and prefer primary evidence
+        // before building the nine-passage model context.
+        val preferred = WorkspaceResearchQueryPlan.choose(
+            question,
+            WorkspaceWebLinkIntent.Request(question.take(180), maxResults = 3),
+            topicEvidence.map { it.source },
+        )
+        val records = preferred.flatMap { preferredSource ->
+            val extract = topicEvidence.firstOrNull {
+                it.source.finalUrl == preferredSource.finalUrl
+            }
             val sourceIndex = verifiedSources.indexOfFirst {
-                it.finalUrl == extract.source.finalUrl
+                it.finalUrl == preferredSource.finalUrl
             }
-            if (sourceIndex < 0) emptyList() else extract.passages.take(3).map { passage ->
-                (sourceIndex + 1) to (extract.source to passage)
-            }
+            if (sourceIndex < 0 || extract == null) emptyList() else
+                extract.passages.take(3).map { passage ->
+                    (sourceIndex + 1) to (extract.source to passage)
+                }
         }.take(MAX_EVIDENCE)
         if (!WorkspaceResearchQuestionFocus.coversQuestion(
                 question, topicEvidence.map { it.source })) return null
