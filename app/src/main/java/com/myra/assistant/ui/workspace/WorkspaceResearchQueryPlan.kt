@@ -38,6 +38,12 @@ internal object WorkspaceResearchQueryPlan {
         results: List<WorkspacePublicWebSearch.Verified>,
     ): List<WorkspacePublicWebSearch.Verified> {
         val relevant = WorkspaceResearchQuestionFocus.relevant(question, results)
+            .sortedWith(compareByDescending<WorkspacePublicWebSearch.Verified> {
+                WorkspaceResearchEvidenceQuality.primaryFor(it, question)
+            }.thenByDescending {
+                WorkspaceResearchQuestionFocus.sourceScore(
+                    it, WorkspaceResearchQuestionFocus.inspect(question))
+            })
         val focus = WorkspaceResearchQuestionFocus.inspect(question)
         val ranked = WorkspacePublicWebSearch.selectResults(
             original.copy(maxResults = 3), relevant)
@@ -51,7 +57,23 @@ internal object WorkspaceResearchQueryPlan {
                 WorkspaceResearchQuestionFocus.sourceMentionsSubject(it, subject)
             }
         }.distinctBy { it.finalUrl }
-        return (covered + ranked + relevant).distinctBy { it.finalUrl }
-            .take(original.maxResults)
+        val first = (covered + ranked + relevant).distinctBy { it.finalUrl }
+        // Keep the comparison's two subjects, then prefer an independent
+        // publisher for a third source instead of repeating the same website.
+        val selected = covered.toMutableList()
+        for (candidate in first) {
+            if (selected.size >= original.maxResults) break
+            if (selected.any { it.finalUrl == candidate.finalUrl }) continue
+            val existing = selected.mapNotNull {
+                WorkspaceResearchEvidenceQuality.publisher(it.finalUrl)
+            }.toSet()
+            val publisher = WorkspaceResearchEvidenceQuality.publisher(candidate.finalUrl)
+            if (publisher == null || publisher !in existing) selected += candidate
+        }
+        for (candidate in first) {
+            if (selected.size >= original.maxResults) break
+            if (selected.none { it.finalUrl == candidate.finalUrl }) selected += candidate
+        }
+        return selected.take(original.maxResults)
     }
 }
