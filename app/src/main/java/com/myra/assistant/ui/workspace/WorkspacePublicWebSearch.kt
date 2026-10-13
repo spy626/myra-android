@@ -165,6 +165,7 @@ internal object WorkspacePublicWebSearch {
                 it in setOf("ios", "iphone", "ipad", "apple")
             }) return null
         return when {
+            "ios" in words || "iphone" in words || "ipad" in words -> "support.apple.com"
             "kotlin" in words -> "kotlinlang.org"
             "android" in words || "workmanager" in words ||
                 ("foreground" in words && "service" in words) -> "developer.android.com"
