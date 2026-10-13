@@ -1833,16 +1833,20 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
                     WorkspaceProviderRegistry.id(provider))
                 completeResearchSynthesis(call, projectId, turnId, fallback,
-                    sourceReceipts, null)
+                    sourceReceipts, WorkspaceResearchSynthesis.AuditResult(
+                        null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE))
             }
             override fun onResponse(call: Call, response: Response) {
                 WorkspaceProviderSessionHealth.recordResponse(response)
-                val answer = runCatching {
-                    WorkspaceResearchSynthesis.auditedAnswer(
+                val audit = runCatching {
+                    WorkspaceResearchSynthesis.audit(
                         WorkspaceChatGateway.read(provider, response), bundle)
-                }.getOrNull()
+                }.getOrElse {
+                    WorkspaceResearchSynthesis.AuditResult(
+                        null, WorkspaceResearchSynthesis.AuditIssue.MALFORMED_RESPONSE)
+                }
                 completeResearchSynthesis(call, projectId, turnId, fallback,
-                    sourceReceipts, answer)
+                    sourceReceipts, audit)
             }
         })
     }
@@ -1853,7 +1857,7 @@ class WorkspaceActivity : AppCompatActivity() {
         turnId: String,
         fallback: String,
         sources: List<WorkspaceVerifiedSourceStore.Source>,
-        result: String?,
+        audit: WorkspaceResearchSynthesis.AuditResult,
     ) {
         runOnUiThread {
             if (isFinishing || isDestroyed || !webLinkLookupActive ||
@@ -1862,10 +1866,29 @@ class WorkspaceActivity : AppCompatActivity() {
                 runCatching { conversations.read(projectId).lastOrNull()?.id }
                     .getOrNull() != turnId) return@runOnUiThread
             webResearchSynthesisCall = null
+            // Evidence provenance is preserved even when the model response
+            // is incomplete. This is an audit RESULT, not a claim of truth.
+            recordWorkEvent(
+                WorkspaceWorkPhase.VERIFYING,
+                "Research answer evidence audit",
+                "Stage " + audit.issue.name + " · supported claims " +
+                    audit.acceptedClaims + " · omitted claims " + audit.rejectedClaims,
+            )
+            val limitation = when (audit.issue) {
+                WorkspaceResearchSynthesis.AuditIssue.NONE -> ""
+                WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE ->
+                    "AI answer service respond nahi kar payi."
+                WorkspaceResearchSynthesis.AuditIssue.MALFORMED_RESPONSE ->
+                    "AI ka research response required structured format mein nahi tha."
+                WorkspaceResearchSynthesis.AuditIssue.NO_SUPPORTED_CLAIMS ->
+                    "AI ke proposed claims ko cited passages se support nahi mila."
+                WorkspaceResearchSynthesis.AuditIssue.MISSING_COMPARISON_COVERAGE ->
+                    "AI ka answer comparison ke dono sides cover nahi karta."
+            }
             finishWebLinkLookup(
-                result ?: ("Bro, source-backed comparison ka complete answer " +
-                    "verify nahi ho paya. Jo page evidence available hai:\n\n" + fallback),
-                sources, researchAnswerComplete = result != null)
+                audit.answer ?: ("Bro, source-backed comparison abhi complete nahi hai. " +
+                    limitation + "\n\nJo readable page evidence mili:\n\n" + fallback),
+                sources, researchAnswerComplete = audit.isComplete)
         }
     }
 
