@@ -1724,8 +1724,12 @@ class WorkspaceActivity : AppCompatActivity() {
         val sourceReceipts = relatedEvidence.map {
             WorkspacePublicWebSearch.source(it.source)
         }
+        // An extractive fallback must never echo a single blog's uncorroborated
+        // measured-performance promise as if it were a verified comparison.
+        val safeFallbackEvidence = WorkspaceResearchEvidenceQuality.safeFallbackExtracts(
+            relatedEvidence)
         val fallback = WorkspacePublicResearch.render(
-            question, relatedEvidence, relatedEvidence.size)
+            question, safeFallbackEvidence, safeFallbackEvidence.size)
         if (!WorkspaceResearchQuestionFocus.coversQuestion(
                 question, relatedEvidence.map { it.source })) {
             val focus = WorkspaceResearchQuestionFocus.inspect(question)
@@ -1740,7 +1744,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     "ko complete comparison bolkar nahi dungi."
             else "Bro, is question ke liye relevant readable webpage evidence " +
                 "verify nahi hui. Kisi unrelated source se answer nahi banaungi."
-            val partial = relatedEvidence.take(2).mapNotNull { hit ->
+            val partial = safeFallbackEvidence.take(2).mapNotNull { hit ->
                 hit.passages.firstOrNull()?.let { passage ->
                     "• " + passage.take(280).replace(Regex("""[\[\]*]"""), "") +
                         " ([Source](" + hit.source.finalUrl + "))"
@@ -1754,7 +1758,17 @@ class WorkspaceActivity : AppCompatActivity() {
         val bundle = WorkspaceResearchSynthesis.bundle(
             question, relatedEvidence, relatedSources)
         if (bundle == null) {
-            finishWebLinkLookup(fallback, sourceReceipts, researchAnswerComplete = false)
+            val missingPublishers = WorkspaceResearchEvidenceQuality
+                .requestsMultiplePublishers(question) &&
+                WorkspaceResearchEvidenceQuality.publisherCount(relatedEvidence) < 2
+            val explanation = if (missingPublishers)
+                "Bro, abhi ek hi independent publisher se relevant page evidence " +
+                    "mili. Tumne multiple reliable websites maangi thi, isliye " +
+                    "main ise independently verified comparison nahi kahungi.\n\n" +
+                    fallback
+            else fallback
+            finishWebLinkLookup(
+                explanation, sourceReceipts, researchAnswerComplete = false)
             return
         }
         val currentTurn = runCatching { conversations.read(projectId).lastOrNull() }.getOrNull()
@@ -1871,6 +1885,7 @@ class WorkspaceActivity : AppCompatActivity() {
     ) {
         val id = webLinkLookupProjectId
         val userMessageId = webLinkLookupMessageId
+        val wasResearch = webResearchQuestion != null
         clearWebLinkLookup(cancel = false)
         if (id == null || userMessageId == null || selectedId != id) return
         runCatching {
@@ -1888,7 +1903,8 @@ class WorkspaceActivity : AppCompatActivity() {
             statusMessage = ""
             if (!researchAnswerComplete)
                 workTrace.finishError("Research needs more evidence", reply.take(160))
-            else if (sources.isNotEmpty()) workTrace.finishSuccess("Direct links ready")
+            else if (sources.isNotEmpty()) workTrace.finishSuccess(
+                if (wasResearch) "Research response sourced" else "Direct links ready")
             else workTrace.finishError("Direct link not verified", reply.take(160))
         }.onFailure {
             statusMessage = it.message ?: "Web link result could not be saved."
