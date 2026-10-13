@@ -165,7 +165,9 @@ internal object WorkspacePublicResearch {
             .map { line ->
                 val lineWords = Regex("""[\p{L}\p{N}]{4,}""")
                     .findAll(line.lowercase(Locale.ROOT)).map { it.value }.toSet()
-                line to topic.count { it in lineWords }
+                val onTopic = WorkspaceResearchQuestionFocus.passageOnTopic(
+                    question, source, line)
+                line to if (onTopic) topic.count { it in lineWords } + 1 else 0
             }
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
