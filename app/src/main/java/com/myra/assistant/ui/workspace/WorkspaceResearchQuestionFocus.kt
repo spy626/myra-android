@@ -74,7 +74,13 @@ internal object WorkspaceResearchQuestionFocus {
     ): Boolean = mentionsSubject(textFor(source), subject)
 
     fun mentionsTopic(text: String, focus: Focus): Boolean {
-        val anchor = focus.topicAnchor ?: return true
+        // Ecosystem/context labels are not evidence topics. An Android
+        // documentation page about WorkManager need not repeat "Android" in
+        // every factual paragraph. Preserve the former context exemption.
+        val anchor = focus.topicAnchor?.takeUnless {
+            it in setOf("android", "ios", "kotlin", "java", "python",
+                "linux", "windows", "development", "technology")
+        } ?: return true
         return includesToken(text.lowercase(Locale.ROOT), anchor)
     }
 
