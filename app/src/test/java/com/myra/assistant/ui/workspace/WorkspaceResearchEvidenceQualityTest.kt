@@ -58,6 +58,8 @@ class WorkspaceResearchEvidenceQualityTest {
             WorkspaceResearchEvidenceQuality.measurements("iOS saves up to 3 extra hours"))
         assertEquals(setOf("2+:hour"),
             WorkspaceResearchEvidenceQuality.measurements("Android can gain 2+ hours"))
+        assertEquals(setOf("3:hour"),
+            WorkspaceResearchEvidenceQuality.measurements("iPhone gained three additional hours"))
         assertEquals(setOf("20:%"),
             WorkspaceResearchEvidenceQuality.measurements("Battery use fell 20%"))
         assertTrue(WorkspaceResearchEvidenceQuality.measurements(
