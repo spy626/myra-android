@@ -61,17 +61,27 @@ internal object WorkspaceResearchEvidenceQuality {
      * performance and continue through the existing literal-evidence audit.
      */
     private val measured = Regex(
-        """(?iu)(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?\s*\+?\s*""" +
-            """(?:%|percent|hours?|hrs?|minutes?|mins?|days?|weeks?|""" +
-            """mah|wh|watts?|watt-hours?|seconds?|secs?|times?|x\b)\b?"""
+        """(?iu)(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s*(\+)?\s*""" +
+            """(%|percent|hours?|hrs?|minutes?|mins?|days?|weeks?|""" +
+            """mah|wh|watts?|watt-hours?|seconds?|secs?|times?)(?![\p{L}])"""
     )
 
     fun measurements(text: String): Set<String> =
         measured.findAll(text).map { match ->
-            match.value.lowercase(Locale.ROOT)
-                .replace(Regex("""\s+"""), "")
-                .replace(Regex("""\b(?:hours|hrs)\b"""), "hour")
-                .replace(Regex("""\b(?:minutes|mins)\b"""), "minute")
+            val number = match.groupValues[1].replace(",", ".")
+            val plus = match.groupValues[2]
+            val unit = when (match.groupValues[3].lowercase(Locale.ROOT)) {
+                "hours", "hrs", "hr" -> "hour"
+                "minutes", "mins", "min" -> "minute"
+                "days" -> "day"
+                "weeks" -> "week"
+                "watts", "watt" -> "watt"
+                "seconds", "secs", "sec" -> "second"
+                "percent" -> "%"
+                "times" -> "time"
+                else -> match.groupValues[3].lowercase(Locale.ROOT)
+            }
+            number + plus + ":" + unit
         }.toSet()
 
     /**
