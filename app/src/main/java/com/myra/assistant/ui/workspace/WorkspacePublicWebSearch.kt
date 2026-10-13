@@ -279,7 +279,7 @@ internal object WorkspacePublicWebSearch {
             val hostMatch = preferredHost?.let {
                 target.host == it || target.host.endsWith("." + it)
             } == true
-            val score = overlapTitle * 8 + overlapUrl * 3 + overlapSnippet * 3 +
+            val score = overlapTitle * 8 + overlapUrl * 3 + overlapSnippet * 12 +
                 (if (hostMatch) 50 else 0) +
                 (if (isOfficialDocumentation(url, query)) 45 else 0) - index
             val minimum = if (hostMatch) 50 else 8
