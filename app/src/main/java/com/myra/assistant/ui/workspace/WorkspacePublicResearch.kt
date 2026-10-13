@@ -4,6 +4,8 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
 import java.io.IOException
 import java.net.URI
 import java.util.Locale
@@ -25,16 +27,15 @@ internal object WorkspacePublicResearch {
         """(?:cookies|tracking|subscribe|sign up|log in|privacy policy|""" +
         """accept all|advertisement))"""
     )
-    private val stripTags = Regex("""(?is)<[^>]{0,1400}>""")
-    private val paragraphs = Regex(
-        """(?is)<(?:p|li)\b[^>]{0,1200}>(.*?)</(?:p|li)\s*>"""
-    )
     // A heading that repeats the question is not a grounded finding.
     private val factualCue = Regex(
         """(?iu)\b(?:is|are|was|were|can|may|must|should|provides?|allows?|""" +
             """uses?|runs?|handles?|executes?|schedules?|supports?|requires?|""" +
             """starts?|stops?|ensures?|designed|intended|perform|performed|""" +
-            """continue|continues|persist|needs?|display|displays)\b"""
+            """continue|continues|persist|needs?|display|displays|reduces?|reduced|""" +
+            """improves?|improved|limits?|limited|manages?|managed|""" +
+            """prevents?|prevented|helps?|helped|enables?|enabled|""" +
+            """disables?|disabled|automatically|adjusts?|adjusted|saves?|saved)\b"""
     )
     private val ignored = setOf(
         "with", "which", "what", "when", "from", "have", "does", "how", "why",
@@ -60,6 +61,80 @@ internal object WorkspacePublicResearch {
             .findAll(question.lowercase(Locale.ROOT)).map { it.value }
             .filterNot { it in ignored }.toSet()
 
+    /**
+     * Read real DOM article blocks rather than treating a small set of regex-matched
+     * <p>/<li> tags as the whole webpage. Inspired by Android article readers:
+     * headings provide observed topical context, but never count as standalone facts.
+     * This remains a bounded, read-only static HTML parser; it does not execute JS.
+     */
+    private fun articleBlocks(html: String): List<String> {
+        val doc = Jsoup.parse(html)
+        doc.select(
+            "script, style, noscript, svg, iframe, form, template, nav, footer, " +
+                "header, aside, [role=navigation], [role=banner], [role=contentinfo]"
+        ).remove()
+        val main = doc.select("main, article, [role=main]")
+            .maxByOrNull { it.text().length }
+        val root: Element = main?.takeIf { it.text().length >= 120 }
+            ?: doc.body() ?: return emptyList()
+
+        var heading = ""
+        val blocks = mutableListOf<String>()
+        val nodes = root.select("h2, h3, h4, p, li, dd, dt, blockquote")
+        for (node in nodes.take(420)) {
+            if (node.tagName() in setOf("h2", "h3", "h4")) {
+                heading = normalize(node.text()).take(120)
+                continue
+            }
+            // Nested list paragraphs may repeat their parent text; de-duplicate later.
+            val prose = normalize(node.text())
+            if (prose.isBlank()) continue
+            val headingPrefix = heading.takeIf {
+                it.isNotBlank() && !prose.contains(it, ignoreCase = true)
+            }
+            if (prose.length <= 550) {
+                blocks += if (headingPrefix == null) prose else headingPrefix + ": " + prose
+                continue
+            }
+            // Long official documentation paragraphs must not disappear altogether.
+            // Keep actual, ordered sentence spans; never generate new factual text.
+            val sentences = prose.split(Regex("""(?<=[.!?])\s+"""))
+            var chunk = ""
+            fun flush() {
+                if (chunk.isNotBlank()) {
+                    blocks += if (headingPrefix == null) chunk
+                        else headingPrefix + ": " + chunk
+                    chunk = ""
+                }
+            }
+            for (sentence in sentences) {
+                if (sentence.length > 480) {
+                    flush()
+                    sentence.chunked(480).forEach { part ->
+                        blocks += if (headingPrefix == null) part
+                            else headingPrefix + ": " + part
+                    }
+                } else if (chunk.length + sentence.length + 1 > 470) {
+                    flush()
+                    chunk = sentence
+                } else {
+                    chunk = if (chunk.isEmpty()) sentence else chunk + " " + sentence
+                }
+            }
+            flush()
+        }
+        // Some static pages use article DIVs rather than paragraph elements.
+        if (blocks.isEmpty()) {
+            root.select("div, section").filter {
+                it.children().none { child -> child.tagName() in setOf("div", "section", "p", "li") }
+            }.take(100).forEach { node ->
+                val prose = normalize(node.text())
+                if (prose.length in 65..550) blocks += prose
+            }
+        }
+        return blocks.distinct().take(420)
+    }
+
     fun extract(
         response: Response, source: WorkspacePublicWebSearch.Verified, question: String,
     ): Extract? {
@@ -71,16 +146,12 @@ internal object WorkspacePublicResearch {
         val bytes = response.peekBody(MAX_PREFIX).bytes()
         if (bytes.size < 100) return null
         val raw = bytes.toString(Charsets.UTF_8)
-        // Avoid extracting text from scripts, style, login prompts and other non-content.
-        val cleaned = raw
-            .replace(Regex("""(?is)<(script|style|noscript|svg|iframe|form|template)\b[^>]*>.*?</\1\s*>"""), " ")
-            .replace(Regex("""(?is)<!--.*?-->"""), " ")
-        val candidates = if (type.startsWith("text/plain")) cleaned.split('\n')
-            else paragraphs.findAll(cleaned).take(320).map { it.groupValues[1] }.toList()
+        val candidates = if (type.startsWith("text/plain")) raw.split('\n')
+            else articleBlocks(raw)
         val topic = terms(question)
         val subjects = comparisonSubjects(question)
         val candidatesWithScores = candidates.asSequence()
-            .map { normalize(it.replace(stripTags, " ")) }
+            .map(::normalize)
             .filter { it.length in 65..550 && it.count(Char::isLetter) >= 40 &&
                 it.split(Regex("""\s+""")).size >= 10 &&
                 factualCue.containsMatchIn(it) &&
@@ -94,8 +165,8 @@ internal object WorkspacePublicResearch {
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
             .toList()
-        // For comparison questions, prefer one distinct factual passage per subject.
-        // A common heading mentioning both subjects must not become both sides.
+        // Preserve independent factual passages for both comparison subjects.
+        // A comparison headline alone can never become evidence for either side.
         val focused = if (subjects.size == 2) subjects.mapNotNull { subject ->
             candidatesWithScores.firstOrNull { (line, _) ->
                 line.contains(subject, ignoreCase = true) &&
