@@ -26,6 +26,10 @@ internal object WorkspaceFreeSearxSearch {
     private const val MAX_CANDIDATES = 16
 
     private val words = Regex("""[\p{L}\p{N}]{2,}""")
+    private val unsafePath = Regex(
+        """(?iu)(?:^|[/_.-])(?:login|logout|signin|signup|register|""" +
+            """account|checkout|payment|pay|oauth|auth|callback)(?:$|[/_.-])"""
+    )
     private val noise = setOf(
         "site", "official", "guide", "docs", "documentation", "from", "about",
         "source", "sources", "website", "websites", "page", "pages", "the",
@@ -53,7 +57,7 @@ internal object WorkspaceFreeSearxSearch {
             "SearXNG request must stay at the approved HTTPS search endpoint"
         }
         return Request.Builder()
-            .url(target.canonicalUrl)
+            .url(url)
             .header("Accept", "application/json")
             .header("User-Agent", "LYRA-PublicResearch/1")
             .get().build()
@@ -77,6 +81,7 @@ internal object WorkspaceFreeSearxSearch {
             // No http://, private IPs, credential URLs, or unsafe link destinations.
             if (!WorkspacePublicWebSearch.matchesRequestedDestination(
                     target.canonicalUrl, intent.query, intent.preferredHost)) continue
+            if (unsafePath.containsMatchIn(URI(target.canonicalUrl).path.orEmpty())) continue
             val title = item.optString("title").replace(
                 Regex("""<[^>]{0,300}>"""), " ").replace(
                 Regex("""\s+"""), " ").trim().take(180)
