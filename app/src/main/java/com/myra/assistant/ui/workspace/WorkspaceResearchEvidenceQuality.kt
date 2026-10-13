@@ -63,7 +63,8 @@ internal object WorkspaceResearchEvidenceQuality {
      * performance and continue through the existing literal-evidence audit.
      */
     private val measured = Regex(
-        """(?iu)(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s*(\+)?\s*""" +
+        """(?iu)(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?|one|two|three|four|""" +
+            """five|six|seven|eight|nine|ten|eleven|twelve)\s*(\+)?\s*""" +
             """(?:extra\s+|additional\s+|more\s+)?""" +
             """(%|percent|hours?|hrs?|minutes?|mins?|days?|weeks?|""" +
             """mah|wh|watts?|watt-hours?|seconds?|secs?|times?)(?![\p{L}])"""
@@ -71,7 +72,21 @@ internal object WorkspaceResearchEvidenceQuality {
 
     fun measurements(text: String): Set<String> =
         measured.findAll(text).map { match ->
-            val number = match.groupValues[1].replace(",", ".")
+            val number = when (match.groupValues[1].lowercase(Locale.ROOT)) {
+                "one" -> "1"
+                "two" -> "2"
+                "three" -> "3"
+                "four" -> "4"
+                "five" -> "5"
+                "six" -> "6"
+                "seven" -> "7"
+                "eight" -> "8"
+                "nine" -> "9"
+                "ten" -> "10"
+                "eleven" -> "11"
+                "twelve" -> "12"
+                else -> match.groupValues[1].replace(",", ".")
+            }
             val plus = match.groupValues[2]
             val unit = when (match.groupValues[3].lowercase(Locale.ROOT)) {
                 "hours", "hrs", "hr" -> "hour"
