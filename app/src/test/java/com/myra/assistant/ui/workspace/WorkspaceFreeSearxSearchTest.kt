@@ -68,6 +68,23 @@ class WorkspaceFreeSearxSearchTest {
             parsed.map { it.url })
     }
 
+    @Test fun snippetCanAdmitTopicalPublisherPageWithGenericTitle() {
+        val json = """
+        {"results":[
+          {"title":"Use Low Power Mode on your iPhone",
+           "url":"https://support.apple.com/en-us/101604",
+           "content":"Improve battery life by limiting background energy usage."},
+          {"title":"Totally unrelated documentation",
+           "url":"https://example.org/unrelated",
+           "content":"A general programming guide."}
+        ]}
+        """.trimIndent()
+        val parsed = WorkspaceFreeSearxSearch.parseJson(
+            json, WorkspaceWebLinkIntent.Request("iOS battery optimization", maxResults = 3))
+        assertEquals(1, parsed.size)
+        assertEquals("https://support.apple.com/en-us/101604", parsed.single().url)
+    }
+
     @Test fun preferredHostKeepsPublicSearchResultsScoped() {
         val scoped = WorkspaceWebLinkIntent.Request(
             "iOS battery optimization", preferredHost = "support.apple.com",
