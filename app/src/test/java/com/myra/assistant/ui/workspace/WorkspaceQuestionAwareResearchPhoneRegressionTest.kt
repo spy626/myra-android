@@ -134,6 +134,21 @@ class WorkspaceQuestionAwareResearchPhoneRegressionTest {
         assertNull(WorkspaceResearchSynthesis.bundle(question, extracted))
     }
 
+    @Test fun officialFeatureNameCanSupportTopicWithoutRepeatingCategoryWord() {
+        val apple = WorkspacePublicWebSearch.Verified(
+            "Use Low Power Mode on your iPhone",
+            "https://support.apple.com/en-us/101604",
+            "Battery saving settings for Apple devices", "text/html")
+        val related = "Low Power Mode reduces background activity and " +
+            "automatically manages energy use on iPhone devices."
+        assertTrue(WorkspaceResearchQuestionFocus.passageOnTopic(question, apple, related))
+        assertEquals(1, WorkspaceResearchQuestionFocus.relevantExtracts(
+            question, listOf(WorkspacePublicResearch.Extract(apple, listOf(related)))).size)
+        assertFalse(WorkspaceResearchQuestionFocus.passageOnTopic(
+            question, android,
+            "Android application optimization uses R8 and Gradle to shrink compiled code."))
+    }
+
     @Test fun singlePlatformCannotSupplyFakeTwoSidedModelComparison() {
         assertNull(WorkspaceResearchSynthesis.bundle(question, listOf(
             WorkspacePublicResearch.Extract(android, listOf(
