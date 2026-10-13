@@ -431,7 +431,10 @@ internal class WorkspacePublicWebSearchRunner(
     private var generation = 0L
     private var active: Call? = null
 
-    @Synchronized fun start(request: WorkspaceWebLinkIntent.Request) {
+    @Synchronized fun start(
+        request: WorkspaceWebLinkIntent.Request,
+        useFreeMetaSearch: Boolean = false,
+    ) {
         cancelLocked()
         val run = ++generation
         if (WorkspaceGitHubRepositorySearch.supports(request)) {
@@ -456,9 +459,44 @@ internal class WorkspacePublicWebSearchRunner(
                 },
                 onFailure = { startWebSearch(run, request) },
             )
+        } else if (useFreeMetaSearch) {
+            startFreeMetaSearch(run, request)
         } else {
             startWebSearch(run, request)
         }
+    }
+
+    /**
+     * SearXNG is ONLY an optional public-research discovery backend. Public
+     * instances can reject JSON or rate-limit requests; never retry or bypass
+     * their restrictions. Fail over to the existing DuckDuckGo path.
+     */
+    private fun startFreeMetaSearch(
+        run: Long, request: WorkspaceWebLinkIntent.Request,
+    ) {
+        synchronized(this) { if (run != generation) return }
+        val metaRequest = runCatching { WorkspaceFreeSearxSearch.request(request) }
+            .getOrNull()
+        if (metaRequest == null) {
+            startWebSearch(run, request)
+            return
+        }
+        listener.onEvent(
+            WorkspaceWorkPhase.SEARCHING, "Searching free metasearch",
+            request.query.take(100),
+        )
+        dispatch(
+            run,
+            metaRequest,
+            onSuccess = { response ->
+                val hits = response.use {
+                    WorkspaceFreeSearxSearch.read(it, request)
+                }
+                if (hits.isEmpty()) startWebSearch(run, request)
+                else startCandidateVerification(run, request, hits)
+            },
+            onFailure = { startWebSearch(run, request) },
+        )
     }
 
     private fun startWebSearch(
