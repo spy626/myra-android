@@ -1885,9 +1885,10 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceResearchSynthesis.AuditIssue.MISSING_COMPARISON_COVERAGE ->
                     "AI ka answer comparison ke dono sides cover nahi karta."
             }
+            val safePartial = audit.partialAnswer ?: fallback
             finishWebLinkLookup(
                 audit.answer ?: ("Bro, source-backed comparison abhi complete nahi hai. " +
-                    limitation + "\n\nJo readable page evidence mili:\n\n" + fallback),
+                    limitation + "\n\nJo supported evidence mili:\n\n" + safePartial),
                 sources, researchAnswerComplete = audit.isComplete)
         }
     }
