@@ -1546,7 +1546,8 @@ class WorkspaceActivity : AppCompatActivity() {
                         if (webResearchQuestion != null && webResearchQueryIndex + 1 <
                             webResearchQueries.size) {
                             webResearchQueryIndex++
-                            webLinkRunner().start(webResearchQueries[webResearchQueryIndex])
+                            webLinkRunner().start(webResearchQueries[webResearchQueryIndex],
+                                useFreeMetaSearch = webResearchQuestion != null)
                             return@runOnUiThread
                         }
                         if (webResearchQuestion != null) {
@@ -1738,7 +1739,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 "Researching missing source evidence",
                 "Additional source search " + webResearchExtraSearches + " of " +
                     WorkspaceResearchRecovery.MAX_EXTRA_SEARCHES)
-            webLinkRunner().start(retry)
+            webLinkRunner().start(retry, useFreeMetaSearch = true)
             return
         }
         val sourceReceipts = relatedEvidence.map {
@@ -1877,7 +1878,8 @@ class WorkspaceActivity : AppCompatActivity() {
         val nextIndex = webResearchQueryIndex + 1
         if (nextIndex >= webResearchQueries.size) return false
         webResearchQueryIndex = nextIndex
-        webLinkRunner().start(webResearchQueries[nextIndex])
+        webLinkRunner().start(webResearchQueries[nextIndex],
+            useFreeMetaSearch = true)
         return true
     }
 
@@ -1958,7 +1960,8 @@ class WorkspaceActivity : AppCompatActivity() {
         webLinkLookupMessageId = messageId
         statusMessage = ""
         render()
-        webLinkRunner().start(webResearchQueries.first())
+        webLinkRunner().start(webResearchQueries.first(),
+            useFreeMetaSearch = researchQuestion != null)
     }
 
     private fun finishStablePlatformLink(
