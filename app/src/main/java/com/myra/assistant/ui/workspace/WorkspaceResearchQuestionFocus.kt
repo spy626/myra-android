@@ -79,6 +79,35 @@ internal object WorkspaceResearchQuestionFocus {
     }
 
     /**
+     * Contextual relevance when publishers name an official feature instead of
+     * repeating the user's category word in every paragraph. Require the page
+     * metadata to match the actual topic AND at least two distinctive terms to
+     * occur in both the metadata and the observed factual paragraph. This is an
+     * admission heuristic, not a truth or citation proof: the strict evidence
+     * and quote audit remains authoritative downstream.
+     */
+    fun passageOnTopic(
+        question: String,
+        source: WorkspacePublicWebSearch.Verified,
+        passage: String,
+    ): Boolean {
+        val focus = inspect(question)
+        val anchor = focus.topicAnchor ?: return true
+        if (includesToken(passage.lowercase(Locale.ROOT), anchor)) return true
+        if (sourceScore(source, focus) <= 0) return false
+
+        val generic = instructionWords + focus.topicWords +
+            focus.subjects.flatMap(::aliases) +
+            setOf("optimization", "optimized", "optimize", "overview",
+                "article", "website", "official", "application", "applications",
+                "page", "guide", "documentation", "information")
+        val meta = tokens(source.title + " " + source.snippet).toSet()
+        return tokens(passage).distinct().count { token ->
+            token !in generic && token in meta && token.length >= 4
+        } >= 2
+    }
+
+    /**
      * A source can be about battery while an unrelated paragraph discusses R8.
      * Extract-level topic checking prevents that paragraph from turning into
      * a battery claim. Generic platform contexts are allowed as page metadata.
@@ -88,14 +117,11 @@ internal object WorkspaceResearchQuestionFocus {
         extracts: List<WorkspacePublicResearch.Extract>,
     ): List<WorkspacePublicResearch.Extract> {
         val focus = inspect(question)
-        val anchor = focus.topicAnchor?.takeUnless {
-            it in setOf("android", "ios", "kotlin", "java", "python",
-                "linux", "windows", "development", "technology")
-        }
         return extracts.mapNotNull { extract ->
             if (sourceScore(extract.source, focus) <= 0) return@mapNotNull null
-            val passages = if (anchor == null) extract.passages
-                else extract.passages.filter { includesToken(it.lowercase(Locale.ROOT), anchor) }
+            val passages = extract.passages.filter {
+                passageOnTopic(question, extract.source, it)
+            }
             if (passages.isEmpty()) null else extract.copy(passages = passages)
         }
     }
