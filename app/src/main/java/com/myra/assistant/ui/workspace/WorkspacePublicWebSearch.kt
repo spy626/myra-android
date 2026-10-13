@@ -430,6 +430,10 @@ internal class WorkspacePublicWebSearchRunner(
 
     private var generation = 0L
     private var active: Call? = null
+    // One failed public SearXNG probe must not multiply network timeouts across
+    // every query in a multi-round task. In-memory only; no user data persisted.
+    private var metaUnavailableUntilMs = 0L
+    private val metaCooldownMs = 10 * 60 * 1000L
 
     @Synchronized fun start(
         request: WorkspaceWebLinkIntent.Request,
@@ -474,7 +478,13 @@ internal class WorkspacePublicWebSearchRunner(
     private fun startFreeMetaSearch(
         run: Long, request: WorkspaceWebLinkIntent.Request,
     ) {
-        synchronized(this) { if (run != generation) return }
+        synchronized(this) {
+            if (run != generation) return
+            if (System.currentTimeMillis() < metaUnavailableUntilMs) {
+                startWebSearch(run, request)
+                return
+            }
+        }
         val metaRequest = runCatching { WorkspaceFreeSearxSearch.request(request) }
             .getOrNull()
         if (metaRequest == null) {
@@ -495,7 +505,14 @@ internal class WorkspacePublicWebSearchRunner(
                 if (hits.isEmpty()) startWebSearch(run, request)
                 else startCandidateVerification(run, request, hits)
             },
-            onFailure = { startWebSearch(run, request) },
+            onFailure = {
+                synchronized(this) {
+                    if (run == generation) {
+                        metaUnavailableUntilMs = System.currentTimeMillis() + metaCooldownMs
+                    }
+                }
+                startWebSearch(run, request)
+            },
         )
     }
 
