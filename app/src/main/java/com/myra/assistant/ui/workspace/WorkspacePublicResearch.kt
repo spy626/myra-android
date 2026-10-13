@@ -16,7 +16,7 @@ import java.util.Locale
  * Produces an extractive, cited response from pages actually read at request time.
  */
 internal object WorkspacePublicResearch {
-    private const val MAX_PREFIX = 96_000L
+    private const val MAX_PREFIX = 256_000L
     data class Extract(val source: WorkspacePublicWebSearch.Verified, val passages: List<String>)
 
     private val unsafeText = Regex(
@@ -89,8 +89,13 @@ internal object WorkspacePublicResearch {
             // Nested list paragraphs may repeat their parent text; de-duplicate later.
             val prose = normalize(node.text())
             if (prose.isBlank()) continue
+            // A comparison heading repeats both topics; attaching it to every
+            // paragraph would wrongly turn single-subject evidence into a
+            // two-sided claim. Treat that heading as navigation, not evidence.
             val headingPrefix = heading.takeIf {
-                it.isNotBlank() && !prose.contains(it, ignoreCase = true)
+                it.isNotBlank() && !prose.contains(it, ignoreCase = true) &&
+                    !Regex("""(?iu)\b(?:vs|versus|and|aur|compare|comparison)\b""")
+                        .containsMatchIn(it)
             }
             if (prose.length <= 550) {
                 blocks += if (headingPrefix == null) prose else headingPrefix + ": " + prose
@@ -308,7 +313,7 @@ internal class WorkspacePublicResearchRunner(
         listener.onEvent("Reading public page " + (index + 1) + " of " + sources.size)
         val request = Request.Builder().url(target.canonicalUrl)
             .header("Accept", "text/html, text/plain")
-            .header("Range", "bytes=0-95999")
+            .header("Range", "bytes=0-255999")
             .header("User-Agent", "LYRA-PublicResearch/1")
             .get().build()
         val call = WorkspaceAgentReachGitHub.client.newCall(request)
