@@ -195,6 +195,22 @@ class WorkspacePublicWebSearchTest {
         assertEquals("developer.android.com", java.net.URI(results.first().url).host)
     }
 
+    @Test fun searchSnippetRecoversOfficialArticleWithDifferentTitleVocabulary() {
+        val html = """
+            <div class="result">
+            <a class="result__a" href="https://support.apple.com/en-us/101604">
+              Use Low Power Mode on your iPhone
+            </a>
+            <a class="result__snippet">
+              Apple explains battery-saving controls and background power consumption.
+            </a></div>
+        """.trimIndent()
+        val results = WorkspacePublicWebSearch.parseHtml(
+            html, "iOS battery optimization", null)
+        assertEquals(1, results.size)
+        assertEquals("https://support.apple.com/en-us/101604", results.first().url)
+    }
+
     @Test fun searchRequestIsGetOnlyWithoutCredentialHeaders() {
         val request = WorkspacePublicWebSearch.searchRequest(
             WorkspaceWebLinkIntent.Request("AIRI repo", "github.com")
