@@ -13,6 +13,8 @@ internal object WorkspaceResearchEvidenceQuality {
     fun publisher(url: String): String? {
         val host = runCatching { URI(url).host?.lowercase(Locale.ROOT) }
             .getOrNull()?.removePrefix("www.") ?: return null
+        // Android's developer documentation and Google support are one owner.
+        if (host == "android.com" || host.endsWith(".android.com")) return "google.com"
         val parts = host.split('.')
         if (parts.size < 2) return null
         val suffix = if (parts.size >= 3 && parts[parts.lastIndex - 1] in setOf(
@@ -62,6 +64,7 @@ internal object WorkspaceResearchEvidenceQuality {
      */
     private val measured = Regex(
         """(?iu)(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s*(\+)?\s*""" +
+            """(?:extra\s+|additional\s+|more\s+)?""" +
             """(%|percent|hours?|hrs?|minutes?|mins?|days?|weeks?|""" +
             """mah|wh|watts?|watt-hours?|seconds?|secs?|times?)(?![\p{L}])"""
     )
@@ -92,15 +95,32 @@ internal object WorkspaceResearchEvidenceQuality {
     fun corroboratesMeasurements(
         claim: String,
         supporting: List<WorkspaceResearchSynthesis.Evidence>,
+        question: String,
     ): Boolean {
         val claimed = measurements(claim)
         if (claimed.isEmpty()) return true
         return claimed.all { value ->
-            supporting.filter { value in measurements(it.passage) }
-                .mapNotNull { publisher(it.source.finalUrl) }
+            val subjects = WorkspacePublicResearch.comparisonSubjects(question)
+                .filter { WorkspaceResearchQuestionFocus.mentionsSubject(claim, it) }
+            supporting.filter { evidence ->
+                value in measurements(evidence.passage) && subjects.all { subject ->
+                    WorkspaceResearchQuestionFocus.mentionsSubject(
+                        evidence.passage + " " + evidence.source.title, subject)
+                }
+            }.mapNotNull { publisher(it.source.finalUrl) }
                 .distinct().size >= 2
         }
     }
+
+    /** Explicit user requirement for more than one independently owned website. */
+    fun requestsMultiplePublishers(question: String): Boolean =
+        Regex("""(?iu)\b(?:multiple|several|independent|do\s+alag|two\s+sources|2\s+sources)\b""")
+            .containsMatchIn(question) &&
+            Regex("""(?iu)\b(?:sources?|websites?|publishers?|references?)\b""")
+                .containsMatchIn(question)
+
+    fun publisherCount(extracts: List<WorkspacePublicResearch.Extract>): Int =
+        extracts.mapNotNull { publisher(it.source.finalUrl) }.distinct().size
 
     /** Extractive fallback must not repeat an uncorroborated numerical promise. */
     fun safeFallbackExtracts(
