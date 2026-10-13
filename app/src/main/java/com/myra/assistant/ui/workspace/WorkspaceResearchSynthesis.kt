@@ -204,6 +204,10 @@ internal object WorkspaceResearchSynthesis {
                 quote.none { it in "<>{}" } &&
                 supporting.any { it.passage.contains(quote, ignoreCase = true) } &&
                 terms(quote).count { it in claimTerms } >= 2
+            // A supplied quote is an explicit provenance claim. A fabricated
+            // or wrongly attributed quote must never be silently ignored just
+            // because a lexical-overlap fallback would otherwise pass.
+            if (quote.isNotEmpty() && !anchoredQuote) return null
             if (overlap < maxOf(3, (claimTerms.size * 0.45).toInt()) &&
                 !(anchoredQuote && overlap >= 2)) return null
             val literals = critical.findAll(statement).map {
