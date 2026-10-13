@@ -264,16 +264,22 @@ internal object WorkspacePublicWebSearch {
 
             val titleTokens = tokens(title)
             val urlTokens = tokens(target.host + " " + URI(url).path.orEmpty())
-            // Host match without topical evidence is not an appropriate result.
-            if (subjectTokens.none { it in titleTokens || it in urlTokens }) {
+            val snippetTokens = tokens(snippet)
+            // Result snippets can contain the topic while a publisher uses a
+            // synonym in the title (e.g. a feature name instead of its category).
+            // Keep pinned-host/direct-link lookups strict; research candidates
+            // still undergo HTTPS verification and actual page evidence checks.
+            if (subjectTokens.none { it in titleTokens || it in urlTokens } &&
+                (preferredHost != null || subjectTokens.none { it in snippetTokens })) {
                 return@mapIndexedNotNull null
             }
             val overlapTitle = queryTokens.count { it in titleTokens }
             val overlapUrl = queryTokens.count { it in urlTokens }
+            val overlapSnippet = queryTokens.count { it in snippetTokens }
             val hostMatch = preferredHost?.let {
                 target.host == it || target.host.endsWith("." + it)
             } == true
-            val score = overlapTitle * 8 + overlapUrl * 3 +
+            val score = overlapTitle * 8 + overlapUrl * 3 + overlapSnippet * 3 +
                 (if (hostMatch) 50 else 0) +
                 (if (isOfficialDocumentation(url, query)) 45 else 0) - index
             val minimum = if (hostMatch) 50 else 8
