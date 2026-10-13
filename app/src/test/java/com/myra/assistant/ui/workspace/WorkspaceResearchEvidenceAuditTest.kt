@@ -93,8 +93,12 @@ class WorkspaceResearchEvidenceAuditTest {
         assertEquals(WorkspaceResearchSynthesis.AuditIssue.MISSING_COMPARISON_COVERAGE,
             results.issue)
         assertNull(results.answer)
+        assertFalse(results.isComplete)
         assertEquals(1, results.acceptedClaims)
         assertEquals(1, results.rejectedClaims)
+        assertTrue(results.partialAnswer.orEmpty().contains("comparison incomplete"))
+        assertTrue(results.partialAnswer.orEmpty().contains(ios.finalUrl))
+        assertFalse(results.partialAnswer.orEmpty().contains("3 extra hours"))
 
         val fake = """{"claims":[
           {"text":"Android battery optimization manages idle tasks and helps conserve device power.",
