@@ -1769,8 +1769,10 @@ class WorkspaceActivity : AppCompatActivity() {
             finishWebLinkLookup(reply, sourceReceipts, researchAnswerComplete = false)
             return
         }
+        // Citation numbers follow actual readable-source receipts, never
+        // merely reachable pages that had no suitable passage.
         val bundle = WorkspaceResearchSynthesis.bundle(
-            question, relatedEvidence, relatedSources)
+            question, relatedEvidence, relatedEvidence.map { it.source })
         if (bundle == null) {
             val missingPublishers = WorkspaceResearchEvidenceQuality
                 .requestsMultiplePublishers(question) &&
