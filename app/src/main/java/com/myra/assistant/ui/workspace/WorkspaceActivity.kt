@@ -1511,7 +1511,13 @@ class WorkspaceActivity : AppCompatActivity() {
                 ) {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
-                        recordWorkEvent(phase, label, detail)
+                        // The public-search runner finishes one QUERY, not the
+                        // whole multi-round research turn. Preserve the original
+                        // thinking/search timeline until synthesis/final answer.
+                        if (webResearchQuestion != null && phase == WorkspaceWorkPhase.DONE) {
+                            recordWorkEvent(
+                                WorkspaceWorkPhase.VERIFYING, "Web candidates collected", detail)
+                        } else recordWorkEvent(phase, label, detail)
                     }
                 }
 
