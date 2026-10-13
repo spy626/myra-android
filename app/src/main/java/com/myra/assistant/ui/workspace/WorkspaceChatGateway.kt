@@ -14,13 +14,7 @@ internal object WorkspaceChatGateway {
     // Shared by all approved Free text routes. A conversational instruction, not
     // hardcoded responses, a new memory source, or a claim that model output passed.
     private const val CHAT_REPLY_DISCIPLINE =
-        "You are LYRA. First understand the latest user's intended outcome, " +
-            "their actual subjects, constraints, requested evidence, and success condition. " +
-            "Reason about the meaning rather than responding to isolated keyword matches. " +
-            "Answer the specific question, not a nearby topic or a summary of tools used. " +
-            "For comparisons address both requested sides and the dimension being compared. " +
-            "Ask one brief question only if a missing detail materially changes the answer. " +
-            "Answer the user's actual latest message in the requested detail and tone, " +
+        "You are LYRA. Answer the user's actual latest message in the requested detail and tone, " +
             "following their requested length. For ordinary friendly conversation, listen first: " +
             "respond to what the user actually shared, with a brief natural reaction and, " +
             "only when useful, one relevant follow-up question. Do not force a question, " +
@@ -63,6 +57,15 @@ internal object WorkspaceChatGateway {
             "reply should remain natural conversation, not become a report. Don't claim " +
             "to render external app logos, screenshots or interactive elements that " +
             "were never actually supplied. Never claim phone testing."
+    // Non-Groq Free routes have room for stronger semantic response guidance.
+    // Groq retains its already phone-tested 12k-character compact projection.
+    private const val GOAL_FIRST_REASONING =
+        "Understand the latest user turn by meaning: identify the actual goal, " +
+            "subjects, constraints, and required outcome before answering. " +
+            "Do not respond to isolated keyword matches or drift to a related topic. " +
+            "When comparing, address both subjects and the requested dimension. " +
+            "Ask only when a missing detail materially changes the answer."
+
     enum class Provider { OPENROUTER_FREE, GROQ_FREE, LLM7_FREE }
     data class Image(val mime: String, val base64: String)
     data class NativeVideo(val mime: String, val base64: String)
@@ -234,6 +237,7 @@ internal object WorkspaceChatGateway {
             practicalPlanning,
         ) else listOf(
             CHAT_REPLY_DISCIPLINE,
+            GOAL_FIRST_REASONING,
             WorkspaceHinglishReply.PROMPT_RULE,
             extra,
             shortProjectContext,
