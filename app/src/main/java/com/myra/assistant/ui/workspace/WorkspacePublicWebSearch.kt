@@ -503,7 +503,8 @@ internal class WorkspacePublicWebSearchRunner(
                     WorkspaceFreeSearxSearch.read(it, request)
                 }
                 if (hits.isEmpty()) startWebSearch(run, request)
-                else startCandidateVerification(run, request, hits)
+                else startCandidateVerification(
+                    run, request, hits, metaFallback = true)
             },
             onFailure = {
                 synchronized(this) {
@@ -569,6 +570,7 @@ internal class WorkspacePublicWebSearchRunner(
         broadened: Boolean = false,
         previous: List<WorkspacePublicWebSearch.Verified> = emptyList(),
         original: WorkspaceWebLinkIntent.Request = request,
+        metaFallback: Boolean = false,
     ) {
         synchronized(this) { if (run != generation) return }
         listener.onEvent(
@@ -577,7 +579,7 @@ internal class WorkspacePublicWebSearchRunner(
             candidates.first().title.take(100),
         )
         verifyCandidate(run, request, candidates, 0, null, 0, previous.toMutableList(),
-            broadened, original)
+            broadened, original, metaFallback)
     }
 
     @Synchronized fun cancel() {
@@ -600,6 +602,7 @@ internal class WorkspacePublicWebSearchRunner(
         verifiedResults: MutableList<WorkspacePublicWebSearch.Verified>,
         broadened: Boolean,
         original: WorkspaceWebLinkIntent.Request,
+        metaFallback: Boolean = false,
     ) {
         // Keep the proven single-link path at 5 attempts. Plural requests can
         // inspect up to 8 candidates and finish with fewer than requested.
@@ -608,13 +611,17 @@ internal class WorkspacePublicWebSearchRunner(
             else original.maxResults
         if (index >= minOf(candidates.size, maxCandidates) ||
             verifiedResults.size >= targetCount) {
-            completeCandidates(run, original, verifiedResults, broadened)
+            if (metaFallback && verifiedResults.isEmpty()) {
+                // SearXNG returned links but none passed the existing guarded
+                // HTTP verification. Don't report a research failure yet.
+                startWebSearch(run, original)
+            } else completeCandidates(run, original, verifiedResults, broadened)
             return
         }
         val candidate = candidates[index]
         fun next() {
             verifyCandidate(run, request, candidates, index + 1, null, 0, verifiedResults,
-                broadened, original)
+                broadened, original, metaFallback)
         }
         val target = redirected ?: runCatching {
             WorkspaceAgentReachPolicy.parse(candidate.url)
@@ -642,7 +649,7 @@ internal class WorkspacePublicWebSearchRunner(
                         }
                         verifyCandidate(
                             run, request, candidates, index, redirect, depth + 1,
-                            verifiedResults, broadened, original,
+                            verifiedResults, broadened, original, metaFallback,
                         )
                     } else {
                         val verified = runCatching {
