@@ -93,6 +93,57 @@ class WorkspacePublicResearchTest {
                 "Android mein WorkManager aur Foreground Service mein kya difference hai?"))
     }
 
+    @Test fun staticArticleHeadingKeepsRelevantEvidenceWhenBodyUsesDifferentWords() {
+        val question = "LYRA, Android aur iOS ki battery optimization compare karo."
+        val ios = WorkspacePublicWebSearch.Verified(
+            "iOS battery optimization on iPhone",
+            "https://support.apple.com/en-us/101604", "", "text/html")
+        val html = """
+            <html><head><title>Low Power Mode</title></head><body>
+            <nav>Home News Subscribe</nav><main><h2>Battery settings</h2>
+            <p>Low Power Mode reduces background application refresh and temporarily
+               pauses some activities to help the device consume less energy while
+               the user continues everyday work on the phone.</p>
+            </main></body></html>
+        """.trimIndent()
+        val found = requireNotNull(response(html).use {
+            WorkspacePublicResearch.extract(it, ios, question)
+        })
+        assertTrue(found.passages.any { it.contains("Battery settings") })
+        assertTrue(found.passages.any { it.contains("reduces background") })
+        assertFalse(found.passages.any { it.contains("Subscribe") })
+        assertEquals(1, WorkspaceResearchQuestionFocus.relevantExtracts(
+            question, listOf(found)).size)
+    }
+
+    @Test fun longDocumentationParagraphsAreSplitNotSilentlyDiscarded() {
+        val question = "Compare Android and iOS battery optimization"
+        val longParagraph = ("Battery optimization reduces unnecessary background work " +
+            "and manages energy use while applications remain installed. ").repeat(17)
+        val html = "<html><main><h2>Battery operation</h2><p>" +
+            longParagraph + "</p></main></html>"
+        val found = requireNotNull(response(html).use {
+            WorkspacePublicResearch.extract(it, source, question)
+        })
+        assertTrue(found.passages.isNotEmpty())
+        assertTrue(found.passages.all { it.length <= 320 })
+        assertTrue(found.passages.any { it.contains("background work") })
+    }
+
+    @Test fun articleDivBodyWithoutParagraphTagsStillSuppliesObservedEvidence() {
+        val html = """
+            <html><main><section><div>
+            WorkManager is designed for deferrable background tasks that require
+            reliable execution after the app is no longer visible to the user.
+            </div></section></main></html>
+        """.trimIndent()
+        val found = requireNotNull(response(html).use {
+            WorkspacePublicResearch.extract(it, source,
+                "WorkManager background tasks explanation with sources")
+        })
+        assertTrue(found.passages.any { it.contains("reliable execution") })
+    }
+
     @Test fun noReadableEvidenceCannotBeClaimedAsGroundedExplanation() {
         val result = response("<html><p>hello world</p></html>").use {
             WorkspacePublicResearch.extract(it, source,
