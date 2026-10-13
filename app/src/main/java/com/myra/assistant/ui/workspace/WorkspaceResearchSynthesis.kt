@@ -96,6 +96,7 @@ internal object WorkspaceResearchSynthesis {
         val issue: AuditIssue,
         val acceptedClaims: Int = 0,
         val rejectedClaims: Int = 0,
+        val partialAnswer: String? = null,
     ) {
         val isComplete: Boolean get() = issue == AuditIssue.NONE && answer != null
     }
@@ -227,6 +228,12 @@ internal object WorkspaceResearchSynthesis {
         val rejected = claims.length() - accepted.size
         if (accepted.isEmpty()) return AuditResult(
             null, AuditIssue.NO_SUPPORTED_CLAIMS, 0, rejected)
+        fun links(hits: List<Evidence>): String =
+            hits.distinctBy { it.sourceId }.joinToString(" ") { hit ->
+                val index = hit.sourceId.removePrefix("S")
+                "[Source " + index + "](" + hit.source.finalUrl + ")"
+            }
+
         val comparisons = focus.subjects
         if (comparisons.size == 2 && comparisons.any { subject ->
                 accepted.none { (statement, supporting) ->
@@ -235,8 +242,19 @@ internal object WorkspaceResearchSynthesis {
                             WorkspaceResearchQuestionFocus.sourceMentionsSubject(it.source, subject)
                         }
                 }
-            }) return AuditResult(
-                null, AuditIssue.MISSING_COMPARISON_COVERAGE, accepted.size, rejected)
+            }) {
+            // Preserve only independently audited claims. Report the missing
+            // comparison side; never present one-sided evidence as complete.
+            val partial = buildString {
+                appendLine("**Supported findings — comparison incomplete**")
+                appendLine()
+                accepted.forEach { (statement, hits) ->
+                    appendLine("• " + statement.trimEnd('.') + ". " + links(hits))
+                }
+            }.trim()
+            return AuditResult(null, AuditIssue.MISSING_COMPARISON_COVERAGE,
+                accepted.size, rejected, partial)
+        }
 
         val takeaway = root.optJSONObject("takeaway")?.let(::audited)
             ?.takeIf { candidate ->
@@ -246,12 +264,6 @@ internal object WorkspaceResearchSynthesis {
                             WorkspaceResearchQuestionFocus.sourceMentionsSubject(it.source, subject)
                         }
                     })
-            }
-
-        fun links(hits: List<Evidence>): String =
-            hits.distinctBy { it.sourceId }.joinToString(" ") { hit ->
-                val index = hit.sourceId.removePrefix("S")
-                "[Source " + index + "](" + hit.source.finalUrl + ")"
             }
 
         val answer = buildString {
