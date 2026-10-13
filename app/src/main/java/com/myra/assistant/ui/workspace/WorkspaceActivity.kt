@@ -122,6 +122,10 @@ class WorkspaceActivity : AppCompatActivity() {
     private var webResearchQueries = emptyList<WorkspaceWebLinkIntent.Request>()
     private var webResearchQueryIndex = 0
     private val webResearchCollected = mutableListOf<WorkspacePublicWebSearch.Verified>()
+    // Preserve read evidence across bounded recovery rounds; never re-read failed URLs.
+    private val webResearchReadEvidence = mutableListOf<WorkspacePublicResearch.Extract>()
+    private val webResearchReadUrls = mutableSetOf<String>()
+    private var webResearchExtraSearches = 0
     private var webResearchOriginal: WorkspaceWebLinkIntent.Request? = null
     private var webResearchRunner: WorkspacePublicResearchRunner? = null
     // Same selected Free provider, single bounded call; no parallel research model owner.
@@ -1517,39 +1521,8 @@ class WorkspaceActivity : AppCompatActivity() {
                         val researchQuestion = webResearchQuestion
                         if (researchQuestion != null &&
                             advanceResearchSearch(results)) return@runOnUiThread
-                        val finalResults = if (researchQuestion != null)
-                            WorkspaceResearchQueryPlan.choose(
-                                researchQuestion,
-                                requireNotNull(webResearchOriginal),
-                                webResearchCollected,
-                            ) else results
                         if (researchQuestion != null) {
-                            val capturedId = webLinkLookupMessageId
-                            webResearchRunner?.cancel()
-                            webResearchRunner = WorkspacePublicResearchRunner(
-                                listener = object : WorkspacePublicResearchRunner.Listener {
-                                    override fun onEvent(label: String) {
-                                        runOnUiThread {
-                                            if (webLinkLookupActive &&
-                                                webLinkLookupMessageId == capturedId) {
-                                                recordWorkEvent(
-                                                    WorkspaceWorkPhase.VERIFYING, label, null)
-                                            }
-                                        }
-                                    }
-                                    override fun onComplete(
-                                        evidence: List<WorkspacePublicResearch.Extract>,
-                                    ) {
-                                        runOnUiThread {
-                                            if (!webLinkLookupActive ||
-                                                webLinkLookupMessageId != capturedId) return@runOnUiThread
-                                            finishResearchWithEvidence(
-                                                researchQuestion, finalResults, evidence,
-                                            )
-                                        }
-                                    }
-                                },
-                            ).also { it.start(researchQuestion, finalResults) }
+                            readResearchResults(researchQuestion)
                         } else {
                             finishWebLinkLookup(
                                 reply = WorkspacePublicWebSearch.receiptAll(
@@ -1570,39 +1543,11 @@ class WorkspaceActivity : AppCompatActivity() {
                             webLinkRunner().start(webResearchQueries[webResearchQueryIndex])
                             return@runOnUiThread
                         }
-                        if (webResearchQuestion != null && webResearchCollected.isNotEmpty()) {
-                            val finalResults = WorkspaceResearchQueryPlan.choose(
-                                requireNotNull(webResearchQuestion),
-                                requireNotNull(webResearchOriginal), webResearchCollected)
-                            // Other queries failed; read surviving verified destinations.
-                            // An HTTP 200 alone never proves there is factual page evidence.
-                            val question = requireNotNull(webResearchQuestion)
-                            val capturedId = webLinkLookupMessageId
-                            webResearchRunner?.cancel()
-                            webResearchRunner = WorkspacePublicResearchRunner(
-                                listener = object : WorkspacePublicResearchRunner.Listener {
-                                    override fun onEvent(label: String) {
-                                        runOnUiThread {
-                                            if (webLinkLookupActive &&
-                                                webLinkLookupMessageId == capturedId) {
-                                                recordWorkEvent(
-                                                    WorkspaceWorkPhase.VERIFYING, label, null)
-                                            }
-                                        }
-                                    }
-                                    override fun onComplete(
-                                        evidence: List<WorkspacePublicResearch.Extract>,
-                                    ) {
-                                        runOnUiThread {
-                                            if (webLinkLookupActive &&
-                                                webLinkLookupMessageId == capturedId) {
-                                                finishResearchWithEvidence(
-                                                    question, finalResults, evidence)
-                                            }
-                                        }
-                                    }
-                                }
-                            ).also { it.start(question, finalResults) }
+                        if (webResearchQuestion != null) {
+                            // All initial/extra searches may have failed or returned
+                            // duplicate URLs: evaluate evidence before choosing one
+                            // more bounded gap-specific recovery query.
+                            readResearchResults(requireNotNull(webResearchQuestion))
                             return@runOnUiThread
                         }
                         finishWebLinkLookup(
@@ -1614,6 +1559,51 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
             },
         ).also { webLinkLookupRunner = it }
+    }
+
+    /**
+     * After each search round, inspect only URLs not already read. If they fail
+     * to yield relevant paragraphs, finishResearchWithEvidence can request a
+     * bounded second round rather than prematurely returning one blog post.
+     */
+    private fun readResearchResults(question: String) {
+        val turnId = webLinkLookupMessageId ?: return
+        if (!webLinkLookupActive || selectedId != webLinkLookupProjectId) return
+        val unseen = webResearchCollected.filterNot {
+            it.finalUrl in webResearchReadUrls
+        }
+        val originals = webResearchOriginal ?: return
+        val chosen = WorkspaceResearchQueryPlan.choose(question, originals, unseen)
+        if (chosen.isEmpty()) {
+            finishResearchWithEvidence(
+                question, webResearchReadEvidence.map { it.source },
+                emptyList())
+            return
+        }
+        webResearchReadUrls.addAll(chosen.map { it.finalUrl })
+        webResearchRunner?.cancel()
+        webResearchRunner = WorkspacePublicResearchRunner(
+            listener = object : WorkspacePublicResearchRunner.Listener {
+                override fun onEvent(label: String) {
+                    runOnUiThread {
+                        if (webLinkLookupActive && webLinkLookupMessageId == turnId &&
+                            selectedId == webLinkLookupProjectId) {
+                            recordWorkEvent(WorkspaceWorkPhase.VERIFYING, label, null)
+                        }
+                    }
+                }
+                override fun onComplete(
+                    extracts: List<WorkspacePublicResearch.Extract>,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !webLinkLookupActive ||
+                            webLinkLookupMessageId != turnId ||
+                            selectedId != webLinkLookupProjectId) return@runOnUiThread
+                        finishResearchWithEvidence(question, chosen, extracts)
+                    }
+                }
+            },
+        ).also { it.start(question, chosen) }
     }
 
     private fun appDownloadRunner(): WorkspaceAppDownloadRunner {
@@ -1715,12 +1705,36 @@ class WorkspaceActivity : AppCompatActivity() {
         val projectId = webLinkLookupProjectId ?: return
         val turnId = webLinkLookupMessageId ?: return
         if (!webLinkLookupActive || selectedId != projectId) return
+        // Evidence survives a bounded recovery round; deduplicate exact URLs.
+        evidence.forEach { hit ->
+            if (webResearchReadEvidence.none { it.source.finalUrl == hit.source.finalUrl })
+                webResearchReadEvidence += hit
+        }
+        val allEvidence = webResearchReadEvidence.toList()
         // Keep the original question authoritative at every stage. A live,
         // reachable page is NOT relevant just because its title says Android.
-        val relatedSources = WorkspaceResearchQuestionFocus.relevant(question, sources)
+        val allSources = (sources + allEvidence.map { it.source })
+            .distinctBy { it.finalUrl }
+        val relatedSources = WorkspaceResearchQuestionFocus.relevant(question, allSources)
         val relatedUrls = relatedSources.map { it.finalUrl }.toSet()
         val relatedEvidence = WorkspaceResearchQuestionFocus.relevantExtracts(
-            question, evidence.filter { it.source.finalUrl in relatedUrls })
+            question, allEvidence.filter { it.source.finalUrl in relatedUrls })
+        val retry = if (webResearchExtraSearches < WorkspaceResearchRecovery.MAX_EXTRA_SEARCHES)
+            webResearchOriginal?.let { original ->
+                WorkspaceResearchRecovery.next(
+                    question, original, relatedEvidence, webResearchQueries)
+            } else null
+        if (retry != null) {
+            webResearchExtraSearches++
+            webResearchQueries = webResearchQueries + retry
+            webResearchQueryIndex = webResearchQueries.lastIndex
+            recordWorkEvent(WorkspaceWorkPhase.SEARCHING,
+                "Researching missing source evidence",
+                "Additional source search " + webResearchExtraSearches + " of " +
+                    WorkspaceResearchRecovery.MAX_EXTRA_SEARCHES)
+            webLinkRunner().start(retry)
+            return
+        }
         val sourceReceipts = relatedEvidence.map {
             WorkspacePublicWebSearch.source(it.source)
         }
@@ -1870,6 +1884,9 @@ class WorkspaceActivity : AppCompatActivity() {
         webResearchQuestion = null
         webResearchQueries = emptyList()
         webResearchCollected.clear()
+        webResearchReadEvidence.clear()
+        webResearchReadUrls.clear()
+        webResearchExtraSearches = 0
         webResearchOriginal = null
         webResearchQueryIndex = 0
         webLinkLookupActive = false
