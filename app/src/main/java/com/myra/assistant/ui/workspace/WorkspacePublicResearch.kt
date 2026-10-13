@@ -167,7 +167,11 @@ internal object WorkspacePublicResearch {
                     .findAll(line.lowercase(Locale.ROOT)).map { it.value }.toSet()
                 val onTopic = WorkspaceResearchQuestionFocus.passageOnTopic(
                     question, source, line)
-                line to if (onTopic) topic.count { it in lineWords } + 1 else 0
+                // Discovery is deliberately recall-friendly: keep paragraphs whose
+                // words match the actual question even if the contextual
+                // topic heuristic is uncertain. The separate relevantExtracts
+                // and model citation audit remain strict before final output.
+                line to topic.count { it in lineWords } + (if (onTopic) 1 else 0)
             }
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
