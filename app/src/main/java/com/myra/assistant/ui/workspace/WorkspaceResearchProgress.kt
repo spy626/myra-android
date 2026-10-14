@@ -1,6 +1,5 @@
 package com.myra.assistant.ui.workspace
 
-import java.net.URI
 import java.util.Locale
 
 /**
@@ -41,6 +40,28 @@ internal object WorkspaceResearchProgress {
             message = domains.joinToString(" · ") +
                 ". Checking which pages provide usable evidence.",
         )
+    }
+
+    /**
+     * Reconstruct chips from the bounded, source-derived public update only.
+     * Reject arbitrary narration text; never turn unchecked model text into
+     * clickable sources or reported search activity.
+     */
+    fun domainChips(update: WorkspacePublicWorkMessage): List<String> {
+        if (!Regex("""research-round-\\d{1,2}""").matches(update.key)) return emptyList()
+        if (!Regex("""Found [1-9]\\d* reachable websites?""").matches(update.status)) {
+            return emptyList()
+        }
+        val marker = ". Checking which pages provide usable evidence."
+        if (!update.text.endsWith(marker)) return emptyList()
+        val hosts = update.text.removeSuffix(marker).split(" · ")
+        if (hosts.size !in 1..5) return emptyList()
+        val pattern = Regex("""[a-z0-9](?:[a-z0-9.-]{0,120}[a-z0-9])?""")
+        return hosts.takeIf { list ->
+            list.all { host ->
+                host.contains('.') && pattern.matches(host) && !host.contains("..")
+            }
+        }.orEmpty()
     }
 
     fun readEvidence(
