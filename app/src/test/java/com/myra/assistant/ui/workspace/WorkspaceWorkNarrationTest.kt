@@ -262,6 +262,65 @@ class WorkspaceWorkNarrationTest {
         assertFalse(visible.any { it.label == "Verifying exact CI" })
     }
 
+    @Test fun researchStagesDisplayObservedProgressWithoutGenericVerification() {
+        val snapshot = WorkspaceWorkSnapshot(
+            events = listOf(
+                WorkspaceWorkEvent(WorkspaceWorkPhase.THINKING,
+                    "Understanding your question", null, 1_000L),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.SEARCHING,
+                    "Searching the web", "Android iOS battery optimization", 2_000L),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.VERIFYING,
+                    "Verifying direct destination", "support.apple.com", 3_000L),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.VERIFYING,
+                    "Reading public page 1 of 3", null, 4_000L),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.SEARCHING,
+                    "Researching missing source evidence", null, 5_000L),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.THINKING,
+                    "Synthesizing verified source evidence", "Free provider", 6_000L),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.VERIFYING,
+                    "Research answer evidence audit", "accepted claims 2", 7_000L),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.DONE,
+                    "Research completed", null, 8_000L),
+            ),
+            startedAtMs = 1_000L,
+            endedAtMs = 8_000L,
+        )
+
+        val labels = WorkspaceWorkNarration.events(snapshot).map { it.label }
+        assertEquals(listOf(
+            "Thinking",
+            "Searching websites",
+            "Checking source links",
+            "Reading website 1 of 3",
+            "Searching for missing sources",
+            "Preparing the sourced answer",
+            "Checking answer citations",
+            "Work verified",
+        ), labels)
+        assertFalse(labels.any { it.contains("Verifying the result") })
+        assertFalse(labels.any { it.contains("Searched 4") || it.contains("Searched 5") })
+        // Research detail does not leak user wording, provider labels or source
+        // metadata into a duplicate status message.
+        assertTrue(WorkspaceWorkNarration.events(snapshot).all {
+            it.detail == null
+        })
+        assertEquals("Worked for 7s ›",
+            WorkspaceWorkPresentation.compactRow(snapshot, false, 9_000L))
+    }
+
+    @Test fun plainConversationThinkingRemainsShortWithoutFakeWebSearch() {
+        val snapshot = WorkspaceWorkSnapshot(
+            events = listOf(WorkspaceWorkEvent(
+                WorkspaceWorkPhase.THINKING, "Thinking", "Free provider", 1_000L)),
+            startedAtMs = 1_000L,
+            endedAtMs = null,
+        )
+        assertEquals(listOf("Thinking"),
+            WorkspaceWorkNarration.events(snapshot).map { it.label })
+        assertEquals(listOf("Thinking"),
+            WorkspaceWorkPresentation.visibleEvents(snapshot, false).map { it.label })
+    }
+
     @Test fun repeatedTechnicalStatusesCollapseIntoOneHumanMilestone() {
         val snapshot = WorkspaceWorkSnapshot(
             events = listOf(
