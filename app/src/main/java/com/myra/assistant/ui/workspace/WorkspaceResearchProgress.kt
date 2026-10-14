@@ -49,7 +49,7 @@ internal object WorkspaceResearchProgress {
      */
     fun domainChips(update: WorkspacePublicWorkMessage): List<String> {
         if (!Regex("""research-round-\d{1,2}""").matches(update.key)) return emptyList()
-        if (!Regex("""Found [1-9]\d* reachable websites?""").matches(update.status)) {
+        if (!Regex("""Found [1-9]\d* reachable websites?""").matches(update.statusLabel)) {
             return emptyList()
         }
         val marker = ". Checking which pages provide usable evidence."
