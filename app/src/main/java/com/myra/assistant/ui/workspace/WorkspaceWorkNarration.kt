@@ -51,6 +51,9 @@ internal object WorkspaceWorkNarration {
                 if (draftPr.containsMatchIn(raw.label) ||
                     completion.containsMatchIn(raw.label) ||
                     raw.label.equals("Preparing result explanation", ignoreCase = true) ||
+                    // Query completion has its own verified page-count receipt;
+                    // don't render technical bookkeeping as another generic row.
+                    raw.label.equals("Web candidates collected", ignoreCase = true) ||
                     (raw.phase == WorkspaceWorkPhase.VERIFYING &&
                         hasExactCiEvidence && ci.containsMatchIn(raw.label)) ||
                     (raw.phase == WorkspaceWorkPhase.VERIFYING &&
