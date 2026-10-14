@@ -10,6 +10,31 @@ import java.util.Locale
 internal object WorkspaceResearchProgress {
     internal data class Update(val key: String, val status: String, val message: String)
 
+    /**
+     * A saved research reply is a completed delivery even when its evidence
+     * coverage is incomplete. Do not mark that as cancellation or fabricate
+     * research success; preserve the exact incomplete label in expanded history.
+     * Actual unverified direct links and real execution errors stay errors.
+     */
+    fun recordSavedOutcome(
+        trace: WorkspaceWorkTrace,
+        wasResearch: Boolean,
+        researchAnswerComplete: Boolean,
+        hasSources: Boolean,
+        failureDetail: String,
+    ) {
+        when {
+            wasResearch && !researchAnswerComplete ->
+                trace.finishSuccess("Research incomplete — answer saved")
+            !researchAnswerComplete ->
+                trace.finishError("Research needs more evidence", failureDetail.take(160))
+            hasSources ->
+                trace.finishSuccess(
+                    if (wasResearch) "Research response sourced" else "Direct links ready")
+            else -> trace.finishError("Direct link not verified", failureDetail.take(160))
+        }
+    }
+
     fun kickoff(): Update = Update(
         key = "research-plan",
         status = "Thinking",
