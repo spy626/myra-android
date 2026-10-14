@@ -328,6 +328,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private var liveRichBlocks: List<Block> = emptyList()
     private val workTraces = WorkspaceTurnWorkTraces()
     private val publicWorkNarrations = WorkspaceTurnPublicNarrations()
+    // One bounded report, local to this process: never written to Logcat/Room/prefs.
+    private val researchDebugReport = WorkspaceResearchDebugReport()
     private val detachedWorkTrace = WorkspaceWorkTrace()
     // The currently foreground-owned receipt. Background GitHub work keeps its own exact turn.
     private var workTraceMessageId: String? = null
@@ -1887,6 +1889,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 runCatching { conversations.read(projectId).lastOrNull()?.id }
                     .getOrNull() != turnId) return@runOnUiThread
             webResearchSynthesisCall = null
+            researchDebugReport.record(turnId, audit)
             // Evidence provenance is preserved even when the model response
             // is incomplete. This is an audit RESULT, not a claim of truth.
             recordWorkEvent(
@@ -2000,6 +2003,7 @@ class WorkspaceActivity : AppCompatActivity() {
         researchQuestion: String? = null,
     ) {
         clearWebLinkLookup()
+        if (researchQuestion != null) researchDebugReport.clear()
         webResearchQuestion = researchQuestion
         webResearchOriginal = request
         webResearchQueries = if (researchQuestion != null)
@@ -3217,6 +3221,32 @@ class WorkspaceActivity : AppCompatActivity() {
         renderAttachments()
     }
 
+    /**
+     * Only visible in the debuggable, isolated phone-test APK. The report
+     * contains safe per-claim metadata, never raw provider JSON or chat text.
+     */
+    private fun showResearchDebugReport(text: String) {
+        AlertDialog.Builder(this)
+            .setTitle("LYRA Research Debug Report")
+            .setMessage(text)
+            .setPositiveButton("Copy report") { _, _ -> copyMessage(text) }
+            .setNeutralButton("Clear report") { _, _ ->
+                researchDebugReport.clear()
+                toast("Local research report cleared")
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showRawReplyTrace(turnId: String?, content: String) {
+        AlertDialog.Builder(this)
+            .setTitle("LYRA raw reply and prompt trace")
+            .setMessage(WorkspaceRichDiagnostics.show(this, turnId, content))
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Copy raw") { _, _ -> copyMessage(content) }
+            .show()
+    }
+
     private fun copyMessage(text: String) {
         runCatching {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -3587,13 +3617,22 @@ class WorkspaceActivity : AppCompatActivity() {
                     // occupying the normal chat action row. Long-press Retry to inspect.
                     retryButton.setOnLongClickListener {
                         val sourceTurnId = latestUserTurnId
-                        AlertDialog.Builder(this@WorkspaceActivity)
-                            .setTitle("LYRA raw reply and prompt trace")
-                            .setMessage(WorkspaceRichDiagnostics.show(
-                                this@WorkspaceActivity, sourceTurnId, message.text))
-                            .setNegativeButton("Close", null)
-                            .setPositiveButton("Copy raw") { _, _ -> copyMessage(message.text) }
-                            .show()
+                        val debugOnly = (applicationInfo.flags and
+                            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                        val report = if (debugOnly) researchDebugReport.forTurn(sourceTurnId)
+                            else null
+                        if (report == null) {
+                            showRawReplyTrace(sourceTurnId, message.text)
+                        } else {
+                            AlertDialog.Builder(this@WorkspaceActivity)
+                                .setTitle("Developer diagnostics")
+                                .setItems(arrayOf(
+                                    "Research Debug Report", "Raw reply and prompt trace"
+                                )) { _, selected ->
+                                    if (selected == 0) showResearchDebugReport(report)
+                                    else showRawReplyTrace(sourceTurnId, message.text)
+                                }.setNegativeButton("Close", null).show()
+                        }
                         true
                     }
                     retryButton.tooltipText = "Long-press for diagnostics"
