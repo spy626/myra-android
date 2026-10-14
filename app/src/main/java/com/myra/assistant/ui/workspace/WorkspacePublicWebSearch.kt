@@ -201,7 +201,8 @@ internal object WorkspacePublicWebSearch {
         request: WorkspaceWebLinkIntent.Request, results: List<Verified>,
     ): List<Verified> = results.distinctBy { it.finalUrl }
         .sortedWith(compareByDescending<Verified> {
-            if (isOfficialDocumentation(it.finalUrl, request.query)) 1 else 0
+            if (isOfficialDocumentation(it.finalUrl, request.query) ||
+                WorkspaceResearchEvidenceQuality.primaryFor(it, request.query)) 1 else 0
         }.thenByDescending {
             tokens(request.query).count { term -> term in tokens(it.title) }
         }).take(request.maxResults)
@@ -281,7 +282,9 @@ internal object WorkspacePublicWebSearch {
             } == true
             val score = overlapTitle * 8 + overlapUrl * 3 + overlapSnippet * 12 +
                 (if (hostMatch) 50 else 0) +
-                (if (isOfficialDocumentation(url, query)) 45 else 0) - index
+                (if (isOfficialDocumentation(url, query) ||
+                    WorkspaceResearchEvidenceQuality.primaryFor(
+                        Verified(title, url, snippet, "text/html"), query)) 45 else 0) - index
             val minimum = if (hostMatch) 50 else 8
             Candidate(title, url, snippet, score).takeIf { score >= minimum }
         }.distinctBy { it.url }
@@ -374,10 +377,19 @@ internal object WorkspacePublicWebSearch {
             )) return false
         if (results.any { it.finalUrl == candidate.finalUrl }) return false
         if (request.maxResults == 1 || request.preferredHost != null) return true
+        // Multiple official documentation pages may still be useful for a
+        // single-ecosystem lookup. Comparisons should not count several pages
+        // from the same owner as independent publishers.
+        if (isOfficialDocumentation(candidate.finalUrl, request.query) &&
+            WorkspacePublicResearch.comparisonSubjects(request.query).size != 2) return true
+        val publisher = WorkspaceResearchEvidenceQuality.publisher(candidate.finalUrl)
+        if (publisher != null) return results.none {
+            WorkspaceResearchEvidenceQuality.publisher(it.finalUrl) == publisher
+        }
         val host = URI(candidate.finalUrl).host.removePrefix("www.").lowercase(Locale.ROOT)
         return results.none {
             URI(it.finalUrl).host.removePrefix("www.").lowercase(Locale.ROOT) == host
-        } || isOfficialDocumentation(candidate.finalUrl, request.query)
+        }
     }
 
     fun receiptAll(results: List<Verified>, requested: Int): String {

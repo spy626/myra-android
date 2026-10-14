@@ -26,10 +26,16 @@ internal object WorkspaceResearchQueryPlan {
             Regex("""[\p{L}\p{N}]{3,}""").findAll(question.lowercase(Locale.ROOT))
                 .map { it.value }.firstOrNull { it in background }.orEmpty()
         }
-        return (listOf(original) + subjects.map { subject ->
+        // Search each comparison side first; the raw mixed-language request is
+        // retained as the final broad discovery query for independent evidence.
+        // This avoids letting generic first-round results consume the earliest slots.
+        val focused = subjects.map { subject ->
             original.copy(query = (subject + " " + context).trim().take(180),
                 maxResults = 2)
-        }).distinctBy { it.query.lowercase(Locale.ROOT) }.take(MAX_QUERIES)
+        }
+        return (focused + original).distinctBy {
+            it.query.lowercase(Locale.ROOT)
+        }.take(MAX_QUERIES)
     }
 
     fun choose(

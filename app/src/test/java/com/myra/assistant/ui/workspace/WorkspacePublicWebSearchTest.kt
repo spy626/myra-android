@@ -1,6 +1,7 @@
 package com.myra.assistant.ui.workspace
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -143,6 +144,39 @@ class WorkspacePublicWebSearchTest {
         assertTrue(result.contains("only 1 could be verified"))
     }
 
+
+    @Test fun researchResultsDoNotCountSubdomainsAsIndependentPublishers() {
+        val request = WorkspaceWebLinkIntent.Request(
+            "Android iOS battery optimization", maxResults = 3)
+        fun verified(url: String) = WorkspacePublicWebSearch.Verified(
+            "Battery optimization guidance", url, "Android and iOS battery", "text/html")
+        val first = verified("https://lifetips.alibaba.com/article/battery-tips")
+        val sameOwner = verified("https://alibaba.com/article/battery-tips")
+        val official = verified("https://developer.android.com/topic/performance/power")
+        assertFalse(WorkspacePublicWebSearch.canAddResult(
+            request, listOf(first), sameOwner))
+        assertTrue(WorkspacePublicWebSearch.canAddResult(
+            request, listOf(first), official))
+    }
+
+    @Test fun mixedPlatformResearchRanksOfficialPagesAheadOfGenericResults() {
+        val html = """
+            <a class="result__a" href="https://blog.example.com/android-ios-battery">
+                Android iOS battery optimization comparison explained
+            </a>
+            <a class="result__a" href="https://developer.android.com/topic/performance/power">
+                Android battery optimization documentation
+            </a>
+            <a class="result__a" href="https://support.apple.com/en-us/101604">
+                iOS battery optimization guidance
+            </a>
+        """.trimIndent()
+        val candidates = WorkspacePublicWebSearch.parseHtml(
+            html, "Android iOS battery optimization", null)
+        assertEquals(3, candidates.size)
+        val topHosts = candidates.take(2).map { java.net.URI(it.url).host }.toSet()
+        assertEquals(setOf("developer.android.com", "support.apple.com"), topHosts)
+    }
 
     @Test fun htmlEntitiesInTitlesAreDecodedBeforeDisplay() {
         val html = """

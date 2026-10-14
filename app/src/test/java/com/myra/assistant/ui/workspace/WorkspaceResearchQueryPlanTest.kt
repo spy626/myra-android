@@ -11,9 +11,21 @@ class WorkspaceResearchQueryPlanTest {
             "WorkManager Foreground Service", maxResults = 3)
         val queries = WorkspaceResearchQueryPlan.queries(question, original)
         assertEquals(3, queries.size)
-        assertTrue(queries[1].query.contains("WorkManager"))
-        assertTrue(queries[2].query.contains("Foreground Service"))
+        assertTrue(queries[0].query.contains("WorkManager"))
+        assertTrue(queries[1].query.contains("Foreground Service"))
+        assertEquals(original, queries[2])
         assertTrue(queries.all { it.preferredHost == null })
+    }
+
+    @Test fun mixedLanguageBatteryResearchSearchesBothSidesBeforeBroadQuery() {
+        val question = "Android aur iOS ki battery optimization compare karo. " +
+            "Multiple reliable websites se information lekar sources ke saath answer do."
+        val original = WorkspaceWebLinkIntent.Request(question, maxResults = 3)
+        val queries = WorkspaceResearchQueryPlan.queries(question, original)
+        assertEquals(3, queries.size)
+        assertEquals("Android battery optimization", queries[0].query)
+        assertEquals("iOS battery optimization", queries[1].query)
+        assertEquals(original, queries[2])
     }
 
     @Test fun researchSourceSelectionRequiresBothTopicsWhenAvailable() {
