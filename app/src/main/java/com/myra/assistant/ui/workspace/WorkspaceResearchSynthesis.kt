@@ -125,7 +125,12 @@ internal object WorkspaceResearchSynthesis {
         "Reply ONLY as JSON with 2 to 6 sourced factual claims and an OPTIONAL " +
         "short practical takeaway when evidence supports a useful conclusion: " +
         """{"claims":[{"text":"factual sentence","evidenceIds":["E1"],"supportQuote":"exact excerpt from cited evidence"}],"takeaway":{"text":"practical conclusion","evidenceIds":["E1","E2"]}}""" +
-        ". Use natural English/Hinglish, clear meaningful differences for BOTH " +
+        ". For any two-subject comparison, write at least one grounded claim " +
+        "explicitly naming EACH requested subject. Do not output a one-sided " +
+        "list as a complete comparison. Only cite subject-specific passages; " +
+        "a website headline alone is not claim evidence. If one side lacks " +
+        "passage support, never fabricate it. Use natural English/Hinglish, " +
+        "clear meaningful differences for BOTH " +
         "comparison subjects, tradeoffs and practical settings if the passages " +
         "actually support them. Prefer 3 to 5 useful points, not two superficial " +
         "rephrasings. Do not invent sources, links, metrics, generalizations, " +
@@ -145,6 +150,12 @@ internal object WorkspaceResearchSynthesis {
         bundle.evidence.forEach { record ->
             appendLine(record.id + " (" + record.sourceId + "): " +
                 record.passage.replace('\n', ' ').replace('\r', ' '))
+        }
+        val sides = WorkspaceResearchQuestionFocus.inspect(bundle.question).subjects
+        if (sides.size == 2) {
+            appendLine("IMPORTANT: compare " + sides.joinToString(" versus ") +
+                ". Write a separate claim naming each subject when its page " +
+                "passage supports the subject; otherwise omit unsupported claims.")
         }
         appendLine("Write a helpful, source-grounded comparison and optional cited takeaway as JSON.")
         appendLine("Do not repeat a one-publisher numerical battery-life promise.")
