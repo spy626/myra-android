@@ -1906,7 +1906,15 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceResearchSynthesis.AuditIssue.MISSING_COMPARISON_COVERAGE ->
                     "AI ka answer comparison ke dono sides cover nahi karta."
             }
-            val safePartial = audit.partialAnswer ?: fallback
+            // The deterministic comparison remains explicitly INCOMPLETE:
+            // direct page excerpts are not a second model or a claim-audit bypass.
+            // Prefer two observed sides over presenting only one model claim,
+            // but never construct platform facts from a URL title alone.
+            val sideBySide = if (!audit.isComplete) webResearchQuestion?.let { question ->
+                WorkspaceResearchComparisonFallback.sideBySide(
+                    question, webResearchReadEvidence)
+            } else null
+            val safePartial = sideBySide ?: audit.partialAnswer ?: fallback
             finishWebLinkLookup(
                 audit.answer ?: ("Bro, source-backed comparison abhi complete nahi hai. " +
                     limitation + "\n\nJo supported evidence mili:\n\n" + safePartial),
