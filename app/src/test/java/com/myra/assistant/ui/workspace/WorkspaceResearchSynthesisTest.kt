@@ -33,8 +33,8 @@ class WorkspaceResearchSynthesisTest {
     @Test fun acceptedResearchShowsNativeComparisonAndOnlyCitedSourceLinks() {
         val bundle = evidence()
         val raw = """{"claims":[
-          {"text":"WorkManager schedules reliable background work with constraints and retries.","evidenceIds":["E1"]},
-          {"text":"Foreground Service runs user-visible ongoing foreground work.","evidenceIds":["E2"]}
+          {"text":"WorkManager is designed for persistent work that can be deferred until constraints are met.","evidenceIds":["E1"]},
+          {"text":"A foreground service performs user-noticeable ongoing work and must display a notification.","evidenceIds":["E2"]}
         ]}"""
         val answer = requireNotNull(WorkspaceResearchSynthesis.auditedAnswer(raw, bundle))
         assertTrue(answer.contains("### At a glance"))
@@ -57,7 +57,7 @@ class WorkspaceResearchSynthesisTest {
         val answer = requireNotNull(WorkspaceResearchSynthesis.auditedAnswer(valid, bundle))
         assertTrue(answer.contains(work.finalUrl))
         assertTrue(answer.contains(service.finalUrl))
-        assertTrue(answer.contains("Source 2"))
+        assertTrue(answer.contains("developer.android.com"))
     }
 
     @Test fun refusesInventedCitationsNumbersAndProviderUrls() {
