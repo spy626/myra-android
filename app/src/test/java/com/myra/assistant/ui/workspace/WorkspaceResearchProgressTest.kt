@@ -90,6 +90,40 @@ class WorkspaceResearchProgressTest {
         }.isFailure)
     }
 
+    @Test fun safePartialReplyIsSavedWithoutClaimingSuccessfulResearchOrCancellation() {
+        var now = 1_000L
+        val trace = WorkspaceWorkTrace { now }
+        trace.begin(WorkspaceWorkPhase.SEARCHING, "Searching the web")
+        now = 4_000L
+        WorkspaceResearchProgress.recordSavedOutcome(
+            trace, wasResearch = true, researchAnswerComplete = false,
+            hasSources = true, failureDetail = "Incomplete but saved source excerpts")
+        val result = trace.snapshot()
+        assertEquals(WorkspaceWorkPhase.DONE, result.current?.phase)
+        assertEquals("Research incomplete — answer saved", result.current?.label)
+        assertFalse(result.active)
+        assertEquals("Worked for 3s ›",
+            WorkspaceWorkPresentation.compactRow(result, false, now))
+        assertTrue(WorkspaceWorkPresentation.visibleEvents(result, false).isEmpty())
+        assertEquals("Research incomplete — answer saved",
+            WorkspaceWorkPresentation.visibleEvents(result, true).last().label)
+    }
+
+    @Test fun actualNoSourceAndDirectLinkFailuresStillRemainErrors() {
+        val trace = WorkspaceWorkTrace { 1_000L }
+        trace.begin(WorkspaceWorkPhase.SEARCHING, "Searching websites")
+        WorkspaceResearchProgress.recordSavedOutcome(
+            trace, wasResearch = false, researchAnswerComplete = true,
+            hasSources = false, failureDetail = "Unverified direct URL")
+        assertEquals(WorkspaceWorkPhase.ERROR, trace.snapshot().current?.phase)
+        trace.begin(WorkspaceWorkPhase.SEARCHING, "Searching websites")
+        WorkspaceResearchProgress.recordSavedOutcome(
+            trace, wasResearch = true, researchAnswerComplete = true,
+            hasSources = true, failureDetail = "")
+        assertEquals(WorkspaceWorkPhase.DONE, trace.snapshot().current?.phase)
+        assertEquals("Research response sourced", trace.snapshot().current?.label)
+    }
+
     @Test fun publicTimelineKeepsCompletedResearchMilestonesExpandable() {
         val store = WorkspaceTurnPublicNarrations()
         store.reset("turn-7")
