@@ -145,6 +145,8 @@ internal object WorkspaceWorkNarration {
             }
 
             WorkspaceWorkPhase.DONE -> when {
+                raw.label.equals("Research incomplete — answer saved", ignoreCase = true) ->
+                    "Research incomplete — answer saved"
                 website.containsMatchIn(raw.label) -> "Website verified"
                 github.containsMatchIn(raw.label) -> "GitHub change verified"
                 edit.containsMatchIn(raw.label) -> "Change verified"
