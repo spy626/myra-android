@@ -1992,11 +1992,13 @@ class WorkspaceActivity : AppCompatActivity() {
             if (sources.isNotEmpty()) verifiedSources.put(id, saved.id, sources)
         }.onSuccess {
             statusMessage = ""
-            if (!researchAnswerComplete)
-                workTrace.finishError("Research needs more evidence", reply.take(160))
-            else if (sources.isNotEmpty()) workTrace.finishSuccess(
-                if (wasResearch) "Research response sourced" else "Direct links ready")
-            else workTrace.finishError("Direct link not verified", reply.take(160))
+            WorkspaceResearchProgress.recordSavedOutcome(
+                trace = workTrace,
+                wasResearch = wasResearch,
+                researchAnswerComplete = researchAnswerComplete,
+                hasSources = sources.isNotEmpty(),
+                failureDetail = reply,
+            )
         }.onFailure {
             statusMessage = it.message ?: "Web link result could not be saved."
             workTrace.finishError("Web link not saved", statusMessage)
