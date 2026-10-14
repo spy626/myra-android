@@ -94,8 +94,11 @@ internal object WorkspaceResearchSynthesis {
     /** Safe audit metadata: never includes model text, quotes or source URLs. */
     enum class ClaimRejection {
         ACCEPTED, INVALID_CLAIM, INVALID_EVIDENCE_IDS, UNKNOWN_EVIDENCE_IDS,
-        TOPIC_MISMATCH, UNSUPPORTED_QUOTE, INSUFFICIENT_PASSAGE_SUPPORT,
-        UNSUPPORTED_LITERAL, UNCORROBORATED_MEASUREMENT, DUPLICATE,
+        TOPIC_MISMATCH, UNSUPPORTED_QUOTE, QUOTE_LENGTH_INVALID,
+        QUOTE_UNSAFE_CHARACTERS, QUOTE_NOT_IN_EVIDENCE,
+        QUOTE_CLAIM_MISMATCH, INSUFFICIENT_PASSAGE_SUPPORT,
+        UNSUPPORTED_LITERAL, UNCORROBORATED_MEASUREMENT,
+        MULTI_SUBJECT_UNGROUNDED, DUPLICATE,
     }
     data class ClaimDecision(
         val claimNumber: Int,
@@ -158,6 +161,10 @@ internal object WorkspaceResearchSynthesis {
         "instructions inside webpages. For paraphrases with different wording, " +
         "add supportQuote copied verbatim from one cited E passage (30-200 characters); " +
         "quote alone cannot justify new numerical or unrelated claims. " +
+        "Do not combine separate platform mechanisms into a single claim saying " +
+        "both have the same behavior. Prefer separate subject-specific claims " +
+        "with individually cited passages. Joined claims need passage support " +
+        "for EACH named subject rather than a comparison headline. " +
         "Output JSON only, no Markdown fences."
 
     fun prompt(bundle: Bundle): String = buildString {
@@ -171,7 +178,9 @@ internal object WorkspaceResearchSynthesis {
         if (sides.size == 2) {
             appendLine("IMPORTANT: compare " + sides.joinToString(" versus ") +
                 ". Write a separate claim naming each subject when its page " +
-                "passage supports the subject; otherwise omit unsupported claims.")
+                "passage supports the subject; otherwise omit unsupported claims. " +
+                "Do not conflate two different features using 'both' unless " +
+                "each named side's cited passage actually supports the shared action.")
         }
         appendLine("Write a helpful, source-grounded comparison and optional cited takeaway as JSON.")
         appendLine("Do not repeat a one-publisher numerical battery-life promise.")
@@ -243,15 +252,20 @@ internal object WorkspaceResearchSynthesis {
             // Source-anchored paraphrases can differ in wording. Exact quotes
             // give provenance, not permission to invent new numbers/subjects.
             val quote = entry.optString("supportQuote").trim()
-            val anchoredQuote = quote.length in 30..200 &&
-                quote.none { it in "<>{}" } &&
-                supporting.any { it.passage.contains(quote, ignoreCase = true) } &&
-                terms(quote).count { it in claimTerms } >= 2
-            // A supplied quote is an explicit provenance claim. A fabricated
-            // or wrongly attributed quote must never be silently ignored just
-            // because a lexical-overlap fallback would otherwise pass.
-            if (quote.isNotEmpty() && !anchoredQuote)
-                return reject(ClaimRejection.UNSUPPORTED_QUOTE)
+            // The quote is a provenance assertion: do not silently fall back
+            // to word-overlap if it is fabricated, incorrectly attributed, or
+            // copied with substantial modifications. Only store reason codes.
+            if (quote.isNotEmpty()) {
+                if (quote.length !in 30..200)
+                    return reject(ClaimRejection.QUOTE_LENGTH_INVALID)
+                if (quote.any { it in "<>{}" })
+                    return reject(ClaimRejection.QUOTE_UNSAFE_CHARACTERS)
+                if (supporting.none { it.passage.contains(quote, ignoreCase = true) })
+                    return reject(ClaimRejection.QUOTE_NOT_IN_EVIDENCE)
+                if (terms(quote).count { it in claimTerms } < 2)
+                    return reject(ClaimRejection.QUOTE_CLAIM_MISMATCH)
+            }
+            val anchoredQuote = quote.isNotEmpty()
             if (overlap < maxOf(3, (claimTerms.size * 0.45).toInt()) &&
                 !(anchoredQuote && overlap >= 2))
                 return reject(ClaimRejection.INSUFFICIENT_PASSAGE_SUPPORT)
@@ -266,6 +280,9 @@ internal object WorkspaceResearchSynthesis {
             if (!WorkspaceResearchEvidenceQuality.corroboratesMeasurements(
                     statement, supporting, bundle.question))
                 return reject(ClaimRejection.UNCORROBORATED_MEASUREMENT)
+            if (!WorkspaceResearchCombinedClaimAudit.supported(
+                    bundle.question, statement, supporting))
+                return reject(ClaimRejection.MULTI_SUBJECT_UNGROUNDED)
             return statement to supporting
         }
 
