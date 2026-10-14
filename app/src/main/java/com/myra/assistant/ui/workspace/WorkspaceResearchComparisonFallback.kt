@@ -24,8 +24,13 @@ internal object WorkspaceResearchComparisonFallback {
             val passage: String,
             val source: WorkspacePublicWebSearch.Verified,
         )
+        // Prefer first-party documentation when it contains an explicit
+        // subject-specific factual passage; other sources remain eligible.
+        val ranked = safe.sortedByDescending {
+            WorkspaceResearchEvidenceQuality.primaryFor(it.source, question)
+        }
         val findings = subjects.mapNotNull { subject ->
-            safe.asSequence().filter { extract ->
+            ranked.asSequence().filter { extract ->
                 WorkspaceResearchQuestionFocus.sourceMentionsSubject(extract.source, subject)
             }.flatMap { extract ->
                 extract.passages.asSequence().filter { passage ->
