@@ -24,6 +24,18 @@ internal object WorkspaceResearchCombinedClaimAudit {
         "battery", "batteries", "optimization", "optimized", "optimize",
     )
 
+    // Treat regular inflections as the same observed term. This is a
+    // conservative lexical aid, NOT semantic entailment or a word list of
+    // platform-specific shortcuts. For example "limits" / "limit" and
+    // "tasks" / "task" must not invalidate an otherwise exact sourced claim.
+    private fun normalized(token: String): String = when {
+        token.length > 5 && token.endsWith("ies") -> token.dropLast(3) + "y"
+        token.length > 4 && token.endsWith("s") &&
+            !token.endsWith("ss") && !token.endsWith("us") &&
+            !token.endsWith("is") -> token.dropLast(1)
+        else -> token
+    }
+
     fun supported(
         question: String,
         statement: String,
@@ -55,12 +67,13 @@ internal object WorkspaceResearchCombinedClaimAudit {
         val shared = sharedAssertion.find(statement) ?: return true
         val suffix = statement.substring(shared.range.last + 1)
         val predicate = word.findAll(suffix.lowercase(Locale.ROOT))
-            .map { it.value }.filterNot { it in generic }.distinct().toList()
+            .map { it.value }.filterNot { it in generic }
+            .map(::normalized).distinct().toList()
         if (predicate.isEmpty()) return false
         return sides.all { side ->
             side.any { evidence ->
                 val observed = word.findAll(evidence.passage.lowercase(Locale.ROOT))
-                    .map { it.value }.toSet()
+                    .map { normalized(it.value) }.toSet()
                 predicate.all { it in observed }
             }
         }
