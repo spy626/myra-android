@@ -24,6 +24,16 @@ internal object WorkspaceWorkNarration {
     private val github = Regex("(?i)github|self-edit|\\bci\\b")
     private val edit = Regex("(?i)edit")
     private val applying = Regex("(?i)preparing|applying|saving|editing|committing|building")
+    // Only the observed event can supply a progress milestone. Do not infer
+    // search counts, source domains, research conclusions or private reasoning.
+    private val publicPageRead = Regex("""(?i)^Reading public page (\d{1,2}) of (\d{1,2})$""")
+    private val publicWeb = Regex("(?i)public web|web search|website|webpage|web link")
+    private val missingResearch = Regex("(?i)missing source evidence|additional source search")
+    private val sourceAudit = Regex("(?i)research answer evidence audit")
+    private val sourceLink = Regex("(?i)verifying direct destination|verifying source|checking source")
+    private val questionThinking = Regex("(?i)^thinking$|understanding your question")
+    private val researchWriting = Regex("(?i)synthesizing verified source evidence")
+
 
     fun events(snapshot: WorkspaceWorkSnapshot): List<WorkspaceWorkEvent> {
         val projected = mutableListOf<WorkspaceWorkEvent>()
@@ -72,10 +82,34 @@ internal object WorkspaceWorkNarration {
         }
         if (budget.matches(raw.label)) return null
         val label = when (raw.phase) {
-            WorkspaceWorkPhase.THINKING -> "Analyzing the task"
-            WorkspaceWorkPhase.SEARCHING,
-            WorkspaceWorkPhase.VISITING,
-            WorkspaceWorkPhase.READING -> "Reading relevant context"
+            WorkspaceWorkPhase.THINKING -> when {
+                researchWriting.containsMatchIn(raw.label) -> "Preparing the sourced answer"
+                questionThinking.containsMatchIn(raw.label) -> "Thinking"
+                else -> "Analyzing the task"
+            }
+
+            WorkspaceWorkPhase.SEARCHING -> when {
+                missingResearch.containsMatchIn(raw.label) -> "Searching for missing sources"
+                raw.label.contains("GitHub", ignoreCase = true) -> "Searching GitHub"
+                publicWeb.containsMatchIn(raw.label) ||
+                    raw.label.contains("searching the web", ignoreCase = true) ->
+                    "Searching websites"
+                else -> "Searching relevant sources"
+            }
+
+            WorkspaceWorkPhase.VISITING -> when {
+                publicWeb.containsMatchIn(raw.label) ||
+                    raw.label.contains("destination", ignoreCase = true) ->
+                    "Opening website"
+                else -> "Reading relevant context"
+            }
+
+            WorkspaceWorkPhase.READING -> when {
+                publicWeb.containsMatchIn(raw.label) ||
+                    raw.label.contains("public page", ignoreCase = true) ->
+                    "Reading webpage"
+                else -> "Reading relevant context"
+            }
 
             WorkspaceWorkPhase.CODING -> when {
                 website.containsMatchIn(raw.label) && raw.label.contains("build", ignoreCase = true) ->
@@ -85,13 +119,19 @@ internal object WorkspaceWorkNarration {
             }
 
             WorkspaceWorkPhase.VERIFYING -> when {
+                publicPageRead.matches(raw.label) -> {
+                    val match = requireNotNull(publicPageRead.matchEntire(raw.label))
+                    "Reading website " + match.groupValues[1] + " of " + match.groupValues[2]
+                }
+                sourceAudit.containsMatchIn(raw.label) -> "Checking answer citations"
+                sourceLink.containsMatchIn(raw.label) -> "Checking source links"
                 review.containsMatchIn(raw.label) -> "Reviewing the change"
                 ci.containsMatchIn(raw.label) -> "Verifying exact CI"
                 writeSafety.containsMatchIn(raw.label) -> "Checking write safety"
                 completion.containsMatchIn(raw.label) -> "Confirming completion"
                 draftPr.containsMatchIn(raw.label) -> "Updating the draft PR"
                 proposal.containsMatchIn(raw.label) -> "Checking the proposed change"
-                else -> "Verifying the result"
+                else -> "Checking completed work"
             }
 
             WorkspaceWorkPhase.RECOVERING -> when {
