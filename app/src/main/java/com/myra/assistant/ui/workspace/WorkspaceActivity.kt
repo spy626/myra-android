@@ -2634,12 +2634,41 @@ class WorkspaceActivity : AppCompatActivity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(-1, -2))
         }
-        host.addView(label(item.message.text, 16f).apply {
-            text = WorkspaceMarkdownText.render(item.message.text)
-            setTextColor(Color.rgb(230, 236, 244))
-            setPadding(dp(4), 0, dp(8), dp(10))
-            setTextIsSelectable(true)
-        }, LinearLayout.LayoutParams(-1, -2))
+        val verifiedDomains = WorkspaceResearchProgress.domainChips(item.message)
+        if (verifiedDomains.isNotEmpty()) {
+            // Read-only publisher chips, derived solely from actually verified
+            // HTTPS search destinations. No guessed logos or click-through to
+            // unverified sources; the final Sources sheet owns safe URL opening.
+            val strip = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(3), dp(4), dp(3), dp(4))
+            }
+            verifiedDomains.forEach { domain ->
+                strip.addView(label(domain, 12.25f).apply {
+                    setTextColor(Color.rgb(205, 221, 213))
+                    background = rounded(Color.rgb(25, 42, 35), 12)
+                    setPadding(dp(10), dp(6), dp(10), dp(6))
+                    contentDescription = "Verified website: " + domain
+                }, LinearLayout.LayoutParams(-2, -2).apply {
+                    rightMargin = dp(7)
+                })
+            }
+            host.addView(android.widget.HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(strip)
+            }, LinearLayout.LayoutParams(-1, -2))
+            host.addView(label("Checking which pages provide usable evidence.", 13.5f).apply {
+                setTextColor(Color.rgb(168, 178, 191))
+                setPadding(dp(4), 0, dp(8), dp(10))
+            }, LinearLayout.LayoutParams(-1, -2))
+        } else {
+            host.addView(label(item.message.text, 16f).apply {
+                text = WorkspaceMarkdownText.render(item.message.text)
+                setTextColor(Color.rgb(230, 236, 244))
+                setPadding(dp(4), 0, dp(8), dp(10))
+                setTextIsSelectable(true)
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
     }
 
     private fun addWorkConversationTimeline(
