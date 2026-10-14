@@ -32,12 +32,16 @@ internal object WorkspaceResearchProgress {
             }.getOrNull()
         }.distinct().take(5)
         if (domains.isEmpty()) return null
-        val count = unique.size
+        val pages = unique.size
+        val websiteCount = domains.size
         return Update(
             key = "research-round-$index",
-            status = "Found $count reachable " +
-                if (count == 1) "website" else "websites",
-            message = domains.joinToString(" · ") +
+            // Page URLs and distinct publisher hosts are not the same count.
+            status = "Found $pages reachable " +
+                if (pages == 1) "page" else "pages",
+            message = "From $websiteCount " +
+                (if (websiteCount == 1) "website: " else "websites: ") +
+                domains.joinToString(" · ") +
                 ". Checking which pages provide usable evidence.",
         )
     }
@@ -49,12 +53,16 @@ internal object WorkspaceResearchProgress {
      */
     fun domainChips(update: WorkspacePublicWorkMessage): List<String> {
         if (!Regex("""research-round-\d{1,2}""").matches(update.key)) return emptyList()
-        if (!Regex("""Found [1-9]\d* reachable websites?""").matches(update.statusLabel)) {
+        if (!Regex("""Found [1-9]\d* reachable pages?""").matches(update.statusLabel)) {
             return emptyList()
         }
         val marker = ". Checking which pages provide usable evidence."
         if (!update.text.endsWith(marker)) return emptyList()
-        val hosts = update.text.removeSuffix(marker).split(" · ")
+        val body = update.text.removeSuffix(marker)
+        val match = Regex("""From ([1-5]) websites?: (.+)""").matchEntire(body)
+            ?: return emptyList()
+        val hosts = match.groupValues[2].split(" · ")
+        if (hosts.size != match.groupValues[1].toInt()) return emptyList()
         if (hosts.size !in 1..5) return emptyList()
         val pattern = Regex("""[a-z0-9](?:[a-z0-9.-]{0,120}[a-z0-9])?""")
         return hosts.takeIf { list ->
