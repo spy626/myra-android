@@ -31,7 +31,9 @@ internal object WorkspaceResearchQuestionFocus {
     )
 
     private fun tokens(text: String): List<String> =
-        words.findAll(text.lowercase(Locale.ROOT)).map { it.value }.toList()
+        words.findAll(text.lowercase(Locale.ROOT))
+            .map { it.value.trim('.', '-') }
+            .filter(String::isNotEmpty).toList()
 
     fun inspect(question: String): Focus {
         val subjects = WorkspacePublicResearch.comparisonSubjects(question)

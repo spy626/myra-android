@@ -324,11 +324,32 @@ internal object WorkspaceResearchSynthesis {
         if (accepted.isEmpty()) return AuditResult(
             null, AuditIssue.NO_SUPPORTED_CLAIMS, 0, rejected,
             claimDecisions = decisions, modelResponseCharacters = raw.length)
+        // Only successfully audited evidence is shown as cited material; the
+        // other reachable or searched sites are not sources for this answer.
+        fun sourceHost(hit: Evidence): String = runCatching {
+            java.net.URI(hit.source.finalUrl).host.orEmpty().removePrefix("www.")
+        }.getOrDefault("source").ifBlank { "source" }
         fun links(hits: List<Evidence>): String =
             hits.distinctBy { it.sourceId }.joinToString(" ") { hit ->
-                val index = hit.sourceId.removePrefix("S")
-                "[Source " + index + "](" + hit.source.finalUrl + ")"
+                "[" + sourceHost(hit) + "](" + hit.source.finalUrl + ")"
             }
+        fun sourcesUsed(hits: List<Evidence>): String = buildString {
+            val distinct = hits.distinctBy { it.sourceId }
+            if (distinct.isNotEmpty()) {
+                appendLine("### Sources used")
+                appendLine()
+                distinct.forEachIndexed { index, hit ->
+                    val title = hit.source.title
+                        .replace(Regex("""[\[\]()|*_`\r\n]"""), " ")
+                        .replace(Regex("""\s+"""), " ").trim().take(90)
+                    append(index + 1).append(". [")
+                        .append(sourceHost(hit)).append("](")
+                        .append(hit.source.finalUrl).append(")")
+                    if (title.isNotBlank()) append(" — ").append(title)
+                    appendLine()
+                }
+            }
+        }.trim()
 
         val comparisons = focus.subjects
         if (comparisons.size == 2 && comparisons.any { subject ->
@@ -342,11 +363,13 @@ internal object WorkspaceResearchSynthesis {
             // Preserve only independently audited claims. Report the missing
             // comparison side; never present one-sided evidence as complete.
             val partial = buildString {
-                appendLine("**Supported findings — comparison incomplete**")
+                appendLine("## Supported findings — comparison incomplete")
                 appendLine()
                 accepted.forEach { (statement, hits) ->
-                    appendLine("• " + statement.trimEnd('.') + ". " + links(hits))
+                    appendLine("- " + statement.trimEnd('.') + ". " + links(hits))
                 }
+                appendLine()
+                appendLine(sourcesUsed(accepted.flatMap { it.second }))
             }.trim()
             return AuditResult(null, AuditIssue.MISSING_COMPARISON_COVERAGE,
                 accepted.size, rejected, partial, decisions, raw.length)
@@ -363,16 +386,43 @@ internal object WorkspaceResearchSynthesis {
             }
 
         val answer = buildString {
-            appendLine("**What the sources say**")
+            if (comparisons.size == 2) {
+                appendLine("## Research comparison")
+                appendLine()
+                appendLine("### At a glance")
+                appendLine()
+                appendLine("| Platform | Supported observation |")
+                appendLine("| --- | --- |")
+                comparisons.forEach { subject ->
+                    val finding = accepted.firstOrNull { (statement, hits) ->
+                        WorkspaceResearchQuestionFocus.mentionsSubject(statement, subject) &&
+                            hits.any {
+                                WorkspaceResearchQuestionFocus.sourceMentionsSubject(it.source, subject)
+                            }
+                    }
+                    if (finding != null) {
+                        appendLine("| " + subject.replace("|", "/") + " | " +
+                            finding.first.replace("|", "/") + " |")
+                    }
+                }
+                appendLine()
+                appendLine("These observations are not necessarily tests of the same mechanism.")
+                appendLine()
+            }
+            appendLine("### Supported findings")
             appendLine()
             accepted.forEach { (statement, hits) ->
-                appendLine("• " + statement.trimEnd('.') + ". " + links(hits))
+                appendLine("- " + statement.trimEnd('.') + ". " + links(hits))
             }
             if (takeaway != null) {
                 appendLine()
-                appendLine("**Practical takeaway**")
+                appendLine("### Practical takeaway")
+                appendLine()
                 appendLine(takeaway.first.trimEnd('.') + ". " + links(takeaway.second))
             }
+            appendLine()
+            appendLine(sourcesUsed(
+                accepted.flatMap { it.second } + (takeaway?.second ?: emptyList())))
         }.trim()
         return AuditResult(answer, AuditIssue.NONE, accepted.size, rejected,
             claimDecisions = decisions, modelResponseCharacters = raw.length)

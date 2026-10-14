@@ -30,6 +30,20 @@ class WorkspaceResearchSynthesisTest {
             "Compare WorkManager and Foreground Service", hits))
     }
 
+    @Test fun acceptedResearchShowsNativeComparisonAndOnlyCitedSourceLinks() {
+        val bundle = evidence()
+        val raw = """{"claims":[
+          {"text":"WorkManager schedules reliable background work with constraints and retries.","evidenceIds":["E1"]},
+          {"text":"Foreground Service runs user-visible ongoing foreground work.","evidenceIds":["E2"]}
+        ]}"""
+        val answer = requireNotNull(WorkspaceResearchSynthesis.auditedAnswer(raw, bundle))
+        assertTrue(answer.contains("### At a glance"))
+        assertTrue(answer.contains("| Platform | Supported observation |"))
+        assertTrue(answer.contains("### Sources used"))
+        assertTrue(answer.contains(bundle.evidence[0].source.finalUrl))
+        assertTrue(answer.contains(bundle.evidence[1].source.finalUrl))
+    }
+
     @Test fun modelCanOnlyCiteVerifiedEvidenceIdentifiers() {
         val bundle = evidence()
         assertEquals(2, bundle.sourceCount)

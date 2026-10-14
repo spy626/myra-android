@@ -62,8 +62,9 @@ class WorkspaceQuestionAwareResearchPhoneRegressionTest {
         val request = requireNotNull(WorkspaceWebResearchIntent.decide(question))
         val planned = WorkspaceResearchQueryPlan.queries(question, request.search)
         assertEquals(3, planned.size)
-        assertTrue(planned[1].query.contains("Android battery optimization"))
-        assertTrue(planned[2].query.contains("iOS battery optimization"))
+        assertTrue(planned[0].query.contains("Android battery optimization"))
+        assertTrue(planned[1].query.contains("iOS battery optimization"))
+        assertEquals(request.search, planned[2])
         assertTrue(planned.all { it.preferredHost == null })
         assertNull(WorkspacePublicWebSearch.officialDocumentationHost(request.search.query))
     }
