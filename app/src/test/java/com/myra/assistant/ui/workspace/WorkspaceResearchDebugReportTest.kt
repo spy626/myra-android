@@ -64,7 +64,7 @@ class WorkspaceResearchDebugReportTest {
            "evidenceIds":["E2"]}
         ]}"""
         val audit = WorkspaceResearchSynthesis.audit(input, bundle())
-        assertEquals(WorkspaceResearchSynthesis.ClaimRejection.UNSUPPORTED_QUOTE,
+        assertEquals(WorkspaceResearchSynthesis.ClaimRejection.QUOTE_NOT_IN_EVIDENCE,
             audit.claimDecisions[0].result)
         // This number has no matching literal or independent measured source.
         assertTrue(audit.claimDecisions[1].result in setOf(
