@@ -26,6 +26,24 @@ internal class WorkspaceResearchDebugReport {
         lastReport = summarize(audit)
     }
 
+    /** Distinguish a model failure from a research turn that never called it. */
+    enum class SkipReason {
+        MISSING_COMPARISON_EVIDENCE,
+        EVIDENCE_BUNDLE_REJECTED,
+        FREE_PROVIDER_UNAVAILABLE,
+        MODEL_REQUEST_NOT_PREPARED,
+    }
+
+    @Synchronized fun skipped(turnId: String, reason: SkipReason) {
+        if (turnId.isBlank()) return
+        lastTurnId = turnId
+        lastReport = "LYRA Research Debug Report\\n" +
+            "Local test-only audit metadata; no raw JSON, chat text or keys.\\n\\n" +
+            "Final audit: NOT_RUN\\n" +
+            "Research model stage: " + reason.name + "\\n" +
+            "No model claim decisions were available for this turn."
+    }
+
     @Synchronized fun forTurn(turnId: String?): String? =
         lastReport?.takeIf { turnId != null && turnId == lastTurnId }
 
