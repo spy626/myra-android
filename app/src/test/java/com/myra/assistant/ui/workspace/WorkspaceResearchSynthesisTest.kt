@@ -70,6 +70,10 @@ class WorkspaceResearchSynthesisTest {
         assertNull(WorkspaceResearchSynthesis.bundle("Compare WorkManager", emptyList()))
         val text = WorkspaceResearchSynthesis.prompt(evidence())
         assertTrue(text.contains("E1"))
+        assertTrue(text.contains("WorkManager versus Foreground Service"))
+        assertTrue(WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS.contains(
+            "claim explicitly naming EACH requested subject"))
+
         assertFalse(text.contains("api_key"))
     }
 }
