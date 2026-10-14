@@ -48,8 +48,8 @@ internal object WorkspaceResearchProgress {
      * clickable sources or reported search activity.
      */
     fun domainChips(update: WorkspacePublicWorkMessage): List<String> {
-        if (!Regex("""research-round-\\d{1,2}""").matches(update.key)) return emptyList()
-        if (!Regex("""Found [1-9]\\d* reachable websites?""").matches(update.status)) {
+        if (!Regex("""research-round-\d{1,2}""").matches(update.key)) return emptyList()
+        if (!Regex("""Found [1-9]\d* reachable websites?""").matches(update.status)) {
             return emptyList()
         }
         val marker = ". Checking which pages provide usable evidence."
