@@ -32,7 +32,7 @@ class WorkspaceResearchProgressTest {
         )
         val first = requireNotNull(WorkspaceResearchProgress.searchRound(0, list))
         assertEquals("research-round-0", first.key)
-        assertEquals("Found 3 reachable websites", first.status)
+        assertEquals("Found 3 reachable pages", first.status)
         assertTrue(first.message.contains("developer.android.com"))
         assertTrue(first.message.contains("support.apple.com"))
         assertTrue(first.message.contains("lifetips.alibaba.com"))
@@ -52,10 +52,29 @@ class WorkspaceResearchProgressTest {
     @Test fun noRawQuestionKeysCredentialsOrFakeWebsiteCounts() {
         val update = requireNotNull(WorkspaceResearchProgress.searchRound(
             3, listOf(source("https://support.apple.com/en-us/108055"))))
-        assertEquals("Found 1 reachable website", update.status)
+        assertEquals("Found 1 reachable page", update.status)
         assertFalse(update.message.contains("108055"))
         assertFalse(update.message.contains("api_key"))
+        assertTrue(update.message.contains("From 1 website: support.apple.com"))
+        assertEquals(listOf("support.apple.com"),
+            WorkspaceResearchProgress.domainChips(WorkspacePublicWorkMessage(
+                update.key, update.status, update.message, 1L)))
         assertEquals("research-round-3", update.key)
+    }
+
+    @Test fun multiplePagesOnOneDomainAreNeverReportedAsMultipleWebsites() {
+        val update = requireNotNull(WorkspaceResearchProgress.searchRound(2, listOf(
+            source("https://support.apple.com/en-us/108055"),
+            source("https://support.apple.com/en-us/101604"),
+        )))
+        assertEquals("Found 2 reachable pages", update.status)
+        assertTrue(update.message.startsWith("From 1 website: support.apple.com"))
+        assertEquals(listOf("support.apple.com"),
+            WorkspaceResearchProgress.domainChips(WorkspacePublicWorkMessage(
+                update.key, update.status, update.message, 4L)))
+        assertTrue(WorkspaceResearchProgress.domainChips(WorkspacePublicWorkMessage(
+            update.key, update.status, update.message.replace("From 1 website",
+                "From 2 websites"), 4L)).isEmpty())
     }
 
     @Test fun readProgressNeverEquatesReachablePagesWithFactualEvidence() {
@@ -98,7 +117,7 @@ class WorkspaceResearchProgressTest {
         assertEquals(3, expanded.filterIsInstance<WorkspaceWorkConversationItem.Public>().size)
         assertTrue(expanded.any {
             it is WorkspaceWorkConversationItem.Public &&
-                it.message.statusLabel == "Found 2 reachable websites"
+                it.message.statusLabel == "Found 2 reachable pages"
         })
     }
 }
