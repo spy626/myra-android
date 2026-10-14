@@ -20,7 +20,7 @@ internal object WorkspaceResearchQuestionFocus {
     private val instructionWords = setOf(
         "lyra", "bro", "please", "mujhe", "kya", "hai", "aur", "and",
         "mein", "main", "mai", "ke", "ki", "ka", "ko", "se", "saath",
-        "batao", "bataye", "karo", "kar", "lekar", "answer", "reply",
+        "batao", "bataye", "karo", "kar", "do", "lekar", "answer", "reply",
         "give", "tell", "explain", "difference", "different", "compare",
         "comparison", "versus", "reliable", "multiple", "websites", "website",
         "sources", "source", "citations", "citation", "references", "evidence",
