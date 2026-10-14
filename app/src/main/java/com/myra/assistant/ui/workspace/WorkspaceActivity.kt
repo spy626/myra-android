@@ -1500,6 +1500,20 @@ class WorkspaceActivity : AppCompatActivity() {
         }
     }
 
+    /** Per-turn research narration; the existing in-memory timeline owns display. */
+    private fun publishResearchProgress(update: WorkspaceResearchProgress.Update?) {
+        if (update == null || !webLinkLookupActive || webResearchQuestion == null) return
+        val turnId = webLinkLookupMessageId ?: return
+        val projectId = webLinkLookupProjectId ?: return
+        if (selectedId != projectId || workTraceMessageId != turnId) return
+        // All events belong to the current authoritative user turn, never to an
+        // older response whose async callback has arrived after a new message.
+        if (runCatching { conversations.read(projectId).lastOrNull()?.id }.getOrNull()
+            != turnId) return
+        publicWorkNarrations.upsert(turnId, update.key, update.status, update.message)
+        refreshWorkTraceUi(turnId)
+    }
+
     private fun webLinkRunner(): WorkspacePublicWebSearchRunner {
         webLinkLookupRunner?.let { return it }
         return WorkspacePublicWebSearchRunner(
@@ -1525,6 +1539,10 @@ class WorkspaceActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
                         val researchQuestion = webResearchQuestion
+                        if (researchQuestion != null) {
+                            publishResearchProgress(WorkspaceResearchProgress.searchRound(
+                                webResearchQueryIndex, results))
+                        }
                         if (researchQuestion != null &&
                             advanceResearchSearch(results)) return@runOnUiThread
                         if (researchQuestion != null) {
@@ -1726,6 +1744,9 @@ class WorkspaceActivity : AppCompatActivity() {
         val relatedUrls = relatedSources.map { it.finalUrl }.toSet()
         val relatedEvidence = WorkspaceResearchQuestionFocus.relevantExtracts(
             question, allEvidence.filter { it.source.finalUrl in relatedUrls })
+        publishResearchProgress(WorkspaceResearchProgress.readEvidence(
+            verifiedPages = webResearchReadUrls.size,
+            relevantPages = relatedEvidence.size))
         val retry = if (webResearchExtraSearches < WorkspaceResearchRecovery.MAX_EXTRA_SEARCHES)
             webResearchOriginal?.let { original ->
                 WorkspaceResearchRecovery.next(
@@ -1983,6 +2004,9 @@ class WorkspaceActivity : AppCompatActivity() {
         webLinkLookupProjectId = id
         webLinkLookupMessageId = messageId
         statusMessage = ""
+        if (researchQuestion != null) {
+            publishResearchProgress(WorkspaceResearchProgress.kickoff())
+        }
         render()
         webLinkRunner().start(webResearchQueries.first(),
             useFreeMetaSearch = researchQuestion != null)
