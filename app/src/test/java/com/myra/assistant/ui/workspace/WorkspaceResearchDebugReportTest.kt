@@ -77,6 +77,19 @@ class WorkspaceResearchDebugReportTest {
         assertFalse(report.contains("Sensitive account"))
     }
 
+    @Test fun reportShowsFixedVsDynamicProviderWithoutSecrets() {
+        val audit = WorkspaceResearchSynthesis.AuditResult(
+            null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE)
+        val groq = WorkspaceResearchDebugReport.summarize(
+            audit, WorkspaceProviderRegistry.Id.GROQ_FREE)
+        val open = WorkspaceResearchDebugReport.summarize(
+            audit, WorkspaceProviderRegistry.Id.OPENROUTER_FREE)
+        assertTrue(groq.contains("openai/gpt-oss-120b"))
+        assertTrue(open.contains("openrouter/free (dynamic model)"))
+        assertFalse(groq.contains("Bearer "))
+        assertFalse(open.contains("Bearer "))
+    }
+
     @Test fun malformedModelResponseShowsShapeNotRawBody() {
         val raw = "not-json-password=do-not-leak"
         val audit = WorkspaceResearchSynthesis.audit(raw, bundle())

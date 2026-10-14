@@ -1826,15 +1826,24 @@ class WorkspaceActivity : AppCompatActivity() {
             clearWebLinkLookup()
             return
         }
-        val provider = runCatching {
-            selectedProvider(
-                hasAttachments = false,
-                extraSystemInstructions = WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS,
-                attachmentKind = WorkspaceProviderRegistry.AttachmentKind.DOCUMENT_TEXT,
-            )
-        }.getOrNull()
-        if (provider == null || WorkspaceProviderSessionHealth.cooldownMessage(
-                WorkspaceProviderRegistry.id(provider)).isNotBlank()) {
+        // Route on the exact public, current-turn envelope. Previous chat messages
+        // are neither forwarded to the research model nor charged to Groq's budget.
+        // LLM7 is deliberately excluded: it has no authorization for source text.
+        val researchMessages = listOf(currentTurn.copy(
+            text = WorkspaceResearchSynthesis.prompt(bundle)))
+        val provider = WorkspaceFreeProviderSelection.chooseResearch(
+            openRouterReady = keys.get(ApiKeyStore.OPENROUTER).isNotBlank() &&
+                WorkspaceProviderSessionHealth.canSend(
+                    WorkspaceProviderRegistry.Id.OPENROUTER_FREE),
+            groqReady = keys.get(ApiKeyStore.GROQ).isNotBlank() &&
+                WorkspaceProviderSessionHealth.canSend(
+                    WorkspaceProviderRegistry.Id.GROQ_FREE),
+            groqFreeZdrApproved = preferences.getBoolean(
+                WorkspaceGroqFree.PREFERENCE_KEY, false),
+            groqFitsResearchEnvelope = WorkspaceGroqFree.withinBudget(
+                researchMessages, WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS),
+        )
+        if (provider == null) {
             researchDebugReport.skipped(turnId,
                 WorkspaceResearchDebugReport.SkipReason.FREE_PROVIDER_UNAVAILABLE)
             finishWebLinkLookup(fallback, sourceReceipts, researchAnswerComplete = false)
@@ -1846,7 +1855,7 @@ class WorkspaceActivity : AppCompatActivity() {
             WorkspaceChatGateway.request(
                 provider = provider,
                 key = keyFor(provider),
-                messages = listOf(currentTurn.copy(text = WorkspaceResearchSynthesis.prompt(bundle))),
+                messages = researchMessages,
                 extraSystemInstructions = WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS,
             ).newBuilder().header("X-Lyra-Public-Research", "1").build()
         }.getOrElse {
@@ -1865,7 +1874,8 @@ class WorkspaceActivity : AppCompatActivity() {
                     WorkspaceProviderRegistry.id(provider))
                 completeResearchSynthesis(call, projectId, turnId, fallback,
                     sourceReceipts, WorkspaceResearchSynthesis.AuditResult(
-                        null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE))
+                        null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE),
+                    WorkspaceProviderRegistry.id(provider))
             }
             override fun onResponse(call: Call, response: Response) {
                 WorkspaceProviderSessionHealth.recordResponse(response)
@@ -1877,7 +1887,8 @@ class WorkspaceActivity : AppCompatActivity() {
                         null, WorkspaceResearchSynthesis.AuditIssue.MALFORMED_RESPONSE)
                 }
                 completeResearchSynthesis(call, projectId, turnId, fallback,
-                    sourceReceipts, audit)
+                    sourceReceipts, audit,
+                    WorkspaceProviderRegistry.idForEndpoint(response.request.url.toString()))
             }
         })
     }
@@ -1889,6 +1900,7 @@ class WorkspaceActivity : AppCompatActivity() {
         fallback: String,
         sources: List<WorkspaceVerifiedSourceStore.Source>,
         audit: WorkspaceResearchSynthesis.AuditResult,
+        modelRoute: WorkspaceProviderRegistry.Id?,
     ) {
         runOnUiThread {
             if (isFinishing || isDestroyed || !webLinkLookupActive ||
@@ -1897,7 +1909,7 @@ class WorkspaceActivity : AppCompatActivity() {
                 runCatching { conversations.read(projectId).lastOrNull()?.id }
                     .getOrNull() != turnId) return@runOnUiThread
             webResearchSynthesisCall = null
-            researchDebugReport.record(turnId, audit)
+            researchDebugReport.record(turnId, audit, modelRoute)
             // Evidence provenance is preserved even when the model response
             // is incomplete. This is an audit RESULT, not a claim of truth.
             recordWorkEvent(

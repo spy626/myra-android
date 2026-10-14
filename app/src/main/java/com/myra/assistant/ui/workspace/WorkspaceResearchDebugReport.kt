@@ -20,10 +20,11 @@ internal class WorkspaceResearchDebugReport {
     @Synchronized fun record(
         turnId: String,
         audit: WorkspaceResearchSynthesis.AuditResult,
+        modelRoute: WorkspaceProviderRegistry.Id? = null,
     ) {
         if (turnId.isBlank()) return
         lastTurnId = turnId
-        lastReport = summarize(audit)
+        lastReport = summarize(audit, modelRoute)
     }
 
     /** Distinguish a model failure from a research turn that never called it. */
@@ -48,11 +49,26 @@ internal class WorkspaceResearchDebugReport {
         lastReport?.takeIf { turnId != null && turnId == lastTurnId }
 
     companion object {
-        fun summarize(audit: WorkspaceResearchSynthesis.AuditResult): String = buildString {
+        fun summarize(
+            audit: WorkspaceResearchSynthesis.AuditResult,
+            modelRoute: WorkspaceProviderRegistry.Id? = null,
+        ): String = buildString {
             appendLine("LYRA Research Debug Report")
             appendLine("Local test-only audit metadata; no original AI JSON or chat content.")
             appendLine()
             appendLine("Final audit: ${audit.issue.name}")
+            if (modelRoute != null) {
+                // Provider metadata only. openrouter/free is a changing pool,
+                // so never report an invented underlying model name.
+                val model = when (modelRoute) {
+                    WorkspaceProviderRegistry.Id.GROQ_FREE ->
+                        "Groq / openai/gpt-oss-120b"
+                    WorkspaceProviderRegistry.Id.OPENROUTER_FREE ->
+                        "OpenRouter / openrouter/free (dynamic model)"
+                    else -> "Unsupported research provider"
+                }
+                appendLine("Model endpoint (attempted or observed): " + model)
+            }
             val jsonState = when (audit.issue) {
                 WorkspaceResearchSynthesis.AuditIssue.MALFORMED_RESPONSE -> "INVALID_JSON_OR_SCHEMA"
                 WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE -> "NO_MODEL_RESPONSE"

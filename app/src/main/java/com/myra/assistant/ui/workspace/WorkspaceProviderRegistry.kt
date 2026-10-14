@@ -19,6 +19,7 @@ internal object WorkspaceProviderRegistry {
     enum class TaskKind {
         CHAT_TEXT,
         CHAT_ATTACHMENT,
+        RESEARCH,
         CODE_EDIT,
         WEBSITE_BUILD,
     }
@@ -87,7 +88,7 @@ internal object WorkspaceProviderRegistry {
             id = Id.OPENROUTER_FREE,
             displayName = "OpenRouter Free",
             tasks = setOf(TaskKind.CHAT_TEXT, TaskKind.CHAT_ATTACHMENT,
-                TaskKind.CODE_EDIT, TaskKind.WEBSITE_BUILD),
+                TaskKind.RESEARCH, TaskKind.CODE_EDIT, TaskKind.WEBSITE_BUILD),
             sourceAllowed = true,
             attachmentsAllowed = true,
             attachmentSupport = mapOf(
@@ -106,6 +107,8 @@ internal object WorkspaceProviderRegistry {
                     WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS),
                 TaskKind.CHAT_ATTACHMENT to Budget(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS,
                     WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS),
+                TaskKind.RESEARCH to Budget(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS,
+                    WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS),
                 TaskKind.CODE_EDIT to Budget(12_000, WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS),
                 TaskKind.WEBSITE_BUILD to Budget(null, null),
             ),
@@ -114,13 +117,15 @@ internal object WorkspaceProviderRegistry {
         Capability(
             id = Id.GROQ_FREE,
             displayName = "Groq Free",
-            tasks = setOf(TaskKind.CHAT_TEXT, TaskKind.CODE_EDIT, TaskKind.WEBSITE_BUILD),
+            tasks = setOf(TaskKind.CHAT_TEXT, TaskKind.RESEARCH,
+                TaskKind.CODE_EDIT, TaskKind.WEBSITE_BUILD),
             sourceAllowed = true,
             attachmentsAllowed = false,
             freeAssurance = FreeAssurance.USER_ATTESTED_FREE_ACCOUNT,
             fallbackRule = FallbackRule.USER_CONSENTED_DEFINITE_HTTP_ONLY,
             budgets = mapOf(
                 TaskKind.CHAT_TEXT to Budget(WorkspaceGroqFree.MAX_PROMPT_CHARS, 2_048),
+                TaskKind.RESEARCH to Budget(WorkspaceGroqFree.MAX_PROMPT_CHARS, 2_048),
                 TaskKind.CODE_EDIT to Budget(WorkspaceGroqFree.MAX_PROMPT_CHARS, 2_048),
                 TaskKind.WEBSITE_BUILD to Budget(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS, 4_500),
             ),
