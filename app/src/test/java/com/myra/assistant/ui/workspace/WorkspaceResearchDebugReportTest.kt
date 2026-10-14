@@ -88,6 +88,22 @@ class WorkspaceResearchDebugReportTest {
         assertFalse(report.contains(raw))
     }
 
+    @Test fun reportExplainsWhenEvidencePreventsAnyModelCall() {
+        val store = WorkspaceResearchDebugReport()
+        store.skipped("turn-1",
+            WorkspaceResearchDebugReport.SkipReason.MISSING_COMPARISON_EVIDENCE)
+        val report = requireNotNull(store.forTurn("turn-1"))
+        assertTrue(report.contains("Final audit: NOT_RUN"))
+        assertTrue(report.contains("MISSING_COMPARISON_EVIDENCE"))
+        assertTrue(report.contains("No model claim decisions"))
+        assertTrue(report.contains("\nResearch model stage: "))
+        assertNull(store.forTurn("turn-2"))
+        store.skipped("turn-2",
+            WorkspaceResearchDebugReport.SkipReason.FREE_PROVIDER_UNAVAILABLE)
+        assertNull(store.forTurn("turn-1"))
+        assertTrue(store.forTurn("turn-2").orEmpty().contains("FREE_PROVIDER_UNAVAILABLE"))
+    }
+
     @Test fun inMemoryReportIsForLatestExactTurnAndCanBeCleared() {
         val store = WorkspaceResearchDebugReport()
         val raw = """{"claims":[
