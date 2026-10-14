@@ -3610,6 +3610,9 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
             }
             if (!mine) {
+                // Capture the specific preceding user turn per assistant bubble;
+                // an older reply must not display the latest turn's report.
+                val replySourceTurnId = latestUserTurnId
                 val actionRow = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -3624,7 +3627,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     // Keep developer diagnostics available without a persistent RAW button
                     // occupying the normal chat action row. Long-press Retry to inspect.
                     retryButton.setOnLongClickListener {
-                        val sourceTurnId = latestUserTurnId
+                        val sourceTurnId = replySourceTurnId
                         val debugOnly = (applicationInfo.flags and
                             android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
                         val report = if (debugOnly) researchDebugReport.forTurn(sourceTurnId)
