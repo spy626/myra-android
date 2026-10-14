@@ -37,10 +37,10 @@ internal class WorkspaceResearchDebugReport {
     @Synchronized fun skipped(turnId: String, reason: SkipReason) {
         if (turnId.isBlank()) return
         lastTurnId = turnId
-        lastReport = "LYRA Research Debug Report\\n" +
-            "Local test-only audit metadata; no raw JSON, chat text or keys.\\n\\n" +
-            "Final audit: NOT_RUN\\n" +
-            "Research model stage: " + reason.name + "\\n" +
+        lastReport = "LYRA Research Debug Report\n" +
+            "Local test-only audit metadata; no raw JSON, chat text or keys.\n\n" +
+            "Final audit: NOT_RUN\n" +
+            "Research model stage: " + reason.name + "\n" +
             "No model claim decisions were available for this turn."
     }
 
