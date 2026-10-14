@@ -91,12 +91,28 @@ internal object WorkspaceResearchSynthesis {
         NONE, MALFORMED_RESPONSE, NO_SUPPORTED_CLAIMS, MISSING_COMPARISON_COVERAGE,
         MODEL_UNAVAILABLE,
     }
+    /** Safe audit metadata: never includes model text, quotes or source URLs. */
+    enum class ClaimRejection {
+        ACCEPTED, INVALID_CLAIM, INVALID_EVIDENCE_IDS, UNKNOWN_EVIDENCE_IDS,
+        TOPIC_MISMATCH, UNSUPPORTED_QUOTE, INSUFFICIENT_PASSAGE_SUPPORT,
+        UNSUPPORTED_LITERAL, UNCORROBORATED_MEASUREMENT, DUPLICATE,
+    }
+    data class ClaimDecision(
+        val claimNumber: Int,
+        val result: ClaimRejection,
+        val evidenceIds: List<String>,
+        val namesFirstSubject: Boolean,
+        val namesSecondSubject: Boolean,
+        val providedQuote: Boolean,
+    )
     data class AuditResult(
         val answer: String?,
         val issue: AuditIssue,
         val acceptedClaims: Int = 0,
         val rejectedClaims: Int = 0,
         val partialAnswer: String? = null,
+        val claimDecisions: List<ClaimDecision> = emptyList(),
+        val modelResponseCharacters: Int = 0,
     ) {
         val isComplete: Boolean get() = issue == AuditIssue.NONE && answer != null
     }
@@ -175,37 +191,53 @@ internal object WorkspaceResearchSynthesis {
         if (bundle.evidence.isEmpty()) return AuditResult(
             null, AuditIssue.NO_SUPPORTED_CLAIMS)
         val root = parseModelObject(raw) ?: return AuditResult(
-            null, AuditIssue.MALFORMED_RESPONSE)
+            null, AuditIssue.MALFORMED_RESPONSE,
+            modelResponseCharacters = raw.length)
         val claims = root.optJSONArray("claims") ?: return AuditResult(
-            null, AuditIssue.MALFORMED_RESPONSE)
+            null, AuditIssue.MALFORMED_RESPONSE,
+            modelResponseCharacters = raw.length)
         if (claims.length() !in 1..6) return AuditResult(
-            null, AuditIssue.MALFORMED_RESPONSE)
+            null, AuditIssue.MALFORMED_RESPONSE,
+            modelResponseCharacters = raw.length)
         val focus = WorkspaceResearchQuestionFocus.inspect(bundle.question)
+        val decisions = mutableListOf<ClaimDecision>()
+        var lastRejection = ClaimRejection.INVALID_CLAIM
+        fun reject(reason: ClaimRejection): Pair<String, List<Evidence>>? {
+            lastRejection = reason
+            return null
+        }
 
         fun audited(entry: JSONObject): Pair<String, List<Evidence>>? {
+            lastRejection = ClaimRejection.INVALID_CLAIM
             val statement = entry.optString("text").trim()
             if (statement.length !in 24..300 ||
                 statement.contains("http:", true) || statement.contains("https:", true) ||
                 statement.contains('\n') || statement.contains('\r') ||
-                statement.any { it in "<>[]{}" }) return null
-            val references = entry.optJSONArray("evidenceIds") ?: return null
-            if (references.length() !in 1..3) return null
+                statement.any { it in "<>[]{}" })
+                return reject(ClaimRejection.INVALID_CLAIM)
+            val references = entry.optJSONArray("evidenceIds")
+                ?: return reject(ClaimRejection.INVALID_EVIDENCE_IDS)
+            if (references.length() !in 1..3)
+                return reject(ClaimRejection.INVALID_EVIDENCE_IDS)
             val ids = (0 until references.length()).mapNotNull {
                 references.optString(it).takeIf { id -> Regex("""E[1-9]""").matches(id) }
             }.distinct()
-            if (ids.size != references.length()) return null
+            if (ids.size != references.length())
+                return reject(ClaimRejection.INVALID_EVIDENCE_IDS)
             val supporting = ids.mapNotNull { id ->
                 bundle.evidence.firstOrNull { it.id == id }
             }
-            if (supporting.size != ids.size) return null
+            if (supporting.size != ids.size)
+                return reject(ClaimRejection.UNKNOWN_EVIDENCE_IDS)
             val claimTerms = terms(statement)
-            if (claimTerms.size < 3) return null
+            if (claimTerms.size < 3) return reject(ClaimRejection.INVALID_CLAIM)
             val topicAnchor = focus.topicAnchor?.takeUnless {
                 it in setOf("android", "ios", "kotlin", "java", "python", "linux",
                     "windows", "technology", "technologies")
             }
             if (topicAnchor != null && (topicAnchor !in claimTerms ||
-                    supporting.none { topicAnchor in terms(it.passage) })) return null
+                    supporting.none { topicAnchor in terms(it.passage) }))
+                return reject(ClaimRejection.TOPIC_MISMATCH)
             val observedTerms = supporting.flatMap { terms(it.passage) }.toSet()
             val overlap = claimTerms.count { it in observedTerms }
             // Source-anchored paraphrases can differ in wording. Exact quotes
@@ -218,31 +250,63 @@ internal object WorkspaceResearchSynthesis {
             // A supplied quote is an explicit provenance claim. A fabricated
             // or wrongly attributed quote must never be silently ignored just
             // because a lexical-overlap fallback would otherwise pass.
-            if (quote.isNotEmpty() && !anchoredQuote) return null
+            if (quote.isNotEmpty() && !anchoredQuote)
+                return reject(ClaimRejection.UNSUPPORTED_QUOTE)
             if (overlap < maxOf(3, (claimTerms.size * 0.45).toInt()) &&
-                !(anchoredQuote && overlap >= 2)) return null
+                !(anchoredQuote && overlap >= 2))
+                return reject(ClaimRejection.INSUFFICIENT_PASSAGE_SUPPORT)
             val literals = critical.findAll(statement).map {
                 it.value.lowercase(Locale.ROOT)
             }.toSet()
             val sourceLiterals = supporting.flatMap { hit ->
                 critical.findAll(hit.passage).map { it.value.lowercase(Locale.ROOT) }.toList()
             }.toSet()
-            if (!sourceLiterals.containsAll(literals)) return null
+            if (!sourceLiterals.containsAll(literals))
+                return reject(ClaimRejection.UNSUPPORTED_LITERAL)
             if (!WorkspaceResearchEvidenceQuality.corroboratesMeasurements(
-                    statement, supporting, bundle.question)) return null
+                    statement, supporting, bundle.question))
+                return reject(ClaimRejection.UNCORROBORATED_MEASUREMENT)
             return statement to supporting
         }
 
         val accepted = mutableListOf<Pair<String, List<Evidence>>>()
         for (index in 0 until claims.length()) {
-            val proposal = claims.optJSONObject(index) ?: continue
-            val candidate = audited(proposal) ?: continue
-            if (accepted.any { it.first.equals(candidate.first, ignoreCase = true) }) continue
-            accepted += candidate
+            val proposal = claims.optJSONObject(index)
+            val statement = proposal?.optString("text").orEmpty()
+            val declared = proposal?.optJSONArray("evidenceIds")
+            // Only schema-controlled E1..E9 references can enter this report.
+            val evidenceIds = if (declared == null) emptyList() else
+                (0 until declared.length()).mapNotNull { position ->
+                    declared.optString(position)
+                        .takeIf { Regex("""E[1-9]""").matches(it) }
+                }.distinct().take(3)
+            val candidate = proposal?.let(::audited)
+            val verdict = when {
+                proposal == null -> ClaimRejection.INVALID_CLAIM
+                candidate == null -> lastRejection
+                accepted.any { it.first.equals(candidate.first, ignoreCase = true) } ->
+                    ClaimRejection.DUPLICATE
+                else -> ClaimRejection.ACCEPTED
+            }
+            decisions += ClaimDecision(
+                claimNumber = index + 1,
+                result = verdict,
+                evidenceIds = evidenceIds,
+                namesFirstSubject = focus.subjects.getOrNull(0)?.let {
+                    WorkspaceResearchQuestionFocus.mentionsSubject(statement, it)
+                } ?: false,
+                namesSecondSubject = focus.subjects.getOrNull(1)?.let {
+                    WorkspaceResearchQuestionFocus.mentionsSubject(statement, it)
+                } ?: false,
+                providedQuote = proposal?.optString("supportQuote")?.isNotBlank() == true,
+            )
+            if (verdict == ClaimRejection.ACCEPTED && candidate != null)
+                accepted += candidate
         }
         val rejected = claims.length() - accepted.size
         if (accepted.isEmpty()) return AuditResult(
-            null, AuditIssue.NO_SUPPORTED_CLAIMS, 0, rejected)
+            null, AuditIssue.NO_SUPPORTED_CLAIMS, 0, rejected,
+            claimDecisions = decisions, modelResponseCharacters = raw.length)
         fun links(hits: List<Evidence>): String =
             hits.distinctBy { it.sourceId }.joinToString(" ") { hit ->
                 val index = hit.sourceId.removePrefix("S")
@@ -268,7 +332,7 @@ internal object WorkspaceResearchSynthesis {
                 }
             }.trim()
             return AuditResult(null, AuditIssue.MISSING_COMPARISON_COVERAGE,
-                accepted.size, rejected, partial)
+                accepted.size, rejected, partial, decisions, raw.length)
         }
 
         val takeaway = root.optJSONObject("takeaway")?.let(::audited)
@@ -293,6 +357,7 @@ internal object WorkspaceResearchSynthesis {
                 appendLine(takeaway.first.trimEnd('.') + ". " + links(takeaway.second))
             }
         }.trim()
-        return AuditResult(answer, AuditIssue.NONE, accepted.size, rejected)
+        return AuditResult(answer, AuditIssue.NONE, accepted.size, rejected,
+            claimDecisions = decisions, modelResponseCharacters = raw.length)
     }
 }
