@@ -38,6 +38,14 @@ class WorkspaceResearchProgressTest {
         assertTrue(first.message.contains("lifetips.alibaba.com"))
         assertFalse(first.message.contains("/en-us/108055"))
         assertTrue(first.message.contains("Checking which pages"))
+        val visible = WorkspacePublicWorkMessage(
+            first.key, first.status, first.message, 1_000L)
+        assertEquals(listOf("developer.android.com", "support.apple.com",
+            "lifetips.alibaba.com"), WorkspaceResearchProgress.domainChips(visible))
+        assertTrue(WorkspaceResearchProgress.domainChips(
+            visible.copy(key = "unrelated-provider-metadata")).isEmpty())
+        assertTrue(WorkspaceResearchProgress.domainChips(
+            visible.copy(text = "Random source summary from a model.")).isEmpty())
         assertNull(WorkspaceResearchProgress.searchRound(1, emptyList()))
     }
 
