@@ -1796,6 +1796,8 @@ class WorkspaceActivity : AppCompatActivity() {
             }.joinToString("\n")
             val reply = if (partial.isBlank()) message else message +
                 "\n\nAbhi jo related information verify hui:\n" + partial
+            researchDebugReport.skipped(turnId,
+                WorkspaceResearchDebugReport.SkipReason.MISSING_COMPARISON_EVIDENCE)
             finishWebLinkLookup(reply, sourceReceipts, researchAnswerComplete = false)
             return
         }
@@ -1813,6 +1815,8 @@ class WorkspaceActivity : AppCompatActivity() {
                     "main ise independently verified comparison nahi kahungi.\n\n" +
                     fallback
             else fallback
+            researchDebugReport.skipped(turnId,
+                WorkspaceResearchDebugReport.SkipReason.EVIDENCE_BUNDLE_REJECTED)
             finishWebLinkLookup(
                 explanation, sourceReceipts, researchAnswerComplete = false)
             return
@@ -1831,6 +1835,8 @@ class WorkspaceActivity : AppCompatActivity() {
         }.getOrNull()
         if (provider == null || WorkspaceProviderSessionHealth.cooldownMessage(
                 WorkspaceProviderRegistry.id(provider)).isNotBlank()) {
+            researchDebugReport.skipped(turnId,
+                WorkspaceResearchDebugReport.SkipReason.FREE_PROVIDER_UNAVAILABLE)
             finishWebLinkLookup(fallback, sourceReceipts, researchAnswerComplete = false)
             return
         }
@@ -1844,6 +1850,8 @@ class WorkspaceActivity : AppCompatActivity() {
                 extraSystemInstructions = WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS,
             ).newBuilder().header("X-Lyra-Public-Research", "1").build()
         }.getOrElse {
+            researchDebugReport.skipped(turnId,
+                WorkspaceResearchDebugReport.SkipReason.MODEL_REQUEST_NOT_PREPARED)
             finishWebLinkLookup(fallback, sourceReceipts, researchAnswerComplete = false)
             return
         }
