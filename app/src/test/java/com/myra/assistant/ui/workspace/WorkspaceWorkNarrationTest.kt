@@ -308,6 +308,33 @@ class WorkspaceWorkNarrationTest {
             WorkspaceWorkPresentation.compactRow(snapshot, false, 9_000L))
     }
 
+    @Test fun incompleteSavedResearchIsNotNarratedAsVerifiedOrStopped() {
+        val saved = WorkspaceWorkSnapshot(
+            events = listOf(
+                WorkspaceWorkEvent(WorkspaceWorkPhase.SEARCHING,
+                    "Searching the web", null, 1_000L),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.DONE,
+                    "Research incomplete — answer saved", null, 4_000L),
+            ),
+            startedAtMs = 1_000L, endedAtMs = 4_000L,
+        )
+        val events = WorkspaceWorkNarration.events(saved)
+        assertEquals("Research incomplete — answer saved", events.last().label)
+        assertEquals(WorkspaceWorkPhase.DONE, events.last().phase)
+        assertFalse(events.any { it.label == "Work stopped" || it.label == "Work verified" })
+
+        val genuinelyStopped = WorkspaceWorkSnapshot(
+            events = listOf(
+                WorkspaceWorkEvent(WorkspaceWorkPhase.SEARCHING,
+                    "Searching websites", null, 1_000L),
+                WorkspaceWorkEvent(WorkspaceWorkPhase.ERROR,
+                    "Stopped", "User cancelled", 4_000L),
+            ), startedAtMs = 1_000L, endedAtMs = 4_000L,
+        )
+        assertEquals("Work stopped",
+            WorkspaceWorkNarration.events(genuinelyStopped).last().label)
+    }
+
     @Test fun plainConversationThinkingRemainsShortWithoutFakeWebSearch() {
         val snapshot = WorkspaceWorkSnapshot(
             events = listOf(WorkspaceWorkEvent(
