@@ -150,6 +150,43 @@ class WorkspaceQuestionAwareResearchPhoneRegressionTest {
             "Android application optimization uses R8 and Gradle to shrink compiled code."))
     }
 
+    @Test fun officialFeatureTermCanPassAuditWithoutRepeatingQuestionAnchor() {
+        val officialApple = WorkspacePublicWebSearch.Verified(
+            "Use Low Power Mode on your iPhone",
+            "https://support.apple.com/en-us/101604",
+            "Battery saving settings for Apple devices", "text/html")
+        val androidPassage = "Android battery optimization limits background application " +
+            "activity to reduce energy consumption and conserve battery power."
+        val iosPassage = "Low Power Mode reduces background activity and automatically " +
+            "manages energy use on iPhone devices."
+        val bundle = requireNotNull(WorkspaceResearchSynthesis.bundle(question, listOf(
+            WorkspacePublicResearch.Extract(android, listOf(androidPassage)),
+            WorkspacePublicResearch.Extract(officialApple, listOf(iosPassage)),
+        )))
+        val androidId = requireNotNull(bundle.evidence.firstOrNull {
+            it.source.finalUrl == android.finalUrl
+        }).id
+        val iosId = requireNotNull(bundle.evidence.firstOrNull {
+            it.source.finalUrl == officialApple.finalUrl
+        }).id
+        val grounded = """{"claims":[
+          {"text":"Android battery optimization limits background application activity to reduce energy consumption.","evidenceIds":["$androidId"]},
+          {"text":"iOS Low Power Mode reduces background activity and automatically manages energy use on iPhone devices.","evidenceIds":["$iosId"],"supportQuote":"$iosPassage"}
+        ]}"""
+        val result = WorkspaceResearchSynthesis.audit(grounded, bundle)
+        assertEquals(WorkspaceResearchSynthesis.AuditIssue.NONE, result.issue)
+        assertEquals(2, result.acceptedClaims)
+        assertEquals(0, result.rejectedClaims)
+
+        val offTopic = """{"claims":[
+          {"text":"Android battery optimization limits background application activity to reduce energy consumption.","evidenceIds":["$androidId"]},
+          {"text":"iOS Xcode builds native mobile applications efficiently.","evidenceIds":["$iosId"]}
+        ]}"""
+        val rejected = WorkspaceResearchSynthesis.audit(offTopic, bundle)
+        assertEquals(WorkspaceResearchSynthesis.ClaimRejection.TOPIC_MISMATCH,
+            rejected.claimDecisions[1].result)
+    }
+
     @Test fun singlePlatformCannotSupplyFakeTwoSidedModelComparison() {
         assertNull(WorkspaceResearchSynthesis.bundle(question, listOf(
             WorkspacePublicResearch.Extract(android, listOf(

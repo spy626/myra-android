@@ -244,8 +244,18 @@ internal object WorkspaceResearchSynthesis {
                 it in setOf("android", "ios", "kotlin", "java", "python", "linux",
                     "windows", "technology", "technologies")
             }
-            if (topicAnchor != null && (topicAnchor !in claimTerms ||
-                    supporting.none { topicAnchor in terms(it.passage) }))
+            // Source pages and valid feature descriptions may use terminology
+            // different from the user's category word (e.g. an official feature
+            // name). Reuse the existing question-aware topic check for BOTH the
+            // observed passage and proposed claim instead of requiring one
+            // literal anchor word. The independent quote/overlap/literal audit
+            // below remains mandatory.
+            if (topicAnchor != null && supporting.none { hit ->
+                    WorkspaceResearchQuestionFocus.passageOnTopic(
+                        bundle.question, hit.source, hit.passage) &&
+                        WorkspaceResearchQuestionFocus.passageOnTopic(
+                            bundle.question, hit.source, statement)
+                })
                 return reject(ClaimRejection.TOPIC_MISMATCH)
             val observedTerms = supporting.flatMap { terms(it.passage) }.toSet()
             val overlap = claimTerms.count { it in observedTerms }
