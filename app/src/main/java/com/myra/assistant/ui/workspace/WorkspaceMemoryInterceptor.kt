@@ -53,6 +53,7 @@ internal class WorkspaceMemoryInterceptor(
     override fun intercept(chain: Interceptor.Chain): Response {
         val original = chain.request()
         if (original.method != "POST" || original.url.toString() != WorkspaceFreeAiSuggestion.ENDPOINT ||
+            original.header("X-Lyra-Public-Research") == "1" ||
             chain.call().isCanceled()) return chain.proceed(original)
         val context = contextProvider() ?: return chain.proceed(original)
         if (!context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)

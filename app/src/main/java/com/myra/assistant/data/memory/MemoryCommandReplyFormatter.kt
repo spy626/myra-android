@@ -6,6 +6,9 @@ object MemoryCommandReplyFormatter {
     fun rememberRejected(): String =
         "Passwords, security codes ya unsafe private details save nahi kar sakti."
 
+    fun rememberUnverified(): String =
+        "Main is baat ko reliably verify nahi kar paayi, isliye save nahi kiya."
+
     fun forgotten(found: Boolean): String = if (found) {
         "Theek hai, woh memory delete kar di."
     } else {

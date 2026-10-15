@@ -21,6 +21,15 @@ class WorkspaceChatGatewayTest {
         }
     }
 
+    @Test fun mediaUsesLongerBoundedTimeoutWithoutChangingProviderInterceptors() {
+        assertTrue(WorkspaceChatGateway.mediaClient.callTimeoutMillis >
+            WorkspaceChatGateway.client.callTimeoutMillis)
+        assertEquals(110_000, WorkspaceChatGateway.mediaClient.callTimeoutMillis)
+        assertEquals(90_000, WorkspaceChatGateway.mediaClient.readTimeoutMillis)
+        assertEquals(WorkspaceChatGateway.client.interceptors.map { it::class.java },
+            WorkspaceChatGateway.mediaClient.interceptors.map { it::class.java })
+    }
+
     @Test fun onlyExplicitWorkspaceFreeRoutesAreExposed() {
         assertEquals(listOf(
             WorkspaceChatGateway.Provider.OPENROUTER_FREE,
@@ -93,6 +102,109 @@ class WorkspaceChatGatewayTest {
         assertEquals("Earlier", openRouter.getJSONObject(1).getString("content"))
         assertTrue(openRouter.getJSONObject(3).getJSONArray("content").getJSONObject(1)
             .getJSONObject("image_url").getString("url").startsWith("data:image/png;base64,"))
+    }
+
+    @Test fun threePhotosAreSentInSelectionOrderOnlyOnLatestTurnWithZeroPrice() {
+        val media = listOf("YWJj", "ZGVm", "Z2hp").map {
+            WorkspaceChatGateway.Image("image/jpeg", it)
+        }
+        val conversation = listOf(message("user", "Earlier"), message("assistant", "Okay"),
+            message("user", "Compare these three screenshots"))
+        val request = WorkspaceChatGateway.request(
+            WorkspaceChatGateway.Provider.OPENROUTER_FREE, "test-key", conversation,
+            images = media)
+        val buffer = okio.Buffer().also { request.body?.writeTo(it) }
+        val body = JSONObject(buffer.readUtf8())
+        assertZeroPrice(body)
+        assertEquals("openrouter/free", body.getString("model"))
+        val transcript = body.getJSONArray("messages")
+        assertEquals("Earlier", transcript.getJSONObject(1).getString("content"))
+        val last = transcript.getJSONObject(transcript.length() - 1).getJSONArray("content")
+        assertEquals(4, last.length())
+        assertEquals("Compare these three screenshots", last.getJSONObject(0).getString("text"))
+        media.forEachIndexed { index, image ->
+            val content = last.getJSONObject(index + 1).getJSONObject("image_url")
+                .getString("url")
+            assertEquals("data:image/jpeg;base64," + image.base64, content)
+        }
+        assertFalse(body.toString().contains("test-key"))
+    }
+
+    @Test fun mediaIsBoundedAndTextOnlyRoutesRejectImagePartsBeforeNetwork() {
+        val conversation = listOf(message("user", "Check my photos"))
+        val image = WorkspaceChatGateway.Image("image/png", "cG5n")
+        assertTrue(runCatching {
+            WorkspaceChatGateway.request(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+                "test-key", conversation, images = List(11) { image })
+        }.isFailure)
+        listOf(WorkspaceChatGateway.Provider.GROQ_FREE,
+            WorkspaceChatGateway.Provider.LLM7_FREE).forEach { provider ->
+            assertTrue(runCatching {
+                WorkspaceChatGateway.request(provider, "test-key", conversation,
+                    images = listOf(image))
+            }.isFailure)
+        }
+    }
+
+    @Test fun upToTenImagesPreserveOrderAndGuardAggregateBudget() {
+        val images = (1..WorkspaceMediaLimits.MAX_PHOTOS).map { i ->
+            WorkspaceChatGateway.Image("image/jpeg", "YQ==".repeat(i))
+        }
+        val body = JSONObject(WorkspaceChatGateway.openRouterBody(
+            listOf(message("user", "Compare all ten screenshots")), images = images))
+        assertZeroPrice(body)
+        val messages = body.getJSONArray("messages")
+        val parts = messages.getJSONObject(messages.length() - 1).getJSONArray("content")
+        assertEquals(11, parts.length())
+        images.forEachIndexed { i, image ->
+            assertEquals("data:image/jpeg;base64," + image.base64,
+                parts.getJSONObject(i + 1).getJSONObject("image_url").getString("url"))
+        }
+        assertTrue(WorkspaceMediaLimits.imageEnvelopeSizes(images.map { it.base64.length }))
+        assertFalse(WorkspaceMediaLimits.imageEnvelopeSizes(List(11) { 4 }))
+        assertFalse(WorkspaceMediaLimits.imageEnvelopeSizes(List(10) { 1_270_001 }))
+    }
+
+    @Test fun originalVideoAndStandaloneAudioUseNativePartsAndZeroPrice() {
+        val user = listOf(message("user", "Analyze this file"))
+        val video = WorkspaceChatGateway.NativeVideo("video/mp4", "YWJj")
+        val rawVideo = JSONObject(WorkspaceChatGateway.openRouterBody(user, video = video))
+        assertZeroPrice(rawVideo)
+        val vmsg = rawVideo.getJSONArray("messages")
+        val vparts = vmsg.getJSONObject(vmsg.length() - 1).getJSONArray("content")
+        assertEquals(2, vparts.length())
+        assertEquals("video_url", vparts.getJSONObject(1).getString("type"))
+        assertEquals("data:video/mp4;base64,YWJj",
+            vparts.getJSONObject(1).getJSONObject("video_url").getString("url"))
+        val audio = WorkspaceChatGateway.Audio("audio/mpeg", "YWJj")
+        val rawAudio = JSONObject(WorkspaceChatGateway.openRouterBody(user, audio = audio))
+        assertZeroPrice(rawAudio)
+        val amsg = rawAudio.getJSONArray("messages")
+        val aparts = amsg.getJSONObject(amsg.length() - 1).getJSONArray("content")
+        assertEquals("input_audio", aparts.getJSONObject(1).getString("type"))
+        assertEquals("mp3", aparts.getJSONObject(1).getJSONObject("input_audio").getString("format"))
+        assertEquals("YWJj", aparts.getJSONObject(1).getJSONObject("input_audio").getString("data"))
+        assertFalse(rawVideo.toString().contains("input_audio"))
+    }
+
+    @Test fun textOnlyProvidersRejectNativeMediaBeforeNetworkAndMixedMediaFailsClosed() {
+        val user = listOf(message("user", "Check media"))
+        val video = WorkspaceChatGateway.NativeVideo("video/mp4", "YWJj")
+        val audio = WorkspaceChatGateway.Audio("audio/mpeg", "YWJj")
+        for (provider in listOf(WorkspaceChatGateway.Provider.GROQ_FREE,
+            WorkspaceChatGateway.Provider.LLM7_FREE)) {
+            assertTrue(runCatching {
+                WorkspaceChatGateway.request(provider, "test-key", user, video = video)
+            }.isFailure)
+            assertTrue(runCatching {
+                WorkspaceChatGateway.request(provider, "test-key", user, audio = audio)
+            }.isFailure)
+        }
+        assertTrue(runCatching {
+            WorkspaceChatGateway.request(WorkspaceChatGateway.Provider.OPENROUTER_FREE,
+                "test-key", user, images = listOf(WorkspaceChatGateway.Image("image/png", "YQ==")),
+                video = video)
+        }.isFailure)
     }
 
     @Test fun everyFreeTextRouteGetsLatinOnlyHinglishPolicyWithoutEditingLatestUserTurn() {

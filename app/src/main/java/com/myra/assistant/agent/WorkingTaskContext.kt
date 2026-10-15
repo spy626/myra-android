@@ -49,7 +49,125 @@ enum class TaskCompletionState { EXECUTING, SUCCESS, FAILURE, UNKNOWN }
 
 class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeMillis) {
     @Volatile private var value = WorkingTaskContext()
+    private val claimedResearchSourceHandoffs = LinkedHashSet<String>()
+    private var researchComparison: BrowserResearchComparison.Session? = null
+    private var researchComparisonClaimKey: String? = null
+    private var researchContinuation: BrowserResearchContinuation.Session? = null
+    private var researchContinuationClaimKey: String? = null
     fun snapshot(): WorkingTaskContext = value
+
+    @Synchronized internal fun beginResearchComparison(
+        session: BrowserResearchComparison.Session,
+    ): Boolean {
+        val fresh = BrowserResearchComparison.fresh(session, now()) ?: return false
+        researchComparison = fresh
+        researchComparisonClaimKey = null
+        researchContinuation = null
+        researchContinuationClaimKey = null
+        return true
+    }
+
+    @Synchronized internal fun pendingResearchComparison(): BrowserResearchComparison.Session? {
+        val current = researchComparison ?: return null
+        val fresh = BrowserResearchComparison.fresh(current, now())
+        if (fresh == null) {
+            researchComparison = null
+            researchComparisonClaimKey = null
+            return null
+        }
+        if (researchComparisonClaimKey != null) return null
+        return fresh
+    }
+
+    @Synchronized internal fun claimResearchComparison(
+        session: BrowserResearchComparison.Session,
+    ): Boolean {
+        val current = pendingResearchComparison() ?: return false
+        if (current != session || researchComparisonClaimKey != null) return false
+        researchComparisonClaimKey = session.claimKey
+        return true
+    }
+
+    @Synchronized internal fun releaseResearchComparison(
+        session: BrowserResearchComparison.Session,
+    ) {
+        if (researchComparison == session &&
+            researchComparisonClaimKey == session.claimKey
+        ) researchComparisonClaimKey = null
+    }
+
+    @Synchronized internal fun completeResearchComparison(
+        session: BrowserResearchComparison.Session,
+        continuation: BrowserResearchContinuation.Session? = null,
+    ): Boolean {
+        if (researchComparison != session ||
+            researchComparisonClaimKey != session.claimKey
+        ) return false
+        val freshContinuation = continuation?.let {
+            BrowserResearchContinuation.fresh(it, now())
+        }
+        if (continuation != null && freshContinuation == null) return false
+        researchComparison = null
+        researchComparisonClaimKey = null
+        researchContinuation = freshContinuation
+        researchContinuationClaimKey = null
+        return true
+    }
+
+    @Synchronized internal fun pendingResearchContinuation(): BrowserResearchContinuation.Session? {
+        val current = researchContinuation ?: return null
+        val fresh = BrowserResearchContinuation.fresh(current, now())
+        if (fresh == null) {
+            researchContinuation = null
+            researchContinuationClaimKey = null
+            return null
+        }
+        if (researchContinuationClaimKey != null) return null
+        return fresh
+    }
+
+    @Synchronized internal fun claimResearchContinuation(
+        session: BrowserResearchContinuation.Session,
+    ): Boolean {
+        val current = pendingResearchContinuation() ?: return false
+        if (current != session || researchContinuationClaimKey != null) return false
+        researchContinuationClaimKey = session.claimKey
+        return true
+    }
+
+    @Synchronized internal fun releaseResearchContinuation(
+        session: BrowserResearchContinuation.Session,
+    ) {
+        if (researchContinuation == session &&
+            researchContinuationClaimKey == session.claimKey
+        ) researchContinuationClaimKey = null
+    }
+
+    @Synchronized internal fun completeResearchContinuation(
+        session: BrowserResearchContinuation.Session,
+    ): Boolean {
+        if (researchContinuation != session ||
+            researchContinuationClaimKey != session.claimKey
+        ) return false
+        researchContinuation = null
+        researchContinuationClaimKey = null
+        return true
+    }
+
+    /**
+     * Exactly-once claim for the existing unfinished research completion. Call only after
+     * a user-selected public destination has independently passed browser verification.
+     */
+    @Synchronized internal fun claimResearchSourceHandoff(
+        pending: BrowserResearchSourceHandoff.Pending,
+    ): Boolean {
+        val current = BrowserResearchSourceHandoff.pending(value, now()) ?: return false
+        if (current != pending || !claimedResearchSourceHandoffs.add(pending.claimKey)) return false
+        while (claimedResearchSourceHandoffs.size > 16) {
+            claimedResearchSourceHandoffs.firstOrNull()?.let(claimedResearchSourceHandoffs::remove)
+        }
+        return true
+    }
 
     @Synchronized fun syncRuntime(task: GeneralRuntimeTask, scene: ScreenScene? = null) {
         value = value.copy(
@@ -120,6 +238,10 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     }
 
     @Synchronized fun beginSearch(query: String, destination: SearchDestination, executor: String, expected: String) {
+        researchComparison = null
+        researchComparisonClaimKey = null
+        researchContinuation = null
+        researchContinuationClaimKey = null
         value = value.copy(
             searchQuery = query, resolvedDestination = destination, selectedExecutor = executor,
             actionStartedAt = now(), expectedOutcome = expected, lastObservedOutcome = null,
@@ -188,6 +310,10 @@ class WorkingTaskContextStore(private val now: () -> Long = System::currentTimeM
     }
 
     @Synchronized fun clearTask() {
+        researchComparison = null
+        researchComparisonClaimKey = null
+        researchContinuation = null
+        researchContinuationClaimKey = null
         value = WorkingTaskContext(
             conversationTopic = value.conversationTopic,
             activeExternalApp = value.activeExternalApp,

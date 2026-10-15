@@ -8,5 +8,9 @@ class MemoryCommandReplyFormatterTest {
         assertEquals("Theek hai, yaad rakhungi.", MemoryCommandReplyFormatter.rememberSaved())
         assertEquals("Theek hai, woh memory delete kar di.", MemoryCommandReplyFormatter.forgotten(true))
         assertEquals("Woh memory saved nahi mili.", MemoryCommandReplyFormatter.forgotten(false))
+        assertEquals(
+            "Main is baat ko reliably verify nahi kar paayi, isliye save nahi kiya.",
+            MemoryCommandReplyFormatter.rememberUnverified()
+        )
     }
 }

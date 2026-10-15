@@ -4,7 +4,7 @@ import java.util.UUID
 
 enum class AgentRuntimeStatus {
     CREATED, UNDERSTANDING, OBSERVING, PLANNING, READY_TO_ACT, ACTING,
-    WAITING_FOR_RESULT, VERIFYING, RECOVERING, NEEDS_CLARIFICATION,
+    WAITING_FOR_RESULT, WAITING_FOR_USER_AUTH, VERIFYING, RECOVERING, NEEDS_CLARIFICATION,
     COMPLETED, FAILED, CANCELLED
 }
 
@@ -90,6 +90,15 @@ data class GeneralActionResult(
     val metadata: Map<String, String> = emptyMap()
 )
 
+/** Only successful, verified substeps are recorded. No webpage text or credentials are kept. */
+data class VerifiedGoalSubstep(
+    val stepId: String,
+    val capability: ToolCapability,
+    val packageName: String,
+    val generation: Long,
+    val evidence: List<String>,
+)
+
 data class GeneralRuntimeTask(
     val id: String = UUID.randomUUID().toString(),
     val turnId: Long,
@@ -101,6 +110,10 @@ data class GeneralRuntimeTask(
     val rejectedTargets: Set<String> = emptySet(),
     val recoveryCount: Int = 0,
     val planRevision: Int = 0,
+    val verifiedGoalSubsteps: List<VerifiedGoalSubstep> = emptyList(),
+    val verifiedResearchSourceCount: Int = 0,
+    val authPause: BrowserAuthenticationHandoff.Pause? = null,
+    val authHandoffAttempts: Int = 0,
     val createdAt: Long,
     val updatedAt: Long = createdAt
 )
@@ -123,6 +136,8 @@ sealed interface PlannerResult {
     data class Next(val step: GeneralPlanStep) : PlannerResult
     data class NeedObservation(val visual: Boolean) : PlannerResult
     data class VerifyPrevious(val step: GeneralPlanStep) : PlannerResult
+    /** An action is executing or a previous dispatch already has an observation owner. */
+    data class InFlight(val stepId: String) : PlannerResult
     data class Recover(val step: GeneralPlanStep) : PlannerResult
     data class NeedClarification(val message: String) : PlannerResult
     data class Complete(val reason: String) : PlannerResult
@@ -131,23 +146,107 @@ sealed interface PlannerResult {
 
 /** Plans one safe next step. Existing platform executors remain adapters beneath capabilities. */
 class GeneralAgentPlanner {
-    fun next(task: GeneralRuntimeTask, perception: PerceptionSnapshot?, relevantTools: List<ToolDefinition>): PlannerResult {
+    fun next(
+        task: GeneralRuntimeTask, perception: PerceptionSnapshot?,
+        relevantTools: List<ToolDefinition>,
+        verifiedFeedback: VerifiedSearchStrategyFeedback? = null,
+    ): PlannerResult {
         if (!task.intent.requiresAction) return PlannerResult.Complete("conversation_tools_locked")
         if (task.recoveryCount > MAX_RECOVERIES) return PlannerResult.Fail("safe_retry_limit")
         task.currentStep?.takeIf { task.status == AgentRuntimeStatus.WAITING_FOR_RESULT }?.let {
             return PlannerResult.VerifyPrevious(it)
-        }
-        if (perception == null && task.intent.requiredCapabilities.any { it.requiresScreen() }) {
-            return PlannerResult.NeedObservation(visual = task.intent.turnIntent == TurnIntent.SCREEN_QUESTION)
         }
         if (perception?.scene?.modal != null && perception.scene.modal != ModalKind.NONE &&
             ModalSafetyPolicy.requiresAuthorization(perception.scene)
         ) {
             return PlannerResult.NeedClarification("Screen par protected dialog hai. Kya karun?")
         }
-        val capability = primaryCapability(task.intent.requiredCapabilities)
-            ?.takeIf { wanted -> relevantTools.any { it.capability == wanted } }
+        // A multi-step search is NOT finished merely because search results appeared.
+        // After one verified search, perform exactly ONE independently observed read-only
+        // results step. Never redispatch search or promote observation into click authority.
+        val previous = task.verifiedGoalSubsteps
+        if (task.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL && previous.isNotEmpty()) {
+            if (previous.size >= 2) {
+                return PlannerResult.NeedClarification("research_goal_needs_independent_source_analysis")
+            }
+            if (previous.single().capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH) &&
+                ToolCapability.OBSERVE_SCREEN in task.intent.requiredCapabilities
+            ) {
+                val observer = relevantTools.firstOrNull { it.capability == ToolCapability.OBSERVE_SCREEN }
+                    ?: return PlannerResult.Fail("declared_observer_unavailable")
+                if (perception == null || perception.taskId != task.id)
+                    return PlannerResult.NeedObservation(visual = false)
+                return PlannerResult.Next(GeneralPlanStep(
+                    taskId = task.id, category = ActionCategory.SCREEN_PERCEPTION,
+                    capability = observer.capability, strategy = "verified_search_followup_observation",
+                    targetDescription = task.intent.targetDescription,
+                    parameters = task.intent.parameters,
+                    expectedOutcome = ExpectedOutcome(ExpectedOutcomeType.RESULT_SET_CHANGED,
+                        "independent fresh search-result observation",
+                        task.intent.relevantApp, task.intent.textHint),
+                    risk = observer.risk,
+                ))
+            }
+            return PlannerResult.NeedClarification("no_authorized_safe_continuation")
+        }
+        // Choose from the tools the existing execution owner actually supplied, not merely
+        // the first capability in a static wish list. Only same-purpose alternatives that
+        // were ALSO explicitly proposed by this intent may replace an unavailable tool.
+        // Observation cannot silently substitute for an unavailable click/send/write action.
+        val preferred = primaryCapability(task.intent.requiredCapabilities)
             ?: return PlannerResult.Fail("no_safe_tool")
+        val equivalent = when (preferred) {
+            ToolCapability.BROWSER_SEARCH -> ToolCapability.WEB_SEARCH
+            ToolCapability.WEB_SEARCH -> ToolCapability.BROWSER_SEARCH
+            ToolCapability.OBSERVE_SCREEN -> ToolCapability.VISUAL_CHECK
+            ToolCapability.VISUAL_CHECK -> ToolCapability.OBSERVE_SCREEN
+            else -> null
+        }?.takeIf { it in task.intent.requiredCapabilities }
+        // Native search-app routing is only a hint from the verified final-turn /
+        // foreground eligibility gate. Availability still comes from actual adapters.
+        val preferredNative = task.intent.parameters["preferredSearchCapability"] ==
+            ToolCapability.WEB_SEARCH.name &&
+            preferred == ToolCapability.BROWSER_SEARCH &&
+            equivalent == ToolCapability.WEB_SEARCH
+        val baseline = if (preferredNative)
+            relevantTools.firstOrNull { it.capability == ToolCapability.WEB_SEARCH }
+                ?: relevantTools.firstOrNull { it.capability == preferred }
+        else relevantTools.firstOrNull { it.capability == preferred }
+            ?: relevantTools.firstOrNull { it.capability == equivalent }
+            ?: return PlannerResult.Fail("no_safe_tool")
+        val availableBaseline = baseline ?: return PlannerResult.Fail("no_safe_tool")
+        val recommendation = if (task.status != AgentRuntimeStatus.RECOVERING)
+            verifiedFeedback?.recommend(
+                availableBaseline.capability,
+                if (availableBaseline.capability == preferred) equivalent else preferred,
+                task.intent.requiredCapabilities, relevantTools.map { it.capability }.toSet(),
+                task.intent.relevantApp,
+            ) else null
+        // A rejected low-risk public search can switch to the other *declared and
+        // actually executable* search route. Accepted, unknown and exception cases
+        // never reach this fallback, preventing duplicate side effects.
+        val rejectedSearch = task.actionHistory.lastOrNull()?.takeIf {
+            task.status == AgentRuntimeStatus.RECOVERING && !it.accepted &&
+                it.failureReason != "adapter_exception" &&
+                it.capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH)
+        }
+        val alternateSearch = when (rejectedSearch?.capability) {
+            ToolCapability.BROWSER_SEARCH -> ToolCapability.WEB_SEARCH
+            ToolCapability.WEB_SEARCH -> ToolCapability.BROWSER_SEARCH
+            else -> null
+        }
+        val safeFallback = relevantTools.firstOrNull {
+            it.capability == alternateSearch &&
+                it.capability in task.intent.requiredCapabilities &&
+                it.risk == ToolRisk.LOW
+        }
+        val selected = safeFallback
+            ?: relevantTools.firstOrNull { it.capability == recommendation }
+            ?: availableBaseline
+        val capability = selected.capability
+        if (perception == null && capability.requiresScreen()) {
+            return PlannerResult.NeedObservation(visual = task.intent.turnIntent == TurnIntent.SCREEN_QUESTION)
+        }
         val expected = expectedFor(capability, task.intent)
         return PlannerResult.Next(
             GeneralPlanStep(
@@ -157,11 +256,17 @@ class GeneralAgentPlanner {
                 targetDescription = task.intent.targetDescription,
                 textPayload = task.intent.textHint,
                 parameters = task.intent.parameters,
-                strategy = if (task.status == AgentRuntimeStatus.RECOVERING) "safe_retry_${task.recoveryCount}" else "primary",
+                strategy = when {
+                    safeFallback != null -> "rejected_search_fallback_${capability.name.lowercase()}"
+                    task.status == AgentRuntimeStatus.RECOVERING -> "safe_retry_${task.recoveryCount}"
+                    selected.capability != availableBaseline.capability ->
+                        "verified_outcome_preferred_${selected.capability.name.lowercase()}"
+                    else -> "primary"
+                },
                 expectedOutcome = expected,
                 requiresFreshPerception = capability.requiresScreen(),
                 requiresVerification = capability !in setOf(ToolCapability.OBSERVE_SCREEN, ToolCapability.VISUAL_CHECK),
-                risk = relevantTools.first { it.capability == capability }.risk
+                risk = selected.risk
             )
         ).let { if (task.status == AgentRuntimeStatus.RECOVERING) PlannerResult.Recover(it.step) else it }
     }
@@ -232,17 +337,23 @@ data class ProductionAdapterExecutors(
     val browserSearch: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
     val observeScreen: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
     val verifyScreen: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
-    val back: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult
+    val back: (GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult,
+    // Installed only when the native Google search-app intent resolves on this device.
+    val webSearch: ((GeneralPlanStep, PerceptionSnapshot) -> GeneralActionResult)? = null,
 )
 
 object ProductionGeneralAdapters {
-    fun create(registry: AgentToolRegistry, executors: ProductionAdapterExecutors): List<GeneralToolAdapter> = listOf(
-        ProductionGeneralToolAdapter("GenericScrollAdapter", requireNotNull(registry.forCapability(ToolCapability.ACCESSIBILITY_SCROLL)), 650L, executors.scroll),
-        ProductionGeneralToolAdapter("BrowserSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.BROWSER_SEARCH)), 900L, executors.browserSearch),
-        ProductionGeneralToolAdapter("ObserveScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.OBSERVE_SCREEN)), 0L, executors.observeScreen),
-        ProductionGeneralToolAdapter("VerifyScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.VERIFY_SCREEN)), 0L, executors.verifyScreen),
-        ProductionGeneralToolAdapter("BackAdapter", requireNotNull(registry.forCapability(ToolCapability.BACK)), 400L, executors.back)
-    )
+    fun create(registry: AgentToolRegistry, executors: ProductionAdapterExecutors): List<GeneralToolAdapter> = buildList {
+        add(ProductionGeneralToolAdapter("GenericScrollAdapter", requireNotNull(registry.forCapability(ToolCapability.ACCESSIBILITY_SCROLL)), 650L, executors.scroll))
+        add(ProductionGeneralToolAdapter("BrowserSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.BROWSER_SEARCH)), 900L, executors.browserSearch))
+        // Never advertise WEB_SEARCH from the static tool list without a real executor.
+        executors.webSearch?.let { executor ->
+            add(ProductionGeneralToolAdapter("NativeWebSearchAdapter", requireNotNull(registry.forCapability(ToolCapability.WEB_SEARCH)), 900L, executor))
+        }
+        add(ProductionGeneralToolAdapter("ObserveScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.OBSERVE_SCREEN)), 0L, executors.observeScreen))
+        add(ProductionGeneralToolAdapter("VerifyScreenAdapter", requireNotNull(registry.forCapability(ToolCapability.VERIFY_SCREEN)), 0L, executors.verifyScreen))
+        add(ProductionGeneralToolAdapter("BackAdapter", requireNotNull(registry.forCapability(ToolCapability.BACK)), 400L, executors.back))
+    }
 }
 
 class GeneralActionRouter(adapters: List<GeneralToolAdapter>) {
@@ -405,6 +516,18 @@ class GeneralRecoveryEngine(private val maxRetries: Int = 1) {
             return RecoveryDecision.Clarify("Screen movement reliably verify nahi hua.")
         }
         if (task.recoveryCount >= maxRetries) return RecoveryDecision.Clarify("Target verify nahi hua. Kaunsa wala?")
+        // Autonomy must not silently replay an accepted side effect. Retry only an
+        // explicitly REJECTED dispatch for a low-risk, bounded capability.
+        val step = task.currentStep ?: return RecoveryDecision.Clarify("safe_retry_requires_current_step")
+        val attempted = task.actionHistory.lastOrNull { it.stepId == step.id }
+            ?: return RecoveryDecision.Clarify("safe_retry_requires_dispatch_receipt")
+        val replaySafe = step.risk == ToolRisk.LOW && step.capability in setOf(
+            ToolCapability.ACCESSIBILITY_SCROLL, ToolCapability.BROWSER_SEARCH,
+            ToolCapability.WEB_SEARCH, ToolCapability.OPEN_APP,
+        )
+        if (attempted.accepted || !replaySafe ||
+            attempted.failureReason == "adapter_exception")
+            return RecoveryDecision.Clarify("accepted_or_sensitive_action_not_replayed")
         return RecoveryDecision.Retry(targetId)
     }
 }
@@ -424,27 +547,77 @@ class GeneralAgentRuntime(
     private val planner: GeneralAgentPlanner = GeneralAgentPlanner(),
     private val verifier: GeneralVerifier = GeneralVerifier(),
     private val recovery: GeneralRecoveryEngine = GeneralRecoveryEngine(),
-    private val now: () -> Long = System::currentTimeMillis
+    private val now: () -> Long = System::currentTimeMillis,
+    private val searchFeedback: VerifiedSearchStrategyFeedback = VerifiedSearchStrategyFeedback(),
 ) {
     @Volatile private var active: GeneralRuntimeTask? = null
     @Volatile private var lastCompleted: GeneralRuntimeTask? = null
     private val beforeByStep = mutableMapOf<String, PerceptionSnapshot>()
+    private val pendingSearchOutcomes =
+        ArrayDeque<VerifiedSearchStrategyFeedback.Record>()
+    @Volatile private var checkpointSink: ((UnifiedTaskReceipt) -> Unit)? = null
+
+    /** Receipt callback is optional and never replaces the existing execution owner. */
+    @Synchronized fun setCheckpointSink(sink: (UnifiedTaskReceipt) -> Unit) {
+        checkpointSink = sink
+        publishCheckpoint()
+    }
+
+    private fun publishCheckpoint() {
+        val task = active ?: lastCompleted ?: return
+        runCatching { checkpointSink?.invoke(UnifiedTaskReceiptPolicy.from(task)) }
+    }
+
+    /** Restore only from the existing memory owner's validated behavior rows. */
+    @Synchronized fun restoreVerifiedSearchOutcomes(
+        rows: Collection<VerifiedSearchStrategyFeedback.Record>
+    ) { searchFeedback.restore(rows) }
+
+    /** A read-once outbox; execution is never delayed for disk IO. */
+    @Synchronized fun takeVerifiedSearchOutcomes(): List<VerifiedSearchStrategyFeedback.Record> =
+        pendingSearchOutcomes.toList().also { pendingSearchOutcomes.clear() }
 
     @Synchronized fun start(turnId: Long, intent: StructuredAgentIntent, taskId: String? = null): GeneralRuntimeTask? {
-        active = active?.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now())
+        active?.let { lastCompleted = it.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now()) }
+        active = null
         beforeByStep.clear()
-        if (!intent.requiresAction) { active = null; return null }
+        if (!intent.requiresAction) { publishCheckpoint(); return null }
         return GeneralRuntimeTask(id = taskId ?: UUID.randomUUID().toString(), turnId = turnId, intent = intent,
-            status = AgentRuntimeStatus.OBSERVING, createdAt = now()).also { active = it }
+            status = AgentRuntimeStatus.OBSERVING, createdAt = now()).also {
+                active = it
+                publishCheckpoint()
+            }
     }
 
     fun activeTask(): GeneralRuntimeTask? = active
     fun lastCompletedTask(): GeneralRuntimeTask? = lastCompleted
 
-    @Synchronized fun next(perception: PerceptionSnapshot?): PlannerResult {
+    /** Pizza-style task receipt view. Actual task/execution owner is unchanged. */
+    fun activeTaskReceipt(): UnifiedTaskReceipt? =
+        active?.let(UnifiedTaskReceiptPolicy::from)
+    fun lastTaskReceipt(): UnifiedTaskReceipt? =
+        lastCompleted?.let(UnifiedTaskReceiptPolicy::from)
+
+    @Synchronized fun next(
+        perception: PerceptionSnapshot?,
+        executableCapabilities: Set<ToolCapability>? = null,
+    ): PlannerResult {
         val task = active ?: return PlannerResult.Fail("no_active_task")
+        // A late callback must never turn a resolved/paused task into a new action.
+        if (task.status in setOf(AgentRuntimeStatus.COMPLETED,
+                AgentRuntimeStatus.FAILED, AgentRuntimeStatus.CANCELLED))
+            return PlannerResult.Fail("task_already_terminal")
+        if (task.status == AgentRuntimeStatus.NEEDS_CLARIFICATION)
+            return PlannerResult.NeedClarification("prior_step_requires_clarification")
+        if (task.status == AgentRuntimeStatus.ACTING ||
+            task.status == AgentRuntimeStatus.VERIFYING) {
+            return PlannerResult.InFlight(task.currentStep?.id.orEmpty())
+        }
+        if (task.status == AgentRuntimeStatus.WAITING_FOR_USER_AUTH)
+            return PlannerResult.NeedClarification("user_browser_authentication_pending")
         val tools = registry.relevant(task.intent.requiredCapabilities)
-        val result = planner.next(task, perception, tools)
+            .filter { executableCapabilities == null || it.capability in executableCapabilities }
+        val result = planner.next(task, perception, tools, searchFeedback)
         active = when (result) {
             is PlannerResult.Next -> task.copy(status = AgentRuntimeStatus.READY_TO_ACT, currentStep = result.step, planRevision = task.planRevision + 1, updatedAt = now())
             is PlannerResult.Recover -> task.copy(status = AgentRuntimeStatus.READY_TO_ACT, currentStep = result.step, planRevision = task.planRevision + 1, updatedAt = now())
@@ -454,7 +627,40 @@ class GeneralAgentRuntime(
             is PlannerResult.Fail -> task.copy(status = AgentRuntimeStatus.FAILED, updatedAt = now()).also { lastCompleted = it }
             else -> task.copy(status = AgentRuntimeStatus.OBSERVING, updatedAt = now())
         }
+        publishCheckpoint()
         return result
+    }
+
+    /**
+     * Existing task/step is paused BEFORE the general verifier could learn an
+     * auth challenge as a failed search. No login action or credential read.
+     */
+    @Synchronized fun pauseForBrowserAuthentication(
+        context: CurrentActivityContext?, observedAt: Long
+    ): BrowserAuthenticationHandoff.Pause? {
+        val task = active ?: return null
+        if (task.authHandoffAttempts != 0 || task.authPause != null) return null
+        val pause = BrowserAuthenticationHandoff.detect(task, context, observedAt) ?: return null
+        active = task.copy(status = AgentRuntimeStatus.WAITING_FOR_USER_AUTH,
+            authPause = pause, authHandoffAttempts = 1, updatedAt = now())
+        publishCheckpoint()
+        return pause
+    }
+
+    /** Fresh safe page merely reopens verification; it never confirms login success. */
+    @Synchronized fun resumeBrowserAuthentication(
+        first: CurrentActivityContext?, second: CurrentActivityContext?, observedAt: Long,
+    ): Boolean {
+        val task = active ?: return false
+        val pause = task.authPause ?: return false
+        if (task.status != AgentRuntimeStatus.WAITING_FOR_USER_AUTH ||
+            task.id != pause.taskId || task.turnId != pause.turnId ||
+            !BrowserAuthenticationHandoff.canReverify(pause, first, second, observedAt)
+        ) return false
+        active = task.copy(status = AgentRuntimeStatus.WAITING_FOR_RESULT,
+            authPause = null, updatedAt = now())
+        publishCheckpoint()
+        return true
     }
 
     @Synchronized fun enrich(parameters: Map<String, String>, relevantApp: String? = null, textHint: String? = null) {
@@ -465,21 +671,71 @@ class GeneralAgentRuntime(
                 textHint = textHint ?: task.intent.textHint
             ), updatedAt = now())
         }
+        publishCheckpoint()
+    }
+
+    /**
+     * Atomic dispatch lease for a single final-turn step. Concurrent callbacks cannot
+     * execute the same action twice; a fresh observation still belongs to the owner.
+     */
+    @Synchronized fun claimStepExecution(step: GeneralPlanStep, turnId: Long): Boolean {
+        val task = active ?: return false
+        if (task.turnId != turnId || task.id != step.taskId ||
+            task.currentStep?.id != step.id ||
+            task.status != AgentRuntimeStatus.READY_TO_ACT) return false
+        active = task.copy(status = AgentRuntimeStatus.ACTING, updatedAt = now())
+        publishCheckpoint()
+        return true
     }
 
     @Synchronized fun recordAction(step: GeneralPlanStep, result: GeneralActionResult, before: PerceptionSnapshot): GeneralRuntimeTask {
         val task = requireNotNull(active) { "no active task" }
-        require(step.taskId == task.id) { "step belongs to another task" }
+        require(step.taskId == task.id && task.currentStep?.id == step.id &&
+            task.status in setOf(AgentRuntimeStatus.ACTING, AgentRuntimeStatus.READY_TO_ACT)) {
+            "stale or duplicate action step"
+        }
         val history = GeneralActionHistory(step.id, step.capability, result.targetId, before.scene.externalForegroundPackage,
             before.scene.generation, null, result.accepted, null, task.recoveryCount, result.failureReason, now())
         beforeByStep[step.id] = before
         return task.copy(status = if (result.accepted) AgentRuntimeStatus.WAITING_FOR_RESULT else AgentRuntimeStatus.RECOVERING,
-            previousSteps = task.previousSteps + step, actionHistory = task.actionHistory + history, updatedAt = now()).also { active = it }
+            previousSteps = task.previousSteps + step, actionHistory = task.actionHistory + history, updatedAt = now()).also {
+                active = it
+                publishCheckpoint()
+            }
+    }
+
+    /** Bind asynchronous dispatch receipts to the same task, turn and claimed step. */
+    @Synchronized fun recordActionIfCurrent(
+        step: GeneralPlanStep, turnId: Long, result: GeneralActionResult,
+        before: PerceptionSnapshot,
+    ): GeneralRuntimeTask? {
+        val task = active ?: return null
+        if (task.id != step.taskId || task.turnId != turnId ||
+            task.currentStep?.id != step.id || task.status != AgentRuntimeStatus.ACTING ||
+            before.taskId != task.id) return null
+        return recordAction(step, result, before)
+    }
+
+    /** A delayed verification may never consume the next user's active task. */
+    @Synchronized fun verifyIfCurrent(
+        taskId: String, turnId: Long, stepId: String, after: PerceptionSnapshot,
+    ): Pair<GeneralVerificationResult, RecoveryDecision?>? {
+        val task = active ?: return null
+        if (task.id != taskId || task.turnId != turnId ||
+            task.currentStep?.id != stepId || after.taskId != taskId ||
+            task.status !in setOf(AgentRuntimeStatus.WAITING_FOR_RESULT,
+                AgentRuntimeStatus.RECOVERING, AgentRuntimeStatus.VERIFYING)) return null
+        return verify(after)
     }
 
     @Synchronized fun verify(after: PerceptionSnapshot): Pair<GeneralVerificationResult, RecoveryDecision?> {
         val task = requireNotNull(active) { "no active task" }
         val step = requireNotNull(task.currentStep) { "no active step" }
+        if (task.status == AgentRuntimeStatus.WAITING_FOR_USER_AUTH)
+            return GeneralVerificationResult(
+                GeneralVerificationStatus.UNKNOWN, step.expectedOutcome.summary,
+                "browser_authentication_pending", .0
+            ) to null
         val history = task.actionHistory.lastOrNull { it.stepId == step.id }
         val before = beforeByStep.remove(step.id) ?: after
         val actionAccepted = history?.accepted != false
@@ -489,9 +745,34 @@ class GeneralAgentRuntime(
             evidence = listOf("adapter_rejected"), mismatchReason = history?.failureReason ?: "dispatch_rejected"
         )
         val updatedHistory = task.actionHistory.map { if (it.stepId == step.id) it.copy(afterGeneration = after.scene.generation, verification = result.status) else it }
+        // Learn once from actual, freshly verified actions; never from UNKNOWN or rejected dispatch.
+        if (history?.accepted == true && searchFeedback.record(task, step, result)) {
+            searchFeedback.snapshot().lastOrNull()?.let { pendingSearchOutcomes.addLast(it) }
+            while (pendingSearchOutcomes.size > 32) pendingSearchOutcomes.removeFirst()
+        }
         if (result.status == GeneralVerificationStatus.SUCCESS) {
+            val goalResearch = task.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
+                step.capability in setOf(ToolCapability.BROWSER_SEARCH, ToolCapability.WEB_SEARCH, ToolCapability.OBSERVE_SCREEN)
+            if (goalResearch && (task.verifiedGoalSubsteps.isNotEmpty() ||
+                    ToolCapability.OBSERVE_SCREEN in task.intent.requiredCapabilities)) {
+                // A verified step is progress, not verified fulfillment of the original goal.
+                // No repeat search: clear currentStep; only a declared observation can follow.
+                val proof = VerifiedGoalSubstep(step.id, step.capability,
+                    after.scene.externalForegroundPackage, after.scene.generation,
+                    result.evidence.take(8))
+                active = task.copy(
+                    status = if (step.capability == ToolCapability.OBSERVE_SCREEN)
+                        AgentRuntimeStatus.PLANNING else AgentRuntimeStatus.OBSERVING,
+                    currentStep = null, actionHistory = updatedHistory,
+                    verifiedGoalSubsteps = (task.verifiedGoalSubsteps + proof).take(2),
+                    updatedAt = now(),
+                )
+                publishCheckpoint()
+                return result to null
+            }
             val completed = task.copy(status = AgentRuntimeStatus.COMPLETED, actionHistory = updatedHistory, updatedAt = now())
             active = null; lastCompleted = completed
+            publishCheckpoint()
             return result to null
         }
         val decision = recovery.decide(task, result, after.scene, history?.targetId)
@@ -503,7 +784,48 @@ class GeneralAgentRuntime(
             is RecoveryDecision.Clarify -> task.copy(status = AgentRuntimeStatus.NEEDS_CLARIFICATION, actionHistory = updatedHistory, updatedAt = now())
             is RecoveryDecision.Fail -> task.copy(status = AgentRuntimeStatus.FAILED, actionHistory = updatedHistory, updatedAt = now())
         }
+        publishCheckpoint()
         return result to decision
+    }
+
+    /** Lease for independently verified public source reading after the two approved
+     * search/observation steps. No new phone adapter or authorization is created. */
+    @Synchronized fun claimSourceAnalysis(taskId: String, turnId: Long): String? {
+        val task = active ?: return null
+        if (task.id != taskId || task.turnId != turnId) return null
+        val query = AutonomousSourceAnalysisPolicy.boundQuery(task) ?: return null
+        active = task.copy(status = AgentRuntimeStatus.VERIFYING, updatedAt = now())
+        publishCheckpoint()
+        return query
+    }
+
+    /** Atomic completion, fenced against cancellation/new user turns.
+     * A source is evidence only if readable factual passages were actually extracted. */
+    @Synchronized fun completeSourceAnalysisIfCurrent(
+        taskId: String, turnId: Long,
+        sources: List<VerifiedResearchSource>, answer: String,
+    ): GeneralRuntimeTask? {
+        val task = active ?: return null
+        if (task.id != taskId || task.turnId != turnId ||
+            task.status != AgentRuntimeStatus.VERIFYING ||
+            task.currentStep != null || task.verifiedGoalSubsteps.size != 2 ||
+            answer.isBlank() || answer.length > 5_000) return null
+        // Independent websites alone do not prove that the returned facts agree.
+        // Re-evaluate the page passages in the authoritative task owner; an adapter
+        // cannot turn a claimed source count into successful task completion.
+        val assessment = AutonomousSourceAnalysisPolicy.assess(sources)
+        val done = task.copy(
+            status = if (assessment.status == ResearchEvidenceStatus.CORROBORATED)
+                AgentRuntimeStatus.COMPLETED else AgentRuntimeStatus.NEEDS_CLARIFICATION,
+            verifiedResearchSourceCount = assessment.independentSources,
+            intent = task.intent.copy(desiredEndState = answer),
+            updatedAt = now(),
+        )
+        active = null
+        lastCompleted = done
+        beforeByStep.clear()
+        publishCheckpoint()
+        return done
     }
 
     /** Allows a validated platform adapter to feed its stronger domain evidence back into the
@@ -514,8 +836,15 @@ class GeneralAgentRuntime(
         val updatedHistory = task.actionHistory.map {
             if (step != null && it.stepId == step.id) it.copy(verification = status) else it
         }
+        // A generic adapter receipt cannot complete a research task after its
+        // search and observation substeps. Only audited public-source evidence
+        // may authorize COMPLETED via completeSourceAnalysisIfCurrent().
+        val needsSourceAudit = task.intent.turnIntent == TurnIntent.MULTI_STEP_GOAL &&
+            task.verifiedGoalSubsteps.size == 2 && task.currentStep == null
         val terminal = when (status) {
-            GeneralVerificationStatus.SUCCESS -> AgentRuntimeStatus.COMPLETED
+            GeneralVerificationStatus.SUCCESS ->
+                if (needsSourceAudit) AgentRuntimeStatus.NEEDS_CLARIFICATION
+                else AgentRuntimeStatus.COMPLETED
             GeneralVerificationStatus.FAILURE -> AgentRuntimeStatus.FAILED
             GeneralVerificationStatus.UNKNOWN -> AgentRuntimeStatus.NEEDS_CLARIFICATION
         }
@@ -528,10 +857,69 @@ class GeneralAgentRuntime(
         active = null
         lastCompleted = completed
         beforeByStep.clear()
+        publishCheckpoint()
         return completed
     }
 
-    @Synchronized fun cancel() { active = active?.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now()); active = null; beforeByStep.clear() }
+    /** A genuinely newer final user turn invalidates pending source reading.
+     * Follow-up turns retain Working Task context, but cannot inherit an older
+     * source-analysis execution lease or deliver its late callback. */
+    @Synchronized fun cancelStaleSourceAnalysis(newTurnId: Long): Boolean {
+        val task = active ?: return false
+        if (newTurnId <= 0L || task.turnId == newTurnId ||
+            task.intent.turnIntent != TurnIntent.MULTI_STEP_GOAL ||
+            task.verifiedGoalSubsteps.size != 2 ||
+            task.currentStep != null ||
+            task.status != AgentRuntimeStatus.VERIFYING) return false
+        cancel()
+        return true
+    }
+
+    @Synchronized fun cancel() {
+        active?.let { lastCompleted = it.copy(status = AgentRuntimeStatus.CANCELLED, updatedAt = now()) }
+        active = null
+        beforeByStep.clear()
+        publishCheckpoint()
+    }
 }
 
-object GeneralAgentRuntimeStore { val runtime = GeneralAgentRuntime() }
+object GeneralAgentRuntimeStore {
+    val runtime = GeneralAgentRuntime()
+    @Volatile private var checkpoint: GeneralTaskCheckpointStore? = null
+
+    /** One private sanitized status file; never restores executable Android actions. */
+    @Synchronized fun enableDurableReceipts(root: java.io.File) {
+        val store = GeneralTaskCheckpointStore(root)
+        checkpoint = store
+        runtime.setCheckpointSink { receipt ->
+            val task = runtime.activeTask()?.takeIf { it.id == receipt.taskId }
+                ?: runtime.lastCompletedTask()?.takeIf { it.id == receipt.taskId }
+            val query = task?.let { AutonomousRecoveryPolicy.safeSearch(it)?.query }
+            store.saveWithSafeSearch(receipt, query)
+        }
+    }
+
+    fun interruptedTaskReview(): GeneralTaskCheckpointStore.Checkpoint? =
+        checkpoint?.read()?.takeIf { it.requiresReview }
+
+    /** Atomic consume-before-dispatch. Never run a stale task twice. */
+    @Synchronized fun claimAutonomousPublicSearch(
+        expected: GeneralTaskCheckpointStore.Checkpoint,
+    ): String? {
+        val store = checkpoint ?: return null
+        return runCatching {
+            val current = store.read() ?: return null
+            if (current != expected ||
+                !AutonomousRecoveryPolicy.autoResumeAllowed(
+                    current, System.currentTimeMillis())) return null
+            val query = current.safeSearchQuery ?: return null
+            if (store.closeForFreshRequest(current)) query else null
+        }.getOrNull()
+    }
+
+    /** User review only; no executable task or new authorization is restored. */
+    fun closeInterruptedReview(expected: GeneralTaskCheckpointStore.Checkpoint): Boolean =
+        checkpoint?.let { store ->
+            runCatching { store.closeForFreshRequest(expected) }.getOrDefault(false)
+        } ?: false
+}

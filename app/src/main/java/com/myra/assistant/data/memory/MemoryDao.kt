@@ -43,6 +43,8 @@ interface AiriMemoryDao {
     suspend fun semanticIdsForConversationRange(conversationId: String, start: Long, end: Long): List<String>
     @Query("UPDATE airi_consolidation_actions SET episodeId = :episodeId, calibratedAt = :at WHERE conversationId = :conversationId AND turnId IN (SELECT turnId FROM airi_conversation_truth WHERE sessionId = :conversationId AND sequence BETWEEN :start AND :end) AND calibratedAt IS NULL")
     suspend fun calibrateActionsForRange(conversationId: String, start: Long, end: Long, episodeId: String, at: Long): Int
+    @Query("SELECT * FROM airi_consolidation_actions WHERE conversationId = :conversationId AND turnId = :turnId ORDER BY createdAt ASC, actionId ASC")
+    suspend fun consolidationActionsForTurn(conversationId: String, turnId: Long): List<ConsolidationActionEntity>
     @Query("SELECT s.* FROM airi_semantic_memory s JOIN airi_semantic_fts f ON s.memoryId = f.memoryId WHERE airi_semantic_fts MATCH :query AND s.active = 1 AND s.invalidAt IS NULL AND s.deletedAt IS NULL LIMIT :limit")
     suspend fun searchSemanticFts(query: String, limit: Int): List<SemanticMemoryEntity>
     @Query("UPDATE airi_semantic_memory SET active = 0, supersededById = :replacementId, updatedAt = :at WHERE semanticKey = :key AND active = 1")

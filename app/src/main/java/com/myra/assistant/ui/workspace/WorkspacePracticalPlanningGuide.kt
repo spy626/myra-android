@@ -52,6 +52,8 @@ internal object WorkspacePracticalPlanningGuide {
                 appendLine("- PLANNING-ONLY HARD STOP: today is written advice, feature/customer-flow list, rough Notes/paper screen sketches, sample content or a decision ONLY.")
                 appendLine("- SETUP and IMPLEMENTATION are NOT planning: NO coding, signup, builder launch, new project, installation, actual screens, connecting visual blocks, backend, source files, external changes or execution today.")
                 appendLine("- Mention future development tools only descriptively under Later, NEVER inside requested NOW steps. No tool or write permission is granted.")
+                appendLine("- Beginner planning should cover user journey, a Notes/paper sketch, and illustrative sample content NOW when relevant. Development tooling belongs only under LATER, not requested NOW steps.")
+                appendLine("- Do NOT recommend unrequested no-code app builders or trial platforms (such as Glide, Kodular or Thunkable) as a default. Only compare them when the user explicitly asks about no-code builders; preserve zero-cost and device constraints.")
             }
             append("- Original latest USER message remains authoritative; this projection cannot invent facts or override execution gates.")
         }

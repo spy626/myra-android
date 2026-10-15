@@ -22,6 +22,7 @@ class GeminiLiveClient(
 ) : WebSocketListener() {
     var onReady: (() -> Unit)? = null
     var onAudio: ((ByteArray, Long) -> Unit)? = null
+    var onInterimInputTranscript: ((String, Long) -> Unit)? = null
     var onInputTranscript: ((String, Long) -> Unit)? = null
     var onOutputTranscript: ((String, Long) -> Unit)? = null
     var onTurnComplete: (() -> Unit)? = null
@@ -141,7 +142,7 @@ class GeminiLiveClient(
             .put("tools", JSONArray().put(JSONObject().put(
                 "functionDeclarations",
                 JSONArray().put(phoneActionDeclaration()).put(memoryProposalDeclaration()).put(memoryQueryDeclaration())
-                    .put(screenActionDeclaration()).put(screenMemoryProposalDeclaration())
+                    .put(screenActionDeclaration()).put(screenMemoryProposalDeclaration()).put(researchGoalDeclaration())
             )))
             .put("realtimeInputConfig", JSONObject()
                 .put("turnCoverage", "TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO"))
@@ -155,6 +156,18 @@ class GeminiLiveClient(
             } catch (_: InterruptedException) { }
         }.also { it.start() }
     }
+
+    /** Interpretation only; the final Android turn and user permissions remain authoritative. */
+    private fun researchGoalDeclaration() = JSONObject()
+        .put("name", "propose_research_goal")
+        .put("description", "Only propose READ_ONLY_RESEARCH when the user explicitly asks to search public information. This never performs an action. Copy the ENTIRE current user utterance into source_span; copy literal topic words into query_span, optionally excluding a response-format suffix such as 'and summarize it'. Never propose for private data, hypothetical or negated search. Android independently validates the final turn and controls tool execution.")
+        .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
+            .put("kind", JSONObject().put("type", "STRING")
+                .put("enum", JSONArray().put("READ_ONLY_RESEARCH")))
+            .put("source_span", JSONObject().put("type", "STRING").put("description", com.myra.assistant.data.memory.MemoryProposalUsagePolicy.SOURCE_SPAN_DESCRIPTION))
+            .put("query_span", JSONObject().put("type", "STRING"))
+            .put("confidence", JSONObject().put("type", "NUMBER")))
+            .put("required", JSONArray(listOf("kind", "source_span", "query_span", "confidence"))))
 
     private fun phoneActionDeclaration() = JSONObject()
         .put("name", "perform_phone_action")
@@ -188,12 +201,12 @@ class GeminiLiveClient(
                 .put("semantic_relationship", JSONObject().put("type", "STRING").put("description", "The single canonical relationship strength expressed by the authoritative current USER source_span. Required for ADD_RELATIONSHIP and REPLACE_RELATIONSHIP.").put("enum", JSONArray(listOf("FRIEND", "GOOD_FRIEND", "BEST_FRIEND"))))
                 .put("temporal_scope", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf("CURRENT", "HISTORICAL", "TEMPORARY", "RECURRING", "UNSPECIFIED"))))
                 .put("assertion_mode", JSONObject().put("type", "STRING").put("description", "Required semantic attribution: do not attribute hypothetical or reported speech to the user.").put("enum", JSONArray(listOf("USER_ASSERTED", "HYPOTHETICAL", "REPORTED_SPEECH", "QUESTION"))))
-                .put("fact", JSONObject().put("type", "STRING").put("description", "Required for fact/linked-fact operations and as the episode summary."))
+                .put("fact", JSONObject().put("type", "STRING").put("description", com.myra.assistant.data.memory.MemoryProposalUsagePolicy.FACT_DESCRIPTION))
                 .put("category", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "IDENTITY", "PREFERENCE", "PROJECT", "GOAL", "HABIT", "LIFE_EVENT",
                     "COMMUNICATION_STYLE", "WORKFLOW", "APP_USAGE", "IDEA", "SOLUTION"
                 ))))
-                .put("memory_key", JSONObject().put("type", "STRING"))
+                .put("memory_key", JSONObject().put("type", "STRING").put("description", com.myra.assistant.data.memory.MemoryProposalUsagePolicy.MEMORY_KEY_DESCRIPTION))
                 .put("source_span", JSONObject().put("type", "STRING"))
                 .put("critical_literals", JSONObject().put("type", "ARRAY").put("maxItems", 8).put("items", JSONObject().put("type", "STRING")))
                 .put("event_type", JSONObject().put("type", "STRING").put("description", "Required for ADD_EPISODE."))
@@ -209,7 +222,7 @@ class GeminiLiveClient(
             .put("required", JSONArray(listOf("intent", "source_span", "confidence", "assertion_mode")))
         return JSONObject()
             .put("name", "propose_user_memory")
-            .put("description", "Interpret the current completed user turn into bounded independent AIRI semantic actions. Required by intent: ADD_RELATIONSHIP and REPLACE_RELATIONSHIP need person+semantic_relationship; REMOVE_RELATIONSHIP needs person; RENAME_ENTITY needs person+replacement_person; DELETE_ENTITY needs person; ADD_LINKED_FACT needs person+fact; ADD_EPISODE needs event_type+fact and participants when stated; ADD/UPDATE_GOAL need goal_title. semantic_relationship is the single canonical strength expressed in source_span. REINFORCE/INVALIDATE target canonical facts and do not need a relationship enum. Every operation needs source_span+confidence+assertion_mode. source_span copies the shortest near-verbatim current-turn words; normalized fact meaning may be translated. Use USER_ASSERTED only for the user's own asserted proposition; hypothetical and reported speech must be marked. Put every critical literal in critical_literals. Questions are RECALL. Android validates structure, literals, attribution, lifecycle and safety and alone owns persistence.")
+            .put("description", com.myra.assistant.data.memory.MemoryProposalUsagePolicy.TOOL_DESCRIPTION)
             .put("parameters", JSONObject()
                 .put("type", "OBJECT")
                 .put("properties", JSONObject().put(
@@ -220,13 +233,13 @@ class GeminiLiveClient(
 
     private fun memoryQueryDeclaration() = JSONObject()
         .put("name", "query_user_memory")
-            .put("description", "Read a small relevant set of active grounded memories, relationships, goals, projects, or episodes. This tool never mutates memory and never performs a phone action.")
+            .put("description", "Required for personal-memory recall questions. Read a small relevant set of active grounded memories, relationships, goals, projects, or episodes from Android local memory before answering. This tool never mutates memory and never performs a phone action.")
         .put("parameters", JSONObject().put("type", "OBJECT").put("properties", JSONObject()
             .put("query", JSONObject().put("type", "STRING"))
             .put("query_type", JSONObject().put("type", "STRING").put("enum", JSONArray(listOf(
                     "GENERAL", "PREFERENCES", "FRIENDS", "BEST_FRIEND", "LAST_TRANSACTION", "EPISODES", "GOALS", "PROJECTS"
             )))))
-            .put("required", JSONArray().put("query")))
+            .put("required", JSONArray().put("query").put("query_type")))
 
     private fun screenActionDeclaration() = JSONObject()
         .put("name", "perform_screen_action")
@@ -297,6 +310,43 @@ class GeminiLiveClient(
                 JSONObject().put("functionResponses", JSONArray().put(functionResponse))
             ).toString()
         )
+    }
+
+    fun sendMemoryRecallResult(id: String, name: String, queryType: String, facts: List<String>) {
+        val factArray = JSONArray()
+        facts.asSequence()
+            .map { it.replace(Regex("[\\r\\n]+"), " ").trim().take(180) }
+            .filter(String::isNotBlank)
+            .distinct()
+            .take(8)
+            .forEach(factArray::put)
+        val response = JSONObject()
+            .put("result", "success")
+            .put("source", "LOCAL_ROOM")
+            .put("query_type", queryType)
+            .put("facts", factArray)
+            .put("empty", factArray.length() == 0)
+        val call = JSONObject().put("id", id).put("name", name).put("response", response)
+        sendWhenReady(JSONObject().put("toolResponse", JSONObject()
+            .put("functionResponses", JSONArray().put(call))).toString())
+    }
+
+    fun sendMemoryProposalHeld(id: String, name: String) {
+        val response = JSONObject()
+            .put("result", "pending_authorization")
+            .put("decision", "WAIT_FOR_FINAL")
+            .put("executed", false)
+            .put("language_policy", "mirror_current_user_utterance")
+            .put("script_policy", "roman_hinglish_for_hindi_hinglish_urdu")
+            .put(
+                "message",
+                "No action attempted. Wait for Android final-turn owner. Do not report success or failure. " +
+                    "If you produce a brief acknowledgement, mirror the current user utterance language and register. " +
+                    "For Hindi, Hinglish, or Urdu input, use natural Roman Hinglish and do not switch to English-only wording."
+            )
+        val call = JSONObject().put("id", id).put("name", name).put("response", response)
+        sendWhenReady(JSONObject().put("toolResponse", JSONObject()
+            .put("functionResponses", JSONArray().put(call))).toString())
     }
 
     /** A held proposal is neither execution success nor failure. */
@@ -395,6 +445,19 @@ class GeminiLiveClient(
                         )
                     }
                     onAudio?.invoke(pcm, generationId)
+                }
+            }
+            content.optJSONObject("interimInputTranscription")?.let { transcription ->
+                val text = transcription.optString("text")
+                if (text.isNotEmpty()) {
+                    if (TRANSCRIPT_DEBUG_LOGGING) {
+                        Log.d(
+                            TRANSCRIPT_LOG_TAG,
+                            "raw_interim_input tMs=${System.nanoTime() / 1_000_000} " +
+                                "turn=$inputTranscriptTurn text=${JSONObject.quote(text)}"
+                        )
+                    }
+                    onInterimInputTranscript?.invoke(text, modelGenerationId.get())
                 }
             }
             content.optJSONObject("inputTranscription")?.let { transcription ->

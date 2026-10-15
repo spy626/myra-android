@@ -19,10 +19,18 @@ internal object WorkspaceGroqFree {
     const val MAX_PROMPT_CHARS = 12_000
     private const val MAX_RESPONSE_BYTES = 96_000L
 
+    /** Fixed reason codes only; never expose raw response contents or credentials. */
+    enum class ReadProblem {
+        HTTP_REJECTED, EMPTY_RESPONSE, INVALID_JSON, MISSING_CHOICE,
+        OUTPUT_LIMIT, FILTERED, UNFINISHED, EMPTY_CONTENT,
+    }
+    class ReadFailure(val problem: ReadProblem, message: String) :
+        IllegalArgumentException(message)
+
     /**
      * One immutable projection for preflight and HTTP body. When a long chat
-     * exceeds Groq Free's conservative 12k-character local ceiling, first use
-     * the existing compact planning prompt (if applicable), then drop only
+     * exceeds Groq Free's conservative 12k-character local ceiling, first compact
+     * editorial planning/rich presentation instructions only, then drop only
      * whole OLD conversation turns in the outbound request copy. Never slice
      * the latest user turn, mutate the conversation store, omit approved
      * runtime instructions or invoke another provider.
@@ -39,11 +47,19 @@ internal object WorkspaceGroqFree {
             if (length(regular) <= MAX_PROMPT_CHARS) return regular
 
             val latest = window.last().text
-            val compact = if (WorkspacePracticalPlanningGuide.instructions(latest).isNotBlank())
-                WorkspaceChatGateway.openAiMessages(
-                    window, extraSystemInstructions = extraSystemInstructions,
-                    compactForGroq = true,
-                ) else null
+            // A full ten-type Rich Blocks contract grew beyond Groq's conservative
+            // local ceiling. Compact presentation prose/examples *only* when needed.
+            // Keep all runtime/skill/security instructions and the latest user turn.
+            val rich = WorkspaceRichBlocksContract.enabled(extraSystemInstructions)
+            val compact = if (rich ||
+                WorkspacePracticalPlanningGuide.instructions(latest).isNotBlank()
+            ) WorkspaceChatGateway.openAiMessages(
+                window,
+                extraSystemInstructions = if (rich)
+                    WorkspaceRichBlocksContract.compactForGroq(extraSystemInstructions)
+                else extraSystemInstructions,
+                compactForGroq = true,
+            ) else null
             val best = if (compact != null && length(compact) < length(regular))
                 compact else regular
             if (length(best) <= MAX_PROMPT_CHARS || window.size == 1) return best
@@ -84,12 +100,23 @@ internal object WorkspaceGroqFree {
             "Groq Free prompt exceeds LYRA's conservative Free-route budget; newest user message stays saved locally and nothing was sent. Shorten old chat context or use an approved Free route."
         }
         // Groq must never receive OpenRouter-only provider settings or paid fallback.
+        val isPublicResearch = extraSystemInstructions ==
+            WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS
         return JSONObject()
             .put("model", MODEL)
-            .put("stream", false)
+            .put("stream", WorkspaceRichBlocksContract.enabled(extraSystemInstructions))
             .put("messages", entries)
             .put("max_completion_tokens", 2_048)
-            .toString()
+            .apply {
+                if (isPublicResearch) {
+                    // Groq's GPT-OSS shares output tokens with internal reasoning.
+                    // Save the existing Free cap and give the final JSON room.
+                    // Do not alter chat/coding or any other provider.
+                    put("reasoning_effort", "low")
+                    put("reasoning_format", "hidden")
+                    put("response_format", JSONObject().put("type", "json_object"))
+                }
+            }.toString()
     }
 
     fun request(
@@ -124,27 +151,34 @@ internal object WorkspaceGroqFree {
                     503, 502, 504 -> "service temporarily unavailable"
                     else -> "request refused"
                 }
-                throw IllegalArgumentException("Groq HTTP ${result.code}: $category. No paid fallback.")
+                throw ReadFailure(ReadProblem.HTTP_REJECTED,
+                    "Groq HTTP ${result.code}: $category. No paid fallback.")
             }
             val data = requireNotNull(result.peekBody(MAX_RESPONSE_BYTES + 1)).bytes()
-            require(data.isNotEmpty() && data.size.toLong() <= MAX_RESPONSE_BYTES) {
-                "Groq response missing or too large; no incomplete reply saved"
-            }
+            if (data.isEmpty() || data.size.toLong() > MAX_RESPONSE_BYTES)
+                throw ReadFailure(ReadProblem.EMPTY_RESPONSE,
+                    "Groq response missing or too large; no incomplete reply saved")
             val json = runCatching { JSONObject(String(data, Charsets.UTF_8)) }
-                .getOrElse { throw IllegalArgumentException("Groq returned an invalid reply") }
-            require(!json.has("error")) { "Groq returned an error; no reply saved" }
+                .getOrElse { throw ReadFailure(ReadProblem.INVALID_JSON,
+                    "Groq returned an invalid reply") }
+            if (json.has("error")) throw ReadFailure(ReadProblem.INVALID_JSON,
+                "Groq returned an error; no reply saved")
             val choice = json.optJSONArray("choices")?.optJSONObject(0)
-            require(choice != null) { "Groq returned no reply" }
+                ?: throw ReadFailure(ReadProblem.MISSING_CHOICE, "Groq returned no reply")
             when (choice.optString("finish_reason")) {
                 "stop" -> Unit
-                "length" -> throw IllegalArgumentException("Groq reached its output-token limit; incomplete reply not saved")
-                "content_filter" -> throw IllegalArgumentException("Groq filtered the reply")
-                else -> throw IllegalArgumentException("Groq did not finish its reply")
+                "length" -> throw ReadFailure(ReadProblem.OUTPUT_LIMIT,
+                    "Groq reached its output-token limit; incomplete reply not saved")
+                "content_filter" -> throw ReadFailure(ReadProblem.FILTERED,
+                    "Groq filtered the reply")
+                else -> throw ReadFailure(ReadProblem.UNFINISHED,
+                    "Groq did not finish its reply")
             }
             val answer = choice.optJSONObject("message")?.opt("content")
-            require(answer is String && answer.trim().length in 1..WorkspaceConversationStore.MAX_MESSAGE_LENGTH) {
-                "Groq returned no complete bounded text reply"
-            }
+            if (answer !is String ||
+                answer.trim().length !in 1..WorkspaceConversationStore.MAX_MESSAGE_LENGTH)
+                throw ReadFailure(ReadProblem.EMPTY_CONTENT,
+                    "Groq returned no complete bounded text reply")
             answer.trim()
         }
     }

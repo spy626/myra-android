@@ -20,6 +20,8 @@ import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.text.util.Linkify
 import android.text.method.LinkMovementMethod
+import android.widget.EditText
+import android.text.InputType
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -37,6 +39,9 @@ import com.myra.assistant.service.AccessibilityHelperService
 import com.myra.assistant.service.MyraVoiceService
 import com.myra.assistant.model.AppCommand
 import com.myra.assistant.MyApplication
+import com.myra.assistant.agent.GeneralAgentRuntimeStore
+import com.myra.assistant.agent.GeneralTaskRecoveryReview
+import com.myra.assistant.agent.AutonomousRecoveryPolicy
 import com.myra.assistant.commands.CommandType
 import com.myra.assistant.commands.CommandParser as StructuredCommandParser
 import com.myra.assistant.core.AssistantController
@@ -115,13 +120,39 @@ class MainActivity : AppCompatActivity() {
             showStatus("Screenshot attached — sawaal likho ya Send dabao")
         }
     }
+    private val userBubbleByTurn = LinkedHashMap<Long, TextView>()
+    private val myraBubbleByTurn = LinkedHashMap<Long, TextView>()
+
     private val voiceListener = object : MyraVoiceService.Listener {
         override fun onState(text: String) = runOnUiThread { showStatus(text) }
-        override fun onReady() = runOnUiThread { b.connectButton.setColorFilter(Color.WHITE); showStatus("Sun rahi hoon…") }
+        override fun onReady() = runOnUiThread {
+            b.connectButton.setColorFilter(Color.WHITE)
+            showStatus("Sun rahi hoon…")
+            tryAutonomousPublicResearch()
+        }
         override fun onAmplitude(value: Float) = runOnUiThread { b.orb.amplitude = value }
         override fun onSpeaking(speaking: Boolean) = runOnUiThread { b.orb.state = if (speaking) OrbAnimationView.State.SPEAKING else OrbAnimationView.State.LISTENING; showStatus(if (speaking) "Bol rahi hoon…" else "Sun rahi hoon…") }
-        override fun onUserText(text: String) = runOnUiThread { addBubble(text, true) }
+        override fun onUserText(turnId: Long, text: String) = runOnUiThread { addBubble(text, true, turnId = turnId) }
+        override fun onUserTextCorrection(turnId: Long, text: String) = runOnUiThread {
+            userBubbleByTurn[turnId]?.let { bubble ->
+                bubble.text = text
+                bubble.contentDescription = text
+            }
+        }
         override fun onMyraText(text: String, error: Boolean) = runOnUiThread { addBubble(text, false, error) }
+        override fun onMyraTextProvisional(turnId: Long, text: String) = runOnUiThread {
+            addBubble(text, false, false, turnId = turnId)
+        }
+        override fun onMyraTextCorrection(turnId: Long, text: String, error: Boolean) = runOnUiThread {
+            val bubble = myraBubbleByTurn[turnId]
+            if (bubble != null) {
+                bubble.text = text
+                bubble.contentDescription = text
+                bubble.setTextColor(if (error) Color.rgb(255, 110, 130) else Color.rgb(238, 238, 238))
+            } else {
+                addBubble(text, false, error, turnId = turnId)
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -178,6 +209,100 @@ class MainActivity : AppCompatActivity() {
         b.stopButton.setOnClickListener { MyraVoiceService.interrupt(); assistantController.stop(); showStatus("Stopped") }
         b.muteButton.setOnClickListener { muted = !muted; startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_MUTE).putExtra(MyraVoiceService.EXTRA_MUTED, muted)); b.muteButton.alpha = if (muted) 1f else .6f; showStatus(if (muted) "Microphone muted" else "Sun rahi hoon…") }
         handleVoiceScreenPermissionIntent(intent)
+        if (savedInstanceState == null) b.root.post { showInterruptedTaskReview() }
+    }
+
+    /**
+     * Continue a previously authorized public-search goal automatically once the normal
+     * voice/agent runtime is ready. This sends a NEW safe research turn through existing
+     * final-turn planning; it never executes a stored Android action or bypasses verification.
+     */
+    private fun tryAutonomousPublicResearch(): Boolean {
+        if (isFinishing || isDestroyed || !MyraVoiceService.isRunning ||
+            !MyraVoiceService.isNaturalVoiceReady ||
+            GeneralAgentRuntimeStore.runtime.activeTask() != null) return false
+        val pending = GeneralAgentRuntimeStore.interruptedTaskReview() ?: return false
+        if (!AutonomousRecoveryPolicy.autoResumeAllowed(pending, System.currentTimeMillis()))
+            return false
+        val query = GeneralAgentRuntimeStore.claimAutonomousPublicSearch(pending)
+            ?: return false
+        showStatus("Resuming previously authorized public research")
+        addBubble("LYRA is continuing your public research: $query", false)
+        MyraVoiceService.sendText("search karo $query")
+        return true
+    }
+
+    /** A checkpoint is a progress receipt, never a saved command to replay. */
+    private fun showInterruptedTaskReview() {
+        // An already running task cannot be replaced by an old recovery prompt.
+        if (isFinishing || isDestroyed ||
+            GeneralAgentRuntimeStore.runtime.activeTask() != null) return
+        val pending = GeneralAgentRuntimeStore.interruptedTaskReview() ?: return
+        // Low-risk, previously authorized public research is autonomous, not a manual
+        // "Resume" dialog. It will re-enter when the normal session is connected.
+        if (AutonomousRecoveryPolicy.autoResumeAllowed(pending, System.currentTimeMillis())) {
+            if (!tryAutonomousPublicResearch())
+                showStatus("Previous public research will resume when LYRA connects")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("LYRA interrupted task")
+            .setMessage("A previous task was interrupted. For privacy, LYRA saved only task " +
+                "progress—not the original instruction or screen. No action resumed. " +
+                "You can dismiss it, or restate the task as a NEW request.")
+            .setNegativeButton("Later", null)
+            .setNeutralButton("Dismiss task") { _, _ ->
+                if (GeneralAgentRuntimeStore.closeInterruptedReview(pending)) {
+                    showStatus("Old interrupted task dismissed")
+                }
+            }
+            .setPositiveButton("Review") { _, _ ->
+                showRestatedTaskDraft(pending)
+            }
+            .show()
+    }
+
+    private fun showRestatedTaskDraft(
+        pending: com.myra.assistant.agent.GeneralTaskCheckpointStore.Checkpoint
+    ) {
+        val input = EditText(this).apply {
+            hint = "Enter the full original goal again"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            maxLines = 3
+            filters = arrayOf(android.text.InputFilter.LengthFilter(700))
+            setSingleLine(true)
+            setPadding(24, 14, 24, 14)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Start as a fresh request")
+            .setMessage("Review the goal before sending it. This only prepares the chat " +
+                "composer: no screen tap, message or browser action runs from this dialog. " +
+                "LYRA will use the normal fresh-screen and action permission checks when sent.")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Prepare request", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                when (val parsed = GeneralTaskRecoveryReview.prepare(
+                    input.text.toString(), pending)) {
+                    is GeneralTaskRecoveryReview.Draft.Rejected ->
+                        input.error = parsed.reason
+                    is GeneralTaskRecoveryReview.Draft.Ready -> {
+                        if (!GeneralAgentRuntimeStore.closeInterruptedReview(pending)) {
+                            input.error = "Task changed. Please review it again."
+                            return@setOnClickListener
+                        }
+                        dialog.dismiss()
+                        b.textInput.setText(parsed.freshInstruction)
+                        b.textInput.setSelection(b.textInput.text.length)
+                        expandComposer()
+                        showStatus("Fresh request ready. Review and tap Send to authorize.")
+                    }
+                }
+            }
+        }
+        dialog.show()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -382,7 +507,7 @@ class MainActivity : AppCompatActivity() {
         }
         dialog.show()
     }
-    private fun addBubble(text: String, isUser: Boolean, isError: Boolean = false) {
+    private fun addBubble(text: String, isUser: Boolean, isError: Boolean = false, turnId: Long? = null) {
         val bubble = TextView(this).apply {
             this.text = text
             setTextColor(if (isError) Color.rgb(255, 110, 130) else Color.rgb(238, 238, 238))
@@ -394,7 +519,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundResource(if (isUser) com.myra.assistant.R.drawable.bg_chat_user else com.myra.assistant.R.drawable.bg_chat_myra)
             setOnLongClickListener {
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("LYRA chat message", text))
+                clipboard.setPrimaryClip(ClipData.newPlainText("LYRA chat message", this.text))
                 Toast.makeText(this@MainActivity, "Message copied", Toast.LENGTH_SHORT).show()
                 true
             }
@@ -421,6 +546,15 @@ class MainActivity : AppCompatActivity() {
             addView(bubble, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         b.chatContainer.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        if (turnId != null) {
+            if (isUser) {
+                userBubbleByTurn[turnId] = bubble
+                while (userBubbleByTurn.size > 20) userBubbleByTurn.remove(userBubbleByTurn.keys.first())
+            } else {
+                myraBubbleByTurn[turnId] = bubble
+                while (myraBubbleByTurn.size > 20) myraBubbleByTurn.remove(myraBubbleByTurn.keys.first())
+            }
+        }
         while (b.chatContainer.childCount > 20) b.chatContainer.removeViewAt(0)
         b.chatScroll.post { b.chatScroll.fullScroll(android.view.View.FOCUS_DOWN) }
     }
@@ -490,7 +624,13 @@ class MainActivity : AppCompatActivity() {
     }
     private fun showStatus(text: String) { b.statusText.text = text }
     private fun disconnect() { startService(Intent(this, MyraVoiceService::class.java).setAction(MyraVoiceService.ACTION_STOP)); b.connectButton.clearColorFilter(); b.orb.state = OrbAnimationView.State.IDLE; showStatus("Tap the mic to wake LYRA") }
-    override fun onResume() { super.onResume(); MyraVoiceService.listener = voiceListener; MyraVoiceService.setUiVisible(true); if (MyraVoiceService.isRunning) b.connectButton.setColorFilter(Color.WHITE) }
+    override fun onResume() {
+        super.onResume()
+        MyraVoiceService.listener = voiceListener
+        MyraVoiceService.setUiVisible(true)
+        if (MyraVoiceService.isRunning) b.connectButton.setColorFilter(Color.WHITE)
+        tryAutonomousPublicResearch()
+    }
     override fun onPause() { MyraVoiceService.setUiVisible(false); super.onPause() }
     override fun onDestroy() { assistantController.removeListener(controllerListener); if (MyraVoiceService.listener === voiceListener) MyraVoiceService.listener = null; super.onDestroy() }
 }

@@ -1,6 +1,14 @@
 package com.myra.assistant.ui.workspace
 
 import android.content.Context
+import android.content.res.ColorStateList
+import android.view.Gravity
+import android.widget.HorizontalScrollView
+import android.widget.TableLayout
+import android.widget.TableRow
+import android.widget.RadioGroup
+import android.widget.RadioButton
+import com.google.android.material.button.MaterialButton
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -10,6 +18,7 @@ import android.text.style.URLSpan
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ImageView
 
 /**
  * Native block renderer for Chat assistant prose. No WebView, remote images or simulated
@@ -17,10 +26,11 @@ import android.widget.TextView
  * copied, retried and sent to the provider unchanged.
  */
 internal object WorkspaceRichAnswerView {
-    private val bodyColor = Color.rgb(230, 236, 244)
-    private val mutedColor = Color.rgb(172, 190, 180)
-    private val accentColor = Color.rgb(156, 232, 188)
-    private val borderColor = Color.rgb(43, 59, 49)
+    // Answer-only palette: neutral ChatGPT-like surfaces. The parent chat
+    // send button, user bubble, and input bar retain their independent LYRA theme.
+    private val bodyColor = Color.rgb(232, 232, 232)
+    private val mutedColor = Color.rgb(174, 174, 174)
+    private val borderColor = Color.argb(20, 255, 255, 255) // ~8% white
 
     private fun dp(context: Context, value: Int): Int =
         (value * context.resources.displayMetrics.density + 0.5f).toInt()
@@ -51,7 +61,7 @@ internal object WorkspaceRichAnswerView {
                 0, formatted.length, URLSpan::class.java
             )?.isNotEmpty() == true
         ) {
-            setLinkTextColor(WorkspaceChatReadability.verifiedLinkColor)
+            setLinkTextColor(mutedColor)
             movementMethod = LinkMovementMethod.getInstance()
         } else {
             setTextIsSelectable(true)
@@ -68,6 +78,42 @@ internal object WorkspaceRichAnswerView {
             topMargin = dp(context, top)
             bottomMargin = dp(context, bottom)
         })
+    }
+
+    /** Shared full-width neutral table for JSON and Markdown answer blocks. */
+    private fun neutralTable(
+        context: Context, headers: List<String>, rows: List<List<String>>,
+    ): View {
+        val horizontal = HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = true
+        }
+        val table = TableLayout(context).apply {
+            isStretchAllColumns = true
+            isShrinkAllColumns = false
+        }
+        (listOf(headers) + rows).forEachIndexed { rowIndex, cells ->
+            val line = TableRow(context).apply { gravity = Gravity.CENTER_VERTICAL }
+            cells.forEach { cell ->
+                val view = label(context, WorkspaceRichStatusText.neutralize(cell),
+                    if (rowIndex == 0) 13.5f else 14.5f, bold = rowIndex == 0).apply {
+                    setPadding(dp(context, 7),
+                        dp(context, if (rowIndex == 0) 11 else 13),
+                        dp(context, 7),
+                        dp(context, if (rowIndex == 0) 11 else 13))
+                    minWidth = dp(context, if (headers.size == 2) 122 else 82)
+                    // No distinct header fill; only typography and hairline dividers.
+                }
+                line.addView(view, TableRow.LayoutParams(0, -2, 1f))
+            }
+            table.addView(line, TableLayout.LayoutParams(-1, -2))
+            if (rowIndex < rows.size) {
+                table.addView(View(context).apply { setBackgroundColor(borderColor) },
+                    TableLayout.LayoutParams(-1, dp(context, 1)))
+            }
+        }
+        horizontal.addView(table, android.widget.FrameLayout.LayoutParams(-1, -2))
+        return horizontal
     }
 
     fun create(context: Context, raw: String): View {
@@ -98,9 +144,9 @@ internal object WorkspaceRichAnswerView {
                             setPadding(dp(context, 7 + item.depth * 13), 0, 0, 0)
                         }
                         line.addView(label(context, "•", 17f).apply {
-                            setTextColor(accentColor)
+                            setTextColor(mutedColor)
                         }, LinearLayout.LayoutParams(dp(context, 18), -2))
-                        line.addView(label(context, item.text, 16.5f),
+                        line.addView(label(context, WorkspaceRichStatusText.neutralize(item.text), 16.5f),
                             LinearLayout.LayoutParams(0, -2, 1f))
                         put(group, line, context, top = 3, bottom = 3)
                     }
@@ -112,27 +158,23 @@ internal object WorkspaceRichAnswerView {
                         val line = row(context).apply {
                             setPadding(dp(context, 1), 0, 0, 0)
                         }
-                        val number = label(context, item.number, 13.5f, bold = true).apply {
-                            setTextColor(accentColor)
-                            gravity = android.view.Gravity.CENTER
-                            background = GradientDrawable().apply {
-                                setColor(Color.rgb(22, 49, 35))
-                                cornerRadius = dp(context, 10).toFloat()
-                            }
+                        val number = label(context, item.number + ".", 16f, bold = true).apply {
+                            setTextColor(bodyColor)
+                            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                         }
                         line.addView(number, LinearLayout.LayoutParams(
-                            dp(context, 29), dp(context, 29)
-                        ).apply { rightMargin = dp(context, 11) })
+                            dp(context, 25), -2
+                        ).apply { rightMargin = dp(context, 6) })
                         val content = column(context)
-                        put(content, label(context, item.text), context)
+                        put(content, label(context, WorkspaceRichStatusText.neutralize(item.text)), context)
                         item.details.forEach { detail ->
                             val nested = row(context).apply {
                                 setPadding(dp(context, 3), 0, 0, 0)
                             }
                             nested.addView(label(context, "•", 15f).apply {
-                                setTextColor(accentColor)
+                                setTextColor(mutedColor)
                             }, LinearLayout.LayoutParams(dp(context, 17), -2))
-                            nested.addView(label(context, detail, 15.5f),
+                            nested.addView(label(context, WorkspaceRichStatusText.neutralize(detail), 15.5f),
                                 LinearLayout.LayoutParams(0, -2, 1f))
                             put(content, nested, context, top = 4)
                         }
@@ -143,30 +185,8 @@ internal object WorkspaceRichAnswerView {
                     put(root, group, context, top = 2, bottom = 7)
                 }
                 is WorkspaceRichAnswerBlocks.Block.Table -> {
-                    val group = column(context)
-                    block.rows.forEachIndexed { rowIndex, cells ->
-                        val item = column(context).apply {
-                            setPadding(dp(context, 12), dp(context, 10),
-                                dp(context, 12), dp(context, 10))
-                            background = GradientDrawable().apply {
-                                setColor(Color.rgb(19, 28, 23))
-                                cornerRadius = dp(context, 11).toFloat()
-                                setStroke(dp(context, 1), borderColor)
-                            }
-                        }
-                        // Stacked comparison cards retain all 2–4 source columns while
-                        // keeping their label/value relationships readable on a narrow phone.
-                        put(item, label(context, block.headers.first(), 12.5f, muted = true),
-                            context, bottom = 2)
-                        put(item, label(context, cells[0], 16.5f, bold = true),
-                            context, bottom = if (cells.size > 1) 4 else 0)
-                        cells.drop(1).forEachIndexed { valueIndex, value ->
-                            put(item, label(context, "**" + block.headers[valueIndex + 1] +
-                                ":** " + value, 15.5f), context, top = 1)
-                        }
-                        put(group, item, context, top = if (rowIndex == 0) 2 else 6)
-                    }
-                    put(root, group, context, top = 4, bottom = 7)
+                    put(root, neutralTable(context, block.headers, block.rows), context,
+                        top = 5, bottom = 9)
                 }
                 is WorkspaceRichAnswerBlocks.Block.Quote -> {
                     val quote = row(context)
@@ -189,4 +209,152 @@ internal object WorkspaceRichAnswerView {
         }
         return root
     }
+
+    /** JSON-driven Android Views renderer; old Markdown path remains for historical replies. */
+    fun createBlocks(
+        context: Context,
+        blocks: List<Block>,
+        onOptionSelected: (String) -> Unit,
+    ): View {
+        val root = column(context).apply {
+            // Transparent reading surface; never create a grey outer response card.
+            setPadding(dp(context, 5), dp(context, 5), dp(context, 5), dp(context, 8))
+        }
+        blocks.forEach { block ->
+            when (block) {
+                is Block.Text -> put(root, label(context, block.text, 16f), context,
+                    top = 3, bottom = 6)
+                is Block.Heading -> put(root, label(context,
+                    (if (block.emoji.isBlank()) "" else block.emoji + " ") + block.text,
+                    fontSp = 17.5f, bold = true), context, top = 12, bottom = 5)
+                is Block.Bullets -> {
+                    val items = column(context)
+                    block.items.forEach { item ->
+                        val line = row(context)
+                        line.addView(label(context, "•", 17f).apply {
+                            setTextColor(mutedColor)
+                        }, LinearLayout.LayoutParams(dp(context, 20), -2))
+                        line.addView(label(context, WorkspaceRichStatusText.neutralize(item), 15.5f),
+                            LinearLayout.LayoutParams(0, -2, 1f))
+                        put(items, line, context, top = 3, bottom = 3)
+                    }
+                    put(root, items, context, top = 2, bottom = 7)
+                }
+                is Block.Table -> {
+                    put(root, neutralTable(context, block.columns, block.rows),
+                        context, top = 5, bottom = 9)
+                }
+                is Block.ImageRow -> {
+                    // Search placeholder is not an image: no framed blank area.
+                    put(root, label(context,
+                        block.caption.ifBlank { block.query }, 14f, muted = true),
+                        context, top = 3, bottom = 6)
+                }
+                is Block.AppCards -> {
+                    // Inline compact app icon rows, not grey boxes or an app dashboard.
+                    block.items.forEach { (name, note) ->
+                        val line = row(context).apply {
+                            gravity = Gravity.CENTER_VERTICAL
+                            setPadding(dp(context, 1), dp(context, 5),
+                                dp(context, 1), dp(context, 5))
+                        }
+                        val badge: View = WorkspaceLocalAppIcons.icon(name)?.let { drawable ->
+                            ImageView(context).apply {
+                                setImageDrawable(drawable)
+                                scaleType = ImageView.ScaleType.FIT_CENTER
+                                contentDescription = "$name local icon"
+                                setPadding(dp(context, 2), dp(context, 2),
+                                    dp(context, 2), dp(context, 2))
+                            }
+                        } ?: TextView(context).apply {
+                            text = WorkspaceLocalAppIcons.glyph(name)
+                            gravity = Gravity.CENTER
+                            textSize = 16f
+                            setTypeface(typeface, Typeface.BOLD)
+                            setTextColor(mutedColor)
+                            contentDescription = "$name initial"
+                        }
+                        line.addView(badge, LinearLayout.LayoutParams(
+                            dp(context, 34), dp(context, 34)
+                        ).apply { rightMargin = dp(context, 10) })
+                        val details = column(context)
+                        put(details, label(context, name, 15.5f, bold = true), context)
+                        if (note.isNotBlank())
+                            put(details, label(context, note, 14f, muted = true), context, top = 2)
+                        line.addView(details, LinearLayout.LayoutParams(0, -2, 1f))
+                        put(root, line, context, bottom = 3)
+                    }
+                }
+                is Block.Callout -> {
+                    // Tip is normal reading content, never a highlighted card.
+                    if (block.label.isNotBlank()) {
+                        put(root, label(context, block.label, 14f, bold = true),
+                            context, top = 5, bottom = 2)
+                    }
+                    put(root, label(context, block.text, 15.5f),
+                        context, bottom = 7)
+                }
+                is Block.MockupCard -> {
+                    // Legacy mockups become inline notes: bounded WRAP_CONTENT, no
+                    // weighted-height children, inner panels or giant grey rectangles.
+                    put(root, label(context, block.title, 15f, bold = true),
+                        context, top = 5, bottom = 3)
+                    val content = block.items.take(4).joinToString("  •  ") {
+                        WorkspaceRichStatusText.neutralize(it)
+                    }
+                    if (content.isNotBlank()) {
+                        put(root, label(context, content, 14.5f, muted = true),
+                            context, bottom = 6)
+                    }
+                }
+                Block.Divider -> put(root, View(context).apply {
+                    setBackgroundColor(borderColor)
+                    minimumHeight = dp(context, 1)
+                }, context, top = 8, bottom = 8)
+                is Block.Options -> {
+                    val options = column(context).apply {
+                        setPadding(dp(context, 2), dp(context, 4),
+                            dp(context, 2), dp(context, 4))
+                    }
+                    put(options, label(context, block.question, 16f, bold = true),
+                        context, bottom = 5)
+                    val choices = RadioGroup(context).apply {
+                        orientation = RadioGroup.VERTICAL
+                    }
+                    block.choices.forEach { choice ->
+                        choices.addView(RadioButton(context).apply {
+                            id = View.generateViewId()
+                            text = choice
+                            textSize = 14f
+                            setTextColor(bodyColor)
+                            buttonTintList = ColorStateList.valueOf(mutedColor)
+                            tag = choice
+                        }, RadioGroup.LayoutParams(-1, -2))
+                    }
+                    put(options, choices, context, bottom = 7)
+                    val button = MaterialButton(context).apply {
+                        text = "Continue  →"
+                        isEnabled = false
+                        setTextColor(bodyColor)
+                        backgroundTintList = ColorStateList.valueOf(Color.rgb(62, 62, 62))
+                        setOnClickListener {
+                            val picked = choices.findViewById<RadioButton>(choices.checkedRadioButtonId)
+                            val selected = picked?.tag as? String
+                            if (!selected.isNullOrBlank()) {
+                                isEnabled = false
+                                onOptionSelected(selected)
+                            }
+                        }
+                    }
+                    choices.setOnCheckedChangeListener { _, checked ->
+                        button.isEnabled = checked != -1
+                    }
+                    put(options, button, context)
+                    put(root, options, context, top = 7, bottom = 8)
+                }
+            }
+        }
+        return root
+    }
 }
+

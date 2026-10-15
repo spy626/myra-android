@@ -93,14 +93,63 @@ class MemoryBrainCoordinator(
         }
     }
 
+    /** Existing single memory owner also retains bounded non-personal search tool telemetry.
+     * This does not mint a semantic fact, approve a tool or alter final-turn authority. */
+    suspend fun loadVerifiedSearchStrategies(
+        at: Long = System.currentTimeMillis()
+    ): List<com.myra.assistant.agent.VerifiedSearchStrategyFeedback.Record> =
+        AiriSearchStrategyRetention.retained(
+            store.behaviorByKind(AiriSearchStrategyRetention.KIND, 100), at)
+
+    suspend fun retainVerifiedSearchStrategy(
+        record: com.myra.assistant.agent.VerifiedSearchStrategyFeedback.Record,
+        at: Long = System.currentTimeMillis()
+    ): Boolean {
+        val row = runCatching { AiriSearchStrategyRetention.encode(record, at) }.getOrNull()
+            ?: return false
+        return store.transaction {
+            // Same task/capability can never be rewritten into a different outcome.
+            if (behavior(row.stableKey) != null) return@transaction false
+            upsertBehavior(row)
+            val all = behaviorByKind(AiriSearchStrategyRetention.KIND, 100)
+                .sortedWith(compareByDescending<BehaviorObservationEntity> { it.lastObservedAt }
+                    .thenBy { it.stableKey })
+            all.forEachIndexed { index, older ->
+                if (index >= AiriSearchStrategyRetention.MAX_RECORDS ||
+                    AiriSearchStrategyRetention.decode(older, at) == null
+                ) deleteBehavior(older.stableKey)
+            }
+            behavior(row.stableKey)?.let {
+                AiriSearchStrategyRetention.decode(it, at) == record
+            } == true
+        }
+    }
+
+    suspend fun projectFinalDisplay(evidence: AuthoritativeMemoryTurnEvidence): String? =
+        runCatching { reasoningProvider.interpretFinalTurn(evidence) }
+            .onFailure {
+                log("MEMORY_DISPLAY_PROJECTION_FAILED turnId=${evidence.turnId} reason=${it.javaClass.simpleName}")
+            }
+            .getOrNull()?.displayText?.let { FinalTurnDisplayProjectionPolicy.select(evidence, it) }
+
     suspend fun prepareFinalTurn(evidence: AuthoritativeMemoryTurnEvidence, staged: List<MemorySemanticFrame>, semanticConsistent: Boolean = true): FinalMemoryTurnPlan {
         if (ownedSessions.add(evidence.sessionId)) {
             AiriMemoryRuntime.beginSession(evidence.sessionId, evidence.turnId)
         } else {
             AiriMemoryRuntime.claimTurn(evidence.sessionId, evidence.turnId)
         }
-        val bounded = staged.take(4)
-        if (bounded.isEmpty()) return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.IGNORE)
+        val fallback = if (staged.isEmpty() && FinalTurnSemanticCandidateGate.shouldInterpret(evidence)) {
+            runCatching { reasoningProvider.interpretFinalTurn(evidence) }
+                .onFailure {
+                    log("MEMORY_FINAL_TURN_FALLBACK_FAILED turnId=${evidence.turnId} reason=${it.javaClass.simpleName}")
+                }
+                .getOrDefault(FinalTurnSemanticInterpretation())
+        } else FinalTurnSemanticInterpretation()
+        val displayProjection = FinalTurnDisplayProjectionPolicy.select(evidence, fallback.displayText)
+        val bounded = (if (staged.isNotEmpty()) staged else fallback.operations).take(4)
+        if (bounded.isEmpty()) return FinalMemoryTurnPlan(
+            evidence.sourceText, decision = MemoryDecision.IGNORE, displayProjection = displayProjection
+        )
         if (!semanticConsistent) return FinalMemoryTurnPlan(evidence.sourceText, decision = MemoryDecision.REJECT, rejectionReason = MemoryFailureReason.CRITICAL_LITERAL_MISSING.name)
         val isQuestion = bounded.any { it.intent == MemorySemanticIntent.RECALL }
         if (isQuestion && bounded.any { it.intent !in setOf(MemorySemanticIntent.RECALL, MemorySemanticIntent.CLARIFY) })
@@ -156,7 +205,8 @@ class MemoryBrainCoordinator(
             else -> MemoryDecision.SAVE
         }
         return FinalMemoryTurnPlan(evidence.sourceText, resolved, decision, decision == MemoryDecision.NEEDS_CLARIFICATION,
-            MemoryFailureReason.AMBIGUOUS_ENTITY.name.takeIf { decision == MemoryDecision.NEEDS_CLARIFICATION })
+            MemoryFailureReason.AMBIGUOUS_ENTITY.name.takeIf { decision == MemoryDecision.NEEDS_CLARIFICATION },
+            displayProjection = displayProjection)
     }
 
     suspend fun executeFinalTurnPlan(plan: FinalMemoryTurnPlan, evidence: AuthoritativeMemoryTurnEvidence? = null): MemoryBrainOutcome {
@@ -255,7 +305,46 @@ class MemoryBrainCoordinator(
             AiriMemoryRuntime.markConsolidated(turn.sessionId, turn.turnId)
         }
         AiriWorkingMemory.record(VerifiedMemoryTransaction(turn.turnId, plan.operations.last().intent, status, lastId))
+        if (status == MemoryTransactionStatus.SUCCEEDED) {
+            val diff = memoryDiff(turn.sessionId, turn.turnId)
+            log("MEMORY_DIFF turnId=${turn.turnId} items=${diff.items.size} verified=${diff.verified} " +
+                "new=${diff.adds} reinforce=${diff.reinforces} update=${diff.updates} invalidate=${diff.invalidates} " +
+                "buckets=${diff.items.joinToString(",") { it.bucket.name }}")
+        }
         return when { transient && lastId == null && !deleted -> MemoryBrainOutcome.Transient(); deleted -> MemoryBrainOutcome.Deleted(true); else -> MemoryBrainOutcome.Mutated(MemoryWriteResult.Saved(lastId!!)) }
+    }
+
+    /**
+     * OpenViking-style per-turn memory diff, derived from the existing durable
+     * consolidation journal. This is a read projection only; Room remains the
+     * single storage truth and MemoryBrainCoordinator remains the single owner.
+     */
+    suspend fun memoryDiff(conversationId: String, turnId: Long): MemoryDiffSnapshot {
+        val actions = store.consolidationActions(conversationId, turnId)
+        val items = actions.map { action ->
+            val row = action.memoryId?.let { store.semanticById(it) }
+            val category = row?.category ?: when {
+                action.semanticKey?.startsWith("relationship:") == true -> MemoryCategory.PERSON.name
+                action.semanticKey?.startsWith("goal:") == true -> MemoryCategory.GOAL.name
+                else -> null
+            }
+            val verified = when (action.action) {
+                SemanticConsolidationAction.INVALIDATE.name -> !action.semanticKey.isNullOrBlank()
+                else -> action.memoryId != null && row != null
+            }
+            MemoryDiffItem(
+                action = action.action,
+                bucket = MemoryOrganization.bucket(category),
+                category = category,
+                semanticKey = action.semanticKey,
+                memoryId = action.memoryId,
+                statement = row?.statement,
+                verified = verified,
+                episodeId = action.episodeId,
+                calibratedAt = action.calibratedAt
+            )
+        }
+        return MemoryDiffSnapshot(conversationId, turnId, items)
     }
 
     suspend fun recall(query: String, limit: Int = 8, type: MemoryRecallType = MemoryRecallType.GENERAL): MemoryBrainOutcome.Recalled {

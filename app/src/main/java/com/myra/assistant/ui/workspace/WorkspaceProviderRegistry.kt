@@ -19,9 +19,18 @@ internal object WorkspaceProviderRegistry {
     enum class TaskKind {
         CHAT_TEXT,
         CHAT_ATTACHMENT,
+        RESEARCH,
         CODE_EDIT,
         WEBSITE_BUILD,
     }
+
+    /** An attachment is a semantic modality, not merely hasAttachments=true. */
+    enum class AttachmentKind {
+        DOCUMENT_TEXT, PHOTO, VIDEO_FRAMES_SILENT, VIDEO_ORIGINAL, AUDIO_ORIGINAL,
+    }
+
+    /** Declared input is not a live model-health guarantee. Never upgrade experimental to proven. */
+    enum class AttachmentSupport { DECLARED_INPUT, EXPERIMENTAL_UNVERIFIED, UNSUPPORTED }
 
     enum class FreeAssurance {
         /** API request itself enforces a literal zero-price ceiling. */
@@ -50,6 +59,7 @@ internal object WorkspaceProviderRegistry {
         val tasks: Set<TaskKind>,
         val sourceAllowed: Boolean,
         val attachmentsAllowed: Boolean,
+        val attachmentSupport: Map<AttachmentKind, AttachmentSupport> = emptyMap(),
         val freeAssurance: FreeAssurance,
         val fallbackRule: FallbackRule,
         val budgets: Map<TaskKind, Budget>,
@@ -78,15 +88,26 @@ internal object WorkspaceProviderRegistry {
             id = Id.OPENROUTER_FREE,
             displayName = "OpenRouter Free",
             tasks = setOf(TaskKind.CHAT_TEXT, TaskKind.CHAT_ATTACHMENT,
-                TaskKind.CODE_EDIT, TaskKind.WEBSITE_BUILD),
+                TaskKind.RESEARCH, TaskKind.CODE_EDIT, TaskKind.WEBSITE_BUILD),
             sourceAllowed = true,
             attachmentsAllowed = true,
+            attachmentSupport = mapOf(
+                AttachmentKind.DOCUMENT_TEXT to AttachmentSupport.DECLARED_INPUT,
+                AttachmentKind.PHOTO to AttachmentSupport.DECLARED_INPUT,
+                // Ten locally sampled silent frames are transmitted as image_url parts.
+                AttachmentKind.VIDEO_FRAMES_SILENT to AttachmentSupport.DECLARED_INPUT,
+                // openrouter/free is a changing pool: video_url and input_audio are NOT proven.
+                AttachmentKind.VIDEO_ORIGINAL to AttachmentSupport.EXPERIMENTAL_UNVERIFIED,
+                AttachmentKind.AUDIO_ORIGINAL to AttachmentSupport.EXPERIMENTAL_UNVERIFIED,
+            ),
             freeAssurance = FreeAssurance.API_ZERO_PRICE_CEILING,
             fallbackRule = FallbackRule.USER_CONSENTED_DEFINITE_HTTP_ONLY,
             budgets = mapOf(
                 TaskKind.CHAT_TEXT to Budget(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS,
                     WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS),
                 TaskKind.CHAT_ATTACHMENT to Budget(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS,
+                    WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS),
+                TaskKind.RESEARCH to Budget(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS,
                     WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS),
                 TaskKind.CODE_EDIT to Budget(12_000, WorkspaceFreeAiSuggestion.MAX_OUTPUT_TOKENS),
                 TaskKind.WEBSITE_BUILD to Budget(null, null),
@@ -96,13 +117,15 @@ internal object WorkspaceProviderRegistry {
         Capability(
             id = Id.GROQ_FREE,
             displayName = "Groq Free",
-            tasks = setOf(TaskKind.CHAT_TEXT, TaskKind.CODE_EDIT, TaskKind.WEBSITE_BUILD),
+            tasks = setOf(TaskKind.CHAT_TEXT, TaskKind.RESEARCH,
+                TaskKind.CODE_EDIT, TaskKind.WEBSITE_BUILD),
             sourceAllowed = true,
             attachmentsAllowed = false,
             freeAssurance = FreeAssurance.USER_ATTESTED_FREE_ACCOUNT,
             fallbackRule = FallbackRule.USER_CONSENTED_DEFINITE_HTTP_ONLY,
             budgets = mapOf(
                 TaskKind.CHAT_TEXT to Budget(WorkspaceGroqFree.MAX_PROMPT_CHARS, 2_048),
+                TaskKind.RESEARCH to Budget(WorkspaceGroqFree.MAX_PROMPT_CHARS, 2_048),
                 TaskKind.CODE_EDIT to Budget(WorkspaceGroqFree.MAX_PROMPT_CHARS, 2_048),
                 TaskKind.WEBSITE_BUILD to Budget(WorkspaceLongInputPolicy.MAX_REQUEST_CHARS, 4_500),
             ),
@@ -154,6 +177,20 @@ internal object WorkspaceProviderRegistry {
     fun supports(id: Id, task: TaskKind): Boolean = task in capability(id).tasks
 
     fun allowsAttachments(id: Id): Boolean = capability(id).attachmentsAllowed
+
+    fun attachmentSupport(id: Id, kind: AttachmentKind): AttachmentSupport =
+        capability(id).attachmentSupport[kind] ?: AttachmentSupport.UNSUPPORTED
+
+    /** Experimental original files require affirmative, per-send user consent. */
+    fun supportsAttachment(id: Id, kind: AttachmentKind,
+                           experimentalApproved: Boolean = false): Boolean {
+        if (!supports(id, TaskKind.CHAT_ATTACHMENT) || !allowsAttachments(id)) return false
+        return when (attachmentSupport(id, kind)) {
+            AttachmentSupport.DECLARED_INPUT -> true
+            AttachmentSupport.EXPERIMENTAL_UNVERIFIED -> experimentalApproved
+            AttachmentSupport.UNSUPPORTED -> false
+        }
+    }
 
     fun allowsSource(id: Id): Boolean = capability(id).sourceAllowed
 

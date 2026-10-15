@@ -9,12 +9,13 @@ package com.myra.assistant.ui.workspace
 internal object WorkspaceConnectedGitHubRunIntent {
     data class Decision(
         val runNumber: Long? = null,
+        val latest: Boolean = false,
         val localError: String? = null,
         val includeCommitSha: Boolean = false,
     ) {
         init {
-            require((runNumber == null) xor (localError == null)) {
-                "Connected GitHub run decision must be one run number or one local error"
+            require(listOf(runNumber != null, latest, localError != null).count { it } == 1) {
+                "Connected GitHub run decision must be one exact run, latest run, or local error"
             }
         }
     }
@@ -31,8 +32,12 @@ internal object WorkspaceConnectedGitHubRunIntent {
     private val statusQuestion = Regex(
         """(?iu)\b(?:green|red|pass(?:ed)?|fail(?:ed)?|status|result|ci)\b"""
     )
+    private val latestCue = Regex(
+        """(?iu)\b(?:latest|newest|most\s+recent|recent|current|abhi\s+ka|aaj\s+ka)\b"""
+    )
     private val readRequest = Regex(
-        """(?iu)\b(?:check|verify|read|fetch|show|get|tell|dekh\p{L}*|bata\p{L}*|kya|green|red|pass(?:ed)?|fail(?:ed)?|status|result)\b|\?"""
+        """(?iu)\b(?:check|verify|read|fetch|show|get|tell|dekh\p{L}*|bata\p{L}*|kya|""" +
+            """green|red|pass(?:ed)?|fail(?:ed)?|status|result|link|url|latest|newest|recent|current)\b|\?"""
     )
     private val explicitCommitSha = Regex(
         """(?iu)\b(?:commit\s+(?:sha|hash|id)|full\s+sha|sha\s+(?:bhi|also|too))\b"""
@@ -63,15 +68,23 @@ internal object WorkspaceConnectedGitHubRunIntent {
             .filter { it > 0L }
             .distinct()
             .toList()
-        if (values.isEmpty()) return null
-        if (values.size != 1) {
+        if (values.size > 1) {
             return Decision(localError =
                 "I found multiple build/run numbers. Ask me to verify one GitHub Actions run at a time; nothing was changed.")
         }
-        return Decision(
-            runNumber = values.single(),
-            includeCommitSha = explicitCommitSha.containsMatchIn(requested),
-        )
+        if (values.size == 1) {
+            return Decision(
+                runNumber = values.single(),
+                includeCommitSha = explicitCommitSha.containsMatchIn(requested),
+            )
+        }
+        if (latestCue.containsMatchIn(requested)) {
+            return Decision(
+                latest = true,
+                includeCommitSha = explicitCommitSha.containsMatchIn(requested),
+            )
+        }
+        return null
     }
 
     /** Compact verified result, not a dump of connector metadata. */
@@ -107,5 +120,21 @@ internal object WorkspaceConnectedGitHubRunIntent {
             appendLine()
             append("[🔗 GitHub Build #${run.runNumber} ↗](${run.url})")
         }
+    }
+
+    fun source(
+        completion: WorkspaceConnectedGitHubRunRunner.Completion,
+        observedAtMs: Long = System.currentTimeMillis(),
+    ): WorkspaceVerifiedSourceStore.Source {
+        val run = completion.run
+        val status = run.status.replace('_', ' ')
+        val result = run.conclusion?.replace('_', ' ') ?: "pending"
+        return WorkspaceVerifiedSourceStore.Source(
+            title = "GitHub Build #" + run.runNumber,
+            url = run.url,
+            snippet = "Connected branch " + completion.branch + " · " + status + " · " + result,
+            observedAtMs = observedAtMs,
+            verifiedLabel = "Connected GitHub",
+        )
     }
 }

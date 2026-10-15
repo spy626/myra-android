@@ -44,6 +44,7 @@ internal object WorkspaceCustomProviderConnection {
             .connectTimeout(minOf(profile.timeoutSeconds, 20).toLong(), TimeUnit.SECONDS)
             .readTimeout(profile.timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
+            .addInterceptor(WorkspaceRichUserContextInterceptor())
             .followRedirects(false)
             .followSslRedirects(false)
             .dns(dns(profile))

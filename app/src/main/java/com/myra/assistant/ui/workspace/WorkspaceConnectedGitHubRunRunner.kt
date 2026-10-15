@@ -33,8 +33,16 @@ internal class WorkspaceConnectedGitHubRunRunner(
     private var active: Call? = null
 
     @Synchronized fun start(runNumber: Long) {
-        cancelLocked()
         require(runNumber > 0L) { "GitHub workflow run number is invalid" }
+        startLookup(runNumber)
+    }
+
+    @Synchronized fun startLatest() {
+        startLookup(null)
+    }
+
+    private fun startLookup(runNumber: Long?) {
+        cancelLocked()
         val run = ++generation
         val saved = store.loadGitHub()
         if (saved == null) {
@@ -71,7 +79,7 @@ internal class WorkspaceConnectedGitHubRunRunner(
                     branch = fresh.branch,
                     tokenExpiresAtMs = expiry,
                 )
-                readRun(run, runNumber, fresh.repository, fresh.branch, fresh.accessToken)
+                readRequested(run, runNumber, fresh.repository, fresh.branch, fresh.accessToken)
             }
             return
         }
@@ -81,7 +89,18 @@ internal class WorkspaceConnectedGitHubRunRunner(
             fail(run, "Reconnect GitHub once to refresh read access safely.")
             return
         }
-        readRun(run, runNumber, saved.repository, saved.branch, saved.token)
+        readRequested(run, runNumber, saved.repository, saved.branch, saved.token)
+    }
+
+    private fun readRequested(
+        generationId: Long,
+        runNumber: Long?,
+        repository: String,
+        branch: String,
+        token: String,
+    ) {
+        if (runNumber == null) readLatest(generationId, repository, branch, token)
+        else readRun(generationId, runNumber, repository, branch, token)
     }
 
     @Synchronized fun cancel() {
@@ -92,6 +111,48 @@ internal class WorkspaceConnectedGitHubRunRunner(
     private fun cancelLocked() {
         active?.cancel()
         active = null
+    }
+
+    private fun readLatest(
+        generationId: Long,
+        repository: String,
+        branch: String,
+        token: String,
+    ) {
+        synchronized(this) {
+            if (generationId != generation) return
+        }
+        listener.onEvent(
+            WorkspaceWorkPhase.VERIFYING,
+            "Checking latest GitHub Actions build",
+            branch,
+        )
+        dispatch(
+            generationId,
+            WorkspaceGitHubConnector.workflowRunsForBranchRequest(
+                token = token,
+                repository = repository,
+                branch = branch,
+                page = 1,
+            ),
+            "Latest GitHub Actions build could not be read; no repository change was attempted.",
+        ) { response ->
+            val found = requireNotNull(
+                WorkspaceGitHubConnector.readLatestWorkflowRun(response, branch)
+            ) {
+                "No recent Build Android APK push run was found on " + branch + "."
+            }
+            synchronized(this) {
+                if (generationId != generation) return@dispatch
+            }
+            listener.onEvent(
+                WorkspaceWorkPhase.DONE,
+                "Latest GitHub build verified",
+                "#" + found.runNumber + " · " + found.status +
+                    (found.conclusion?.let { " · " + it } ?: ""),
+            )
+            listener.onComplete(Completion(repository, branch, found))
+        }
     }
 
     private fun readRun(

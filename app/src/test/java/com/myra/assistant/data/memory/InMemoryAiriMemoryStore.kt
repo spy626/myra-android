@@ -219,6 +219,9 @@ open class InMemoryAiriMemoryStore : AiriMemoryStore {
             evidence.sessionId, evidence.turnId, memoryId, frame.stableKey, action.name,
             frame.sourceSpan.hashCode().toString(), time())
     }
+    override suspend fun consolidationActions(conversationId: String, turnId: Long) =
+        consolidationActions.filter { it.conversationId == conversationId && it.turnId == turnId }
+
     override suspend fun markEpisodeConsolidated(id: String, at: Long): Boolean {
         var changed = false; episodes.replaceAll { pair ->
             if (pair.first.episodeId == id && pair.first.consolidatedAt == null) { changed = true; pair.first.copy(consolidatedAt = at) to pair.second } else pair

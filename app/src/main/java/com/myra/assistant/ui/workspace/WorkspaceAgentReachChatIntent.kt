@@ -1,9 +1,9 @@
 package com.myra.assistant.ui.workspace
 
 /**
- * Conservative user-intent gate for read-only Agent Reach.
+ * Conservative user-intent gate for read-only Agent Reach: GitHub and public webpages.
  *
- * A GitHub URL is not automatically opened merely because it appears in conversation. The message
+ * A URL is not automatically opened merely because it appears in conversation. The message
  * must be primarily the link itself or explicitly ask LYRA to read/check/inspect it.
  */
 internal object WorkspaceAgentReachChatIntent {
@@ -20,28 +20,25 @@ internal object WorkspaceAgentReachChatIntent {
 
     private val url = Regex("""https://[^\s<>"']+""", RegexOption.IGNORE_CASE)
     private val readIntent = Regex(
-        """(?i)\b(?:check|read|inspect|review|open|analyse|analyze|summarise|summarize|""" +
+        """(?i)\b(?:check|read|inspect|review|open|analyse|analyze|summarise|summarize|research|explore|study|investigate|""" +
             """dekh|dekho|dekhe|samjho)\b|\bcheck\s+k(?:a)?ro\b|\bcheck\s+kro\b"""
     )
     private val blockedIntent = Regex(
-        """(?i)(?:\b(?:do\s+not|don't|dont)\s+(?:open|read|check|inspect|review|analy[sz]e)\b)|""" +
-            """(?:\bmat\s+(?:khol|open|read|check|dekh|inspect)\b)|""" +
-            """(?:\b(?:open|read|check|dekh|inspect)\s+mat\b)"""
+        """(?i)(?:\b(?:do\s+not|don't|dont)\s+(?:open|read|check|inspect|review|analy[sz]e|research|explore|study|investigate)\b)|""" +
+            """(?:\bmat\s+(?:khol|open|read|check|dekh|inspect|research|explore|study)\b)|""" +
+            """(?:\b(?:open|read|check|dekh|inspect|research|explore|study)\s+mat\b)"""
     )
 
     private fun cleanUrl(raw: String): String =
         raw.trim().trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}')
 
     fun decide(message: String): Decision? {
-        if (blockedIntent.containsMatchIn(message)) return null
+        // A link can sit between a negative verb and "mat": "research [URL] mat".
+        // Mask URLs for NEGATION detection only; never alter the actual requested target.
+        if (blockedIntent.containsMatchIn(message) ||
+            blockedIntent.containsMatchIn(message.replace(url, " "))) return null
         val candidates = url.findAll(message)
             .map { cleanUrl(it.value) }
-            .filter {
-                runCatching {
-                    WorkspaceAgentReachPolicy.parse(it).platform ==
-                        WorkspaceAgentReachPolicy.Platform.GITHUB
-                }.getOrDefault(false)
-            }
             .distinct()
             .toList()
         if (candidates.isEmpty()) return null
@@ -52,20 +49,22 @@ internal object WorkspaceAgentReachChatIntent {
         if (!primarilyLink && !readIntent.containsMatchIn(message)) return null
         if (candidates.size != 1) {
             return Decision(localError =
-                "Agent Reach reads one GitHub link at a time. Nothing was opened.")
+                "Agent Reach reads one public HTTPS link at a time. Nothing was opened.")
         }
 
         val parsed = runCatching { WorkspaceAgentReachPolicy.parse(candidates.single()) }
             .getOrElse {
                 return Decision(localError =
-                    (it.message ?: "This GitHub URL is not accepted for read-only Agent Reach."))
+                    (it.message ?: "This URL is not accepted for read-only Agent Reach."))
             }
         return runCatching {
-            WorkspaceAgentReachGitHub.selection(parsed)
+            if (parsed.platform == WorkspaceAgentReachPolicy.Platform.GITHUB) {
+                WorkspaceAgentReachGitHub.selection(parsed)
+            }
             Decision(target = parsed)
         }.getOrElse {
             Decision(localError =
-                (it.message ?: "This GitHub link type is not supported by read-only Agent Reach yet."))
+                (it.message ?: "This link type is not supported by read-only Agent Reach yet."))
         }
     }
 }

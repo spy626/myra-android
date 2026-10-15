@@ -69,6 +69,9 @@ class WorkspaceActivity : AppCompatActivity() {
     private val conversations by lazy {
         WorkspaceConversationStore(projects, File(noBackupFilesDir, "workspace-conversations"))
     }
+    private val verifiedSources by lazy {
+        WorkspaceVerifiedSourceStore(File(noBackupFilesDir, "workspace-verified-sources"))
+    }
     private val tasks by lazy { WorkspaceTaskStore(projects) }
     private val suggestions by lazy {
         WorkspaceAiSuggestionDraftStore(File(noBackupFilesDir, "workspace-ai-drafts"))
@@ -104,11 +107,38 @@ class WorkspaceActivity : AppCompatActivity() {
     private var agentReachUserRequest: String? = null
     private var agentReachBaseCompletion: WorkspaceAgentReachGitHubRunner.Completion? = null
     private var agentReachRunner: WorkspaceAgentReachGitHubRunner? = null
+    private var agentReachWebRunner: WorkspaceAgentReachPublicWebRunner? = null
     private var agentReachRelevantRunner: WorkspaceAgentReachGitHubRelevantRunner? = null
+    private var exactLinkLookupActive = false
+    private var exactLinkLookupProjectId: String? = null
+    private var exactLinkLookupMessageId: String? = null
+    private var exactLinkLookupRunner: WorkspaceYouTubeChannelSearchRunner? = null
+    private var webLinkLookupActive = false
+    private var webLinkLookupRequestedCount = 1
+    private var webLinkLookupProjectId: String? = null
+    private var webLinkLookupMessageId: String? = null
+    private var webLinkLookupRunner: WorkspacePublicWebSearchRunner? = null
+    private var webResearchQuestion: String? = null
+    private var webResearchQueries = emptyList<WorkspaceWebLinkIntent.Request>()
+    private var webResearchQueryIndex = 0
+    private val webResearchCollected = mutableListOf<WorkspacePublicWebSearch.Verified>()
+    // Preserve read evidence across bounded recovery rounds; never re-read failed URLs.
+    private val webResearchReadEvidence = mutableListOf<WorkspacePublicResearch.Extract>()
+    private val webResearchReadUrls = mutableSetOf<String>()
+    private var webResearchExtraSearches = 0
+    private var webResearchOriginal: WorkspaceWebLinkIntent.Request? = null
+    private var webResearchRunner: WorkspacePublicResearchRunner? = null
+    // Same selected Free provider, single bounded call; no parallel research model owner.
+    private var webResearchSynthesisCall: Call? = null
+    private var appDownloadActive = false
+    private var appDownloadProjectId: String? = null
+    private var appDownloadMessageId: String? = null
+    private var appDownloadRunner: WorkspaceAppDownloadRunner? = null
     private var connectedRunVerificationActive = false
     private var connectedRunVerificationProjectId: String? = null
     private var connectedRunVerificationMessageId: String? = null
     private var connectedRunVerificationNumber: Long? = null
+    private var connectedRunVerificationLatest = false
     private var connectedRunVerificationIncludeSha = false
     private var connectedRunVerificationRunner: WorkspaceConnectedGitHubRunRunner? = null
     private var connectedDownloadReadActive = false
@@ -293,8 +323,13 @@ class WorkspaceActivity : AppCompatActivity() {
         )
     }
     private var statusMessage = ""
+    // Only closed streamed blocks, never persisted until final reply acceptance.
+    private var liveRichTurnId: String? = null
+    private var liveRichBlocks: List<Block> = emptyList()
     private val workTraces = WorkspaceTurnWorkTraces()
     private val publicWorkNarrations = WorkspaceTurnPublicNarrations()
+    // One bounded report, local to this process: never written to Logcat/Room/prefs.
+    private val researchDebugReport = WorkspaceResearchDebugReport()
     private val detachedWorkTrace = WorkspaceWorkTrace()
     // The currently foreground-owned receipt. Background GitHub work keeps its own exact turn.
     private var workTraceMessageId: String? = null
@@ -351,8 +386,8 @@ class WorkspaceActivity : AppCompatActivity() {
     private lateinit var attachmentList: LinearLayout
 
     private val photoPicker =
-        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            uri?.let { addAttachment(it) }
+        registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(WorkspaceMediaLimits.MAX_PHOTOS)) { uris ->
+            uris.distinct().forEach { addAttachment(it) }
         }
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(::routePickedDocument)
@@ -534,7 +569,9 @@ class WorkspaceActivity : AppCompatActivity() {
         return WorkspaceRuntimeSelfModel.combine(
             WorkspaceRuntimeSelfModel.instructions(snapshot),
             extraSystemInstructions,
-        )
+        ) + if (project?.type == WorkspaceProjectType.CHAT &&
+            extraSystemInstructions.isNullOrBlank())
+            "\n\n" + WorkspaceRichBlocksContract.INSTRUCTIONS else ""
     }
 
     private data class CapturedWorkflowImprovementApproval(
@@ -991,10 +1028,11 @@ class WorkspaceActivity : AppCompatActivity() {
                             return@runOnUiThread
                         }
                         finishConnectedRunVerification(
-                            WorkspaceConnectedGitHubRunIntent.receipt(
+                            reply = WorkspaceConnectedGitHubRunIntent.receipt(
                                 completion,
                                 includeCommitSha = connectedRunVerificationIncludeSha,
-                            )
+                            ),
+                            source = WorkspaceConnectedGitHubRunIntent.source(completion),
                         )
                     }
                 }
@@ -1005,7 +1043,8 @@ class WorkspaceActivity : AppCompatActivity() {
                             return@runOnUiThread
                         }
                         finishConnectedRunVerification(
-                            "I couldn't verify that connected GitHub build safely: " + message
+                            reply = "I couldn't verify that connected GitHub build safely: " + message,
+                            source = null,
                         )
                     }
                 }
@@ -1019,10 +1058,14 @@ class WorkspaceActivity : AppCompatActivity() {
         connectedRunVerificationProjectId = null
         connectedRunVerificationMessageId = null
         connectedRunVerificationNumber = null
+        connectedRunVerificationLatest = false
         connectedRunVerificationIncludeSha = false
     }
 
-    private fun finishConnectedRunVerification(reply: String) {
+    private fun finishConnectedRunVerification(
+        reply: String,
+        source: WorkspaceVerifiedSourceStore.Source?,
+    ) {
         val id = connectedRunVerificationProjectId
         val messageId = connectedRunVerificationMessageId
         clearConnectedRunVerification(cancel = false)
@@ -1031,7 +1074,13 @@ class WorkspaceActivity : AppCompatActivity() {
             require(conversations.read(id).lastOrNull()?.id == messageId) {
                 "Conversation changed; GitHub build verification was not saved"
             }
-            conversations.append(id, "assistant", reply)
+            val saved = conversations.attachAssistantToTurn(
+                projectId = id,
+                expectedUserId = messageId,
+                assistantId = "github-read-" + messageId,
+                text = reply,
+            )
+            if (source != null) verifiedSources.put(id, saved.id, listOf(source))
         }.onSuccess {
             statusMessage = ""
         }.onFailure {
@@ -1048,18 +1097,19 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun startConnectedRunVerification(
         id: String,
         messageId: String,
-        runNumber: Long,
-        includeCommitSha: Boolean,
+        decision: WorkspaceConnectedGitHubRunIntent.Decision,
     ) {
         clearConnectedRunVerification()
         connectedRunVerificationActive = true
         connectedRunVerificationProjectId = id
         connectedRunVerificationMessageId = messageId
-        connectedRunVerificationNumber = runNumber
-        connectedRunVerificationIncludeSha = includeCommitSha
+        connectedRunVerificationNumber = decision.runNumber
+        connectedRunVerificationLatest = decision.latest
+        connectedRunVerificationIncludeSha = decision.includeCommitSha
         statusMessage = ""
         render()
-        connectedRunVerifier().start(runNumber)
+        if (decision.latest) connectedRunVerifier().startLatest()
+        else connectedRunVerifier().start(requireNotNull(decision.runNumber))
     }
 
     private fun connectedDownloadRunner(): WorkspaceConnectedGitHubDownloadRunner {
@@ -1155,6 +1205,56 @@ class WorkspaceActivity : AppCompatActivity() {
                         (it.message ?: "GitHub connector unavailable")
                 )
             }
+    }
+
+    private fun publicWebReachRunner(): WorkspaceAgentReachPublicWebRunner {
+        agentReachWebRunner?.let { return it }
+        return WorkspaceAgentReachPublicWebRunner(
+            currentTarget = { if (agentReachActive) agentReachTarget else null },
+            listener = object : WorkspaceAgentReachPublicWebRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase, label: String, detail: String?
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(journey: WorkspaceAgentReachWebNavigation.Journey) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        val id = agentReachProjectId
+                        val messageId = agentReachMessageId
+                        clearAgentReachState(cancel = false)
+                        if (id == null || messageId == null || selectedId != id) return@runOnUiThread
+                        runCatching {
+                            require(conversations.read(id).lastOrNull()?.id == messageId) {
+                                "Conversation changed; public page receipt was not saved"
+                            }
+                            conversations.append(id, "assistant",
+                                WorkspaceAgentReachReceipt.publicJourney(journey))
+                        }.onSuccess {
+                            statusMessage = ""
+                        }.onFailure {
+                            statusMessage = it.message ?: "Public page receipt could not be saved"
+                            recordWorkEvent(WorkspaceWorkPhase.ERROR,
+                                "Public page receipt not saved", statusMessage)
+                        }
+                        render()
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !agentReachActive) return@runOnUiThread
+                        clearAgentReachState(cancel = false)
+                        statusMessage = message
+                        render()
+                    }
+                }
+            },
+        ).also { agentReachWebRunner = it }
     }
 
     private fun githubReachRunner(): WorkspaceAgentReachGitHubRunner {
@@ -1295,6 +1395,7 @@ class WorkspaceActivity : AppCompatActivity() {
         if (cancel) {
             agentReachRunner?.cancel()
             agentReachRelevantRunner?.cancel()
+            agentReachWebRunner?.cancel()
         }
         agentReachActive = false
         agentReachTarget = null
@@ -1302,6 +1403,709 @@ class WorkspaceActivity : AppCompatActivity() {
         agentReachMessageId = null
         agentReachUserRequest = null
         agentReachBaseCompletion = null
+    }
+
+    private fun exactLinkRunner(): WorkspaceYouTubeChannelSearchRunner {
+        exactLinkLookupRunner?.let { return it }
+        return WorkspaceYouTubeChannelSearchRunner(
+            listener = object : WorkspaceYouTubeChannelSearchRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !exactLinkLookupActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(candidate: WorkspaceYouTubeChannelSearch.Candidate) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !exactLinkLookupActive) return@runOnUiThread
+                        finishExactLinkLookup(
+                            reply = WorkspaceYouTubeChannelSearch.receipt(candidate),
+                            source = WorkspaceYouTubeChannelSearch.source(candidate),
+                        )
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !exactLinkLookupActive) return@runOnUiThread
+                        finishExactLinkLookup(
+                            reply = "Bro, exact YouTube channel link verify nahi ho paya. " +
+                                "Search-results URL ko direct channel link bolkar nahi dungi. " + message,
+                            source = null,
+                        )
+                    }
+                }
+            },
+        ).also { exactLinkLookupRunner = it }
+    }
+
+    private fun clearExactLinkLookup(cancel: Boolean = true) {
+        if (cancel) exactLinkLookupRunner?.cancel()
+        exactLinkLookupActive = false
+        exactLinkLookupProjectId = null
+        exactLinkLookupMessageId = null
+    }
+
+    private fun finishExactLinkLookup(
+        reply: String,
+        source: WorkspaceVerifiedSourceStore.Source?,
+    ) {
+        val id = exactLinkLookupProjectId
+        val userMessageId = exactLinkLookupMessageId
+        clearExactLinkLookup(cancel = false)
+        if (id == null || userMessageId == null || selectedId != id) return
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == userMessageId) {
+                "Conversation changed; exact link result not saved"
+            }
+            val assistantId = "exact-link-" + userMessageId
+            val saved = conversations.attachAssistantToTurn(
+                projectId = id,
+                expectedUserId = userMessageId,
+                assistantId = assistantId,
+                text = reply,
+            )
+            if (source != null) {
+                verifiedSources.put(id, saved.id, listOf(source))
+            }
+            saved
+        }.onSuccess {
+            statusMessage = ""
+            if (source != null) workTrace.finishSuccess("Exact link ready")
+            else workTrace.finishError("Exact link not verified", reply.take(160))
+        }.onFailure {
+            statusMessage = it.message ?: "Exact link result could not be saved."
+            workTrace.finishError("Exact link not saved", statusMessage)
+        }
+        render()
+    }
+
+    private fun startExactLinkLookup(
+        id: String,
+        messageId: String,
+        request: WorkspaceExactLinkIntent.Request,
+    ) {
+        clearExactLinkLookup()
+        exactLinkLookupActive = true
+        exactLinkLookupProjectId = id
+        exactLinkLookupMessageId = messageId
+        statusMessage = ""
+        render()
+        when (request.platform) {
+            WorkspaceExactLinkIntent.Platform.YOUTUBE ->
+                exactLinkRunner().start(request.query)
+        }
+    }
+
+    /** Per-turn research narration; the existing in-memory timeline owns display. */
+    private fun publishResearchProgress(update: WorkspaceResearchProgress.Update?) {
+        if (update == null || !webLinkLookupActive || webResearchQuestion == null) return
+        val turnId = webLinkLookupMessageId ?: return
+        val projectId = webLinkLookupProjectId ?: return
+        if (selectedId != projectId || workTraceMessageId != turnId) return
+        // All events belong to the current authoritative user turn, never to an
+        // older response whose async callback has arrived after a new message.
+        if (runCatching { conversations.read(projectId).lastOrNull()?.id }.getOrNull()
+            != turnId) return
+        publicWorkNarrations.upsert(turnId, update.key, update.status, update.message)
+        refreshWorkTraceUi(turnId)
+    }
+
+    private fun webLinkRunner(): WorkspacePublicWebSearchRunner {
+        webLinkLookupRunner?.let { return it }
+        return WorkspacePublicWebSearchRunner(
+            listener = object : WorkspacePublicWebSearchRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
+                        // The public-search runner finishes one QUERY, not the
+                        // whole multi-round research turn. Preserve the original
+                        // thinking/search timeline until synthesis/final answer.
+                        if (webResearchQuestion != null && phase == WorkspaceWorkPhase.DONE) {
+                            recordWorkEvent(
+                                WorkspaceWorkPhase.VERIFYING, "Web candidates collected", detail)
+                        } else recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(results: List<WorkspacePublicWebSearch.Verified>) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
+                        val researchQuestion = webResearchQuestion
+                        if (researchQuestion != null) {
+                            publishResearchProgress(WorkspaceResearchProgress.searchRound(
+                                webResearchQueryIndex, results))
+                        }
+                        if (researchQuestion != null &&
+                            advanceResearchSearch(results)) return@runOnUiThread
+                        if (researchQuestion != null) {
+                            readResearchResults(researchQuestion)
+                        } else {
+                            finishWebLinkLookup(
+                                reply = WorkspacePublicWebSearch.receiptAll(
+                                    results, webLinkLookupRequestedCount
+                                ),
+                                sources = results.map { WorkspacePublicWebSearch.source(it) },
+                            )
+                        }
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !webLinkLookupActive) return@runOnUiThread
+                        if (webResearchQuestion != null && webResearchQueryIndex + 1 <
+                            webResearchQueries.size) {
+                            webResearchQueryIndex++
+                            webLinkRunner().start(webResearchQueries[webResearchQueryIndex],
+                                useFreeMetaSearch = webResearchQuestion != null)
+                            return@runOnUiThread
+                        }
+                        if (webResearchQuestion != null) {
+                            // All initial/extra searches may have failed or returned
+                            // duplicate URLs: evaluate evidence before choosing one
+                            // more bounded gap-specific recovery query.
+                            readResearchResults(requireNotNull(webResearchQuestion))
+                            return@runOnUiThread
+                        }
+                        finishWebLinkLookup(
+                            reply = "Bro, exact public link verify nahi ho paya. " +
+                                "Search result ko direct link bolkar guess nahi karunga. " + message,
+                            sources = emptyList(),
+                        )
+                    }
+                }
+            },
+        ).also { webLinkLookupRunner = it }
+    }
+
+    /**
+     * After each search round, inspect only URLs not already read. If they fail
+     * to yield relevant paragraphs, finishResearchWithEvidence can request a
+     * bounded second round rather than prematurely returning one blog post.
+     */
+    private fun readResearchResults(question: String) {
+        val turnId = webLinkLookupMessageId ?: return
+        if (!webLinkLookupActive || selectedId != webLinkLookupProjectId) return
+        val unseen = webResearchCollected.filterNot {
+            it.finalUrl in webResearchReadUrls
+        }
+        val originals = webResearchOriginal ?: return
+        val chosen = WorkspaceResearchQueryPlan.choose(question, originals, unseen)
+        if (chosen.isEmpty()) {
+            finishResearchWithEvidence(
+                question, webResearchReadEvidence.map { it.source },
+                emptyList())
+            return
+        }
+        webResearchReadUrls.addAll(chosen.map { it.finalUrl })
+        webResearchRunner?.cancel()
+        webResearchRunner = WorkspacePublicResearchRunner(
+            listener = object : WorkspacePublicResearchRunner.Listener {
+                override fun onEvent(label: String) {
+                    runOnUiThread {
+                        if (webLinkLookupActive && webLinkLookupMessageId == turnId &&
+                            selectedId == webLinkLookupProjectId) {
+                            recordWorkEvent(WorkspaceWorkPhase.VERIFYING, label, null)
+                        }
+                    }
+                }
+                override fun onComplete(
+                    extracts: List<WorkspacePublicResearch.Extract>,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !webLinkLookupActive ||
+                            webLinkLookupMessageId != turnId ||
+                            selectedId != webLinkLookupProjectId) return@runOnUiThread
+                        finishResearchWithEvidence(question, chosen, extracts)
+                    }
+                }
+            },
+        ).also { it.start(question, chosen) }
+    }
+
+    private fun appDownloadRunner(): WorkspaceAppDownloadRunner {
+        appDownloadRunner?.let { return it }
+        return WorkspaceAppDownloadRunner(
+            listener = object : WorkspaceAppDownloadRunner.Listener {
+                override fun onEvent(
+                    phase: WorkspaceWorkPhase,
+                    label: String,
+                    detail: String?,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !appDownloadActive) return@runOnUiThread
+                        recordWorkEvent(phase, label, detail)
+                    }
+                }
+
+                override fun onComplete(
+                    name: String,
+                    results: List<WorkspaceAppDownloadSearch.Result>,
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || !appDownloadActive) return@runOnUiThread
+                        finishAppDownloadLookup(
+                            reply = WorkspaceAppDownloadSearch.reply(name, results),
+                            sources = WorkspaceAppDownloadSearch.sources(results),
+                        )
+                    }
+                }
+            },
+        ).also { appDownloadRunner = it }
+    }
+
+    private fun clearAppDownloadLookup(cancel: Boolean = true) {
+        if (cancel) appDownloadRunner?.cancel()
+        appDownloadActive = false
+        appDownloadProjectId = null
+        appDownloadMessageId = null
+    }
+
+    private fun finishAppDownloadLookup(
+        reply: String,
+        sources: List<WorkspaceVerifiedSourceStore.Source>,
+    ) {
+        val projectId = appDownloadProjectId
+        val turnId = appDownloadMessageId
+        clearAppDownloadLookup(cancel = false)
+        if (projectId == null || turnId == null || selectedId != projectId) return
+        runCatching {
+            require(conversations.read(projectId).lastOrNull()?.id == turnId) {
+                "Conversation changed; app-download result not saved"
+            }
+            val saved = conversations.attachAssistantToTurn(
+                projectId = projectId,
+                expectedUserId = turnId,
+                assistantId = "app-download-" + turnId,
+                text = reply,
+            )
+            if (sources.isNotEmpty()) verifiedSources.put(projectId, saved.id, sources)
+        }.onSuccess {
+            statusMessage = ""
+            if (sources.isNotEmpty()) {
+                workTrace.finishSuccess("App download links verified")
+            } else {
+                workTrace.finishError("App download links unconfirmed",
+                    "No public store listing or publisher website passed checks")
+            }
+        }.onFailure {
+            statusMessage = it.message ?: "App download lookup could not be saved"
+            workTrace.finishError("App download lookup not saved", statusMessage)
+        }
+        render()
+    }
+
+    private fun startAppDownloadLookup(
+        projectId: String,
+        turnId: String,
+        request: WorkspaceAppDownloadIntent.Request,
+    ) {
+        clearAppDownloadLookup()
+        appDownloadActive = true
+        appDownloadProjectId = projectId
+        appDownloadMessageId = turnId
+        statusMessage = ""
+        render()
+        appDownloadRunner().start(request)
+    }
+
+    /**
+     * Phase 1/2 research integration. Reuses the selected existing Free chat provider;
+     * verified web text is not personal memory, no tool execution or arbitrary URLs are
+     * accepted from a model. Every result is tied to this exact newest user turn.
+     */
+    private fun finishResearchWithEvidence(
+        question: String,
+        sources: List<WorkspacePublicWebSearch.Verified>,
+        evidence: List<WorkspacePublicResearch.Extract>,
+    ) {
+        val projectId = webLinkLookupProjectId ?: return
+        val turnId = webLinkLookupMessageId ?: return
+        if (!webLinkLookupActive || selectedId != projectId) return
+        // Evidence survives a bounded recovery round; deduplicate exact URLs.
+        evidence.forEach { hit ->
+            if (webResearchReadEvidence.none { it.source.finalUrl == hit.source.finalUrl })
+                webResearchReadEvidence += hit
+        }
+        val allEvidence = webResearchReadEvidence.toList()
+        // Keep the original question authoritative at every stage. A live,
+        // reachable page is NOT relevant just because its title says Android.
+        val allSources = (sources + allEvidence.map { it.source })
+            .distinctBy { it.finalUrl }
+        val relatedSources = WorkspaceResearchQuestionFocus.relevant(question, allSources)
+        val relatedUrls = relatedSources.map { it.finalUrl }.toSet()
+        val relatedEvidence = WorkspaceResearchQuestionFocus.relevantExtracts(
+            question, allEvidence.filter { it.source.finalUrl in relatedUrls })
+        publishResearchProgress(WorkspaceResearchProgress.readEvidence(
+            verifiedPages = webResearchReadUrls.size,
+            relevantPages = relatedEvidence.size))
+        val retry = if (webResearchExtraSearches < WorkspaceResearchRecovery.MAX_EXTRA_SEARCHES)
+            webResearchOriginal?.let { original ->
+                WorkspaceResearchRecovery.next(
+                    question, original, relatedEvidence, webResearchQueries)
+            } else null
+        if (retry != null) {
+            webResearchExtraSearches++
+            webResearchQueries = webResearchQueries + retry
+            webResearchQueryIndex = webResearchQueries.lastIndex
+            recordWorkEvent(WorkspaceWorkPhase.SEARCHING,
+                "Researching missing source evidence",
+                "Additional source search " + webResearchExtraSearches + " of " +
+                    WorkspaceResearchRecovery.MAX_EXTRA_SEARCHES)
+            webLinkRunner().start(retry, useFreeMetaSearch = true)
+            return
+        }
+        val sourceReceipts = relatedEvidence.map {
+            WorkspacePublicWebSearch.source(it.source)
+        }
+        // An extractive fallback must never echo a single blog's uncorroborated
+        // measured-performance promise as if it were a verified comparison.
+        val safeFallbackEvidence = WorkspaceResearchEvidenceQuality.safeFallbackExtracts(
+            relatedEvidence)
+        val fallback = WorkspacePublicResearch.render(
+            question, safeFallbackEvidence, safeFallbackEvidence.size)
+        if (!WorkspaceResearchQuestionFocus.coversQuestion(
+                question, relatedEvidence.map { it.source })) {
+            val focus = WorkspaceResearchQuestionFocus.inspect(question)
+            val missing = focus.subjects.filterNot { subject ->
+                relatedEvidence.any {
+                    WorkspaceResearchQuestionFocus.sourceMentionsSubject(it.source, subject)
+                }
+            }
+            val message = if (missing.isNotEmpty())
+                "Bro, ${missing.joinToString(" aur ")} ke liye is topic par " +
+                    "relevant page evidence abhi nahi mili. Main one-sided research " +
+                    "ko complete comparison bolkar nahi dungi."
+            else "Bro, is question ke liye relevant readable webpage evidence " +
+                "verify nahi hui. Kisi unrelated source se answer nahi banaungi."
+            val partial = safeFallbackEvidence.take(2).mapNotNull { hit ->
+                hit.passages.firstOrNull()?.let { passage ->
+                    "• " + passage.take(280).replace(Regex("""[\[\]*]"""), "") +
+                        " ([Source](" + hit.source.finalUrl + "))"
+                }
+            }.joinToString("\n")
+            val reply = if (partial.isBlank()) message else message +
+                "\n\nAbhi jo related information verify hui:\n" + partial
+            researchDebugReport.skipped(turnId,
+                WorkspaceResearchDebugReport.SkipReason.MISSING_COMPARISON_EVIDENCE)
+            finishWebLinkLookup(reply, sourceReceipts, researchAnswerComplete = false)
+            return
+        }
+        // Citation numbers follow actual readable-source receipts, never
+        // merely reachable pages that had no suitable passage.
+        val bundle = WorkspaceResearchSynthesis.bundle(
+            question, relatedEvidence, relatedEvidence.map { it.source })
+        if (bundle == null) {
+            val missingPublishers = WorkspaceResearchEvidenceQuality
+                .requestsMultiplePublishers(question) &&
+                WorkspaceResearchEvidenceQuality.publisherCount(relatedEvidence) < 2
+            val explanation = if (missingPublishers)
+                "Bro, abhi ek hi independent publisher se relevant page evidence " +
+                    "mili. Tumne multiple reliable websites maangi thi, isliye " +
+                    "main ise independently verified comparison nahi kahungi.\n\n" +
+                    fallback
+            else fallback
+            researchDebugReport.skipped(turnId,
+                WorkspaceResearchDebugReport.SkipReason.EVIDENCE_BUNDLE_REJECTED)
+            finishWebLinkLookup(
+                explanation, sourceReceipts, researchAnswerComplete = false)
+            return
+        }
+        val currentTurn = runCatching { conversations.read(projectId).lastOrNull() }.getOrNull()
+        if (currentTurn?.id != turnId || currentTurn.role != "user") {
+            clearWebLinkLookup()
+            return
+        }
+        // Route on the exact public, current-turn envelope. Previous chat messages
+        // are neither forwarded to the research model nor charged to Groq's budget.
+        // LLM7 is deliberately excluded: it has no authorization for source text.
+        val researchMessages = listOf(currentTurn.copy(
+            text = WorkspaceResearchSynthesis.prompt(bundle)))
+        val provider = WorkspaceFreeProviderSelection.chooseResearch(
+            openRouterReady = keys.get(ApiKeyStore.OPENROUTER).isNotBlank() &&
+                WorkspaceProviderSessionHealth.canSend(
+                    WorkspaceProviderRegistry.Id.OPENROUTER_FREE),
+            groqReady = keys.get(ApiKeyStore.GROQ).isNotBlank() &&
+                WorkspaceProviderSessionHealth.canSend(
+                    WorkspaceProviderRegistry.Id.GROQ_FREE),
+            groqFreeZdrApproved = preferences.getBoolean(
+                WorkspaceGroqFree.PREFERENCE_KEY, false),
+            groqFitsResearchEnvelope = WorkspaceGroqFree.withinBudget(
+                researchMessages, WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS),
+        )
+        if (provider == null) {
+            researchDebugReport.skipped(turnId,
+                WorkspaceResearchDebugReport.SkipReason.FREE_PROVIDER_UNAVAILABLE)
+            finishWebLinkLookup(fallback, sourceReceipts, researchAnswerComplete = false)
+            return
+        }
+        val request = runCatching {
+            // Only this user turn and bounded PUBLIC source evidence are sent.
+            // Do not include earlier private chat history in the research model request.
+            WorkspaceChatGateway.request(
+                provider = provider,
+                key = keyFor(provider),
+                messages = researchMessages,
+                extraSystemInstructions = WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS,
+            ).newBuilder().header("X-Lyra-Public-Research", "1").build()
+        }.getOrElse {
+            researchDebugReport.skipped(turnId,
+                WorkspaceResearchDebugReport.SkipReason.MODEL_REQUEST_NOT_PREPARED)
+            finishWebLinkLookup(fallback, sourceReceipts, researchAnswerComplete = false)
+            return
+        }
+        recordWorkEvent(WorkspaceWorkPhase.THINKING,
+            "Synthesizing verified source evidence", providerLabel(provider))
+        val call = WorkspaceChatGateway.client(provider).newCall(request)
+        webResearchSynthesisCall = call
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
+                    WorkspaceProviderRegistry.id(provider))
+                completeResearchSynthesis(call, projectId, turnId, fallback,
+                    sourceReceipts, WorkspaceResearchSynthesis.AuditResult(
+                        null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE,
+                        modelFailureReason =
+                            WorkspaceResearchSynthesis.ModelFailureReason.NETWORK_ERROR),
+                    WorkspaceProviderRegistry.id(provider))
+            }
+            override fun onResponse(call: Call, response: Response) {
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                val audit = runCatching {
+                    WorkspaceResearchSynthesis.audit(
+                        WorkspaceChatGateway.read(provider, response), bundle)
+                }.getOrElse { failure ->
+                    val problem = when {
+                        !response.isSuccessful ->
+                            WorkspaceResearchSynthesis.ModelFailureReason.HTTP_REJECTED
+                        failure is WorkspaceGroqFree.ReadFailure -> when (failure.problem) {
+                            WorkspaceGroqFree.ReadProblem.OUTPUT_LIMIT ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.OUTPUT_TOKEN_LIMIT
+                            WorkspaceGroqFree.ReadProblem.EMPTY_CONTENT ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.CONTENT_EMPTY
+                            WorkspaceGroqFree.ReadProblem.FILTERED ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.RESPONSE_FILTERED
+                            WorkspaceGroqFree.ReadProblem.UNFINISHED ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.UNFINISHED_REPLY
+                            else ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.PROVIDER_RESPONSE_INVALID
+                        }
+                        else ->
+                            WorkspaceResearchSynthesis.ModelFailureReason.PROVIDER_READ_ERROR
+                    }
+                    WorkspaceResearchSynthesis.AuditResult(
+                        null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE,
+                        modelFailureReason = problem)
+                }
+                completeResearchSynthesis(call, projectId, turnId, fallback,
+                    sourceReceipts, audit,
+                    WorkspaceProviderRegistry.idForEndpoint(response.request.url.toString()))
+            }
+        })
+    }
+
+    private fun completeResearchSynthesis(
+        call: Call,
+        projectId: String,
+        turnId: String,
+        fallback: String,
+        sources: List<WorkspaceVerifiedSourceStore.Source>,
+        audit: WorkspaceResearchSynthesis.AuditResult,
+        modelRoute: WorkspaceProviderRegistry.Id?,
+    ) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed || !webLinkLookupActive ||
+                webResearchSynthesisCall !== call || selectedId != projectId ||
+                webLinkLookupMessageId != turnId ||
+                runCatching { conversations.read(projectId).lastOrNull()?.id }
+                    .getOrNull() != turnId) return@runOnUiThread
+            webResearchSynthesisCall = null
+            researchDebugReport.record(turnId, audit, modelRoute)
+            // Evidence provenance is preserved even when the model response
+            // is incomplete. This is an audit RESULT, not a claim of truth.
+            recordWorkEvent(
+                WorkspaceWorkPhase.VERIFYING,
+                "Research answer evidence audit",
+                "Stage " + audit.issue.name + " · supported claims " +
+                    audit.acceptedClaims + " · omitted claims " + audit.rejectedClaims,
+            )
+            val limitation = when (audit.issue) {
+                WorkspaceResearchSynthesis.AuditIssue.NONE -> ""
+                WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE ->
+                    "AI answer service respond nahi kar payi."
+                WorkspaceResearchSynthesis.AuditIssue.MALFORMED_RESPONSE ->
+                    "AI ka research response required structured format mein nahi tha."
+                WorkspaceResearchSynthesis.AuditIssue.NO_SUPPORTED_CLAIMS ->
+                    "AI ke proposed claims ko cited passages se support nahi mila."
+                WorkspaceResearchSynthesis.AuditIssue.MISSING_COMPARISON_COVERAGE ->
+                    "AI ka answer comparison ke dono sides cover nahi karta."
+            }
+            // The deterministic comparison remains explicitly INCOMPLETE:
+            // direct page excerpts are not a second model or a claim-audit bypass.
+            // Prefer two observed sides over presenting only one model claim,
+            // but never construct platform facts from a URL title alone.
+            val sideBySide = if (!audit.isComplete) webResearchQuestion?.let { question ->
+                WorkspaceResearchComparisonFallback.sideBySide(
+                    question, webResearchReadEvidence)
+            } else null
+            val safePartial = sideBySide ?: audit.partialAnswer ?: fallback
+            finishWebLinkLookup(
+                audit.answer ?: ("Bro, source-backed comparison abhi complete nahi hai. " +
+                    limitation + "\n\nJo supported evidence mili:\n\n" + safePartial),
+                sources, researchAnswerComplete = audit.isComplete)
+        }
+    }
+
+    private fun advanceResearchSearch(
+        next: List<WorkspacePublicWebSearch.Verified>,
+    ): Boolean {
+        webResearchCollected.addAll(next.filter { result ->
+            webResearchCollected.none { it.finalUrl == result.finalUrl }
+        })
+        val nextIndex = webResearchQueryIndex + 1
+        if (nextIndex >= webResearchQueries.size) return false
+        webResearchQueryIndex = nextIndex
+        webLinkRunner().start(webResearchQueries[nextIndex],
+            useFreeMetaSearch = true)
+        return true
+    }
+
+    private fun clearWebLinkLookup(cancel: Boolean = true) {
+        if (cancel) {
+            webLinkLookupRunner?.cancel()
+            webResearchRunner?.cancel()
+            webResearchSynthesisCall?.cancel()
+        }
+        webResearchSynthesisCall = null
+        webResearchRunner = null
+        webResearchQuestion = null
+        webResearchQueries = emptyList()
+        webResearchCollected.clear()
+        webResearchReadEvidence.clear()
+        webResearchReadUrls.clear()
+        webResearchExtraSearches = 0
+        webResearchOriginal = null
+        webResearchQueryIndex = 0
+        webLinkLookupActive = false
+        webLinkLookupRequestedCount = 1
+        webLinkLookupProjectId = null
+        webLinkLookupMessageId = null
+    }
+
+    private fun finishWebLinkLookup(
+        reply: String,
+        sources: List<WorkspaceVerifiedSourceStore.Source>,
+        researchAnswerComplete: Boolean = true,
+    ) {
+        val id = webLinkLookupProjectId
+        val userMessageId = webLinkLookupMessageId
+        val wasResearch = webResearchQuestion != null
+        clearWebLinkLookup(cancel = false)
+        if (id == null || userMessageId == null || selectedId != id) return
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == userMessageId) {
+                "Conversation changed; web link result not saved"
+            }
+            val saved = conversations.attachAssistantToTurn(
+                projectId = id,
+                expectedUserId = userMessageId,
+                assistantId = "web-link-" + userMessageId,
+                text = reply,
+            )
+            if (sources.isNotEmpty()) verifiedSources.put(id, saved.id, sources)
+        }.onSuccess {
+            statusMessage = ""
+            WorkspaceResearchProgress.recordSavedOutcome(
+                trace = workTrace,
+                wasResearch = wasResearch,
+                researchAnswerComplete = researchAnswerComplete,
+                hasSources = sources.isNotEmpty(),
+                failureDetail = reply,
+            )
+        }.onFailure {
+            statusMessage = it.message ?: "Web link result could not be saved."
+            workTrace.finishError("Web link not saved", statusMessage)
+        }
+        render()
+    }
+
+    private fun startWebLinkLookup(
+        id: String,
+        messageId: String,
+        request: WorkspaceWebLinkIntent.Request,
+        researchQuestion: String? = null,
+    ) {
+        clearWebLinkLookup()
+        if (researchQuestion != null) researchDebugReport.clear()
+        webResearchQuestion = researchQuestion
+        webResearchOriginal = request
+        webResearchQueries = if (researchQuestion != null)
+            WorkspaceResearchQueryPlan.queries(researchQuestion, request)
+        else listOf(request)
+        webResearchQueryIndex = 0
+        webResearchCollected.clear()
+        webLinkLookupActive = true
+        webLinkLookupRequestedCount = request.maxResults
+        webLinkLookupProjectId = id
+        webLinkLookupMessageId = messageId
+        statusMessage = ""
+        if (researchQuestion != null) {
+            publishResearchProgress(WorkspaceResearchProgress.kickoff())
+        }
+        render()
+        webLinkRunner().start(webResearchQueries.first(),
+            useFreeMetaSearch = researchQuestion != null)
+    }
+
+    private fun finishStablePlatformLink(
+        id: String,
+        messageId: String,
+        match: WorkspaceStablePlatformLink.Match,
+    ) {
+        runCatching {
+            require(conversations.read(id).lastOrNull()?.id == messageId) {
+                "Conversation changed; platform link result not saved"
+            }
+            conversations.attachAssistantToTurn(
+                projectId = id,
+                expectedUserId = messageId,
+                assistantId = "platform-link-" + messageId,
+                text = WorkspaceStablePlatformLink.receipt(match),
+            )
+        }.onSuccess {
+            statusMessage = ""
+            workTrace.finishSuccess("Link ready")
+        }.onFailure {
+            statusMessage = it.message ?: "Platform link could not be saved."
+            workTrace.finishError("Link not saved", statusMessage)
+        }
+        render()
+    }
+
+    private fun startPublicWebReach(
+        id: String,
+        messageId: String,
+        target: WorkspaceAgentReachPolicy.Target,
+        userRequest: String,
+    ) {
+        clearAgentReachState()
+        agentReachActive = true
+        agentReachTarget = target
+        agentReachProjectId = id
+        agentReachMessageId = messageId
+        statusMessage = ""
+        render()
+        publicWebReachRunner().start(target, userRequest)
     }
 
     private fun startGitHubReach(
@@ -1348,6 +2152,9 @@ class WorkspaceActivity : AppCompatActivity() {
         activeRequest?.cancel()
         activeRequest = null
         clearAgentReachState()
+        clearExactLinkLookup()
+        clearWebLinkLookup()
+        clearAppDownloadLookup()
         clearConnectedRunVerification()
         clearConnectedDownloadRead()
         clearConnectedHeadsRead()
@@ -1531,8 +2338,8 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     private fun isForegroundBusy(): Boolean =
-        activeRequest != null || coding.isRunning || agentReachActive ||
-            connectedRunVerificationActive || connectedDownloadReadActive ||
+        activeRequest != null || coding.isRunning || agentReachActive || exactLinkLookupActive ||
+            webLinkLookupActive || appDownloadActive || connectedRunVerificationActive || connectedDownloadReadActive ||
             connectedHeadsReadActive
 
     private fun isBusy(): Boolean = isForegroundBusy() || githubSelfEdit.isRunning
@@ -1541,6 +2348,9 @@ class WorkspaceActivity : AppCompatActivity() {
         if (!isForegroundBusy()) return
         val normalChatWasRunning = activeRequest != null
         val githubReadWasRunning = agentReachActive
+        val exactLinkWasRunning = exactLinkLookupActive
+        val webLinkWasRunning = webLinkLookupActive
+        val appDownloadWasRunning = appDownloadActive
         val connectedRunReadWasRunning = connectedRunVerificationActive
         val connectedDownloadWasRunning = connectedDownloadReadActive
         val connectedHeadsWasRunning = connectedHeadsReadActive
@@ -1555,6 +2365,25 @@ class WorkspaceActivity : AppCompatActivity() {
             workTrace.finishError(
                 "Stopped",
                 "GitHub read cancelled; no content was installed, executed, or sent to a provider.")
+        }
+        if (exactLinkWasRunning) {
+            clearExactLinkLookup()
+            workTrace.finishError(
+                "Stopped",
+                "Exact link lookup cancelled; no external action or write was performed.")
+        }
+        if (webLinkWasRunning) {
+            clearWebLinkLookup()
+            workTrace.finishError(
+                "Stopped",
+                "Web link lookup cancelled; no external action or write was performed.")
+        }
+        if (appDownloadWasRunning) {
+            clearAppDownloadLookup()
+            workTrace.finishError(
+                "Stopped",
+                "Public app download lookup cancelled; no APK installed or executed."
+            )
         }
         if (connectedRunReadWasRunning) {
             clearConnectedRunVerification()
@@ -1860,12 +2689,41 @@ class WorkspaceActivity : AppCompatActivity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(-1, -2))
         }
-        host.addView(label(item.message.text, 16f).apply {
-            text = WorkspaceMarkdownText.render(item.message.text)
-            setTextColor(Color.rgb(230, 236, 244))
-            setPadding(dp(4), 0, dp(8), dp(10))
-            setTextIsSelectable(true)
-        }, LinearLayout.LayoutParams(-1, -2))
+        val verifiedDomains = WorkspaceResearchProgress.domainChips(item.message)
+        if (verifiedDomains.isNotEmpty()) {
+            // Read-only publisher chips, derived solely from actually verified
+            // HTTPS search destinations. No guessed logos or click-through to
+            // unverified sources; the final Sources sheet owns safe URL opening.
+            val strip = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(3), dp(4), dp(3), dp(4))
+            }
+            verifiedDomains.forEach { domain ->
+                strip.addView(label(domain, 12.25f).apply {
+                    setTextColor(Color.rgb(205, 221, 213))
+                    background = rounded(Color.rgb(25, 42, 35), 12)
+                    setPadding(dp(10), dp(6), dp(10), dp(6))
+                    contentDescription = "Verified website: " + domain
+                }, LinearLayout.LayoutParams(-2, -2).apply {
+                    rightMargin = dp(7)
+                })
+            }
+            host.addView(android.widget.HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(strip)
+            }, LinearLayout.LayoutParams(-1, -2))
+            host.addView(label("Checking which pages provide usable evidence.", 13.5f).apply {
+                setTextColor(Color.rgb(168, 178, 191))
+                setPadding(dp(4), 0, dp(8), dp(10))
+            }, LinearLayout.LayoutParams(-1, -2))
+        } else {
+            host.addView(label(item.message.text, 16f).apply {
+                text = WorkspaceMarkdownText.render(item.message.text)
+                setTextColor(Color.rgb(230, 236, 244))
+                setPadding(dp(4), 0, dp(8), dp(10))
+                setTextIsSelectable(true)
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
     }
 
     private fun addWorkConversationTimeline(
@@ -2000,7 +2858,7 @@ class WorkspaceActivity : AppCompatActivity() {
         )
         val stoppingForeground =
             state.composerAction == WorkspaceChatConcurrencyPolicy.ComposerAction.STOP_FOREGROUND
-        val ready = !workTab && (stoppingForeground || composer.text.toString().isNotBlank())
+        val ready = !workTab && (stoppingForeground || composer.text.toString().isNotBlank() || attachments.isNotEmpty())
         sendButton.isEnabled = ready
         sendButton.alpha = if (ready) 1f else .5f
         sendButton.setImageResource(
@@ -2406,6 +3264,32 @@ class WorkspaceActivity : AppCompatActivity() {
         renderAttachments()
     }
 
+    /**
+     * Only visible in the debuggable, isolated phone-test APK. The report
+     * contains safe per-claim metadata, never raw provider JSON or chat text.
+     */
+    private fun showResearchDebugReport(text: String) {
+        AlertDialog.Builder(this)
+            .setTitle("LYRA Research Debug Report")
+            .setMessage(text)
+            .setPositiveButton("Copy report") { _, _ -> copyMessage(text) }
+            .setNeutralButton("Clear report") { _, _ ->
+                researchDebugReport.clear()
+                toast("Local research report cleared")
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showRawReplyTrace(turnId: String?, content: String) {
+        AlertDialog.Builder(this)
+            .setTitle("LYRA raw reply and prompt trace")
+            .setMessage(WorkspaceRichDiagnostics.show(this, turnId, content))
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Copy raw") { _, _ -> copyMessage(content) }
+            .show()
+    }
+
     private fun copyMessage(text: String) {
         runCatching {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -2417,9 +3301,15 @@ class WorkspaceActivity : AppCompatActivity() {
     private fun messageIcon(resource: Int, description: String, action: () -> Unit): ImageButton =
         ImageButton(this).apply {
             setImageResource(resource)
+            imageTintList = android.content.res.ColorStateList.valueOf(
+                Color.rgb(170, 180, 174)
+            )
             background = rounded(Color.TRANSPARENT, 18)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(9), dp(9), dp(9), dp(9))
+            // Smaller visible icon, unchanged accessible 44dp hit area.
+            setPadding(dp(13), dp(13), dp(13), dp(13))
+            minimumWidth = dp(44)
+            minimumHeight = dp(44)
             contentDescription = description
             isClickable = true
             isFocusable = true
@@ -2540,7 +3430,8 @@ class WorkspaceActivity : AppCompatActivity() {
 
     private fun showChatFailure(id: String, messageId: String,
                                 replacingAssistantId: String?, provider: WorkspaceChatGateway.Provider,
-                                picked: List<Attachment>, reason: String) {
+                                picked: List<Attachment>, reason: String,
+                                frameOnlyVideo: Boolean = false) {
         if (selectedId != id || workTab || isBusy()) return
         val history = runCatching { conversations.read(id) }.getOrNull() ?: return
         val eligible = if (replacingAssistantId == null)
@@ -2556,7 +3447,8 @@ class WorkspaceActivity : AppCompatActivity() {
         if (retry.allowImmediateRetry) {
             dialog.setPositiveButton("Retry once") { _, _ ->
                 if (selectedId == id && !workTab && !isBusy())
-                    requestReply(id, messageId, provider, picked, replacingAssistantId)
+                    requestReply(id, messageId, provider, picked, replacingAssistantId,
+                        frameOnlyVideo = frameOnlyVideo)
             }
         } else dialog.setPositiveButton("Close", null)
         dialog.show()
@@ -2604,19 +3496,58 @@ class WorkspaceActivity : AppCompatActivity() {
                 return
             }
         var latestUserPrompt = ""
+        var latestUserTurnId: String? = null
         messages.forEach { message ->
             val mine = message.role == "user"
-            if (mine) latestUserPrompt = message.text
+            if (mine) {
+                latestUserPrompt = message.text
+                latestUserTurnId = message.id
+            }
             // Retain original saved user turns. Existing assistant replies are romanized
             // for this CHAT display without altering historical database records.
-            val assistantPresentation = if (!mine && current.type == WorkspaceProjectType.CHAT)
+            val parsedRich = if (!mine && current.type == WorkspaceProjectType.CHAT &&
+                RichBlockParser.isEnvelope(message.text))
+                RichBlockParser.parse(message.text) else null
+            val assistantPresentation = if (!mine && parsedRich == null &&
+                current.type == WorkspaceProjectType.CHAT)
                 WorkspaceHinglishReply.normalize(message.text) else message.text
-            val item = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val sourceEvidence = if (!mine && current.type == WorkspaceProjectType.CHAT) {
+                runCatching { verifiedSources.get(current.projectId, message.id) }
+                    .getOrDefault(emptyList())
+            } else emptyList()
+            val appCard = if (!mine && current.type == WorkspaceProjectType.CHAT) {
+                WorkspaceAppDownloadCard.parse(message.text, sourceEvidence)
+            } else null
+            // Compact verified app links live on the normal chat surface:
+            // no nested card, border, or oversized per-message padding.
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
             val story = if (!mine && current.type == WorkspaceProjectType.CHAT)
                 WorkspaceStoryScript.card(latestUserPrompt, assistantPresentation) else null
             val codeParts = if (!mine && story == null) WorkspaceCodeBlocks.parse(assistantPresentation)
                 else emptyList()
-            if (story != null) {
+            if (appCard != null) {
+                item.addView(
+                    WorkspaceAppDownloadCard.create(this, appCard) { verifiedUrl ->
+                        WorkspaceSourcesSheet.openVerified(this@WorkspaceActivity, verifiedUrl)
+                    },
+                    LinearLayout.LayoutParams(-1, -2),
+                )
+            } else if (parsedRich != null) {
+                item.addView(
+                    WorkspaceRichAnswerView.createBlocks(this, parsedRich) { choice ->
+                        if (selectedId == current.projectId && !isForegroundBusy() && !workTab) {
+                            composer.setText(choice)
+                            sendMessage()
+                        }
+                    },
+                    LinearLayout.LayoutParams(-1, -2).apply {
+                        leftMargin = dp(5)
+                        rightMargin = dp(5)
+                    },
+                )
+            } else if (story != null) {
                 item.addView(WorkspaceStoryCardView.create(this, story) {
                     copyMessage(story.copyText)
                 }, LinearLayout.LayoutParams(-1, -2))
@@ -2714,19 +3645,93 @@ class WorkspaceActivity : AppCompatActivity() {
                 }
             }
             if (!mine) {
+                // Capture the specific preceding user turn per assistant bubble;
+                // an older reply must not display the latest turn's report.
+                val replySourceTurnId = latestUserTurnId
                 val actionRow = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.START
+                    gravity = Gravity.START or Gravity.CENTER_VERTICAL
                 }
                 actionRow.addView(messageIcon(R.drawable.ic_workspace_copy, "Copy LYRA reply") {
                     copyMessage(assistantPresentation)
-                }, LinearLayout.LayoutParams(dp(40), dp(40)))
-                actionRow.addView(messageIcon(R.drawable.ic_workspace_retry, "Retry LYRA reply") {
+                }, LinearLayout.LayoutParams(dp(44), dp(44)))
+                val retryButton = messageIcon(R.drawable.ic_workspace_retry, "Retry LYRA reply") {
                     retryAssistant(current.projectId, message.id)
-                }, LinearLayout.LayoutParams(dp(40), dp(40)))
-                item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(40)))
+                }
+                if (current.type == WorkspaceProjectType.CHAT) {
+                    // Keep developer diagnostics available without a persistent RAW button
+                    // occupying the normal chat action row. Long-press Retry to inspect.
+                    retryButton.setOnLongClickListener {
+                        val sourceTurnId = replySourceTurnId
+                        val debugOnly = (applicationInfo.flags and
+                            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                        val report = if (debugOnly) researchDebugReport.forTurn(sourceTurnId)
+                            else null
+                        if (report == null) {
+                            showRawReplyTrace(sourceTurnId, message.text)
+                        } else {
+                            AlertDialog.Builder(this@WorkspaceActivity)
+                                .setTitle("Developer diagnostics")
+                                .setItems(arrayOf(
+                                    "Research Debug Report", "Raw reply and prompt trace"
+                                )) { _, selected ->
+                                    if (selected == 0) showResearchDebugReport(report)
+                                    else showRawReplyTrace(sourceTurnId, message.text)
+                                }.setNegativeButton("Close", null).show()
+                        }
+                        true
+                    }
+                    retryButton.tooltipText = "Long-press for diagnostics"
+                }
+                actionRow.addView(retryButton, LinearLayout.LayoutParams(dp(44), dp(44)))
+                if (current.type == WorkspaceProjectType.CHAT) {
+                    if (sourceEvidence.isNotEmpty()) {
+                        // Tiny, distinct website badges + plain text. No Sources
+                        // pill, border, or background; 44dp tappable row retained.
+                        val sourcesButton = LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            isClickable = true
+                            isFocusable = true
+                            contentDescription = "Open Sources, " +
+                                sourceEvidence.size + " verified links from " +
+                                WorkspaceSourceBadgeView.preview(sourceEvidence)
+                                    .joinToString(", ") { it.host }
+                            addView(
+                                WorkspaceSourceBadgeView.create(
+                                    this@WorkspaceActivity, sourceEvidence
+                                ),
+                                LinearLayout.LayoutParams(-2, dp(18)),
+                            )
+                            addView(label("Sources · " + sourceEvidence.size, 11.5f).apply {
+                                setTextColor(Color.rgb(170, 180, 174))
+                                gravity = Gravity.CENTER_VERTICAL
+                            }, LinearLayout.LayoutParams(-2, -2).apply {
+                                leftMargin = dp(6)
+                            })
+                            setOnClickListener {
+                                WorkspaceSourcesSheet.show(this@WorkspaceActivity, sourceEvidence)
+                            }
+                        }
+                        actionRow.addView(
+                            sourcesButton,
+                            LinearLayout.LayoutParams(-2, dp(44)).apply {
+                                leftMargin = dp(5)
+                                rightMargin = dp(3)
+                            },
+                        )
+                    }
+                }
+                item.addView(actionRow, LinearLayout.LayoutParams(-1, dp(44)).apply {
+                    topMargin = if (appCard != null) dp(3) else 0
+                })
             }
             content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+            if (mine && activeRequest != null && liveRichTurnId == message.id &&
+                liveRichBlocks.isNotEmpty()) {
+                content.addView(WorkspaceRichAnswerView.createBlocks(this, liveRichBlocks) { },
+                    LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+            }
             if (mine) {
                 val turnTrace = workTraces.existing(message.id)
                 val turnSnapshot = turnTrace?.snapshot()
@@ -2869,6 +3874,7 @@ class WorkspaceActivity : AppCompatActivity() {
                         }
                     }
                     conversations.deleteChat(id)
+                    verifiedSources.deleteProject(id)
                     if (chatOnly) check(projects.deleteProject(id)) { "Chat-only metadata could not be removed" }
                 }.onSuccess {
                     preferences.edit().remove("chat_pinned_$id").remove("chat_title_$id").apply()
@@ -2943,12 +3949,16 @@ class WorkspaceActivity : AppCompatActivity() {
     }
 
     /** Single Workspace selection point; full same-chat request budget, never only latest text.
+     * Typed attachment capability is checked here; unverified whole-file media requires consent.
      * Attachments use the existing OpenRouter route or stay local; no auto retry or paid route.
      * Groq Free/ZDR opt-in does not certify an account that is later upgraded to paid.
      */
     private fun selectedProvider(
         hasAttachments: Boolean = false,
         extraSystemInstructions: String? = null,
+        attachmentKind: WorkspaceProviderRegistry.AttachmentKind =
+            WorkspaceProviderRegistry.AttachmentKind.PHOTO,
+        experimentalAttachmentApproved: Boolean = false,
     ): WorkspaceChatGateway.Provider? {
         val openRouterAvailable = keys.get(ApiKeyStore.OPENROUTER).isNotBlank()
         val groqAvailable = keys.get(ApiKeyStore.GROQ).isNotBlank()
@@ -2965,7 +3975,9 @@ class WorkspaceActivity : AppCompatActivity() {
             ?.let { WorkspaceLlm7Free.withinBudget(it, extraSystemInstructions) } ?: false
         return WorkspaceFreeProviderSelection.choose(
             openRouterAvailable, groqAvailable, groqApproved, groqFits, hasAttachments,
-            llm7Available, llm7Approved, llm7Fits)
+            llm7Available, llm7Approved, llm7Fits,
+            attachmentKind = attachmentKind,
+            experimentalAttachmentApproved = experimentalAttachmentApproved)
     }
 
     private fun keyFor(provider: WorkspaceChatGateway.Provider): String = when (provider) {
@@ -3054,15 +4066,15 @@ class WorkspaceActivity : AppCompatActivity() {
         // copy a bounded JPEG/PNG immediately while the grant is fresh so thumbnail, markup
         // and send all use LYRA-owned local bytes.
         if ((source.mime == "image/jpeg" || source.mime == "image/png") &&
-            source.size in 1L..2_000_000L) {
+            source.size in 1L..WorkspaceMediaLimits.MAX_PHOTO_BYTES.toLong()) {
             val extension = if (source.mime == "image/png") ".png" else ".jpg"
-            val output = File(dir, "photo-${System.currentTimeMillis()}$extension")
+            val output = File(dir, "photo-${java.util.UUID.randomUUID()}$extension")
             val bytes = contentResolver.openInputStream(source.uri)?.use {
-                it.readBounded(2_000_000)
+                it.readBounded(WorkspaceMediaLimits.MAX_PHOTO_BYTES)
             } ?: throw IllegalArgumentException("Photo cannot be read")
             require(bytes.isNotEmpty()) { "Photo is empty" }
             output.writeBytes(bytes)
-            require(output.length() in 1L..2_000_000L) { "Photo copy is invalid" }
+            require(output.length() in 1L..WorkspaceMediaLimits.MAX_PHOTO_BYTES.toLong()) { "Photo copy is invalid" }
             val uri = FileProvider.getUriForFile(
                 this,
                 "${packageName}.fileprovider",
@@ -3099,22 +4111,28 @@ class WorkspaceActivity : AppCompatActivity() {
             )
         } ?: throw IllegalArgumentException("Photo cannot be decoded")
 
-        val output = File(dir, "photo-${System.currentTimeMillis()}.jpg")
-        var quality = 92
+        val output = File(dir, "photo-${java.util.UUID.randomUUID()}.jpg")
+        // Ten-photo Free payload: re-encode oversized images at controlled size.
+        val longest = maxOf(bitmap.width, bitmap.height)
+        val ratio = if (longest > 1400) 1400f / longest else 1f
+        val scaled = if (ratio < 1f) Bitmap.createScaledBitmap(bitmap,
+            (bitmap.width * ratio).toInt().coerceAtLeast(1),
+            (bitmap.height * ratio).toInt().coerceAtLeast(1), true) else bitmap
         var saved = false
-        while (quality >= 52) {
+        for (quality in listOf(88, 78, 68, 58, 48, 38)) {
             java.io.FileOutputStream(output).use { stream ->
-                require(bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)) {
+                require(scaled.compress(Bitmap.CompressFormat.JPEG, quality, stream)) {
                     "Photo could not be prepared"
                 }
             }
-            if (output.length() in 1L..2_000_000L) {
+            if (output.length() in 1L..WorkspaceMediaLimits.MAX_PHOTO_BYTES.toLong()) {
                 saved = true
                 break
             }
-            quality -= 10
         }
-        require(saved) { "Photo could not be reduced below LYRA's 2 MB send limit" }
+        if (scaled !== bitmap) scaled.recycle()
+        bitmap.recycle()
+        require(saved) { "Photo could not fit LYRA's ten-photo Free upload budget" }
 
         val uri = FileProvider.getUriForFile(
             this,
@@ -3130,13 +4148,56 @@ class WorkspaceActivity : AppCompatActivity() {
         )
     }
 
+    /** Copy private local audio/video immediately; Android picker grants can be temporary. */
+    private fun prepareNativeMediaAttachment(source: Attachment): Attachment {
+        val kind = WorkspaceAttachmentPolicy.kind(source.mime)
+        require(kind == WorkspaceAttachmentPolicy.Kind.VIDEO ||
+            kind == WorkspaceAttachmentPolicy.Kind.AUDIO) { "Expected audio/video media" }
+        if (kind == WorkspaceAttachmentPolicy.Kind.VIDEO) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(this, source.uri)
+                val durationMs = retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                    ?: throw IllegalArgumentException("Video duration could not be verified")
+                require(durationMs in 1L..WorkspaceMediaLimits.MAX_VIDEO_DURATION_MS.toLong()) {
+                    "Full-video Free upload supports up to five minutes"
+                }
+            } finally {
+                retriever.release()
+            }
+        }
+        val cap = WorkspaceAttachmentPolicy.maxBytes(kind).toInt()
+        val bytes = contentResolver.openInputStream(source.uri)?.use { it.readBounded(cap) }
+            ?: throw IllegalArgumentException("Media could not be read")
+        require(bytes.isNotEmpty()) { "Selected media is empty" }
+        val dir = File(cacheDir, "workspace-media").apply { mkdirs() }
+        require(dir.isDirectory) { "Private media cache unavailable" }
+        val extension = when (source.mime) {
+            "video/mp4" -> "mp4"
+            "video/webm" -> "webm"
+            "audio/mpeg", "audio/mp3" -> "mp3"
+            "audio/wav", "audio/x-wav" -> "wav"
+            else -> throw IllegalArgumentException("Unsupported audio/video encoding")
+        }
+        val saved = File(dir, "media-${java.util.UUID.randomUUID()}.$extension")
+        saved.writeBytes(bytes)
+        val copy = FileProvider.getUriForFile(this,
+            "${packageName}.fileprovider", saved)
+        return source.copy(uri = copy, size = saved.length())
+    }
+
     private fun addAttachment(uri: Uri, requirePhoto: Boolean = false) {
         if (workTab || isBusy()) {
             toast("Wait for the current reply before adding files")
             return
         }
-        if (attachments.size >= 3) {
-            toast("Maximum three local attachments")
+        if (attachments.size >= WorkspaceMediaLimits.MAX_PHOTOS) {
+            toast("Maximum ten photos/attachments per request")
+            return
+        }
+        if (attachments.any { it.uri == uri }) {
+            toast("This item is already attached")
             return
         }
         if (uri.scheme != "content") {
@@ -3170,6 +4231,10 @@ class WorkspaceActivity : AppCompatActivity() {
                 mime = when {
                     name.endsWith(".jpg", true) || name.endsWith(".jpeg", true) -> "image/jpeg"
                     name.endsWith(".png", true) -> "image/png"
+                    name.endsWith(".mp4", true) -> "video/mp4"
+                    name.endsWith(".webm", true) -> "video/webm"
+                    name.endsWith(".mp3", true) -> "audio/mpeg"
+                    name.endsWith(".wav", true) -> "audio/wav"
                     else -> ""
                 }
             }
@@ -3193,22 +4258,38 @@ class WorkspaceActivity : AppCompatActivity() {
                 when (kind) {
                     WorkspaceAttachmentPolicy.Kind.IMAGE -> "Photo must be 30 MB or smaller"
                     WorkspaceAttachmentPolicy.Kind.TEXT -> "Text document must be 3 KB or smaller"
-                    WorkspaceAttachmentPolicy.Kind.AUDIO,
+                    WorkspaceAttachmentPolicy.Kind.AUDIO ->
+                        "MP3/WAV audio must be 8 MB or smaller for the Free route"
                     WorkspaceAttachmentPolicy.Kind.VIDEO ->
-                        "Audio/video file must be 50 MB or smaller"
+                        "Complete MP4/WebM video must be 12 MB or smaller for the Free route"
                     WorkspaceAttachmentPolicy.Kind.UNSUPPORTED -> "Unsupported attachment"
                 }
             }
             if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
                 require(attachments.none {
-                    WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.IMAGE
-                }) { "Only one photo per request" }
+                    WorkspaceAttachmentPolicy.kind(it.mime) in setOf(
+                        WorkspaceAttachmentPolicy.Kind.VIDEO, WorkspaceAttachmentPolicy.Kind.AUDIO)
+                }) { "Choose up to ten photos OR one video/audio file" }
+            }
+            if (kind == WorkspaceAttachmentPolicy.Kind.VIDEO ||
+                kind == WorkspaceAttachmentPolicy.Kind.AUDIO) {
+                require(attachments.none {
+                    WorkspaceAttachmentPolicy.kind(it.mime) in setOf(
+                        WorkspaceAttachmentPolicy.Kind.IMAGE, WorkspaceAttachmentPolicy.Kind.VIDEO,
+                        WorkspaceAttachmentPolicy.Kind.AUDIO)
+                }) { "Choose one original video/audio file OR up to ten photos" }
+            }
+            if (kind == WorkspaceAttachmentPolicy.Kind.AUDIO) {
+                require(mime in setOf("audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav")) {
+                    "Select MP3 or WAV audio for the zero-price multimodal route"
+                }
             }
             val source = Attachment(uri, name, mime, size)
-            if (kind == WorkspaceAttachmentPolicy.Kind.IMAGE) {
-                preparePhotoAttachment(source)
-            } else {
-                source
+            when (kind) {
+                WorkspaceAttachmentPolicy.Kind.IMAGE -> preparePhotoAttachment(source)
+                WorkspaceAttachmentPolicy.Kind.VIDEO, WorkspaceAttachmentPolicy.Kind.AUDIO ->
+                    prepareNativeMediaAttachment(source)
+                else -> source
             }
         }.getOrElse {
             toast(it.message ?: "Attachment unavailable")
@@ -3241,12 +4322,14 @@ class WorkspaceActivity : AppCompatActivity() {
                 contentResolver.openFileDescriptor(replacement, "r")?.use { size = it.statSize }
             }
             require(size in 1L..2_000_000L) { "Marked photo must be 2 MB or smaller" }
-            attachments[index].copy(
+            // Markup output can exceed the new ten-photo cap. Re-normalize it
+            // rather than letting a seemingly attached image fail at Send.
+            preparePhotoAttachment(attachments[index].copy(
                 uri = replacement,
                 name = name.take(120),
                 mime = "image/jpeg",
                 size = size,
-            )
+            ))
         }.getOrElse {
             toast(it.message ?: "Marked photo could not be attached")
             return
@@ -3456,7 +4539,7 @@ class WorkspaceActivity : AppCompatActivity() {
                     attachmentList.addView(
                         compactAttachmentCard(
                             title = attachment.name,
-                            subtitle = "Video · local only",
+                            subtitle = "Original video + soundtrack (model-dependent)",
                             thumbnail = videoThumbnail(attachment.uri),
                             onRemove = {
                                 attachments.remove(attachment)
@@ -3492,6 +4575,7 @@ class WorkspaceActivity : AppCompatActivity() {
 
         attachmentList.visibility =
             if (skillAttachment != null || attachments.isNotEmpty()) View.VISIBLE else View.GONE
+        updateSendButton()
     }
 
     private fun InputStream.readBounded(max: Int): ByteArray {
@@ -3942,11 +5026,28 @@ class WorkspaceActivity : AppCompatActivity() {
         return true
     }
 
-    private fun sendMessage() {
+    private fun sendMessage(
+        attachmentRouteApproved: Boolean = false,
+        videoFramesOnly: Boolean = false,
+    ) {
         if (workTab) return
         if (isForegroundBusy()) { stopForegroundReply(); return }
-        val text = composer.text.toString()
-        if (text.isBlank()) { toast("Write a message first"); return }
+        val typed = composer.text.toString()
+        val text = typed.ifBlank {
+            when {
+                attachments.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                    WorkspaceAttachmentPolicy.Kind.VIDEO } ->
+                    "Analyze this entire video and its original soundtrack if the free model supports both."
+                attachments.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                    WorkspaceAttachmentPolicy.Kind.IMAGE } ->
+                    "Describe these attached images."
+                attachments.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                    WorkspaceAttachmentPolicy.Kind.AUDIO } ->
+                    "Transcribe and summarize this audio file if the free model supports audio."
+                else -> ""
+            }
+        }
+        if (text.isBlank()) { toast("Write a message or attach media"); return }
         if (!WorkspaceLongInputPolicy.sendable(text)) {
             statusMessage = "The complete pasted draft is still in the chat box. " +
                 "This app supports up to ${WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS} characters per message; nothing was sent."
@@ -3971,18 +5072,42 @@ class WorkspaceActivity : AppCompatActivity() {
                 WorkspaceAttachmentPolicy.label(WorkspaceAttachmentPolicy.kind(it.mime))
             }.distinct().joinToString(" / ")
             statusMessage =
-                "$types attachment is selected locally, but audio/video model sending is not active yet. Nothing was sent."
+                "$types attachment is selected locally, but audio model sending is not active. Nothing was sent."
             render()
             return
         }
-        val connectedReadRoute = if (picked.isEmpty() && skillCommand == null) {
-            val prior = selectedId?.let {
+        val priorMessages = if (picked.isEmpty() && skillCommand == null) {
+            selectedId?.let {
                 runCatching { conversations.read(it) }.getOrDefault(emptyList())
             } ?: emptyList()
-            WorkspaceConnectedGitHubReadRouting.decide(text, prior)
+        } else emptyList()
+        val appDownloadLookup = if (picked.isEmpty() && skillCommand == null) {
+            WorkspaceAppDownloadIntent.decide(text, priorMessages)
+        } else null
+        val connectedReadRoute = if (picked.isEmpty() && skillCommand == null &&
+            appDownloadLookup == null) {
+            WorkspaceConnectedGitHubReadRouting.decide(text, priorMessages)
+        } else null
+        val exactLinkLookup = if (picked.isEmpty() && skillCommand == null &&
+            connectedReadRoute == null) {
+            WorkspaceExactLinkIntent.decide(text, priorMessages)
+        } else null
+        val stablePlatformLink = if (picked.isEmpty() && skillCommand == null &&
+            connectedReadRoute == null && exactLinkLookup == null) {
+            WorkspaceStablePlatformLink.decide(text)
+        } else null
+        // Keyword-based research detection must NOT decide whether the question
+        // deserves web research. It only keeps explanation requests from being
+        // mistaken for a bare "send links" command; the Free model plans the route.
+        val explanatoryQuestion = if (picked.isEmpty() && skillCommand == null)
+            WorkspaceWebResearchIntent.decide(text) != null else false
+        val webLinkLookup = if (picked.isEmpty() && skillCommand == null &&
+            connectedReadRoute == null && exactLinkLookup == null && stablePlatformLink == null) {
+            if (explanatoryQuestion) null else WorkspaceWebLinkIntent.decide(text)
         } else null
         val githubSelfEditRequest =
-            picked.isEmpty() && connectedReadRoute == null &&
+            picked.isEmpty() && exactLinkLookup == null && connectedReadRoute == null &&
+                appDownloadLookup == null && stablePlatformLink == null && webLinkLookup == null &&
                 WorkspaceGitHubSelfEdit.isExplicitRequest(text)
         if (githubSelfEditRequest &&
             !WorkspaceChatConcurrencyPolicy.state(
@@ -3994,7 +5119,9 @@ class WorkspaceActivity : AppCompatActivity() {
             render()
             return
         }
-        val intent = if (githubSelfEditRequest) null
+        val readOnlyLookup = appDownloadLookup != null || connectedReadRoute != null ||
+            exactLinkLookup != null || stablePlatformLink != null || webLinkLookup != null
+        val intent = if (githubSelfEditRequest || readOnlyLookup) null
             else WorkspaceChatIntent.requestedProjectType(text)
         if (selectedId == null) {
             val title = text.lineSequence().firstOrNull().orEmpty()
@@ -4027,9 +5154,49 @@ class WorkspaceActivity : AppCompatActivity() {
             val groqTextOnly = preferences.getBoolean(WorkspaceGroqFree.PREFERENCE_KEY, false) &&
                 keys.get(ApiKeyStore.GROQ).isNotBlank()
             val customTextOnly = WorkspaceCustomProviderStore.chatEnabled(this)
-            if (llm7TextOnly || groqTextOnly || customTextOnly) {
-                statusMessage = "The enabled text route does not accept attachments in LYRA. Remove the attachment or turn that text route OFF; nothing was sent."
+            if (keys.get(ApiKeyStore.OPENROUTER).isBlank()) {
+                statusMessage = "An OpenRouter Free key is required for media. Groq and LLM7 are text-only. Draft and attachments retained; nothing sent."
                 render()
+                AlertDialog.Builder(this).setTitle("Free media route unavailable")
+                    .setMessage("Add an OpenRouter Free key for up to ten photos, one complete MP4/WebM (soundtrack intact), or one MP3/WAV. Video/audio requires a compatible $0 model. Nothing uploaded.")
+                    .setNegativeButton("Later", null)
+                    .setPositiveButton("API settings") { _, _ ->
+                        startActivity(Intent(this, ApiCloudSettingsActivity::class.java))
+                    }.show()
+                return
+            }
+            val rawSoundOrVideo = picked.any {
+                WorkspaceAttachmentPolicy.kind(it.mime) in setOf(
+                    WorkspaceAttachmentPolicy.Kind.AUDIO, WorkspaceAttachmentPolicy.Kind.VIDEO)
+            }
+            if ((llm7TextOnly || groqTextOnly || customTextOnly || rawSoundOrVideo) &&
+                !attachmentRouteApproved) {
+                val hasVideo = picked.any {
+                    WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.VIDEO
+                }
+                val consentDescription = if (hasVideo)
+                    "Original video is an EXPERIMENTAL upload of the whole file INCLUDING its " +
+                        "soundtrack. The changing OpenRouter Free pool does NOT guarantee a " +
+                        "compatible $0/ZDR video model. Frames only sends ten spaced silent " +
+                        "screenshots through image input, never the soundtrack. No paid " +
+                        "fallback or automatic second upload."
+                else if (picked.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                        WorkspaceAttachmentPolicy.Kind.AUDIO })
+                    "Original audio is an EXPERIMENTAL upload. The OpenRouter Free pool does " +
+                        "NOT guarantee a compatible $0/ZDR audio model or transcription. " +
+                        "No paid fallback or automatic resend."
+                else "This sends selected photos through OpenRouter Free image input instead " +
+                    "of your text-only provider. No paid fallback."
+                val dialog = AlertDialog.Builder(this).setTitle("Send with OpenRouter Free?")
+                    .setMessage(consentDescription)
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton(if (hasVideo) "Original video" else "Use OpenRouter Free") { _, _ ->
+                        sendMessage(attachmentRouteApproved = true)
+                    }
+                if (hasVideo) dialog.setNeutralButton("Frames only (silent)") { _, _ ->
+                    sendMessage(attachmentRouteApproved = true, videoFramesOnly = true)
+                }
+                dialog.show()
                 return
             }
         }
@@ -4120,6 +5287,10 @@ class WorkspaceActivity : AppCompatActivity() {
             return
         }
         activateWorkTrace(stored.id)
+        if (appDownloadLookup != null && current.type == WorkspaceProjectType.CHAT) {
+            startAppDownloadLookup(id, stored.id, appDownloadLookup)
+            return
+        }
         if (connectedReadRoute != null && current.type == WorkspaceProjectType.CHAT) {
             when (connectedReadRoute) {
                 is WorkspaceConnectedGitHubReadRouting.Route.Build -> {
@@ -4136,9 +5307,7 @@ class WorkspaceActivity : AppCompatActivity() {
                         }.onFailure { statusMessage = it.message ?: "Read clarification not saved." }
                         render()
                     } else {
-                        startConnectedRunVerification(
-                            id, stored.id, requireNotNull(choice.runNumber), choice.includeCommitSha
-                        )
+                        startConnectedRunVerification(id, stored.id, choice)
                     }
                 }
                 is WorkspaceConnectedGitHubReadRouting.Route.Download -> {
@@ -4164,6 +5333,18 @@ class WorkspaceActivity : AppCompatActivity() {
                 is WorkspaceConnectedGitHubReadRouting.Route.Heads ->
                     startConnectedHeadsRead(id, stored.id, connectedReadRoute.decision)
             }
+            return
+        }
+        if (exactLinkLookup != null && current.type == WorkspaceProjectType.CHAT) {
+            startExactLinkLookup(id, stored.id, exactLinkLookup)
+            return
+        }
+        if (stablePlatformLink != null && current.type == WorkspaceProjectType.CHAT) {
+            finishStablePlatformLink(id, stored.id, stablePlatformLink)
+            return
+        }
+        if (webLinkLookup != null && current.type == WorkspaceProjectType.CHAT) {
+            startWebLinkLookup(id, stored.id, webLinkLookup)
             return
         }
         if (githubSelfEditRequest) {
@@ -4230,7 +5411,11 @@ class WorkspaceActivity : AppCompatActivity() {
                     return
                 }
                 decision.target?.let { target ->
-                    startGitHubReach(id, stored.id, target, text)
+                    if (target.platform == WorkspaceAgentReachPolicy.Platform.GITHUB) {
+                        startGitHubReach(id, stored.id, target, text)
+                    } else {
+                        startPublicWebReach(id, stored.id, target, text)
+                    }
                     return
                 }
             }
@@ -4269,6 +5454,20 @@ class WorkspaceActivity : AppCompatActivity() {
             selectedProvider(
                 picked.isNotEmpty(),
                 extraSystemInstructions = runtimeInstructions,
+                attachmentKind = when {
+                    videoFramesOnly -> WorkspaceProviderRegistry.AttachmentKind.VIDEO_FRAMES_SILENT
+                    picked.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                        WorkspaceAttachmentPolicy.Kind.VIDEO } ->
+                        WorkspaceProviderRegistry.AttachmentKind.VIDEO_ORIGINAL
+                    picked.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                        WorkspaceAttachmentPolicy.Kind.AUDIO } ->
+                        WorkspaceProviderRegistry.AttachmentKind.AUDIO_ORIGINAL
+                    picked.any { WorkspaceAttachmentPolicy.kind(it.mime) ==
+                        WorkspaceAttachmentPolicy.Kind.IMAGE } ->
+                        WorkspaceProviderRegistry.AttachmentKind.PHOTO
+                    else -> WorkspaceProviderRegistry.AttachmentKind.DOCUMENT_TEXT
+                },
+                experimentalAttachmentApproved = attachmentRouteApproved,
             )
         }
             .getOrElse { statusMessage = "Secure key storage unavailable. Message saved locally."; render(); return }
@@ -4302,10 +5501,99 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         statusMessage = ""
         render()
+        // Existing Free model makes the semantic public-research decision;
+        // local keyword recognition never authorizes the research path.
+        if (skillProjection == null && picked.isEmpty() &&
+            projects.getProject(id)?.type == WorkspaceProjectType.CHAT &&
+            WorkspaceIntelligentUnderstanding.shouldPlan(text)) {
+            startIntelligentUnderstanding(id, stored.id, provider)
+            return
+        }
         requestReply(
             id, stored.id, provider, picked,
             skillProjection = skillProjection,
+            frameOnlyVideo = videoFramesOnly,
         )
+    }
+
+    /**
+     * Single-turn model-based route choice for ordinary Chat.
+     * No secondary memory brain, no new provider, no tools or write authority.
+     * The activeRequest and requestGeneration leases provide Stop / onStop /
+     * chat-switch cancellation just like an ordinary Free Chat request.
+     */
+    private fun startIntelligentUnderstanding(
+        id: String,
+        turnId: String,
+        provider: WorkspaceChatGateway.Provider,
+    ) {
+        if (selectedId != id || isForegroundBusy() || workTab) return
+        val history = runCatching { conversations.read(id) }.getOrNull()
+        if (history?.lastOrNull()?.id != turnId ||
+            history.lastOrNull()?.role != "user") return
+        val request = runCatching {
+            WorkspaceChatGateway.request(
+                provider = provider,
+                key = keyFor(provider),
+                messages = history.takeLast(5),
+                extraSystemInstructions = WorkspaceIntelligentUnderstanding.SYSTEM_INSTRUCTIONS,
+            )
+        }.getOrNull()
+        if (request == null) {
+            requestReply(id, turnId, provider, emptyList())
+            return
+        }
+        val serial = ++requestGeneration
+        val call = WorkspaceChatGateway.client(provider).newCall(request)
+        activeRequest = call
+        workTrace.begin(
+            WorkspaceWorkPhase.THINKING, "Understanding your question",
+            providerLabel(provider))
+        statusMessage = ""
+        render()
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                completeIntelligentUnderstanding(call, serial, id, turnId, provider, null)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                WorkspaceProviderSessionHealth.recordResponse(response)
+                val decision = runCatching {
+                    WorkspaceIntelligentUnderstanding.parse(
+                        WorkspaceChatGateway.read(provider, response))
+                }.getOrNull()
+                completeIntelligentUnderstanding(call, serial, id, turnId, provider, decision)
+            }
+        })
+    }
+
+    private fun completeIntelligentUnderstanding(
+        call: Call,
+        serial: Long,
+        id: String,
+        turnId: String,
+        provider: WorkspaceChatGateway.Provider,
+        decision: WorkspaceIntelligentUnderstanding.Decision?,
+    ) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed || activeRequest !== call ||
+                serial != requestGeneration || selectedId != id ||
+                workTab || runCatching {
+                    conversations.read(id).lastOrNull()?.id
+                }.getOrNull() != turnId) return@runOnUiThread
+            activeRequest = null
+            when (decision?.route) {
+                WorkspaceIntelligentUnderstanding.Route.PUBLIC_RESEARCH -> {
+                    val question = conversations.read(id).last().text
+                    startWebLinkLookup(
+                        id, turnId,
+                        WorkspaceWebLinkIntent.Request(
+                            query = decision.query, maxResults = 3),
+                        researchQuestion = question)
+                }
+                else -> requestReply(id, turnId, provider, emptyList())
+            }
+        }
     }
 
     private fun requestCustomReply(
@@ -4361,7 +5649,7 @@ class WorkspaceActivity : AppCompatActivity() {
         val systemInstructions = runtimeSelfModelInstructions(id, skillProjection?.prompt)
         val outgoing = runCatching {
             WorkspaceCustomProviderChat.request(
-                profile, key, transcript,
+                profile, key, WorkspaceAgentReachReceipt.providerSafeHistory(transcript),
                 extraSystemInstructions = systemInstructions,
             )
         }.getOrElse {
@@ -4371,6 +5659,10 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         val serial = ++requestGeneration
         val call = WorkspaceCustomProviderConnection.client(profile).newCall(outgoing)
+        val richRequested = WorkspaceRichBlocksContract.enabled(systemInstructions)
+        WorkspaceRichDiagnostics.record(this, messageId, outgoing, profile.displayName)
+        liveRichTurnId = null
+        liveRichBlocks = emptyList()
         activeRequest = call
         activateWorkTrace(messageId)
         if (skillProjection != null) {
@@ -4406,7 +5698,20 @@ class WorkspaceActivity : AppCompatActivity() {
             override fun onResponse(call: Call, response: Response) {
                 completeCustomReply(
                     call, serial, id, messageId, replacingAssistantId,
-                    runCatching { WorkspaceCustomProviderChat.read(response) },
+                    runCatching {
+                        if (richRequested) WorkspaceRichResponse.read(
+                            response, WorkspaceCustomProviderChat::read,
+                        ) { ready ->
+                            runOnUiThread {
+                                if (serial == requestGeneration && activeRequest === call &&
+                                    selectedId == id && !isFinishing && !isDestroyed) {
+                                    liveRichTurnId = messageId
+                                    liveRichBlocks += ready.filterNot { it is Block.Options }
+                                    render()
+                                }
+                            }
+                        } else WorkspaceCustomProviderChat.read(response)
+                    },
                     skillProjection,
                 )
             }
@@ -4426,24 +5731,36 @@ class WorkspaceActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed || serial != requestGeneration ||
                 activeRequest !== call || selectedId != id) return@runOnUiThread
             activeRequest = null
+            liveRichTurnId = null
+            liveRichBlocks = emptyList()
 
             val checked = result.mapCatching { reply ->
                 if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT) {
                     val saved = conversations.read(id)
                     val actual = if (replacingAssistantId != null &&
                         saved.lastOrNull()?.id == replacingAssistantId) saved.dropLast(1) else saved
-                    val visible = WorkspaceChatTurnFrame.verify(actual, reply)
+                    val clean = WorkspaceChatVisibleReply.sanitize(reply)
+                    require(!RichBlockParser.looksLikeEnvelope(clean) ||
+                        (RichBlockParser.isEnvelope(clean) &&
+                            RichBlockParser.parse(clean).isNotEmpty())) {
+                        "LYRA returned invalid rich blocks; incomplete reply not saved"
+                    }
+                    val checkText = if (RichBlockParser.isEnvelope(clean))
+                        RichBlockParser.visibleText(RichBlockParser.parse(clean)) else clean
+                    val visible = WorkspaceChatTurnFrame.verify(actual, checkText)
                     WorkspacePlanningAnswerBoundary.requireAcceptable(
                         actual.lastOrNull()?.takeIf { it.role == "user" }?.text.orEmpty(),
                         visible,
                     )
+                    clean
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
                 skillProjection?.let {
                     WorkspaceSkillInvocationFreshness.requireCurrent(skillStore, it)
                 }
-                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT)
+                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT &&
+                    !RichBlockParser.isEnvelope(reply))
                     WorkspaceHinglishReply.normalize(reply) else reply
                 WorkspaceSkillResultBoundary.attach(presented, skillProjection)
             }
@@ -4515,6 +5832,7 @@ class WorkspaceActivity : AppCompatActivity() {
         picked: List<Attachment>,
         replacingAssistantId: String? = null,
         skillProjection: WorkspaceSkillInvocation.Projection? = null,
+        frameOnlyVideo: Boolean = false,
     ) {
         if (selectedId != id || isForegroundBusy() || workTab) return
         val cooldown = WorkspaceProviderSessionHealth.cooldownMessage(
@@ -4551,40 +5869,109 @@ class WorkspaceActivity : AppCompatActivity() {
                 "${picked.size} selected item${if (picked.size == 1) "" else "s"}")
             if (::root.isInitialized) render()
         }
+        val video = picked.firstOrNull {
+            WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.VIDEO
+        }
+        val sound = picked.firstOrNull {
+            WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.AUDIO
+        }
+        if (frameOnlyVideo && video == null) {
+            statusMessage = "Frame-only mode requires one video; nothing uploaded."
+            render()
+            return
+        }
         val enriched = runCatching {
-            val addition = picked.filterNot { it.mime.startsWith("image/") }
-                .joinToString("\n\n") { "Document ${it.name}:\n${readAttachmentText(it)}" }
+            val addition = picked.filter {
+                WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.TEXT
+            }.joinToString("\n\n") { "Document ${it.name}:\n${readAttachmentText(it)}" }
+            val mediaNote = when {
+                frameOnlyVideo && video != null ->
+                    "ONLY ten ordered visual samples requested across this video (5%, 15%, ..., 95%) " +
+                    "are attached. Key-frame decoding can shift exact positions. The original video " +
+                    "and soundtrack were NOT uploaded; NO transcript exists. Describe only the sampled " +
+                    "visual evidence; do not invent speech, unseen events or full-video coverage."
+                video != null ->
+                    "The ORIGINAL WHOLE video file including its existing audio track is attached " +
+                    "as native video_url, not three stills. Analyze only modalities actually " +
+                    "decoded by your model. If audio or video understanding is unavailable, " +
+                    "state the limitation; never pretend to have heard unseen content."
+                sound != null ->
+                    "The actual audio is attached as input_audio; transcribe only if decoded."
+                else -> ""
+            }
             val last = transcript.last()
-            val expanded = last.text + if (addition.isBlank()) "" else "\n\n$addition"
+            val extras = listOf(addition, mediaNote).filter(String::isNotBlank)
+            val expanded = last.text + if (extras.isEmpty()) "" else
+                "\n\n" + extras.joinToString("\n\n")
             require(expanded.length <= WorkspaceLongInputPolicy.MAX_MESSAGE_CHARS) {
                 "Attachments exceed the private request limit"
             }
             transcript.dropLast(1) + last.copy(text = expanded)
         }.getOrElse { statusMessage = it.message ?: "Document unavailable"; render(); return }
-        val image = picked.firstOrNull { it.mime.startsWith("image/") }?.let { attachment ->
-            runCatching {
-                val bytes = contentResolver.openInputStream(attachment.uri)?.use { it.readBounded(2_000_000) }
-                    ?: throw IllegalArgumentException("Cannot read photo")
+        val nativeMedia = runCatching {
+            val photos = picked.filter {
+                WorkspaceAttachmentPolicy.kind(it.mime) == WorkspaceAttachmentPolicy.Kind.IMAGE
+            }.map { attachment ->
+                val bytes = contentResolver.openInputStream(attachment.uri)?.use {
+                    it.readBounded(WorkspaceMediaLimits.MAX_PHOTO_BYTES)
+                } ?: throw IllegalArgumentException("Photo cannot be read")
                 require(bytes.isNotEmpty()) { "Photo is empty" }
                 WorkspaceChatGateway.Image(attachment.mime,
                     android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
-            }.getOrElse { statusMessage = it.message ?: "Photo unavailable"; render(); return }
+            }
+            // The silent local fallback is an explicit choice, never an automatic retry.
+            val sampledFrames = if (frameOnlyVideo && video != null)
+                WorkspaceVideoFrameSampler.frames(this, video.uri) else emptyList()
+            val fullVideo = video?.takeUnless { frameOnlyVideo }?.let {
+                val bytes = contentResolver.openInputStream(it.uri)?.use { stream ->
+                    stream.readBounded(WorkspaceMediaLimits.MAX_NATIVE_VIDEO_BYTES)
+                } ?: throw IllegalArgumentException("Original video cannot be read")
+                WorkspaceChatGateway.NativeVideo(it.mime,
+                    android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+            }
+            val fullAudio = sound?.let {
+                val bytes = contentResolver.openInputStream(it.uri)?.use { stream ->
+                    stream.readBounded(WorkspaceMediaLimits.MAX_AUDIO_BYTES)
+                } ?: throw IllegalArgumentException("Original audio cannot be read")
+                WorkspaceChatGateway.Audio(it.mime,
+                    android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+            }
+            Triple(photos + sampledFrames, fullVideo, fullAudio)
+        }.getOrElse {
+            statusMessage = it.message ?: "Selected media cannot be prepared"
+            render()
+            return
         }
         require(replacingAssistantId == null || skillProjection == null) {
             "Skill projection cannot be reused on retry"
         }
         val systemInstructions = runtimeSelfModelInstructions(id, skillProjection?.prompt)
+        // Every Free Chat route gets the bounded seven-block example; the complete
+        // editorial example remains available only for a larger-budget route.
+        val freeInstructions = if (skillProjection == null)
+            WorkspaceRichBlocksContract.compactForGroq(systemInstructions)
+                ?: systemInstructions else systemInstructions
         val outgoing = runCatching {
             WorkspaceChatGateway.request(
                 provider,
                 keyFor(provider),
                 enriched,
-                image,
-                extraSystemInstructions = systemInstructions,
+                image = null,
+                extraSystemInstructions = freeInstructions,
+                images = nativeMedia.first,
+                video = nativeMedia.second,
+                audio = nativeMedia.third,
             )
         }.getOrElse { statusMessage = it.message ?: "Provider unavailable"; render(); return }
         val serial = ++requestGeneration
-        val call = WorkspaceChatGateway.client(provider).newCall(outgoing)
+        val hasNativeMedia = nativeMedia.first.isNotEmpty() ||
+            nativeMedia.second != null || nativeMedia.third != null
+        val call = (if (hasNativeMedia) WorkspaceChatGateway.mediaClient
+            else WorkspaceChatGateway.client(provider)).newCall(outgoing)
+        val richRequested = WorkspaceRichBlocksContract.enabled(freeInstructions)
+        WorkspaceRichDiagnostics.record(this, messageId, outgoing, provider.name)
+        liveRichTurnId = null
+        liveRichBlocks = emptyList()
         activeRequest = call
         if (skillProjection != null && workTrace.snapshot().events.isEmpty()) {
             workTrace.begin(
@@ -4600,31 +5987,97 @@ class WorkspaceActivity : AppCompatActivity() {
         }
         statusMessage = ""
         render()
-        call.enqueue(object : Callback {
+        val callback = object : Callback {
             override fun onFailure(call: Call, error: IOException) {
                 WorkspaceProviderSessionHealth.recordUncertainNetworkFailure(
                     WorkspaceProviderRegistry.id(provider))
+                WorkspaceRichDiagnostics.failure(this@WorkspaceActivity, messageId,
+                    "Uncertain network failure; not auto-retried")
                 complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
-                    Result.failure(IllegalStateException(WorkspaceChatGateway.networkFailure(provider, error))),
-                    skillProjection)
+                    Result.failure(IllegalStateException(
+                        WorkspaceChatGateway.networkFailure(provider, error))), skillProjection,
+                    frameOnlyVideo)
             }
+
             override fun onResponse(call: Call, response: Response) {
                 WorkspaceProviderSessionHealth.recordResponse(response)
-                complete(call, serial, id, messageId, replacingAssistantId, provider, picked,
-                    runCatching { WorkspaceChatGateway.read(provider, response) },
-                    skillProjection)
+                WorkspaceRichDiagnostics.actual(this@WorkspaceActivity, messageId,
+                    response.request)
+                val result = runCatching {
+                    val reply = if (richRequested) WorkspaceRichResponse.read(
+                        response,
+                        { actual -> WorkspaceChatGateway.read(provider, actual) },
+                        { stats -> WorkspaceRichDiagnostics.metrics(
+                            this@WorkspaceActivity, messageId, stats) },
+                        { ready ->
+                            runOnUiThread {
+                                if (serial == requestGeneration && activeRequest === call &&
+                                    selectedId == id && !isFinishing && !isDestroyed) {
+                                    liveRichTurnId = messageId
+                                    liveRichBlocks += WorkspaceRichOutputBudget.preview(
+                                        ready.filterNot { it is Block.Options })
+                                    render()
+                                }
+                            }
+                        },
+                    ) else WorkspaceChatGateway.read(provider, response)
+                    reply
+                }
+                val failure = result.exceptionOrNull()
+                // Prose and bullets are valid complete answers. Retry ONLY on a
+                // real local transport overflow, not because a visual is absent.
+                val budgetIssue = failure is WorkspaceRichResponse.BudgetExceeded
+                val retryRequest = if (budgetIssue && richRequested &&
+                    picked.isEmpty() && skillProjection == null &&
+                    replacingAssistantId == null)
+                    WorkspaceRichRetry.request(outgoing) else null
+                if (retryRequest != null && call.request()
+                        .header("X-Lyra-Rich-Short-Retry") != "1") {
+                    WorkspaceRichDiagnostics.failure(this@WorkspaceActivity, messageId,
+                        "Local response budget/visual failure; short retry scheduled")
+                    runOnUiThread {
+                        if (serial == requestGeneration && activeRequest === call &&
+                            selectedId == id && !isFinishing && !isDestroyed) {
+                            // Previous streamed partial blocks were display-only.
+                            liveRichTurnId = null
+                            liveRichBlocks = emptyList()
+                            val next = WorkspaceChatGateway.client(provider)
+                                .newCall(retryRequest)
+                            activeRequest = next
+                            WorkspaceRichDiagnostics.record(this@WorkspaceActivity,
+                                messageId, retryRequest, provider.name, retry = true)
+                            workTrace.add(WorkspaceWorkPhase.THINKING,
+                                "Short retry", "Same Free provider, once")
+                            statusMessage = ""
+                            render()
+                            next.enqueue(this)
+                        }
+                    }
+                    return
+                }
+                if (failure != null) WorkspaceRichDiagnostics.failure(
+                    this@WorkspaceActivity, messageId,
+                    if (failure is WorkspaceRichResponse.BudgetExceeded)
+                        "Local SSE response budget exceeded" else
+                        (failure.message ?: "Provider reply failed"))
+                complete(call, serial, id, messageId, replacingAssistantId,
+                    provider, picked, result, skillProjection, frameOnlyVideo)
             }
-        })
+        }
+        call.enqueue(callback)
     }
 
     private fun complete(call: Call, serial: Long, id: String, userMessageId: String,
                          replacingAssistantId: String?, provider: WorkspaceChatGateway.Provider,
                          picked: List<Attachment>, result: Result<String>,
-                         skillProjection: WorkspaceSkillInvocation.Projection? = null) {
+                         skillProjection: WorkspaceSkillInvocation.Projection? = null,
+                         frameOnlyVideo: Boolean = false) {
         runOnUiThread {
             if (isFinishing || isDestroyed || serial != requestGeneration ||
                 activeRequest !== call || selectedId != id) return@runOnUiThread
             activeRequest = null
+            liveRichTurnId = null
+            liveRichBlocks = emptyList()
             // Check the completed visible draft against the actual USER topic before
             // saving it. This is deliberately conservative and makes NO new AI call.
             val checked = result.mapCatching { reply ->
@@ -4632,18 +6085,40 @@ class WorkspaceActivity : AppCompatActivity() {
                     val saved = conversations.read(id)
                     val actual = if (replacingAssistantId != null &&
                         saved.lastOrNull()?.id == replacingAssistantId) saved.dropLast(1) else saved
-                    val visible = WorkspaceChatTurnFrame.verify(actual, reply)
+                    val clean = WorkspaceChatVisibleReply.sanitize(reply)
+                    val userText = actual.lastOrNull()
+                        ?.takeIf { it.role == "user" }?.text.orEmpty()
+                    val plan = WorkspacePracticalPlanningGuide.instructions(userText).isNotBlank() ||
+                        WorkspaceRichBlocksContract.shortProjectContext(userText).isNotBlank()
+                    val output = if (RichBlockParser.isEnvelope(clean) ||
+                        (plan && skillProjection == null))
+                        WorkspaceRichOutputBudget.compact(clean, plan)
+                    else WorkspaceRichOutputBudget.Result(clean, emptyList(), emptyList(),
+                        emptyList())
+                    WorkspaceRichDiagnostics.output(this, userMessageId, output)
+                    val budgeted = output.raw
+                    require(!RichBlockParser.looksLikeEnvelope(budgeted) ||
+                        (RichBlockParser.isEnvelope(budgeted) &&
+                            RichBlockParser.parse(budgeted).isNotEmpty())) {
+                        "LYRA returned invalid rich blocks; incomplete reply not saved"
+                    }
+                    val checkText = if (RichBlockParser.isEnvelope(budgeted))
+                        RichBlockParser.visibleText(RichBlockParser.parse(budgeted))
+                    else budgeted
+                    val visible = WorkspaceChatTurnFrame.verify(actual, checkText)
                     WorkspacePlanningAnswerBoundary.requireAcceptable(
                         actual.lastOrNull()?.takeIf { it.role == "user" }?.text.orEmpty(),
                         visible,
                     )
+                    budgeted
                 } else reply
             }
             val finalized = checked.mapCatching { reply ->
                 skillProjection?.let {
                     WorkspaceSkillInvocationFreshness.requireCurrent(skillStore, it)
                 }
-                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT)
+                val presented = if (projects.getProject(id)?.type == WorkspaceProjectType.CHAT &&
+                    !RichBlockParser.isEnvelope(reply))
                     WorkspaceHinglishReply.normalize(reply) else reply
                 WorkspaceSkillResultBoundary.attach(presented, skillProjection)
             }
@@ -4669,7 +6144,7 @@ class WorkspaceActivity : AppCompatActivity() {
             }
             render()
             if (failure != null) showChatFailure(id, userMessageId, replacingAssistantId,
-                provider, picked, statusMessage)
+                provider, picked, statusMessage, frameOnlyVideo)
         }
     }
 }

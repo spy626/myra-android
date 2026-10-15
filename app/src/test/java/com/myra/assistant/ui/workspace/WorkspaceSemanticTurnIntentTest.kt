@@ -25,6 +25,28 @@ class WorkspaceSemanticTurnIntentTest {
         }
     }
 
+    @Test fun linkRequestsAreReadOnlyAndNeverSelfEdit() {
+        listOf(
+            "Latest GitHub build ka link do",
+            "OpenAI website ka link bhejo",
+            "YouTube ka URL share karo",
+            "docs ka link de",
+        ).forEach { text ->
+            val proposal = WorkspaceSemanticTurnIntent.propose(text)
+            assertEquals(text, WorkspaceSemanticTurnIntent.Kind.READ_ONLY_VERIFICATION, proposal.kind)
+            assertEquals(text, WorkspaceSemanticTurnIntent.Effect.READ, proposal.effect)
+            assertFalse(text, WorkspaceGitHubSelfEdit.isExplicitRequest(text))
+            assertNull(text, WorkspaceChatIntent.requestedProjectType(text))
+        }
+
+        val write = "GitHub repo me universal link feature add karo"
+        assertEquals(
+            WorkspaceSemanticTurnIntent.Effect.WRITE,
+            WorkspaceSemanticTurnIntent.propose(write).effect,
+        )
+        assertTrue(WorkspaceGitHubSelfEdit.isExplicitRequest(write))
+    }
+
     @Test fun directBuildAndEditRequestsStillExecute() {
         val website = "Can you build me a website?"
         assertEquals(
