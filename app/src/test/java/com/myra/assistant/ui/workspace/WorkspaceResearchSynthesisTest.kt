@@ -30,6 +30,42 @@ class WorkspaceResearchSynthesisTest {
             "Compare WorkManager and Foreground Service", hits))
     }
 
+    @Test fun differentPlatformDimensionsArePartialEvenWithBothSidesAccepted() {
+        val question = "Compare Android and iOS battery optimization"
+        val android = WorkspacePublicWebSearch.Verified(
+            "About preserving battery - Android Developers",
+            "https://developer.android.com/topic/performance/power",
+            "Android battery optimization updates", "text/html")
+        val ios = WorkspacePublicWebSearch.Verified(
+            "iOS low power mode and battery optimization",
+            "https://lifetips.alibaba.com/article/ios-low-power",
+            "iOS battery optimization Low Power Mode reduces CPU frequency and mail fetch",
+            "text/html")
+        val bundle = WorkspaceResearchSynthesis.Bundle(question, listOf(
+            WorkspaceResearchSynthesis.Evidence(
+                "E1", "S1",
+                "Android battery optimization OS updates preserve user experience and system health.",
+                android),
+            WorkspaceResearchSynthesis.Evidence(
+                "E2", "S2",
+                "iOS Low Power Mode reduces CPU frequency, disables mail fetch and pauses visual effects.",
+                ios),
+        ))
+        val raw = """{"claims":[
+          {"text":"Android battery optimization OS updates preserve user experience and system health.","evidenceIds":["E1"]},
+          {"text":"iOS Low Power Mode reduces CPU frequency, disables mail fetch and pauses visual effects.","evidenceIds":["E2"]}
+        ]}"""
+        val result = WorkspaceResearchSynthesis.audit(raw, bundle)
+        assertEquals(2, result.acceptedClaims)
+        assertEquals(0, result.rejectedClaims)
+        assertEquals(WorkspaceResearchSynthesis.AuditIssue.MISSING_COMPARISON_COVERAGE,
+            result.issue)
+        assertNull(result.answer)
+        assertTrue(result.partialAnswer.orEmpty().contains(android.finalUrl))
+        assertTrue(result.partialAnswer.orEmpty().contains(ios.finalUrl))
+        assertFalse(result.isComplete)
+    }
+
     @Test fun acceptedResearchShowsNativeComparisonAndOnlyCitedSourceLinks() {
         val bundle = evidence()
         val raw = """{"claims":[

@@ -73,7 +73,7 @@ class WorkspaceResearchQuoteAndJointClaimsTest {
         assertFalse(result.answer.orEmpty().contains("both manage"))
     }
 
-    @Test fun independentSingleSubjectClaimsRemainAvailableAndCitable() {
+    @Test fun unrelatedSingleSubjectClaimsRemainAvailableButAreNotCompleteComparison() {
         val result = audit(
             claim("Android battery optimization reduces background drain by limiting app work.",
                 listOf("E1")),
@@ -81,14 +81,16 @@ class WorkspaceResearchQuoteAndJointClaimsTest {
                 listOf("E2")),
             claim(joined, listOf("E1", "E2")),
         )
-        assertEquals(WorkspaceResearchSynthesis.AuditIssue.NONE, result.issue)
+        assertEquals(WorkspaceResearchSynthesis.AuditIssue.MISSING_COMPARISON_COVERAGE,
+            result.issue)
         assertEquals(2, result.acceptedClaims)
         assertEquals(1, result.rejectedClaims)
         assertEquals(WorkspaceResearchSynthesis.ClaimRejection.MULTI_SUBJECT_UNGROUNDED,
             result.claimDecisions.last().result)
-        assertTrue(result.answer.orEmpty().contains(android.finalUrl))
-        assertTrue(result.answer.orEmpty().contains(ios.finalUrl))
-        assertFalse(result.answer.orEmpty().contains("both manage"))
+        assertNull(result.answer)
+        assertTrue(result.partialAnswer.orEmpty().contains(android.finalUrl))
+        assertTrue(result.partialAnswer.orEmpty().contains(ios.finalUrl))
+        assertFalse(result.partialAnswer.orEmpty().contains("both manage"))
     }
 
     @Test fun genuineSharedMechanismMustAppearForBothSides() {
