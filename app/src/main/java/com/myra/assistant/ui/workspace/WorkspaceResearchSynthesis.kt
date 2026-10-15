@@ -61,7 +61,7 @@ internal object WorkspaceResearchSynthesis {
         if (subjects.size != 2) return true
         val questionWords = words.findAll(question.lowercase(Locale.ROOT))
             .map { it.value }.toSet()
-        val generic = ignored + setOf(
+        val generic = (ignored - "work") + setOf(
             "some", "many", "other", "each", "both", "same", "platform",
             "platforms", "device", "devices", "phone", "phones",
             "iphone", "iphones", "apple", "google", "pixel",
