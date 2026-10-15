@@ -75,6 +75,9 @@ internal class WorkspaceResearchDebugReport {
                 else -> "VALID_STRUCTURED_RESPONSE"
             }
             appendLine("Model response format: ${jsonState}")
+            audit.modelFailureReason?.let { reason ->
+                appendLine("Model read failure: ${reason.name}")
+            }
             appendLine("Model response characters: ${audit.modelResponseCharacters}")
             appendLine("Proposed claims: ${audit.claimDecisions.size}")
             appendLine("Accepted claims: ${audit.acceptedClaims}")

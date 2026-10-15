@@ -101,6 +101,40 @@ class WorkspaceGroqFreeTest {
             WorkspaceChatGateway.Image("image/png", "cG5n")) }.isFailure)
     }
 
+    @Test fun researchOnlyUsesGroqLowReasoningAndJsonWithoutChangingChat() {
+        val input = listOf(message("user", "Compare Android and iOS battery optimization"))
+        val research = JSONObject(WorkspaceGroqFree.body(input,
+            extraSystemInstructions = WorkspaceResearchSynthesis.SYSTEM_INSTRUCTIONS))
+        assertEquals(WorkspaceGroqFree.MODEL, research.getString("model"))
+        assertFalse(research.getBoolean("stream"))
+        assertEquals("low", research.getString("reasoning_effort"))
+        assertEquals("hidden", research.getString("reasoning_format"))
+        assertEquals("json_object",
+            research.getJSONObject("response_format").getString("type"))
+        assertEquals(2_048, research.getInt("max_completion_tokens"))
+        val chat = JSONObject(WorkspaceGroqFree.body(input))
+        assertFalse(chat.has("reasoning_effort"))
+        assertFalse(chat.has("reasoning_format"))
+        assertFalse(chat.has("response_format"))
+    }
+
+    @Test fun outputLimitAndMissingContentAreDistinctSafeGroqReasons() {
+        val req = Request.Builder().url(WorkspaceGroqFree.ENDPOINT).build()
+        fun response(data: String): Response = Response.Builder().request(req)
+            .protocol(Protocol.HTTP_1_1).code(200).message("OK")
+            .body(data.toResponseBody()).build()
+        val limit = runCatching { WorkspaceGroqFree.read(response(
+            """{"choices":[{"finish_reason":"length","message":{"content":null}}]}"""))
+        }.exceptionOrNull()
+        assertEquals(WorkspaceGroqFree.ReadProblem.OUTPUT_LIMIT,
+            (limit as? WorkspaceGroqFree.ReadFailure)?.problem)
+        val noContent = runCatching { WorkspaceGroqFree.read(response(
+            """{"choices":[{"finish_reason":"stop","message":{"content":null}}]}"""))
+        }.exceptionOrNull()
+        assertEquals(WorkspaceGroqFree.ReadProblem.EMPTY_CONTENT,
+            (noContent as? WorkspaceGroqFree.ReadFailure)?.problem)
+    }
+
     @Test fun unfinishedOrRejectedGroqReplyNeverBecomesAssistantMessage() {
         val request = Request.Builder().url(WorkspaceGroqFree.ENDPOINT).build()
         val unfinished = Response.Builder().request(request).protocol(Protocol.HTTP_1_1)

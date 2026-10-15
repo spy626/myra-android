@@ -1874,7 +1874,9 @@ class WorkspaceActivity : AppCompatActivity() {
                     WorkspaceProviderRegistry.id(provider))
                 completeResearchSynthesis(call, projectId, turnId, fallback,
                     sourceReceipts, WorkspaceResearchSynthesis.AuditResult(
-                        null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE),
+                        null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE,
+                        modelFailureReason =
+                            WorkspaceResearchSynthesis.ModelFailureReason.NETWORK_ERROR),
                     WorkspaceProviderRegistry.id(provider))
             }
             override fun onResponse(call: Call, response: Response) {
@@ -1882,9 +1884,28 @@ class WorkspaceActivity : AppCompatActivity() {
                 val audit = runCatching {
                     WorkspaceResearchSynthesis.audit(
                         WorkspaceChatGateway.read(provider, response), bundle)
-                }.getOrElse {
+                }.getOrElse { failure ->
+                    val problem = when {
+                        !response.isSuccessful ->
+                            WorkspaceResearchSynthesis.ModelFailureReason.HTTP_REJECTED
+                        failure is WorkspaceGroqFree.ReadFailure -> when (failure.problem) {
+                            WorkspaceGroqFree.ReadProblem.OUTPUT_LIMIT ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.OUTPUT_TOKEN_LIMIT
+                            WorkspaceGroqFree.ReadProblem.EMPTY_CONTENT ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.CONTENT_EMPTY
+                            WorkspaceGroqFree.ReadProblem.FILTERED ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.RESPONSE_FILTERED
+                            WorkspaceGroqFree.ReadProblem.UNFINISHED ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.UNFINISHED_REPLY
+                            else ->
+                                WorkspaceResearchSynthesis.ModelFailureReason.PROVIDER_RESPONSE_INVALID
+                        }
+                        else ->
+                            WorkspaceResearchSynthesis.ModelFailureReason.PROVIDER_READ_ERROR
+                    }
                     WorkspaceResearchSynthesis.AuditResult(
-                        null, WorkspaceResearchSynthesis.AuditIssue.MALFORMED_RESPONSE)
+                        null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE,
+                        modelFailureReason = problem)
                 }
                 completeResearchSynthesis(call, projectId, turnId, fallback,
                     sourceReceipts, audit,

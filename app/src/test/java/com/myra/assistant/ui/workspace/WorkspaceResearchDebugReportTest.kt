@@ -90,6 +90,20 @@ class WorkspaceResearchDebugReportTest {
         assertFalse(open.contains("Bearer "))
     }
 
+    @Test fun emptyProviderResponseIsNotMisreportedAsMalformedAiClaims() {
+        val outcome = WorkspaceResearchSynthesis.AuditResult(
+            null, WorkspaceResearchSynthesis.AuditIssue.MODEL_UNAVAILABLE,
+            modelFailureReason =
+                WorkspaceResearchSynthesis.ModelFailureReason.OUTPUT_TOKEN_LIMIT)
+        val report = WorkspaceResearchDebugReport.summarize(
+            outcome, WorkspaceProviderRegistry.Id.GROQ_FREE)
+        assertTrue(report.contains("Final audit: MODEL_UNAVAILABLE"))
+        assertTrue(report.contains("Model response format: NO_MODEL_RESPONSE"))
+        assertTrue(report.contains("Model read failure: OUTPUT_TOKEN_LIMIT"))
+        assertFalse(report.contains("INVALID_JSON_OR_SCHEMA"))
+        assertFalse(report.contains("Bearer"))
+    }
+
     @Test fun malformedModelResponseShowsShapeNotRawBody() {
         val raw = "not-json-password=do-not-leak"
         val audit = WorkspaceResearchSynthesis.audit(raw, bundle())

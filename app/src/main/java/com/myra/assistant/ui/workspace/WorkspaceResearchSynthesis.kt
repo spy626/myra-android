@@ -162,6 +162,12 @@ internal object WorkspaceResearchSynthesis {
         NONE, MALFORMED_RESPONSE, NO_SUPPORTED_CLAIMS, MISSING_COMPARISON_COVERAGE,
         MODEL_UNAVAILABLE,
     }
+    /** Safe failure metadata; no upstream response body or API key retained. */
+    enum class ModelFailureReason {
+        NETWORK_ERROR, HTTP_REJECTED, OUTPUT_TOKEN_LIMIT, CONTENT_EMPTY,
+        PROVIDER_RESPONSE_INVALID, RESPONSE_FILTERED, UNFINISHED_REPLY,
+        PROVIDER_READ_ERROR,
+    }
     /** Safe audit metadata: never includes model text, quotes or source URLs. */
     enum class ClaimRejection {
         ACCEPTED, INVALID_CLAIM, INVALID_EVIDENCE_IDS, UNKNOWN_EVIDENCE_IDS,
@@ -187,6 +193,7 @@ internal object WorkspaceResearchSynthesis {
         val partialAnswer: String? = null,
         val claimDecisions: List<ClaimDecision> = emptyList(),
         val modelResponseCharacters: Int = 0,
+        val modelFailureReason: ModelFailureReason? = null,
     ) {
         val isComplete: Boolean get() = issue == AuditIssue.NONE && answer != null
     }
