@@ -98,9 +98,17 @@ internal object WorkspaceResearchSynthesis {
         if (sides[0].any { candidate -> sides[1].any { it === candidate } })
             return true
         return sides[0].any { left ->
-            val leftWords = dimensions(left.first)
+            // Inspect ONLY the passages already cited by each accepted claim.
+            // Faithful paraphrases can share a mechanism ("background activity")
+            // even when their claim wording differs ("idle tasks" / "app refresh").
+            val leftWords = dimensions(left.first + " " +
+                left.second.joinToString(" ") { it.passage })
             leftWords.isNotEmpty() && sides[1].any { right ->
-                leftWords.intersect(dimensions(right.first)).isNotEmpty()
+                val rightWords = dimensions(right.first + " " +
+                    right.second.joinToString(" ") { it.passage })
+                leftWords.intersect(rightWords).any {
+                    it !in setOf("energy", "power", "battery", "optimization")
+                }
             }
         }
     }
