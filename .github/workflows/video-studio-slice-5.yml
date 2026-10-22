@@ -1,0 +1,61 @@
+name: Video Studio Slice 5 Android JSON Bridge
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-5']
+    paths:
+      - 'tools/video_studio/**'
+      - 'app/src/main/java/com/myra/assistant/video/**'
+      - '.github/workflows/video-studio-slice-5.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-4']
+    paths:
+      - 'tools/video_studio/**'
+      - 'app/src/main/java/com/myra/assistant/video/**'
+      - '.github/workflows/video-studio-slice-5.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-contract-and-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test offline house grammar and strict JSON render contract
+        run: |
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Install only free open-source Blender and FFmpeg dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends blender ffmpeg libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libopengl0 xvfb xauth
+      - name: Render real Blender scene from Android-compatible JSON
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          mkdir -p build/video-studio/android-request/frames
+          timeout 900 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup --python tools/video_studio/mini_house_blender.py \
+            -- --output-dir build/video-studio/android-request \
+            --request-json tools/video_studio/requests/sample-blue-house.json
+          ffmpeg -hide_banner -loglevel error -y -framerate 12 -start_number 1 \
+            -i build/video-studio/android-request/frames/frame_%04d.png \
+            -frames:v 72 -c:v libx264 -pix_fmt yuv420p -crf 23 \
+            -preset veryfast -movflags +faststart \
+            build/video-studio/android-request/mini_house_6s.mp4
+          python3 tools/video_studio/verify_mini_house.py build/video-studio/android-request
+          python3 tools/video_studio/verify_request_render.py \
+            tools/video_studio/requests/sample-blue-house.json build/video-studio/android-request
+      - name: Publish actual render and editable Blender proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyra-slice5-json-request-blender-demo
+          path: |
+            build/video-studio/android-request/mini_house_6s.mp4
+            build/video-studio/android-request/mini_house_scene.blend
+            build/video-studio/android-request/scene_manifest.json
+            tools/video_studio/requests/sample-blue-house.json
+          retention-days: 7
+          if-no-files-found: error
