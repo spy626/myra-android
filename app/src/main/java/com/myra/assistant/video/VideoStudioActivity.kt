@@ -5,17 +5,20 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.appcompat.app.AlertDialog
 import android.widget.ArrayAdapter
+import okhttp3.Call
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.databinding.ActivityVideoStudioBinding
 import java.util.UUID
 
 /**
- * Standalone opt-in storyboard UI. No AI requests, network, permissions,
- * storage writes, rendering, or changes to existing Workspace/voice flows.
+ * Standalone opt-in storyboard UI and user-initiated public GitHub status GET.
+ * No token, private reads, submission, storage writes, rendering, or changes
+ * to existing Workspace/voice/memory flows.
  */
 class VideoStudioActivity : AppCompatActivity() {
     private lateinit var binding: ActivityVideoStudioBinding
     private lateinit var draftProjectId: String
+    private var activeStatusCall: Call? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,6 +87,78 @@ class VideoStudioActivity : AppCompatActivity() {
             }
         }
 
+        binding.refreshGithubRunButton.setOnClickListener {
+            val id = binding.githubRunIdInput.text.toString().trim()
+            val valid = runCatching {
+                VideoStudioJobStatusContract.publicApiUrl(id)
+            }.isSuccess
+            if (!valid) {
+                binding.githubRunStatusText.text =
+                    "Enter a valid numeric GitHub run ID to check a real status."
+                return@setOnClickListener
+            }
+            activeStatusCall?.cancel()
+            binding.githubRunStatusText.text = "Checking the public GitHub API once…"
+            activeStatusCall = VideoStudioJobStatusReader.refresh(id) { result ->
+                runOnUiThread {
+                    if (isFinishing || isDestroyed ||
+                        binding.githubRunIdInput.text.toString().trim() != id) {
+                        return@runOnUiThread
+                    }
+                    binding.githubRunStatusText.text = result.fold(
+                        onSuccess = { it.readable() },
+                        onFailure = {
+                            "Status unverified: " + (it.message ?: "Could not read GitHub") +
+                                "\nUse Open GitHub run status for the authoritative page."
+                        },
+                    )
+                }
+            }
+        }
+
+        binding.openManualRenderWorkflowButton.setOnClickListener {
+            val request = runCatching {
+                val kind = when (binding.kindSpinner.selectedItemPosition) {
+                    1 -> VideoStudioKind.CARTOON
+                    2 -> VideoStudioKind.EXPLAINER
+                    else -> VideoStudioKind.CONSTRUCTION
+                }
+                VideoStudioRenderRequestFactory.fromDraft(
+                    VideoStudioPlanning.createDraft(
+                        projectId = draftProjectId,
+                        rawPrompt = binding.promptInput.text.toString(),
+                        kind = kind,
+                        durationSeconds = if (binding.durationGroup.checkedRadioButtonId ==
+                            binding.duration60.id) 60 else 30,
+                    ),
+                )
+            }.getOrElse { error ->
+                binding.githubRunStatusText.text = "Cannot review manual render: " +
+                    (error.message ?: "Unsupported mini-house request")
+                return@setOnClickListener
+            }
+            val instructions = VideoStudioRenderRequestFactory.reviewText(request) +
+                "\n\nProject ID: " + request.projectId +
+                "\n\nGitHub owner must manually select Run workflow and enter " +
+                "these reviewed settings AFTER a separately approved default-branch " +
+                "deployment. This button only opens the website. It cannot submit " +
+                "a render job or make a 30/60-second video."
+            AlertDialog.Builder(this)
+                .setTitle("Review GitHub manual render")
+                .setMessage(instructions)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Open GitHub") { _, _ ->
+                    runCatching {
+                        startActivity(Intent(Intent.ACTION_VIEW,
+                            Uri.parse(VideoStudioJobLinks.WORKFLOW_PAGE)))
+                    }.onFailure {
+                        binding.githubRunStatusText.text =
+                            "Could not open GitHub. No video job was submitted."
+                    }
+                }
+                .show()
+        }
+
         binding.reviewRenderRequestButton.setOnClickListener {
             val request = runCatching {
                 val kind = when (binding.kindSpinner.selectedItemPosition) {
@@ -123,6 +198,12 @@ class VideoStudioActivity : AppCompatActivity() {
                 }
                 .show()
         }
+    }
+
+    override fun onStop() {
+        activeStatusCall?.cancel()
+        activeStatusCall = null
+        super.onStop()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
