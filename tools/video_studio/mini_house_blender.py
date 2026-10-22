@@ -9,6 +9,8 @@ import os
 import sys
 import bpy
 from mathutils import Vector
+# Blender's embedded Python does not put the --python script directory on sys.path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from house_brief import DEFAULT_PROMPT, parse_brief
 
 FPS, SECONDS, WIDTH, HEIGHT = 12, 6, 360, 640
