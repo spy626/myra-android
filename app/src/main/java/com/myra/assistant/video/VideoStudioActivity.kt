@@ -1,6 +1,8 @@
 package com.myra.assistant.video
 
+import android.content.Intent
 import android.os.Bundle
+import androidx.appcompat.app.AlertDialog
 import android.widget.ArrayAdapter
 import androidx.appcompat.app.AppCompatActivity
 import com.myra.assistant.databinding.ActivityVideoStudioBinding
@@ -62,6 +64,46 @@ class VideoStudioActivity : AppCompatActivity() {
             binding.storyboardText.text = result.getOrElse { error ->
                 "Cannot preview storyboard: ${error.message ?: "Invalid brief"}"
             }
+        }
+
+        binding.reviewRenderRequestButton.setOnClickListener {
+            val request = runCatching {
+                val kind = when (binding.kindSpinner.selectedItemPosition) {
+                    1 -> VideoStudioKind.CARTOON
+                    2 -> VideoStudioKind.EXPLAINER
+                    else -> VideoStudioKind.CONSTRUCTION
+                }
+                val draft = VideoStudioPlanning.createDraft(
+                    projectId = draftProjectId,
+                    rawPrompt = binding.promptInput.text.toString(),
+                    kind = kind,
+                    durationSeconds = if (binding.durationGroup.checkedRadioButtonId ==
+                        binding.duration60.id) 60 else 30,
+                )
+                VideoStudioRenderRequestFactory.fromDraft(draft)
+            }.getOrElse { error ->
+                binding.storyboardText.text = "Cannot prepare 6s 3D test: " +
+                    (error.message ?: "Unsupported mini-house brief")
+                return@setOnClickListener
+            }
+
+            AlertDialog.Builder(this)
+                .setTitle("Review 6-second 3D test request")
+                .setMessage(VideoStudioRenderRequestFactory.reviewText(request))
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Share JSON") { _, _ ->
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/json"
+                        putExtra(Intent.EXTRA_TEXT, request.toJson())
+                    }
+                    runCatching {
+                        startActivity(Intent.createChooser(share, "Share Blender test request"))
+                    }.onFailure {
+                        binding.storyboardText.text =
+                            "No available app to share the JSON. No render was started."
+                    }
+                }
+                .show()
         }
     }
 
