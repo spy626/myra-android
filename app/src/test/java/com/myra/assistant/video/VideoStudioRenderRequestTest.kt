@@ -34,7 +34,7 @@ class VideoStudioRenderRequestTest {
         assertEquals("cream", spec.getString("wall_color"))
         assertEquals("flat", spec.getString("roof_style"))
         assertTrue(spec.getBoolean("garden"))
-        assertEquals(9, json.length())
+        assertEquals(10, json.length())
         assertEquals(4, spec.length())
         assertFalse(request.toJson().contains("api_key"))
         assertFalse(request.toJson().contains("prompt"))
