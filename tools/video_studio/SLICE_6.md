@@ -25,3 +25,14 @@ or 60 seconds. Free GitHub Actions usage is finite and subject to quotas.
 A SUCCESS receipt is written ONLY after rendered frames, MP4 and geometry
 checks pass; failures are reflected by GitHub Actions. No extra app database,
 memory brain, website changes or code copied from external repos.
+
+## Slice 6 cancelled-run recovery
+
+A previous render job was cancelled at the 25-minute job limit while downloading
+Blender from the runner's default Azure Ubuntu mirror (the 35.9 MB package
+alone took roughly 12 minutes). The same exact APT dependency set installed
+in seconds on an earlier run. The recovery now probes a small sample from
+**Ubuntu archive mirrors only**, picks a responsive archive or fails early,
+retains Ubuntu package-signature validation, and keeps the same Blender
+renderer, MP4 checks and receipt workflow. It does not bypass failed tests or
+mark a cancelled render as passed.

@@ -71,10 +71,15 @@ jobs:
             --project-id "$JOB_PROJECT" --floors "$JOB_FLOORS" \
             --color "$JOB_COLOR" --roof "$JOB_ROOF" \
             --garden "$JOB_GARDEN" --target "$JOB_TARGET"
+      - name: Choose responsive trusted Ubuntu archive (avoid stalled Azure mirror)
+        run: |
+          bash tools/video_studio/configure_ci_apt_mirror.sh
       - name: Install free Blender, FFmpeg, and graphics dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends blender ffmpeg libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libopengl0 xvfb xauth
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends blender ffmpeg libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libopengl0 xvfb xauth
+          blender --version | head -n 2
+          ffmpeg -version | head -n 1
       - name: Render actual six-second Blender video from approved job
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
