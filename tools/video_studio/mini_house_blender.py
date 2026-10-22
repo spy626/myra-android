@@ -1,4 +1,4 @@
-"""LYRA slice 3: fixed original 6-second Blender mini-house 3D prototype.
+"""LYRA slice 4: bounded prompt-controlled Blender mini-house 3D prototype.
 
 Run: blender -b --factory-startup --python tools/video_studio/mini_house_blender.py -- --output-dir build/video-studio
 No AI video provider, external model, paid asset, or Android render is used.
@@ -9,6 +9,9 @@ import os
 import sys
 import bpy
 from mathutils import Vector
+# Blender's embedded Python does not put the --python script directory on sys.path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from house_brief import DEFAULT_PROMPT, parse_brief
 
 FPS, SECONDS, WIDTH, HEIGHT = 12, 6, 360, 640
 FRAMES = FPS * SECONDS
@@ -56,7 +59,7 @@ def shrub(name, center, material):
     obj.data.materials.append(material)
 
 
-def build_scene(directory):
+def build_scene(directory, spec):
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
     scene = bpy.context.scene
@@ -78,7 +81,7 @@ def build_scene(directory):
     grass = color("Grass", (0.35, 0.56, 0.35))
     earth = color("Ground display stand", (0.30, 0.32, 0.32))
     stone = color("Concrete", (0.70, 0.70, 0.68))
-    wall = color("Ivory facade", (0.94, 0.90, 0.81))
+    wall = color("Selectable facade", {"cream": (0.94, 0.90, 0.81), "blue": (0.29, 0.55, 0.82), "terracotta": (0.81, 0.43, 0.30)}[spec.wall_color])
     white = color("White facade", (0.92, 0.95, 0.94))
     roof = color("Modern slate roof", (0.22, 0.33, 0.39))
     wood = color("Wood entry", (0.55, 0.32, 0.20))
@@ -90,10 +93,11 @@ def build_scene(directory):
     box("Display plinth", (0, 0, -0.29), (6.2, 5.8, 0.36), earth)
     box("Garden plot", (0, 0, -0.06), (6.0, 5.55, 0.10), grass)
     box("Garden entry path", (0, -2.2, 0.025), (1.02, 1.4, 0.08), path)
-    for i, x in enumerate((-2.53, 2.53)):
-        for j, y in enumerate((-2.0, 1.78)):
-            box("Planter {} {}".format(i, j), (x, y, 0.10), (0.62, 0.66, 0.22), path)
-            shrub("Garden foliage {} {}".format(i, j), (x, y, 0.39), grass)
+    if spec.garden:
+        for i, x in enumerate((-2.53, 2.53)):
+            for j, y in enumerate((-2.0, 1.78)):
+                box("Planter {} {}".format(i, j), (x, y, 0.10), (0.62, 0.66, 0.22), path)
+                shrub("Garden foliage {} {}".format(i, j), (x, y, 0.39), grass)
 
     box("01 Foundation", (0, 0, 0.10), (4.0, 3.3, 0.24), stone, (3, 11))
     for x in (-1.76, 1.76):
@@ -105,18 +109,35 @@ def build_scene(directory):
     box("03 Facade left", (-1.3, -1.40, 1.26), (0.93, 0.14, 2.07), white, (17, 29))
     box("03 Facade right", (1.3, -1.40, 1.26), (0.93, 0.14, 2.07), white, (17, 30))
     box("03 Entrance lintel", (0, -1.40, 2.06), (1.68, 0.13, 0.31), wall, (18, 30))
-    box("04 First floor slab", (0, 0, 2.41), (4.12, 3.40, 0.20), stone, (27, 37))
-    box("05 Upper rear wall", (-0.59, 1.47, 3.40), (2.34, 0.13, 1.81), white, (33, 46))
-    box("05 Upper left wall", (-1.69, 0.23, 3.40), (0.14, 2.63, 1.81), white, (34, 47))
-    box("05 Upper right wall", (0.54, 0.23, 3.40), (0.14, 2.63, 1.81), wall, (35, 48))
-    box("05 Upper front wall", (-0.60, -1.08, 3.40), (2.32, 0.14, 1.81), wall, (35, 49))
-    box("06 Flat roof", (-0.59, 0.23, 4.36), (2.55, 2.98, 0.24), roof, (42, 53))
-    box("06 Terrace floor", (1.28, 0.05, 2.60), (1.38, 3.10, 0.08), path, (41, 52))
-    for x in (0.69, 1.07, 1.45, 1.88):
-        box("Terrace railing post {:.2f}".format(x), (x, -1.48, 3.02),
-            (0.052, 0.05, 0.72), trim, (48, 59))
-    box("Terrace handrail", (1.29, -1.48, 3.43), (1.52, 0.07, 0.11), trim, (51, 61))
+    if spec.floors == 2:
+        box("04 First floor slab", (0, 0, 2.41), (4.12, 3.40, 0.20), stone, (27, 37))
+        box("05 Upper rear wall", (-0.59, 1.47, 3.40), (2.34, 0.13, 1.81), white, (33, 46))
+        box("05 Upper left wall", (-1.69, 0.23, 3.40), (0.14, 2.63, 1.81), white, (34, 47))
+        box("05 Upper right wall", (0.54, 0.23, 3.40), (0.14, 2.63, 1.81), wall, (35, 48))
+        box("05 Upper front wall", (-0.60, -1.08, 3.40), (2.32, 0.14, 1.81), wall, (35, 49))
 
+    if spec.roof_style == "flat":
+        if spec.floors == 2:
+            box("06 Flat roof", (-0.59, 0.23, 4.36), (2.55, 2.98, 0.24), roof, (42, 53))
+            box("06 Terrace floor", (1.28, 0.05, 2.60), (1.38, 3.10, 0.08), path, (41, 52))
+            for x in (0.69, 1.07, 1.45, 1.88):
+                box("Terrace railing post {:.2f}".format(x), (x, -1.48, 3.02), (0.052, 0.05, 0.72), trim, (48, 59))
+            box("Terrace handrail", (1.29, -1.48, 3.43), (1.52, 0.07, 0.11), trim, (51, 61))
+        else:
+            box("06 Single floor flat roof", (0, 0, 2.45), (4.18, 3.48, 0.20), roof, (42, 53))
+    else:
+        import math
+        angle = 0.34
+        half_span = 2.09
+        half_center = half_span / 2
+        rise = half_center * math.tan(angle)
+        eave_height = 4.38 if spec.floors == 2 else 2.49
+        width = half_span / math.cos(angle) + 0.08
+        for side, sign in (("left", -1), ("right", 1)):
+            panel = box("06 Gable roof panel " + side,
+                        (sign * half_center, 0, eave_height + rise),
+                        (width, 3.68, 0.18), roof, (42, 56))
+            panel.rotation_euler.y = sign * angle
     box("07 Door", (0, -1.53, 1.02), (0.85, 0.07, 1.76), wood, (47, 60))
     box("07 Door awning", (0, -1.65, 2.16), (1.25, 0.40, 0.10), roof, (48, 60))
     for x in (-1.26, 1.26):
@@ -124,21 +145,24 @@ def build_scene(directory):
             (0.64, 0.07, 0.75), glass, (49, 61))
         box("07 Window divider {}".format(x), (x, -1.57, 1.38),
             (0.05, 0.09, 0.79), trim, (50, 62))
-    box("08 Upper window", (-0.60, -1.18, 3.5), (1.35, 0.07, 0.85), glass, (52, 65))
-    box("08 Upper divider", (-0.60, -1.23, 3.5), (0.07, 0.09, 0.92), trim, (53, 66))
+    if spec.floors == 2:
+        box("08 Upper window", (-0.60, -1.18, 3.5), (1.35, 0.07, 0.85), glass, (52, 65))
+        box("08 Upper divider", (-0.60, -1.23, 3.5), (0.07, 0.09, 0.92), trim, (53, 66))
     box("08 Entrance step", (0, -1.8, 0.13), (1.36, 0.57, 0.18), path, (50, 65))
-    for x in (-1.95, 1.95):
-        shrub("Flower bed {}".format(x), (x, -2.08, 0.20), flower)
+    if spec.garden:
+        for x in (-1.95, 1.95):
+            shrub("Flower bed {}".format(x), (x, -2.08, 0.20), flower)
 
     bpy.ops.object.camera_add(location=(9.0, -11.8, 7.3))
     cam = bpy.context.object
     cam.name = "Moving studio camera"
     cam.data.type = "ORTHO"
-    cam.data.ortho_scale = 8.8
+    cam.data.ortho_scale = 8.8 if spec.floors == 2 else 7.6
     scene.camera = cam
     for f, location in ((1, (9, -11.8, 7.4)), (36, (8, -10.4, 7.0)), (72, (7.4, -9.6, 6.6))):
         cam.location = location
-        cam.rotation_euler = (Vector((0.0, 0.0, 2.04)) - cam.location).to_track_quat("-Z", "Y").to_euler()
+        target_z = 2.04 if spec.floors == 2 else 1.28
+        cam.rotation_euler = (Vector((0.0, 0.0, target_z)) - cam.location).to_track_quat("-Z", "Y").to_euler()
         cam.keyframe_insert(data_path="location", frame=f)
         cam.keyframe_insert(data_path="rotation_euler", frame=f)
 
@@ -150,7 +174,13 @@ def build_scene(directory):
             "width": WIDTH, "height": HEIGHT, "fps": FPS,
             "duration_seconds": SECONDS, "expected_frames": FRAMES,
             "object_count": len(scene.objects),
-            "kind": "fixed procedural proof of concept, NOT prompt-to-video",
+            "kind": "bounded keyword-to-3D test; not general AI text-to-video",
+            "spec": spec.manifest(),
+            "geometry": {
+                "second_storey": "04 First floor slab" in bpy.data.objects,
+                "gable_panels": sum(1 for obj in bpy.data.objects if obj.name.startswith("06 Gable roof panel")),
+                "garden_planters": sum(1 for obj in bpy.data.objects if obj.name.startswith("Planter ")),
+            },
         }, out, indent=2)
     bpy.ops.render.render(animation=True)
 
@@ -159,10 +189,12 @@ def main():
     command = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     args = parser.parse_args(command)
+    spec = parse_brief(args.prompt)
     output = os.path.abspath(args.output_dir)
     os.makedirs(os.path.join(output, "frames"), exist_ok=True)
-    build_scene(output)
+    build_scene(output, spec)
     print("SIX_SECOND_BLENDER_RENDER_COMPLETE")
 
 
