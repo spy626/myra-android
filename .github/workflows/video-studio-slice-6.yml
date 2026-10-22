@@ -1,0 +1,115 @@
+name: Video Studio Slice 6 Authorized Render Job
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: 'Project ID: letters, numbers, underscore or dash'
+        required: true
+        default: mini_house_manual
+        type: string
+      floors:
+        description: 'House floor count'
+        required: true
+        type: choice
+        options: ['1', '2']
+      color:
+        description: 'Wall color'
+        required: true
+        type: choice
+        options: ['cream', 'blue', 'terracotta']
+      roof:
+        description: 'Roof style'
+        required: true
+        type: choice
+        options: ['flat', 'gable']
+      garden:
+        description: 'Garden on/off'
+        required: true
+        type: choice
+        options: ['yes', 'no']
+      target:
+        description: 'Future Short duration; actual preview stays 6 seconds'
+        required: true
+        type: choice
+        options: ['30', '60']
+  push:
+    branches: ['agent/lyra-video-studio-slice-6']
+    paths:
+      - 'tools/video_studio/**'
+      - '.github/workflows/video-studio-slice-6.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-5']
+    paths:
+      - 'tools/video_studio/**'
+      - '.github/workflows/video-studio-slice-6.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  authorized-mini-house-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit-test strict renderer inputs, IDs, and receipts
+        run: |
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Construct approved JSON without credentials
+        env:
+          JOB_PROJECT: ${{ inputs.project_id || 'slice6_ci_demo' }}
+          JOB_FLOORS: ${{ inputs.floors || '1' }}
+          JOB_COLOR: ${{ inputs.color || 'blue' }}
+          JOB_ROOF: ${{ inputs.roof || 'gable' }}
+          JOB_GARDEN: ${{ inputs.garden || 'no' }}
+          JOB_TARGET: ${{ inputs.target || '30' }}
+        run: |
+          mkdir -p build/video-studio/approved-job/frames
+          python3 tools/video_studio/render_job.py prepare \
+            --output-json build/video-studio/approved-job/request.json \
+            --project-id "$JOB_PROJECT" --floors "$JOB_FLOORS" \
+            --color "$JOB_COLOR" --roof "$JOB_ROOF" \
+            --garden "$JOB_GARDEN" --target "$JOB_TARGET"
+      - name: Install free Blender, FFmpeg, and graphics dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends blender ffmpeg libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libopengl0 xvfb xauth
+      - name: Render actual six-second Blender video from approved job
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          timeout 900 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup --python tools/video_studio/mini_house_blender.py \
+            -- --output-dir build/video-studio/approved-job \
+            --request-json build/video-studio/approved-job/request.json
+          ffmpeg -hide_banner -loglevel error -y -framerate 12 -start_number 1 \
+            -i build/video-studio/approved-job/frames/frame_%04d.png \
+            -frames:v 72 -c:v libx264 -pix_fmt yuv420p -crf 23 \
+            -preset veryfast -movflags +faststart \
+            build/video-studio/approved-job/mini_house_6s.mp4
+      - name: Check real MP4, frames and request consistency
+        run: |
+          python3 tools/video_studio/verify_mini_house.py build/video-studio/approved-job
+          python3 tools/video_studio/verify_request_render.py \
+            build/video-studio/approved-job/request.json build/video-studio/approved-job
+      - name: Record job completion and SHA-256 only after verified render
+        run: |
+          python3 tools/video_studio/render_job.py complete \
+            --request build/video-studio/approved-job/request.json \
+            --manifest build/video-studio/approved-job/scene_manifest.json \
+            --video build/video-studio/approved-job/mini_house_6s.mp4 \
+            --output-receipt build/video-studio/approved-job/job_receipt.json \
+            --run-id "$GITHUB_RUN_ID" --git-sha "$GITHUB_SHA"
+      - name: Upload verified video and run receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyra-slice6-authorized-preview
+          path: |
+            build/video-studio/approved-job/request.json
+            build/video-studio/approved-job/job_receipt.json
+            build/video-studio/approved-job/mini_house_6s.mp4
+            build/video-studio/approved-job/mini_house_scene.blend
+            build/video-studio/approved-job/scene_manifest.json
+          if-no-files-found: error
+          retention-days: 7
