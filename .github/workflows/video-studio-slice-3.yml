@@ -1,0 +1,46 @@
+name: Video Studio Blender Demo
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-3']
+    paths: ['tools/video_studio/**', '.github/workflows/video-studio-slice-3.yml']
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-2']
+    paths: ['tools/video_studio/**', '.github/workflows/video-studio-slice-3.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render-mini-house:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install free Blender and FFmpeg on runner
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends blender ffmpeg libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libopengl0 xvfb xauth
+          blender --version | head -n 2
+      - name: Render original 3D scene into PNG frames
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          mkdir -p build/video-studio/frames
+          timeout 900 xvfb-run -a -s '-screen 0 1280x1024x24' blender -b --factory-startup --python tools/video_studio/mini_house_blender.py -- --output-dir build/video-studio
+      - name: Encode actual rendered frames as a 9:16 H264 MP4
+        run: |
+          ffmpeg -hide_banner -loglevel error -y -framerate 12 -start_number 1 -i build/video-studio/frames/frame_%04d.png -frames:v 72 -c:v libx264 -pix_fmt yuv420p -crf 23 -preset veryfast -movflags +faststart build/video-studio/mini_house_6s.mp4
+      - name: Verify actual scene and video technical properties
+        run: |
+          python3 tools/video_studio/verify_mini_house.py build/video-studio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyra-mini-house-6s-blender-prototype
+          path: |
+            build/video-studio/mini_house_6s.mp4
+            build/video-studio/mini_house_scene.blend
+            build/video-studio/scene_manifest.json
+          if-no-files-found: error
+          retention-days: 7
