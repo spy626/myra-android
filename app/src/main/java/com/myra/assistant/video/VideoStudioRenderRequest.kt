@@ -92,7 +92,7 @@ internal object VideoStudioRenderRequestFactory {
         appendLine("Floors: " + request.spec.floors)
         appendLine("Wall color: " + request.spec.wallColor)
         appendLine("Roof style: " + request.spec.roofStyle)
-        appendLine("Garden: " + if (request.spec.garden) "yes" else "no")
+        appendLine("Garden: " + (if (request.spec.garden) "yes" else "no"))
         appendLine()
         appendLine("Real render TEST: 6 seconds, 360x640, 12 fps")
         appendLine("Shorts target: " + request.targetSeconds + "s (NOT rendered yet)")
