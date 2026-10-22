@@ -1,0 +1,17 @@
+{
+  "request_version": 1,
+  "renderer": "blender-mini-house-v1",
+  "project_id": "mini_house_demo_001",
+  "mode": "construction",
+  "target_duration_seconds": 30,
+  "preview_duration_seconds": 6,
+  "width": 360,
+  "height": 640,
+  "fps": 12,
+  "spec": {
+    "floors": 1,
+    "wall_color": "blue",
+    "roof_style": "gable",
+    "garden": false
+  }
+}

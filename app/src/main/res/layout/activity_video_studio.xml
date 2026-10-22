@@ -48,7 +48,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Slice 2 · Local storyboard prototype, not a video generator"
+                android:text="Slice 5 · Storyboard + reviewed Blender test request. Not automatic video generation"
                 android:textColor="#9FC4A5"
                 android:textSize="13sp" />
 
@@ -145,6 +145,30 @@
                 android:textColor="#D8F6DD"
                 android:textSize="16sp"
                 android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/reviewRenderRequestButton"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/bg_workspace_dialog_input"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:text="Review 6s Blender test request"
+                android:contentDescription="Review and share structured mini-house render request. Does not create video."
+                android:textColor="#C9FFD0"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Test-request sharing only. Rendering is not started from LYRA yet. Target 30s/60s videos are not available."
+                android:textColor="#9FC4A5"
+                android:textSize="12sp" />
 
             <TextView
                 android:id="@+id/storyboardText"
