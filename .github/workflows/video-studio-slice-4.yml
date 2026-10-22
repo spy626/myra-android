@@ -1,0 +1,76 @@
+name: Video Studio Slice 4 Variants
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-4']
+    paths: ['tools/video_studio/**', '.github/workflows/video-studio-slice-4.yml']
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-3']
+    paths: ['tools/video_studio/**', '.github/workflows/video-studio-slice-4.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render-house-variants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: two-floor-cream-flat
+            prompt: 'Build a two-floor cream mini house with flat roof and garden'
+            floors: 2
+            color: cream
+            roof: flat
+            garden: 'yes'
+          - id: one-floor-blue-gable
+            prompt: 'Make a single-floor blue mini house with gable roof and no garden'
+            floors: 1
+            color: blue
+            roof: gable
+            garden: 'no'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test constrained text brief parser
+        run: |
+          python3 -m unittest discover -s tools/video_studio -p 'test_house_brief.py' -v
+      - name: Install free Blender, software graphics, FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends blender ffmpeg libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libopengl0 xvfb xauth
+      - name: Render real 3D house geometry, encode and validate MP4
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          BRIEF: ${{ matrix.prompt }}
+          OUTPUT_ID: ${{ matrix.id }}
+          EXPECTED_FLOORS: ${{ matrix.floors }}
+          EXPECTED_COLOR: ${{ matrix.color }}
+          EXPECTED_ROOF: ${{ matrix.roof }}
+          EXPECTED_GARDEN: ${{ matrix.garden }}
+        run: |
+          output_dir="build/video-studio/$OUTPUT_ID"
+          mkdir -p "$output_dir/frames"
+          timeout 900 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup --python tools/video_studio/mini_house_blender.py \
+            -- --output-dir "$output_dir" --prompt "$BRIEF"
+          ffmpeg -hide_banner -loglevel error -y -framerate 12 -start_number 1 \
+            -i "$output_dir/frames/frame_%04d.png" -frames:v 72 \
+            -c:v libx264 -pix_fmt yuv420p -crf 23 -preset veryfast \
+            -movflags +faststart "$output_dir/mini_house_6s.mp4"
+          python3 tools/video_studio/verify_mini_house.py "$output_dir"
+          python3 tools/video_studio/verify_house_variant.py "$output_dir" \
+            --floors "$EXPECTED_FLOORS" --color "$EXPECTED_COLOR" \
+            --roof "$EXPECTED_ROOF" --garden "$EXPECTED_GARDEN"
+      - name: Upload video + editable Blender source for quality inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyra-mini-house-${{ matrix.id }}
+          path: |
+            build/video-studio/${{ matrix.id }}/mini_house_6s.mp4
+            build/video-studio/${{ matrix.id }}/mini_house_scene.blend
+            build/video-studio/${{ matrix.id }}/scene_manifest.json
+          if-no-files-found: error
+          retention-days: 7
