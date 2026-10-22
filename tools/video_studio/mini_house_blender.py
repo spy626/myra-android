@@ -29,6 +29,13 @@ def box(name, center, dimensions, material, reveal=None):
     if reveal:
         start, finish = reveal
         assert 1 <= start < finish <= FRAMES
+        # Keep unrevealed 3D objects genuinely invisible. Flattening their Z
+        # scale alone left roofs/slabs floating as visible plates in early frames.
+        obj.hide_render = True
+        obj.keyframe_insert(data_path="hide_render", frame=1)
+        obj.keyframe_insert(data_path="hide_render", frame=start - 1)
+        obj.hide_render = False
+        obj.keyframe_insert(data_path="hide_render", frame=start)
         z = obj.location.z
         depth = obj.scale.z
         obj.location.z = z - depth / 2 + 0.0005
