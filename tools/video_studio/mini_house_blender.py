@@ -12,6 +12,7 @@ from mathutils import Vector
 # Blender's embedded Python does not put the --python script directory on sys.path.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from house_brief import DEFAULT_PROMPT, parse_brief
+from render_request import load_render_request
 
 FPS, SECONDS, WIDTH, HEIGHT = 12, 6, 360, 640
 FRAMES = FPS * SECONDS
@@ -59,7 +60,7 @@ def shrub(name, center, material):
     obj.data.materials.append(material)
 
 
-def build_scene(directory, spec):
+def build_scene(directory, spec, request_meta=None):
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
     scene = bpy.context.scene
@@ -176,6 +177,7 @@ def build_scene(directory, spec):
             "object_count": len(scene.objects),
             "kind": "bounded keyword-to-3D test; not general AI text-to-video",
             "spec": spec.manifest(),
+            "request_contract": request_meta,
             "geometry": {
                 "second_storey": "04 First floor slab" in bpy.data.objects,
                 "gable_panels": sum(1 for obj in bpy.data.objects if obj.name.startswith("06 Gable roof panel")),
@@ -189,12 +191,19 @@ def main():
     command = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--prompt", default=DEFAULT_PROMPT)
+    parser.add_argument("--prompt", default=None)
+    parser.add_argument("--request-json", default=None)
     args = parser.parse_args(command)
-    spec = parse_brief(args.prompt)
+    if args.request_json is not None and args.prompt is not None:
+        parser.error("Choose either --prompt or --request-json")
+    if args.request_json:
+        spec, request_meta = load_render_request(args.request_json)
+    else:
+        spec = parse_brief(args.prompt or DEFAULT_PROMPT)
+        request_meta = None
     output = os.path.abspath(args.output_dir)
     os.makedirs(os.path.join(output, "frames"), exist_ok=True)
-    build_scene(output, spec)
+    build_scene(output, spec, request_meta)
     print("SIX_SECOND_BLENDER_RENDER_COMPLETE")
 
 
