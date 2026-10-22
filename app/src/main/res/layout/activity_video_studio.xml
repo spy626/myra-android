@@ -48,7 +48,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Slice 5 · Storyboard + reviewed Blender test request. Not automatic video generation"
+                android:text="Slice 7 · Storyboard, approved test request and real GitHub status. Not automatic video generation"
                 android:textColor="#9FC4A5"
                 android:textSize="13sp" />
 
@@ -174,7 +174,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="24dp"
-                android:text="GitHub render job status (manual)"
+                android:text="GitHub render job status (read-only)"
                 android:textColor="#F1FFF3"
                 android:textStyle="bold"
                 android:textSize="15sp" />
@@ -211,7 +211,55 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
-                android:text="This opens GitHub in your browser. LYRA does not submit jobs, store tokens, or verify remote status inside the app."
+                android:text="You can open the official GitHub page or check this public repository's actual status once. LYRA never submits a job or stores a GitHub token."
+                android:textColor="#9FC4A5"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/refreshGithubRunButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_workspace_dialog_input"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="Check real GitHub status"
+                android:contentDescription="Check the actual GitHub public run state once. Does not submit a render."
+                android:textColor="#C9FFD0"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/githubRunStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_workspace_project_card"
+                android:padding="14dp"
+                android:text="Not checked. Enter a run ID and tap Check real GitHub status."
+                android:textColor="#CBE7D0"
+                android:textSize="13sp"
+                android:lineSpacingExtra="4dp" />
+
+            <TextView
+                android:id="@+id/openManualRenderWorkflowButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/bg_workspace_dialog_input"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="Review manual render options on GitHub"
+                android:contentDescription="Review house options before opening the GitHub authenticated workflow page"
+                android:textColor="#C9FFD0"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Opening GitHub does not start rendering. Run workflow requires a reviewed default-branch deployment and GitHub permission. No GitHub token is embedded in LYRA."
                 android:textColor="#9FC4A5"
                 android:textSize="12sp" />
 
