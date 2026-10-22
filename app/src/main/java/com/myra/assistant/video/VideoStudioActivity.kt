@@ -1,6 +1,7 @@
 package com.myra.assistant.video
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.appcompat.app.AlertDialog
 import android.widget.ArrayAdapter
@@ -39,6 +40,7 @@ class VideoStudioActivity : AppCompatActivity() {
                 if (savedInstanceState.getInt(STATE_SECONDS, 30) == 60)
                     binding.duration60.id else binding.duration30.id,
             )
+            binding.githubRunIdInput.setText(savedInstanceState.getString(STATE_RUN_ID, ""))
             binding.storyboardText.text = savedInstanceState.getString(
                 STATE_PREVIEW, binding.storyboardText.text.toString(),
             )
@@ -63,6 +65,22 @@ class VideoStudioActivity : AppCompatActivity() {
             }
             binding.storyboardText.text = result.getOrElse { error ->
                 "Cannot preview storyboard: ${error.message ?: "Invalid brief"}"
+            }
+        }
+
+        binding.openGithubRunButton.setOnClickListener {
+            val url = runCatching {
+                VideoStudioJobLinks.statusPage(binding.githubRunIdInput.text.toString())
+            }.getOrElse { error ->
+                binding.storyboardText.text = "Invalid GitHub run ID: " +
+                    (error.message ?: "Enter a numeric run ID")
+                return@setOnClickListener
+            }
+            runCatching {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            }.onFailure {
+                binding.storyboardText.text =
+                    "Could not open GitHub. No render job was submitted."
             }
         }
 
@@ -114,6 +132,7 @@ class VideoStudioActivity : AppCompatActivity() {
         outState.putInt(STATE_SECONDS,
             if (binding.durationGroup.checkedRadioButtonId == binding.duration60.id) 60 else 30)
         outState.putString(STATE_PREVIEW, binding.storyboardText.text.toString())
+        outState.putString(STATE_RUN_ID, binding.githubRunIdInput.text.toString())
         super.onSaveInstanceState(outState)
     }
 
@@ -123,5 +142,6 @@ class VideoStudioActivity : AppCompatActivity() {
         private const val STATE_KIND = "video_studio_kind"
         private const val STATE_SECONDS = "video_studio_duration"
         private const val STATE_PREVIEW = "video_studio_preview"
+        private const val STATE_RUN_ID = "video_studio_github_run_id"
     }
 }

@@ -171,6 +171,51 @@
                 android:textSize="12sp" />
 
             <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="GitHub render job status (manual)"
+                android:textColor="#F1FFF3"
+                android:textStyle="bold"
+                android:textSize="15sp" />
+
+            <EditText
+                android:id="@+id/githubRunIdInput"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_field"
+                android:hint="Enter GitHub Actions numeric run ID"
+                android:inputType="number"
+                android:maxLength="18"
+                android:paddingHorizontal="14dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#9FC4A5"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/openGithubRunButton"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_workspace_dialog_input"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="Open GitHub run status  ↗"
+                android:textColor="#C9FFD0"
+                android:textSize="14sp"
+                android:contentDescription="Open official GitHub run page; no job is submitted" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="This opens GitHub in your browser. LYRA does not submit jobs, store tokens, or verify remote status inside the app."
+                android:textColor="#9FC4A5"
+                android:textSize="12sp" />
+
+            <TextView
                 android:id="@+id/storyboardText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
