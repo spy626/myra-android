@@ -51,6 +51,7 @@ import com.myra.assistant.commands.Command
 import com.myra.assistant.databinding.ActivityMainBinding
 import com.myra.assistant.databinding.SheetSettingsBinding
 import com.myra.assistant.ui.settings.SettingsActivity
+import com.myra.assistant.video.VideoStudioActivity
 import com.myra.assistant.screen.ScreenCaptureService
 import com.myra.assistant.screen.ScreenShareState
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -162,6 +163,9 @@ class MainActivity : AppCompatActivity() {
         appActions = AppActionExecutor(this)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) permission.launch(Manifest.permission.RECORD_AUDIO)
         b.settingsButton.setOnClickListener { showSettings() }
+        b.videoStudioButton.setOnClickListener {
+            startActivity(Intent(this, VideoStudioActivity::class.java))
+        }
         b.screenVisionButton.setOnClickListener { handleScreenVisionButton() }
         b.chatToggleButton.setOnClickListener { expandComposer() }
         b.characterSurface.onCharacterTapped = { speakCharacterTouchReaction() }

@@ -56,6 +56,25 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/deviceText" />
 
+    <TextView
+        android:id="@+id/videoStudioButton"
+        android:layout_width="132dp"
+        android:layout_height="34dp"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_field"
+        android:contentDescription="Open Video Studio storyboard prototype"
+        android:fontFamily="monospace"
+        android:gravity="center"
+        android:text="VIDEO STUDIO"
+        android:textColor="#9DEAAA"
+        android:textSize="9sp"
+        android:textStyle="bold"
+        android:clickable="true"
+        android:focusable="true"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/workspaceButton" />
+
     <LinearLayout
         android:id="@+id/brandBlock"
         android:layout_width="wrap_content"
