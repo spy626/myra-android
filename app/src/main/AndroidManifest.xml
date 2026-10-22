@@ -65,6 +65,7 @@
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Myra.Workspace" />
+        <activity android:name=".video.VideoStudioActivity" android:exported="false" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.Myra.Workspace" />
         <activity android:name=".ui.workspace.WorkspaceActivity" android:exported="false" android:screenOrientation="portrait" android:theme="@style/Theme.Myra.Workspace" />
         <activity
             android:name=".ui.main.MainActivity"
