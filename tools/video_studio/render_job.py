@@ -40,8 +40,8 @@ def approved_input_fingerprint(request):
         ("garden", "yes" if spec.garden else "no"),
         ("target", str(request["target_duration_seconds"])),
     ]
-    canonical = "lyra-video-render-manual-v1\\n" + "".join(
-        key + "=" + value + "\\n" for key, value in rows
+    canonical = "lyra-video-render-manual-v1\n" + "".join(
+        key + "=" + value + "\n" for key, value in rows
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
