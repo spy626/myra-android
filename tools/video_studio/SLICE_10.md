@@ -1,0 +1,16 @@
+# LYRA Video Studio — Slice 10: Server-owned identity and durable reservation foundations
+
+## Implementation (isolated, not deployed)
+
+- `connector-broker/src/video-github-session.mjs` uses **only a server-held OAuth session** and a fresh, read-only `GET https://api.github.com/user` identity check. It rejects expired sessions, wrong GitHub IDs, auth failures, redirects, wrong content types, oversized replies, and fake client assertions. The returned principal contains a numeric GitHub user ID and opaque session handle, **never a GitHub token**. OAuth login/PKCE and the server session vault are *not* implemented or deployed; only an adapter that reads already-issued, server-stored sessions is provided.
+- `connector-broker/src/video-owner-ledger.mjs` uses the **Cloudflare Durable Object storage transaction API** for atomic per-owner reserve operations. On first reserve it pins the namespace to the GitHub numeric user ID; owner mismatch, replayed nonce, an existing active job, or a fourth request in the same UTC day fails closed. State survives adapter instance recreation because it lives in the supplied Durable Object storage, not process memory. A single server-side namespace must be selected by authenticated owner ID (never a phone-provided owner ID).
+- The existing Slice 9 HMAC signed owner/session ticket works with this ledger via `verifyAndReserveVideoRender`. It requires independently server-verified workflow deployment and **scoped GitHub Actions:write**, which **the current installed GitHub App does not have**.
+- The design intentionally **does not automatically clear active reservations when tickets expire**; expiration of a ticket does not prove a remote render finished. No client-accessible release function is exposed. A future trusted reconciler with GitHub run/receipt evidence must safely close a job before another can begin.
+
+## Tests and limits
+
+The Node test suite uses a serialized in-memory **test double** to simulate Cloudflare `storage.transaction()` and verifies concurrent reservations, persisted state across wrapper recreation, cross-owner rejection, UTC daily limits, replay, and fail-closed OAuth identity verification. Integration tests exercise `GitHub user verification -> HMAC ticket -> Durable Object-style reservation`. Existing Slice 9 tests plus Python cross-language request/receipt tests also run. Standard Android CI must remain green.
+
+**Not deployed:** No Durable Object namespace, Wrangler migration/binding, OAuth login endpoints, session vault, GitHub Actions write grant, workflow deployment to default branch, secure dispatch endpoint, authenticated MP4 download, or phone test. These are explicit dependencies for a later approved slice. No token/PAT inside the APK, no changes to `main`, the existing connector broker request routes, voice, Workspace, chat, memory, or the working Blender renderer.
+
+Cloudflare Durable Object SQLite-backed storage is persistent and transactional, but Cloudflare free-tier quotas and pricing apply; this is not unlimited free GPU rendering.
