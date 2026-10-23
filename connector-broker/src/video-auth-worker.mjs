@@ -1,7 +1,8 @@
 /**
  * Isolated, DISABLED-BY-DEFAULT staging OAuth web entrypoint.
  * Does not change/deploy the installed LYRA connector src/index.js.
- * Routes only GET /oauth/github/start and GET /oauth/github/callback.
+ * Routes GET /oauth/github/start, GET /oauth/github/callback and a
+ * CSRF-protected POST /oauth/github/logout. No session introspection.
  * Absolutely NO GitHub Actions dispatch, authorization override or MP4 API.
  */
 import {beginBrowserGitHubOAuth,finishBrowserGitHubOAuth} from "./video-oauth-flow.mjs";
@@ -41,7 +42,9 @@ export default {
         return response({error:"video_auth_not_deployed"},503);
       }
       const url=new URL(request.url);
-      if (request.method!=="GET" || url.protocol!=="https:" ||
+      const logout = url.pathname==="/oauth/github/logout" && !url.search;
+      if ((request.method!=="GET" && !(logout && request.method==="POST")) ||
+          url.protocol!=="https:" ||
           typeof env?.VIDEO_AUTH_PUBLIC_ORIGIN!=="string" ||
           url.origin!==env.VIDEO_AUTH_PUBLIC_ORIGIN ||
           new URL(env.VIDEO_GITHUB_CALLBACK_URL).origin!==url.origin)
@@ -54,6 +57,25 @@ export default {
         env.VIDEO_OAUTH_VAULT.idFromName("video:oauth-vault:v1")
       );
       const nowSeconds=Math.floor(Date.now()/1000);
+      if (logout) {
+        // Revoke ONLY the server-held session. A cross-origin form POST must
+        // never be able to sign out the user's browser (logout CSRF).
+        const origin=request.headers.get("origin");
+        const site=request.headers.get("sec-fetch-site");
+        if (origin!==url.origin || (site!==null && site!=="same-origin") ||
+            request.body!==null) {
+          return response({error:"request_not_allowed"},403);
+        }
+        if (typeof vault.revoke!=="function")
+          return response({error:"vault_not_configured"},503);
+        await vault.revoke(cookieValue(request,SESSION));
+        // Only clear browser cookies AFTER durable server-side revocation.
+        const headers=new Headers({...HEADERS,"Content-Type":"application/json; charset=utf-8"});
+        headers.append("Set-Cookie",cookie(SESSION,"",0));
+        headers.append("Set-Cookie",cookie(PENDING,"",0));
+        return new Response(JSON.stringify({signed_out:true,render_submitted:false}),
+          {status:200,headers});
+      }
       if (url.pathname==="/oauth/github/start" && !url.search) {
         const result=await beginBrowserGitHubOAuth({env,vault,nowSeconds});
         return new Response(null,{status:303,headers:{
