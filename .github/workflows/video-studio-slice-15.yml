@@ -1,0 +1,51 @@
+name: Video Studio Slice 15 Offline Staging Readiness Gate
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-15']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_15.md'
+      - '.github/workflows/video-studio-slice-15.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-14']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_15.md'
+      - '.github/workflows/video-studio-slice-15.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-staging-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Validate disabled staging without deploying
+        run: |
+          python3 tools/video_studio/check_staging_readiness.py
+      - name: Reject unsafe staging configurations in positive and negative tests
+        run: |
+          python3 -m unittest discover -s tools/video_studio -p 'test_staging_readiness.py' -v
+      - name: Preserve all OAuth, rate, owner and logout security regressions
+        run: |
+          for file in connector-broker/src/video-*.mjs connector-broker/test/video-*.test.mjs; do
+            node --check "$file"
+          done
+          node --test connector-broker/test/video-*.test.mjs
+      - name: Preserve six-field Python render contracts
+        run: |
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Forbid mutation of active Cloudflare broker
+        run: |
+          git diff --exit-code HEAD~1 -- connector-broker/src/index.js connector-broker/wrangler.toml
