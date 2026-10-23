@@ -24,6 +24,10 @@ async function loadWrappersWithTestBase() {
 class Storage {
   constructor(){this.db=new Map();}
   async get(k){return this.db.get(k);}
+  async getAlarm(){return this.alarmAt??null;}
+  async setAlarm(at){this.alarmAt=at;}
+  async list({prefix}){return new Map([...this.db].filter(([key])=>key.startsWith(prefix)));}
+
   async delete(k){this.db.delete(k);}
   async transaction(fn){
     const tx={get:async k=>this.db.get(k),

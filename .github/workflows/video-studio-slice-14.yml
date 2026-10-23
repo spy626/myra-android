@@ -1,0 +1,44 @@
+name: Video Studio Slice 14 OAuth Vault Expiry Cleanup
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-14']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - '.github/workflows/video-studio-slice-14.yml'
+      - 'tools/video_studio/SLICE_14.md'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-13']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - '.github/workflows/video-studio-slice-14.yml'
+      - 'tools/video_studio/SLICE_14.md'
+
+permissions:
+  contents: read
+
+jobs:
+  oauth-vault-expiry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check all isolated Node source syntax
+        run: |
+          node --version
+          for file in connector-broker/src/video-*.mjs connector-broker/test/video-*.test.mjs; do
+            node --check "$file"
+          done
+      - name: Run OAuth cleanup and prior security regression tests
+        run: node --test connector-broker/test/video-*.test.mjs
+      - name: Verify Python request and receipt compatibility
+        run: python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Ensure staging remains disabled and live broker remains untouched
+        run: |
+          grep -F 'VIDEO_AUTH_ENABLED = "false"' connector-broker/wrangler.video-auth.example.toml
+          grep -F 'VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"' connector-broker/wrangler.video-auth.example.toml
+          git diff --exit-code HEAD~1 -- connector-broker/src/index.js connector-broker/wrangler.toml

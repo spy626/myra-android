@@ -6,6 +6,10 @@ import {verifyGithubOwnerFromServerSession} from "../src/video-github-session.mj
 class DurableMemoryTestDouble {
   constructor(backing=new Map()){this.db=backing;this.tail=Promise.resolve();}
   get(key){return Promise.resolve(structuredClone(this.db.get(key)));}
+  async getAlarm(){return this.alarmAt??null;}
+  async setAlarm(at){this.alarmAt=at;}
+  async list({prefix}){return new Map([...this.db].filter(([key])=>key.startsWith(prefix)));}
+
   async delete(key){this.db.delete(key);}
   async transaction(callback){
     let release;const prior=this.tail;this.tail=new Promise(resolve=>release=resolve);await prior;

@@ -17,8 +17,11 @@ const sha = async v => [...new Uint8Array(await crypto.subtle.digest("SHA-256", 
 
 export class VideoOAuthVault {
   constructor(ctx, env) {
-    if (!ctx?.storage || typeof ctx.storage.transaction !== "function")
-      throw Error("Durable transactional storage is required");
+    if (!ctx?.storage || typeof ctx.storage.transaction !== "function" ||
+        typeof ctx.storage.getAlarm !== "function" ||
+        typeof ctx.storage.setAlarm !== "function" ||
+        typeof ctx.storage.list !== "function")
+      throw Error("Durable transactional storage and alarms are required");
     this.storage = ctx.storage;
     this.env = env;
   }
@@ -40,6 +43,8 @@ export class VideoOAuthVault {
         nowSeconds < 1000000000 || expiresAt <= nowSeconds ||
         expiresAt > nowSeconds + MAX_PENDING_SECONDS) throw Error("Invalid OAuth transaction");
     const key = "oauth:pending:" + await sha(state);
+    // Fail closed before storing any untracked OAuth state.
+    await this.scheduleExpiry(expiresAt);
     return this.storage.transaction(async tx => {
       if (await tx.get(key) !== undefined) throw Error("OAuth state already used");
       await tx.put(key, {verifier, cookieHash, expiresAt});
@@ -84,6 +89,7 @@ export class VideoOAuthVault {
     const record = {kind:"server-issued-github-oauth", githubUserId, expiresAt,
       iv:Array.from(iv), ciphertext:Array.from(ciphertext)};
     const key = "oauth:session:" + await sha(sessionId);
+    await this.scheduleExpiry(expiresAt);
     await this.storage.transaction(async tx => {
       if (await tx.get(key) !== undefined) throw Error("Session collision");
       await tx.put(key, record);
@@ -114,6 +120,61 @@ export class VideoOAuthVault {
     return {kind:"server-issued-github-oauth", id:sessionId,
       githubUserId:record.githubUserId, expiresAt:record.expiresAt,
       accessToken:new TextDecoder("utf-8", {fatal:true}).decode(plain)};
+  }
+
+  async scheduleExpiry(expiresAt) {
+    if (!Number.isSafeInteger(expiresAt) || expiresAt<1000000000)
+      throw Error("Invalid OAuth expiry");
+    const target=expiresAt*1000;
+    const existing=await this.storage.getAlarm();
+    if (existing===null || existing===undefined || existing>target)
+      await this.storage.setAlarm(target);
+  }
+
+  // Invoked only by the Cloudflare platform alarm, NOT an HTTP route.
+  async cleanupExpired(nowSeconds) {
+    if (!Number.isSafeInteger(nowSeconds) || nowSeconds<1000000000)
+      throw Error("Trusted cleanup time required");
+    let pending=0,session=0,next=null;
+    for (const prefix of ["oauth:pending:","oauth:session:"]) {
+      const rows=await this.storage.list({prefix});
+      if (!(rows instanceof Map)) throw Error("OAuth storage enumeration unavailable");
+      for (const [key,item] of rows) {
+        if (!new RegExp("^"+prefix+"[0-9a-f]{64}$").test(key))
+          throw Error("Malformed OAuth storage key");
+        if (!item || !Number.isSafeInteger(item.expiresAt) ||
+            item.expiresAt<1000000000)
+          throw Error("Malformed OAuth expiry record");
+        if (item.expiresAt>nowSeconds) {
+          next=next===null ? item.expiresAt : Math.min(next,item.expiresAt);
+          continue;
+        }
+        const removed=await this.storage.transaction(async tx=>{
+          // Re-check after listing, so concurrent state consumption/revocation
+          // cannot cause unsafe cleanup of a changed record.
+          const current=await tx.get(key);
+          if (current===undefined) return false;
+          if (!Number.isSafeInteger(current.expiresAt) ||
+              current.expiresAt<1000000000)
+            throw Error("Malformed OAuth expiry record");
+          if (current.expiresAt>nowSeconds) return false;
+          await tx.delete(key);
+          return true;
+        });
+        if (removed) {
+          if (prefix==="oauth:pending:") pending++; else session++;
+        }
+      }
+    }
+    if (next!==null) {
+      // A just-fired alarm has no pending schedule in Cloudflare. Also repair
+      // stale alarm timestamps from storage implementations/restarts.
+      const current=await this.storage.getAlarm();
+      if (current===null || current===undefined ||
+          current<=nowSeconds*1000 || current>next*1000)
+        await this.storage.setAlarm(next*1000);
+    }
+    return Object.freeze({pending,session});
   }
 
   async revoke(sessionId) {

@@ -6,6 +6,10 @@ import {VideoOAuthVault} from "../src/video-oauth-vault.mjs";
 class FakeDurableStorage {
   constructor(){this.data=new Map();this.tail=Promise.resolve();}
   async get(key){return structuredClone(this.data.get(key));}
+  async getAlarm(){return this.alarmAt??null;}
+  async setAlarm(at){this.alarmAt=at;}
+  async list({prefix}){return new Map([...this.data].filter(([key])=>key.startsWith(prefix)));}
+
   async delete(key){this.data.delete(key);}
   async transaction(fn){
     const before=this.tail;let unlock;

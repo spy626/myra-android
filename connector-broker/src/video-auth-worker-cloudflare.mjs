@@ -22,6 +22,7 @@ export class VideoOAuthVault extends DurableObject {
   saveSession(input) { return this.adapter.saveSession(input); }
   load(sessionId) { return this.adapter.load(sessionId); }
   revoke(sessionId) { return this.adapter.revoke(sessionId); }
+  alarm() { return this.adapter.cleanupExpired(Math.floor(Date.now()/1000)); }
 }
 
 export class VideoRenderOwnerDurableObject extends DurableObject {

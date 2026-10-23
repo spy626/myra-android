@@ -7,6 +7,10 @@ import {VideoRenderOwnerDurableObject} from "../src/video-owner-durable-object.m
 class DurableDouble{
   constructor(){this.map=new Map();this.tail=Promise.resolve();}
   get(key){return Promise.resolve(structuredClone(this.map.get(key)));}
+  async getAlarm(){return this.alarmAt??null;}
+  async setAlarm(at){this.alarmAt=at;}
+  async list({prefix}){return new Map([...this.map].filter(([key])=>key.startsWith(prefix)));}
+
   delete(key){this.map.delete(key);return Promise.resolve();}
   async transaction(fn){
     let release;const prev=this.tail;this.tail=new Promise(r=>release=r);await prev;

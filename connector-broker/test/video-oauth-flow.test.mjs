@@ -6,6 +6,10 @@ import {VideoOAuthVault} from "../src/video-oauth-vault.mjs";
 class Store {
   constructor(){this.data=new Map();this.tail=Promise.resolve();}
   get(k){return Promise.resolve(structuredClone(this.data.get(k)));}
+  async getAlarm(){return this.alarmAt??null;}
+  async setAlarm(at){this.alarmAt=at;}
+  async list({prefix}){return new Map([...this.data].filter(([key])=>key.startsWith(prefix)));}
+
   delete(k){this.data.delete(k);return Promise.resolve();}
   async transaction(fn){
     let release;const previous=this.tail;this.tail=new Promise(r=>release=r);await previous;
