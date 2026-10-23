@@ -1,0 +1,47 @@
+name: Video Studio Slice 13 Durable OAuth Rate Gate
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-13']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - '.github/workflows/video-studio-slice-13.yml'
+      - 'tools/video_studio/SLICE_13.md'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-12']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - '.github/workflows/video-studio-slice-13.yml'
+      - 'tools/video_studio/SLICE_13.md'
+
+permissions:
+  contents: read
+
+jobs:
+  durable-rate-gate-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Validate Node syntax
+        run: |
+          node --version
+          for file in connector-broker/src/video-*.mjs connector-broker/test/video-*.test.mjs; do
+            node --check "$file"
+          done
+      - name: Run all OAuth authorization, rate and revocation tests
+        run: node --test connector-broker/test/video-*.test.mjs
+      - name: Preserve render-request Python contract
+        run: python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Verify disabled staging and unchanged live broker
+        run: |
+          grep -F 'VIDEO_AUTH_ENABLED = "false"' connector-broker/wrangler.video-auth.example.toml
+          grep -F 'VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"' connector-broker/wrangler.video-auth.example.toml
+          grep -F 'new_sqlite_classes = ["VideoOAuthRateGate"]' connector-broker/wrangler.video-auth.example.toml
+          git diff --exit-code HEAD~1 -- connector-broker/src/index.js connector-broker/wrangler.toml

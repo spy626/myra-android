@@ -7,6 +7,32 @@
  */
 import {beginBrowserGitHubOAuth,finishBrowserGitHubOAuth} from "./video-oauth-flow.mjs";
 
+const HASH_TEXT=new TextEncoder();
+async function anonymousClientKey(request,env) {
+  // On a separately approved Cloudflare Worker, this header is set by the
+  // platform. It is a rate hint, NEVER user identity or authorization.
+  const address=request.headers.get("cf-connecting-ip");
+  if (!address || address.length>45 || address!==address.trim() ||
+      address.includes(",")) throw Error("Cloudflare client address unavailable");
+  if (address.includes(":")) {
+    if (!/^[0-9a-fA-F:.]+$/.test(address) || address.split(":").length<3)
+      throw Error("Invalid client address");
+  } else {
+    const parts=address.split(".");
+    if (parts.length!==4 || parts.some(p=>!/^(0|[1-9][0-9]{0,2})$/.test(p) ||
+        Number(p)>255)) throw Error("Invalid client address");
+  }
+  const hex=env?.VIDEO_AUTH_RATE_KEY_HEX;
+  if (typeof hex!=="string" || !/^[0-9a-fA-F]{64}$/.test(hex))
+    throw Error("Server-side limiter hash secret unavailable");
+  const raw=Uint8Array.from(hex.match(/.{2}/g),b=>parseInt(b,16));
+  const key=await crypto.subtle.importKey("raw",raw,{name:"HMAC",hash:"SHA-256"},false,["sign"]);
+  const digest=new Uint8Array(await crypto.subtle.sign("HMAC",key,
+    HASH_TEXT.encode(address.toLowerCase())));
+  return Array.from(digest,b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+
 
 const PENDING = "__Host-lyra_video_pending";
 const SESSION = "__Host-lyra_video_session";
@@ -58,6 +84,24 @@ export default {
         env.VIDEO_OAUTH_VAULT.idFromName("video:oauth-vault:v1")
       );
       const nowSeconds=Math.floor(Date.now()/1000);
+      // Bound requests BEFORE durable OAuth state creation or GitHub traffic.
+      // The singleton global budget also limits rotating client addresses.
+      const route=url.pathname==="/oauth/github/start" && !url.search
+        ? "start" : url.pathname==="/oauth/github/callback" ? "callback" : null;
+      if (route) {
+        const limiter=env?.VIDEO_AUTH_RATE_GATE;
+        if (!limiter || typeof limiter.idFromName!=="function" ||
+            typeof limiter.get!=="function")
+          return response({error:"rate_gate_unavailable"},503);
+        const gate=limiter.get(limiter.idFromName("video:oauth-global-rate:v1"));
+        if (!gate || typeof gate.reserveAttempt!=="function")
+          return response({error:"rate_gate_unavailable"},503);
+        const permitted=await gate.reserveAttempt({
+          route,sourceKey:await anonymousClientKey(request,env),nowSeconds,
+        });
+        if (permitted!==true)
+          return response({error:"rate_limited"},429,{"Retry-After":"600"});
+      }
       if (logout) {
         // Revoke ONLY the server-held session. A cross-origin form POST must
         // never be able to sign out the user's browser (logout CSRF).

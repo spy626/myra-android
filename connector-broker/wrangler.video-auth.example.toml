@@ -15,6 +15,7 @@ VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"
 # REQUIRED ONLY FOR A FUTURE, SEPARATELY APPROVED DEPLOYMENT:
 # VIDEO_AUTH_PUBLIC_ORIGIN, VIDEO_GITHUB_CALLBACK_URL
 # VIDEO_GITHUB_CLIENT_ID, VIDEO_GITHUB_CLIENT_SECRET, VIDEO_SESSION_KEY_HEX.
+# VIDEO_AUTH_RATE_KEY_HEX: a separate 32-byte random server secret, hex encoded.
 # The client secret and vault AES key MUST be Cloudflare secrets.
 
 [[durable_objects.bindings]]
@@ -28,3 +29,12 @@ class_name = "VideoRenderOwnerDurableObject"
 [[migrations]]
 tag = "video-auth-staging-v1"
 new_sqlite_classes = ["VideoOAuthVault", "VideoRenderOwnerDurableObject"]
+
+# Slice 13: separate SQLite Durable Object for staging-only global rate budgets.
+[[durable_objects.bindings]]
+name = "VIDEO_AUTH_RATE_GATE"
+class_name = "VideoOAuthRateGate"
+
+[[migrations]]
+tag = "video-auth-staging-v2"
+new_sqlite_classes = ["VideoOAuthRateGate"]
