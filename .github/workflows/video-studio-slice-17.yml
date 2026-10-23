@@ -74,7 +74,11 @@ jobs:
             >"$RUNNER_TEMP/lyra-video-workerd.log" 2>&1 &
           local_pid=$!
           trap 'kill "$local_pid" 2>/dev/null || true; wait "$local_pid" 2>/dev/null || true' EXIT
-          python3 ../tools/video_studio/slice17_local_smoke.py
+          if ! python3 ../tools/video_studio/slice17_local_smoke.py --ready-seconds 35; then
+            echo "Local workerd readiness failed; last 80 CLI log lines:"
+            tail -n 80 "$RUNNER_TEMP/lyra-video-workerd.log" || true
+            exit 1
+          fi
       - name: Preserve Node and Python authorisation and video regressions
         run: |
           for file in connector-broker/src/video-*.mjs connector-broker/test/video-*.test.mjs; do
