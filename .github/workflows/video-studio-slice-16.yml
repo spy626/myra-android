@@ -1,0 +1,47 @@
+name: Video Studio Slice 16 Offline OAuth End-to-End Simulation
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-16']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_16.md'
+      - '.github/workflows/video-studio-slice-16.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-15']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_16.md'
+      - '.github/workflows/video-studio-slice-16.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-oauth-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check Node source and test syntax
+        run: |
+          node --version
+          for file in connector-broker/src/video-*.mjs connector-broker/test/video-*.test.mjs; do
+            node --check "$file"
+          done
+      - name: Full offline Worker browser login/logout and abuse boundary smoke
+        run: node --test connector-broker/test/video-staging-smoke.test.mjs
+      - name: Preserve all old OAuth, owner, rate, alarm and rendering contracts
+        run: |
+          node --test connector-broker/test/video-*.test.mjs
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Re-check staging disable guard and no production connector mutation
+        run: |
+          python3 tools/video_studio/check_staging_readiness.py
+          git diff --exit-code HEAD~1 -- connector-broker/src/index.js connector-broker/wrangler.toml
