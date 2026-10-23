@@ -42,7 +42,8 @@ export default {
         return response({error:"video_auth_not_deployed"},503);
       }
       const url=new URL(request.url);
-      const logout = url.pathname==="/oauth/github/logout" && !url.search;
+      const logout = url.pathname==="/oauth/github/logout" && !url.search &&
+        request.method==="POST";
       if ((request.method!=="GET" && !(logout && request.method==="POST")) ||
           url.protocol!=="https:" ||
           typeof env?.VIDEO_AUTH_PUBLIC_ORIGIN!=="string" ||
