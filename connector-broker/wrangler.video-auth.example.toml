@@ -1,0 +1,30 @@
+# Slice 11 — STAGING TEMPLATE ONLY. NOT DEPLOYED.
+# The installed production LYRA connector uses wrangler.toml and src/index.js.
+# This independent entrypoint must NOT be deployed until owner approves:
+# trusted HTTPS domain, Github OAuth App callback and secret management,
+# per-IP abuse limits, protected API design and Cloudflare plan/quotas.
+name = "lyra-video-auth-staging"
+main = "src/video-auth-worker-cloudflare.mjs"
+compatibility_date = "2026-10-24"
+workers_dev = false
+
+[vars]
+VIDEO_AUTH_ENABLED = "false"
+VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"
+
+# REQUIRED ONLY FOR A FUTURE, SEPARATELY APPROVED DEPLOYMENT:
+# VIDEO_AUTH_PUBLIC_ORIGIN, VIDEO_GITHUB_CALLBACK_URL
+# VIDEO_GITHUB_CLIENT_ID, VIDEO_GITHUB_CLIENT_SECRET, VIDEO_SESSION_KEY_HEX.
+# The client secret and vault AES key MUST be Cloudflare secrets.
+
+[[durable_objects.bindings]]
+name = "VIDEO_OAUTH_VAULT"
+class_name = "VideoOAuthVault"
+
+[[durable_objects.bindings]]
+name = "VIDEO_OWNER_LEDGER"
+class_name = "VideoRenderOwnerDurableObject"
+
+[[migrations]]
+tag = "video-auth-staging-v1"
+new_sqlite_classes = ["VideoOAuthVault", "VideoRenderOwnerDurableObject"]
