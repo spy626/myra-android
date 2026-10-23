@@ -5,7 +5,7 @@
 # per-IP abuse limits, protected API design and Cloudflare plan/quotas.
 name = "lyra-video-auth-staging"
 main = "src/video-auth-worker-cloudflare.mjs"
-compatibility_date = "2026-10-24"
+compatibility_date = "2026-06-24"
 workers_dev = false
 
 [vars]
