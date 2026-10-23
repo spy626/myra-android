@@ -1,0 +1,38 @@
+name: Video Studio Slice 9 Authorization Policy
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-9']
+    paths:
+      - 'connector-broker/src/video-render-authorization.mjs'
+      - 'connector-broker/test/video-render-authorization.test.mjs'
+      - '.github/workflows/video-studio-slice-9.yml'
+      - 'tools/video_studio/**'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-8']
+    paths:
+      - 'connector-broker/src/video-render-authorization.mjs'
+      - 'connector-broker/test/video-render-authorization.test.mjs'
+      - '.github/workflows/video-studio-slice-9.yml'
+      - 'tools/video_studio/**'
+
+permissions:
+  contents: read
+
+jobs:
+  authorization-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Node authorization module syntax validation
+        run: |
+          node --version
+          node --check connector-broker/src/video-render-authorization.mjs
+          node --check connector-broker/test/video-render-authorization.test.mjs
+      - name: Server-side ownership, HMAC, anti-replay, quota and expiry tests
+        run: |
+          node --test connector-broker/test/video-render-authorization.test.mjs
+      - name: Verify prior Kotlin/Python golden fingerprint and render inputs
+        run: |
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
