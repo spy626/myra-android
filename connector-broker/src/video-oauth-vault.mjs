@@ -21,7 +21,7 @@ export class VideoOAuthVault {
         typeof ctx.storage.getAlarm !== "function" ||
         typeof ctx.storage.setAlarm !== "function" ||
         typeof ctx.storage.list !== "function")
-      throw Error("Durable transactional storage is required");
+      throw Error("Durable transactional storage and alarms are required");
     this.storage = ctx.storage;
     this.env = env;
   }
@@ -166,7 +166,14 @@ export class VideoOAuthVault {
         }
       }
     }
-    if (next!==null) await this.scheduleExpiry(next);
+    if (next!==null) {
+      // A just-fired alarm has no pending schedule in Cloudflare. Also repair
+      // stale alarm timestamps from storage implementations/restarts.
+      const current=await this.storage.getAlarm();
+      if (current===null || current===undefined ||
+          current<=nowSeconds*1000 || current>next*1000)
+        await this.storage.setAlarm(next*1000);
+    }
     return Object.freeze({pending,session});
   }
 
