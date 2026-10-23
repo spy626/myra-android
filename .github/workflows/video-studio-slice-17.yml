@@ -1,0 +1,89 @@
+name: Video Studio Slice 17 Wrangler Local Runtime Gate
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-17']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_17.md'
+      - '.github/workflows/video-studio-slice-17.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-16']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_17.md'
+      - '.github/workflows/video-studio-slice-17.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  staging-bundle-and-loopback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    env:
+      CI: "true"
+      CLOUDFLARE_API_TOKEN: ""
+      CLOUDFLARE_ACCOUNT_ID: ""
+      CF_API_TOKEN: ""
+      CF_API_KEY: ""
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Preflight checked-in staging template (activation stays BLOCKED)
+        run: |
+          python3 tools/video_studio/check_staging_readiness.py
+          python3 -m unittest discover -s tools/video_studio -p 'test_staging_readiness.py' -v
+      - name: Real Wrangler bundle compilation — --dry-run ONLY, no deploy
+        working-directory: connector-broker
+        run: |
+          set -euo pipefail
+          test -z "$CLOUDFLARE_API_TOKEN"
+          test -z "$CLOUDFLARE_ACCOUNT_ID"
+          test -z "$CF_API_TOKEN"
+          test -z "$CF_API_KEY"
+          mkdir -p "$RUNNER_TEMP/lyra-video-staging-bundle"
+          npx --yes wrangler@4.102.0 deploy --config ./wrangler.video-auth.example.toml \
+            --dry-run --outdir "$RUNNER_TEMP/lyra-video-staging-bundle"
+          python3 - "$RUNNER_TEMP/lyra-video-staging-bundle" <<'PY'
+          from pathlib import Path
+          import sys
+          files = list(Path(sys.argv[1]).rglob('*.js'))
+          if not files or max(f.stat().st_size for f in files) < 2000:
+              raise SystemExit('FAIL: Cloudflare dry run produced no usable JavaScript bundle')
+          print('PASS: Wrangler compiled isolated staging Worker without deployment')
+          PY
+      - name: Start actual local workerd runtime and verify disabled HTTP routes
+        working-directory: connector-broker
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4.102.0 dev --local \
+            --config ./wrangler.video-auth.example.toml \
+            --ip 127.0.0.1 --port 8787 --log-level error \
+            >"$RUNNER_TEMP/lyra-video-workerd.log" 2>&1 &
+          local_pid=$!
+          trap 'kill "$local_pid" 2>/dev/null || true; wait "$local_pid" 2>/dev/null || true' EXIT
+          python3 ../tools/video_studio/slice17_local_smoke.py
+      - name: Preserve Node and Python authorisation and video regressions
+        run: |
+          for file in connector-broker/src/video-*.mjs connector-broker/test/video-*.test.mjs; do
+            node --check "$file"
+          done
+          node --test connector-broker/test/video-*.test.mjs
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Ensure production broker and deployed config are not touched
+        run: |
+          git diff --exit-code HEAD~1 -- connector-broker/src/index.js connector-broker/wrangler.toml
+          grep -F 'VIDEO_AUTH_ENABLED = "false"' connector-broker/wrangler.video-auth.example.toml
+          grep -F 'VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"' connector-broker/wrangler.video-auth.example.toml
