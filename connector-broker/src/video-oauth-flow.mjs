@@ -98,6 +98,14 @@ export async function finishBrowserGitHubOAuth({
       !/^[A-Za-z0-9_-]{20,300}$/.test(reply.access_token) ||
       (reply.token_type && String(reply.token_type).toLowerCase() !== "bearer"))
     throw Error("GitHub OAuth token was not issued");
+  // Refuse over-privileged grants (OAuth scope may be cumulative across logins).
+  if (reply.scope !== undefined &&
+      (typeof reply.scope !== "string" ||
+       reply.scope.split(",").some(s=>s.trim() && s.trim() !== "read:user")))
+    throw Error("GitHub OAuth granted unexpected scopes");
+  if (reply.expires_in !== undefined &&
+      (!Number.isSafeInteger(reply.expires_in) || reply.expires_in <= 0))
+    throw Error("GitHub OAuth token lifetime invalid");
   // Recheck the actual user BEFORE storing any newly issued session.
   const user=await boundedJson(await fetchImpl("https://api.github.com/user",{
     method:"GET",redirect:"manual",

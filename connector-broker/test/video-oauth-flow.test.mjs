@@ -88,6 +88,8 @@ test("expired state, GitHub identity failure, redirects and untrusted callback f
     async()=>json({error:"bad_verification_code"}),
     async()=>new Response(null,{status:302,headers:{Location:"https://evil.example"}}),
     async()=>json({access_token:token,token_type:"mac"}),
+    async()=>json({access_token:token,token_type:"bearer",expires_in:0}),
+    async()=>json({access_token:token,token_type:"bearer",scope:"repo,read:user"}),
   ]){
     const v=new VideoOAuthVault({storage:new Store()},env);
     const start=await beginBrowserGitHubOAuth({env,vault:v,nowSeconds:now});

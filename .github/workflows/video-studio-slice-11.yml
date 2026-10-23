@@ -27,6 +27,8 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - name: Check Node server and test source syntax
         run: |
           node --version
