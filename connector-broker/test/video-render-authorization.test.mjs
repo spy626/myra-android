@@ -86,7 +86,8 @@ test("tampering, expiration, missing permissions, wrong user/session fail closed
   const ticket = await issue();
   const [payload, sig] = ticket.split(".");
   await assert.rejects(reserve(payload.slice(0, -1) + "A." + sig), /signature|Invalid|Malformed/);
-  await assert.rejects(reserve(payload + ".AAAA"), /Invalid/);
+  await assert.rejects(reserve(payload + ".AAAA"), /signature/);
+  await assert.rejects(reserve(ticket + ".AAAA"), /Invalid/);
   await assert.rejects(reserve(ticket, new FakeAtomicStore(), {
     principal: {...owner, githubUserId: 99991},
   }), /another authenticated session/);
