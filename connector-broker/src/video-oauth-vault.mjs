@@ -53,16 +53,20 @@ export class VideoOAuthVault {
         !Number.isSafeInteger(nowSeconds) || nowSeconds < 1000000000)
       throw Error("Invalid OAuth callback");
     const key = "oauth:pending:" + await sha(state);
-    return this.storage.transaction(async tx => {
+    // Commit the one-time state deletion before raising an expiry error:
+    // throwing from inside a Durable Object transaction ROLLS BACK deletion.
+    const result = await this.storage.transaction(async tx => {
       const record = await tx.get(key);
-      // A mismatched browser proof must not consume the rightful browser's state.
+      // Wrong browser must not consume a legitimate user's pending login.
       if (!record || record.cookieHash !== cookieHash)
         throw Error("OAuth browser binding mismatch");
       await tx.delete(key);
-      if (record.expiresAt <= nowSeconds) throw Error("OAuth state expired");
-      if (!VERIFIER.test(record.verifier)) throw Error("OAuth verifier is invalid");
-      return record.verifier;
+      return {expired: record.expiresAt <= nowSeconds,
+        verifier: record.verifier};
     });
+    if (result.expired) throw Error("OAuth state expired");
+    if (!VERIFIER.test(result.verifier)) throw Error("OAuth verifier is invalid");
+    return result.verifier;
   }
 
   async saveSession({sessionId, githubUserId, accessToken, nowSeconds, expiresAt}) {
