@@ -33,11 +33,19 @@ function objects(env){
 export default {
   async fetch(request,env){
     const url=new URL(request.url);
-    if(request.method!=="POST" || url.pathname!=="/__slice18_local_rpc" ||
-       url.search || url.hostname!=="127.0.0.1" || url.port!=="8788" ||
-       request.headers.get("x-lyra-slice18-local")!=="enabled" ||
-       request.body!==null)
-      return new Response(null,{status:404});
+    const guarded=[
+      ["method",request.method==="POST"],
+      ["pathname",url.pathname==="/__slice18_local_rpc"],
+      ["query",!url.search],
+      ["loopback",url.hostname==="127.0.0.1"],
+      ["port",url.port==="8788"],
+      ["local_flag",request.headers.get("x-lyra-slice18-local")==="enabled"],
+      ["body_absent",request.body===null],
+    ];
+    const failed=guarded.find(([,allowed])=>!allowed);
+    if(failed) return Response.json({error:"local_probe_guard",field:failed[0]},{
+      status:404,headers:{"Cache-Control":"no-store"},
+    });
     if(env?.VIDEO_AUTH_ENABLED!=="false" ||
        env?.VIDEO_AUTH_DEPLOYMENT_APPROVED!=="false" ||
        env?.VIDEO_SESSION_KEY_HEX!=="a".repeat(64))
