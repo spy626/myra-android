@@ -4,7 +4,7 @@
 # trusted HTTPS domain, Github OAuth App callback and secret management,
 # per-IP abuse limits, protected API design and Cloudflare plan/quotas.
 name = "lyra-video-auth-staging"
-main = "src/video-auth-worker.mjs"
+main = "src/video-auth-worker-cloudflare.mjs"
 compatibility_date = "2026-10-24"
 workers_dev = false
 

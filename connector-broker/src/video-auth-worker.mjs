@@ -4,11 +4,8 @@
  * Routes only GET /oauth/github/start and GET /oauth/github/callback.
  * Absolutely NO GitHub Actions dispatch, authorization override or MP4 API.
  */
-import {VideoOAuthVault} from "./video-oauth-vault.mjs";
-import {VideoRenderOwnerDurableObject} from "./video-owner-durable-object.mjs";
 import {beginBrowserGitHubOAuth,finishBrowserGitHubOAuth} from "./video-oauth-flow.mjs";
 
-export {VideoOAuthVault,VideoRenderOwnerDurableObject};
 
 const PENDING = "__Host-lyra_video_pending";
 const SESSION = "__Host-lyra_video_session";

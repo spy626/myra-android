@@ -20,3 +20,8 @@
 ## Security constraints
 
 GitHub supports and recommends PKCE S256. Cloudflare recommends SQLite-backed Durable Objects via new_sqlite_classes. No OAuth token, GitHub App key or signing secret belongs in the APK. The current LYRA Cloudflare broker, main, memory, voice, chat, Workspace and existing Blender renderer remain untouched.
+
+## Cloudflare RPC staging compatibility
+
+- Cloudflare's current public-method RPC contract requires `extends DurableObject`; the staging Wrangler entry now selects `src/video-auth-worker-cloudflare.mjs`, which exports real platform-subclass wrappers for the previously tested vault and owner ledger adapters.
+- Node tests load those exact wrapper methods using a test-only base-class shim, and assert the disabled-by-default SQLite bindings. This is a compatibility check, NOT a live Wrangler/Cloudflare deployment acceptance test.
