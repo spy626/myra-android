@@ -1,5 +1,8 @@
 package com.myra.assistant.video
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -117,13 +120,13 @@ class VideoStudioActivity : AppCompatActivity() {
         }
 
         binding.openManualRenderWorkflowButton.setOnClickListener {
-            val request = runCatching {
+            val approved = runCatching {
                 val kind = when (binding.kindSpinner.selectedItemPosition) {
                     1 -> VideoStudioKind.CARTOON
                     2 -> VideoStudioKind.EXPLAINER
                     else -> VideoStudioKind.CONSTRUCTION
                 }
-                VideoStudioRenderRequestFactory.fromDraft(
+                val request = VideoStudioRenderRequestFactory.fromDraft(
                     VideoStudioPlanning.createDraft(
                         projectId = draftProjectId,
                         rawPrompt = binding.promptInput.text.toString(),
@@ -132,25 +135,41 @@ class VideoStudioActivity : AppCompatActivity() {
                             binding.duration60.id) 60 else 30,
                     ),
                 )
+                VideoStudioSubmissionFactory.prepare(request)
             }.getOrElse { error ->
-                binding.githubRunStatusText.text = "Cannot review manual render: " +
+                binding.githubRunStatusText.text = "Cannot approve this test request: " +
                     (error.message ?: "Unsupported mini-house request")
                 return@setOnClickListener
             }
-            val instructions = VideoStudioRenderRequestFactory.reviewText(request) +
-                "\n\nProject ID: " + request.projectId +
-                "\n\nGitHub owner must manually select Run workflow and enter " +
-                "these reviewed settings AFTER a separately approved default-branch " +
-                "deployment. This button only opens the website. It cannot submit " +
-                "a render job or make a 30/60-second video."
+            // Neither dialog action dispatches a job. Clipboard is used only
+            // after explicit approval and carries no prompt or credential.
             AlertDialog.Builder(this)
-                .setTitle("Review GitHub manual render")
-                .setMessage(instructions)
+                .setTitle("Approve manual GitHub render inputs")
+                .setMessage(approved.humanReview())
                 .setNegativeButton("Cancel", null)
+                .setNeutralButton("Copy approved inputs") { _, _ ->
+                    runCatching {
+                        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE)
+                            as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText(
+                            "LYRA mini-house GitHub workflow fields",
+                            approved.copyableInputs(),
+                        ))
+                        binding.githubRunStatusText.text =
+                            "Six approved inputs copied. Fingerprint: " +
+                            approved.fingerprint().take(12) +
+                            "… No render started. GitHub owner approval is still required."
+                    }.onFailure {
+                        binding.githubRunStatusText.text =
+                            "Could not copy inputs. No job was submitted."
+                    }
+                }
                 .setPositiveButton("Open GitHub") { _, _ ->
                     runCatching {
                         startActivity(Intent(Intent.ACTION_VIEW,
                             Uri.parse(VideoStudioJobLinks.WORKFLOW_PAGE)))
+                        binding.githubRunStatusText.text =
+                            "Official workflow page opened. No job was submitted by LYRA."
                     }.onFailure {
                         binding.githubRunStatusText.text =
                             "Could not open GitHub. No video job was submitted."
