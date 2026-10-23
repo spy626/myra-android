@@ -1,0 +1,37 @@
+name: Video Studio Slice 10 Owner Storage Contract
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-10']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - '.github/workflows/video-studio-slice-10.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-9']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - '.github/workflows/video-studio-slice-10.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  owner-storage-auth-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Node 22 server authorization and storage source syntax
+        run: |
+          node --version
+          for file in connector-broker/src/video-*.mjs connector-broker/test/video-*.test.mjs; do
+            node --check "$file"
+          done
+      - name: Test OAuth owner proof, atomic persistent quota and signed policy integration
+        run: |
+          node --test connector-broker/test/video-*.test.mjs
+      - name: Preserve Python/Android six-field approval fingerprint contract
+        run: |
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
