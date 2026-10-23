@@ -5,6 +5,7 @@
  * No production broker route or GitHub dispatch is added here.
  */
 import {DurableObject} from "cloudflare:workers";
+import {VideoOAuthRateGate as RateGateAdapter} from "./video-auth-rate-limit.mjs";
 import worker from "./video-auth-worker.mjs";
 import {VideoOAuthVault as SessionVaultAdapter} from "./video-oauth-vault.mjs";
 import {VideoRenderOwnerDurableObject as OwnerLedgerAdapter} from "./video-owner-durable-object.mjs";
@@ -32,4 +33,14 @@ export class VideoRenderOwnerDurableObject extends DurableObject {
   readFromTrustedBroker(ownerId, nowSeconds) {
     return this.adapter.readFromTrustedBroker(ownerId, nowSeconds);
   }
+}
+
+/** Strictly one internal Durable Object namespace for rate limits. */
+export class VideoOAuthRateGate extends DurableObject {
+  constructor(ctx,env) {
+    super(ctx,env);
+    this.adapter=new RateGateAdapter(ctx);
+  }
+  reserveAttempt(input) { return this.adapter.reserveAttempt(input); }
+  alarm() { return this.adapter.cleanupExpired(Math.floor(Date.now()/1000)); }
 }

@@ -25,13 +25,18 @@ const environment={
   VIDEO_GITHUB_CLIENT_ID:"Ov23li_test_client_00000",
   VIDEO_GITHUB_CLIENT_SECRET:"example_test_client_secret_xxxxxxxxx",
   VIDEO_SESSION_KEY_HEX:"e".repeat(64),
+  VIDEO_AUTH_RATE_KEY_HEX:"b".repeat(64),
+  VIDEO_AUTH_RATE_GATE:{idFromName:name=>name,get:()=>({reserveAttempt:async()=>true})},
   VIDEO_OAUTH_VAULT:{
     idFromName:name=>name,
     get:()=>new VideoOAuthVault({storage:db},{VIDEO_SESSION_KEY_HEX:"e".repeat(64)}),
   },
 };
-const req=(path,method="GET",headers={})=>
-  new Request("https://auth-test.example.org"+path,{method,headers});
+const req=(path,method="GET",headers={})=> {
+  const h=new Headers(headers);
+  if(!h.has("CF-Connecting-IP"))h.set("CF-Connecting-IP","203.0.113.42");
+  return new Request("https://auth-test.example.org"+path,{method,headers:h});
+};
 
 test("staging worker refuses OAuth routes without separate approval and config",async()=>{
   const res=await worker.fetch(req("/oauth/github/start"),{

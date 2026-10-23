@@ -15,7 +15,7 @@ async function loadWrappersWithTestBase() {
     'class DurableObject { constructor(ctx,env) { this.ctx=ctx; this.env=env; } }'
   );
   for(const file of ["video-auth-worker.mjs","video-oauth-vault.mjs",
-                      "video-owner-durable-object.mjs"]) {
+                      "video-owner-durable-object.mjs","video-auth-rate-limit.mjs"]) {
     src=src.replace('from "./'+file+'"',
       'from "'+new URL("../src/"+file,import.meta.url).href+'"');
   }
