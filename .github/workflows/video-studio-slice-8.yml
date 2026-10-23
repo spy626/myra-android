@@ -1,0 +1,33 @@
+name: Video Studio Slice 8 Approval Contract
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-8']
+    paths:
+      - 'tools/video_studio/**'
+      - '.github/workflows/video-studio-slice-8.yml'
+      - 'app/src/main/java/com/myra/assistant/video/**'
+      - 'app/src/test/java/com/myra/assistant/video/**'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-7']
+    paths:
+      - 'tools/video_studio/**'
+      - '.github/workflows/video-studio-slice-8.yml'
+      - 'app/src/main/java/com/myra/assistant/video/**'
+      - 'app/src/test/java/com/myra/assistant/video/**'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contract-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Python request, receipt, fingerprint and failure contracts
+        run: |
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Reject Python syntax errors
+        run: |
+          python3 -m py_compile tools/video_studio/render_job.py tools/video_studio/render_request.py tools/video_studio/test_submission_fingerprint.py
