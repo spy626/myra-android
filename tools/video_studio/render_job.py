@@ -25,6 +25,27 @@ def make_request(project_id, floors, color, roof, garden, target):
     return payload
 
 
+def approved_input_fingerprint(request):
+    """Deterministic cross-platform reference digest, NOT an auth signature.
+
+    Android uses exactly these six GitHub workflow_dispatch fields, in this
+    fixed order. Neither the original user prompt nor any credential appears.
+    """
+    spec, _ = validate_request(request)
+    rows = [
+        ("project_id", request["project_id"]),
+        ("floors", str(spec.floors)),
+        ("color", spec.wall_color),
+        ("roof", spec.roof_style),
+        ("garden", "yes" if spec.garden else "no"),
+        ("target", str(request["target_duration_seconds"])),
+    ]
+    canonical = "lyra-video-render-manual-v1\\n" + "".join(
+        key + "=" + value + "\\n" for key, value in rows
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def run_url(run_id):
     if not isinstance(run_id, str) or not re.fullmatch(r"[1-9][0-9]{0,17}", run_id):
         raise ValueError("Invalid GitHub Actions run ID")
@@ -46,6 +67,7 @@ def create_success_receipt(request, manifest, video, run_id, sha):
         "run_url": run_url(run_id), "git_sha": sha,
         "project_id": request["project_id"],
         "target_duration_seconds": request["target_duration_seconds"],
+        "approved_input_fingerprint": approved_input_fingerprint(request),
         "rendered_seconds": 6, "mp4_bytes": len(video),
         "mp4_sha256": hashlib.sha256(video).hexdigest(),
     }
