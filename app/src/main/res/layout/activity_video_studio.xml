@@ -48,7 +48,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Slice 7 · Storyboard, approved test request and real GitHub status. Not automatic video generation"
+                android:text="Slice 8 · Approved manual submission inputs and real GitHub job status. Video rendering is not automatic"
                 android:textColor="#9FC4A5"
                 android:textSize="13sp" />
 
@@ -250,8 +250,8 @@
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
-                android:text="Review manual render options on GitHub"
-                android:contentDescription="Review house options before opening the GitHub authenticated workflow page"
+                android:text="Approve &amp; copy GitHub render inputs"
+                android:contentDescription="Review six safe render options, then copy them or open GitHub. Does not start video generation."
                 android:textColor="#C9FFD0"
                 android:textSize="13sp" />
 
@@ -259,7 +259,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Opening GitHub does not start rendering. Run workflow requires a reviewed default-branch deployment and GitHub permission. No GitHub token is embedded in LYRA."
+                android:text="Copying approved inputs or opening GitHub does not start rendering. GitHub owner authorization and a separately approved workflow deployment remain required. No GitHub token in LYRA."
                 android:textColor="#9FC4A5"
                 android:textSize="12sp" />
 
