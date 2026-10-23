@@ -1,0 +1,46 @@
+name: Video Studio Slice 12 Browser Session Revocation
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-12']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - '.github/workflows/video-studio-slice-12.yml'
+      - 'tools/video_studio/SLICE_12.md'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-11']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.test.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - '.github/workflows/video-studio-slice-12.yml'
+      - 'tools/video_studio/SLICE_12.md'
+
+permissions:
+  contents: read
+
+jobs:
+  oauth-logout-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check isolated Node sources and tests
+        run: |
+          node --version
+          for file in connector-broker/src/video-*.mjs connector-broker/test/video-*.test.mjs; do
+            node --check "$file"
+          done
+      - name: Verify login, logout, CSRF, owner, replay and crypto contracts
+        run: node --test connector-broker/test/video-*.test.mjs
+      - name: Preserve Python six-field Blender request compatibility
+        run: python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Ensure auth stays disabled and production code unchanged
+        run: |
+          grep -F 'VIDEO_AUTH_ENABLED = "false"' connector-broker/wrangler.video-auth.example.toml
+          grep -F 'VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"' connector-broker/wrangler.video-auth.example.toml
+          git diff --exit-code HEAD~1 -- connector-broker/src/index.js connector-broker/wrangler.toml
