@@ -33,6 +33,9 @@ function objects(env){
 export default {
   async fetch(request,env){
     const url=new URL(request.url);
+    const noPayload=request.body===null ||
+      (request.headers.get("content-length")==="0" &&
+       (await request.text())==="");
     const guarded=[
       ["method",request.method==="POST"],
       ["pathname",url.pathname==="/__slice18_local_rpc"],
@@ -40,7 +43,7 @@ export default {
       ["loopback",url.hostname==="127.0.0.1"],
       ["port",url.port==="8788"],
       ["local_flag",request.headers.get("x-lyra-slice18-local")==="enabled"],
-      ["body_absent",request.body===null],
+      ["body_absent",noPayload],
     ];
     const failed=guarded.find(([,allowed])=>!allowed);
     if(failed) return Response.json({error:"local_probe_guard",field:failed[0]},{
