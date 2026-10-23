@@ -1,0 +1,102 @@
+name: Video Studio Slice 18 Real Local Durable Object RPC Gate
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-18']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_18.md'
+      - '.github/workflows/video-studio-slice-18.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-17']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/test/video-*.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_18.md'
+      - '.github/workflows/video-studio-slice-18.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-local-durable-rpc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      CLOUDFLARE_API_TOKEN: ""
+      CLOUDFLARE_ACCOUNT_ID: ""
+      CF_API_TOKEN: ""
+      CF_API_KEY: ""
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Confirm unchanged offline staging remains BLOCKED
+        run: |
+          python3 tools/video_studio/check_staging_readiness.py
+          python3 -m unittest discover -s tools/video_studio -p 'test_staging_readiness.py' -v
+      - name: Exercise real workerd Durable Object RPC with ephemeral fake-only config
+        working-directory: connector-broker
+        run: |
+          set -euo pipefail
+          test -z "$CLOUDFLARE_API_TOKEN"
+          test -z "$CLOUDFLARE_ACCOUNT_ID"
+          test -z "$CF_API_TOKEN"
+          test -z "$CF_API_KEY"
+          runtime_config="./wrangler.slice18.local-ci.generated.toml"
+          cat > "$runtime_config" <<'TOML'
+          # Auto-generated in CI; never used by production or staging.
+          name = "lyra-video-slice18-local-ci"
+          main = "test/video-runtime-probe.mjs"
+          compatibility_date = "2026-06-24"
+          workers_dev = false
+          [vars]
+          VIDEO_AUTH_ENABLED = "false"
+          VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"
+          VIDEO_SESSION_KEY_HEX = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          [[durable_objects.bindings]]
+          name = "VIDEO_OAUTH_VAULT"
+          class_name = "VideoOAuthVault"
+          [[durable_objects.bindings]]
+          name = "VIDEO_OWNER_LEDGER"
+          class_name = "VideoRenderOwnerDurableObject"
+          [[durable_objects.bindings]]
+          name = "VIDEO_AUTH_RATE_GATE"
+          class_name = "VideoOAuthRateGate"
+          [[migrations]]
+          tag = "ci-slice18-v1"
+          new_sqlite_classes = ["VideoOAuthVault", "VideoRenderOwnerDurableObject", "VideoOAuthRateGate"]
+          TOML
+          npx --yes wrangler@4.102.0 dev --local \
+            --config "$runtime_config" --ip 127.0.0.1 --port 8788 \
+            --log-level error >"$RUNNER_TEMP/lyra-slice18-workerd.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; rm -f "$runtime_config"' EXIT
+          if ! python3 ../tools/video_studio/slice18_durable_smoke.py; then
+            echo "Slice 18 local workerd Durable Object RPC failed:"
+            tail -n 70 "$RUNNER_TEMP/lyra-slice18-workerd.log" || true
+            exit 1
+          fi
+      - name: Verify all inherited Node and Python security contracts
+        run: |
+          for file in connector-broker/src/video-*.mjs connector-broker/test/video-*.mjs; do
+            node --check "$file"
+          done
+          node --test connector-broker/test/video-*.test.mjs
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Ensure live broker and original staging flags were not modified
+        run: |
+          git diff --exit-code HEAD~1 -- connector-broker/src/index.js connector-broker/wrangler.toml connector-broker/wrangler.video-auth.example.toml
+          grep -F 'VIDEO_AUTH_ENABLED = "false"' connector-broker/wrangler.video-auth.example.toml
+          grep -F 'VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"' connector-broker/wrangler.video-auth.example.toml
+          test ! -f connector-broker/wrangler.slice18.local-ci.generated.toml
