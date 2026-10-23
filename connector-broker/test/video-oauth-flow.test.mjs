@@ -58,7 +58,7 @@ test("one-time GitHub callback exchanges PKCE code, verifies real user and store
       const sha=new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(body.code_verifier)));
       const derived=btoa(String.fromCharCode(...sha)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
       assert.equal(derived,challenge);
-      return json({access_token:token,token_type:"bearer",expires_in:1200});
+      return json({access_token:token,token_type:"bearer",scope:"read:user",expires_in:1200});
     }
     assert.equal(url,"https://api.github.com/user");
     assert.equal(opts.headers.Authorization,"Bearer "+token);
@@ -90,6 +90,9 @@ test("expired state, GitHub identity failure, redirects and untrusted callback f
     async()=>json({access_token:token,token_type:"mac"}),
     async()=>json({access_token:token,token_type:"bearer",expires_in:0}),
     async()=>json({access_token:token,token_type:"bearer",scope:"repo,read:user"}),
+    async()=>json({access_token:token,token_type:"bearer"}),
+    async()=>json({access_token:token,token_type:"bearer",scope:""}),
+    async()=>json({access_token:token,token_type:"bearer",scope:"read:user,"}),
   ]){
     const v=new VideoOAuthVault({storage:new Store()},env);
     const start=await beginBrowserGitHubOAuth({env,vault:v,nowSeconds:now});
@@ -122,6 +125,6 @@ test("remote user verification rejects malformed/oversize/unauthorized replies",
     await assert.rejects(finishBrowserGitHubOAuth({env,vault:v,nowSeconds:now,
       state:new URL(start.authorizationUrl).searchParams.get("state"),
       code:"sample_code_0123456789",browserProof:start.browserProof,
-      fetchImpl:async url=>url.includes("access_token")?json({access_token:token}):failure}));
+      fetchImpl:async url=>url.includes("access_token")?json({access_token:token,scope:"read:user"}):failure}));
   }
 });

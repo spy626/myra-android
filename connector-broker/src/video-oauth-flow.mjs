@@ -99,10 +99,11 @@ export async function finishBrowserGitHubOAuth({
       (reply.token_type && String(reply.token_type).toLowerCase() !== "bearer"))
     throw Error("GitHub OAuth token was not issued");
   // Refuse over-privileged grants (OAuth scope may be cumulative across logins).
-  if (reply.scope !== undefined &&
-      (typeof reply.scope !== "string" ||
-       reply.scope.split(",").some(s=>s.trim() && s.trim() !== "read:user")))
-    throw Error("GitHub OAuth granted unexpected scopes");
+  // Treat omitted/empty scope as unverified: an existing OAuth grant can
+  // contain broader rights than the scopes requested in this login attempt.
+  // The token exchange must explicitly confirm the single read-only scope.
+  if (reply.scope !== "read:user")
+    throw Error("GitHub OAuth granted missing or unexpected scopes");
   if (reply.expires_in !== undefined &&
       (!Number.isSafeInteger(reply.expires_in) || reply.expires_in <= 0))
     throw Error("GitHub OAuth token lifetime invalid");
