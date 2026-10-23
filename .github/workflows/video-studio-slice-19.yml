@@ -1,0 +1,91 @@
+name: Video Studio Slice 19 Deploy-Free Release Evidence Gate
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-19']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_19.md'
+      - '.github/workflows/video-studio-slice-19.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-18']
+    paths:
+      - 'connector-broker/src/video-*.mjs'
+      - 'connector-broker/wrangler.video-auth.example.toml'
+      - 'tools/video_studio/*.py'
+      - 'tools/video_studio/SLICE_19.md'
+      - '.github/workflows/video-studio-slice-19.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  release-evidence-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CI: "true"
+      CLOUDFLARE_API_TOKEN: ""
+      CLOUDFLARE_ACCOUNT_ID: ""
+      CF_API_TOKEN: ""
+      CF_API_KEY: ""
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify release gate and strict negative cases offline
+        run: |
+          python3 -m unittest discover -s tools/video_studio -p 'test_staging_release_evidence.py' -v
+          python3 tools/video_studio/check_staging_readiness.py
+      - name: Compile actual separate staging Worker — never deploy
+        working-directory: connector-broker
+        run: |
+          set -euo pipefail
+          test -z "$CLOUDFLARE_API_TOKEN"
+          test -z "$CLOUDFLARE_ACCOUNT_ID"
+          test -z "$CF_API_TOKEN"
+          test -z "$CF_API_KEY"
+          mkdir -p "$RUNNER_TEMP/lyra-slice19-compiled"
+          npx --yes wrangler@4.102.0 deploy \
+            --config ./wrangler.video-auth.example.toml \
+            --dry-run --outdir "$RUNNER_TEMP/lyra-slice19-compiled"
+      - name: Generate SHA256-only release evidence, activation BLOCKED
+        run: |
+          set -euo pipefail
+          python3 tools/video_studio/staging_release_evidence.py \
+            --bundle-dir "$RUNNER_TEMP/lyra-slice19-compiled" \
+            --output "$RUNNER_TEMP/lyra-video-slice19-evidence.json" \
+            --commit "$(git rev-parse HEAD)"
+          python3 - "$RUNNER_TEMP/lyra-video-slice19-evidence.json" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert data["staging_activation"] == "BLOCKED"
+          assert data["deployed"] is False
+          assert data["workflow_dispatched"] is False
+          assert data["ready_for_live_activation"] is False
+          print("PASS: checksum-only evidence; staging and dispatch remain disabled")
+          PY
+      - name: Preserve inherited Node and Python regressions
+        run: |
+          node --test connector-broker/test/video-*.test.mjs
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+      - name: Assert production broker and separate staging template unchanged
+        run: |
+          git diff --exit-code HEAD~1 -- \
+            connector-broker/src/index.js connector-broker/wrangler.toml \
+            connector-broker/wrangler.video-auth.example.toml
+          grep -F 'VIDEO_AUTH_ENABLED = "false"' connector-broker/wrangler.video-auth.example.toml
+          grep -F 'VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"' connector-broker/wrangler.video-auth.example.toml
+      - name: Publish metadata only, NEVER the compiled JavaScript bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyra-video-slice19-offline-release-evidence
+          path: ${{ runner.temp }}/lyra-video-slice19-evidence.json
+          retention-days: 14
+          if-no-files-found: error
