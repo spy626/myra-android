@@ -30,6 +30,8 @@ class VideoStudioSubmissionPackageTest {
             listOf("mini_house_demo", "1", "blue", "gable", "no", "30"),
             pkg.inputs().values.toList(),
         )
+        assertEquals("7a15c74a1779d3aa9ac0ccb6519d8d605a079840f5d25d3b86e0520924c6782e",
+            pkg.fingerprint())
         assertEquals(64, pkg.fingerprint().length)
         assertTrue(pkg.fingerprint().all { it in '0'..'9' || it in 'a'..'f' })
         assertFalse(pkg.copyableInputs().contains("Bearer"))
