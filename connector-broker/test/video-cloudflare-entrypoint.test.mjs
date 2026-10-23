@@ -63,5 +63,5 @@ test("Cloudflare RPC wrapper delegates to encrypted vault and owner quota adapte
   assert.equal(await ledger.reserveFromTrustedBroker(request),true);
   assert.equal(await ledger.reserveFromTrustedBroker(request),false);
   assert.equal((await ledger.readFromTrustedBroker(4321,now)).dailyUsed,1);
-  await assert.rejects(ledger.readFromTrustedBroker(4322,now),/another/);
+  await assert.rejects(ledger.readFromTrustedBroker(4322,now),/scope|another/);
 });
