@@ -23,6 +23,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ''
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 16
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -44,6 +46,6 @@ jobs:
       - name: Ensure production and staging disabled config untouched
         run: |
           set -euo pipefail
-          git diff --exit-code HEAD^ HEAD -- connector-broker/src/index.js connector-broker/wrangler.toml connector-broker/wrangler.video-auth.example.toml
+          git diff --exit-code 2a3ad3f61c1e59d0fd36394e24cca9dcf7514a06 HEAD -- connector-broker/src/index.js connector-broker/wrangler.toml connector-broker/wrangler.video-auth.example.toml
           grep -F 'VIDEO_AUTH_ENABLED = "false"' connector-broker/wrangler.video-auth.example.toml
           grep -F 'VIDEO_AUTH_DEPLOYMENT_APPROVED = "false"' connector-broker/wrangler.video-auth.example.toml
