@@ -64,7 +64,7 @@ jobs:
             "$output/structure_shot_6s.mp4"
           python3 tools/video_studio/verify_structure_shot.py \
             tools/video_studio/requests/sample-blue-house.json "$output"
-      - name: Prepare quality contact sheet and compare distinct construction movie
+      - name: Prepare contact sheet and checksum for manual comparison
         run: |
           set -euo pipefail
           output=build/video-studio/slice22
