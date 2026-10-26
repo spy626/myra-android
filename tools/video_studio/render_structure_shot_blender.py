@@ -56,6 +56,35 @@ def grow_block(name, center, dimensions, material, begin, finish, axis=2):
     return ob
 
 
+def handoff_block(name, first_xyz, first_size, last_xyz, last_size, material,
+                  finished_frame=26):
+    """Animate REAL object transforms from foundation's final geometry to existing frame geometry.
+
+    Frame 1 is identical to the previous shot's frame 72. Frame 26 onward
+    is identical to the structure renderer's original dimensions/location.
+    """
+    ob = block(name, last_xyz, last_size, material)
+    ob.location = first_xyz
+    ob.scale = tuple(first_size[i] / last_size[i] for i in range(3))
+    ob.keyframe_insert(data_path="location", frame=1)
+    ob.keyframe_insert(data_path="scale", frame=1)
+    ob.location = last_xyz
+    ob.scale = (1.0, 1.0, 1.0)
+    ob.keyframe_insert(data_path="location", frame=finished_frame)
+    ob.keyframe_insert(data_path="scale", frame=finished_frame)
+    return ob
+
+
+def retire_survey_marker(name, xyz, size, material, end_frame=9):
+    ob = block(name, xyz, size, material)
+    ob.hide_render = False
+    ob.keyframe_insert(data_path="hide_render", frame=1)
+    ob.keyframe_insert(data_path="hide_render", frame=end_frame - 1)
+    ob.hide_render = True
+    ob.keyframe_insert(data_path="hide_render", frame=end_frame)
+    return ob
+
+
 def build_frame(directory, request):
     selected = approved_frame_shot(request)
     spec = selected["spec"]
@@ -90,17 +119,57 @@ def build_frame(directory, request):
     }[spec["wall_color"]])
     paving = mat("Site path", (0.80, 0.70, 0.52))
 
-    block("Ground grass", (0, 0, -0.36), (7.5, 6.9, 0.25), lawn)
-    block("Construction clearing", (0, 0, -0.18), (5.25, 4.85, 0.10), soil)
-    block("Paved path to structure", (0, -2.82, -0.15), (1.1, 1.1, 0.08), paving)
-    block("Finished concrete foundation only", (0, 0, 0.12), (4.05, 3.36, 0.26), concrete)
+    # Slice27: start with the precise world-space geometry of Slice21's
+    # last foundation frame, THEN morph naturally into the existing complete
+    # structure positions before the wall/beams progress.
+    handoff_block("Ground grass", (0, 0, -0.34), (7.5, 6.9, 0.25),
+                  (0, 0, -0.36), (7.5, 6.9, 0.25), lawn, 26)
+    handoff_block("Construction clearing", (0, 0, -0.14), (5.25, 4.85, 0.15),
+                  (0, 0, -0.18), (5.25, 4.85, 0.10), soil, 26)
+    path = mat("Transforming site entrance", (0.82, 0.69, 0.48))
+    path.keyframe_insert(data_path="diffuse_color", frame=1)
+    path.diffuse_color = (0.80, 0.70, 0.52, 1.0)
+    path.keyframe_insert(data_path="diffuse_color", frame=26)
+    handoff_block("Paved path to structure", (0, -2.87, -0.19),
+                  (1.1, 1.1, 0.08), (0, -2.82, -0.15),
+                  (1.1, 1.1, 0.08), path, 26)
+    # This existing slab must meet foundation end with NO sudden jump.
+    handoff_block("Finished concrete foundation only", (0, 0, 0.15),
+                  (4.05, 3.36, 0.28), (0, 0, 0.12),
+                  (4.05, 3.36, 0.26), concrete, 26)
 
-    corners = ((-1.70, -1.32), (-1.70, 1.32), (1.70, -1.32), (1.70, 1.32))
-    for i, (x, y) in enumerate(corners):
-        block("Concrete column footing %d" % i, (x, y, 0.35),
-              (0.55, 0.55, 0.21), concrete)
-        block("Existing rebar %d" % i, (x, y, 0.62),
-              (0.085, 0.085, 0.44), steel)
+    dark = mat("Foundation end trench", (0.20, 0.18, 0.17))
+    sand = mat("Foundation end survey guides", (0.82, 0.69, 0.48))
+    retire_survey_marker("Foundation trench perimeter", (0, 0, -0.045),
+                         (4.5, 3.8, 0.045), dark)
+    retire_survey_marker("Survey axis longitudinal", (0, 0, -0.008),
+                         (0.025, 4.2, 0.025), sand)
+    retire_survey_marker("Survey axis transverse", (0, 0, 0.007),
+                         (4.9, 0.025, 0.025), sand)
+
+    initial_paint = {
+        "cream": (0.94, 0.90, 0.81),
+        "blue": (0.29, 0.55, 0.82),
+        "terracotta": (0.81, 0.43, 0.30),
+    }[spec["wall_color"]]
+    footing_paint = mat("Concrete footings changing from requested paint", initial_paint)
+    footing_paint.keyframe_insert(data_path="diffuse_color", frame=1)
+    footing_paint.diffuse_color = (0.70, 0.73, 0.72, 1.0)
+    footing_paint.keyframe_insert(data_path="diffuse_color", frame=26)
+
+    corner_start = ((-1.67, -1.31), (-1.67, 1.31),
+                    (1.67, -1.31), (1.67, 1.31))
+    corners = ((-1.70, -1.32), (-1.70, 1.32),
+               (1.70, -1.32), (1.70, 1.32))
+    for i, ((fx, fy), (x, y)) in enumerate(zip(corner_start, corners)):
+        handoff_block("Concrete column footing %d" % i,
+                      (fx, fy, 0.42), (0.52, 0.52, 0.34),
+                      (x, y, 0.35), (0.55, 0.55, 0.21),
+                      footing_paint, 26)
+        handoff_block("Existing rebar %d" % i,
+                      (fx, fy, 1.14), (0.09, 0.09, 1.34),
+                      (x, y, 0.62), (0.085, 0.085, 0.44),
+                      steel, 26)
 
     for i, (x, y) in enumerate(corners):
         grow_block("01 Rising ground-floor column %d" % i,
