@@ -124,23 +124,27 @@ def build_frame(directory, request):
     grow_block("03 Right masonry starter wall", (1.70, 0, 0.75),
                (0.15, 2.48, 1.03), masonry, 57, 72)
 
-    bpy.ops.object.camera_add(location=(8.5, -10.2, 6.8))
+    # Slice26: exact camera handoff from the previous foundation's frame 72.
+    # End pose remains identical to the facade shot's frame 1. Camera zoom,
+    # location and look-at animate; no abrupt lens/orientation reset at cuts.
+    bpy.ops.object.camera_add(location=(4.7, -7.2, 6.1))
     camera = bpy.context.object
     camera.name = "Ground floor orbit camera"
     camera.data.type = "ORTHO"
-    camera.data.ortho_scale = 8.2
     scene.camera = camera
-    for frame, xyz in (
-        (1, (8.5, -10.2, 6.8)),
-        (36, (6.9, -9.4, 6.2)),
-        (72, (5.1, -8.8, 5.8)),
+    for frame, xyz, aim_z, zoom in (
+        (1, (4.7, -7.2, 6.1), 0.10, 8.4),
+        (36, (4.9, -8.0, 5.95), 0.66, 8.3),
+        (72, (5.1, -8.8, 5.8), 1.18, 8.2),
     ):
         camera.location = xyz
         camera.rotation_euler = (
-            Vector((0, 0, 1.18)) - camera.location
+            Vector((0, 0, aim_z)) - camera.location
         ).to_track_quat("-Z", "Y").to_euler()
+        camera.data.ortho_scale = zoom
         camera.keyframe_insert(data_path="location", frame=frame)
         camera.keyframe_insert(data_path="rotation_euler", frame=frame)
+        camera.data.keyframe_insert(data_path="ortho_scale", frame=frame)
 
     animated = [
         ob for ob in scene.objects
