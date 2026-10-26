@@ -1,0 +1,86 @@
+name: Video Studio Slice 22 Real Structure Shot Gate
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-22']
+    paths:
+      - 'tools/video_studio/**'
+      - '.github/workflows/video-studio-slice-22.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-21']
+
+permissions:
+  contents: read
+
+jobs:
+  real-structure-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    env:
+      CLOUDFLARE_API_TOKEN: ''
+      CLOUDFLARE_ACCOUNT_ID: ''
+      GH_TOKEN: ''
+      LIBGL_ALWAYS_SOFTWARE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 16
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Preserve storyboard and OAuth/owner offline test coverage
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+          node --test connector-broker/test/video-*.test.mjs
+          python3 tools/video_studio/check_staging_readiness.py
+          git diff --exit-code 2dac8aa25d1bd2248fa8352bae1b15da438f788d HEAD -- \
+            connector-broker/src/index.js connector-broker/wrangler.toml \
+            connector-broker/wrangler.video-auth.example.toml \
+            tools/video_studio/mini_house_blender.py \
+            tools/video_studio/render_foundation_shot_blender.py
+      - name: Install free isolated Blender and FFmpeg, no accounts or tokens
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends blender ffmpeg libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libopengl0 xvfb xauth
+          blender --version | head -n 2
+      - name: Render a new moving building frame, not the foundation movie
+        run: |
+          set -euo pipefail
+          output=build/video-studio/slice22
+          mkdir -p "$output/frames"
+          timeout 900 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup --python tools/video_studio/render_structure_shot_blender.py \
+            -- --request tools/video_studio/requests/sample-blue-house.json \
+            --output-dir "$output"
+      - name: Encode exactly 72 genuine H264 frames and verify Blender proof
+        run: |
+          set -euo pipefail
+          output=build/video-studio/slice22
+          ffmpeg -hide_banner -loglevel error -y -framerate 12 -start_number 1 \
+            -i "$output/frames/structure_%04d.png" -frames:v 72 \
+            -c:v libx264 -pix_fmt yuv420p -crf 23 -preset veryfast -movflags +faststart \
+            "$output/structure_shot_6s.mp4"
+          python3 tools/video_studio/verify_structure_shot.py \
+            tools/video_studio/requests/sample-blue-house.json "$output"
+      - name: Prepare quality contact sheet and compare distinct construction movie
+        run: |
+          set -euo pipefail
+          output=build/video-studio/slice22
+          ffmpeg -hide_banner -loglevel error -y -i "$output/structure_shot_6s.mp4" \
+            -vf "select='eq(n,0)+eq(n,35)+eq(n,71)',scale=180:320,tile=3x1" \
+            -frames:v 1 "$output/structure_contact_sheet.png"
+          test -s "$output/structure_contact_sheet.png"
+          sha256sum "$output/structure_shot_6s.mp4"
+      - name: Upload real structural evidence for manual quality review only
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyra-slice22-real-structure-6s-proof
+          path: |
+            build/video-studio/slice22/structure_shot_6s.mp4
+            build/video-studio/slice22/structure_scene.blend
+            build/video-studio/slice22/structure_manifest.json
+            build/video-studio/slice22/structure_contact_sheet.png
+          retention-days: 7
+          if-no-files-found: error
