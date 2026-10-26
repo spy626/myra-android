@@ -52,7 +52,7 @@ def measure(movie: Path) -> dict:
     result = subprocess.run([
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
         "-i", str(movie), "-map", "0:v:0",
-        "-vf", "select=" + selection,
+        "-vf", "select='" + selection + "'",
         "-vsync", "0", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"
     ], capture_output=True, check=True, timeout=120)
     if len(result.stdout) != BYTES_PER_FRAME * len(selected):
