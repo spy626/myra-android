@@ -148,7 +148,7 @@ jobs:
             -vf "select='eq(n,0)+eq(n,71)+eq(n,72)+eq(n,143)+eq(n,144)+eq(n,215)+eq(n,216)+eq(n,287)+eq(n,288)+eq(n,359)',scale=180:320,tile=10x1" \
             -frames:v 1 "$base/sequence/construction_sequence_contact_sheet.png"
           test -s "$base/sequence/construction_sequence_contact_sheet.png"
-          python3 tools/video_studio/verify_slice27_seams.py             --video "$base/sequence/construction_sequence_30s.mp4"             --report "$base/sequence/continuity_audit.json"
+          python3 tools/video_studio/verify_slice26_seams.py             --video "$base/sequence/construction_sequence_30s.mp4"             --report "$base/sequence/continuity_audit.json"
       - name: Upload authentic 30s video and NEW Blender scenes
         uses: actions/upload-artifact@v4
         with:
