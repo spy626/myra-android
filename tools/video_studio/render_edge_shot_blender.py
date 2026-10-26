@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from render_request import load_render_request
 from edge_shot_contract import approved_edge_shot
 from render_structure_shot_blender import mat, block, grow_block
+from reveal_finish_contract import FINISH_COLORS, FINISH_PARTS, PREFIX, approved_detail_plan
 
 
 def setup(directory, name):
@@ -180,6 +181,21 @@ def house_reveal(scene, spec):
     for label, xyz, size, material, start, finish, axis in finishing:
         grow_block("06 Reveal finishing " + label, xyz, size, material,
                    start, finish, axis=axis)
+
+    # Slice28: 19 locally modeled, physically editable architectural finishes.
+    # All are hidden at frame 1 to preserve the validated facade->reveal cut.
+    # Studio shading + cavity shadows give geometry depth; these fixtures
+    # are NOT physically simulated lamps or a path-traced lighting claim.
+    approved_detail_plan()
+    finish_mats = {
+        key: mat("Architectural " + key, rgb)
+        for key, rgb in FINISH_COLORS.items()
+    }
+    for label, xyz, dims, tone, begin, end, axis in FINISH_PARTS:
+        if spec["roof_style"] == "flat" and label.startswith("Roof line cap"):
+            xyz = (xyz[0], xyz[1], 2.96)
+        grow_block(PREFIX + label, xyz, dims, finish_mats[tone],
+                   begin, end, axis=axis)
 
     camera_move(scene, "Finished home orbit right", (
         (1, (3.0, -7.8, 5.1)), (36, (0.5, -8.8, 5.3)),
