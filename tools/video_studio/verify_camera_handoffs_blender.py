@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
 from pathlib import Path
 
 import bpy
@@ -48,7 +49,9 @@ def main():
     p.add_argument("--foundation", required=True, type=Path)
     p.add_argument("--structure", required=True, type=Path)
     p.add_argument("--facade", required=True, type=Path)
-    a = p.parse_args()
+    # Blender owns argv before --; only accept the bounded operator flags.
+    params = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    a = p.parse_args(params)
     foundation_end = camera_at(a.foundation, 72)
     structure_start = camera_at(a.structure, 1)
     structure_end = camera_at(a.structure, 72)
