@@ -185,7 +185,7 @@ jobs:
             -vf 'scale=180:320,tile=3x1' -frames:v 1 \
             "$base/sequence/cycles_lookdev_contact_sheet.png"
           test -s "$base/sequence/cycles_lookdev_contact_sheet.png"
-      - name: Render and independently verify 32-sample Cycles denoised look
+      - name: Render and independently verify 32-sample Cycles plus FFmpeg NLMeans look
         run: |
           set -euo pipefail
           base=build/video-studio/slice30

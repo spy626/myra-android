@@ -5,13 +5,16 @@ film untouched. No arbitrary input code, downloaded assets, or paid models.
 """
 from __future__ import annotations
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from physical_look_contract import FRAMES
-from refined_cycles_contract import REFINED_SAMPLES, require_refined_plan
+from refined_cycles_contract import (
+    DENOISING_FILTER, REFINED_SAMPLES, require_refined_plan
+)
 from verify_cycles_lookdev_blender import check_scene
 
 
@@ -29,7 +32,9 @@ def build(source: Path, output: Path):
     if scene.render.image_settings.file_format != "PNG":
         raise ValueError("Only original offline PNG still rendering is allowed")
     scene.cycles.samples = REFINED_SAMPLES
-    scene.cycles.use_denoising = True
+    # Ubuntu's signed Blender build has no OpenImageDenoise support.
+    # Keep true CPU path tracing and apply fixed FFmpeg NLMeans after render.
+    scene.cycles.use_denoising = False
     scene.cycles.device = "CPU"
     scene.render.threads_mode = "FIXED"
     scene.render.threads = 2
@@ -42,10 +47,20 @@ def build(source: Path, output: Path):
     )
     for frame in FRAMES:
         scene.frame_set(frame)
-        scene.render.filepath = str((output / ("refined_frame_%04d.png" % frame)).resolve())
+        raw = output / ("refined_raw_%04d.png" % frame)
+        denoised = output / ("refined_frame_%04d.png" % frame)
+        scene.render.filepath = str(raw.resolve())
         bpy.ops.render.render(write_still=True)
-        print("LYRA_REFINED_CPU_FRAME_RENDERED", frame, flush=True)
-    print("SLICE30_REFINED_32_SAMPLE_DENOISED_STILLS_COMPLETE", flush=True)
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-y", "-i", str(raw.resolve()), "-vf", DENOISING_FILTER,
+            "-frames:v", "1", "-pix_fmt", "rgb24",
+            str(denoised.resolve())
+        ], check=True, timeout=120)
+        if not raw.is_file() or not denoised.is_file():
+            raise RuntimeError("Missing CPU path trace or NLMeans denoised output")
+        print("LYRA_REFINED_CPU_FRAME_AND_NLMEANS_RENDERED", frame, flush=True)
+    print("SLICE30_REAL_32_SAMPLE_CYCLES_FFMPEG_NLMEANS_COMPLETE", flush=True)
 
 
 def main():
