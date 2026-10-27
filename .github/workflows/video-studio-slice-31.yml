@@ -1,0 +1,257 @@
+name: Video Studio Slice 31 Free-only OpenRouter Wan API and Verified 30s Gate
+
+on:
+  push:
+    branches: ['agent/lyra-video-studio-slice-31']
+    paths:
+      - 'tools/video_studio/**'
+      - 'connector-broker/src/video-openrouter-free.mjs'
+      - 'connector-broker/test/video-openrouter-free.test.mjs'
+      - '.github/workflows/video-studio-slice-31.yml'
+  pull_request:
+    branches: ['agent/lyra-video-studio-slice-30']
+
+permissions:
+  contents: read
+
+jobs:
+  real-thirty-second-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 48
+    env:
+      CLOUDFLARE_API_TOKEN: ''
+      CLOUDFLARE_ACCOUNT_ID: ''
+      GH_TOKEN: ''
+      LIBGL_ALWAYS_SOFTWARE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Preserve inherited offline security tests and unchanged LYRA renderers
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/video_studio -p 'test_*.py' -v
+          node --test connector-broker/test/video-*.test.mjs
+          python3 tools/video_studio/check_staging_readiness.py
+          # Slice31: only free-model adapter and tests may differ;
+          # deployed broker, GitHub OAuth and Cloudflare auth MUST be unchanged.
+          git diff --exit-code 4122e52dd3a1fbe777c52eba7796100a14bf11b3 HEAD -- \
+            connector-broker/src/index.js \
+            connector-broker/src/video-auth-worker.mjs \
+            connector-broker/src/video-auth-worker-cloudflare.mjs \
+            connector-broker/src/video-render-authorization.mjs \
+            connector-broker/wrangler.toml \
+            connector-broker/wrangler.video-auth.example.toml \
+            app/src/main/java/com/myra/assistant/video
+          git diff --exit-code 9d8b2d73a40d86b926315dd858787f40cea5a526 HEAD -- \
+            connector-broker/src/index.js connector-broker/wrangler.toml \
+            connector-broker/wrangler.video-auth.example.toml \
+            tools/video_studio/mini_house_blender.py \
+            tools/video_studio/render_foundation_shot_blender.py \
+            tools/video_studio/render_facade_shot_blender.py \
+            tools/video_studio/render_structure_shot_blender.py \
+            tools/video_studio/assemble_construction_sequence.py \
+            tools/video_studio/assemble_three_shot_sequence.py
+      - name: Install free offline Blender and FFmpeg
+        run: |
+          set -euo pipefail
+          # Reuse the existing official-Ubuntu mirror probe; APT signature
+          # checks stay enabled. Avoid indefinite Azure mirror/package stalls.
+          bash tools/video_studio/configure_ci_apt_mirror.sh
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 update -qq
+          timeout 650 sudo apt-get -o Acquire::Retries=1 \
+            -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+            install -y --no-install-recommends \
+            blender ffmpeg libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libopengl0 xvfb xauth
+          blender --version | head -n 2
+      - name: Render NEW site survey and lot preparation scene
+        run: |
+          set -euo pipefail
+          o=build/video-studio/slice31/lot
+          mkdir -p "$o/frames"
+          timeout 700 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup --python tools/video_studio/render_edge_shot_blender.py \
+            -- --scene lot --request tools/video_studio/requests/sample-blue-house.json --output-dir "$o"
+          ffmpeg -hide_banner -loglevel error -nostdin -y -framerate 12 -start_number 1 \
+            -i "$o/frames/lot_%04d.png" -frames:v 72 \
+            -c:v libx264 -pix_fmt yuv420p -crf 23 -preset veryfast -movflags +faststart \
+            "$o/lot_shot_6s.mp4"
+          python3 tools/video_studio/verify_edge_shot.py \
+            --scene lot --request tools/video_studio/requests/sample-blue-house.json --output-dir "$o"
+      - name: Render actual original foundation shot
+        run: |
+          set -euo pipefail
+          o=build/video-studio/slice31/foundation
+          mkdir -p "$o/frames"
+          timeout 700 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup --python tools/video_studio/render_foundation_shot_blender.py \
+            -- --request tools/video_studio/requests/sample-blue-house.json --output-dir "$o"
+          ffmpeg -hide_banner -loglevel error -nostdin -y -framerate 12 -start_number 1 \
+            -i "$o/frames/foundation_%04d.png" -frames:v 72 \
+            -c:v libx264 -pix_fmt yuv420p -crf 23 -preset veryfast -movflags +faststart \
+            "$o/foundation_shot_6s.mp4"
+          python3 tools/video_studio/verify_foundation_shot.py \
+            tools/video_studio/requests/sample-blue-house.json "$o"
+      - name: Render actual original structure shot
+        run: |
+          set -euo pipefail
+          o=build/video-studio/slice31/structure
+          mkdir -p "$o/frames"
+          timeout 700 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup --python tools/video_studio/render_structure_shot_blender.py \
+            -- --request tools/video_studio/requests/sample-blue-house.json --output-dir "$o"
+          ffmpeg -hide_banner -loglevel error -nostdin -y -framerate 12 -start_number 1 \
+            -i "$o/frames/structure_%04d.png" -frames:v 72 \
+            -c:v libx264 -pix_fmt yuv420p -crf 23 -preset veryfast -movflags +faststart \
+            "$o/structure_shot_6s.mp4"
+          python3 tools/video_studio/verify_structure_shot.py \
+            tools/video_studio/requests/sample-blue-house.json "$o"
+      - name: Render actual original roof and facade shot
+        run: |
+          set -euo pipefail
+          o=build/video-studio/slice31/facade
+          mkdir -p "$o/frames"
+          timeout 700 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup --python tools/video_studio/render_facade_shot_blender.py \
+            -- --request tools/video_studio/requests/sample-blue-house.json --output-dir "$o"
+          ffmpeg -hide_banner -loglevel error -nostdin -y -framerate 12 -start_number 1 \
+            -i "$o/frames/facade_%04d.png" -frames:v 72 \
+            -c:v libx264 -pix_fmt yuv420p -crf 23 -preset veryfast -movflags +faststart \
+            "$o/facade_shot_6s.mp4"
+          python3 tools/video_studio/verify_facade_shot.py \
+            tools/video_studio/requests/sample-blue-house.json "$o"
+      - name: Render NEW finished-house reveal and exterior finishing scene
+        run: |
+          set -euo pipefail
+          o=build/video-studio/slice31/reveal
+          mkdir -p "$o/frames"
+          timeout 700 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup --python tools/video_studio/render_edge_shot_blender.py \
+            -- --scene reveal --request tools/video_studio/requests/sample-blue-house.json --output-dir "$o"
+          ffmpeg -hide_banner -loglevel error -nostdin -y -framerate 12 -start_number 1 \
+            -i "$o/frames/reveal_%04d.png" -frames:v 72 \
+            -c:v libx264 -pix_fmt yuv420p -crf 23 -preset veryfast -movflags +faststart \
+            "$o/reveal_shot_6s.mp4"
+          python3 tools/video_studio/verify_edge_shot.py \
+            --scene reveal --request tools/video_studio/requests/sample-blue-house.json --output-dir "$o"
+      - name: Verify nineteen real animated reveal finish meshes
+        run: |
+          set -euo pipefail
+          base=build/video-studio/slice31
+          blender -b --factory-startup \
+            --python tools/video_studio/verify_reveal_finish_blender.py -- \
+            --blend "$base/reveal/reveal_scene.blend" \
+            --roof-style gable \
+            --report "$base/sequence/reveal_detail_audit.json"
+      - name: Audit original .blend camera endpoints at structure cut
+        run: |
+          set -euo pipefail
+          base=build/video-studio/slice31
+          blender -b --factory-startup --python tools/video_studio/verify_camera_handoffs_blender.py             -- --foundation "$base/foundation/foundation_scene.blend"             --structure "$base/structure/structure_scene.blend"             --facade "$base/facade/facade_scene.blend"
+      - name: Prove matching real foundation, frame and facade 3D geometry
+        run: |
+          set -euo pipefail
+          base=build/video-studio/slice31
+          blender -b --factory-startup \
+            --python tools/video_studio/verify_geometry_handoffs_blender.py -- \
+            --foundation "$base/foundation/foundation_scene.blend" \
+            --structure "$base/structure/structure_scene.blend" \
+            --facade "$base/facade/facade_scene.blend" \
+            --output "$base/sequence/geometry_handoff_audit.json"
+      - name: Assemble 30s H264, verify all 360 decoded frames and contact sheet
+        run: |
+          set -euo pipefail
+          base=build/video-studio/slice31
+          python3 tools/video_studio/assemble_five_shot_sequence.py \
+            --request tools/video_studio/requests/sample-blue-house.json \
+            --lot-dir "$base/lot" --foundation-dir "$base/foundation" \
+            --structure-dir "$base/structure" --facade-dir "$base/facade" \
+            --reveal-dir "$base/reveal" --output-dir "$base/sequence"
+          ffmpeg -hide_banner -loglevel error -nostdin -y \
+            -i "$base/sequence/construction_sequence_30s.mp4" \
+            -vf "select='eq(n,0)+eq(n,71)+eq(n,72)+eq(n,143)+eq(n,144)+eq(n,215)+eq(n,216)+eq(n,287)+eq(n,288)+eq(n,359)',scale=180:320,tile=10x1" \
+            -frames:v 1 "$base/sequence/construction_sequence_contact_sheet.png"
+          test -s "$base/sequence/construction_sequence_contact_sheet.png"
+          python3 tools/video_studio/verify_slice26_seams.py             --video "$base/sequence/construction_sequence_30s.mp4"             --report "$base/sequence/continuity_audit.json"
+      - name: Render three new physically lit Cycles CPU preview frames
+        run: |
+          set -euo pipefail
+          base=build/video-studio/slice31
+          timeout 900 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup \
+            --python tools/video_studio/render_cycles_lookdev_blender.py -- \
+            --source "$base/reveal/reveal_scene.blend" \
+            --output "$base/cycles_lookdev"
+          blender -b --factory-startup \
+            --python tools/video_studio/verify_cycles_lookdev_blender.py -- \
+            --scene "$base/cycles_lookdev/reveal_cycles_lookdev.blend" \
+            --original "$base/reveal/reveal_scene.blend" \
+            --output "$base/cycles_lookdev" \
+            --report "$base/sequence/cycles_lookdev_audit.json"
+          ffmpeg -hide_banner -loglevel error -nostdin -y \
+            -pattern_type glob -i "$base/cycles_lookdev/cycles_frame_*.png" \
+            -vf 'scale=180:320,tile=3x1' -frames:v 1 \
+            "$base/sequence/cycles_lookdev_contact_sheet.png"
+          test -s "$base/sequence/cycles_lookdev_contact_sheet.png"
+      - name: Render and independently verify 32-sample Cycles plus FFmpeg NLMeans look
+        run: |
+          set -euo pipefail
+          base=build/video-studio/slice31
+          timeout 1100 xvfb-run -a -s '-screen 0 1280x1024x24' \
+            blender -b --factory-startup \
+            --python tools/video_studio/render_refined_cycles_blender.py -- \
+            --source "$base/cycles_lookdev/reveal_cycles_lookdev.blend" \
+            --output "$base/cycles_refined"
+          blender -b --factory-startup \
+            --python tools/video_studio/verify_refined_cycles_blender.py -- \
+            --original "$base/cycles_lookdev/reveal_cycles_lookdev.blend" \
+            --refined "$base/cycles_refined/reveal_cycles_refined.blend" \
+            --original-frames "$base/cycles_lookdev" \
+            --refined-frames "$base/cycles_refined" \
+            --report "$base/sequence/refined_cycles_audit.json"
+          ffmpeg -hide_banner -loglevel error -nostdin -y \
+            -pattern_type glob -i "$base/cycles_refined/refined_frame_*.png" \
+            -vf 'scale=180:320,tile=3x1' -frames:v 1 \
+            "$base/sequence/refined_cycles_contact_sheet.png"
+          test -s "$base/sequence/refined_cycles_contact_sheet.png"
+          ffmpeg -hide_banner -loglevel error -nostdin -y \
+            -i "$base/sequence/cycles_lookdev_contact_sheet.png" \
+            -i "$base/sequence/refined_cycles_contact_sheet.png" \
+            -filter_complex '[0:v][1:v]vstack=inputs=2' \
+            -frames:v 1 "$base/sequence/baseline_vs_refined_cycles.png"
+          test -s "$base/sequence/baseline_vs_refined_cycles.png"
+      - name: Upload authentic 30s video and NEW Blender scenes
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyra-slice31-real-five-shot-construction-30s
+          path: |
+            build/video-studio/slice31/sequence/construction_sequence_30s.mp4
+            build/video-studio/slice31/sequence/construction_sequence_30s_manifest.json
+            build/video-studio/slice31/sequence/continuity_audit.json
+            build/video-studio/slice31/sequence/geometry_handoff_audit.json
+            build/video-studio/slice31/sequence/reveal_detail_audit.json
+            build/video-studio/slice31/sequence/cycles_lookdev_audit.json
+            build/video-studio/slice31/sequence/refined_cycles_audit.json
+            build/video-studio/slice31/sequence/refined_cycles_contact_sheet.png
+            build/video-studio/slice31/sequence/baseline_vs_refined_cycles.png
+            build/video-studio/slice31/cycles_refined/reveal_cycles_refined.blend
+            build/video-studio/slice31/cycles_refined/refined_frame_*.png
+            build/video-studio/slice31/sequence/cycles_lookdev_contact_sheet.png
+            build/video-studio/slice31/cycles_lookdev/reveal_cycles_lookdev.blend
+            build/video-studio/slice31/cycles_lookdev/cycles_frame_*.png
+            build/video-studio/slice31/foundation/foundation_scene.blend
+            build/video-studio/slice31/facade/facade_scene.blend
+            build/video-studio/slice31/structure/structure_scene.blend
+            build/video-studio/slice31/sequence/construction_sequence_contact_sheet.png
+            build/video-studio/slice31/lot/lot_scene.blend
+            build/video-studio/slice31/lot/lot_shot_6s.mp4
+            build/video-studio/slice31/lot/lot_manifest.json
+            build/video-studio/slice31/reveal/reveal_scene.blend
+            build/video-studio/slice31/reveal/reveal_shot_6s.mp4
+            build/video-studio/slice31/reveal/reveal_manifest.json
+          if-no-files-found: error
+          retention-days: 7
