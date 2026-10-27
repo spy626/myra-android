@@ -26,9 +26,10 @@ def near(actual, expected, name, tolerance=0.0002):
         raise ValueError("Mismatch in true Cycles evidence: " + name)
 
 
-def check_scene(scene):
+def check_scene(scene, samples=SAMPLES, denoised=False):
     if (scene.render.engine != "CYCLES" or scene.cycles.device != "CPU" or
-        scene.cycles.samples != SAMPLES or scene.frame_end != 72 or
+        scene.cycles.samples != samples or
+        bool(scene.cycles.use_denoising) is not denoised or scene.frame_end != 72 or
         scene.render.fps != 12 or
         scene.render.resolution_x != 360 or
         scene.render.resolution_y != 640):
